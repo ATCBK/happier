@@ -158,6 +158,8 @@ type ProfileReadPublication = Readonly<{
     onReady?: (projection: ProfileCatalogProjection, isAccountCurrent: () => boolean) => void;
     hasPendingCleanup?: () => boolean;
     deferCleanup?: boolean;
+    /** Definition-only operations do not consume or migrate private runtime attachments. */
+    migrateSkills?: boolean;
 }>;
 export async function readProfileCatalogProjection(scope: ServerAccountScope, signal?: AbortSignal,
     publication?: ProfileReadPublication): Promise<ProfileCatalogProjection> {
@@ -167,11 +169,12 @@ export async function readProfileCatalogProjection(scope: ServerAccountScope, si
 }
 async function readCapturedProfileCatalogProjection(context: ProfileAccountContext, mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null,
     signal?: AbortSignal, publication?: ProfileReadPublication): Promise<ProfileCatalogProjection> {
+    const migrateSkills = publication?.migrateSkills !== false;
     const capturedSource: { baseline: Awaited<ReturnType<typeof readProfileTransferSourceInContext>> | null } = { baseline: null };
     let catalog = await readCapturedProfileCatalog(context, mode, material, signal, async () => {
         capturedSource.baseline = await readProfileTransferSourceInContext(context);
         return capturedSource.baseline.source.raw;
-    }, undefined, true);
+    }, undefined, migrateSkills);
     if (catalog.status !== 'ready' && catalog.status !== 'partial') return { catalog, artifactsById: new Map(), source: null };
     // An opened active control is destination authority even when stale source roots remain.
     // Every other case needs the genuine baseline; row presence never decides the source.
@@ -219,7 +222,7 @@ async function readCapturedProfileCatalogProjection(context: ProfileAccountConte
         });
         context.assertCurrent();
         if (transfer.status === 'active') {
-            catalog = await readCapturedProfileCatalog(context, mode, material, signal, undefined, undefined, true);
+            catalog = await readCapturedProfileCatalog(context, mode, material, signal, undefined, undefined, migrateSkills);
             if (catalog.status !== 'ready' || catalog.control?.record.phase !== 'active'
                 || catalog.control.revision !== transfer.revision) return { catalog: { status: 'unavailable', reason: 'reference-conflict' }, artifactsById: new Map(), source: null };
             source = resolveProfileCatalogAuthorityV1({ rawSettings: undefined, control: catalog.control.record });
@@ -337,7 +340,7 @@ export async function readProfileCatalogInContext(context: ProfileAccountContext
     catch (error) { return catalogFailure(error, signal); }
 }
 export async function readProfileCatalogProjectionInContext(context: ProfileAccountContext, signal?: AbortSignal,
-    options?: Readonly<{ deferCleanup?: boolean }>): Promise<ProfileCatalogProjection> {
+    options?: Readonly<{ deferCleanup?: boolean; migrateSkills?: boolean }>): Promise<ProfileCatalogProjection> {
     try { return await admitProfileAccount(context, (captured, mode, material) => readCapturedProfileCatalogProjection(captured, mode, material, signal, options)); }
     catch (error) { return { catalog: catalogFailure(error, signal), artifactsById: new Map(), source: null }; }
 }

@@ -144,6 +144,12 @@ describe('Profile catalog captured Account transport', () => {
         });
         expect(await readProfileCatalog(scope)).toMatchObject({ status: 'ready', records: [{ record: { skillSeeds: ['existing'] } }] });
         expect(mutations).toHaveLength(0);
+        const definitionOnly = await withProfileAccount(scope, undefined, context => readProfileCatalogProjectionInContext(context, undefined, {
+            deferCleanup: true, migrateSkills: false,
+        }));
+        expect(definitionOnly.catalog).toMatchObject({ status: 'ready', records: [{ revision: 2,
+            record: { skillSeeds: ['existing'], promptStack: retainedStack } }] });
+        expect(mutations).toHaveLength(0);
         const first = await withProfileAccount(scope, undefined, context => readProfileCatalogProjectionInContext(context, undefined, { deferCleanup: true }));
         expect(first.catalog).toMatchObject({ status: 'ready', referenceGuardRevision: 4,
             records: [{ revision: 3, record: { skillSeeds: ['existing', 'a'],
@@ -512,7 +518,7 @@ describe('Profile catalog captured Account transport', () => {
         await expect(readProfileCatalogProjection(scope)).resolves.toMatchObject({ source: null,
             catalog: { status: 'unavailable', reason: 'reference-conflict' } });
     });
-    it('activates a genuine eligible predecessor through the captured transfer carrier then reloads native rows', async () => {
+    it('activates a genuine eligible predecessor through the captured transfer carrier without runtime attachment migration', async () => {
         sourceRaw = { futureSibling: { keep: true }, profiles: [{ id: 'legacy', name: 'Legacy', environmentVariables: [],
             defaultEnabled: false, createdAt: 1, updatedAt: 2 }] };
         let transfer: ProfileTransferRowReadResponseV1 = { status: 'absent' };
@@ -551,13 +557,13 @@ describe('Profile catalog captured Account transport', () => {
             if (path === '/v1/account/entity-rows/profiles') return Response.json({ ...page, rows, transferControl: transfer });
             return Response.json({ error: 'not_found' }, { status: 404 });
         });
-        const projection = await readProfileCatalogProjection(scope);
+        const projection = await readProfileCatalogProjection(scope, undefined, { migrateSkills: false });
         expect(projection).toMatchObject({ source: 'destination', catalog: { status: 'ready', source: 'destination',
             authority: 'active', records: [{ record: { id: 'legacy', enabled: false } }] } });
         expect(posted).toEqual(['prepare', 'activate']);
         expect(projection).toMatchObject({ cleanup: { status: 'cleanup-pending' } });
         allowCleanup = true;
-        const resumed = await readProfileCatalogProjection(scope);
+        const resumed = await readProfileCatalogProjection(scope, undefined, { migrateSkills: false });
         expect(resumed).toMatchObject({ source: 'destination', cleanup: { status: 'complete' } });
         expect(sourceRaw).toEqual({ futureSibling: { keep: true } });
         expect(historyRead).toBe(true);

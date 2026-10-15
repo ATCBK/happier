@@ -35,6 +35,7 @@ import { ArtifactBodyEnvelopeV1Schema } from '@happier-dev/protocol/artifacts/ar
 import type { Artifact, ArtifactCreateRequest } from '@/sync/domains/artifacts/artifactTypes';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { captureLazyActionAccountContext } from './actionAccountContext';
+import { readProfileCatalogInContext } from '@/sync/api/account/apiProfileCatalog';
 import { createApiAuthoringMemoryTransport } from '@/sync/api/account/apiAuthoringMemory';
 import { createAuthoringMemorySync } from '@/sync/engine/authoringMemory/authoringMemorySync';
 import { createAuthoringMemoryCipher } from '@/sync/encryption/authoringMemoryEncryption';
@@ -376,6 +377,15 @@ async function fixture() {
         setProfile(attachments?: Pick<ProfileRecordV1, 'enabled' | 'promptStack' | 'secretBindings'>, id = 'editable') {
             const record = editableRecord(id, attachments);
             rows = [{ id: record.id, revision: 4, content: { t: 'plain', v: record } }];
+        },
+        seedUnrelatedUnavailableBundleProfile() {
+            const record = editableRecord('neighbor', { enabled: true, secretBindings: {}, promptStack: [{
+                id: 'neighbor-entry', ref: { kind: 'bundle', artifactId: 'unavailable-neighbor-bundle' },
+                enabled: true, placement: 'system_append',
+            }] });
+            const row: ProfileRowV1 = { id: record.id, revision: 2, content: { t: 'plain', v: record } };
+            rows.push(row);
+            return row;
         },
         seedVisibleBuiltin() {
             settings = { ...settings, favoriteProfiles: ['azure-openai'] };
@@ -752,8 +762,9 @@ describe('UI Profile Action front door', () => {
         const f = await fixture();
         f.setProfile({ enabled: true, promptStack: [], secretBindings: { KEEP: null } });
         const selected = { kind: 'resource', resourceId: 'private-key', expectedResourceRevision: 3 } as const;
+        const bindingContext = { ...f.context, presentUserConfirmation: { actionId: 'launch_profiles.secrets.select' as const } };
         const result = await f.executor.execute('launch_profiles.secrets.select', { id: 'editable', expectedRevision: 4,
-            selections: [{ envName: 'API_KEY', selection: selected }, { envName: 'SECOND_KEY', selection: selected }] }, f.context);
+            selections: [{ envName: 'API_KEY', selection: selected }, { envName: 'SECOND_KEY', selection: selected }] }, bindingContext);
         expect(result).toEqual({ ok: true, result: { status: 'updated', id: 'editable', revision: 5 } });
         expect(f.profileMutations).toHaveLength(1);
         expect(f.profileMutations[0]?.savedSecretRevisions).toEqual([{ resourceId: 'private-key', expectedRevision: 3 }]);
@@ -762,7 +773,7 @@ describe('UI Profile Action front door', () => {
         } } } });
         const acknowledged = structuredClone(f.profileRows());
         expect(await f.executor.execute('launch_profiles.secrets.select', { id: 'editable', expectedRevision: 4,
-            selections: [{ envName: 'API_KEY', selection: { kind: 'none' } }] }, f.context))
+            selections: [{ envName: 'API_KEY', selection: { kind: 'none' } }] }, bindingContext))
             .toMatchObject({ ok: true, result: { status: 'conflict', id: 'editable', revision: 5 } });
         expect(f.profileRows()).toEqual(acknowledged);
         expect(f.profileMutations).toHaveLength(1);
@@ -776,7 +787,9 @@ describe('UI Profile Action front door', () => {
             const selected = { kind: 'resource', resourceId: 'private-key', expectedResourceRevision: failure === 'stale_resource' ? 2 : 3 } as const;
             const result = await f.executor.execute('launch_profiles.secrets.select', { id: 'editable', expectedRevision: 4,
                 selections: [{ envName: 'API_KEY', selection: selected }, { envName: failure === 'invalid_environment' ? 'bad-name' : 'SECOND_KEY',
-                    selection: { ...selected, expectedResourceRevision: failure === 'stale_resource' ? 2 : 4 } }] }, f.context);
+                    selection: { ...selected, expectedResourceRevision: failure === 'stale_resource' ? 2 : 4 } }] }, {
+                ...f.context, presentUserConfirmation: { actionId: 'launch_profiles.secrets.select' },
+            });
             if (failure === 'conflicting_resource_proofs') expect(result).toMatchObject({ ok: true, result: { status: 'invalid' } });
             else expect(result.ok).toBe(false);
             expect(f.profileRows()).toEqual(before);
@@ -818,7 +831,7 @@ describe('UI Profile Action front door', () => {
         expect(f.settings()).toMatchObject({ favoriteProfiles: ['neighbor'], futurePreference: { version: 'initial' },
             futureSecretCarrier: { _isSecretValue: true, encryptedValue: { t: 'enc-v1', c: 'opaque-sibling-ciphertext' } } });
     });
-    it('publishes the current Profile row into its Artifact definition while retaining private row metadata', async () => {
+    it.each([false, true])('publishes the current Profile row with private metadata (unavailable neighboring bundle: %s)', async neighboringBundle => {
         const f = await fixture();
         const attachments = {
             enabled: false,
@@ -827,9 +840,16 @@ describe('UI Profile Action front door', () => {
             secretBindings: { API_KEY: formatSharedSavedSecretRefV1('private-key') },
         };
         f.setProfile(attachments);
+        const neighbor = neighboringBundle ? f.seedUnrelatedUnavailableBundleProfile() : null;
         expect(f.settings()).not.toHaveProperty('profiles');
-        const result = await f.executor.execute('launch_profiles.publish', { profileId: 'editable' }, f.context);
-        expect(result).toMatchObject({ ok: true });
+        const account = await captureLazyActionAccountContext(f.context.serverId);
+        try {
+            expect(await readProfileCatalogInContext(account, undefined, { readSourceBaseline: true }))
+                .toMatchObject({ status: 'ready', source: 'destination', diagnostics: [] });
+        } finally { account.dispose(); }
+        const publicationContext = { ...f.context, presentUserConfirmation: { actionId: 'launch_profiles.publish' as const } };
+        const result = await f.executor.execute('launch_profiles.publish', { profileId: 'editable' }, publicationContext);
+        expect(result.ok ? null : result).toBeNull();
         if (!result.ok) throw new Error('Current Profile row was not published');
         const reference = LaunchProfileArtifactReferenceV1Schema.parse(result.result);
         const artifact = f.artifacts().get(reference.artifactId);
@@ -844,16 +864,17 @@ describe('UI Profile Action front door', () => {
         expect(String(envelope.body)).not.toContain('private-prompt');
         expect(String(envelope.body)).not.toContain(formatSharedSavedSecretRefV1('private-key'));
         expect(String(envelope.body)).not.toContain('private-material-not-for-publication');
-        expect(f.profileRows()).toEqual([{ id: 'editable', revision: 5, content: { t: 'plain', v: ProfileRecordV1Schema.parse({
+        expect(f.profileRows().filter(row => row.id === 'editable')).toEqual([{ id: 'editable', revision: 5, content: { t: 'plain', v: ProfileRecordV1Schema.parse({
             v: 1, id: 'editable', definition: { kind: 'artifact', artifactId: reference.artifactId }, ...attachments,
         }) } }]);
         expect(f.profileMutations).toMatchObject([{ id: 'editable', operation: 'update', expectedRevision: 4 }]);
-        await expect(f.executor.execute('launch_profiles.publish', { profileId: 'editable' }, f.context))
+        await expect(f.executor.execute('launch_profiles.publish', { profileId: 'editable' }, publicationContext))
             .resolves.toEqual({ ok: true, result: reference });
         expect(f.artifacts().size).toBe(1);
-        expect(f.profileRows()[0]?.revision).toBe(5);
+        expect(f.profileRows().find(row => row.id === 'editable')?.revision).toBe(5);
         expect(f.settingsMutations).toEqual([]);
         expect(f.settings()).not.toHaveProperty('profiles');
+        if (neighbor) expect(f.profileRows().find(row => row.id === neighbor.id)).toEqual(neighbor);
     });
     it('selects the machine environment through acknowledged captured-Home authoring memory, without a Settings write', async () => {
         const f = await fixture();
