@@ -470,7 +470,7 @@ export async function claudeRemote(opts: {
             await opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_cleanup_failed').catch((observationError) => {
                 logger.debug('[claudeRemote] Failed to publish cleanup observation loss', observationError);
             });
-            if (responseError) {
+            if (responseError && responseError !== error) {
                 throw new AggregateError([responseError, error], 'Claude legacy runtime failed with incomplete owned process cleanup', { cause: responseError });
             }
             throw error;

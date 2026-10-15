@@ -419,7 +419,7 @@ describe('claude sdk query exit handling', () => {
     }
   });
 
-  it.runIf(process.platform !== 'win32').each(['direct', 'retargeted-symlink'])('keeps native provider tasks when only the legacy wrapper is killed (%s)', async (launchPathKind) => {
+  it.runIf(process.platform !== 'win32').each(['direct', 'retargeted-symlink', 'awaiting-next'])('keeps native provider tasks when only the legacy wrapper is killed (%s)', async (launchPathKind) => {
     const { claudeRemote } = await import('../claudeRemote');
     tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-legacy-native-wrapper-exit-'));
     const script = writeExecutableShimSync({ dir: tmpRoot, fileName: 'provider', contents: `#!${process.execPath}
@@ -456,7 +456,7 @@ describe('claude sdk query exit handling', () => {
       result = claudeRemote({ path: tmpRoot, sessionId: null, transcriptPath: null, hookSettingsPath,
         runtimeActivityAdapter: adapter,
         nextMessage: async () => {
-          if (initialRead) return null;
+          if (initialRead && launchPathKind !== 'awaiting-next') return null;
           initialRead = true;
           return { message: 'hi', mode: { permissionMode: 'default' } };
         },
@@ -486,7 +486,9 @@ describe('claude sdk query exit handling', () => {
       if (nativePid === undefined) throw new Error('Expected actual native provider PID');
       expect(isPidAlive(nativePid)).toBe(true);
       expect(ledger.getActiveProviderTaskCount()).toBe(1);
-      await expect(withTimeout(result, 5000, 'native wrapper exit with inherited streams open')).rejects.toMatchObject({ code: 'claude_native_provider_exit_unverified' });
+      const error = await withTimeout(result.then(() => undefined, (failure: unknown) => failure), 5000, 'native wrapper exit with inherited streams open');
+      expect(error).toMatchObject({ code: 'claude_native_provider_exit_unverified' });
+      expect(error).not.toBeInstanceOf(AggregateError);
     } finally {
       await killProcessTree({ pid: nativePid });
       await result?.catch(() => undefined);
