@@ -108,6 +108,8 @@ import { createSpawnedSession } from '@/session/services/createSpawnedSession';
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
+import { logger } from '@/ui/logger';
 
 /** Account content material exactly as the CLI persists it: a box seed plus its own public key. */
 function accountDataKeyCredentials(seedByte: number) {
@@ -1550,6 +1552,47 @@ describe('callMachineRpc', () => {
       await vi.advanceTimersByTimeAsync(100);
       await pending;
     } finally { vi.useRealTimers(); }
+  });
+
+  it('correlates a stopped Session resume refusal with the exact emitted RPC before a late launch reply', async () => {
+    vi.useFakeTimers();
+    const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    axiosGet.mockResolvedValueOnce({ data: { machine: { storageMode: 'plain', id: 'machine-plain',
+      dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } } });
+    let replied = false;
+    socket.emit.mockImplementationOnce((event, _payload, ack) => {
+      expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
+      setTimeout(() => { replied = true; ack({ ok: true, result: { type: 'success', sessionId: 'stopped-session' } }); }, 28_120);
+    });
+    let result: Awaited<ReturnType<typeof requestInactiveSessionResume>> | undefined;
+    const pending = requestInactiveSessionResume({ credentials: { token: 'plain-token', encryption: null },
+      sessionId: 'stopped-session', requestId: 'workflow:own-run:own-child:session-ready', waitForReady: true,
+      rawSession: createSessionRecordFixture({ id: 'stopped-session', active: false, machineId: 'machine-plain', path: '/repo' }),
+      metadata: { machineId: 'machine-plain', path: '/repo', claudeSessionId: 'native-session',
+        runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } },
+    }).then(value => { result = value; });
+    try {
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(result).toMatchObject({ ok: false, code: 'timeout' });
+      expect(replied).toBe(false);
+      const emitted = socket.emit.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CALL)?.[1];
+      expect(emitted).toMatchObject({ method: `machine-plain:${RPC_METHODS.SPAWN_HAPPY_SESSION}` });
+      expect(diagnostic).toHaveBeenCalledWith('[SessionResume] Readiness refused', expect.objectContaining({
+        requestId: 'workflow:own-run:own-child:session-ready', spawnRpcRequestId: emitted.requestId,
+        phase: 'spawn_rpc', cause: 'MACHINE_RPC_TIMEOUT', elapsedMs: 20_000, cancelled: false,
+      }));
+      await vi.advanceTimersByTimeAsync(8_120);
+      expect(replied).toBe(true);
+      expect(result).toMatchObject({ ok: false, code: 'timeout' });
+      expect(socket.emit.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CALL)).toHaveLength(1);
+    } finally {
+      await pending;
+      diagnostic.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('keeps caller-lifecycle machine RPC acknowledgement open until cancellation', async () => {

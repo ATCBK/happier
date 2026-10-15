@@ -12,6 +12,14 @@ import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { awaitSpawnedSessionId } from './awaitSpawnedSessionId';
 import type { ActionExecutorContext, SessionInitialGoalRequestV1 } from '@happier-dev/protocol';
+import { randomUUID } from 'node:crypto';
+import { logger } from '@/ui/logger';
+
+const resumeDiagnosticCauseCodes = new Set<string>([
+  ...Object.values(SPAWN_SESSION_ERROR_CODES),
+  'MACHINE_RPC_TIMEOUT',
+  'session_identity_mismatch',
+]);
 
 /**
  * `unsupported` is a statement about CAPABILITY — this Session cannot be resumed
@@ -197,6 +205,18 @@ export async function requestInactiveSessionResume(params: Readonly<{
         requestId,
       })
     : undefined;
+  const spawnRpcRequestId = randomUUID();
+  let phase: 'spawn_rpc' | 'nonce_readiness' = 'spawn_rpc';
+  const refuse = (failure: Extract<InactiveSessionResumeResult, { ok: false }>, cause: unknown) => {
+    logger.infoFile('[SessionResume] Readiness refused', {
+      requestId, sessionId: params.sessionId, machineId, spawnRpcRequestId, phase,
+      cause: typeof cause === 'string' && resumeDiagnosticCauseCodes.has(cause) ? cause : 'unclassified',
+      outcomeCode: failure.code, elapsedMs: Date.now() - startedAtMs,
+      cancelled: params.signal?.aborted === true,
+      transport: params.machineRpcTransport && !params.externalAction ? 'direct' : 'machine_rpc',
+    });
+    return failure;
+  };
 
   try {
     const method = options.modelSelection?.ref.providerConnectionId != null
@@ -213,6 +233,7 @@ export async function requestInactiveSessionResume(params: Readonly<{
           credentials: params.credentials,
           machineId,
           method,
+          requestId: spawnRpcRequestId,
           request,
           ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
           ...(params.signal ? { signal: params.signal } : {}),
@@ -222,11 +243,11 @@ export async function requestInactiveSessionResume(params: Readonly<{
       ? readNonEmptyString((response as { sessionId?: unknown }).sessionId)
       : null;
     if (responseSessionId !== null && responseSessionId !== params.sessionId) {
-      return {
+      return refuse({
         ok: false,
         code: 'unsupported',
         message: 'Inactive session resume answered for a different session; pending custody was retained',
-      };
+      }, 'session_identity_mismatch');
     }
     if (
       !response
@@ -243,7 +264,8 @@ export async function requestInactiveSessionResume(params: Readonly<{
       const code = response && typeof response === 'object'
         && (response as { errorCode?: unknown }).errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_DIRECTORY_MISSING
         ? SPAWN_SESSION_ERROR_CODES.SESSION_DIRECTORY_MISSING : 'resume_failed';
-      return { ok: false, code, message };
+      return refuse({ ok: false, code, message }, response && typeof response === 'object'
+        ? Reflect.get(response, 'errorCode') : undefined);
     }
     // The daemon reuses an existing runner without admitting this request's
     // launch nonce. Only a nonce-bearing accepted launch needs the existing
@@ -253,15 +275,16 @@ export async function requestInactiveSessionResume(params: Readonly<{
       return { ok: true };
     }
 
+    phase = 'nonce_readiness';
     const remainingTimeoutMs = typeof params.timeoutMs === 'number'
       ? Math.max(0, params.timeoutMs - (Date.now() - startedAtMs))
       : undefined;
     if (remainingTimeoutMs === 0) {
-      return {
+      return refuse({
         ok: false,
         code: 'timeout',
         message: 'Timed out waiting for the inactive session to become ready',
-      };
+      }, SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT);
     }
     const ready = await awaitSpawnedSessionId({
       result: {
@@ -288,7 +311,7 @@ export async function requestInactiveSessionResume(params: Readonly<{
       ...(params.signal ? { signal: params.signal } : {}),
     });
     if (ready.type !== 'success' || ready.sessionId !== params.sessionId) {
-      return {
+      return refuse({
         ok: false,
         code: ready.type === 'error'
           && ready.errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT
@@ -299,15 +322,15 @@ export async function requestInactiveSessionResume(params: Readonly<{
         message: ready.type === 'error'
           ? ready.errorMessage
           : 'Inactive session readiness resolved to a different session',
-      };
+      }, ready.type === 'error' ? ready.errorCode : 'session_identity_mismatch');
     }
     return { ok: true };
   } catch (error) {
     const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : null;
-    return {
+    return refuse({
       ok: false,
       code: resolveThrownResumeFailureCode(error, code),
       message: error instanceof Error ? error.message : 'Inactive session resume failed; pending custody was retained',
-    };
+    }, code);
   }
 }

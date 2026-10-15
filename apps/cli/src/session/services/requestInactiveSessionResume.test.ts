@@ -11,6 +11,7 @@ vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc }));
 
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { requestInactiveSessionResume } from './requestInactiveSessionResume';
+import { logger } from '@/ui/logger';
 
 const machineKey = new Uint8Array(32).fill(1);
 const credentials = {
@@ -209,6 +210,7 @@ describe('requestInactiveSessionResume', () => {
 
   afterEach(() => {
     callMachineRpc.mockReset();
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
   });
@@ -444,10 +446,56 @@ describe('requestInactiveSessionResume', () => {
   });
 
   it('retains custody when resume times out', async () => {
+    const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     callMachineRpc.mockRejectedValue(Object.assign(new Error('timed out'), { code: 'MACHINE_RPC_TIMEOUT' }));
 
     await expect(requestInactiveSessionResume({
       credentials, sessionId: 'session-1', localId: 'local-1', rawSession: rawSession(), metadata,
     })).resolves.toMatchObject({ ok: false, code: 'timeout' });
+    expect(diagnostic).toHaveBeenCalledWith('[SessionResume] Readiness refused', expect.objectContaining({
+      requestId: 'local-1', sessionId: 'session-1', machineId: 'machine-1',
+      phase: 'spawn_rpc', cause: 'MACHINE_RPC_TIMEOUT', outcomeCode: 'timeout',
+      spawnRpcRequestId: callMachineRpc.mock.calls[0]?.[0]?.requestId,
+      transport: 'machine_rpc',
+      elapsedMs: expect.any(Number), cancelled: false,
+    }));
+  });
+
+  it('distinguishes an accepted launch readiness timeout from the initial RPC timeout', async () => {
+    const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    callMachineRpc.mockResolvedValueOnce({ type: 'success', spawnNonce: 'accepted-launch' });
+    callMachineRpc.mockResolvedValueOnce({ status: 'error', errorCode: 'SESSION_WEBHOOK_TIMEOUT', errorMessage: 'private native detail' });
+    await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'local-1',
+      rawSession: rawSession(), metadata, waitForReady: true })).resolves.toMatchObject({ ok: false, code: 'timeout' });
+    expect(diagnostic).toHaveBeenCalledWith('[SessionResume] Readiness refused', expect.objectContaining({
+      phase: 'nonce_readiness', cause: 'SESSION_WEBHOOK_TIMEOUT', outcomeCode: 'timeout',
+    }));
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private native detail');
+  });
+
+  it('does not log arbitrary transport codes or error prose in readiness diagnostics', async () => {
+    const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    callMachineRpc.mockRejectedValue(Object.assign(new Error('private transport detail'), { code: 'private-code' }));
+    await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'local-1',
+      rawSession: rawSession(), metadata })).resolves.toMatchObject({ ok: false, code: 'resume_failed' });
+    expect(diagnostic).toHaveBeenCalledWith('[SessionResume] Readiness refused', expect.objectContaining({
+      phase: 'spawn_rpc', cause: 'unclassified', outcomeCode: 'resume_failed',
+    }));
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(/private transport detail|private-code|account-token/);
+  });
+
+  it('identifies caller cancellation without logging the abort reason', async () => {
+    const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const cancellation = new AbortController();
+    callMachineRpc.mockImplementationOnce(async () => {
+      cancellation.abort(new Error('private abort reason'));
+      throw cancellation.signal.reason;
+    });
+    await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'local-1',
+      rawSession: rawSession(), metadata, signal: cancellation.signal })).resolves.toMatchObject({ ok: false, code: 'resume_failed' });
+    expect(diagnostic).toHaveBeenCalledWith('[SessionResume] Readiness refused', expect.objectContaining({
+      phase: 'spawn_rpc', cancelled: true, cause: 'unclassified', outcomeCode: 'resume_failed',
+    }));
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private abort reason');
   });
 });
