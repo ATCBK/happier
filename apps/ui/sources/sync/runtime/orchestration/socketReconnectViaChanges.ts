@@ -225,6 +225,7 @@ export async function runSocketReconnectCatchUpViaChanges(params: {
     const maxPages = Math.max(1, Math.trunc(params.maxChangesPagesPerResume ?? 5));
     let forceSnapshotRefresh = params.forceSnapshotRefresh;
     let snapshotCursorAwaitingFinalPersist: string | null = null;
+    let blockedCheckpoint: { status: 'ok'; nextCursor: string; shouldPersistCursor: boolean } | null = null;
 
     for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
         const result = await params.fetchChanges({
@@ -234,6 +235,10 @@ export async function runSocketReconnectCatchUpViaChanges(params: {
         });
 
         if (result.status === 'cursor-gone') {
+            if (blockedCheckpoint) {
+                await params.snapshotRefresh();
+                return blockedCheckpoint;
+            }
             const snapshot = await runSnapshotRepair(result.currentCursor, 'cursor-gone');
             if (snapshot.status === 'fallback') {
                 return snapshot;
@@ -263,7 +268,7 @@ export async function runSocketReconnectCatchUpViaChanges(params: {
         }
 
         if (changes.length === 0) {
-            return {
+            return blockedCheckpoint ?? {
                 status: 'ok',
                 nextCursor,
                 shouldPersistCursor: snapshotCursorAwaitingFinalPersist !== null || nextCursor !== afterCursor,
@@ -275,21 +280,30 @@ export async function runSocketReconnectCatchUpViaChanges(params: {
         const safeAdvanceCursor = normalizeApplySafeCursor(applyResult, nextCursor);
 
         if (safeAdvanceCursor !== nextCursor) {
-            const checkpointPersisted = safeAdvanceCursor !== null && safeAdvanceCursor !== afterCursor
-                ? await checkpointApprovedCursor(safeAdvanceCursor, {
-                    reason: 'changes-page',
-                    changes,
-                })
-                : false;
-            reportBlockedCursor(applyResult, changes);
-            return {
-                status: 'ok',
-                nextCursor: safeAdvanceCursor ?? afterCursor,
-                shouldPersistCursor: safeAdvanceCursor !== null && safeAdvanceCursor !== afterCursor && !checkpointPersisted,
-            };
+            if (!blockedCheckpoint) {
+                const shouldAdvance = safeAdvanceCursor !== null && safeAdvanceCursor !== afterCursor;
+                const checkpointPersisted = shouldAdvance
+                    ? await checkpointApprovedCursor(safeAdvanceCursor, { reason: 'changes-page', changes })
+                    : false;
+                blockedCheckpoint = {
+                    status: 'ok',
+                    nextCursor: safeAdvanceCursor ?? afterCursor,
+                    shouldPersistCursor: (shouldAdvance && !checkpointPersisted)
+                        || snapshotCursorAwaitingFinalPersist !== null,
+                };
+                reportBlockedCursor(applyResult, changes);
+                if (shouldAdvance && params.checkpointCursor && !checkpointPersisted) return blockedCheckpoint;
+            }
+            if (changes.length < params.changesPageLimit) return blockedCheckpoint;
+            // Keep the durable cursor before the first unmaterialized change, but
+            // still read later pages so an unrelated failure cannot starve pins
+            // and other Account projections. The existing page budget owns repair.
+            afterCursor = nextCursor;
+            continue;
         }
 
         if (changes.length < params.changesPageLimit) {
+            if (blockedCheckpoint) return blockedCheckpoint;
             const checkpointPersisted = nextCursor !== afterCursor
                 ? await checkpointApprovedCursor(nextCursor, {
                     reason: 'changes-page',
@@ -303,18 +317,24 @@ export async function runSocketReconnectCatchUpViaChanges(params: {
             };
         }
 
-        const checkpointPersisted = nextCursor !== afterCursor
+        const checkpointPersisted = !blockedCheckpoint && nextCursor !== afterCursor
             ? await checkpointApprovedCursor(nextCursor, {
                 reason: 'changes-page',
                 changes,
             })
             : false;
-        if (nextCursor !== afterCursor && params.checkpointCursor && !checkpointPersisted) {
+        if (!blockedCheckpoint && nextCursor !== afterCursor && params.checkpointCursor && !checkpointPersisted) {
             return { status: 'fallback' };
         }
         afterCursor = nextCursor;
     }
 
+    if (blockedCheckpoint) {
+        // A known-domain snapshot can refresh later projections, but it cannot
+        // prove an earlier unsupported or failed change has been materialized.
+        await params.snapshotRefresh();
+        return blockedCheckpoint;
+    }
     const snapshot = await runSnapshotRepair(afterCursor, 'page-budget');
     if (snapshot.status === 'fallback') {
         return snapshot;

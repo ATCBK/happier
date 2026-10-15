@@ -137,4 +137,122 @@ describe('fetchAndApplySessionOrganizationSnapshot', () => {
         const folderKey = buildSessionOrganizationServerKey('server-a', 'folder-stale');
         expect(getStorage().getState().sessionOrganizationFoldersByFolderKey[folderKey]).toBeUndefined();
     });
+
+    it.each([
+        { blockedKind: 'session', tail: 'short' },
+        { blockedKind: 'future-kind', tail: 'short' },
+        { blockedKind: 'future-kind', tail: 'budget' },
+        { blockedKind: 'future-kind', tail: 'cursor-gone' },
+    ] as const)(
+        'refreshes later pin changes past a blocked $blockedKind page with a $tail tail without checkpointing over the gap',
+        async ({ blockedKind, tail }) => {
+            const { SessionOrganizationSnapshotResponseSchema } = await import('@happier-dev/protocol/sessions/organization/snapshot');
+            const { createEmbedEncryption } = await import('@/embed/encryption/createEmbedEncryption');
+            const { fetchChanges, fetchCurrentChangesCursor } = await import('@/sync/api/session/apiChanges');
+            const { fetchAndApplySessionById } = await import('@/sync/engine/sessions/sessionById');
+            const { applyPlannedChangeActions } = await import('@/sync/runtime/orchestration/changesApplier');
+            const { runSocketReconnectCatchUpViaChanges } = await import('@/sync/runtime/orchestration/socketReconnectViaChanges');
+            const { getStorage } = await import('@/sync/domains/state/storageStore');
+            const { buildSessionOrganizationSessionKey } = await import('@/sync/domains/session/organization');
+            const { fetchAndApplySessionOrganizationSnapshot } = await import('./fetchSessionOrganizationSnapshot');
+            const credentials = { token: 'token-a', secret: 'secret-a' };
+            const frame = await createEmbedEncryption();
+            const baseline = SessionOrganizationSnapshotResponseSchema.parse({ snapshot: {
+                schemaVersion: 1, version: 1,
+                pins: [
+                    { sessionId: 'garden', sortKey: 'a', pinnedAt: 1, listPinned: false, railPinned: true },
+                    { sessionId: 'reading', sortKey: 'b', pinnedAt: 2, listPinned: true, railPinned: true },
+                ],
+                folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [],
+            } });
+            getStorage().getState().applySessionOrganizationSnapshot('server-a', baseline.snapshot);
+            const pageCursors: string[] = [];
+            const checkpoints: string[] = [];
+            const request = async (path: string): Promise<Response> => {
+                const url = new URL(path, 'http://server-a.test');
+                if (url.pathname === '/v2/changes') {
+                    const after = url.searchParams.get('after') ?? '';
+                    pageCursors.push(after);
+                    if (after === '0') return jsonResponse({ nextCursor: 2, changes: [
+                        { cursor: 1, kind: 'account', entityId: 'self', changedAt: 1, hint: { settingsVersion: 1 } },
+                        { cursor: 2, kind: blockedKind, entityId: 'unavailable-session', changedAt: 2 },
+                    ] });
+                    if (after === '2' && tail === 'cursor-gone') return new Response(JSON.stringify({
+                        error: 'cursor-gone', currentCursor: 4,
+                    }), { status: 410 });
+                    if (after === '2') return jsonResponse({ nextCursor: 3, changes: [{
+                        cursor: 3, kind: 'account', entityId: 'session-organization', changedAt: 3,
+                        hint: { sessionOrganization: true, scope: 'pins', sessionIds: ['garden', 'reading'] },
+                    }] });
+                    if (after === '4') return jsonResponse({ nextCursor: 4, changes: [] });
+                }
+                if (url.pathname === '/v2/cursor') return jsonResponse({ cursor: 4, changesFloor: 0 });
+                if (url.pathname === '/v2/sessions/unavailable-session') {
+                    // The real by-ID reader and change applier interpret this retryable HTTP failure.
+                    return new Response('Unavailable', { status: 503 });
+                }
+                if (url.pathname === '/v2/session-organization') return jsonResponse({ snapshot: {
+                    ...baseline.snapshot, version: 2,
+                    pins: baseline.snapshot.pins.map(pin => ({ ...pin, sortKey: pin.sessionId === 'reading' ? 'a' : 'b' })),
+                } });
+                throw new Error(`Unexpected HTTP request: ${path}`);
+            };
+            try {
+                const result = await runSocketReconnectCatchUpViaChanges({
+                    credentials, accountId: 'account-a', afterCursor: '0', changesPageLimit: 2,
+                    maxChangesPagesPerResume: tail === 'budget' ? 1 : undefined,
+                    forceSnapshotRefresh: false,
+                    planContext: { isSessionListMember: () => true },
+                    fetchChanges: params => fetchChanges({ ...params, request }),
+                    fetchCurrentCursor: params => fetchCurrentChangesCursor({ ...params, request }),
+                    checkpointCursor: cursor => { checkpoints.push(cursor); return true; },
+                    applyPlanned: planned => applyPlannedChangeActions({
+                        planned, credentials, isSessionMessagesLoaded: () => false,
+                        invalidate: { sessionRows: async sessionIds => {
+                            for (const sessionId of sessionIds) {
+                                const refreshed = await fetchAndApplySessionById({
+                                    sessionId, credentials, request, encryption: frame.encryption,
+                                    sessionDataKeys: new Map(), applySessions: () => {}, log: { log: () => {} },
+                                });
+                                if (!refreshed.ok) throw new Error(refreshed.errorCode);
+                            }
+                        } },
+                        refreshSessionOrganization: async plan => {
+                            await fetchAndApplySessionOrganizationSnapshot({
+                                credentials, serverId: 'server-a', requestAtEndpoint: request,
+                                request: {
+                                    includeFolders: plan.includeFolders, includeTags: plan.includeTags,
+                                    includeLabels: plan.includeLabels, assignmentSessionIds: plan.assignmentSessionIds,
+                                    folderIds: plan.folderIds, tagIds: plan.tagIds, orderScopes: plan.orderScopes,
+                                },
+                            });
+                        },
+                        invalidateMessagesForSession: async () => {}, invalidateScmStatusForSession: () => {},
+                        applyTodoSocketUpdates: async () => {}, kvBulkGet: async () => ({ values: [] }),
+                    }),
+                    snapshotRefresh: async () => {
+                        if (tail === 'short') throw new Error('A short tail needs no snapshot repair');
+                        // Even a completed known-domain read cannot acknowledge the unknown change.
+                        await fetchAndApplySessionOrganizationSnapshot({
+                            credentials, serverId: 'server-a', requestAtEndpoint: request,
+                        });
+                        return { status: 'complete' };
+                    },
+                });
+
+                const pins = getStorage().getState().sessionOrganizationPinsBySessionKey;
+                expect(pins[buildSessionOrganizationSessionKey('server-a', 'reading')]).toMatchObject({
+                    sortKey: 'a', listPinned: true, railPinned: true,
+                });
+                expect(pins[buildSessionOrganizationSessionKey('server-a', 'garden')]).toMatchObject({
+                    sortKey: 'b', listPinned: false, railPinned: true,
+                });
+                expect(pageCursors).toEqual(tail === 'budget' ? ['0'] : ['0', '2']);
+                expect(checkpoints).toEqual(['1']);
+                expect(result).toEqual({ status: 'ok', nextCursor: '1', shouldPersistCursor: false });
+            } finally {
+                frame.dispose();
+            }
+        },
+    );
 });

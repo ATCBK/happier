@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { FetchChangesFn } from './socketReconnectViaChanges';
 import { runSocketReconnectCatchUpViaChanges } from './socketReconnectViaChanges';
+import { applyPlannedChangeActions } from './changesApplier';
 
 const credentials: AuthCredentials = { token: 't', secret: 's' };
 
@@ -537,6 +538,64 @@ describe('runSocketReconnectCatchUpViaChanges', () => {
             nextCursor: '1',
             shouldPersistCursor: false,
         });
+    });
+
+    it('stops a blocked-page scan when its safe checkpoint is refused', async () => {
+        const requestedCursors: Array<string | null> = [];
+        const result = await runSocketReconnectCatchUpViaChanges({
+            credentials, accountId: 'a', afterCursor: '0', changesPageLimit: 2,
+            forceSnapshotRefresh: false,
+            fetchChanges: async ({ afterCursor }) => {
+                requestedCursors.push(afterCursor);
+                return { status: 'ok', nextCursor: '2', changes: [
+                    { cursor: 1, kind: 'account', entityId: 'self', changedAt: 1, hint: { settingsVersion: 1 } },
+                    { cursor: 2, kind: 'future-kind', entityId: 'blocked', changedAt: 2 },
+                ] };
+            },
+            checkpointCursor: () => false,
+            applyPlanned: planned => applyPlannedChangeActions({
+                planned, credentials, isSessionMessagesLoaded: () => false, invalidate: {},
+                invalidateMessagesForSession: async () => {}, invalidateScmStatusForSession: () => {},
+                applyTodoSocketUpdates: async () => {}, kvBulkGet: async () => ({ values: [] }),
+            }),
+            snapshotRefresh: async () => { throw new Error('A refused checkpoint must end this scan'); },
+        });
+
+        expect(requestedCursors).toEqual(['0']);
+        expect(result).toEqual({ status: 'ok', nextCursor: '1', shouldPersistCursor: true });
+    });
+
+    it.each(['short', 'empty'] as const)('retains the first safe checkpoint across later partial and complete pages with a %s tail', async tail => {
+        const requestedCursors: Array<string | null> = [];
+        const checkpoints: string[] = [];
+        const result = await runSocketReconnectCatchUpViaChanges({
+            credentials, accountId: 'a', afterCursor: '0', changesPageLimit: 2,
+            forceSnapshotRefresh: false,
+            fetchChanges: async ({ afterCursor }) => {
+                requestedCursors.push(afterCursor);
+                const firstCursor = Number(afterCursor) + 1;
+                const complete = { cursor: firstCursor, kind: 'account', entityId: 'self', changedAt: firstCursor,
+                    hint: { settingsVersion: 1 } };
+                if (afterCursor === '6') return { status: 'ok', nextCursor: '6', changes: [] };
+                if (afterCursor === '4' && tail === 'short') return { status: 'ok', nextCursor: '5', changes: [complete] };
+                return { status: 'ok', nextCursor: String(firstCursor + 1), changes: [complete,
+                    { cursor: firstCursor + 1, kind: afterCursor === '4' ? 'account' : 'future-kind',
+                        entityId: afterCursor === '4' ? 'self' : 'next', changedAt: firstCursor + 1,
+                        ...(afterCursor === '4' ? { hint: { settingsVersion: 1 } } : {}) },
+                ] };
+            },
+            checkpointCursor: cursor => { checkpoints.push(cursor); return true; },
+            applyPlanned: planned => applyPlannedChangeActions({
+                planned, credentials, isSessionMessagesLoaded: () => false, invalidate: {},
+                invalidateMessagesForSession: async () => {}, invalidateScmStatusForSession: () => {},
+                applyTodoSocketUpdates: async () => {}, kvBulkGet: async () => ({ values: [] }),
+            }),
+            snapshotRefresh: async () => { throw new Error('A short tail needs no snapshot repair'); },
+        });
+
+        expect(requestedCursors).toEqual(tail === 'short' ? ['0', '2', '4'] : ['0', '2', '4', '6']);
+        expect(checkpoints).toEqual(['1']);
+        expect(result).toEqual({ status: 'ok', nextCursor: '1', shouldPersistCursor: false });
     });
 
     it('can force snapshot refresh even when under the page limit', async () => {
