@@ -75,6 +75,33 @@ async function click(element: HTMLElement | null): Promise<void> {
 }
 
 describe('HappierPresenceCapsule', () => {
+  it('keeps Watch reachable in a compact strip without requesting control', async () => {
+    const { host } = createHost();
+    let watching = false;
+    const onTakeControl = vi.fn();
+    const onWatch = () => { watching = true; };
+    const render = (presence: HappierPresence) => (
+      <HappierPresenceCapsule presence={presence} copy={COPY} colors={COLORS} host={host}
+        compact placement="strip" onWatch={onWatch} onTakeControl={onTakeControl}
+        onCheckAgain={() => undefined} testID="p" />
+    );
+    const mounted = mountThroughReactNativeWeb(render({ kind: 'agent', controlEpoch: 1 }));
+    try {
+      await click(byTestId(mounted.container, 'p-watch'));
+      expect(watching).toBe(true);
+      expect(onTakeControl).not.toHaveBeenCalled();
+      // A source with no Watch operation must still offer no dead button.
+      await mounted.render(<HappierPresenceCapsule presence={{ kind: 'agent', controlEpoch: 1 }}
+        copy={COPY} colors={COLORS} host={host} compact placement="strip" testID="p" />);
+      expect(byTestId(mounted.container, 'p-watch')).toBeNull();
+      await mounted.render(render({ kind: 'unconfirmed', controlEpoch: 2 }));
+      expect(byTestId(mounted.container, 'p-watch')).toBeNull();
+      expect(byTestId(mounted.container, 'p-check-again')).toBeTruthy();
+    } finally {
+      mounted.unmount();
+    }
+  });
+
   it('does not mistake command acceptance for authoritative human control', async () => {
     const { host } = createHost();
     const mounted = mountThroughReactNativeWeb(

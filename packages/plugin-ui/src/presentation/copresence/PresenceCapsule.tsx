@@ -311,7 +311,7 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
             ) : null}
           </View>
         )}
-        {props.onWatch && !(compact && (unconfirmed || strip)) ? (
+        {props.onWatch && !(compact && unconfirmed) ? (
           <host.Button emphasis="plain" title={copy.watch} onPress={props.onWatch} testID={`${testID}-watch`} />
         ) : null}
         {human && !observationRecovery && props.onHandBack ? (
