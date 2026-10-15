@@ -219,17 +219,17 @@ describe('bootstrapActiveServerFromWebLocation', () => {
         expect(result?.serverUrl).toBe('http://happier-repo-dev-a1cc5e0671.localhost:57010');
     });
 
-    it('drops stale route serverId params when consuming a web server override', async () => {
+    it.each(['127.0.0.1-57010', 'srv_other_home'])('preserves destination Home scope %s when consuming a web server override', async serverId => {
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
         process.env.EXPO_PUBLIC_HAPPY_SERVER_URL = 'http://localhost:57010';
 
-        stubWebLocation('http://happier-github-auth-e2ee.localhost:19081/session/session-1?server=http%3A%2F%2F127.0.0.1%3A57010&serverId=127.0.0.1-57010&tab=files');
+        stubWebLocation(`http://happier-github-auth-e2ee.localhost:19081/session/session-1?server=http%3A%2F%2F127.0.0.1%3A57010&serverId=${serverId}&tab=files`);
 
         const { bootstrapActiveServerFromWebLocation } = await importFreshBootstrap();
         const result = await bootstrapActiveServerFromWebLocation({ scope: 'device' });
 
         expect(result?.serverUrl).toBe('http://127.0.0.1:57010');
-        expect(result?.cleanedRelativeUrl).toBe('/session/session-1?tab=files');
+        expect(result?.cleanedRelativeUrl).toBe(`/session/session-1?serverId=${serverId}&tab=files`);
     });
 
     it.each([

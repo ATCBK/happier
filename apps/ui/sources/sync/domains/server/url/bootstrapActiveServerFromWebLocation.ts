@@ -95,7 +95,7 @@ export function readWebServerUrlOverrideFromLocation(): WebServerUrlOverride | n
         current.searchParams.delete('server');
         current.searchParams.delete('url');
         current.searchParams.delete('auto');
-        current.searchParams.delete('serverId');
+        // serverId qualifies the destination, independently of this global Home selection.
         const search = current.searchParams.toString();
         const cleanedRelativeUrl = `${current.pathname}${search ? `?${search}` : ''}${current.hash ?? ''}`;
         return { serverUrl, cleanedRelativeUrl };

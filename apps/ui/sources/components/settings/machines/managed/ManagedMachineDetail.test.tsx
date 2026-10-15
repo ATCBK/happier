@@ -21,7 +21,7 @@ import { ManagedMachineDetail } from './ManagedMachineDetail';
 import { t } from '@/text';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { ManagedCreationProgress } from './ManagedCreationProgress';
-import { ManagedEnrolledMachineSections, useManagedMachineHeaderIdentity, type ManagedMachineHeaderIdentity } from './ManagedMachineSections';
+import { ManagedMachineSections, ManagedEnrolledMachineSections, useManagedMachineHeaderIdentity, type ManagedMachineHeaderIdentity } from './ManagedMachineSections';
 import { ManagedMachinePolicySection, ManagedMachineControllerSection, ManagedControllerMoveList, ManagedMachineRecipeSection } from './ManagedMachineDetailSections';
 import { MachineConfigurationReceipt } from './MachineConfigurationReceipt';
 import { ManagedMachineV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
@@ -56,6 +56,10 @@ import { Item } from '@/components/ui/lists/Item';
 import { MachineProvisionersListResultV1Schema, MachineProvisionerOptionsResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { AutomationDefinitionDetailSchema, AutomationDefinitionListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, V2SessionRecordSchema, encodeV2SessionListCursorV1 } from '@happier-dev/protocol';
+import { commitWebServerUrlOverride } from '@/sync/domains/server/url/bootstrapActiveServerFromWebLocation';
+import { resolveCompactAppDestinations, resolveDestinationRefFromHref } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { WorkspaceRouteBody as ManagedMachineRouteBody } from '@/app/(app)/machines/managed/[id]';
 
 const operationRpcBoundary = vi.hoisted(() => ({ answer: null as unknown, registryAnswer: null as unknown, schemaAnswer: null as unknown,
     requests: [] as Array<Readonly<{ serverId?: string | null; accountId?: string | null; machineId: string; method: string }>> }));
@@ -130,6 +134,49 @@ function staticRetentionQualification(machine: ManagedMachineV1, url: URL, init?
 }
 
 describe('managed Machine detail', () => {
+    it('reads a cold managed destination through the real consumed Home URL and retained route producer', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-cold-destination.test', scope: 'tab' });
+        const homeId = 'srv_managed_cold_destination';
+        await setServerProfileIdentityForUrl(target.serverUrl, homeId);
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
+        const machine = ManagedMachineV1Schema.parse({ id: 'cold-managed', homeId, custodianAccountId: 'owner',
+            launch: { provider: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, name: 'Cold managed receipt', choices: {} },
+            controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'unsubmitted', creationState: 'active',
+            desired: 'stop', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false });
+        const pathname = `/machines/managed/${machine.id}`;
+        const location = { href: `https://app.test${pathname}?serverId=${homeId}&server=${encodeURIComponent(target.serverUrl)}` };
+        vi.stubGlobal('document', {});
+        vi.stubGlobal('window', { location, history: { state: null,
+            replaceState: (_state: unknown, _title: string, href: string) => { location.href = new URL(href, location.href).href; } } });
+        await commitWebServerUrlOverride({ action: { kind: 'refresh_auth', serverUrl: target.serverUrl },
+            switchServer: async () => { throw new Error('Already admitted Home must not switch'); }, refreshAuth: async () => {} });
+        const url = new URL(location.href);
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
+        const destination = resolveDestinationRefFromHref(catalog, `${url.pathname}${url.search}`);
+        if (!destination) throw new Error('Managed destination must be admitted');
+        // URL cleanup uses a browser boundary; the renderer keeps the suite's native host boundary.
+        vi.unstubAllGlobals();
+        const reads: unknown[] = [];
+        setRuntimeFetch(async (input, init) => {
+            const requestUrl = new URL(String(input));
+            if (requestUrl.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (requestUrl.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (requestUrl.pathname === '/v1/machines/managed/actions/get') {
+                expect(requestUrl.origin).toBe(target.serverUrl);
+                reads.push(JSON.parse(String(init?.body)));
+                return Response.json(machine);
+            }
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const navigation = (await import('expo-router')).router;
+        const screen = await renderScreen(<DestinationInstanceHost tabId="cold-managed-tab" ref={destination} pathname={pathname} focused visible navigation={navigation}>
+            <ManagedMachineRouteBody />
+        </DestinationInstanceHost>);
+        await flushHookEffects({ cycles: 30 });
+        expect(reads).toContainEqual({ homeId, managedId: machine.id });
+        expect(screen.tree.findByType(ManagedMachineSections).props.machine).toEqual(machine);
+        await screen.unmount();
+    });
     it.each(['provider', 'credential'] as const)('offers the canonical %s recovery from current native facts without installation retry', async removed => {
         const target = await upsertAndActivateServer({ serverUrl: `https://managed-missing-${removed}.test`, scope: 'tab' });
         await setServerProfileIdentityForUrl(target.serverUrl, `srv_managed_missing_${removed}`);
