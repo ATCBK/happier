@@ -388,7 +388,9 @@ function mapEvent(event: ClaudeProviderEvent, runtimeAuthServiceId: string | nul
     case 'transcript-agent-message-committed': {
       const message = committedMessage(event);
       return message
-        ? { kind: 'transcript-message-committed', messageId: event.localId, ...(event.sidechainId ? { sidechainId: event.sidechainId } : {}), ...message }
+        ? { kind: 'transcript-message-committed', messageId: event.localId,
+          ...(event.turnId ? { turnId: event.turnId } : {}),
+          ...(event.sidechainId ? { sidechainId: event.sidechainId } : {}), ...message }
         : null;
     }
     case 'session-ended':

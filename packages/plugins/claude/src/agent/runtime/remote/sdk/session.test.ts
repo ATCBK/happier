@@ -6,6 +6,7 @@ import {
   registerSensitiveDiagnosticValues,
 } from '@happier-dev/protocol';
 import type { AgentSessionRuntimeEvent } from '@happier-dev/protocol/runtime';
+import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import type {
   AgentSessionModelsSource,
   AgentSessionHostServices,
@@ -4813,6 +4814,110 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     } finally {
       await runtime.resetOrDisposeRuntime().catch(() => undefined);
     }
+  });
+
+  it.each(['assistant', 'result'] as const)('correlates committed SDK %s text with the admitted foreground turn', async source => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      happierSessionId: 'sdk-structured-run', permissionMode: 'default', publishTranscriptMessages: true });
+    const context = { session: { services: {
+      activeInput: { bind: () => ({ dispose() {} }) }, models: { bind: () => ({ dispose() {} }) },
+    } } } as unknown as AgentSessionRuntimeContext;
+    const session = createClaudeNativeSessionRuntimeFromOperations(operations,
+      { kind: 'create', sessionId: 'sdk-structured-run', cwd: '/tmp/claude-project' }, context);
+    const events: AgentSessionRuntimeEvent[] = [];
+    const subscription = session.watch(event => events.push(event));
+    const text = JSON.stringify({ summaryMarkdown: 'Captured changes.' });
+    try {
+      await session.send({ inputIds: ['structured-input'], input: { text: 'Generate structured output' },
+        delivery: { kind: 'newTurn', turnId: 'structured-turn' } });
+      await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
+      for (const extra of [{ isReplay: true }, { parent_tool_use_id: 'native-sidechain' }]) {
+        await exec.emit({ type: 'assistant', uuid: `outside-${Object.keys(extra)[0]}`, ...extra, message: {
+          role: 'assistant', content: [{ type: 'text', text: 'Outside the foreground response' }],
+        } });
+      }
+      if (source === 'assistant') await exec.emit({ type: 'assistant', uuid: 'structured-assistant', message: {
+        role: 'assistant', content: [{ type: 'text', text }],
+      } });
+      await exec.emit({ type: 'result', subtype: 'success', is_error: false, result: text,
+        uuid: 'structured-result', session_id: 'native-structured-run', queued_turn_count: 0, usage: {}, modelUsage: {} });
+      await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'turn-complete', turnId: 'structured-turn' }),
+      ])));
+      const committed = events.filter(event => event.kind === 'transcript-message-committed').map(event => AgentSessionRuntimeEventSchema.parse(event));
+      expect(committed.filter(event => event.kind === 'transcript-message-committed' && event.text === text))
+        .toEqual([expect.objectContaining({ kind: 'transcript-message-committed', role: 'assistant', turnId: 'structured-turn', text })]);
+      expect(committed.filter(event => event.kind === 'transcript-message-committed' && event.text === 'Outside the foreground response')
+        .every(event => !('turnId' in event) || event.turnId === undefined)).toBe(true);
+    } finally { subscription.dispose(); await session.dispose(); }
+  });
+
+  it.each([
+    ['completed', 'assistant'], ['completed', 'result'],
+    ['cancelled', 'assistant'], ['cancelled', 'result'],
+  ] as const)('keeps late %s query %s text outside the newer foreground turn', async (settlement, source) => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      happierSessionId: 'sdk-late-query', permissionMode: 'default', publishTranscriptMessages: true, publishSdkMessages: true });
+    const context = { session: { services: {
+      activeInput: { bind: () => ({ dispose() {} }) }, models: { bind: () => ({ dispose() {} }) },
+    } } } as unknown as AgentSessionRuntimeContext;
+    const session = createClaudeNativeSessionRuntimeFromOperations(operations,
+      { kind: 'create', sessionId: 'sdk-late-query', cwd: '/tmp/claude-project' }, context);
+    const events: AgentSessionRuntimeEvent[] = [];
+    const subscription = session.watch(event => events.push(AgentSessionRuntimeEventSchema.parse(event)));
+    const rawDeltas: Array<Readonly<{ turnId?: string; delta: unknown }>> = [];
+    const unsubscribeProvider = operations.subscribeProviderEvents(event => {
+      if (event.kind === 'message-delta') rawDeltas.push(event);
+    });
+    const result = (uuid: string, text: string) => ({ type: 'result', subtype: 'success', is_error: false,
+      session_id: 'native-late-query', uuid, result: text, queued_turn_count: 0, usage: {}, modelUsage: {} });
+    try {
+      await session.send({ inputIds: ['input-a'], input: { text: 'First query' },
+        delivery: { kind: 'newTurn', turnId: 'turn-a' } });
+      const processA = exec.processes[0];
+      if (!processA) throw new Error('Expected the first SDK process');
+      if (settlement === 'completed') {
+        await processA.emit({ type: 'system', subtype: 'task_started', session_id: 'native-late-query',
+          task_id: 'background-a', task_type: 'local_agent', is_backgrounded: true });
+        await processA.emit(result('result-a', 'First foreground complete'));
+        await operations.waitForProviderTurnCompletion();
+      } else {
+        await operations.cancelProviderTurn('turn-a');
+        await operations.waitForProviderTurnCompletion();
+      }
+      await session.send({ inputIds: ['input-b'], input: { text: 'Second query' },
+        delivery: { kind: 'newTurn', turnId: 'turn-b' } });
+      const processB = exec.processes[1];
+      if (!processB) throw new Error('Expected the second SDK process');
+      const lateText = 'Late output from the first query';
+      if (source === 'assistant') {
+        await processA.emit({ type: 'assistant', uuid: 'late-assistant-a', message: {
+          role: 'assistant', content: [{ type: 'text', text: lateText }],
+        } });
+      } else {
+        await processA.emit(result('late-result-a', lateText));
+      }
+      await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'transcript-message-committed', text: lateText }),
+      ])));
+      const lateCommits = events.filter(event => event.kind === 'transcript-message-committed' && event.text === lateText);
+      expect(lateCommits.map(event => event.turnId)).toEqual([undefined]);
+      if (source === 'assistant') {
+        expect(rawDeltas).toHaveLength(1);
+        expect(rawDeltas[0]?.turnId).toBeUndefined();
+      }
+      expect(events.filter(event => event.kind === 'turn-complete' && event.turnId === 'turn-b')).toEqual([]);
+      await processB.emit(result('result-b', 'Second foreground complete'));
+      await operations.waitForProviderTurnCompletion();
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'transcript-message-committed', text: 'Second foreground complete', turnId: 'turn-b' }),
+        expect.objectContaining({ kind: 'turn-complete', turnId: 'turn-b' }),
+      ]));
+    } finally { unsubscribeProvider(); subscription.dispose(); await session.dispose(); }
   });
 
   it('publishes Claude SDK assistant text as committed transcript events for UI sessions', async () => {

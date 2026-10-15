@@ -72,13 +72,13 @@ export const ClaudeProviderEventSchema = z.discriminatedUnion('kind', [
   ProviderEventBaseSchema.extend({
     kind: z.literal('message-delta'),
     sidechainId: providerIdentity().optional(),
-    turnId: z.string().trim().min(1),
+    turnId: z.string().trim().min(1).optional(),
     delta: z.unknown(),
   }),
   ProviderEventBaseSchema.extend({
     kind: z.literal('tool-call'),
     sidechainId: providerIdentity().optional(),
-    turnId: z.string().trim().min(1),
+    turnId: z.string().trim().min(1).optional(),
     toolCallId: providerIdentity(),
     toolName: z.string().trim().min(1),
     toolInput: z.unknown(),
@@ -107,6 +107,7 @@ export const ClaudeProviderEventSchema = z.discriminatedUnion('kind', [
   ProviderEventBaseSchema.extend({
     kind: z.literal('transcript-agent-message-committed'),
     sidechainId: providerIdentity().optional(),
+    turnId: z.string().trim().min(1).optional(),
     agentId: z.string().trim().min(1),
     localId: z.string().trim().min(1),
     body: z.unknown(),

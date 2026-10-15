@@ -522,7 +522,7 @@ function readSdkSidechainId(value: unknown): string | undefined {
 function mapSdkRuntimeEvent(params: Readonly<{
     message: SDKMessage;
     sessionId: string;
-    turnId: string;
+    turnId: string | null;
     providerFailure?: ClaudeProviderFailureEvidence | null;
 }>): ProviderEventMessage | null {
     if (params.message.type === 'assistant') {
@@ -531,13 +531,14 @@ function mapSdkRuntimeEvent(params: Readonly<{
             emittedAtMs: Date.now(),
             kind: 'message-delta',
             ...(readSdkSidechainId(params.message) ? { sidechainId: readSdkSidechainId(params.message) } : {}),
-            turnId: params.turnId,
+            ...(params.turnId && !isReplayClaudeAgentSdkMessage(params.message) ? { turnId: params.turnId } : {}),
             delta: {
                 agentId: 'claude',
                 message: params.message,
             },
         });
     }
+    if (isSdkResultMessage(params.message) && !params.turnId) return null;
     if (isSdkResultMessage(params.message) && params.message.subtype === 'success' && params.message.is_error !== true) {
         return ClaudeProviderEventSchema.parse({
             sessionId: params.sessionId,
@@ -574,6 +575,7 @@ function mapSdkTranscriptEvent(params: Readonly<{
     message: SDKMessage;
     sessionId: string;
     sequence: number;
+    turnId: string | null;
 }>): ProviderEventMessage | null {
     const text = readClaudeNativePeerMessageText(params.message)
         ?? (isSdkAssistantMessage(params.message) ? readAssistantText(params.message) : null);
@@ -582,6 +584,9 @@ function mapSdkTranscriptEvent(params: Readonly<{
         sessionId: params.sessionId,
         emittedAtMs: Date.now(),
         kind: 'transcript-agent-message-committed',
+        ...(params.turnId && isSdkAssistantMessage(params.message)
+            && !isReplayClaudeAgentSdkMessage(params.message) && !readSdkSidechainId(params.message)
+            ? { turnId: params.turnId } : {}),
         ...(readSdkSidechainId(params.message) ? { sidechainId: readSdkSidechainId(params.message) } : {}),
         agentId: 'claude',
         localId: `claude-sdk-${readMessageId(params.message, `assistant-${params.sequence}`)}`,
@@ -599,6 +604,7 @@ function mapResultTranscriptEvent(params: Readonly<{
     message: SDKResultMessage;
     sessionId: string;
     sequence: number;
+    turnId: string | null;
 }>): ProviderEventMessage | null {
     const text = readString(params.message.result);
     if (!text) return null;
@@ -606,6 +612,7 @@ function mapResultTranscriptEvent(params: Readonly<{
         sessionId: params.sessionId,
         emittedAtMs: Date.now(),
         kind: 'transcript-agent-message-committed',
+        ...(params.turnId ? { turnId: params.turnId } : {}),
         agentId: 'claude',
         localId: `claude-sdk-result-${readMessageId(params.message, `result-${params.sequence}`)}`,
         body: {
@@ -655,7 +662,7 @@ function mapSdkResultUsageTranscriptEvent(params: Readonly<{
 function mapSdkToolRuntimeEvents(params: Readonly<{
     message: SDKMessage;
     sessionId: string;
-    turnId: string;
+    turnId: string | null;
     toolNameByCallId: Map<string, string>;
     taskNotificationProjector: ReturnType<typeof createClaudeTaskNotificationToolResultProjector>;
 }>): ProviderEventMessage[] {
@@ -668,7 +675,7 @@ function mapSdkToolRuntimeEvents(params: Readonly<{
             emittedAtMs: Date.now(),
             kind: 'tool-call',
             ...(sidechainId ? { sidechainId } : {}),
-            turnId: params.turnId,
+            ...(params.turnId && !isReplayClaudeAgentSdkMessage(params.message) ? { turnId: params.turnId } : {}),
             toolCallId: block.id,
             toolName: block.name,
             toolInput: block.input,
@@ -683,7 +690,7 @@ function mapSdkToolRuntimeEvents(params: Readonly<{
             emittedAtMs: Date.now(),
             kind: 'tool-result',
             ...(resultSidechainId ? { sidechainId: resultSidechainId } : {}),
-            turnId: params.turnId,
+            ...(params.turnId && !isReplayClaudeAgentSdkMessage(params.message) ? { turnId: params.turnId } : {}),
             toolCallId: block.toolUseId,
             output: block.output,
             ...(block.isError === undefined ? {} : { isError: block.isError }),
@@ -1369,6 +1376,7 @@ export function createClaudeAgentSdkTurnOperations(
         providerFailure: ClaudeProviderFailureEvidence | null;
         publishedTranscriptText: boolean;
         turnQuery: ClaudeSdkQuery;
+        turnId: string | null;
     }>;
 
     function publishResultUsage(message: SDKResultMessage, observedAtMs: number): void {
@@ -1396,6 +1404,7 @@ export function createClaudeAgentSdkTurnOperations(
                 message: turn.message,
                 sessionId: readString(params.happierSessionId) ?? providerSessionId ?? 'claude-agent-sdk',
                 sequence: turn.messageSequence,
+                turnId: activeCompletion === turn.completion && !cancelledQueries.has(turn.turnQuery) ? turn.turnId : null,
             });
             if (resultTranscriptEvent) publishRuntimeEvent(resultTranscriptEvent);
         }
@@ -1405,16 +1414,16 @@ export function createClaudeAgentSdkTurnOperations(
         turn: ResultTurn,
         publishTerminal: (event: ClaudeProviderEvent) => void,
     ): void {
+        publishResultEvidence(turn);
         if (activeQuery === turn.turnQuery) activeQuery = null;
         if (activeCompletion === turn.completion) {
             activeCompletion = null;
             turnInFlight = false;
         }
-        publishResultEvidence(turn);
         publishTerminal(mapSdkRuntimeEvent({
             message: turn.message,
             sessionId: readRuntimeEventSessionId(),
-            turnId: currentTurnId ?? 'claude-agent-sdk-turn',
+            turnId: turn.turnId ?? 'claude-agent-sdk-turn',
             providerFailure: turn.providerFailure,
         })!);
         reconcileProviderTaskRuntimeActivityForCurrentQuery('foreground-result');
@@ -1603,13 +1612,13 @@ export function createClaudeAgentSdkTurnOperations(
         }
         : null;
 
-    function publishCancelledTurnTerminal(completion: DeferredCompletion, reason: string): void {
+    function publishCancelledTurnTerminal(completion: DeferredCompletion, reason: string, turnId: string | null): void {
         if (!completion.claimTerminalPublication()) return;
         publishRuntimeEvent(ClaudeProviderEventSchema.parse({
             sessionId: readRuntimeEventSessionId(),
             emittedAtMs: Date.now(),
             kind: 'turn-cancelled',
-            turnId: currentTurnId ?? 'claude-agent-sdk-turn',
+            turnId: turnId ?? 'claude-agent-sdk-turn',
             reason,
         }));
     }
@@ -1629,11 +1638,11 @@ export function createClaudeAgentSdkTurnOperations(
         turnInFlight = false;
         lastTurnCompletionFailure = null;
         reconcileProviderTaskRuntimeActivityForCurrentQuery('user-cancelled');
-        publishCancelledTurnTerminal(completion, 'user_request');
+        publishCancelledTurnTerminal(completion, 'user_request', currentTurnId);
         completion.resolve();
     }
 
-    async function consumeTurnMessages(turnQuery: ClaudeSdkQuery, completion: DeferredCompletion, launchEffort?: string | null): Promise<void> {
+    async function consumeTurnMessages(turnQuery: ClaudeSdkQuery, completion: DeferredCompletion, turnId: string | null, launchEffort?: string | null): Promise<void> {
         const mcpUsage = createClaudeMcpUsageWitness(Object.keys(params.mcpServers ?? {}).filter(name => name !== 'happier'), Date.now());
         const skillUsage = createClaudeSkillUsageWitness();
         let sawResult = false;
@@ -1642,6 +1651,8 @@ export function createClaudeAgentSdkTurnOperations(
         let publishedTranscriptText = false;
         let providerFailure: ClaudeProviderFailureEvidence | null = null;
         let foregroundCompleted = false;
+        const readForegroundTurnId = (): string | null => !foregroundCompleted
+            && !cancelledQueries.has(turnQuery) && activeCompletion === completion ? turnId : null;
         let sdkResultSubtype: string | null = null;
         const toolNameByCallId = new Map<string, string>();
         const publishTerminal = (event: ClaudeProviderEvent): void => {
@@ -1671,7 +1682,7 @@ export function createClaudeAgentSdkTurnOperations(
                 sessionId: readRuntimeEventSessionId(),
                 emittedAtMs: Date.now(),
                 kind: 'turn-failed',
-                turnId: currentTurnId ?? 'claude-agent-sdk-turn',
+                turnId: turnId ?? 'claude-agent-sdk-turn',
                 issue: buildClaudeSessionRuntimeIssue({
                     code,
                     source,
@@ -1686,7 +1697,7 @@ export function createClaudeAgentSdkTurnOperations(
                 sessionId: readRuntimeEventSessionId(),
                 emittedAtMs: Date.now(),
                 kind: 'turn-failed',
-                turnId: currentTurnId ?? 'claude-agent-sdk-turn',
+                turnId: turnId ?? 'claude-agent-sdk-turn',
                 issue: buildClaudeSessionRuntimeIssue({
                     code: failure.code,
                     source: failure.source,
@@ -1698,7 +1709,7 @@ export function createClaudeAgentSdkTurnOperations(
             }));
         };
         const publishCancelledTerminal = (reason: string): void => {
-            publishCancelledTurnTerminal(completion, reason);
+            publishCancelledTurnTerminal(completion, reason, turnId);
         };
         try {
             while (true) {
@@ -1764,7 +1775,7 @@ export function createClaudeAgentSdkTurnOperations(
                         compactionId: readString(message.uuid) ?? randomUUID(), phase: 'completed',
                         trigger: compactMetadata?.trigger === 'auto' ? 'automatic'
                             : compactMetadata?.trigger === 'manual' ? 'manual' : 'unknown',
-                        ...(currentTurnId ? { turnId: currentTurnId } : {}),
+                        ...(readForegroundTurnId() ? { turnId: readForegroundTurnId() } : {}),
                     }));
                 }
                 const completedBackgroundTasks = observeProviderTaskActivity(message, undefined, turnQuery)
@@ -1777,7 +1788,7 @@ export function createClaudeAgentSdkTurnOperations(
                     const runtimeEvent = mapSdkRuntimeEvent({
                         message,
                         sessionId: providerSessionId ?? readString(params.happierSessionId) ?? 'claude-agent-sdk',
-                        turnId: currentTurnId ?? 'claude-agent-sdk-turn',
+                        turnId: readForegroundTurnId(),
                         providerFailure,
                     });
                     publishRuntimeEvent(runtimeEvent);
@@ -1788,9 +1799,11 @@ export function createClaudeAgentSdkTurnOperations(
                         message,
                         sessionId: readString(params.happierSessionId) ?? providerSessionId ?? 'claude-agent-sdk',
                         sequence: messageSequence,
+                        turnId: readForegroundTurnId(),
                     });
                     if (transcriptEvent) {
-                        if (isSdkAssistantMessage(message)) publishedTranscriptText = true;
+                        if (isSdkAssistantMessage(message) && !isReplayClaudeAgentSdkMessage(message)
+                            && !readSdkSidechainId(message)) publishedTranscriptText = true;
                         publishRuntimeEvent(transcriptEvent);
                     }
                 }
@@ -1801,7 +1814,7 @@ export function createClaudeAgentSdkTurnOperations(
                         inferenceId: readString(message.message.id),
                         nativeSessionId: readString(message.session_id),
                         turnId: !isReplayClaudeAgentSdkMessage(message) && !readString(message.parent_tool_use_id)
-                            ? currentTurnId : null,
+                            ? readForegroundTurnId() : null,
                         modelId: readClaudeAssistantModelId(message),
                         ...(currentProviderModel ? { modelSource: 'provider' } : {}),
                         observedAtMs: Date.now(),
@@ -1812,7 +1825,7 @@ export function createClaudeAgentSdkTurnOperations(
                     for (const runtimeEvent of mapSdkToolRuntimeEvents({
                         message,
                         sessionId: readRuntimeEventSessionId(),
-                        turnId: currentTurnId ?? 'claude-agent-sdk-turn',
+                        turnId: readForegroundTurnId(),
                         toolNameByCallId,
                         taskNotificationProjector,
                     })) {
@@ -1875,6 +1888,7 @@ export function createClaudeAgentSdkTurnOperations(
                     providerFailure,
                     publishedTranscriptText,
                     turnQuery,
+                    turnId,
                 };
                 // SDK 0.3.243 gives success and error results the same queue contract:
                 // positive counts retain the submitted turn until its queued sends finish.
@@ -1896,18 +1910,19 @@ export function createClaudeAgentSdkTurnOperations(
                     continue;
                 }
                 const usedSkills = skillUsage.finish();
-                if (currentTurnId && !cancelledQueries.has(turnQuery) && !foregroundCompleted && usedSkills.length) {
+                const foregroundTurnId = readForegroundTurnId();
+                if (foregroundTurnId && usedSkills.length) {
                     publishRuntimeEvent(ClaudeProviderEventSchema.parse({ kind: 'skill-usage',
-                        sessionId: readRuntimeEventSessionId(), turnId: currentTurnId, emittedAtMs: Date.now(), skills: usedSkills }));
+                        sessionId: readRuntimeEventSessionId(), turnId: foregroundTurnId, emittedAtMs: Date.now(), skills: usedSkills }));
                 }
                 if (isSuccessfulResultMessage) {
                     sawResult = true;
                     const shouldContinueForBackgroundTasks = providerActivityLedger.hasActiveProviderTasks(turnQuery);
                     if (!shouldContinueForBackgroundTasks) providerActivityLedger.completeQueryObservation(turnQuery);
-                    if (currentTurnId && !cancelledQueries.has(turnQuery) && !foregroundCompleted
+                    if (foregroundTurnId
                         && Object.keys(params.mcpServers ?? {}).length > 0) {
                         publishRuntimeEvent(ClaudeProviderEventSchema.parse({ kind: 'mcp-tool-usage',
-                            sessionId: readRuntimeEventSessionId(), turnId: currentTurnId, emittedAtMs: Date.now(),
+                            sessionId: readRuntimeEventSessionId(), turnId: foregroundTurnId, emittedAtMs: Date.now(),
                             ...mcpUsage.finish(Date.now(), !shouldContinueForBackgroundTasks) }));
                     }
                     const turnEndContextUsageRefresh = params.publishTranscriptMessages === true
@@ -1965,7 +1980,7 @@ export function createClaudeAgentSdkTurnOperations(
                     publishTerminal(mapSdkRuntimeEvent({
                         message,
                         sessionId: readRuntimeEventSessionId(),
-                        turnId: currentTurnId ?? 'claude-agent-sdk-turn',
+                        turnId: turnId ?? 'claude-agent-sdk-turn',
                         providerFailure,
                     })!);
                     const resultError = createResultError(message, providerFailure);
@@ -2181,6 +2196,7 @@ export function createClaudeAgentSdkTurnOperations(
                 };
             }
             turnInFlight = true;
+            const submittedTurnId = currentTurnId;
             const submission = { cancelled: false };
             pendingSubmission = submission;
             try {
@@ -2231,7 +2247,7 @@ export function createClaudeAgentSdkTurnOperations(
                         onPromptDeliveryOutcome?.({
                             type: 'input-accepted',
                             ...identity,
-                            delivery: { kind: 'newTurn', turnId: currentTurnId ?? 'claude-agent-sdk-turn' },
+                            delivery: { kind: 'newTurn', turnId: submittedTurnId ?? 'claude-agent-sdk-turn' },
                         });
                     } else if (outcome.kind === 'rejected_before_effect') {
                         const message = sanitizeProviderErrorPreview(outcome.reason);
@@ -2290,7 +2306,7 @@ export function createClaudeAgentSdkTurnOperations(
                     activeQuery = interruptedQuery;
                     if (pendingSubmission === submission) pendingSubmission = null;
                     disposeQuery = interruptedQuery;
-                    void consumeTurnMessages(interruptedQuery, completion);
+                    void consumeTurnMessages(interruptedQuery, completion, submittedTurnId);
                     return outcome;
                 }
                 const launchSettings = {
@@ -2375,7 +2391,7 @@ export function createClaudeAgentSdkTurnOperations(
                 activeQuery = turnQuery;
                 if (pendingSubmission === submission) pendingSubmission = null;
                 disposeQuery = turnQuery;
-                void consumeTurnMessages(turnQuery, completion, launchEffort);
+                void consumeTurnMessages(turnQuery, completion, submittedTurnId, launchEffort);
                 const transportOutcome = await turnQuery.promptTransportOutcome;
                 const outcome: ClaudeRuntimePromptSubmissionOutcome = transportOutcome.kind === 'accepted'
                     ? transportOutcome
