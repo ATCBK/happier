@@ -1,5 +1,6 @@
 import { PluginRuntimeCapabilityFamilyV1Schema } from '@happier-dev/protocol/plugins/runtime/api';
 import type { PluginRuntimeCapabilityFamilyV1 } from '@happier-dev/protocol';
+import { z } from 'zod/mini';
 
 export type PluginRuntimeAuthoritySnapshotV1 = Readonly<{
     runtimeCapabilities: readonly PluginRuntimeCapabilityFamilyV1[];
@@ -18,7 +19,7 @@ export function snapshotActivatedPluginRuntimeAuthority(
     if (!runtimeCapabilities) return null;
     return Object.freeze({
         runtimeCapabilities: Object.freeze(
-            PluginRuntimeCapabilityFamilyV1Schema.array().parse(
+            z.array(PluginRuntimeCapabilityFamilyV1Schema).parse(
                 [...runtimeCapabilities].sort(),
             ),
         ),
