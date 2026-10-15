@@ -36,7 +36,7 @@ const page = {
   scope: Pick<Bar['page']['scope'], 'costBasis'>;
 }>;
 
-function renderBar(selections: string[]) {
+function renderBar(selections: string[], overrides: Partial<Bar> = {}) {
   const filter = (
     field: 'sources' | 'agents',
     selected: string[],
@@ -69,13 +69,14 @@ function renderBar(selections: string[]) {
       ),
     ],
     costBasisOptions: ['auto'],
+    costBasisPending: false,
     onPeriodChange: async () => true,
     onCostBasisChange: async () => true,
     metric: 'tokens',
     onMetricChange: null,
     testID: 'filters',
   } satisfies Bar;
-  return renderScreen(<UsageFilterBar {...props} />);
+  return renderScreen(<UsageFilterBar {...props} {...overrides} />);
 }
 
 describe('UsageFilterBar', () => {
@@ -122,5 +123,21 @@ describe('UsageFilterBar', () => {
     const { Popover } = await import('@/components/ui/popover');
     expect(screen.findAllByType(Popover).every((popover) => (popover.props.portal?.anchorAlign ?? 'start') === 'start')).toBe(true);
     await screen.unmount();
+  });
+
+  it('holds the cost basis chip and each unanswered count slot while the usage read is outstanding', async () => {
+    Object.assign(viewport, { width: 1280, height: 900 });
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', maxTouchPoints: 0 });
+    const pending = await renderBar([], { costBasisPending: true });
+    const chips = pending.findAllByType(SelectionListFilterChip).map((chip) => chip.props.filter);
+    // The basis in force is the chip's only known choice; the scope chips hold their count slot until it is known.
+    expect(chips.find((chip) => chip.id === 'costBasis')?.options.map((option: { id: string }) => option.id)).toEqual(['auto']);
+    expect(chips.find((chip) => chip.id === 'sources')).toMatchObject({ reserveCount: true, count: '1' });
+    expect(chips.find((chip) => chip.id === 'agents')?.reserveCount).toBeUndefined();
+    await pending.unmount();
+    // Answered with one basis only: nothing to choose, so the chip is gone.
+    const settled = await renderBar([]);
+    expect(settled.findAllByType(SelectionListFilterChip).map((chip) => chip.props.filter.id)).not.toContain('costBasis');
+    await settled.unmount();
   });
 });

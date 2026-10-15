@@ -727,6 +727,13 @@ export type SelectionListFilter = Readonly<{
     /** How many things the filter leaves in view ("Changed only 14"), after the value in a quieter tone. */
     count?: string;
     /**
+     * Hold the count's two-digit slot while it is not known yet, so a chip that gains its count
+     * ("All" then "All 5") keeps its width and its neighbours stay where they were drawn.
+     */
+    reserveCount?: boolean;
+    /** Hold the presence dot's slot while there is no dot, so a dot that appears later moves nothing. */
+    reservePresence?: boolean;
+    /**
      * An on/off filter that is on: the chip ends in × and pressing it turns the filter off. Such a
      * chip has no chooser; `clearAccessibilityLabel` names what pressing it does ("Show all files").
      */

@@ -30,7 +30,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
   const view = useUsageAnalyticsView(props.slice, props.query);
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   if (!view)
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={{ kind: 'summary' }} />;
   const cost = props.query.metric === 'cost';
   const selectedCost = view.pageCost;
   const currency = selectedCost.selection?.currency ?? view.costPresentation.currency;
@@ -105,9 +105,13 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         showLabel
         label={t('usage.board.page.mergedPrs')}
         value={merged?.length ?? UNKNOWN_VALUE}
-        reserveCaption
+        // Every figure, a zero or a dash included, says why it reads as it does in the same caption slot.
         caption={
-          merged && merged.length > 0 ? t('usage.board.page.linkedByEvidence') : undefined
+          !merged
+            ? t('usage.board.page.notMeasuredYet')
+            : merged.length > 0
+              ? t('usage.board.page.linkedByEvidence')
+              : t('usage.board.page.noneLinkedByEvidence')
         }
       />,
     );
@@ -123,10 +127,9 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         label={t('usage.board.page.agentTime')}
         value={intervals ? intervals.agentTimeMs / HOUR_MS : UNKNOWN_VALUE}
         valueFormatter={intervals ? () => formatUsageDurationCompact(intervals.agentTimeMs) : undefined}
-        reserveCaption
         caption={intervals ? t('usage.board.page.elapsedTime', {
           time: formatUsageDurationCompact(intervals.elapsedBusyMs),
-        }) : undefined}
+        }) : t('usage.board.page.notMeasuredYet')}
       />,
     );
   else

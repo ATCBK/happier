@@ -8,7 +8,8 @@ import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useWidgetFrameResourceActivity } from '@/components/widgets/frame/widgetFrameResourceActivity';
 import { t } from '@/text';
-import type { UsageBodyProps } from './usageBodyKit';
+import { UsageBodyReading, type UsageBodyProps } from './usageBodyKit';
+import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { useUsageWidgetModel } from './usageWidgetBatch';
 import { useUsageQueryActions } from './useUsageQueryActions';
 import { UsageDailyWidget } from './UsageDailyWidget';
@@ -24,7 +25,7 @@ import { UsagePlanFitWidget } from './UsagePlanFitWidget';
 import { UsageProjectLedgerWidget } from './UsageProjectLedgerWidget';
 import { UsageSessionValueWidget } from './UsageSessionValueWidget';
 import { UsageOutcomesWidget } from './UsageOutcomesWidget';
-import { UsageCoachWidget } from './UsageCoachWidget';
+import { UsageCoachWidget, isUsageCoachStrip } from './UsageCoachWidget';
 import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { UsageParallelWidget } from './UsageParallelWidget';
 import { UsageHumanLoopWidget } from './UsageHumanLoopWidget';
@@ -105,6 +106,11 @@ function UsageQueryWidgetBody(
   const pricesAction = useUsageModelPricesAction(props.id === 'usage_cost_facts' ? slice : null, props.serverId, props.testID);
   useUsageQueryActions(props.id, slice?.shownQuery ?? query, pricesAction);
   const Body = USAGE_QUERY_BODIES[props.id];
+  // A first read holds the room of the shape that lands (Period summary's figures, the Coach's strip), so the
+  // widgets below it do not move when the facts arrive; every other body holds three list rows.
+  const presentation = useWidgetPresentation();
+  const readingShape = props.id === 'usage_period_summary' ? { kind: 'summary' as const }
+    : props.id === 'usage_coach' && isUsageCoachStrip(presentation) ? { kind: 'strip' as const } : undefined;
   if (!query)
     return (
       <SurfaceStateCard
@@ -140,6 +146,7 @@ function UsageQueryWidgetBody(
         />
       );
     // Pending is never zero: the rows' space is held until the first facts arrive.
+    if (readingShape) return <UsageBodyReading testID={`${props.testID}.loading`} shape={readingShape} />;
     return (
       <ItemLoadStateRows
         testID={`${props.testID}.loading`}

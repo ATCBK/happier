@@ -62,7 +62,7 @@ import {
   useUsageWidgetBatchSlices,
   useUsageWidgetBatchInventorySlice,
 } from './widgets/usageWidgetBatch';
-import { describeUsagePagePendingSources, readUsagePageAsOfMs } from './widgets/usageBodyKit';
+import { describeUsagePagePendingSources, readUsageCoverageGaps, readUsagePageAsOfMs } from './widgets/usageBodyKit';
 
 const PRESET_ICON: Readonly<Record<UsageWidgetPresetId, IconName>> = {
   overview: 'squares-four',
@@ -351,6 +351,9 @@ function UsagePageDocument(
         : [],
     [firstAccounting, page.period],
   );
+  // Cost bases are named by the first usage read; until it answers (or fails) the toolbar holds the chip's room.
+  const costBasisPending = usageWidgets.length > 0 && !firstAccounting
+    && slices.every(slice => readUsageCoverageGaps(slice, ['accounting']).every(gap => gap.status === 'pending' || gap.status === 'not_loaded'));
   const bindingSelectLayout = binding.selectLayout;
   const selectAreaLayout = React.useCallback(async (layoutId: string) => (await bindingSelectLayout(layoutId)).ok, [bindingSelectLayout]);
   const publishedLayouts = React.useMemo(() => tabs.map((tab) => ({ id: tab.id, name: tab.name })), [tabs]);
@@ -490,6 +493,7 @@ function UsagePageDocument(
         onPeriodChange={selectPeriod}
         onCostBasisChange={selectCostBasis}
         costBasisOptions={costBasisOptions}
+        costBasisPending={costBasisPending}
         metric={metric}
         metricPending={pendingMetric === metricLifetime}
         onMetricChange={

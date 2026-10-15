@@ -77,6 +77,10 @@ describe('one selected money basis across Usage bodies', () => {
       expect(statLabels()).toEqual(expectedLabels);
       expect(screen.findAllByType(HappierDataMetric).find(metric => metric.props.label === t('usage.board.page.agentTime'))?.props.value)
         .toBe(expected);
+      // A dash carries its quiet reason in the caption slot, so the three cells stay even.
+      const stat = (label: string) => screen.findAllByType(HappierDataMetric).find(metric => metric.props.label === label)!;
+      expect(stat(t('usage.board.page.agentTime')).props.caption === t('usage.board.page.notMeasuredYet')).toBe(expected === '—');
+      expect(stat(t('usage.board.page.mergedPrs')).props.caption).toEqual(expect.any(String));
     }
   });
   it('uses reported then priced money per real QA row across Daily, Flow, Breakdowns, Leaders, Efficiency and Work', async () => {

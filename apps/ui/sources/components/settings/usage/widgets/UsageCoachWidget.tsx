@@ -38,7 +38,10 @@ import {
   UsageBodyInsufficient,
   UsageBodyReading,
   UsageCoverageLine,
+  readUsageCoverageGaps,
+  SETTLED_COACH_STRIP_BODY_PX,
   usagePeriodPhrase,
+  useSettledBodyHeightFloor,
   useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
@@ -56,6 +59,11 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /** Below this body width the Overview strip's three columns would crush their titles; it lists instead. */
 const STRIP_MIN_WIDTH_PX = 760;
 const STRIP_FINDINGS = 3;
+/** On Overview, at the strip's width, the Coach is three findings in a row; its loading state holds that room. */
+export function isUsageCoachStrip(presentation: ReturnType<typeof useWidgetPresentation>): boolean {
+  return presentation?.size !== undefined && presentation.size !== 'large'
+    && (presentation.geometry?.width ?? 0) >= STRIP_MIN_WIDTH_PX;
+}
 const DETECTOR_GLYPHS: Readonly<Record<UsageCoachDetectorId, IconName>> = {
   duplicated_instructions: 'file-text',
   model_misfit: 'cpu',
@@ -226,6 +234,18 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   const coach = props.slice.coach;
   const { refresh } = props.model;
   const { controller, snapshot } = useUsageCoachController(refresh);
+  // Anywhere but its own view (size Large) the Coach is a glance: up to three findings, the rest of
+  // the Coach (hidden, checks, digest, preferences) stays on the Coach view.
+  const glance = presentation?.size !== undefined && presentation.size !== 'large';
+  const strip = isUsageCoachStrip(presentation);
+  // The strip holds its populated height while the evidence it reads is outstanding, so the loading
+  // state, the "need more evidence" line and the findings come and go inside one height; once settled it
+  // keeps the tallest height it has drawn, so a re-read never moves what sits below.
+  const reading = readUsageCoverageGaps(props.slice, ['how_you_work', 'accounting'])
+    .some(gap => gap.status === 'pending' || gap.status === 'not_loaded');
+  const floor = useSettledBodyHeightFloor(!reading, `${glance}:${strip}`);
+  const bodyStyle = [styles.body, strip && reading ? { minHeight: SETTLED_COACH_STRIP_BODY_PX }
+    : floor.minHeight !== undefined ? { minHeight: floor.minHeight } : null];
   // Preferences are rare: a quiet disclosure after the findings, never a bar above them (lab d2coach).
   const configuration = <UsagePlanDisclosure title={t('usage.board.coach.configure')} testID={`${props.testID}.configure`}>
     <UsageCoachSettingsGroup serverId={props.serverId} testID={`${props.testID}.preferences`} />
@@ -241,7 +261,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   );
   if (!coach)
     return (
-      <View style={styles.body}>
+      <View style={bodyStyle} onLayout={floor.onLayout}>
         <UsageBodyInsufficient
           testID={`${props.testID}.unavailable`}
           title={t('usage.board.coach.unavailableTitle')}
@@ -279,10 +299,6 @@ export function UsageCoachWidget(props: UsageBodyProps) {
     ...(disabled.length ? [{ key: 'disabled', label: t('usage.board.coach.summaryOff'), value: disabled.length }] : []),
   ];
   // On Overview the Coach is a strip of up to three findings (lab wgusage-CD); its own view lists all.
-  // Anywhere but its own view (size Large) the Coach is a glance: up to three findings, the rest of
-  // the Coach (hidden, checks, digest, preferences) stays on the Coach view.
-  const glance = presentation?.size !== undefined && presentation.size !== 'large';
-  const strip = glance && (presentation?.geometry?.width ?? 0) >= STRIP_MIN_WIDTH_PX;
   const shown = glance ? visible.slice(0, STRIP_FINDINGS) : visible;
   const row = (finding: UsageCoachFinding) => (
     <UsageCoachFindingRow
@@ -301,12 +317,12 @@ export function UsageCoachWidget(props: UsageBodyProps) {
     />
   );
   return (
-    <View style={styles.body} testID={`${props.testID}.coach`}>
+    <View style={bodyStyle} onLayout={floor.onLayout} testID={`${props.testID}.coach`}>
       {/* The facts band belongs to the Coach view; the Overview strip is the findings alone (lab wgusage-CD). */}
       {glance ? null : <UsageCoachSummaryBand facts={summary} testID={`${props.testID}.summary`} />}
       {visible.length === 0 && appliedOnly.length === 0 ? (
         props.slice.sources.some(source => ['accounting', 'how_you_work'].includes(source.source) && source.status === 'pending')
-          && coach.currentness !== 'stale' ? <UsageBodyReading testID={`${props.testID}.loading`} /> :
+          && coach.currentness !== 'stale' ? <UsageBodyReading testID={`${props.testID}.loading`} {...(strip ? { shape: { kind: 'strip' as const } } : {})} /> :
         <SurfaceStateCard
           testID={`${props.testID}.empty`}
           kind="empty"

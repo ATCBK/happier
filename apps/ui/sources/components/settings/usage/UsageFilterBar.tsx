@@ -34,6 +34,8 @@ export function UsageFilterBar(
     slices: readonly UsageQueryResultSlice[];
     scopeFilters: readonly UsageWidgetPageFilter[];
     costBasisOptions: readonly UsageWidgetPageScope['costBasis'][];
+    /** The usage read that tells which cost bases exist has not answered yet. */
+    costBasisPending: boolean;
     onPeriodChange(period: UsagePeriod): Promise<boolean>;
     onCostBasisChange(costBasis: UsageWidgetPageScope['costBasis']): Promise<boolean>;
     /** The displayed widgets' shared metric; `null` when they differ or none is shown. */
@@ -83,6 +85,10 @@ export function UsageFilterBar(
           ...(selected.length === 0 && options.length > 1
             ? { count: String(options.length - 1) }
             : {}),
+          // The count arrives with the read; its slot is held so the chips beside this one never move.
+          ...(selected.length === 0 ? { reserveCount: true } : {}),
+          // The gap dot comes and goes with coverage; its slot stays so the chips beside Sources never move.
+          ...(field === 'sources' ? { reservePresence: true } : {}),
           ...(field === 'sources' && coverageIncomplete ? { presence: 'attention' as const } : {}),
           ...(field === 'agents' && selected.length === 1
             ? {
@@ -119,14 +125,17 @@ export function UsageFilterBar(
       }),
     [props.scopeFilters, props.testID, coverageIncomplete, theme],
   );
+  // While the read that names the cost bases is outstanding the chip already shows the basis in force (its
+  // only known choice), so the trailing edge keeps its width and nothing beside it moves when the rest arrive.
+  const costBasisChoices = props.costBasisPending ? [page.scope.costBasis] : props.costBasisOptions;
   const costFilter = React.useMemo(
     (): SelectionListFilter | null =>
-      props.costBasisOptions.length < 2
+      costBasisChoices.length < 2 && !props.costBasisPending
         ? null
         : {
             id: 'costBasis',
             label: t('usage.costMode'),
-            options: props.costBasisOptions.map((option) => ({
+            options: costBasisChoices.map((option) => ({
               id: option,
               label: t(COST_BASIS_TITLE[option]),
             })),
@@ -136,7 +145,7 @@ export function UsageFilterBar(
             },
             testID: `${props.testID}.costBasis`,
           },
-    [page.scope.costBasis, props.costBasisOptions, props.onCostBasisChange, props.testID],
+    [page.scope.costBasis, costBasisChoices, props.costBasisPending, props.onCostBasisChange, props.testID],
   );
   const metricTabs = React.useMemo(
     () => [
@@ -158,6 +167,7 @@ export function UsageFilterBar(
             ...(filters.some(filter => filter.active)
               ? { count: String(filters.filter(filter => filter.active).length) }
               : {}),
+            reservePresence: true,
             ...(coverageIncomplete ? { presence: 'attention' as const } : {}),
             renderPopoverContent: ({ close, maxHeight }) => (
               <UsageScopeSections filters={filters} onRequestClose={close} maxHeight={maxHeight}

@@ -134,7 +134,7 @@ export function UsageBodyReading(props: Readonly<{
    * The body's known shape, so the room it will fill is held from the first frame: `meters` rows of a
    * name, a bar and a caption (a list of allowance windows), or the `mix` of two figures over a strip.
    */
-  shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }>;
+  shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }> | Readonly<{ kind: 'summary' }> | Readonly<{ kind: 'strip' }>;
 }>) {
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
@@ -170,6 +170,40 @@ export function UsageBodyReading(props: Readonly<{
       </View>
     );
   }
+  if (shape?.kind === 'strip') {
+    return (
+      <View testID={props.testID} style={readingStyles.strip}>
+        {[0, 1, 2].map((index) => (
+          <View key={index} style={readingStyles.stripColumn}>
+            <HappierSkeletonBlock color={color} width="34%" height={10} radius={4} reducedMotion={reducedMotion} />
+            <HappierSkeletonBlock color={color} width="86%" height={14} radius={4} reducedMotion={reducedMotion} />
+            <HappierSkeletonBlock color={color} width="100%" height={10} radius={4} reducedMotion={reducedMotion} />
+            <HappierSkeletonBlock color={color} width="62%" height={10} radius={4} reducedMotion={reducedMotion} />
+          </View>
+        ))}
+      </View>
+    );
+  }
+  if (shape?.kind === 'summary') {
+    return (
+      <View testID={props.testID} style={readingStyles.summary}>
+        <View style={readingStyles.summaryHero}>
+          <HappierSkeletonBlock color={color} width="30%" height={10} radius={4} reducedMotion={reducedMotion} />
+          <HappierSkeletonBlock color={color} width="34%" height={40} radius={8} reducedMotion={reducedMotion} />
+          <HappierSkeletonBlock color={color} width="52%" height={12} radius={4} reducedMotion={reducedMotion} />
+        </View>
+        <View style={readingStyles.summaryStats}>
+          {[0, 1, 2].map((index) => (
+            <View key={index} style={readingStyles.summaryStat}>
+              <HappierSkeletonBlock color={color} width="40%" height={10} radius={4} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="62%" height={24} radius={6} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="84%" height={12} radius={4} reducedMotion={reducedMotion} />
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  }
   return (
     <View testID={props.testID} style={readingStyles.body}>
       <HappierSkeletonBlock color={color} width="28%" height={28} radius={6} reducedMotion={reducedMotion} />
@@ -179,6 +213,9 @@ export function UsageBodyReading(props: Readonly<{
   );
 }
 
+const SETTLED_SUMMARY_BODY_PX = 166;
+/** The Coach's Overview strip with its findings in (one row of three columns) measures this tall. */
+export const SETTLED_COACH_STRIP_BODY_PX = 118;
 const readingStyles = StyleSheet.create(() => ({
   body: { gap: 12, paddingVertical: 4 },
   meters: { gap: USAGE_METER_METRICS.rowGapPx, paddingVertical: 4 },
@@ -186,6 +223,14 @@ const readingStyles = StyleSheet.create(() => ({
   mix: { gap: 18, paddingVertical: 4 },
   mixFigures: { flexDirection: 'row', columnGap: 24 },
   mixFigure: { flex: 1, gap: 8 },
+  // The Period summary's settled body (a hero, its line, three captioned figures) measures this tall.
+  summary: { minHeight: SETTLED_SUMMARY_BODY_PX, gap: 20 },
+  summaryHero: { gap: 8 },
+  // The same wrap as the figures themselves (UsagePeriodSummaryWidget), so a narrow card holds two rows too.
+  summaryStats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
+  summaryStat: { flexGrow: 1, flexBasis: 120, minWidth: 0, gap: 8 },
+  strip: { minHeight: SETTLED_COACH_STRIP_BODY_PX, flexDirection: 'row', columnGap: 36, paddingVertical: 4 },
+  stripColumn: { flex: 1, gap: 10 },
 }));
 
 /** True while every read a body depends on is still outstanding (pending or not yet loaded). */
@@ -195,8 +240,14 @@ export function isUsageReadOutstanding(slice: UsageQueryResultSlice, sources: re
 }
 
 /** "No usage in this period" only once the usage read answered; until then the body is loading. */
-export function UsageBodyNoUsage(props: Readonly<{ slice: UsageQueryResultSlice; testID: string }>) {
-  if (isUsageReadOutstanding(props.slice, ['accounting'])) return <UsageBodyReading testID={`${props.testID}.loading`} />;
+export function UsageBodyNoUsage(props: Readonly<{
+  slice: UsageQueryResultSlice;
+  testID: string;
+  /** The shape the body will take, so its first read holds that room. */
+  readingShape?: React.ComponentProps<typeof UsageBodyReading>['shape'];
+}>) {
+  if (isUsageReadOutstanding(props.slice, ['accounting']))
+    return <UsageBodyReading testID={`${props.testID}.loading`} {...(props.readingShape ? { shape: props.readingShape } : {})} />;
   return (
     <UsageBodyInsufficient
       testID={`${props.testID}.empty`}

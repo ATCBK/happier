@@ -102,16 +102,17 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
                     {leading}
                     {filter.showLabel ? <Text style={[styles.label, styles.labelMuted, styles.name]} numberOfLines={1}>{filter.label}</Text> : null}
                     <Text style={[styles.label, filter.muted ? styles.labelMuted : null, filter.active ? { color: theme.colors.text.link } : null]} numberOfLines={1}>{valueLabel}</Text>
-                    {filter.count !== undefined ? <Text style={[styles.label, styles.labelMuted, styles.count]}>{filter.count}</Text> : null}
-                    {filter.presence ? (
+                    {filter.count !== undefined || filter.reserveCount
+                        ? <Text style={[styles.label, styles.labelMuted, styles.count]}>{filter.reserveCount ? reserveCountSlot(filter.count ?? '') : filter.count}</Text> : null}
+                    {filter.presence || filter.reservePresence ? (
                         <View
-                            style={[styles.dot, {
+                            style={[styles.dot, !filter.presence ? styles.dotReserved : null, filter.presence ? {
                                 backgroundColor: filter.presence === 'online'
                                     ? theme.colors.status.connected
                                     : filter.presence === 'attention'
                                         ? theme.colors.state.warning.foreground
                                         : theme.colors.status.disconnected,
-                            }]}
+                            } : null]}
                         />
                     ) : null}
                     {canOpen ? <Icon name={open ? 'caret-up' : 'caret-down'} size={12} color={theme.colors.text.secondary} /> : null}
@@ -188,6 +189,12 @@ export function SelectionListFilterChips(props: Readonly<{
     );
 }
 
+/** A figure space is as wide as a tabular digit, so the slot keeps two digits' width whatever the count. */
+const COUNT_SLOT_DIGITS = 2;
+function reserveCountSlot(count: string): string {
+    return count + '\u2007'.repeat(Math.max(0, COUNT_SLOT_DIGITS - count.length));
+}
+
 const stylesheet = StyleSheet.create((theme) => ({
     // A chip is as wide as what it says, up to the room its row offers: a value is never cut to a
     // fixed width (a long machine name keeps its whole name), it ellipsizes only when the row itself is narrower.
@@ -236,6 +243,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: 6,
         height: 6,
         borderRadius: 3,
+    },
+    dotReserved: {
+        opacity: 0,
     },
     inline: {
         flexDirection: 'row',
