@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DownloadResumable, DownloadOptions, DownloadProgressData } from 'expo-file-system/legacy';
 
 import { ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
@@ -33,6 +33,12 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
     uri: string;
     constructor(...parts: Array<string | { uri: string }>) { this.uri = joinUri(parts); }
     get exists() { return directories.has(this.uri); }
+    // Mirrors expo-file-system: the recursive byte total of contained files, null when the directory is missing.
+    get size() {
+      const contained = [...files.entries()].filter(([key]) => key.startsWith(`${this.uri}/`));
+      if (contained.length === 0 && !directories.has(this.uri)) return null;
+      return contained.reduce((acc, [, data]) => acc + data.length, 0);
+    }
     create() { directories.add(this.uri); }
     delete() {
       directories.delete(this.uri);
@@ -132,6 +138,7 @@ const installOptions = {
 
 describe('modelPacks installer (native)', () => {
   beforeEach(() => { nativeDownload.mockReset(); });
+  afterEach(() => { vi.useRealTimers(); });
 
   it('rewrites GitHub release file URLs using publisher-authored asset names', async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
@@ -221,44 +228,37 @@ describe('modelPacks installer (native)', () => {
 
     it('retries a transient server error on a cache-distinct URL and completes the pack', async () => {
       useInstallerFakeClock();
-      try {
-        const { bytes, manifest: remote } = await packOf(1);
-        const fs = createFs();
-        const requested: string[] = [];
-        // GitHub has served a sticky 500 for one exact asset URL while the same asset with any other
-        // query string succeeded.
-        useNativeDownloads(fs, () => bytes, requested, { status: (url) => (url === 'https://example.com/f0' ? 500 : 200) });
-        await settleWithFakeClock(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
-          fs, fetch: fetchManifest(remote),
-        }));
-        expect(requested).toHaveLength(2);
-        expect(requested[1]).not.toBe(requested[0]);
-        expect(requested[1]?.startsWith('https://example.com/f0?')).toBe(true);
-        expect(fs.files.has(`${PACK_URI}/pack.json`)).toBe(true);
-      } finally {
-        vi.useRealTimers();
-      }
+      const { bytes, manifest: remote } = await packOf(1);
+      const fs = createFs();
+      const requested: string[] = [];
+      // GitHub has served a sticky 500 for one exact asset URL while the same asset with any other
+      // query string succeeded.
+      useNativeDownloads(fs, () => bytes, requested, { status: (url) => (url === 'https://example.com/f0' ? 500 : 200) });
+      await settleWithFakeClock(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+        fs, fetch: fetchManifest(remote),
+      }));
+      expect(requested).toHaveLength(2);
+      expect(requested[1]).not.toBe(requested[0]);
+      expect(requested[1]?.startsWith('https://example.com/f0?')).toBe(true);
+      expect(fs.files.has(`${PACK_URI}/pack.json`)).toBe(true);
     });
 
     it('gives up on a persistent server error with its status and leaves the pack uninstalled', async () => {
       useInstallerFakeClock();
-      try {
-        const { bytes, manifest: remote } = await packOf(1);
-        const fs = createFs();
-        const requested: string[] = [];
-        useNativeDownloads(fs, () => bytes, requested, { status: () => 503 });
-        await expect(settleWithFakeClock(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
-          fs, fetch: fetchManifest(remote),
-        }))).rejects.toThrow('model_pack_download_failed:503');
-        expect(requested.length).toBeGreaterThan(1);
-        expect(fs.files.has(`${PACK_URI}/espeak-ng-data/lang/f0`)).toBe(false);
-        expect(fs.files.has(`${PACK_URI}/pack.json`)).toBe(false);
-      } finally {
-        vi.useRealTimers();
-      }
+      const { bytes, manifest: remote } = await packOf(1);
+      const fs = createFs();
+      const requested: string[] = [];
+      useNativeDownloads(fs, () => bytes, requested, { status: () => 503 });
+      await expect(settleWithFakeClock(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+        fs, fetch: fetchManifest(remote),
+      }))).rejects.toThrow('model_pack_download_failed:503');
+      expect(requested.length).toBeGreaterThan(1);
+      expect(fs.files.has(`${PACK_URI}/espeak-ng-data/lang/f0`)).toBe(false);
+      expect(fs.files.has(`${PACK_URI}/pack.json`)).toBe(false);
     });
 
     it('downloads many small files concurrently within a bound', async () => {
+      useInstallerFakeClock();
       const { bytes, manifest: remote } = await packOf(24);
       const fs = createFs();
       let active = 0;
@@ -271,13 +271,16 @@ describe('modelPacks installer (native)', () => {
           active -= 1;
         },
       });
-      await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, { fs, fetch: fetchManifest(remote) });
+      await settleWithFakeClock(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+        fs, fetch: fetchManifest(remote),
+      }));
       expect(peak).toBeGreaterThan(1);
       expect(peak).toBeLessThan(24);
       expect(fs.files.has(`${PACK_URI}/pack.json`)).toBe(true);
     });
 
     it('stops the pack on a non-retryable failure and reports that failure rather than sibling cancellation', async () => {
+      useInstallerFakeClock();
       const { bytes, manifest: remote } = await packOf(48);
       const fs = createFs();
       const requested: string[] = [];
@@ -286,9 +289,9 @@ describe('modelPacks installer (native)', () => {
         // The failing file answers last, so earlier siblings have verified by then.
         inFlight: (url) => new Promise((resolve) => setTimeout(resolve, url.endsWith('/f1') ? 30 : 5)),
       });
-      await expect(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+      await expect(settleWithFakeClock(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
         fs, fetch: fetchManifest(remote),
-      })).rejects.toThrow('model_pack_download_failed:404');
+      }))).rejects.toThrow('model_pack_download_failed:404');
       expect(requested.filter((url) => url === 'https://example.com/f1')).toHaveLength(1);
       expect(requested.length).toBeLessThan(48);
       expect(fs.files.has(`${PACK_URI}/pack.json`)).toBe(false);
@@ -297,6 +300,7 @@ describe('modelPacks installer (native)', () => {
     });
 
     it('discards every downloaded file when the user cancels an install', async () => {
+      useInstallerFakeClock();
       const { bytes, manifest: remote } = await packOf(24);
       const fs = createFs();
       const controller = new AbortController();
@@ -308,31 +312,30 @@ describe('modelPacks installer (native)', () => {
           if (completed === 8) controller.abort();
         },
       });
-      await expect(ensureModelPackInstalled({ ...installOptions, signal: controller.signal }, {
+      await expect(settleWithFakeClock(ensureModelPackInstalled({ ...installOptions, signal: controller.signal }, {
         fs, fetch: fetchManifest(remote),
-      })).rejects.toThrow('aborted');
+      }))).rejects.toThrow('aborted');
       expect([...fs.files.keys()].filter((uri) => uri.startsWith(`${PACK_URI}/`))).toEqual([]);
     });
 
     it('never reports more progress than the pack size when a failed response body is larger than the asset', async () => {
       useInstallerFakeClock();
-      try {
-        const { bytes, manifest: remote } = await packOf(2);
-        const fs = createFs();
-        const progress: number[] = [];
-        // A 500 error page is far larger than a tiny espeak-ng asset.
-        useNativeDownloads(fs, () => bytes, [], {
-          status: (url) => (url === 'https://example.com/f0' ? 500 : 200),
-          writtenBytes: (url) => (url === 'https://example.com/f0' ? 164_854 : bytes.length),
-        });
-        await settleWithFakeClock(ensureModelPackInstalled({
-          ...installOptions, signal: new AbortController().signal, onProgress: (p) => progress.push(p.loaded / p.total),
-        }, { fs, fetch: fetchManifest(remote) }));
-        expect(Math.max(...progress)).toBe(1);
-        expect(progress.filter((ratio) => ratio === 1)).toHaveLength(1);
-      } finally {
-        vi.useRealTimers();
-      }
+      const { bytes, manifest: remote } = await packOf(2);
+      const fs = createFs();
+      const progress: Array<{ ratio: number; filesDone: number }> = [];
+      // A 500 error page is far larger than a tiny espeak-ng asset.
+      useNativeDownloads(fs, () => bytes, [], {
+        status: (url) => (url === 'https://example.com/f0' ? 500 : 200),
+        writtenBytes: (url) => (url === 'https://example.com/f0' ? 164_854 : bytes.length),
+      });
+      await settleWithFakeClock(ensureModelPackInstalled({
+        ...installOptions, signal: new AbortController().signal,
+        onProgress: (p) => progress.push({ ratio: p.loaded / p.total, filesDone: p.filesDone }),
+      }, { fs, fetch: fetchManifest(remote) }));
+      expect(Math.max(...progress.map((p) => p.ratio))).toBe(1);
+      // A retried attempt re-reporting bytes already counted adds no report of its own.
+      expect(new Set(progress.map((p) => `${p.ratio}:${p.filesDone}`)).size).toBe(progress.length);
+      expect(progress.at(-1)).toEqual({ ratio: 1, filesDone: 2 });
     });
 
     it('removes update leftovers once a fresh install completes', async () => {
@@ -353,6 +356,20 @@ describe('modelPacks installer (native)', () => {
         ...installOptions, signal: new AbortController().signal, onProgress: (p) => progress.push({ loaded: p.loaded, total: p.total }),
       }, { fs, fetch: fetchManifest(remote) });
       expect(progress.at(-1)).toEqual({ loaded: bytes.length * 3, total: bytes.length * 3 });
+    });
+
+    it('reports how many pack files are done, counting already verified ones', async () => {
+      const { bytes, manifest: remote } = await packOf(3);
+      const fs = createFs(new Map([[`${PACK_URI}/espeak-ng-data/lang/f0`, bytes]]));
+      const progress: Array<{ filesDone: number; filesTotal: number }> = [];
+      useNativeDownloads(fs, () => bytes);
+      await ensureModelPackInstalled({
+        ...installOptions, signal: new AbortController().signal,
+        onProgress: (p) => progress.push({ filesDone: p.filesDone, filesTotal: p.filesTotal }),
+      }, { fs, fetch: fetchManifest(remote) });
+      expect(progress.every((p) => p.filesTotal === 3)).toBe(true);
+      expect(progress.map((p) => p.filesDone)).toEqual([...progress.map((p) => p.filesDone)].sort());
+      expect(progress.at(-1)).toEqual({ filesDone: 3, filesTotal: 3 });
     });
   });
 
@@ -451,6 +468,7 @@ describe('modelPacks installer (native)', () => {
     });
 
     it('discards staged update files but keeps the installed pack when the user cancels an update', async () => {
+      useInstallerFakeClock();
       const fs = createFs();
       const original = new Uint8Array([2]);
       const installed = await installedPack(fs, [{ path: 'a.bin', bytes: original }, { path: 'b.bin', bytes: original }]);
@@ -469,9 +487,9 @@ describe('modelPacks installer (native)', () => {
         },
       });
 
-      await expect(ensureModelPackInstalled({ ...updateOptions, signal: controller.signal }, {
+      await expect(settleWithFakeClock(ensureModelPackInstalled({ ...updateOptions, signal: controller.signal }, {
         fs, fetch: fetchManifest(remote),
-      })).rejects.toThrow('aborted');
+      }))).rejects.toThrow('aborted');
 
       expect([...fs.files.keys()].filter((uri) => uri.includes('/modelPackUpdates/'))).toEqual([]);
       expect(fs.files.get(`${PACK_URI}/a.bin`)).toEqual(original);
@@ -514,6 +532,51 @@ describe('modelPacks installer (native)', () => {
     const summary = await getModelPackInstallSummary({ packId: 'example' }, { fs: createFs() });
     expect(summary.installed).toBe(false);
     expect(summary.manifest).toBe(null);
+  });
+
+  describe('partial downloads', () => {
+    const STAGING_URI = 'file:///docs/happier/voice/modelPackUpdates/example';
+
+    it('reports the bytes an unfinished install left on disk, including staged update files', async () => {
+      const fs = createFs(new Map([
+        [`${PACK_URI}/espeak-ng-data/lang/f0`, new Uint8Array(3)],
+        [`${PACK_URI}/model.onnx`, new Uint8Array(5)],
+        [`${STAGING_URI}/model.onnx`, new Uint8Array(2)],
+      ]));
+      const summary = await getModelPackInstallSummary({ packId: 'example' }, { fs });
+      expect(summary.installed).toBe(false);
+      expect(summary.partialBytes).toBe(10);
+    });
+
+    it('does not count the empty pack directory an install creates up front', async () => {
+      const fs = createFs();
+      await expect(ensureModelPackInstalled({
+        ...installOptions, signal: new AbortController().signal, mode: 'require_installed', manifestUrl: null,
+      }, { fs })).rejects.toThrow('model_pack_not_installed');
+      expect((await getModelPackInstallSummary({ packId: 'example' }, { fs })).partialBytes).toBe(0);
+    });
+
+    it('reports no partial download once the pack is installed', async () => {
+      const fs = createFs(new Map([
+        [`${PACK_URI}/model.onnx`, new Uint8Array(5)],
+        [`${STAGING_URI}/model.onnx`, new Uint8Array(2)],
+      ]));
+      new fs.File(PACK_URI, 'pack.json').write(JSON.stringify({ manifest: manifest([
+        { path: 'model.onnx', url: 'https://example.com/model.onnx', sha256: 'a'.repeat(64), sizeBytes: 5 },
+      ]) }));
+      const summary = await getModelPackInstallSummary({ packId: 'example' }, { fs });
+      expect(summary.installed).toBe(true);
+      expect(summary.partialBytes).toBe(0);
+    });
+
+    it('discards a partial download', async () => {
+      const fs = createFs(new Map([
+        [`${PACK_URI}/model.onnx`, new Uint8Array(5)],
+        [`${STAGING_URI}/model.onnx`, new Uint8Array(2)],
+      ]));
+      await removeModelPack({ packId: 'example' }, { fs });
+      expect((await getModelPackInstallSummary({ packId: 'example' }, { fs })).partialBytes).toBe(0);
+    });
   });
 
   it('removes without throwing when the directory is missing', async () => {

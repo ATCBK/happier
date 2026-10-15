@@ -5,7 +5,7 @@ import { Platform } from 'react-native';
 
 import type { ModelPackManifest } from '@/voice/modelPacks/manifest';
 
-import type { InstallerFs, Progress } from './types';
+import type { InstallerFs, ModelPackDownloadProgress, Progress } from './types';
 import { getPackFile } from './paths';
 import { cacheBustUrl, throwIfAborted } from './network';
 
@@ -26,15 +26,17 @@ const TRANSIENT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
 
 const HTTP_FAILURE_PREFIX = 'model_pack_download_failed:';
 
+// Storage failures surface through the native transfer too, but retrying cannot free space or grant access.
+const LOCAL_STORAGE_FAILURE = /ENOSPC|no space left|EACCES|permission denied|EROFS|read-only file system/i;
+
 function isTransientTransferFailure(error: unknown, signal: AbortSignal): boolean {
   if (signal.aborted || !(error instanceof Error)) return false;
   if (error.message.startsWith(HTTP_FAILURE_PREFIX)) {
     const status = Number(error.message.slice(HTTP_FAILURE_PREFIX.length));
     return status === 408 || status === 429 || status >= 500;
   }
-  // Installer outcomes (checksum mismatch, cancellation) are final; native transport failures
-  // (connection reset, DNS, timeouts) carry platform-specific messages and are retried.
-  return !error.message.startsWith('model_pack_');
+  // Native transport failures (connection reset, DNS, timeouts) carry platform-specific messages.
+  return error.message !== 'model_pack_download_cancelled' && !LOCAL_STORAGE_FAILURE.test(error.message);
 }
 
 async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
@@ -137,35 +139,32 @@ async function downloadToFile(opts: {
   }
 }
 
-async function downloadAndVerifyFile(opts: {
+async function downloadWithRetry(opts: {
   downloader: NativeDownloader;
-  fs: InstallerFs;
-  rootDir: any;
-  entry: ModelPackManifest['files'][number];
+  url: string;
+  fileUri: string;
   signal: AbortSignal;
   onProgress?: (p: Progress) => void;
 }): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
       // A cached edge failure is keyed by the exact URL, so retries must not repeat it.
-      const url = attempt === 0 ? opts.entry.url : cacheBustUrl(opts.entry.url);
-      await downloadAndVerifyFileOnce({ ...opts, url });
+      await downloadToFile({ ...opts, url: attempt === 0 ? opts.url : cacheBustUrl(opts.url) });
       return;
     } catch (error) {
       const retryDelayMs = TRANSIENT_RETRY_DELAYS_MS[attempt];
       if (retryDelayMs === undefined || !isTransientTransferFailure(error, opts.signal)) throw error;
-      console.warn(`[modelPacks] Retrying ${opts.entry.path} after transient failure`, error);
+      console.warn(`[modelPacks] Retrying ${opts.url} after transient failure`, error);
       await abortableDelay(retryDelayMs, opts.signal);
     }
   }
 }
 
-async function downloadAndVerifyFileOnce(opts: {
+async function downloadAndVerifyFile(opts: {
   downloader: NativeDownloader;
   fs: InstallerFs;
   rootDir: any;
   entry: ModelPackManifest['files'][number];
-  url: string;
   signal: AbortSignal;
   onProgress?: (p: Progress) => void;
 }): Promise<void> {
@@ -187,8 +186,9 @@ async function downloadAndVerifyFileOnce(opts: {
   }
 
   try {
-    await downloadToFile({
-      downloader: opts.downloader, url: opts.url, fileUri: file.uri, signal: opts.signal, onProgress: opts.onProgress,
+    // Only the network transfer is retried; local storage and verification failures are final.
+    await downloadWithRetry({
+      downloader: opts.downloader, url: opts.entry.url, fileUri: file.uri, signal: opts.signal, onProgress: opts.onProgress,
     });
 
     const actual = await sha256FileHex(file, opts.signal);
@@ -215,10 +215,13 @@ export async function downloadManifestFiles(opts: {
   rootDir: any;
   manifest: ModelPackManifest;
   signal: AbortSignal;
-  onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
+  onProgress?: (p: ModelPackDownloadProgress) => void;
 }): Promise<void> {
   const total = opts.manifest.files.reduce((acc, f) => acc + (Number.isFinite(f.sizeBytes) ? f.sizeBytes : 0), 0);
+  const filesTotal = opts.manifest.files.length;
   let loadedTotal = 0;
+  let filesDone = 0;
+  const report = () => opts.onProgress?.({ loaded: loadedTotal, total, filesDone, filesTotal });
   throwIfAborted(opts.signal);
   const downloader = await import('expo-file-system/legacy');
   // The first fatal failure stops sibling transfers; the pack then reports that failure, not their aborts.
@@ -226,17 +229,17 @@ export async function downloadManifestFiles(opts: {
   const forwardAbort = () => pack.abort();
   opts.signal.addEventListener('abort', forwardAbort, { once: true });
   if (opts.signal.aborted) pack.abort();
-  let failure: { error: unknown } | null = null;
+  const failures: unknown[] = [];
   let next = 0;
 
   const installFile = async (f: ModelPackManifest['files'][number]) => {
     let loadedThisFile = 0;
     const advance = (loaded: number) => {
       const delta = loaded - loadedThisFile;
-      if (delta <= 0) return;
+      if (delta <= 0) return false;
       loadedThisFile = loaded;
       loadedTotal += delta;
-      opts.onProgress?.({ loaded: loadedTotal, total, file: f.path });
+      return true;
     };
     await downloadAndVerifyFile({
       downloader,
@@ -245,10 +248,14 @@ export async function downloadManifestFiles(opts: {
       entry: f,
       signal: pack.signal,
       // Native counts error-response bodies too; a failed attempt must not report beyond the asset.
-      onProgress: (p) => advance(Number.isFinite(f.sizeBytes) ? Math.min(p.loaded, f.sizeBytes) : p.loaded),
+      onProgress: (p) => {
+        if (advance(Number.isFinite(f.sizeBytes) ? Math.min(p.loaded, f.sizeBytes) : p.loaded)) report();
+      },
     });
     // Verified files count fully, including ones already present from an interrupted install.
     advance(Number.isFinite(f.sizeBytes) ? f.sizeBytes : loadedThisFile);
+    filesDone += 1;
+    report();
   };
 
   const worker = async () => {
@@ -257,7 +264,7 @@ export async function downloadManifestFiles(opts: {
       try {
         await installFile(f);
       } catch (error) {
-        failure ??= { error };
+        failures.push(error);
         pack.abort();
       }
     }
@@ -270,5 +277,5 @@ export async function downloadManifestFiles(opts: {
     opts.signal.removeEventListener('abort', forwardAbort);
   }
   throwIfAborted(opts.signal);
-  if (failure) throw (failure as { error: unknown }).error;
+  if (failures.length > 0) throw failures[0];
 }

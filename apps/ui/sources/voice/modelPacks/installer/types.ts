@@ -14,3 +14,6 @@ export type InstallerOverrides = {
 
 export type Progress = { loaded: number; total: number };
 
+/** Pack-level progress: bytes are clamped to the manifest sizes; verified files count as done. */
+export type ModelPackDownloadProgress = Readonly<{ loaded: number; total: number; filesDone: number; filesTotal: number }>;
+

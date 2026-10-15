@@ -298,7 +298,7 @@ describe('synthesizeKokoroWav (native)', () => {
     );
   });
 
-  it('forwards model pack download progress (including file) during prepare', async () => {
+  it('forwards model pack download progress (including file counts) during prepare', async () => {
     const onProgress = vi.fn();
 
     const kokoroNativeModule = {
@@ -309,7 +309,7 @@ describe('synthesizeKokoroWav (native)', () => {
     };
 
     const ensureInstalled = vi.fn().mockImplementation(async (opts: any) => {
-      opts?.onProgress?.({ loaded: 1, total: 4, file: 'onnx/model_quantized.onnx' });
+      opts?.onProgress?.({ loaded: 1, total: 4, filesDone: 2, filesTotal: 7 });
       return {
         packDirUri: 'file:///docs/happier/voice/modelPacks/kokoro-test',
         manifest: {
@@ -345,6 +345,6 @@ describe('synthesizeKokoroWav (native)', () => {
       },
     );
 
-    expect(onProgress).toHaveBeenCalledWith({ loaded: 1, total: 4, file: 'onnx/model_quantized.onnx' });
+    expect(onProgress).toHaveBeenCalledWith({ loaded: 1, total: 4, filesDone: 2, filesTotal: 7 });
   });
 });

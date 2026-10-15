@@ -11,7 +11,9 @@ import {
   getPackUpdateDir,
   normalizePackId,
 } from './installer/paths';
-import type { InstallMode, InstallerFs, InstallerOverrides, UpdatePolicy } from './installer/types';
+import type { InstallMode, InstallerFs, InstallerOverrides, ModelPackDownloadProgress, UpdatePolicy } from './installer/types';
+
+export type { ModelPackDownloadProgress } from './installer/types';
 
 function manifestsEqual(a: ModelPackManifest, b: ModelPackManifest): boolean {
   if (a.packId !== b.packId) return false;
@@ -73,7 +75,7 @@ async function applyPackUpdate(opts: {
   installed: ModelPackManifest;
   remote: ModelPackManifest;
   signal: AbortSignal;
-  onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
+  onProgress?: (p: ModelPackDownloadProgress) => void;
 }): Promise<void> {
   const installedSha = new Map(opts.installed.files.map((f) => [f.path, f.sha256.toLowerCase()]));
   // Files missing from the pack are fetched as well, so an update also repairs a damaged install.
@@ -130,7 +132,7 @@ export async function ensureModelPackInstalled(
     manifestUrl: string | null;
     timeoutMs: number;
     signal: AbortSignal;
-    onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
+    onProgress?: (p: ModelPackDownloadProgress) => void;
     updatePolicy?: UpdatePolicy;
   },
   overrides: InstallerOverrides = {},
@@ -258,17 +260,30 @@ export async function checkModelPackUpdateAvailable(
   };
 }
 
+function directoryBytes(dir: any): number {
+  try {
+    // expo-file-system sums contained files recursively and reports null for a missing directory.
+    const size: unknown = dir.size;
+    return typeof size === 'number' && Number.isFinite(size) && size > 0 ? size : 0;
+  } catch (error) {
+    console.warn('[modelPacks] Failed to measure model pack directory', error);
+    return 0;
+  }
+}
+
 export async function getModelPackInstallSummary(
   opts: { packId: string | null },
   overrides: InstallerOverrides = {},
-): Promise<{ installed: boolean; packDirUri: string | null; manifest: ModelPackManifest | null }> {
+): Promise<{ installed: boolean; packDirUri: string | null; manifest: ModelPackManifest | null; partialBytes: number }> {
   const fs = await getFs(overrides);
   const id = normalizePackId(opts.packId);
   const rootDir = getPackRootDir(fs, id);
   const meta = getMetaFile(fs, rootDir);
 
   const manifest = await readInstalledManifest(meta);
-  return { installed: manifest !== null, packDirUri: rootDir.uri, manifest };
+  // A failed install keeps verified files so a retry resumes; report them so they can also be discarded.
+  const partialBytes = manifest ? 0 : directoryBytes(rootDir) + directoryBytes(getPackUpdateDir(fs, id));
+  return { installed: manifest !== null, packDirUri: rootDir.uri, manifest, partialBytes };
 }
 
 export async function removeModelPack(opts: { packId: string | null }, overrides: InstallerOverrides = {}): Promise<void> {

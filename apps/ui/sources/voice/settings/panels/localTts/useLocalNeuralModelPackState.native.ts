@@ -3,12 +3,16 @@ import * as React from 'react';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { prepareKokoroTts } from '@/voice/kokoro/runtime/synthesizeKokoroWav';
-import { formatDownloadProgressDetail } from '@/voice/downloads/downloadProgress';
 import { checkModelPackUpdateAvailable, ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import {
+  confirmDiscardPartialDownload,
+  readPartialDownloadBytes,
+  type ModelPackRowStatus,
+} from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 
-type ModelStatus = 'idle' | 'downloading' | 'ready' | 'error';
+type ModelStatus = ModelPackRowStatus;
 
 export function useLocalNeuralModelPackState(params: {
   packId: string;
@@ -17,7 +21,6 @@ export function useLocalNeuralModelPackState(params: {
 }): Readonly<{
   modelStatus: ModelStatus;
   downloadProgress: unknown | null;
-  downloadDetail: string | null;
   installed: boolean;
   installSummary: Awaited<ReturnType<typeof getModelPackInstallSummary>> | null;
   updateCheckedRemote: null | { build: string | null; updateAvailable: boolean };
@@ -80,6 +83,8 @@ export function useLocalNeuralModelPackState(params: {
         await refreshInstallState();
         return;
       }
+      // Verified files stay on disk after a failure; read them so the screen can offer resume or discard.
+      await refreshInstallState();
       setModelStatus('error');
       await Modal.alert(t('common.error'), error instanceof Error ? error.message : String(error));
     } finally {
@@ -100,18 +105,21 @@ export function useLocalNeuralModelPackState(params: {
   const clearAssets = React.useCallback(() => {
     fireAndForget((async () => {
       if (modelStatus === 'downloading') return;
-      const confirmed = await Modal.confirm(
-        t('settingsVoice.local.kokoro.removeAssets.confirmTitle'),
-        t('settingsVoice.local.kokoro.removeAssets.confirmBody'),
-        { confirmText: t('settingsVoice.local.kokoro.removeAssets.confirmButton') },
-      );
+      const partialBytes = readPartialDownloadBytes(installSummary);
+      const confirmed = partialBytes > 0
+        ? await confirmDiscardPartialDownload(partialBytes)
+        : await Modal.confirm(
+          t('settingsVoice.local.kokoro.removeAssets.confirmTitle'),
+          t('settingsVoice.local.kokoro.removeAssets.confirmBody'),
+          { confirmText: t('settingsVoice.local.kokoro.removeAssets.confirmButton') },
+        );
       if (!confirmed) return;
       await removeModelPack({ packId: params.packId });
       setModelStatus('idle');
       setDownloadProgress(null);
       await refreshInstallState();
     })(), { tag: 'useLocalNeuralModelPackState.confirm.clearAssets' });
-  }, [modelStatus, params.packId, refreshInstallState]);
+  }, [installSummary, modelStatus, params.packId, refreshInstallState]);
 
   const checkForUpdates = React.useCallback(() => {
     fireAndForget((async () => {
@@ -198,17 +206,9 @@ export function useLocalNeuralModelPackState(params: {
     })(), { tag: 'useLocalNeuralModelPackState.checkForUpdates' });
   }, [modelStatus, params.manifestUrl, params.networkTimeoutMs, params.packId, refreshInstallState]);
 
-  const downloadDetail = React.useMemo(() => {
-    if (modelStatus !== 'downloading') return null;
-    return downloadProgress
-      ? formatDownloadProgressDetail(downloadProgress, { prefix: t('settingsVoice.local.kokoro.modelStatus.downloadingPrefix') })
-      : t('settingsVoice.local.kokoro.modelStatus.downloading');
-  }, [downloadProgress, modelStatus]);
-
   return {
     modelStatus,
     downloadProgress,
-    downloadDetail,
     installed,
     installSummary,
     updateCheckedRemote,

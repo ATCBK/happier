@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DownloadOptions, DownloadPauseState, DownloadProgressData, FileSystemDownloadResult } from 'expo-file-system/legacy';
 
-import { ensureModelPackInstalled } from '@/voice/modelPacks/installer.native';
+import { ensureModelPackInstalled, type ModelPackDownloadProgress } from '@/voice/modelPacks/installer.native';
 import { settleWithFakeClock, useInstallerFakeClock } from '@/voice/modelPacks/installerFakeClock.testHarness';
 
 type NativeTask = {
@@ -133,7 +133,7 @@ async function createHarness(options: { status?: number; pending?: boolean; fail
     throw new Error('artifact_fetch_crossed_js_boundary');
   };
 
-  const install = (signal: AbortSignal, onProgress?: (progress: { loaded: number; total: number }) => void) => ensureModelPackInstalled({
+  const install = (signal: AbortSignal, onProgress?: (progress: ModelPackDownloadProgress) => void) => ensureModelPackInstalled({
     packId: 'example', mode: 'download_if_missing', manifestUrl: 'https://example.com/manifest.json',
     timeoutMs: 120_000, signal, onProgress,
   }, { fs: { Directory, File, Paths: { document: 'file:///docs/' } }, fetch: fetchImpl });
@@ -151,8 +151,8 @@ describe('native model pack file downloads', () => {
   it.each(['android', 'ios'] as const)('downloads files outside JS and releases native resources on %s', async (platform) => {
     nativeBoundary.platform.OS = platform;
     const harness = await createHarness();
-    const progress: Array<{ loaded: number; total: number }> = [];
-    await harness.install(new AbortController().signal, (value) => progress.push({ loaded: value.loaded, total: value.total }));
+    const progress: ModelPackDownloadProgress[] = [];
+    await harness.install(new AbortController().signal, (value) => progress.push(value));
 
     expect(harness.requestedUrls).toHaveLength(1);
     expect(harness.requestedUrls[0]).toContain('manifest.json');
@@ -160,7 +160,12 @@ describe('native model pack file downloads', () => {
     if (platform === 'ios') expect(harness.nativeOptions[0]?.sessionType).toBe(1);
     expect(harness.files.get(harness.fileUri)).toEqual(harness.bytes);
     expect(harness.files.has(harness.metaUri)).toBe(true);
-    expect(progress).toEqual([{ loaded: 2, total: 4 }, { loaded: 4, total: 4 }]);
+    // Bytes arrive while the file transfers; it counts as done only once verified.
+    expect(progress).toEqual([
+      { loaded: 2, total: 4, filesDone: 0, filesTotal: 1 },
+      { loaded: 4, total: 4, filesDone: 0, filesTotal: 1 },
+      { loaded: 4, total: 4, filesDone: 1, filesTotal: 1 },
+    ]);
     expect(harness.lifecycle).toMatchObject({ subscribed: false, retainedNativeTask: false });
   });
 
@@ -183,6 +188,14 @@ describe('native model pack file downloads', () => {
     expect(harness.files.has(harness.fileUri)).toBe(false);
     expect(harness.files.has(harness.metaUri)).toBe(false);
     expect(harness.lifecycle).toMatchObject({ subscribed: false, retainedNativeTask: false });
+  });
+
+  it('fails without retrying when the device runs out of storage during a transfer', async () => {
+    const harness = await createHarness({ failure: new Error('java.io.IOException: write failed: ENOSPC (No space left on device)') });
+    useInstallerFakeClock();
+    await expect(settleWithFakeClock(harness.install(new AbortController().signal))).rejects.toThrow('ENOSPC');
+    expect(harness.nativeUrls).toHaveLength(1);
+    expect(harness.files.has(harness.fileUri)).toBe(false);
   });
 
   it('preserves native setup failure while reporting cleanup failure and unsubscribing', async () => {

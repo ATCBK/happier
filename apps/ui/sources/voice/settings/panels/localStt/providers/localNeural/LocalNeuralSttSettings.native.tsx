@@ -9,14 +9,24 @@ import { Modal } from '@/modal';
 import type { VoiceLocalSttSettings } from '@/sync/domains/settings/voiceLocalSttSettings';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { formatDownloadProgressDetail } from '@/voice/downloads/downloadProgress';
-import { checkModelPackUpdateAvailable, ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
+import {
+  checkModelPackUpdateAvailable,
+  ensureModelPackInstalled,
+  getModelPackInstallSummary,
+  removeModelPack,
+  type ModelPackDownloadProgress,
+} from '@/voice/modelPacks/installer.native';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { getSherpaStreamingSttPackOptions } from '@/voice/sherpa/stt/sherpaStreamingSttPacks';
 import { Icon } from '@/components/ui/icons/Icon';
-
-type Progress = { loaded: number; total: number; file?: string };
+import {
+  confirmDiscardPartialDownload,
+  readPartialDownloadBytes,
+  resolveModelPackTransferRow,
+  resolvePartialDownloadRemoveRow,
+  type ModelPackRowStatus,
+} from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 
 export function LocalNeuralSttSettings(props: {
   cfg: VoiceLocalSttSettings;
@@ -45,8 +55,8 @@ export function LocalNeuralSttSettings(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectivePackId, props.cfg.localNeural.assetId, props.cfg.provider]);
 
-  const [modelStatus, setModelStatus] = React.useState<'idle' | 'downloading' | 'ready' | 'error'>('idle');
-  const [progress, setProgress] = React.useState<Progress | null>(null);
+  const [modelStatus, setModelStatus] = React.useState<ModelPackRowStatus>('idle');
+  const [progress, setProgress] = React.useState<ModelPackDownloadProgress | null>(null);
   const prepareAbortRef = React.useRef<AbortController | null>(null);
   const [installed, setInstalled] = React.useState(false);
   const [installSummary, setInstallSummary] = React.useState<null | Awaited<ReturnType<typeof getModelPackInstallSummary>>>(null);
@@ -115,6 +125,8 @@ export function LocalNeuralSttSettings(props: {
       if (abortController.signal.aborted) {
         setModelStatus(installed ? 'ready' : 'idle');
       } else {
+        // Verified files stay on disk after a failure; read them so the row can offer resume or discard.
+        await refreshInstalled();
         setModelStatus('error');
         await Modal.alert(
           t('settingsVoice.local.localNeuralStt.alerts.downloadFailedTitle'),
@@ -131,16 +143,20 @@ export function LocalNeuralSttSettings(props: {
     if (!effectivePackId) return;
     // Removing files under an in-flight install or update would leave a pack recorded with files missing.
     if (modelStatus === 'downloading') return;
-    const ok = await Modal.confirm(
-      t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmTitle'),
-      t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmBody'),
-      { confirmText: t('common.remove'), destructive: true },
-    );
+    const partialBytes = readPartialDownloadBytes(installSummary);
+    const ok = partialBytes > 0
+      ? await confirmDiscardPartialDownload(partialBytes)
+      : await Modal.confirm(
+        t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmTitle'),
+        t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmBody'),
+        { confirmText: t('common.remove'), destructive: true },
+      );
     if (!ok) return;
     await removeModelPack({ packId: effectivePackId });
     setInstalled(false);
     setModelStatus('idle');
-  }, [effectivePackId, modelStatus]);
+    await refreshInstalled();
+  }, [effectivePackId, installSummary, modelStatus, refreshInstalled]);
 
   const checkForUpdates = React.useCallback(async () => {
     if (!effectivePackId) return;
@@ -245,16 +261,16 @@ export function LocalNeuralSttSettings(props: {
 
   const effectiveLanguage = props.cfg.localNeural.language ?? '';
   const installedBuild = formatModelPackBuildLabel((installSummary as any)?.manifest);
+  const partialBytes = readPartialDownloadBytes(installSummary);
+  const transferRow = resolveModelPackTransferRow({ status: modelStatus, progress, partialBytes });
+  const partialRemoveRow = installed ? null : resolvePartialDownloadRemoveRow(partialBytes);
   const downloadDetail =
-    modelStatus === 'downloading'
-      ? (progress
-        ? formatDownloadProgressDetail(progress, { prefix: t('settingsVoice.local.kokoro.modelStatus.downloadingPrefix') })
-        : t('settingsVoice.local.kokoro.modelStatus.downloading'))
-      : installed
+    transferRow?.detail
+      ?? (installed
         ? installedBuild
           ? t('settingsVoice.local.localNeuralStt.status.installedWithBuild', { build: installedBuild })
           : t('settingsVoice.local.localNeuralStt.status.installed')
-        : t('settingsVoice.local.localNeuralStt.status.notInstalled');
+        : t('settingsVoice.local.localNeuralStt.status.notInstalled'));
 
   return (
     <>
@@ -284,7 +300,8 @@ export function LocalNeuralSttSettings(props: {
 
       <Item
         title={t('settingsVoice.local.localNeuralStt.modelFiles.title')}
-        subtitle={t('settingsVoice.local.localNeuralStt.modelFiles.subtitle')}
+        subtitle={transferRow?.subtitle ?? t('settingsVoice.local.localNeuralStt.modelFiles.subtitle')}
+        subtitleLines={transferRow ? 0 : undefined}
         detail={downloadDetail}
         onPress={() => void prepareModel()}
         rightElement={
@@ -302,9 +319,9 @@ export function LocalNeuralSttSettings(props: {
 
       <Item
         title={t('settingsVoice.local.localNeuralStt.removeModelFiles.title')}
-        subtitle={t('settingsVoice.local.localNeuralStt.removeModelFiles.subtitle')}
-        detail={installed ? t('common.remove') : '—'}
-        onPress={installed ? () => void clearAssets() : undefined}
+        subtitle={partialRemoveRow?.subtitle ?? t('settingsVoice.local.localNeuralStt.removeModelFiles.subtitle')}
+        detail={installed ? t('common.remove') : (partialRemoveRow?.detail ?? '—')}
+        onPress={installed || partialRemoveRow ? () => void clearAssets() : undefined}
         showChevron={false}
         selected={false}
       />
