@@ -189,14 +189,14 @@ export function UsageBodyReading(props: Readonly<{
       <View testID={props.testID} style={readingStyles.summary}>
         <View style={readingStyles.summaryHero}>
           <HappierSkeletonBlock color={color} width="30%" height={10} radius={4} reducedMotion={reducedMotion} />
-          <HappierSkeletonBlock color={color} width="34%" height={40} radius={8} reducedMotion={reducedMotion} />
+          <HappierSkeletonBlock color={color} width="34%" height={34} radius={8} reducedMotion={reducedMotion} />
           <HappierSkeletonBlock color={color} width="52%" height={12} radius={4} reducedMotion={reducedMotion} />
         </View>
         <View style={readingStyles.summaryStats}>
           {[0, 1, 2].map((index) => (
             <View key={index} style={readingStyles.summaryStat}>
               <HappierSkeletonBlock color={color} width="40%" height={10} radius={4} reducedMotion={reducedMotion} />
-              <HappierSkeletonBlock color={color} width="62%" height={24} radius={6} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="62%" height={22} radius={6} reducedMotion={reducedMotion} />
               <HappierSkeletonBlock color={color} width="84%" height={12} radius={4} reducedMotion={reducedMotion} />
             </View>
           ))}
@@ -213,7 +213,7 @@ export function UsageBodyReading(props: Readonly<{
   );
 }
 
-const SETTLED_SUMMARY_BODY_PX = 166;
+const SETTLED_SUMMARY_BODY_PX = 152;
 /** The Coach's Overview strip with its findings in (one row of three columns) measures this tall. */
 export const SETTLED_COACH_STRIP_BODY_PX = 118;
 const readingStyles = StyleSheet.create(() => ({

@@ -82,6 +82,10 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
       : null;
   const hasRatios =
     efficiency.cacheHitRatePct !== null || efficiency.costPerMtokUsd !== null;
+  // Work evidence is not part of this widget's own read: the figure names a merged PR only when the slice carries it.
+  const merged = props.slice.work?.outcomes.filter((outcome) => outcome.pullRequest.state === 'merged') ?? null;
+  const perMergedPrUsd = merged && merged.length > 0 && view.pageCost.amountUsd !== null
+    ? view.pageCost.amountUsd / merged.length : null;
   const segments = usageCompositionSegments(composition, (index) =>
     usageSeriesColor(theme, index),
   );
@@ -95,63 +99,87 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
     );
   return (
     <View style={styles.body} testID={`${props.testID}.efficiency`}>
-      {hasRatios ? (
-        <View style={styles.grid}>
-          {efficiency.cacheHitRatePct !== null ? (
-            <View style={styles.cell}>
-              <HappierDataMetric
-                testID={`${props.testID}.cacheHit`}
-                theme={chartTheme}
-                size="stat"
-                showLabel
-                label={t('usage.board.page.cacheHit')}
-                value={efficiency.cacheHitRatePct / 100}
-                valueFormatter={(value) => `${Math.round(value * 100)}%`}
-                caption={
-                  view.cacheSavings?.cacheSavingsUsd != null
-                    ? t('usage.board.page.cacheListPriceDifference', {
-                        amount: formatUsageCost(
-                          view.cacheSavings.cacheSavingsUsd,
-                          'USD',
-                        ),
-                      })
-                    : t('usage.board.page.cacheReadTokens', {
-                        tokens: formatTokenCount(efficiency.cachedReadTokens),
-                      })
-                }
-              />
-            </View>
-          ) : null}
-          {efficiency.costPerMtokUsd !== null ? (
-            <View style={styles.cell}>
-              <HappierDataMetric
-                testID={`${props.testID}.perMtok`}
-                theme={chartTheme}
-                size="stat"
-                showLabel
-                label={t('usage.board.page.perMillionTokens')}
-                value={efficiency.costPerMtokUsd}
-                caption={view.pageCost.selection ? usageCostKindPhrase(view.pageCost.selection.kind) : undefined}
-                valueFormatter={(value) =>
-                  formatUsageCost(value, efficiency.currency)
-                }
-                {...(perMtokDelta !== null
-                  ? {
-                      comparison: {
-                        value: `${perMtokDelta >= 0 ? '▲' : '▼'} ${Math.round(Math.abs(perMtokDelta) * 100)}%`,
-                        label: t('usage.board.page.vsBefore'),
-                        meaning:
-                          perMtokDelta <= 0
-                            ? ('good' as const)
-                            : ('bad' as const),
-                      },
-                    }
-                  : {})}
-              />
-            </View>
-          ) : null}
+      {/* The lab's four figures keep their slots: an unknown is a quiet dash with its reason beneath. */}
+      <View style={styles.grid}>
+        <View style={styles.cell}>
+          <HappierDataMetric
+            testID={`${props.testID}.cacheHit`}
+            theme={chartTheme}
+            size="stat"
+            showLabel
+            label={t('usage.board.page.cacheHit')}
+            value={efficiency.cacheHitRatePct !== null ? efficiency.cacheHitRatePct / 100 : UNKNOWN_VALUE}
+            valueFormatter={(value) => `${Math.round(value * 100)}%`}
+            caption={
+              efficiency.cacheHitRatePct === null
+                ? t('common.unavailable')
+                : view.cacheSavings?.cacheSavingsUsd != null
+                  ? t('usage.board.page.cacheListPriceDifference', {
+                      amount: formatUsageCost(view.cacheSavings.cacheSavingsUsd, 'USD'),
+                    })
+                  : t('usage.board.page.cacheReadTokens', {
+                      tokens: formatTokenCount(efficiency.cachedReadTokens),
+                    })
+            }
+          />
         </View>
-      ) : null}
+        <View style={styles.cell}>
+          <HappierDataMetric
+            testID={`${props.testID}.perMtok`}
+            theme={chartTheme}
+            size="stat"
+            showLabel
+            label={t('usage.board.page.perMillionTokens')}
+            value={efficiency.costPerMtokUsd ?? UNKNOWN_VALUE}
+            caption={
+              efficiency.costPerMtokUsd === null
+                ? t('common.unavailable')
+                : view.pageCost.selection
+                  ? usageCostKindPhrase(view.pageCost.selection.kind)
+                  : undefined
+            }
+            valueFormatter={(value) => formatUsageCost(value, efficiency.currency)}
+            {...(perMtokDelta !== null
+              ? {
+                  comparison: {
+                    value: `${perMtokDelta >= 0 ? '▲' : '▼'} ${Math.round(Math.abs(perMtokDelta) * 100)}%`,
+                    label: t('usage.board.page.vsBefore'),
+                    meaning: perMtokDelta <= 0 ? ('good' as const) : ('bad' as const),
+                  },
+                }
+              : {})}
+          />
+        </View>
+        <View style={styles.cell}>
+          <HappierDataMetric
+            testID={`${props.testID}.perMergedPr`}
+            theme={chartTheme}
+            size="stat"
+            showLabel
+            label={t('usage.board.page.perMergedPr')}
+            value={perMergedPrUsd ?? UNKNOWN_VALUE}
+            valueFormatter={(value) => formatUsageCost(value, efficiency.currency)}
+            caption={
+              !merged
+                ? t('usage.board.page.notMeasuredYet')
+                : merged.length === 0
+                  ? t('usage.board.page.noneLinkedByEvidence')
+                  : t('usage.board.page.linkedByEvidence')
+            }
+          />
+        </View>
+        <View style={styles.cell}>
+          <HappierDataMetric
+            testID={`${props.testID}.noKeptChange`}
+            theme={chartTheme}
+            size="stat"
+            showLabel
+            label={t('usage.board.page.noKeptChange')}
+            value={UNKNOWN_VALUE}
+            caption={t('usage.board.page.notMeasuredYet')}
+          />
+        </View>
+      </View>
       {segments.length > 0 ? (
         <CompositionStrip
           theme={chartTheme}
@@ -197,8 +225,11 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
   );
 }
 
+const UNKNOWN_VALUE = '—';
+
 const styles = StyleSheet.create(() => ({
   body: { gap: 18 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
-  cell: { flexGrow: 1, flexBasis: 140, minWidth: 0 },
+  // Two figures a row whenever the card can hold two; a narrower one stacks them.
+  cell: { flexGrow: 1, flexBasis: '40%', minWidth: 120 },
 }));

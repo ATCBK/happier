@@ -279,6 +279,13 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
     // A paced window behind Show all still disproves a whole-list missing-pace statement.
     const reasons = rows.map((row) => (row.window.pace ? null : planWindowStatement(row.window, nowMs).text));
     const sharedReason = reasons.length > 1 && reasons[0] && reasons.every((reason) => reason === reasons[0]) ? reasons[0] : null;
+    // When only some windows lack a projection and two or more share the cause, that cause is said once too:
+    // under one line for the widget, never beneath every row.
+    const repeatedReasons = new Map<string, number>();
+    for (const reason of reasons) if (reason) repeatedReasons.set(reason, (repeatedReasons.get(reason) ?? 0) + 1);
+    const [repeatedReason, repeatedCount] = sharedReason ? [null, 0]
+      : [...repeatedReasons].sort((left, right) => right[1] - left[1]).find(([, count]) => count > 1) ?? [null, 0];
+    const quietReason = sharedReason ?? repeatedReason;
     return (
       <View style={bodyStyle} onLayout={floor.onLayout} testID={`${props.testID}.projections`}>
         {rows.length ? (
@@ -290,15 +297,17 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
                 window={row.window}
                 nowMs={nowMs}
                 stacked={stacked}
-                {...(sharedReason ? { resetOnly: true } : {})}
+                {...(quietReason && !row.window.pace && planWindowStatement(row.window, nowMs).text === quietReason ? { resetOnly: true } : {})}
                 testID={`${props.testID}.window.${row.account.accountId}.${row.window.meterId}`}
               />
             ))}
           </UsageMeterStack>
         ) : null}
-        {sharedReason ? (
+        {quietReason ? (
           <Text style={[styles.quiet, text.detail]} testID={`${props.testID}.sharedReason`}>
-            {t('usage.board.plans.paceSharedReason', { reason: sharedReason })}
+            {sharedReason
+              ? t('usage.board.plans.paceSharedReason', { reason: sharedReason })
+              : t('usage.board.plans.paceSharedReasonSome', { count: repeatedCount, reason: quietReason })}
           </Text>
         ) : null}
         {lead.rows.length < rows.length || expanded ? (

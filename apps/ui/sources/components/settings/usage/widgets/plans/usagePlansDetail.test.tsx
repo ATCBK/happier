@@ -318,7 +318,12 @@ it('does not declare all projections missing when a settled paced window is behi
   expect(screen.findByTestId('proj.showAll')).toBeTruthy();
   expect(screen.findByTestId('proj.window.paced.weekly')).toBeFalsy();
   expect(screen.findByTestId('proj.legend')).toBeTruthy();
-  expect(screen.findByTestId('proj.sharedReason')).toBeFalsy();
+  // The eight windows without a projection share a cause: said once for the widget, as a partial statement,
+  // never as "No projection yet" for the whole list nor beneath every row.
+  const text = screen.getTextContent();
+  expect(screen.findByTestId('proj.sharedReason')).toBeTruthy();
+  expect(text).toContain(t('usage.board.plans.paceSharedReasonSome', { count: 8, reason: t('usage.board.plans.paceNotDerived') }));
+  expect(text).not.toContain(t('usage.board.plans.paceSharedReason', { reason: '' }));
 });
 
 it('lists every reported window with its projection beside other widgets, without the burn-up or disclosures', async () => {

@@ -352,7 +352,9 @@ function UsagePageDocument(
     [firstAccounting, page.period],
   );
   // Cost bases are named by the first usage read; until it answers (or fails) the toolbar holds the chip's room.
-  const costBasisPending = usageWidgets.length > 0 && !firstAccounting
+  // The toolbar's second row is held from first paint too: until the layout answers, the widgets it follows are unknown.
+  const layoutLoading = layout.state.status === 'loading';
+  const costBasisPending = (layoutLoading || usageWidgets.length > 0) && !firstAccounting
     && slices.every(slice => readUsageCoverageGaps(slice, ['accounting']).every(gap => gap.status === 'pending' || gap.status === 'not_loaded'));
   const bindingSelectLayout = binding.selectLayout;
   const selectAreaLayout = React.useCallback(async (layoutId: string) => (await bindingSelectLayout(layoutId)).ok, [bindingSelectLayout]);
@@ -495,9 +497,9 @@ function UsagePageDocument(
         costBasisOptions={costBasisOptions}
         costBasisPending={costBasisPending}
         metric={metric}
-        metricPending={pendingMetric === metricLifetime}
+        metricPending={layoutLoading || pendingMetric === metricLifetime}
         onMetricChange={
-          usageWidgets.length && ready?.canEdit ? onMetricChange : null
+          layoutLoading || (usageWidgets.length && ready?.canEdit) ? onMetricChange : null
         }
         testID="usage-filters"
       />
