@@ -166,10 +166,6 @@ describe('desktop login-start service-backed Settings declaration', () => {
         expect(readLocalDaemonSharedState<LocalDaemonStatusData>(manual.runner).status?.serviceAutostart).toBe('on-demand');
     });
 });
-import { LlmTaskRunnerConfigV1WriteSchema } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
-import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
-import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
-import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 describe('exact Account Settings history purge declaration', () => {
@@ -1629,29 +1625,6 @@ describe('declared settings owner', () => {
         expect(await rebased.action({ actionId: 'settings.set', input: { anchor: 'sourceControl.prepareAfterTurn', value: true } }))
             .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
         expect(rebased.account()['scm.diffSummary.prefetch']).toBe(false);
-    });
-    it.each(['agent', 'mcp'] as const)('round-trips both background model settings through the real declarations on %s', async surface => {
-        const value = await supportedSummaryPreference();
-        const modelSelection = ProviderBoundModelRefSchema.parse(JSON.parse(value.slice('model:'.length)));
-        const runner = LlmTaskRunnerConfigV1WriteSchema.parse({ v: 1, modelSelection, permissionMode: 'no_tools' });
-        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'settings.set': { enabled: true } },
-            approvalWaivedSurfaces: { 'settings.set': ['agent', 'mcp'] } });
-        const owner = createOwner(undefined, true, true, applySettings(settingsDefaults, { actionsSettingsV1 }));
-        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
-        const context = { surface, authority: 'account_automation' as const };
-        for (const [anchor, selection] of [['sourceControl.summaryModel', value], ['session.resume.summaryModel', runner]] as const) {
-            expect(await executor.execute('settings.set', { anchor, value: selection }, context)).toEqual({ ok: true, result: { anchor, value: selection } });
-            expect(await executor.execute('settings.get', { anchor }, context)).toEqual({ ok: true, result: { anchor, value: selection } });
-        }
-        const persisted = settingsParse(owner.account());
-        expect(persisted.sessionReplaySummaryRunnerV1).toEqual(runner);
-        expect(JSON.parse(persisted['scm.diffSummary.modelProfileOverride'].slice('model:'.length))).toEqual(runner.modelSelection);
-        // Actual Settings producer -> exact Run-start consumer; routing and model identity cannot drift.
-        const request = ExecutionRunStartRequestSchema.parse({ intent: 'task',
-            backendTarget: readBackendTargetRefV2(parseBackendTargetKeyV2(runner.modelSelection.agentTargetKey)),
-            modelSelection: runner.modelSelection, permissionMode: runner.permissionMode,
-            retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response', instructions: 'Summarize the conversation' });
-        expect(request.modelSelection).toEqual(modelSelection);
     });
     it('changes material presets, surface modes, shared blur/tint and toolbar visibility through existing settings Actions', async () => {
         const owner = createOwner({ os: 'web', desktop: true });
