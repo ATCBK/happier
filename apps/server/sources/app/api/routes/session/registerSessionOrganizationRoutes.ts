@@ -359,7 +359,7 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             params: folderIdParamsSchema,
-            body: DeleteSessionOrganizationFolderRequestSchema.optional(),
+            body: z.optional(DeleteSessionOrganizationFolderRequestSchema),
             response: {
                 200: DeleteSessionOrganizationFolderResponseSchema,
                 400: z.object({ error: z.literal("invalid-session-organization-folder-delete") }),
@@ -569,7 +569,7 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             params: tagIdParamsSchema,
-            body: DeleteSessionOrganizationTagRequestSchema.optional(),
+            body: z.optional(DeleteSessionOrganizationTagRequestSchema),
             response: {
                 200: DeleteSessionOrganizationTagResponseSchema,
                 400: z.object({ error: z.literal("invalid-session-organization-tag-delete") }),

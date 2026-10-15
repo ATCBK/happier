@@ -232,7 +232,7 @@ export function machinesRoutes(app: Fastify) {
                 replacesMachineId: z.string().optional(),
                 replacementReason: z.string().optional(),
                 contentPublicKeyFingerprint: z.string().optional(),
-                managedEnrollment: ManagedEnrollmentCorrelationV1Schema.optional(),
+                managedEnrollment: z.optional(ManagedEnrollmentCorrelationV1Schema),
             })
         }
     }, async (request, reply) => {

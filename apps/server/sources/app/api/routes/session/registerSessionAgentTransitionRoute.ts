@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { minLength } from "zod/mini";
 import { SessionMetadataInactiveModelIntentOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionTeamCredentialBindingIntentsV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
@@ -68,7 +69,7 @@ export function registerSessionAgentTransitionRoute(
                 // transition's one Session switch mutation, so the witness the
                 // Home admits Team credential use through is written here, in the
                 // current-view transaction (lane 10 child 01 principle 3).
-                teamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema.min(1).optional(),
+                teamCredentialBindings: z.optional(SessionTeamCredentialBindingIntentsV1Schema.check(minLength(1))),
             }).strict(),
             response: {
                 200: z.object({

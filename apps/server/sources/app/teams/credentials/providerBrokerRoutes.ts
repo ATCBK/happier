@@ -2,6 +2,7 @@ import { PROVIDER_BROKER_OPEN_HTTP_PATH_V1, PROVIDER_BROKER_MODEL_CATALOG_AUTHOR
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_ADMISSION_HTTP_PATH_V1, TEAM_CREDENTIAL_EXTERNAL_PROVIDER_TERMINAL_USAGE_HTTP_PATH_V1, TEAM_CREDENTIAL_RESOURCE_TEST_ADMISSION_HTTP_PATH_V1, TeamCredentialExternalProviderAdmissionResponseV1Schema, TeamCredentialExternalProviderAdmissionV1Schema, TeamCredentialExternalProviderTerminalUsageResponseV1Schema, TeamCredentialExternalProviderTerminalUsageV1Schema, TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema, TeamCredentialResourceTestAdmissionResponseV1Schema, TeamCredentialResourceTestAdmissionV1Schema } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 
+import { z } from 'zod/mini';
 import type { Fastify } from '@/app/api/types';
 import { getMachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import { resolvePeerMediationGrantSigningConfig } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';
@@ -91,8 +92,8 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
         });
         return reply.send(ProviderBrokerAccountAdmissionResponseV2Schema.parse(result));
     });
-    const modelCatalogAuthorizationSchema = ProviderBrokerModelCatalogAuthorizationV1Schema
-        .or(TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema);
+    const modelCatalogAuthorizationSchema = z.union([ProviderBrokerModelCatalogAuthorizationV1Schema,
+        TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema]);
     app.post(PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1, {
         preHandler: app.authenticate,
         attachValidation: true,

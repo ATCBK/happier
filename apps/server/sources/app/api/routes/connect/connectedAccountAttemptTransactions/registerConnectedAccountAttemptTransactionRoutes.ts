@@ -1,5 +1,6 @@
 import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import { z } from "zod";
+import { superRefine } from "zod/mini";
 import type { FastifyReply } from "fastify";
 
 import type { Fastify } from "../../../types";
@@ -32,7 +33,7 @@ const MAX_TRANSACTION_CONTENT_UTF8_BYTES = 524_288;
  * Account mode.
  */
 const TransactionEnvelopeSchema = StoredJsonContentEnvelopeSchema
-    .superRefine((value, context) => {
+    .check(superRefine((value, context) => {
         if (
             new TextEncoder().encode(JSON.stringify(value)).byteLength
             > MAX_TRANSACTION_CONTENT_UTF8_BYTES
@@ -42,7 +43,7 @@ const TransactionEnvelopeSchema = StoredJsonContentEnvelopeSchema
                 message: "Connected-account attempt transaction content exceeds its byte limit",
             });
         }
-    });
+    }));
 
 const TransactionScopeSchema = z.object({
     machineId: z.string().min(1).max(256),

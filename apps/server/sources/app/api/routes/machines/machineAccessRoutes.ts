@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { omit } from 'zod/mini';
 import { MachineAccessGrantSetInputV1Schema, MachineAccessGrantRemoveInputV1Schema, MachineAccessGrantsListResultV1Schema, MachineAccessMutationResultV1Schema, MachineAccessRecipientCensusResponseV1Schema, MachineAccessRefusalV1Schema, MachineRecipientKeyEnvelopeCommitInputV1Schema, MachineRecipientKeyEnvelopeCommitResponseV1Schema, MachineRecipientKeyEnvelopePageQueryV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import {
     commitMachineRecipientKeyEnvelopesInTx,
@@ -11,9 +12,9 @@ import { inTx } from '@/storage/inTx';
 import type { Fastify } from '../../types';
 
 const params = z.object({ id: z.string().min(1) }).strict();
-const setBody = MachineAccessGrantSetInputV1Schema.omit({ serverId: true, machineId: true });
+const setBody = omit(MachineAccessGrantSetInputV1Schema, { serverId: true, machineId: true });
 const removeBody = z.union([
-    MachineAccessGrantRemoveInputV1Schema.omit({ serverId: true, machineId: true }),
+    omit(MachineAccessGrantRemoveInputV1Schema, { serverId: true, machineId: true }),
     z.object({}).strict(),
 ]);
 
@@ -68,7 +69,7 @@ export function registerMachineAccessRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             params,
-            body: MachineRecipientKeyEnvelopeCommitInputV1Schema.omit({ machineId: true }),
+            body: omit(MachineRecipientKeyEnvelopeCommitInputV1Schema, { machineId: true }),
             response: { 200: z.union([MachineRecipientKeyEnvelopeCommitResponseV1Schema, MachineAccessRefusalV1Schema]) },
         },
     }, async (request) => inTx((tx) => commitMachineRecipientKeyEnvelopesInTx(tx, {

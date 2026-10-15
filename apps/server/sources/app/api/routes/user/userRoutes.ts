@@ -207,7 +207,7 @@ export async function userRoutes(app: Fastify) {
             }),
             response: {
                 200: z.object({
-                    user: UserProfileSchema.nullable()
+                    user: z.nullable(UserProfileSchema)
                 }),
                 400: z.union([
                     z.object({ error: z.literal("username-required") }),
@@ -242,7 +242,7 @@ export async function userRoutes(app: Fastify) {
             }),
             response: {
                 200: z.object({
-                    user: UserProfileSchema.nullable()
+                    user: z.nullable(UserProfileSchema)
                 }),
                 404: z.union([NotFoundSchema, z.object({ error: z.literal("User not found") })]),
             }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { Fastify } from "../../../types";
-import { CONNECTED_SERVICE_ERROR_CODES, ConnectedServiceErrorCodeSchema } from '@happier-dev/protocol/connect/connectedServiceErrors';
+import { CONNECTED_SERVICE_ERROR_CODES } from '@happier-dev/protocol/connect/connectedServiceErrors';
 import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import {
@@ -18,7 +18,7 @@ const CONNECTED_SERVICE_OAUTH_VERIFIER_MAX_LEN = 256;
 const CONNECTED_SERVICE_OAUTH_REDIRECT_URI_MAX_LEN = 2048;
 const CONNECTED_SERVICE_OAUTH_STATE_MAX_LEN = 2048;
 
-const ConnectedServiceOauthExchangeErrorCodeSchema = ConnectedServiceErrorCodeSchema.extract([
+const ConnectedServiceOauthExchangeErrorCodeSchema = z.enum([
   CONNECTED_SERVICE_ERROR_CODES.oauthStateMismatch,
   CONNECTED_SERVICE_ERROR_CODES.oauthTimeout,
   CONNECTED_SERVICE_ERROR_CODES.oauthExchangeFailed,

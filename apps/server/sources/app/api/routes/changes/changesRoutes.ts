@@ -75,8 +75,8 @@ export function changesRoutes(app: Fastify) {
             querystring: z.object({
                 after: z.coerce.number().int().min(0).optional(),
                 limit: z.coerce.number().int().min(1).max(500).default(200),
-                sessionId: asServerProtocolZod(SessionIdSchema).optional(),
-                sessionAccessSessionId: asServerProtocolZod(SessionIdSchema).optional(),
+                sessionId: z.optional(asServerProtocolZod(SessionIdSchema)),
+                sessionAccessSessionId: z.optional(asServerProtocolZod(SessionIdSchema)),
             }).optional(),
         },
         config: {

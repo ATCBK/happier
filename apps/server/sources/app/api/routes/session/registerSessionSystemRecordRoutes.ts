@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { pick } from "zod/mini";
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 
 import {
@@ -31,7 +32,7 @@ const PERMISSION_MEDIATION_RECORD_ERROR_RESPONSE_SCHEMA = z.object({
 }).strict();
 
 const PERMISSION_MEDIATION_RECORD_ROUTE_PARAMS_SCHEMA = SessionPermissionMediationRecordIdentityV1Schema;
-const PERMISSION_MEDIATION_RECORD_LIST_ROUTE_PARAMS_SCHEMA = SessionPermissionMediationRecordIdentityV1Schema.pick({
+const PERMISSION_MEDIATION_RECORD_LIST_ROUTE_PARAMS_SCHEMA = pick(SessionPermissionMediationRecordIdentityV1Schema, {
     sessionId: true,
 });
 

@@ -17,7 +17,7 @@ const identityConnectionTestResultSchema = z.object({
     providerUserId: z.string().min(1).max(1024),
     // A provider that supplies no sanitized evidence, and any result written before
     // diagnostics existed, simply omits this field.
-    diagnostics: IdentityConnectionTestDiagnosticsV1Schema.optional(),
+    diagnostics: z.optional(IdentityConnectionTestDiagnosticsV1Schema),
     testedAt: z.string().datetime(),
 }).strict();
 

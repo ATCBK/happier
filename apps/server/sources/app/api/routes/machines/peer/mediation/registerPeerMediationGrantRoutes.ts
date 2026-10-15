@@ -89,7 +89,7 @@ const LiveStreamServerRelayAuthorizationRequestSchema = z.object({
     ttlMs: z.number().int().positive(),
     maxFramesPerSecond: z.number().int().positive().optional(),
     maxFrameBytes: z.number().int().positive().optional(),
-    codecId: MachineLiveStreamCodecIdV1Schema.optional(),
+    codecId: z.optional(MachineLiveStreamCodecIdV1Schema),
     viewerCodecs: z.array(MachineLiveStreamCodecIdV1Schema).optional(),
     // Optional per-tab viewer socket id (C1). When the watcher is a user-scoped browser socket the
     // grant is minted bound to it so the relay delivers frames to exactly that tab. It is part of

@@ -36,6 +36,7 @@ import {
     type TeamIdentityErrorCodeV1,
 } from "@happier-dev/protocol/teams";
 import { TEAM_DIRECTORY_ACTION_PATHS_V1, TEAM_EXTERNAL_GROUP_BINDING_ACTION_PATHS_V1 } from '@happier-dev/protocol/teams';
+import { z } from "zod/mini";
 
 import type { Fastify } from "@/app/api/types";
 import { readTeamOperationAuthenticationFromRequest } from "../actorContext";
@@ -60,7 +61,7 @@ import {
 
 // `team_identity_not_allowed` is the Home provider-kind refusal the identity
 // routes already return for the same Home policy fact.
-const DirectoryRouteErrorV1Schema = TeamDirectoryErrorV1Schema.or(TeamErrorV1Schema).or(TeamIdentityErrorV1Schema);
+const DirectoryRouteErrorV1Schema = z.union([TeamDirectoryErrorV1Schema, TeamErrorV1Schema, TeamIdentityErrorV1Schema]);
 const DirectoryErrors = {
     400: DirectoryRouteErrorV1Schema,
     403: DirectoryRouteErrorV1Schema,

@@ -12,7 +12,7 @@ import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { resolveSessionAccessPrincipalsInTx } from "@/app/session/access/sessionAccessPrincipalResolution";
 
-const ErrorSchema = z.object({ error: z.string(), reason: SessionTeamCredentialBindingRejectionV1Schema.optional() });
+const ErrorSchema = z.object({ error: z.string(), reason: z.optional(SessionTeamCredentialBindingRejectionV1Schema) });
 const errors = { 400: ErrorSchema, 403: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema, 503: ErrorSchema };
 
 function errorStatus(error: SessionAccessGrantErrorCode): 400 | 403 | 404 | 409 | 503 {

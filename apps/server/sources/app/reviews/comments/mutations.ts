@@ -1,5 +1,6 @@
 import * as privacyKit from "privacy-kit";
 import { z } from "zod";
+import { omit } from "zod/mini";
 import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentPrepareMutationResponseV1Schema, ReviewCommentCommitMutationRequestV1Schema, ReviewCommentCommitMutationResponseV1Schema, deriveReviewCommentStructuralMutationV1, applyReviewCommentPreparedSensitiveMutationV1, type ReviewCommentPrepareMutationRequestV1, type ReviewCommentPrepareMutationResponseV1, type ReviewCommentCommitMutationRequestV1, type ReviewCommentStructuralMutationV1, type ReviewCommentStoredSourceV1 } from '@happier-dev/protocol/reviews/comments/mutation';
 import { ReviewCommentOperationErrorCodeV1Schema, ReviewCommentPrincipalHeaderV1Schema, stringifyReviewCommentPrincipalCanonicalJsonV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import { buildReviewCommentEventRequestBindingV1, sealReviewCommentSensitiveEnvelopeV1, openReviewCommentSensitiveMigrationSourceV1, reviewCommentMutationInputWithoutEventEnvelopeV1 } from '@happier-dev/protocol/reviews/comments/content';
@@ -22,7 +23,7 @@ const ReceiptV1Schema = z.object({
     mode: z.enum(["plain", "e2ee"]), accountVersion: z.number().int().optional(),
     contentPublicKeyFingerprint: z.string().nullable(),
     request: ReviewCommentPrepareMutationRequestV1Schema,
-    prepared: ReviewCommentPrepareMutationResponseV1Schema.omit({ receipt: true }),
+    prepared: omit(ReviewCommentPrepareMutationResponseV1Schema, { receipt: true }),
     now: z.number().int().nonnegative(), ids: z.array(z.object({ prefix: z.string(), id: z.string() }).strict()),
 }).strict();
 

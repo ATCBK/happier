@@ -4,6 +4,7 @@ import {
     type TeamIdentityErrorCodeV1,
 } from "@happier-dev/protocol/teams";
 import type { FastifyReply } from "fastify";
+import { z } from "zod/mini";
 
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
@@ -33,7 +34,7 @@ import { readTeamOperationAuthenticationFromRequest } from "@/app/teams/actorCon
 
 import type { Fastify } from "../../types";
 
-const ManagedProviderRouteErrorV1Schema = ManagedIdentityProviderErrorV1Schema.or(TeamIdentityErrorV1Schema);
+const ManagedProviderRouteErrorV1Schema = z.union([ManagedIdentityProviderErrorV1Schema, TeamIdentityErrorV1Schema]);
 const ERROR_RESPONSES = {
     400: ManagedProviderRouteErrorV1Schema,
     403: ManagedProviderRouteErrorV1Schema,

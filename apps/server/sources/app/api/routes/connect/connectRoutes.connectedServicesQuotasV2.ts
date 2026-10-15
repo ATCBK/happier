@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { extend } from "zod/mini";
 
 import { type Fastify } from "../../types";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
@@ -61,7 +62,7 @@ export function connectConnectedServicesQuotasV2Routes(app: Fastify) {
                 profileId: ConnectedServiceProfileIdSchema,
             }),
             body: z.object({
-                sealed: SealedConnectedServiceQuotaSnapshotV1Schema.extend({
+                sealed: extend(SealedConnectedServiceQuotaSnapshotV1Schema, {
                     ciphertext: z.string().min(1).max(MAX_QUOTA_SNAPSHOT_CIPHERTEXT_CHARS),
                 }),
                 metadata: z.object({

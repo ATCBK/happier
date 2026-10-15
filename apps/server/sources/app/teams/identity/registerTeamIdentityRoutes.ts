@@ -2,7 +2,7 @@ import { TeamErrorV1Schema, TeamIdentityConnectionCreateInputV1Schema, TeamIdent
 import { buildTeamMemberSignInUrl } from '@happier-dev/protocol/teams/invitation';
 import { HOME_IDENTITY_ACTION_PATHS_V1, TEAM_IDENTITY_ACTION_PATHS_V1 } from "@happier-dev/protocol/actions";
 import * as home from "@happier-dev/protocol/home";
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { FastifyReply } from "fastify";
 
 import type { Fastify } from "@/app/api/types";
@@ -32,7 +32,7 @@ import {
 // *service* result, so the declared failure contract is the identity vocabulary
 // unioned with the family envelope — the same declared union the directory
 // routes use behind the same gate.
-const IdentityRouteErrorV1Schema = TeamIdentityErrorV1Schema.or(TeamErrorV1Schema);
+const IdentityRouteErrorV1Schema = z.union([TeamIdentityErrorV1Schema, TeamErrorV1Schema]);
 const ErrorResponses = {
     400: IdentityRouteErrorV1Schema,
     403: IdentityRouteErrorV1Schema,
@@ -68,8 +68,8 @@ export function registerTeamIdentityRoutes(
     registerScopedIdentityRoutes(app, dependencies, "team");
 }
 
-function homeInput<T extends z.ZodObject>(schema: T) {
-    return schema.transform((input) => ({ ...input, teamId: null }));
+function homeInput<T extends z.ZodMiniObject>(schema: T) {
+    return z.pipe(schema, z.transform((input: z.output<T>) => ({ ...input, teamId: null })));
 }
 
 /** Both public scopes adapt into the same administration and vendor owners. */
