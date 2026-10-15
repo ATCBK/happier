@@ -35,7 +35,12 @@ export function useAgentModelChoices(params: Readonly<{
     observeSelection?: boolean;
 }>) {
     const [open, setOpen] = React.useState(false);
-    const [discoveryTargetKey, setDiscoveryTargetKey] = React.useState<string | null>(null);
+    const [discoveryTargetKey, setDiscoveryTarget] = React.useState<string | null>(null);
+    const pendingDiscoveryTarget = React.useRef<string | null>(null);
+    const setDiscoveryTargetKey = React.useCallback((targetKey: string | null) => {
+        pendingDiscoveryTarget.current = targetKey;
+        setDiscoveryTarget(targetKey);
+    }, []);
     const enabledAgentIds = useEnabledAgentIds();
     const { snapshot: acpCatalog } = useAcpCatalogForServer(params.serverId);
     const catalogReady = acpCatalog?.catalog.status === 'ready' && !acpCatalog.stale;
@@ -66,8 +71,12 @@ export function useAgentModelChoices(params: Readonly<{
         void (async () => {
             try {
                 account = await captureLazyActionAccountContext(summaryServerId, abort.signal);
+                if (abort.signal.aborted || !catalogLifetime.isCurrent()) return;
+                // A target stays selected for projection; only an explicit operation bypasses the Machine cache once.
+                const requestedDiscoveryTarget = pendingDiscoveryTarget.current;
+                pendingDiscoveryTarget.current = null;
                 const catalog = await readScmDiffSummaryModelCatalogForMachine(account, machineId, abort.signal,
-                    { discoveryTargetKey, modelSelector: decodeScmDiffSummaryModelOverride(params.value) });
+                    { discoveryTargetKey: requestedDiscoveryTarget, modelSelector: decodeScmDiffSummaryModelOverride(params.value) });
                 if (!abort.signal.aborted && catalogLifetime.isCurrent()) setSummaryCatalog(catalog
                     ? { lifetime: catalogLifetime, machineId, serverId: summaryServerId, catalog } : null);
             } catch { if (!abort.signal.aborted) setSummaryCatalog(null); }

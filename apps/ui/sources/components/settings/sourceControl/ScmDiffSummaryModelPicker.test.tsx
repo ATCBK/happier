@@ -92,7 +92,8 @@ describe('Summary model discovery', () => {
             mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
         } });
         const machine = createMachineFixture({ id: 'summary-discovery-machine', activeAt: Date.now() });
-        let observations = 0;
+        const observations: Array<string | undefined> = [];
+        let discoveries = 0;
         const boundary = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId,
             machineId: machine.id, actionId: 'agents.models.list', tokenEpoch: 1,
             execute(input, context) {
@@ -100,13 +101,15 @@ describe('Summary model discovery', () => {
                 const discoveryTargetKey = input && typeof input === 'object' && 'discoveryTargetKey' in input ? input.discoveryTargetKey : undefined;
                 if (discoveryTargetKey) expect(discoveryTargetKey).toBe(buildBackendTargetKeyV2(target));
                 expect(context.target).toEqual({ kind: 'machine', machineId: machine.id });
-                observations += 1;
+                observations.push(typeof discoveryTargetKey === 'string' ? discoveryTargetKey : undefined);
+                if (discoveryTargetKey) discoveries += 1;
                 const automaticModels = [{ id: 'initial-model', name: 'Initial model', costTier: 'low' as const,
                     capabilities: { structuredOutput: 'supported' as const } }];
-                const models = !discoveryTargetKey ? automaticModels : [...automaticModels,
+                const models = discoveries === 0 ? automaticModels : [...automaticModels,
                     { id: 'real-model', name: 'Real model', costTier: 'low' as const, capabilities: { structuredOutput: 'supported' as const } },
                     { id: 'rejected-model', name: 'Rejected model', capabilities: { structuredOutput: 'unsupported' as const } },
                     { id: 'unknown-model', name: 'Unknown model', capabilities: { structuredOutput: 'unknown' as const } },
+                    ...(discoveries > 1 ? [{ id: 'refreshed-model', name: 'Refreshed model', capabilities: { structuredOutput: 'supported' as const } }] : []),
                 ];
                 const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(target), models });
                 return { items: [], scmDiffSummaryCatalog: { profiles,
@@ -141,7 +144,7 @@ describe('Summary model discovery', () => {
         expect(selection).not.toHaveBeenCalled();
         await vi.waitFor(() => expect(menu().props.items.find((item: { title: string }) => item.title === 'Real model'),
             diagnostic()).toBeDefined());
-        expect(observations).toBeGreaterThan(1);
+        expect(discoveries).toBe(1);
         expect(rpc.requests.some(request => request.method === RPC_METHODS.CAPABILITIES_INVOKE)).toBe(false);
         const rows = menu().props.items.filter((item: { title: string }) => item.title === 'Real model');
         // Discovery adds choices without changing the automatic default marker.
@@ -164,15 +167,26 @@ describe('Summary model discovery', () => {
         expect(menu().props.selectedId).toBe(configured ? '' : automatic.id);
         expect(change).not.toHaveBeenCalled();
         expect(getStorage().getState().settings['scm.diffSummary.modelProfileOverride']).toBe('');
+        // Dismissing preserves discovered choices, but reopening must use the Machine's cache.
+        await act(async () => { menu().props.onOpenChange(false); });
+        const beforeReopen = observations.length;
+        await act(async () => { menu().props.onOpenChange(true); });
+        await vi.waitFor(() => expect(observations.length).toBeGreaterThan(beforeReopen));
+        expect(observations.slice(beforeReopen).every(key => key === undefined)).toBe(true);
+        await vi.waitFor(() => expect(menu().props.items.some((item: { title: string }) => item.title === 'Real model')).toBe(true));
+        expect(discoveries).toBe(1);
+        // A second explicit operation refreshes even though the same target remains selected for discovery.
+        await act(async () => { menu().props.onSelect(id); });
+        await vi.waitFor(() => expect(menu().props.items.some((item: { title: string }) => item.title === 'Refreshed model')).toBe(true));
+        expect(discoveries).toBe(2);
+        expect(change).not.toHaveBeenCalled();
+        expect(selection).not.toHaveBeenCalled();
         // Choosing the default returns to following it; the catalog's default is never written as a preference.
         await act(async () => { menu().props.onSelect(automatic.id); });
         expect(change).toHaveBeenCalledWith(configured ? automatic.id : '');
         expect(selection).toHaveBeenCalledWith(expect.objectContaining({
             backendTarget: expect.objectContaining(target), modelSelector: expect.objectContaining({ modelId: 'initial-model' }),
         }));
-        change.mockClear(); selection.mockClear();
-        await act(async () => { menu().props.onSelect(id); });
-        await vi.waitFor(() => expect(menu().props.items.find((item: { title: string }) => item.title === 'Real model'), diagnostic()).toBeDefined());
         await screen.unmount();
     });
     it('offers no Load models operation, and no placeholder model row, when no machine can answer it', async () => {
