@@ -369,6 +369,7 @@ export const ScmDiffSummaryGenerateFailureSchema = lazyZodSchema(() => z.strictO
   success: z.literal(false),
   error: z.string().check(z.minLength(1)),
   errorCode: ScmDiffSummaryErrorCodeSchema,
+  nextAction: z.optional(z.literal('chooseModel')),
   sourceKey: z.optional(z.string().check(z.minLength(1))),
   checkpointReceiptId: z.optional(z.string().check(z.minLength(1))),
   metadata: z.optional(ScmDiffSummaryMetadataSchema),

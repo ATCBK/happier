@@ -246,7 +246,8 @@ describe('SCM generation through real host admission', () => {
                 const path = new URL(request.url ?? '/', 'http://fixture.test').pathname;
                 const data = path === `/v2/sessions/${sessionId}`
                     ? { session: createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain', machineId,
-                        metadata: JSON.stringify({ path: fixture.rootPath }), share: null }) }
+                        metadata: JSON.stringify({ path: fixture.rootPath,
+                            runtimeDescriptorV1: { v: 1, agentId: backendTarget.backendId, agent: {} } }), share: null }) }
                     : path === '/v1/account/encryption/currentness'
                         ? { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }
                         : undefined;
@@ -270,12 +271,7 @@ describe('SCM generation through real host admission', () => {
                 await updateSettings(settings => ({ ...settings,
                     machineIdByServerId: { ...settings.machineIdByServerId, [configuration.activeServerId]: machineId } }));
                 const machineExecutor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
-                    sessionId: automaticModel && parentAvailable ? sessionId : '', mode: 'plain', ctx: null, serverId: configuration.activeServerId, serverHttpBaseUrl: serverUrl,
-                    ...(automaticModel && parentAvailable ? { getCurrentAppliedChildSelection: async () => {
-                        const connected = await readAppliedParentConnectedServices({ runnerPid: process.pid, sessionId, agentId: 'claude' });
-                        return connected.status === 'applied' ? { status: 'applied' as const, backendTarget, modelId,
-                            connectedServices: connected.connectedServices } : connected;
-                    } } : {}),
+                    sessionId: '', mode: 'plain', ctx: null, serverId: configuration.activeServerId, serverHttpBaseUrl: serverUrl,
                     scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] },
                     machineActionDirectTargetTransport: { machineId, invoke: async method => {
                         if (method !== 'capabilities.detect') throw new Error(`Unexpected Machine transport method: ${method}`);
@@ -442,7 +438,7 @@ describe('SCM generation through real host admission', () => {
                                 comparisonId: captured.comparison.id, resultId: '00000000-0000-0000-0000-000000000000', expectedRevision: 0,
                                 outputs: ['walkthrough', 'commitPlan'] },
                         }));
-                    expect(unavailable).toMatchObject({ ok: false, errorCode: 'DIFF_UNAVAILABLE', error: 'DIFF_UNAVAILABLE',
+                    expect(unavailable).toMatchObject({ ok: false, errorCode: 'DIFF_UNAVAILABLE', error: expect.any(String),
                         details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
                     if (!unavailable || typeof unavailable !== 'object' || !('details' in unavailable)) {
                         throw new Error('Run refusal must carry its canonical start evidence');
@@ -464,13 +460,13 @@ describe('SCM generation through real host admission', () => {
                         const stale = await client.call<unknown, unknown>(method, { ...startRequest,
                             intentInput: { ...intentInput, expectedRevision: intentInput.expectedRevision + 1 } });
                         expect(stale).toMatchObject({ ok: false, errorCode: 'execution_run_profile_preparation_failed',
-                            error: 'execution_run_profile_preparation_failed',
+                            error: expect.any(String),
                             details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
                         expect(ExecutionRunListResponseSchema.parse(await client.call('execution.run.list', {})).runs).toEqual([]);
                         const unsupported = await client.call<unknown, unknown>(method, { ...startRequest,
                             modelId: 'freeform-not-in-native-catalog' });
                         expect(unsupported).toMatchObject({ ok: false, errorCode: 'model_structured_output_unsupported',
-                            error: 'model_structured_output_unsupported',
+                            error: expect.any(String),
                             details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
                         expect(ExecutionRunListResponseSchema.parse(await client.call('execution.run.list', {})).runs).toEqual([]);
                         admissionDrain.beginTemporaryDrain();
@@ -512,9 +508,9 @@ describe('SCM generation through real host admission', () => {
                     const generationResponse = await generationOperations.generateFromUserAction({ sessionId, backendTarget,
                         input: {
                             cwd: fixture.rootPath, source: { kind: 'workingTree' }, comparisonId: captured.comparison.id, sessionId,
-                        // Automatic requests deliberately retain no model id: the
-                        // Machine's catalog or applied parent must resolve it.
-                            modelSelector: { ...(!automaticModel ? { modelId } : {}), backendTargetKey: buildBackendTargetKeyV2(backendTarget) },
+                        // Automatic requests carry neither model nor target: the
+                        // selected Session's applied backend must resolve them.
+                            ...(!automaticModel ? { modelSelector: { modelId, backendTargetKey: buildBackendTargetKeyV2(backendTarget) } } : {}),
                             outputs: ['walkthrough', 'commitPlan'],
                         },
                         settings: { 'scm.diffSummary.outputLanguage': 'fr',

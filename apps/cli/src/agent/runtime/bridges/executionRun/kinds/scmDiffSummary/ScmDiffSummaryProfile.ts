@@ -425,10 +425,17 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     if (hasActiveDiffSummaryAnalysis(input)) return '';
     const narration = buildReviewNarrationInputContext(input);
     if (!input.cachedOutput && !input.resultId) return '';
+    // The Action creates the saved record before Run admission. Its pending
+    // envelope is not an existing reading to discuss: the initial prompt must
+    // retain its generation request.
+    const saved = structuredMeta?.kind === 'scm_diff_summary.v1'
+      ? ScmDiffSummaryGenerateOutputSchema.safeParse(structuredMeta.payload) : null;
+    if (!saved?.success || (!saved.data.success || !saved.data.summaryMarkdown)
+      && !Object.values(saved.data.outputs ?? {}).some(output => output?.value !== undefined)) return narration;
     const comparison = ScmComparisonSchema.safeParse(input.comparison);
     const metadata = ScmDiffSummaryMetadataSchema.safeParse(input.metadata);
     if (!comparison.success || !metadata.success || structuredMeta?.kind !== 'scm_diff_summary.v1') return narration;
-    return ['Continue discussing the saved result and its captured evidence. This context does not request generation.',
+    return ['Saved result and captured evidence for the current request:',
       `Captured comparison: ${JSON.stringify(presentScmDiffSummaryModelContext(comparison.data, comparison.data))}`,
       `Saved structured result: ${JSON.stringify(presentScmDiffSummaryModelContext(structuredMeta.payload, comparison.data, readReviewFindingCitationContext(input)))}`,
       findingCitationInstructions, narration].filter(Boolean).join('\n\n');

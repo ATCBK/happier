@@ -13,6 +13,7 @@ import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/act
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { resolveScmDiffSummaryModelSelection, resolveScmDiffSummarySettings, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
+import type { StoredCredentials } from '@/persistence';
 
 type ExecuteCanonicalAction = (
     actionId: 'execution.run.start',
@@ -29,6 +30,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
     backendTarget: BackendTargetRefV2 | null;
     executeCanonicalAction: ExecuteCanonicalAction;
     signal?: AbortSignal;
+    credentials?: StoredCredentials;
 }>): Promise<ScmDiffSummaryGenerateOutput> {
     const settings = getActiveAccountSettingsSnapshot()?.settings ?? accountSettingsParse({});
     const resolvedSettings = resolveScmDiffSummarySettings({ storedSettings: settings, catalogProfiles: [] });
@@ -50,11 +52,12 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
     });
     const requestedOutputs: readonly ScmDiffSummaryOutputKind[] = params.request.outputs ?? ['summary'];
     const outputLanguage = params.request.outputLanguage ?? resolvedSettings.outputLanguage;
+    const investigateSurroundingFiles = params.request.investigateSurroundingFiles ?? resolvedSettings.investigateSurroundingFiles;
     let selector = params.request.modelSelector;
     let backendTarget = params.backendTarget;
     if (!selector?.modelId && !selector?.profileId) {
         const storedValue = selector?.backendTargetKey ? '' : settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride];
-        const catalog = await createCliSettingsCatalogServices({ signal: params.signal }).readScmDiffSummaryCatalog?.(settings, storedValue);
+        const catalog = await createCliSettingsCatalogServices({ signal: params.signal, credentials: params.credentials }).readScmDiffSummaryCatalog?.(settings, storedValue);
         const profiles = selector?.backendTargetKey
             ? catalog?.profiles.filter(profile => profile.modelSelector?.backendTargetKey === selector?.backendTargetKey)
             : catalog?.profiles;
@@ -65,6 +68,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             const outputs: ScmDiffSummaryOutputs = {};
             for (const kind of requestedOutputs) outputs[kind] = { state: 'failed', reason: 'Diff-summary model is unavailable' };
             return ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'MODEL_UNAVAILABLE',
+                nextAction: 'chooseModel',
                 error: 'Diff-summary model is unavailable', sourceKey: captured.metadata.sourceKey,
                 metadata: captured.metadata, comparison: captured.comparison, requestedOutputs, outputs,
                 analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs:
@@ -77,7 +81,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
     }
     const key = buildScmDiffSummaryCacheKey({ source: { kind: 'comparison', comparisonId: captured.comparison.id },
         summarySchemaVersion: SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, outputs: requestedOutputs, scopeKey: sessionId,
-        investigateSurroundingFiles: params.request.investigateSurroundingFiles === true,
+        investigateSurroundingFiles,
         ...(outputLanguage ? { outputLanguage } : {}),
         resolvedSelector: { catalogId: JSON.stringify({ backendTargetKey: backendTarget ? buildBackendTargetKeyV2(backendTarget) : null,
             modelId: selector?.modelId ?? 'default', ...(selector?.profileId ? { profileId: selector.profileId } : {}) }) },
@@ -103,7 +107,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         const saved = await scmDiffSummaryResultStore.create({ cwd: params.request.cwd,
             ...(sessionId ? { sessionId } : {}), output: envelope('pending'),
             ...(backendTarget ? { generator: { backendTarget,
-                ...(params.request.investigateSurroundingFiles === true ? { investigateSurroundingFiles: true } : {}),
+                ...(investigateSurroundingFiles ? { investigateSurroundingFiles: true } : {}),
                 ...(selector?.profileId ? { profileId: selector.profileId } : {}),
                 ...(selector?.modelId ? { modelId: selector.modelId } : {}) } } : {}),
         });
@@ -117,7 +121,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         const failed = async (reason: string, errorCode?: 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE'): Promise<ScmDiffSummaryGenerateOutput> => {
             // A concurrent manual edit or started/terminal publication owns the newer revision.
             const output = errorCode ? ScmDiffSummaryGenerateOutputSchema.parse({ ...envelope('failed', reason),
-                success: false, errorCode, error: reason }) : envelope('failed', reason);
+                success: false, errorCode, error: reason, ...(errorCode === 'MODEL_UNAVAILABLE' ? { nextAction: 'chooseModel' } : {}) }) : envelope('failed', reason);
             await scmDiffSummaryResultStore.publishProgress({ ...scope, expectedRevision: saved.revision, output });
             return latestOutput();
         };
@@ -141,7 +145,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             // parent supplies its applied model at the runner admission owner.
             ...(selector?.modelId && (!sessionId || params.request.modelSelector?.modelId) ? { modelId: selector.modelId } : {}),
             // Only a host-owned saved evidence id crosses admission, never client diff bytes.
-            intentInput: { ...params.request, ...(outputLanguage ? { outputLanguage } : {}), ...(selector ? { modelSelector: selector } : {}), ...(sessionId ? { sessionId } : {}), comparisonId: captured.comparison.id,
+            intentInput: { ...params.request, investigateSurroundingFiles, ...(outputLanguage ? { outputLanguage } : {}), ...(selector ? { modelSelector: selector } : {}), ...(sessionId ? { sessionId } : {}), comparisonId: captured.comparison.id,
                 resultId: saved.resultId, expectedRevision: saved.revision },
             waitForCompletion: false,
         };

@@ -125,8 +125,9 @@ that selected output is pending or writing, including when usable partial groups
 are visible. Live delivery and populated presentation have not been certified here.
 
 `scm.diffSummary.investigateSurroundingFiles` is off by default in unreleased
-0.3 source. UI generation captures the Account preference as an explicit request
-option; other callers opt in with `investigateSurroundingFiles: true`. Enabled and
+0.3 source. Generation uses the Account preference when the request omits
+`investigateSurroundingFiles`; an explicit boolean overrides it for that request.
+The effective value follows the cache identity, saved generator and Run policy. Enabled and
 disabled analysis have different cache identities without changing comparison identity.
 When enabled, the capture owner materializes raw Git blobs at both exact captured
 endpoints, bypassing checkout filters and export attributes. The Run starts in the
@@ -189,8 +190,12 @@ fallback candidate, a known attached parent remains usable; detached generation
 reports model unavailable and retains the captured inventory.
 If attached Run admission proves the parent unavailable and no fallback can be
 admitted, generation also returns `MODEL_UNAVAILABLE`, keeping its captured
-evidence and failed saved result available. An unknown Start outcome is not
+evidence and failed saved result available. This typed refusal carries
+`nextAction: 'chooseModel'` for UI and Action callers. An unknown Start outcome is not
 reclassified as an unavailable model or retried.
+A Machine-custodian request that names a Session derives that Session's backend target from
+its metadata, as the Session route does, so an unset model preference can inherit the attached
+parent there too.
 The relative cost tier is not a token price: current catalogs supply no unit pricing,
 so clients must keep that cost unavailable rather than invent an amount.
 
@@ -559,6 +564,10 @@ with existing Session-owned or detached Run interaction. It is not a new retenti
 A settled output can leave a healthy generator idle. Per-turn structured output
 is published by the host, not by observing arbitrary transcript JSON or prose.
 The host remains the lifecycle, input-custody and streaming owner.
+Fresh pending results retain their generation prompt; an existing usable
+reading supplies saved context without overriding the current request. Agent codecs correlate foreground committed
+assistant text with its admitted turn so retained Runs can publish the reply;
+history and native sidechains do not acquire foreground result authority.
 
 In unreleased 0.3 source, `review.start`, `review.walkthrough` and
 `review.explain_findings` accept an explicit `target: { kind: 'detached' }` on

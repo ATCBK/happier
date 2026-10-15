@@ -2819,12 +2819,23 @@ export function createCliActionDeps(params: Readonly<{
             ...(readComparisonTranscriptPage ? { readComparisonTranscriptPage } : {}), readPullRequestComparisonPage,
             authorizeSession: authorizeReviewSession,
             executeCanonicalAction, actionContext: localReviewContext, ...accountMarksDeps, ...(context.signal ? { signal: context.signal } : {}),
-            executeDiffSummary: async ({ request }) => await executeScmDiffSummaryAction({
-              request: request as ScmDiffSummaryGenerateInput, machineId,
-              ...(readComparisonTranscriptPage ? { readTranscriptPage: readComparisonTranscriptPage } : {}), readPullRequestComparisonPage,
-              backendTarget: resolveScmBackendTarget(null), executeCanonicalAction,
-              ...(context.signal ? { signal: context.signal } : {}),
-            }),
+            executeDiffSummary: async ({ request }) => {
+              const summary = request as ScmDiffSummaryGenerateInput;
+              const parent = summary.sessionId ? await resolveTransportForSession(summary.sessionId, context.signal) : null;
+              if (parent && !parent.ok) return { success: false, errorCode: 'DIFF_UNAVAILABLE', error: parent.code };
+              const metadata = parent?.ok ? readTransportSessionOwnerMetadata(parent) : null;
+              const parentMachineId = parent?.ok ? normalizeStringValue(parent.rawSession.machineId)
+                ?? normalizeStringValue(metadata?.machineId) : null;
+              if (parentMachineId && parentMachineId !== machineId) {
+                return { success: false, errorCode: 'DIFF_UNAVAILABLE', error: 'scm_action_session_not_local' };
+              }
+              return await executeScmDiffSummaryAction({
+                request: summary, machineId, credentials: params.credentials,
+                ...(readComparisonTranscriptPage ? { readTranscriptPage: readComparisonTranscriptPage } : {}), readPullRequestComparisonPage,
+                backendTarget: resolveScmBackendTarget(metadata), executeCanonicalAction,
+                ...(context.signal ? { signal: context.signal } : {}),
+              });
+            },
           });
         }
       }
@@ -2963,6 +2974,7 @@ export function createCliActionDeps(params: Readonly<{
         ...(readComparisonTranscriptPage ? { readTranscriptPage: readComparisonTranscriptPage } : {}),
         readPullRequestComparisonPage,
         backendTarget,
+        credentials: params.credentials,
         executeCanonicalAction,
         ...(context.signal ? { signal: context.signal } : {}),
       }),

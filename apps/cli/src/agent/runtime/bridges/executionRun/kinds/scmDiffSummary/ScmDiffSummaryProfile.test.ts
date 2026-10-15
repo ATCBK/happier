@@ -50,6 +50,15 @@ async function admitInitial(params: ExecutionRunProfileStartParams) {
     previousStructuredMeta: initial?.structuredMeta };
 }
 
+describe('initial generation context', () => {
+  it('does not turn fresh pending generation into discussion of an empty saved result', async () => {
+    const admitted = await admitInitial(start(input(['walkthrough', 'commitPlan'])));
+    expect(ScmDiffSummaryProfile.buildInitialInputContext?.({
+      start: admitted.start, structuredMeta: admitted.previousStructuredMeta,
+    })).toBe('');
+  });
+});
+
 async function exerciseSavedContinuation(operation: 'refine' | 'addOutputs' | 'replacement' | 'explicitChoice',
   assertContinuation: (observed: { prompt: string; admittedInstructions?: unknown; savedLanguage?: unknown; replacementLanguage?: unknown }) => void) {
   const previous = getActiveAccountSettingsSnapshot();

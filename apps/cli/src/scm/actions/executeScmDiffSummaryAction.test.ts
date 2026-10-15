@@ -16,6 +16,11 @@ import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, s
 import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { createTempDirSync } from '@/testkit/fs/tempDir';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
+import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { ConnectedAccountCatalogRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
 
@@ -95,6 +100,33 @@ describe('executeScmDiffSummaryAction', () => {
         }
     });
 
+    it('inherits investigation from Account settings, permits an explicit false override and separates cached results', async () => {
+        const previous = getActiveAccountSettingsSnapshot();
+        const fixture = await changedRepository();
+        const inputs: ReturnType<typeof ExecutionRunScmDiffSummaryInputV1Schema.parse>[] = [];
+        const executeCanonicalAction = async (_id: string, raw: unknown) => {
+            const start = ExecutionRunStartRequestSchema.parse(raw);
+            inputs.push(ExecutionRunScmDiffSummaryInputV1Schema.parse(start.intentInput));
+            return { ok: true as const, result: { runId: `investigation-${inputs.length}`, callId: 'call', sidechainId: 'sidechain' } };
+        };
+        try {
+            setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({
+                'scm.diffSummary.investigateSurroundingFiles': true,
+            }), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'investigation-account' });
+            const request = { cwd: fixture.rootPath, source: { kind: 'workingTree' as const }, modelSelector: { modelId: 'explicit' } };
+            const inherited = await executeScmDiffSummaryAction({ request, machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+            expect(inputs[0]?.investigateSurroundingFiles).toBe(true);
+            expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, resultId: inherited.resultId! }))
+                .toMatchObject({ success: true, result: { generator: { investigateSurroundingFiles: true } } });
+            const overridden = await executeScmDiffSummaryAction({ request: { ...request, investigateSurroundingFiles: false },
+                machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+            expect(inputs[1]?.investigateSurroundingFiles).toBe(false);
+            expect(overridden.resultId).not.toBe(inherited.resultId);
+        } finally {
+            if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+        }
+    });
+
     it('preserves typed unavailable investigation admission and captured inventory when no Run was created', async () => {
         const fixture = await changedRepository();
         const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
@@ -108,30 +140,88 @@ describe('executeScmDiffSummaryAction', () => {
             outputs: { summary: { state: 'failed' } } });
     });
 
+    it('admits the default model from a connected-service credential alone when no native sign-in exists', async () => {
+        const previous = getActiveAccountSettingsSnapshot();
+        const fixture = await changedRepository();
+        vi.stubEnv('ANTHROPIC_API_KEY', undefined);
+        const credentials = { token: 'summary-default-connected-fixture', encryption: null };
+        const purpose = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId: 'claude',
+            contributions: readCurrentContributionRegistry() })?.authorizedPurposes.find(declaration =>
+                declaration.serviceRefs.some(service => service.localId === 'claude-subscription'));
+        if (!purpose?.serviceRefs[0]) throw new Error('Claude connected route declaration is unavailable');
+        const settings = accountSettingsParse({ backendEnabledByTargetKey: Object.fromEntries(
+            [...readCurrentContributionRegistry().agentDefinitionsById.values()].flatMap(entry => entry.identity
+                ? listAgentExecutionTargetsV1(entry.identity).map(target => [buildBackendTargetKeyV2(target), entry.id === 'claude']) : []),
+        ) });
+        const executeCanonicalAction = vi.fn(async (_actionId: string, _input: unknown) => ({ ok: true as const,
+            result: { runId: 'connected-default-run', callId: 'call', sidechainId: 'sidechain' } }));
+        try {
+            setActiveAccountSettingsSnapshot({ source: 'network', settings, settingsVersion: 1, loadedAtMs: 1,
+                settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+                connectedPurposeCatalog: { status: 'ready', revision: 1,
+                    record: ConnectedAccountCatalogRecordV1Schema.parse({ key: 'purposes', value: { v: 1, bindings: [{
+                        purpose: purpose.purpose, target: { kind: 'account', account: { service: purpose.serviceRefs[0], accountId: 'connected-summary' } },
+                    }] } }) } });
+            // The Machine route has no Session backend target, so the default must come from the catalog.
+            const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath, source: { kind: 'workingTree' } },
+                machineId: 'machine', backendTarget: null, credentials, executeCanonicalAction });
+            expect(output).toMatchObject({ success: true, runId: 'connected-default-run' });
+            const start = ExecutionRunStartRequestSchema.parse(executeCanonicalAction.mock.calls[0]?.[1]);
+            expect(start.backendTarget).toMatchObject({ backendId: 'claude' });
+        } finally {
+            if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+        }
+    });
+
+    it('keeps the typed start refusal and its reason on the failed output when no Run was created', async () => {
+        const fixture = await changedRepository();
+        const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' } },
+            machineId: 'machine', backendTarget: BACKEND_TARGET,
+            executeCanonicalAction: async () => ({ ok: false, errorCode: 'execution_run_profile_preparation_failed',
+                error: 'Account settings could not be read', details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } }),
+        });
+        const reason = output.success ? output.outputs?.summary?.reason : undefined;
+        expect(reason).toContain('execution_run_profile_preparation_failed');
+        expect(reason).toContain('Account settings could not be read');
+    });
+
     it('generates a workspace-native saved result through the existing detached Run without a Session', async () => {
         const fixture = await changedRepository();
-        const executeCanonicalAction = vi.fn(async (_actionId: string, _input: unknown) => ({ ok: true as const,
-            result: { runId: 'detached-summary', callId: 'call', sidechainId: 'sidechain' } }));
-        const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
-        const generated = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
-            source: { kind: 'workingTree' }, comparisonId: captured.comparison.id, outputs: ['walkthrough'] },
-            machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
-        expect(generated).toMatchObject({ success: true, runId: 'detached-summary', inputId: expect.any(String),
-            comparison: captured.comparison, outputs: { walkthrough: { state: 'pending' } } });
-        expect(executeCanonicalAction).toHaveBeenCalledWith('execution.run.start', expect.objectContaining({
-            sessionId: null, machineId: 'machine', cwd: fixture.rootPath,
-            localInputId: generated.success ? generated.inputId : undefined,
-            intentInput: expect.objectContaining({ resultId: generated.resultId, comparisonId: captured.comparison.id }),
-        }));
-        const admitted = ExecutionRunStartRequestSchema.parse(executeCanonicalAction.mock.calls[0]?.[1]);
-        expect(admitted.modelId).toEqual(expect.any(String));
-        expect(admitted.modelId).not.toBe('default');
-        expect(getAgentStaticModels(admitted.backendTarget?.backendId ?? '', { catalogOnly: true })
-            .find(model => model.id === admitted.modelId)?.costTier).toBe('low');
-        expect(await scmDiffSummaryResultStore.readStoredScope({ cwd: fixture.rootPath, resultId: generated.resultId! }))
-            .toEqual({ cwd: fixture.rootPath });
-        expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, resultId: generated.resultId! }))
-            .toMatchObject({ success: true, result: { output: { inputId: generated.success ? generated.inputId : undefined } } });
+        const previous = getActiveAccountSettingsSnapshot();
+        // Only Claude's executable/auth boundary is supplied by changedRepository.
+        // Do not probe ambient worker Agent installations as fixture input.
+        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({
+            backendEnabledByTargetKey: Object.fromEntries([...readCurrentContributionRegistry().agentDefinitionsById.values()]
+                .flatMap(entry => entry.identity ? listAgentExecutionTargetsV1(entry.identity)
+                    .map(target => [buildBackendTargetKeyV2(target), entry.id === 'claude']) : [])),
+        }), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'detached-native-fixture' });
+        try {
+            const executeCanonicalAction = vi.fn(async (_actionId: string, _input: unknown) => ({ ok: true as const,
+                result: { runId: 'detached-summary', callId: 'call', sidechainId: 'sidechain' } }));
+            const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
+            const generated = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+                source: { kind: 'workingTree' }, comparisonId: captured.comparison.id, outputs: ['walkthrough'] },
+                machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+            expect(generated).toMatchObject({ success: true, runId: 'detached-summary', inputId: expect.any(String),
+                comparison: captured.comparison, outputs: { walkthrough: { state: 'pending' } } });
+            expect(executeCanonicalAction).toHaveBeenCalledWith('execution.run.start', expect.objectContaining({
+                sessionId: null, machineId: 'machine', cwd: fixture.rootPath,
+                localInputId: generated.success ? generated.inputId : undefined,
+                intentInput: expect.objectContaining({ resultId: generated.resultId, comparisonId: captured.comparison.id }),
+            }));
+            const admitted = ExecutionRunStartRequestSchema.parse(executeCanonicalAction.mock.calls[0]?.[1]);
+            expect(admitted.modelId).toEqual(expect.any(String));
+            expect(admitted.modelId).not.toBe('default');
+            expect(getAgentStaticModels(admitted.backendTarget?.backendId ?? '', { catalogOnly: true })
+                .find(model => model.id === admitted.modelId)?.costTier).toBe('low');
+            expect(await scmDiffSummaryResultStore.readStoredScope({ cwd: fixture.rootPath, resultId: generated.resultId! }))
+                .toEqual({ cwd: fixture.rootPath });
+            expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, resultId: generated.resultId! }))
+                .toMatchObject({ success: true, result: { output: { inputId: generated.success ? generated.inputId : undefined } } });
+        } finally {
+            if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+        }
     });
 
     it('sends the configured automatic model as fallback input so attached admission can inherit the applied parent', async () => {
@@ -276,7 +366,7 @@ describe('executeScmDiffSummaryAction', () => {
         const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath, source: { kind: 'workingTree' },
             modelSelector: { backendTargetKey: 'agent:happier.agent.claude/claude' } },
             machineId: 'machine-low-tier-unavailable', backendTarget: BACKEND_TARGET, executeCanonicalAction });
-        expect(output).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE',
+        expect(output).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE', nextAction: 'chooseModel',
             comparison: { inventory: { files: [expect.objectContaining({ path: fixture.trackedPath })] } } });
         expect(executeCanonicalAction).not.toHaveBeenCalled();
     });
@@ -291,7 +381,7 @@ describe('executeScmDiffSummaryAction', () => {
             modelSelector: { backendTargetKey: 'agent:happier.agent.claude/claude' } },
             sessionId: 'parent-unavailable', backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
             executeCanonicalAction });
-        expect(output).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE', resultId: expect.any(String),
+        expect(output).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE', nextAction: 'chooseModel', resultId: expect.any(String),
             comparison: { inventory: { files: [expect.objectContaining({ path: fixture.trackedPath })] } },
             outputs: { summary: { state: 'failed' } } });
         expect(executeCanonicalAction).toHaveBeenCalledTimes(1);
