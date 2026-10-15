@@ -99,6 +99,7 @@ import {
     isWorkflowInteractionCapacityError,
     WORKFLOW_INTERACTION_CAPACITY_EXCEEDED,
 } from '@/agent/permissions/interactionPersistenceError';
+import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
 
 type NativeAgentRunUsagePublisher = Readonly<{
     provider: string;
@@ -660,13 +661,13 @@ function sessionEventToHostMessage(
 ): AgentMessage | null {
     switch (event.kind) {
         case 'message-delta':
+            if (!isForegroundTurnRuntimeTranscriptEvent(event)) return null;
             return event.channel === 'assistant'
                 ? { type: 'model-output', textDelta: event.text,
                     ...(event.messageId ? { messageId: event.messageId } : {}) }
                 : { type: 'event', name: 'thinking', payload: { textDelta: event.text } };
         case 'transcript-message-committed':
-            // History and sidechain commits are not foreground Run result snapshots.
-            return event.role === 'assistant' && event.turnId && !event.sidechainId
+            return event.role === 'assistant' && isForegroundTurnRuntimeTranscriptEvent(event)
                 ? { type: 'model-output', messageId: event.messageId, fullText: event.text }
                 : null;
         case 'provider-session-id':

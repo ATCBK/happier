@@ -1074,6 +1074,14 @@ only foreground streams; a successful authoritative text commit retires its matc
 stream through the existing stable message identity. Native child turn identifiers stay
 in provider-owned evidence rather than claiming a host foreground turn.
 
+Both the host and public SDK Session-to-Run projections admit assistant/reasoning
+deltas and committed text only with proven foreground scope. An omitted turn id
+does not authorize Run output. Claude captures the admitted turn with each SDK
+query; output arriving after that query is cancelled or its foreground work
+completes remains Session scoped even while a newer query runs. OpenCode carries
+the provider owner's proven turn and child scope into its detached Run adapter,
+preserving committed-message identity rather than relabelling snapshots.
+
 Agent-specific protocol leaves live in `packages/plugins/<agentId>/src/agent/**`. Shared ACP composition, process/terminal transport and host lifecycle stay generic in the CLI. Detection, installation and process launch follow [binary runtime](binary-runtime.md); model-source selection and materialization follow [Providers](providers.md).
 
 ### Session Account-action authority (0.3 development)

@@ -313,7 +313,11 @@ export type AgentSessionRuntimeEvent =
       sequence: number;
       sessionId: string;
       emittedAtMs: number;
-      /** Omit for Session output that does not belong to a foreground host turn. */
+      /**
+       * The host-admitted turn proven to own this output. Omit for Session-scoped,
+       * historical, replayed or late output; never infer it from the current turn.
+       * Without this identity, the output cannot become foreground Run output.
+       */
       turnId?: string;
       agentTurnId?: string;
       kind: 'message-delta';
@@ -321,6 +325,7 @@ export type AgentSessionRuntimeEvent =
       messageId?: string;
       channel: 'assistant' | 'reasoning';
       text: string;
+      /** Sidechain output is Session scoped, even when an originating host turn is known. */
       sidechainId?: string;
     }>
   | Readonly<{
@@ -369,7 +374,13 @@ export type AgentSessionRuntimeEvent =
       messageId: string;
       role: 'user' | 'assistant' | 'reasoning';
       text: string;
+      /**
+       * The host-admitted turn proven to own this output. Omit for Session-scoped,
+       * historical, replayed or late output; never infer it from the current turn.
+       * Without this identity, the output cannot become a foreground Run snapshot.
+       */
       turnId?: string;
+      /** Sidechain output is Session scoped, even when an originating host turn is known. */
       sidechainId?: string;
     }>
   | Readonly<{

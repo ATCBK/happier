@@ -543,13 +543,15 @@ function createExecutionRunRuntimeFromConversation<Event extends AgentExecutionR
       return;
     }
     if (event.turnId !== activeTurnId) return;
+    if ((event.kind === 'message-delta' || event.kind === 'transcript-message-committed')
+      && event.sidechainId !== undefined) return;
     switch (event.kind) {
       case 'message-delta':
         lifecycle.emit({ kind: 'output-delta', channel: event.channel, text: event.text,
           ...(event.messageId ? { messageId: event.messageId } : {}) }, event.emittedAtMs);
         return;
       case 'transcript-message-committed':
-        if (event.role !== 'assistant' || event.sidechainId) return;
+        if (event.role !== 'assistant') return;
         lifecycle.emit({ kind: 'output-message-committed', channel: 'assistant',
           messageId: event.messageId, text: event.text }, event.emittedAtMs);
         return;

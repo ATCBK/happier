@@ -234,7 +234,7 @@ function failedEvent(turnId: string): AgentSessionRuntimeEvent {
 }
 
 describe('createExecutionRunHostBackendFromSessionRuntime', () => {
-  it('does not adopt uncorrelated transcript history as a foreground output snapshot', async () => {
+  it('projects only proven foreground text into Run output', async () => {
     const harness = createSessionHarness();
     const execution = await createExecutionRunHostBackendFromSessionRuntime({
       request: createRequest(), openSession: async () => harness.session,
@@ -243,13 +243,22 @@ describe('createExecutionRunHostBackendFromSessionRuntime', () => {
     execution.watch((event) => events.push(event));
     const turnId = 'run-1-turn-1';
     harness.publish(outputEvent(turnId));
-    // Claude, Codex and OpenCode emit these committed history facts without a host turn identity.
-    harness.publish({ sequence: 3, sessionId: 'session-1', emittedAtMs: 12,
-      kind: 'transcript-message-committed', role: 'assistant', messageId: 'historical-artifact', text: 'Historical replacement' });
-    harness.publish(completeEvent(turnId));
+    let sequence = 2;
+    for (const scope of [{}, { turnId, sidechainId: 'child' }, { turnId: 'older-turn' }]) {
+      for (const channel of ['assistant', 'reasoning'] as const) {
+        harness.publish({ sequence: ++sequence, sessionId: 'session-1', emittedAtMs: sequence,
+          kind: 'message-delta', channel, text: 'Session observation', ...scope });
+      }
+      harness.publish({ sequence: ++sequence, sessionId: 'session-1', emittedAtMs: sequence,
+        kind: 'transcript-message-committed', role: 'assistant', messageId: 'session-artifact', text: 'Session replacement', ...scope });
+    }
+    harness.publish({ sequence: ++sequence, sessionId: 'session-1', emittedAtMs: sequence, turnId,
+      kind: 'transcript-message-committed', role: 'assistant', messageId: 'foreground-artifact', text: 'Foreground replacement' });
+    harness.publish({ ...completeEvent(turnId), sequence: ++sequence, emittedAtMs: sequence });
     expect(events).toMatchObject([
       { kind: 'run-start' },
       { kind: 'output-delta', text: 'early output' },
+      { kind: 'output-message-committed', messageId: 'foreground-artifact', text: 'Foreground replacement' },
       { kind: 'run-complete' },
     ]);
     await execution.dispose();
