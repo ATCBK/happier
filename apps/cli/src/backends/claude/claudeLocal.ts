@@ -602,10 +602,7 @@ export async function claudeLocal(opts: {
                     updateThinking(false);
                 });
             }
-            child.on('error', (error) => {
-                // Ignore
-            });
-            child.on('exit', (code, signal) => {
+            const cleanupAbort = () => {
                 if (abortListenerAttached) {
                     try {
                         opts.abort.removeEventListener('abort', abortListener);
@@ -615,6 +612,19 @@ export async function claudeLocal(opts: {
                     abortListenerAttached = false;
                 }
                 clearAbortTimers();
+            };
+            child.on('error', (error) => {
+                if (child.pid) {
+                    // A failed signal can emit an error for a running child. Keep owning it until exit.
+                    logger.infoFile('[ClaudeLocal] Child process error while awaiting exit', error);
+                    return;
+                }
+                // A failed spawn has no PID and need not emit exit.
+                cleanupAbort();
+                reject(error);
+            });
+            child.on('exit', (code, signal) => {
+                cleanupAbort();
 
                 if (abortTeardownRequested) {
                     // Normal termination due to programmatic abort teardown (switching modes / UI takeover).
