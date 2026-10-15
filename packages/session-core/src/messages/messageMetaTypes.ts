@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createSessionMessageMetaSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageMeta';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 

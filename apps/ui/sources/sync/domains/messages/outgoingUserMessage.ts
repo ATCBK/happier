@@ -1,7 +1,7 @@
 import { isBundledAgentId } from '@/agents/catalog/catalog';
 import { getAgentModelConfig } from '@happier-dev/agents';
 import { buildSendMessageMeta } from '@/sync/domains/messages/buildSendMessageMeta';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createTranscriptRawRecordV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { SessionMessageMetaSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageMeta';
 import type { MessageMeta } from "@happier-dev/session-core/messages";
@@ -32,7 +32,7 @@ type LocalOutboundDeliveryStatus = 'queued' | 'accepted';
 /** Write admission preserves producer-owned metadata; stored reads project display fields separately. */
 export const OutgoingUserTextRecordSchema = createTranscriptRawRecordV1Schema(z, {
     metaSchema: SessionMessageMetaSchema,
-}).refine(record => record.role === 'user');
+}).check(z.refine(record => record.role === 'user'));
 
 /** Local display only; the server admission receipt replaces this projection. */
 export function buildLocalOutboundAccountActor(scope: ServerAccountScope): TranscriptAccountActor {

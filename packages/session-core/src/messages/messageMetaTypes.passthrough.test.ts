@@ -46,7 +46,8 @@ describe('stored MessageMetaSchema', () => {
                 resources: [{ pluginId: 'example.plugin', localId: 'resource' }],
                 conversationTurnOriginV1: { v: 1, channel: 'realtime_conversation', modality: 'voice' },
             },
-            happierStructuredInputV1: { v: 1, vendorPluginMentions: [{ vendorPluginRef: 'plugin' }] },
+            // The structured-input owner preserves inert additive envelope fields.
+            happierStructuredInputV1: { v: 1, vendorPluginMentions: [{ vendorPluginRef: 'plugin' }], futureStructuredField: true },
         });
         expect(TranscriptRawRecordV1Schema.parse(stored).meta).toEqual(parsed.meta);
     });
