@@ -112,6 +112,34 @@ test('hstack happier source snapshot uses retained code and clears native proven
   }
 });
 
+test('hstack happier reuses a reconciled profile without launching the profile writer again', async t => {
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'reconciled-source-cli' });
+  const cliDir = join(fixture.stackDir, 'source-runtime', 'bundle', 'cli');
+  const entrypoint = join(cliDir, 'src', 'index.mjs');
+  await mkdir(dirname(entrypoint), { recursive: true });
+  await writeFile(entrypoint, `{ const args = process.argv.slice(2); ${buildStubHappierServerSetSource()} }\n`
+    + 'console.log("requested-command");\n');
+  await writeFile(join(fixture.stackDir, 'stack.runtime.json'), JSON.stringify({
+    version: 1, stackName: fixture.stackName, ownerPid: process.pid,
+    sourceRuntimeIdentities: { daemon: { selected: 'code', loaded: 'code' } },
+    sourceRuntimeLaunch: { cliDir, entrypoint },
+  }));
+  const env = { ...process.env, HAPPIER_STACK_STACK: fixture.stackName,
+    HAPPIER_STACK_STORAGE_DIR: fixture.storageDir, HAPPIER_STACK_ENV_FILE: join(fixture.stackDir, 'env'),
+    HAPPIER_HOME_DIR: join(fixture.root, '.happy-home') };
+  const invoke = () => runNode([join(rootDir, 'scripts/happier.mjs'), '--runtime=source', '--version'], { cwd: rootDir, env });
+  const first = await invoke();
+  assert.equal(first.code, 0, first.stderr);
+  assert.match(first.stdout, /requested-command/);
+  // CLI process is the system boundary. A matching persisted profile must not
+  // require that writer to start again before the requested command can run.
+  await writeFile(entrypoint, 'if (process.argv[2] === "server") process.exit(71);\nconsole.log("requested-command");\n');
+  const second = await invoke();
+  assert.equal(second.code, 0, second.stderr);
+  assert.match(second.stdout, /requested-command/);
+});
+
 test('hstack happier refuses a missing loaded source CLI instead of selecting built code or rebuilding', async t => {
   const rootDir = stackRootDirFromMeta(import.meta.url);
   const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'missing-source-cli', cliEntrypoint: 'cli/happier.mjs' });

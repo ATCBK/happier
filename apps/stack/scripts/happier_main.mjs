@@ -36,6 +36,15 @@ function isNodeRuntimeEntrypoint(entrypoint) {
 function runCliProfileReconciliation({ resolvedCli, env, cliHomeDir, internalServerUrl, publicServerUrl }) {
   const serverId = String(env.HAPPIER_ACTIVE_SERVER_ID ?? '').trim();
   const args = buildStackServerProfileSetArgs({ serverId, internalServerUrl, publicServerUrl });
+  const profile = { homeDir: cliHomeDir, serverId, internalServerUrl, publicServerUrl };
+  try {
+    // Starting a full CLI just to rewrite an already matching profile delays
+    // every stack command, including Stop. Reuse the canonical persisted check.
+    assertStackServerProfileReconciled(profile);
+    return;
+  } catch (error) {
+    if (error?.code !== 'ESTACKCLIPROFILERECONCILIATION') throw error;
+  }
   const result =
     resolvedCli.kind === 'runtime'
       ? spawnSync(resolvedCli.command, [...resolvedCli.args, ...args], { stdio: 'ignore', env })
@@ -47,12 +56,7 @@ function runCliProfileReconciliation({ resolvedCli, env, cliHomeDir, internalSer
     const detail = result.error instanceof Error ? result.error.message : `exit=${result.status ?? 'unknown'}`;
     throw new Error(`[happier] failed to refresh the stack-owned relay profile before launch (${detail}).`);
   }
-  assertStackServerProfileReconciled({
-    homeDir: cliHomeDir,
-    serverId,
-    internalServerUrl,
-    publicServerUrl,
-  });
+  assertStackServerProfileReconciled(profile);
 }
 
 function printHstackHappierHelp({ json }) {
