@@ -87,7 +87,11 @@ vi.mock('@/session/transport/rpc/machineRpc', () => {
       // Only the native process boundary is substituted. Defer the import
       // until invocation because the lifecycle owner's Account ports use RPC.
       const resume = createSpawnNewSessionLifecycleActionHandler({
-        spawnSession: async options => ({ type: 'success', sessionId: options.existingSessionId! }),
+        spawnSession: async options => {
+          const existing = freshSessionRecords.get(options.existingSessionId!);
+          if (existing) freshSessionRecords.set(existing.id, { ...existing, active: true });
+          return { type: 'success', sessionId: options.existingSessionId! };
+        },
       });
       return await resume(request);
     }
@@ -113,6 +117,7 @@ import { createWorkflowProducerBinding } from './workflowScopeBinding';
 import { bindAutomationWorkflowInputs, isWorkflowJsonObject } from './input';
 import { createProductionWorkflowRunCoordinator } from './production';
 import { createWorkflowSessionStepExecutor } from './sessionStepExecutor';
+import { createWorkflowOriginContextInputPort } from '@/agent/runtime/session/contextOnly/workflowOriginInput';
 import * as cliSpawn from '@/utils/spawnHappyCLI';
 import { spawnRegularProcessAndWaitForWebhook } from '../spawn/spawnRegularProcessAndWaitForWebhook';
 import { waitForTerminalHostedSessionWebhook } from '../spawn/waitForTerminalHostedSessionWebhook';
@@ -1147,6 +1152,56 @@ describe('composed Automation workflow claim and optional receipt', () => {
     expect(openRowProgress(kit, rowFor(kit, 'check')!).result).toEqual({ reported: false });
     expect(rowFor(kit, 'notice')?.lifecycle).toBe('skipped');
     expect(kit.run()).toMatchObject({ state: 'succeeded', workflowCustodyState: 'settled' });
+  });
+
+  it.each([false, true])('readies the exact Bot before offering a quiet origin step (already active: %s)', async alreadyActive => {
+    const directory = await projectDirectory();
+    const habitRunId = '35353535-3535-4535-8535-353535353535';
+    freshSessionRecords.set(sessionId, createSessionRecordFixture({ id: sessionId, active: alreadyActive,
+      encryptionMode: 'plain', machineId, metadata: JSON.stringify({ machineId, path: directory,
+        claudeSessionId: 'native-session', runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
+      }) }));
+    const kit = createWorkflowRunStorageTestkit({ runId: habitRunId, machineId, state: 'claimed',
+      origin: { kind: 'automation', automationId: 'habit' } });
+    const offered: unknown[] = [];
+    const origin = createWorkflowOriginContextInputPort({ accountId, originSessionId: sessionId, machineId,
+      resolveEncryption: async () => ({ kind: 'available', witness: currentness }),
+      // HTTP persistence is the system boundary. Every sealed snapshot and row
+      // is produced by the real coordinator and opened by the real origin reader.
+      storage: { execute: async operation => operation.operation === 'delivery.pull'
+        ? { runs: [{ run: kit.run(), acceptedEnvelope: kit.acceptedEnvelope(), hasOriginInputCandidates: true }], nextCursor: null }
+        : await kit.execute(operation) },
+      readDispatchFact: async () => 'not_dispatched', onDispatchedInput: () => {},
+      onError: error => { throw error; },
+    });
+    const sessionInput = sessionInputBoundary();
+    sessionInput.observe.mockImplementation(async request => {
+      expect(freshSessionRecords.get(sessionId)?.active).toBe(true);
+      const input = await origin.take(request.signal ?? new AbortController().signal);
+      expect(input).toMatchObject({ kind: 'workflow_step', localInputId: request.localId,
+        text: 'Keep the reading notes tidy.', workflowInvocation: { runId: habitRunId } });
+      offered.push(input);
+      await request.onInputMaterialized?.(Date.now());
+      return { ok: true, sessionId, localId: request.localId,
+        result: { kind: 'final_text', text: 'Reading notes are up to date.' } };
+    });
+    const coordinate = workflowDaemonProcess({ storage: kit, sessionInput, directory, readActualConversation: true });
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { conversation: { kind: 'origin_session' } },
+      blocks: [step('upkeep', { document: { text: 'Keep the reading notes tidy.', references: [], attachments: [] } })],
+      finalOutput: { kind: 'result', producer: { blockId: 'upkeep', scope: { kind: 'current' } }, path: [] } };
+    const claim = { runId: habitRunId, automationId: 'habit', scopeSessionId: sessionId, attempt: 1,
+      expectedRevision: 0, accountCurrentness: currentness, automationCause: { kind: 'manual' as const, invokedAt: 1 },
+      causeWorkDepth: 0, definitionEnvelope: JSON.stringify({ t: 'plain', v: { inlineDefinition: definition,
+        workspace: { directory }, executionTarget: { kind: 'session' } } }),
+      acquireMachineStartCapacity: async () => { throw new Error('An existing Bot input consumes no Agent-start slot'); } };
+    expect(await coordinate(claim)).toMatchObject({ state: 'succeeded' });
+    expect(offered).toHaveLength(1);
+    expect(sessionInput.enqueue).not.toHaveBeenCalled();
+    expect(openRowProgress(kit, rowFor(kit, 'upkeep')!).result).toBe('Reading notes are up to date.');
+    const acceptedEnvelope = kit.acceptedEnvelope();
+    if (!acceptedEnvelope) throw new Error('habit_snapshot_not_admitted');
+    expect(await coordinate({ ...claim, expectedRevision: kit.run().revision, acceptedEnvelope })).toMatchObject({ state: 'succeeded' });
+    expect(offered).toHaveLength(1);
   });
 
   it('refuses a V2 lifecycle Workflow whose materialized conversation is its own source', async () => {

@@ -547,6 +547,29 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
         return workflowConversationFailure(prepared.existing.machineId !== params.workspace.machineId ? 'machine_mismatch' : 'workspace_mismatch',
           { kind: 'object' }, { kind: 'object' }, 'conversation_workspace_mismatch');
       }
+    }
+    let conversation: Awaited<ReturnType<typeof deps.materializeConversation>>;
+    const explicitExisting = params.conversationBinding?.kind === 'existing_session'
+      || params.execution.conversation?.kind === 'existing_session';
+    if (params.step.inputMode === 'none' || (!params.observationOnly && prepared.existing
+      && (explicitExisting || prepared.inputPath === 'origin_session'))) {
+      if (params.step.inputMode === 'none' && !params.onSessionReady) return { kind: 'failed', code: 'workflow_session_creation_correspondence_unavailable' };
+      if (!params.observationOnly || prepared.existing) await params.beforeInputAdmission();
+      assertWorkflowAdmissionSignal(params.signal);
+    }
+    try {
+      conversation = await deps.materializeConversation(prepared, params);
+    } catch (error) {
+      if (error instanceof WorkflowSessionCompositionError && error.launchFailure) {
+        return { kind: 'failed', code: error.code, message: error.message };
+      }
+      if (params.signal?.aborted) return settleBeforeAdmissionAfterAbort();
+      if (error instanceof WorkflowSessionCompositionError) return { kind: 'failed', code: error.code,
+        ...(error.details ? { reasonDetails: error.details } : {}),
+        ...(error.message === error.code ? {} : { message: error.message }) };
+      throw error;
+    }
+    if (prepared.inputPath === 'origin_session' && prepared.existing) {
       const localId = deriveWorkflowSessionInputLocalIdV2({
         purpose: 'invocation', runId: params.runId,
         invocationRecordId: params.invocationRecordId ?? params.invocation.logicalInvocationRecordId,
@@ -580,26 +603,6 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
         ? await settleAcceptedInputAfterAbort(prepared.existing.sessionId, localId)
         : { kind: 'needs_attention', code: observed.code };
       return settleObservedInput(observed.result);
-    }
-    let conversation: Awaited<ReturnType<typeof deps.materializeConversation>>;
-    const explicitExisting = params.conversationBinding?.kind === 'existing_session'
-      || params.execution.conversation?.kind === 'existing_session';
-    if (params.step.inputMode === 'none' || (!params.observationOnly && prepared.existing && explicitExisting)) {
-      if (params.step.inputMode === 'none' && !params.onSessionReady) return { kind: 'failed', code: 'workflow_session_creation_correspondence_unavailable' };
-      if (!params.observationOnly || prepared.existing) await params.beforeInputAdmission();
-      assertWorkflowAdmissionSignal(params.signal);
-    }
-    try {
-      conversation = await deps.materializeConversation(prepared, params);
-    } catch (error) {
-      if (error instanceof WorkflowSessionCompositionError && error.launchFailure) {
-        return { kind: 'failed', code: error.code, message: error.message };
-      }
-      if (params.signal?.aborted) return settleBeforeAdmissionAfterAbort();
-      if (error instanceof WorkflowSessionCompositionError) return { kind: 'failed', code: error.code,
-        ...(error.details ? { reasonDetails: error.details } : {}),
-        ...(error.message === error.code ? {} : { message: error.message }) };
-      throw error;
     }
     if (params.step.inputMode === 'none') {
       await params.onSessionReady!({ kind: 'session_ready', sessionId: conversation.sessionId });
@@ -916,6 +919,7 @@ export function createProductionWorkflowConversationOwner(deps: Readonly<{
         }
         if (params.step.inputMode === 'none' || (!params.observationOnly && (
           params.conversationBinding?.kind === 'existing_session' || params.execution.conversation?.kind === 'existing_session'
+          || prepared.inputPath === 'origin_session'
         ))) {
           const credentials = deps.credentials;
           if (!credentials) throw workflowConversationUnavailable('account_scope_unavailable');
