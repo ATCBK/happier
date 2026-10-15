@@ -29,6 +29,7 @@ import {
     buildScmGitRepoBackendPreferenceSettingsDelta,
     resolveScmGitRepoPreferredBackendId,
 } from '@/scm/settings/preferences';
+import { scmBackendDefaultDiffStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import {
     normalizeScmRemoteConfirmPolicy,
     setRemoteConfirmationForKind,
@@ -716,10 +717,8 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                                     value={selectedDiffMode ?? diffModeOptions[0].id}
                                     disabled={contributionCatalogIsStale}
                                     onChange={(mode) => {
-                                        setScmDefaultDiffModeByBackend({
-                                            ...currentDiffModeByBackend,
-                                            [plugin.backendId]: mode,
-                                        });
+                                        const delta = scmBackendDefaultDiffStorage.mutate({ scmDefaultDiffModeByBackend: currentDiffModeByBackend }, { backendId: plugin.backendId, mode });
+                                        if (delta) setScmDefaultDiffModeByBackend(delta.scmDefaultDiffModeByBackend);
                                     }}
                                 />
                             ) : (

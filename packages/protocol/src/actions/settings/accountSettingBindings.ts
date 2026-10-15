@@ -12,6 +12,8 @@ import { buildKeyboardShortcutResetDelta, buildKeyboardShortcutSetDelta, buildKe
 import { prepareDefaultProviderStateSharingChangeV1, prepareAgentProviderStateSharingChangeV1, AgentProviderStateSharingChangeV1Schema, type ProviderStateSharingMutationServicesV1 } from './providerStateSharingMutations.js';
 import { BackendTargetKeyV2InputSchema } from '../../backends/targets/backendTargetRefV2.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
+import { buildScmGitRepoBackendPreferenceSettingsDelta, getFirstPartyScmBackendQualifiedId, getFirstPartyScmBackendLegacyLocalId, resolveScmGitRepoPreferredBackendId } from '../../scm/backendIdentity.js';
+import { ScmDiffAreaSchema } from '../../scm/workingSnapshot.js';
 export * from './featurePreferenceMutations.js';
 export * from './glassPreferenceMutations.js';
 export * from './keyboardPreferenceMutations.js';
@@ -33,7 +35,8 @@ type CoupledSettings = Pick<AccountSettings, 'codingPromptBehaviorV1' | 'usageLi
     | 'keyboardShortcutDisabledCommandIdsV1' | 'keyboardShortcutOverridesV1' | 'commandPaletteEnabled'
     | 'sessionTerminalHost' | 'sessionUseTmux' | 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId'
     | 'sessionTmuxSessionName' | 'sessionTmuxIsolated' | 'sessionTmuxTmpDir' | 'actionsSettingsV1'
-    | 'sessionDefaultPermissionModeByTargetKey' | 'backendEnabledByTargetKey' | 'backendCliSourcePreferenceByTargetKey'>;
+    | 'sessionDefaultPermissionModeByTargetKey' | 'backendEnabledByTargetKey' | 'backendCliSourcePreferenceByTargetKey'
+    | 'scmGitRepoPreferredBackend' | 'scmGitRepoPreferredBackendQualifiedId' | 'scmDefaultDiffModeByBackend'>;
 
 export type PortableAccountSettingBindingV1 = Readonly<{
     scope: 'account'; kind: 'owner'; access: 'read_write' | 'read_only' | 'sensitive';
@@ -53,6 +56,34 @@ export type PreparedPortableAccountSettingBindingV1 = PortableAccountSettingBind
 
 const boolean = (value: unknown) => typeof value === 'boolean' ? { success: true as const, value } : { success: false as const };
 const owner = { scope: 'account', kind: 'owner', access: 'read_write' } as const;
+export const scmGitRoutingStorage: PortableAccountSettingBindingV1 = { ...owner,
+    read: settings => resolveScmGitRepoPreferredBackendId({ legacyPreference: settings.scmGitRepoPreferredBackend,
+        qualifiedPreference: settings.scmGitRepoPreferredBackendQualifiedId }),
+    parse: value => typeof value === 'string' && buildScmGitRepoBackendPreferenceSettingsDelta(value)
+        ? { success: true, value: value.trim() } : { success: false },
+    mutate: (_settings, value) => buildScmGitRepoBackendPreferenceSettingsDelta(value),
+};
+const ScmBackendDiffIntentSchema = z.strictObject({ backendId: z.string().check(z.trim(), z.minLength(1)), mode: ScmDiffAreaSchema });
+function parseScmBackendDiffIntent(value: unknown) {
+    const parsed = ScmBackendDiffIntentSchema.safeParse(value);
+    if (!parsed.success) return null;
+    const record = ACCOUNT_SETTING_DEFINITIONS.scmDefaultDiffModeByBackend.parseMutationValue({ [parsed.data.backendId]: parsed.data.mode });
+    return record.success ? parsed.data : null;
+}
+/** One backend-sized intent, merged over the current Account map by the Settings CAS owner. */
+export const scmBackendDefaultDiffStorage = { ...owner,
+    read: (settings: Pick<AccountSettings, 'scmDefaultDiffModeByBackend'>) => settings.scmDefaultDiffModeByBackend,
+    parse: (value: unknown) => { const parsed = parseScmBackendDiffIntent(value); return parsed ? { success: true as const, value: parsed } : { success: false as const }; },
+    mutate: (settings: Pick<AccountSettings, 'scmDefaultDiffModeByBackend'>, value: SettingDomainValueV1) => {
+        const parsed = parseScmBackendDiffIntent(value);
+        if (!parsed) return null;
+        const backendId = getFirstPartyScmBackendQualifiedId(parsed.backendId) ?? parsed.backendId;
+        const next = { ...settings.scmDefaultDiffModeByBackend, [backendId]: parsed.mode };
+        const legacyId = getFirstPartyScmBackendLegacyLocalId(backendId);
+        if (legacyId) delete next[legacyId];
+        return { scmDefaultDiffModeByBackend: next };
+    },
+} satisfies PortableAccountSettingBindingV1;
 type AgentPreferenceKey = 'sessionDefaultPermissionModeByTargetKey' | 'backendEnabledByTargetKey' | 'backendCliSourcePreferenceByTargetKey';
 const AgentPreferenceIntentSchema = z.strictObject({ agentTargetKey: BackendTargetKeyV2InputSchema, value: StrictJsonValueSchema });
 /** One target-sized intent, revalidated and rebased by the existing Settings CAS owner. */
@@ -423,6 +454,8 @@ export function readPortableAccountSettingBindingV1(declaration: Readonly<{
                 'readyPreview', 'requestPreview', 'soundPreset', 'quietHours'] as const).find(key => key === args[0]);
             return id ? accountNotificationStorageBinding(id) : null;
         }
+        case 'scmGitRoutingStorage': return scmGitRoutingStorage;
+        case 'scmBackendDefaultDiffStorage': return scmBackendDefaultDiffStorage;
         case 'remoteConfirmationStorage': return args[0] === 'pull' || args[0] === 'push' ? remoteConfirmationStorage(args[0]) : null;
         case 'presentationStorage': {
             const section = (['profiles', 'backends', 'models', 'machines', 'paths', 'permissions'] as const).find(key => key === args[0]);

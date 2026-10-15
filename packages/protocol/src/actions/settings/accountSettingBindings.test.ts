@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { accountSettingsParse } from '../../account/settings/accountSettings.js';
-import { readPortableAccountSettingBindingV1 } from './accountSettingBindings.js';
+import { readPortableAccountSettingBindingV1, scmBackendDefaultDiffStorage } from './accountSettingBindings.js';
 import { prepareDefaultProviderStateSharingChangeV1, readProviderStateSharingRiskAgentIdsV1 } from './providerStateSharingMutations.js';
 
 function binding(owner: string, ...options: string[]) {
@@ -10,6 +10,23 @@ function binding(owner: string, ...options: string[]) {
 }
 
 describe('portable coupled Account setting mutations', () => {
+    it('preserves an open backend id that matches an Object prototype property', () => {
+        const settings = accountSettingsParse({ scmDefaultDiffModeByBackend: { neighbor: 'included' } });
+        expect(scmBackendDefaultDiffStorage.mutate(settings, { backendId: 'constructor', mode: 'both' }))
+            .toEqual({ scmDefaultDiffModeByBackend: { neighbor: 'included', constructor: 'both' } });
+    });
+    it.each(['git', 'happier.scm.backend.git/git'])('writes the canonical diff preference and removes its stale alias for %s', backendId => {
+        const settings = accountSettingsParse({ scmDefaultDiffModeByBackend: {
+            git: 'included', 'happier.scm.backend.git/git': 'pending', neighbor: 'both',
+        } });
+        const intent = scmBackendDefaultDiffStorage.parse({ backendId, mode: 'both' });
+        expect(intent.success).toBe(true);
+        if (!intent.success) throw new Error('Expected valid diff preference');
+        const delta = scmBackendDefaultDiffStorage.mutate(settings, intent.value);
+        expect(accountSettingsParse({ ...settings, ...delta }).scmDefaultDiffModeByBackend).toEqual({
+            'happier.scm.backend.git/git': 'both', neighbor: 'both',
+        });
+    });
     it('prepares sharing through the portable owner and retires its replay with the captured context', async () => {
         const settings = accountSettingsParse({});
         const selected = binding('connectedServicesAgentSignIn.sharingState');

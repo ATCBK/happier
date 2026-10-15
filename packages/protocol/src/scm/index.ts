@@ -69,6 +69,11 @@ export {
   type ScmBackendId,
   type ScmBackendPreference,
   type ScmBuiltInBackendId,
+  getFirstPartyScmBackendQualifiedId, getFirstPartyScmBackendLegacyLocalId, isFirstPartyGitScmBackendId,
+  SCM_GIT_REPO_BACKEND_OPTIONS, SCM_BACKEND_QUALIFIED_ID_MAX_LENGTH,
+  normalizeScmGitRepoPreferredBackend, normalizeScmBackendQualifiedId,
+  resolveScmGitRepoPreferredBackendId, buildScmGitRepoBackendPreferenceSettingsDelta,
+  type ScmGitRepoPreferredBackend, type ScmGitRepoBackendPreferenceSettingsDelta,
 } from './backendIdentity.js';
 export {
   ProviderRefreshPolicySchema,

@@ -208,8 +208,6 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       return catalogBinding ? catalogBinding.read(settings) : readBuiltInAccountSettingValueV1(declaration, settings);
     };
     if (requested) {
-      if (requested.reversal) return await executeCliScalarSettingReversal({ declaration, requested,
-        credentials, serverId: params.serverId, signal: context.signal, isCredentialCurrent: params.isCredentialCurrent });
       const value = catalogBinding ? catalogBinding.parse(requested.value) : parseBuiltInAccountSettingValueV1(declaration, requested.value);
       if (!value.success) return refuse('invalid_setting_value');
       const initial = catalogBinding?.prepare || preparedBinding ? await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', signal: context.signal }) : undefined;
@@ -257,6 +255,9 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
         return AccountSettingMutationV1Schema.parse({ operations: Object.entries(persisted).map(([key, value]) => ({ op: 'set', key, value })) });
       };
       try {
+        if (requested.reversal) return await executeCliScalarSettingReversal({ declaration, requested,
+          credentials, serverId: params.serverId, signal: context.signal, isCredentialCurrent: params.isCredentialCurrent,
+          prepareMutation, readValue });
         const result = requested.expectedSettingsVersion === undefined
           ? await updateAccountSettingsV2WithRetry({ credentials, prepareMutation, signal: context.signal })
           : await updateAccountSettingsV2Once({ credentials, expectedVersion: requested.expectedSettingsVersion,

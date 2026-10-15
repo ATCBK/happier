@@ -11,6 +11,8 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createCliActionExecutor } from './createCliActionExecutor';
 import { createCliActionExecutorHarness } from './createCliActionExecutorHarness';
+import { createSignedInSummaryCatalogFixture } from './settingsCatalog.test-support';
+import { createCliSettingsCatalogServices } from './settingsCatalogServices';
 
 const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'settings.set': { enabled: true } } });
 
@@ -54,7 +56,7 @@ describe('CLI declared Account settings', () => {
     });
   });
 
-  afterEach(() => { vi.restoreAllMocks(); resetInMemoryAccountSettingsContextForTests(); });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); resetInMemoryAccountSettingsContextForTests(); });
 
   function executor(token = 'settings-parity-test') {
     return createCliActionExecutorHarness({
@@ -241,6 +243,7 @@ describe('CLI declared Account settings', () => {
   });
 
   it.each([
+    { anchor: 'sourceControl.explainChanges', baseline: true, value: false },
     { anchor: 'sourceControl.investigateSurroundingFiles', baseline: false, value: true },
     { anchor: 'sourceControl.outputLanguage', baseline: '', value: 'fr' },
     { anchor: 'sourceControl.summaryModel', baseline: '', value: '' },
@@ -271,16 +274,65 @@ describe('CLI declared Account settings', () => {
     const owner = executor(token);
     for (const input of [
       { anchor: 'sourceControl.investigateSurroundingFiles', value: 'true' },
-      { anchor: 'sourceControl.outputLanguage', value: 'not-a-language' },
+      { anchor: 'sourceControl.outputLanguage', value: 'not a language' },
     ]) expect(await owner.execute('settings.set', { ...input, reversal: { kind: 'capture' } }, user))
       .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+    content = { t: 'plain', v: { favoriteMachines: ['neighbor'], 'scm.diffSummary.modelProfileOverride': 'invented-model' } };
+    const before = content;
     for (const input of [
       { anchor: 'sourceControl.summaryModel', value: 'invented-model' },
       { anchor: 'sourceControl.prepareAfterTurn', value: true },
     ]) expect(await owner.execute('settings.set', { ...input, reversal: { kind: 'capture' } }, user))
       .toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
-    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['neighbor'] } });
+    expect(content).toEqual(before);
     expect(version).toBe(1);
+  });
+
+  it('sets Source control routing and one backend diff preference through the shared Settings owner without replacing neighbors', async () => {
+    content = { t: 'plain', v: { favoriteMachines: ['neighbor'], scmDefaultDiffModeByBackend: {
+      git: 'included', 'happier.scm.backend.git/git': 'included', neighbor: 'both',
+    } } };
+    const owner = executor();
+    expect(await owner.execute('settings.set', { anchor: 'sourceControl.gitRouting', value: 'sapling' }, user))
+      .toMatchObject({ ok: true, result: { value: 'sapling' } });
+    expect(await owner.execute('settings.get', { anchor: 'sourceControl.gitRouting' }, user))
+      .toMatchObject({ ok: true, result: { value: 'happier.scm.backend.sapling/sapling' } });
+    expect(await owner.execute('settings.set', { anchor: 'sourceControl.backendDefaultDiff',
+      value: { backendId: 'git', mode: 'pending' } }, user))
+      .toMatchObject({ ok: true });
+    expect(await owner.execute('settings.get', { anchor: 'sourceControl.backendDefaultDiff' }, user))
+      .toMatchObject({ ok: true, result: { value: { neighbor: 'both', 'happier.scm.backend.git/git': 'pending' } } });
+    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['neighbor'], scmGitRepoPreferredBackend: 'sapling',
+      scmGitRepoPreferredBackendQualifiedId: null, scmDefaultDiffModeByBackend: { neighbor: 'both', 'happier.scm.backend.git/git': 'pending' } } });
+  });
+
+  it('captures and reverses an admitted catalog model and prefetch-on through the real Settings Action', async () => {
+    const admitted = await createSignedInSummaryCatalogFixture();
+    try {
+      const catalog = await createCliSettingsCatalogServices({}).readScmDiffSummaryCatalog!(accountSettingsParse({}), '');
+      const model = catalog?.profiles.find(profile => profile.costTier === 'low' && profile.structuredOutput === 'supported');
+      if (!model) throw new Error(JSON.stringify({ reason: 'Admitted Agent must produce a supported low-cost model',
+        profiles: catalog?.profiles, diagnostics: admitted.registry.pluginDiagnosticsByPluginId['happier.agent.claude'] }));
+      const token = `e30.${Buffer.from(JSON.stringify({ sub: 'settings-account' })).toString('base64url')}.signature`;
+      const owner = executor(token);
+      for (const [anchor, value, baseline] of [
+        ['sourceControl.summaryModel', model.catalogId, ''],
+        ['sourceControl.prepareAfterTurn', true, false],
+      ] as const) {
+        const changed = await owner.execute('settings.set', { anchor, value, reversal: { kind: 'capture' } }, user);
+        expect(changed).toMatchObject({ ok: true, result: { anchor, value, reversal: { before: { unset: true }, applied: { value } } } });
+        if (!changed.ok) throw new Error(JSON.stringify(changed));
+        const receipt = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(changed.result);
+        if (!('reversal' in receipt) || !receipt.reversal) throw new Error('Missing reversal');
+        expect(await owner.execute('settings.get', { anchor }, user)).toMatchObject({ ok: true, result: { value } });
+        expect(await owner.execute('settings.set', { anchor, value: baseline,
+          reversal: { kind: 'restore', ...receipt.reversal } }, user)).toMatchObject({ ok: true, result: { value: baseline } });
+        expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['neighbor'] } });
+      }
+    } finally {
+      await admitted.dispose();
+      vi.unstubAllEnvs();
+    }
   });
 
   it('rejects resource targets on Account declarations before reading or writing preferences', async () => {

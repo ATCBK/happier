@@ -1,4 +1,4 @@
-import { commitMessageAgentStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
+import { commitMessageAgentStorage, scmGitRoutingStorage, scmBackendDefaultDiffStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import { defineSettingsPage, settingsHosts } from '@/components/settings/catalog/settingDeclarations';
 import { scmDiffSummarySettingBinding, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
 
@@ -41,7 +41,7 @@ export const SOURCE_CONTROL_SETTINGS = defineSettingsPage({
         routing: {
             titleKey: 'settingsSourceControl.page.routing.title',
             settings: {
-                gitRouting: {},
+                gitRouting: { storage: scmGitRoutingStorage },
             },
         },
         files: {
@@ -66,7 +66,7 @@ export const SOURCE_CONTROL_SETTINGS = defineSettingsPage({
         backends: {
             // One row per source-control backend the chosen machine offers (page state).
             settings: {
-                backendDefaultDiff: {},
+                backendDefaultDiff: { storage: scmBackendDefaultDiffStorage },
             },
         },
         editor: {

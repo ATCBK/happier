@@ -1,4 +1,5 @@
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
+import { normalizeScmBackendQualifiedId } from '../../scm/backendIdentity.js';
 import * as z from 'zod/mini';
 import { z as classicZ } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
@@ -55,10 +56,6 @@ import {
   HappierReplayWireMaxSeedCharsSchema,
   HappierReplayWritableMaxSeedCharsSchema,
 } from '../../sessions/replaySeedBudget.js';
-import {
-  buildQualifiedPluginContributionKey,
-  PluginContributionIdentityV1Schema,
-} from '../../plugins/contributionIdentity.js';
 import { MAX_PLUGIN_IDENTIFIER_BYTES } from '../../plugins/pluginId.js';
 
 import {
@@ -698,19 +695,6 @@ function accountBoundedString(maximum = 4 * 1024) {
     return z.string().check(z.maxLength(maximum));
 }
 
-function normalizeScmBackendQualifiedId(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > 256) return null;
-
-  const separatorIndex = trimmed.indexOf('/');
-  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) return null;
-  const parsed = PluginContributionIdentityV1Schema.safeParse({
-    pluginId: trimmed.slice(0, separatorIndex),
-    localId: trimmed.slice(separatorIndex + 1),
-  });
-  return parsed.success ? buildQualifiedPluginContributionKey(parsed.data) : null;
-}
 const ScmBackendQualifiedIdSchema = lazyDefinition(() => z
     .string().check(z.trim(), z.minLength(1), z.maxLength(256), z.refine((value) => normalizeScmBackendQualifiedId(value) === value)));
 
