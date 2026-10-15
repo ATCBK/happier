@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import type { ManagedExecutableRef } from '@happier-dev/plugin-sdk/managed-services';
-import { execLimaGuest, putLimaGuestFile } from '@happier-dev/cli-common/machineLima';
+import { changeLimaPower, execLimaGuest, putLimaGuestFile } from '@happier-dev/cli-common/machineLima';
 import { createLimaSdkExecutor } from './nativeExecutor.js';
 
 const executable: ManagedExecutableRef = { kind: 'managedDependency', id: { pluginId: 'happier.machine.lima', localId: 'lima-cli' } };
@@ -14,7 +14,25 @@ function success(stdout = new Uint8Array()): PluginProcessResult {
 }
 
 describe('public Lima process transport', () => {
-  it('hands only native start descendants to Lima while stop, delete and guest IO remain supervised', async () => {
+  it.each(['start', 'stop'] as const)('uses the native daemon lifetime for retained power %s', async intent => {
+    let running = intent === 'stop';
+    // Replace only public process IO; the shared power owner chooses the real
+    // retained-instance command and the SDK executor supplies its lifetime.
+    const exec: Pick<ExecService, 'run'> = { run: async (request, options) => {
+      if (request.args?.[0] === 'list') {
+        return success(new TextEncoder().encode(JSON.stringify({ ...native, status: running ? 'Running' : 'Stopped' })));
+      }
+      expect(request.args).toEqual([intent === 'start' ? 'restart' : 'stop', identity.instance]);
+      expect(options?.descendantDisposition).toBe(intent === 'start' ? 'preserve-on-success' : undefined);
+      running = intent === 'start';
+      return success();
+    } };
+    const executor = createLimaSdkExecutor({ exec, executable, signal: new AbortController().signal });
+    await expect(changeLimaPower({ executor, ...identity, intent }))
+      .resolves.toEqual({ changed: true, status: intent === 'start' ? 'Running' : 'Stopped' });
+  });
+
+  it('hands explicit native start descendants to Lima while stop, delete and guest IO remain supervised', async () => {
     const exec: Pick<ExecService, 'run'> = { run: async (request, options) => {
       expect(options?.descendantDisposition).toBe(request.args?.[0] === 'start' ? 'preserve-on-success' : undefined);
       return success();
