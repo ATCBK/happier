@@ -400,6 +400,30 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
     expect((await sender()).transportKind).toBe('json_rpc_compat');
     expect(grants).toEqual([]);
   });
+  it.each(['loopback_direct', 'server_relay'] as const)('uses the hydrated active Home port for %s when its retained machine list has no daemon state', async route => {
+    direct = route === 'loopback_direct'; publishFeatures(); selectMachine(direct);
+    const machine = storage.getState().machines['machine-1']!;
+    storage.setState({ machineListByServerId: {
+      ...storage.getState().machineListByServerId,
+      [account.home.id]: [{ ...machine, daemonState: null }],
+    } });
+    const stream = await sender();
+    expect(stream.transportKind).toBe('binary_tunnel');
+    await stream.start();
+    await expect(stream.finish()).resolves.toMatchObject({ finalText: 'hello' });
+    expect(receipt()).toMatchObject({ routeKind: route, localTransport: 'closed' });
+    expect(route === 'loopback_direct' ? opens[0] : authorization?.payload)
+      .toMatchObject({ destination: { host: '127.0.0.1', port: PORT } });
+  });
+  it('does not use a stale retained port when the focused Machine no longer publishes one', async () => {
+    const retained = storage.getState().machines['machine-1']!;
+    selectMachine(true, null);
+    storage.setState({ machineListByServerId: {
+      ...storage.getState().machineListByServerId, [account.home.id]: [retained],
+    } });
+    expect((await sender()).transportKind).toBe('json_rpc_compat');
+    expect(grants).toEqual([]);
+  });
   it('returns compatibility without native admission when target Home credentials are unavailable', async () => {
     expect(await TokenStorage.removeCredentialsForServerUrl(HOME, { serverId: account.home.id })).toBe(true);
     await expect(openProductionVoiceMediaTunnel({ machineTarget: { machineId: 'machine-1' }, requestId: 'request-1',

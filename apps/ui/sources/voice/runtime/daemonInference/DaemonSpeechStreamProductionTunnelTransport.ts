@@ -31,6 +31,7 @@ import {
   type TargetServer,
 } from '@/sync/domains/machines/peer/mediation/stream/productionRouteHttp';
 import { storage } from '@/sync/domains/state/storage';
+import { readPeerEndpointForServerScope } from '@/sync/domains/machines/peer/mediation/readPeerEndpointForServerScope';
 import { resolvePeerMediationDirectPreferencesForScope } from '@/sync/domains/settings/peerMediationPreferences';
 import { parseToken } from '@/utils/auth/parseToken';
 import { createServerScopedRelaySocket } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRelaySocket';
@@ -121,34 +122,15 @@ function readRecordValue(record: Record<string, unknown>, key: string): unknown 
   return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
-function readMachineRecord(input: Readonly<{
-  serverId: string;
-  machineId: string;
-}>): Record<string, unknown> | null {
-  const state = storage.getState() as unknown as {
-    machineListByServerId?: Record<string, readonly unknown[]>;
-    machines?: Record<string, unknown>;
-  };
-  const scopedMachines = state.machineListByServerId?.[input.serverId];
-  if (Array.isArray(scopedMachines)) {
-    for (const candidate of scopedMachines) {
-      if (!isRecord(candidate)) continue;
-      if (String(readRecordValue(candidate, 'id') ?? '') === input.machineId) {
-        return candidate;
-      }
-    }
-  }
-  const fallbackMachine = state.machines?.[input.machineId];
-  return isRecord(fallbackMachine) ? fallbackMachine : null;
-}
-
 function readDaemonHttpPort(input: Readonly<{
   serverId: string;
   machineId: string;
 }>): number | null {
-  const machine = readMachineRecord(input);
-  const daemonState = isRecord(machine?.daemonState) ? machine.daemonState : null;
-  const rawPort = daemonState ? readRecordValue(daemonState, 'httpPort') : null;
+  const rawPort = readPeerEndpointForServerScope({
+    state: storage.getState(),
+    ...input,
+    select: (machine) => machine.daemonState?.httpPort,
+  });
   const port = typeof rawPort === 'number'
     ? rawPort
     : typeof rawPort === 'string' && rawPort.trim().length > 0
