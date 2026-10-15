@@ -294,11 +294,7 @@ export class PermissionRequestCoordinator<TResult> {
         context: PermissionRequestCoordinatorContext;
         completion: PermissionRequestCoordinatorCompletion<TResult>;
     }>): Promise<boolean> {
-        // A live UI answer must be persisted before the provider can continue. Late answers
-        // retain their existing detached/agent-state reconciliation and decision-cache behavior.
-        return params.context.status === 'live'
-            ? await this.completeResponseWithAck(params)
-            : this.completeResponse(params);
+        return await this.completeResponseWithAck(params);
     }
 
     async completeResponseWithAck(params: Readonly<{
@@ -308,7 +304,16 @@ export class PermissionRequestCoordinator<TResult> {
         const { context, completion } = params;
         if (this.isRequestClaimed(context.requestId)) return false;
         const entry = this.pendingRequests.get(context.requestId);
-        if (!entry || entry.status !== 'live' || entry.completionInProgress) return false;
+        if (!entry) {
+            if (!this.store.hasOutstandingRequest(context.requestId)) return false;
+            await this.store.completeRequest({
+                requestId: context.requestId,
+                ...completion.completedRequest,
+                requireAck: true,
+            });
+            return true;
+        }
+        if (entry.completionInProgress) return false;
         entry.completionInProgress = true;
         try {
             await this.store.completeRequest({

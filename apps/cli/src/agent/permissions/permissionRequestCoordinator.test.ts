@@ -294,6 +294,45 @@ describe('PermissionRequestCoordinator', () => {
         expect(session.agentState.requests![bashRequest.requestId]).toBeUndefined();
     });
 
+    it('keeps a failed detached UI response retryable and waits for persistence after reattachment', async () => {
+        const { coordinator, session } = createHarness();
+        const abort = new AbortController();
+        const pending = coordinator.requestDecision(bashRequest, { signal: abort.signal });
+        abort.abort();
+        await expect(pending).rejects.toThrow('Permission request aborted');
+
+        const completion = {
+            result: approve(),
+            completedRequest: { status: 'approved', decision: 'approved' },
+        };
+        const updateState = session.updateAgentState.bind(session);
+        session.updateAgentState = async () => { throw new Error('state transport unavailable'); };
+        await expect(coordinator.completeRpcResponse({
+            context: coordinator.getResponseContext(bashRequest.requestId)!, completion,
+        })).rejects.toThrow('state transport unavailable');
+        expect(coordinator.getResponseContext(bashRequest.requestId)).toMatchObject({
+            status: 'detached', correlation: 'record',
+        });
+        expect(session.agentState.completedRequests![bashRequest.requestId]).toBeUndefined();
+
+        let release!: () => void;
+        const acknowledgement = new Promise<void>((resolve) => { release = resolve; });
+        session.updateAgentState = async (updater) => {
+            await acknowledgement;
+            updateState(updater);
+        };
+        const response = coordinator.completeRpcResponse({
+            context: coordinator.getResponseContext(bashRequest.requestId)!, completion,
+        });
+        const retry = coordinator.requestDecision(bashRequest);
+        expect(await settledState(retry)).toBe('pending');
+        expect(session.agentState.requests![bashRequest.requestId]).toBeDefined();
+        release();
+        await expect(response).resolves.toBe(true);
+        await expect(retry).resolves.toEqual(approve());
+        expect(session.agentState.requests![bashRequest.requestId]).toBeUndefined();
+    });
+
     it('replays a late cached decision for multiple compatible same-id retry callers', async () => {
         const { coordinator, session } = createHarness();
         const abort = new AbortController();
@@ -436,7 +475,7 @@ describe('PermissionRequestCoordinator', () => {
         );
     });
 
-    it('completes UI-only responses when agent state still has the request', () => {
+    it('keeps a failed agent-state-only UI response retryable and preserves independent requests', async () => {
         const { coordinator, session, store } = createHarness();
 
         store.publishRequest({
@@ -446,32 +485,30 @@ describe('PermissionRequestCoordinator', () => {
             createdAt: 500,
             kind: 'user_action',
         });
+        store.publishRequest({
+            requestId: 'independent', toolName: 'Bash', toolInput: { command: 'pwd' }, createdAt: 600,
+        });
 
-        expect(
-            coordinator.handleResponse({
-                requestId: 'agent-state-only',
-                buildCompletion: (context) => {
-                    expect(context).toEqual(
-                        expect.objectContaining({
-                            requestId: 'agent-state-only',
-                            correlation: 'agent_state',
-                            status: 'agent_state_only',
-                            toolName: 'AskUserQuestion',
-                        }),
-                    );
-                    return {
-                        result: { decision: 'approved', answers: { q1: 'yes' } },
-                        completedRequest: {
-                            status: 'approved',
-                            decision: 'approved',
-                            extraCompletedFields: { answers: { q1: 'yes' } },
-                        },
-                    };
-                },
-            }),
-        ).toBe(true);
+        const context = coordinator.getResponseContext('agent-state-only')!;
+        expect(context).toMatchObject({ correlation: 'agent_state', status: 'agent_state_only' });
+        const completion = {
+            result: { decision: 'approved', answers: { q1: 'yes' } },
+            completedRequest: {
+                status: 'approved', decision: 'approved', extraCompletedFields: { answers: { q1: 'yes' } },
+            },
+        };
+        const updateState = session.updateAgentState.bind(session);
+        session.updateAgentState = async () => { throw new Error('state transport unavailable'); };
+        await expect(coordinator.completeRpcResponse({ context, completion })).rejects.toThrow('state transport unavailable');
+        expect(session.agentState.requests!['agent-state-only']).toBeDefined();
+        expect(session.agentState.requests!.independent).toBeDefined();
+        expect(session.agentState.completedRequests!['agent-state-only']).toBeUndefined();
+        session.updateAgentState = updateState;
+
+        await expect(coordinator.completeRpcResponse({ context, completion })).resolves.toBe(true);
 
         expect(session.agentState.requests!['agent-state-only']).toBeUndefined();
+        expect(session.agentState.requests!.independent).toBeDefined();
         expect(session.agentState.completedRequests!['agent-state-only']).toEqual(
             expect.objectContaining({
                 tool: 'AskUserQuestion',
