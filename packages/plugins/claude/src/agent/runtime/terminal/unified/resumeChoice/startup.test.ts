@@ -117,6 +117,48 @@ function pendingDecisionUntilAbort<T>(signal: AbortSignal | undefined): Promise<
 }
 
 describe('createClaudeUnifiedResumeChoiceStartupHandler', () => {
+  it('surfaces first-run theme selection when the native cursor is on its focused choice', async () => {
+    // Claude Code 2.1.296, own isolated tmux launch on nl1 (DF75).
+    // The terminal cursor sits on the chooser, which is not an editable composer.
+    const theme = [
+      " Let's get started.",
+      '',
+      ' Choose the text style that looks best with your terminal',
+      ' To change this later, run /theme',
+      '',
+      '     Auto (match terminal)',
+      ' ❯ ✔ Dark mode',
+      '     Light mode',
+      '     Dark mode (colorblind-friendly)',
+      '     Light mode (colorblind-friendly)',
+      '     Dark mode (ANSI colors only)',
+      '     Light mode (ANSI colors only)',
+      '',
+    ].join('\n');
+    const requestDecision = vi.fn((_request: unknown, options?: Readonly<{ signal?: AbortSignal }>) =>
+      pendingDecisionUntilAbort<Readonly<{ decision: 'approved' }>>(options?.signal));
+    const port = createFakeControlPort({ captures: [theme] });
+    const handler = createClaudeUnifiedResumeChoiceStartupHandler({
+      ctx: createContext(requestDecision), sessionId: 'session-1', port,
+      settleMs: 0, wait: async () => undefined,
+    });
+    try {
+      expect(await handler.handle(parseClaudeScreenState(theme, { cursor: { x: 1, y: 6 } })))
+        .toBe('waiting_for_user');
+      expect(requestDecision).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'AskUserQuestion',
+        input: expect.objectContaining({ questions: [expect.objectContaining({
+          question: expect.stringContaining('Choose the text style'),
+          options: expect.arrayContaining([expect.objectContaining({ label: '✔ Dark mode' })]),
+        })] }),
+      }), expect.anything());
+      expect(port.sentLiteral).toEqual([]);
+      expect(port.sentKeys).toEqual([]);
+    } finally {
+      await handler.dispose();
+    }
+  });
+
   it('keeps the plugin-owned dialog source equal to the host Protocol discriminant', () => {
     expect(CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE)
       .toBe(PROTOCOL_CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE);

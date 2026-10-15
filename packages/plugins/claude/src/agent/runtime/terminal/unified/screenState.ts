@@ -759,9 +759,11 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
   const composerContent = composerState.content;
   const hasComposer = composerContent !== null;
   // A host cursor on the parsed composer is direct evidence that the composer, not an older
-  // selection-shaped transcript row elsewhere in the pane, owns keyboard input. Preserve
-  // fail-closed handling when cursor ownership is unavailable or remains on a real chooser.
-  const activeComposerOwnsInput = hasComposer && composerState.cursorRelation !== null;
+  // selection-shaped transcript row elsewhere in the pane, owns keyboard input. A focused
+  // unindexed chooser uses the same glyph and may put the terminal cursor on that option
+  // (Claude 2.1.296 onboarding); its selection presentation still owns input in that case.
+  const activeComposerOwnsInput = hasComposer && composerState.cursorRelation !== null
+    && visibleDialogSelection?.kind !== 'focused';
   const composerHasSlash = hasComposer && composerContent.startsWith('/');
   const slashPickerOpen = composerHasSlash && SLASH_SUGGESTION_LINE.test(text);
   const userDraftPresent = hasComposer
