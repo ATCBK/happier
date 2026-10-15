@@ -133,6 +133,8 @@ describe("registerPeerMediationGrantRoutes", () => {
         expect(response).toMatchObject({ ok: true, grant: { payload: { callerAuthority: authority } } });
     });
     it.each([
+        { method: RPC_METHODS.DAEMON_COMPUTER_ACTION_EXECUTE, authority: 'present_user' },
+        { method: RPC_METHODS.DAEMON_COMPUTER_ACTION_EXECUTE, authority: 'account_automation' },
         { method: RPC_METHODS.DAEMON_LIVE_STREAM_RELAY_START, authority: 'present_user' },
         { method: RPC_METHODS.DAEMON_LIVE_STREAM_RELAY_START, authority: 'account_automation' },
         { method: RPC_METHODS.DAEMON_BROWSER_VIEW_LIST, authority: 'present_user' },
