@@ -146,6 +146,33 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         }
     });
 
+    it.each([RPC_ERROR_CODES.FORBIDDEN, RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, 'MACHINE_ENCRYPTION_UNAVAILABLE', 'MACHINE_RPC_TIMEOUT', 'action_failed'])('preserves the Computer RPC refusal through the real Action consumer: %s', async errorCode => {
+        const { createActionExecutor, createUnavailableRuntimeActionExecutor } = await import('@happier-dev/protocol');
+        const { ActionExecuteFailureSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
+        const { createComputerRuntimeActionExecutor } = await import('@/sync/domains/computer/actions/runtimeActionExecutor');
+        const { createComputerControlClient } = await import('@/sync/domains/computer/computerControlClient');
+        boundary.setRpcAckResponder(async request => {
+            expect(request.method).toBe(RPC_METHODS.DAEMON_COMPUTER_ACTION_EXECUTE);
+            const { DaemonComputerActionExecuteRequestV1Schema } = await import('@happier-dev/protocol/computer/v1');
+            const decoded = await decodeRequest(request);
+            expect(DaemonComputerActionExecuteRequestV1Schema.parse(decoded.params)).toMatchObject({ actionId: 'computer.targets.list' });
+            if (errorCode === 'MACHINE_RPC_TIMEOUT') throw Object.assign(new Error('Deadline expired'), { code: errorCode });
+            if (errorCode === 'action_failed') throw new Error('Unclassified network failure');
+            return { ok: false, error: 'Owner refused the request', errorCode };
+        });
+        const executor = createActionExecutor({ runtimeActionExecute: createComputerRuntimeActionExecutor({ fallback: createUnavailableRuntimeActionExecutor() }) } as import('@happier-dev/protocol').ActionExecutorDeps);
+        let failure: unknown;
+        const execute: typeof executor.execute = async (...args) => {
+            const result = await executor.execute(...args);
+            failure = result;
+            return result;
+        };
+        const client = createComputerControlClient({ serverId: home.id, machineId: 'machine-1', sessionId: 'computer-session' }, execute);
+        expect(await client.listTargets()).toEqual({ ok: false, code: errorCode });
+        expect(ActionExecuteFailureSchema.parse(failure)).toMatchObject({ errorCode });
+        expect(boundary.requests.length).toBeGreaterThan(0);
+    });
+
     it.each(['reply', 'cancel'] as const)('keeps canonical Stop under the admitted operation lifetime: %s', async outcome => {
         const { stopSessionViaDaemonMachineRpc } = await import('@/sync/ops/sessionStopStrategy');
         const { StopSessionResultSchema } = await import('@happier-dev/protocol/sessionStop');

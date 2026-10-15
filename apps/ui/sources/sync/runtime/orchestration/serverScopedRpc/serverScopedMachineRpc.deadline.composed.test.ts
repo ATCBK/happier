@@ -127,6 +127,34 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
         } };
 }
 
+it('preserves a real Home RPC refusal through the composed Computer Action and strict client', async () => {
+    const { createActionExecutor, createUnavailableRuntimeActionExecutor } = await import('@happier-dev/protocol');
+    const { ActionExecuteFailureSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
+    const { DaemonComputerActionExecuteRequestV1Schema } = await import('@happier-dev/protocol/computer/v1');
+    const { createComputerRuntimeActionExecutor } = await import('@/sync/domains/computer/actions/runtimeActionExecutor');
+    const { createComputerControlClient } = await import('@/sync/domains/computer/computerControlClient');
+    const home = await createDirectRelayHome(1);
+    try {
+        const executor = createActionExecutor({ runtimeActionExecute: createComputerRuntimeActionExecutor({ fallback: createUnavailableRuntimeActionExecutor() }) } as import('@happier-dev/protocol').ActionExecutorDeps);
+        let failure: unknown;
+        const client = createComputerControlClient({ serverId: home.scope.serverId, machineId: 'machine-1', sessionId: 'computer-session' }, async (...args) => {
+            const result = await executor.execute(...args);
+            failure = result;
+            return result;
+        });
+        expect(await client.listTargets()).toEqual({ ok: false, code: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        expect(ActionExecuteFailureSchema.parse(failure)).toMatchObject({ errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        expect(home.calls.length).toBeGreaterThan(0);
+        for (const packet of home.calls) {
+            expect(packet.method).toBe(`machine-1:${RPC_METHODS.DAEMON_COMPUTER_ACTION_EXECUTE}`);
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, packet.params, packet.method);
+            expect(DaemonComputerActionExecuteRequestV1Schema.parse(decoded.params)).toEqual({
+                actionId: 'computer.targets.list', sessionId: 'computer-session', input: { machineId: 'machine-1' },
+            });
+        }
+    } finally { await home.close(); }
+});
+
 it('transfers the remaining filename budget after setup and preserves a partial reply after domain expiry', async () => {
     const relayReply = createDeferred<void>();
     const home = await createDirectRelayHome(1, relayReply.promise, 100);

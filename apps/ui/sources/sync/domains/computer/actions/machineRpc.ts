@@ -3,6 +3,7 @@ import {
     DaemonComputerActionExecuteResponseV1Schema,
 } from '@happier-dev/protocol/computer/v1';
 import { isRpcMethodNotFoundResult, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { isMachineRpcTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
@@ -36,7 +37,8 @@ export const executeComputerActionViaMachineRpc: ComputerMachineRpc = async (inp
         });
     } catch (error) {
         if (input.signal?.aborted) throw error;
-        return refuse('machine_unreachable');
+        return refuse(readRpcErrorCode(error)
+            ?? (isMachineRpcTimeoutError(error) ? MACHINE_RPC_TIMEOUT_ERROR_CODE : 'action_failed'));
     }
     if (isRpcMethodNotFoundResult(raw)) return refuse('computer_unavailable');
     const parsed = DaemonComputerActionExecuteResponseV1Schema.safeParse(raw);
