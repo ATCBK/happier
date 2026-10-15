@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationActionOutputSchemasV1, SettingsDeclarationValueV1Schema, SettingsDeclarationMutationReversalV1Schema, type SettingsDeclarationActionIdV1, type SettingsDeclarationDescriptorV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationActionOutputSchemasV1, SettingsDeclarationValueV1Schema, SettingsDeclarationMutationReversalV1Schema, SettingsDeclarationCapturedMutationV1Schema, type SettingsDeclarationActionIdV1, type SettingsDeclarationDescriptorV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { AccountSettingMutationV1Schema, applyAccountSettingMutationV1 } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
+import { captureSettingMutationV1, restoreSettingMutationV1 } from '@happier-dev/protocol/actions/settings/settingMutationReversal';
 import { ACCOUNT_SETTING_DEFINITIONS } from '@happier-dev/protocol/account/settings/accountSettings';
 import type { AutomationV3Settings } from '@happier-dev/protocol/automations/automationApiV3';
 import { executeAutomationSettingDeclaration } from '@happier-dev/protocol/actions';
@@ -23,7 +25,6 @@ import { executeHomeSettingDeclaration, homeSettingDeclarationUnavailable, readH
     type HomeSettingsDeclarationRead } from '@happier-dev/protocol/actions';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { executeSessionAutoFollowSetting, executeTeamSettingDeclaration } from '@happier-dev/protocol/actions';
-import { readRawSettingScalarV1 } from '@happier-dev/protocol/actions';
 import type { RawSettingsMutationOptions } from './actionAccountContext';
 import type { OneShotAccountSettingsMutationResult } from '@/sync/engine/settings/syncSettings';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -76,17 +77,6 @@ class RejectedSettingMutation extends Error {}
 type SettingsDeclarationActionResult = z.output<(typeof SettingsDeclarationActionOutputSchemasV1)[SettingsDeclarationActionIdV1]>
     | ReturnType<typeof refuse> | ActionApprovalRequestCreatedResult;
 class ConditionalSettingConflict extends Error {}
-const CapturedSettingMutationSchema = z.object({
-    beforeVersion: SettingsDeclarationMutationReversalV1Schema.shape.beforeVersion,
-    before: SettingsDeclarationMutationReversalV1Schema.shape.before,
-    applied: SettingsDeclarationMutationReversalV1Schema.shape.applied,
-}).strict();
-
-function rawScalar(raw: Readonly<Record<string, unknown>>, key: string) {
-    const value = readRawSettingScalarV1(raw, key);
-    if (!value) throw new RejectedSettingMutation();
-    return value;
-}
 
 /** The declaration is the operation's safety owner; unknown operations fail closed. */
 export function resolveSettingsDeclarationOperationApprovalRequired(anchor: string, settings: Settings): boolean {
@@ -336,7 +326,8 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         const versionedRead = actionId === 'settings.get' && SettingsDeclarationActionInputSchemasV1['settings.get'].parse(input).includeVersion === true;
         const settingWrite = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input) : undefined;
         const conditionalWrite = settingWrite?.expectedSettingsVersion !== undefined || settingWrite?.reversal !== undefined;
-        if ((versionedRead || conditionalWrite) && (ref.storage?.scope !== 'account' || !('key' in ref.storage))) {
+        if ((versionedRead || conditionalWrite) && (ref.storage?.scope !== 'account'
+            || !('key' in ref.storage || 'kind' in ref.storage && ref.storage.kind === 'owner'))) {
             return refuse('setting_conditional_mutation_unsupported');
         }
         const target = 'target' in parsed ? parsed.target : undefined;
@@ -481,37 +472,71 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         if (actionId === 'settings.set') {
             if (!access.writable) return refuse('setting_read_only');
             const requested = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input);
-            if (requested.reversal?.kind === 'restore') {
-                if (!owner.accountScope || requested.reversal.scope.serverId !== owner.accountScope.serverId
-                    || requested.reversal.scope.accountId !== owner.accountScope.accountId) return refuse('setting_reversal_scope_mismatch');
-                if (binding.scope !== 'account' || !('key' in binding)) return refuse('setting_conditional_mutation_unsupported');
-                const key = binding.key;
-                const { before, applied, appliedVersion } = requested.reversal;
-                if ([before, applied].some(state => 'value' in state && !ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue(state.value).success)) return refuse('invalid_setting_value');
+            if (requested.reversal || requested.expectedSettingsVersion !== undefined) {
+                if (binding.scope !== 'account' || requested.reversal && !owner.accountScope) return refuse('setting_conditional_mutation_unsupported');
+                const reversal = requested.reversal;
+                if (reversal?.kind === 'restore' && (!owner.accountScope || reversal.scope.serverId !== owner.accountScope.serverId
+                    || reversal.scope.accountId !== owner.accountScope.accountId)) return refuse('setting_reversal_scope_mismatch');
+                if (binding.allowedValues && !binding.allowedValues.some(allowed => allowed === requested.value)) return refuse('invalid_setting_value');
+                if (binding.invertBoolean && typeof requested.value !== 'boolean') return refuse('invalid_setting_value');
+                const storedValue = binding.invertBoolean ? !requested.value : requested.value;
+                const value = 'key' in binding ? ACCOUNT_SETTING_DEFINITIONS[binding.key].parseMutationValue(storedValue) : null;
+                const ownerValue = 'key' in binding ? null : binding.parse(storedValue);
+                if (value && !value.success || ownerValue && !ownerValue.success) return refuse('invalid_setting_value');
+                const prepared = 'key' in binding ? undefined : binding.prepare
+                    ? await binding.prepare(await owner.readAccountSettings(), ownerValue?.success ? ownerValue.value : storedValue,
+                        owner.mutationServices ?? {}, { signal: context?.signal, isCurrent })
+                    : (settings: Settings) => binding.mutate(settings, ownerValue?.success ? ownerValue.value : storedValue);
+                if (!('key' in binding) && !prepared) return refuse('setting_value_unavailable');
+                const mutationFor = (raw: Readonly<Record<string, unknown>>) => {
+                    const settings = settingsParse(raw);
+                    const delta = 'key' in binding && value?.success ? { [binding.key]: value.data } : prepared?.(settings);
+                    if (!delta) throw new RejectedSettingMutation();
+                    return AccountSettingMutationV1Schema.parse({ operations: Object.entries(normalizeVoiceSettingsLocalDelta(delta, settings))
+                        .map(([key, value]) => ({ op: 'set', key, value })) });
+                };
+                let projected: unknown;
                 let result: void | OneShotAccountSettingsMutationResult<void>;
                 try {
                     result = await owner.mutateAccountSettings(raw => {
                         throwIfAborted(context?.signal);
                         if (!isCurrent()) throw new RejectedSettingMutation();
-                        let current: ReturnType<typeof rawScalar>;
-                        try { current = rawScalar(raw, key); } catch { throw new ConditionalSettingConflict(); }
-                        if (!sameStrictJsonValue(current, applied)) throw new ConditionalSettingConflict();
-                        const next = { ...raw };
-                        if ('unset' in before) delete next[key]; else next[key] = before.value;
-                        return next;
-                    }, { expectedSettingsVersion: appliedVersion, rebaseOnConflict: false, observeOutcome: true, signal: context?.signal });
+                        const mutation = mutationFor(raw);
+                        const restore = reversal?.kind === 'restore' ? restoreSettingMutationV1(raw, mutation, reversal) : undefined;
+                        if (restore?.status === 'conflict') throw new ConditionalSettingConflict();
+                        if (restore?.status === 'invalid') throw new RejectedSettingMutation();
+                        const next = applyAccountSettingMutationV1(raw, restore?.status === 'prepared' ? restore.mutation : mutation);
+                        if (next.status === 'invalid') throw new RejectedSettingMutation();
+                        const settings = settingsParse(next.raw);
+                        projected = 'key' in binding ? binding.invertBoolean ? !settings[binding.key] : settings[binding.key] : binding.read(settings);
+                        return { ...next.raw };
+                    }, { observeOutcome: true, signal: context?.signal,
+                        ...(requested.expectedSettingsVersion === undefined ? {} : { expectedSettingsVersion: requested.expectedSettingsVersion, rebaseOnConflict: false }),
+                        ...(reversal?.kind === 'capture' ? { capture: transition => {
+                            const captured = captureSettingMutationV1(transition.before, mutationFor(transition.before), transition.applied);
+                            if (!captured) throw new RejectedSettingMutation();
+                            return { beforeVersion: transition.beforeVersion, ...captured };
+                        } } : {}) });
                 } catch (error) {
                     if (error instanceof ConditionalSettingConflict) return refuse('account_settings_mutation_conflict');
-                    if (error instanceof RejectedSettingMutation) return refuse('setting_not_bound');
+                    if (error instanceof RejectedSettingMutation) return refuse('invalid_setting_value');
                     throw error;
                 }
                 if (!result) return refuse('setting_conditional_mutation_unsupported');
                 if (result.status !== 'applied') return refuse(`account_settings_mutation_${result.status === 'conflict' ? 'conflict' : 'outcome_unknown'}`);
-                const restored = settingsParse('unset' in before ? {} : { [key]: before.value })[key];
-                const output = SettingsDeclarationActionOutputSchemasV1['settings.set'].safeParse(restored === undefined
-                    ? { anchor: ref.anchor, unset: true }
-                    : { anchor: ref.anchor, value: binding.invertBoolean ? !restored : restored });
-                return output.success ? output.data : refuse('invalid_action_output');
+                const response = { anchor: ref.anchor, ...(projected === undefined ? { unset: true as const } : { value: SettingsDeclarationValueV1Schema.parse(projected) }),
+                    settingsVersion: result.settingsVersion };
+                if (reversal?.kind !== 'capture') return response;
+                const captured = SettingsDeclarationCapturedMutationV1Schema.safeParse(result.captured);
+                if (captured.success && result.settingsVersion === captured.data.beforeVersion) {
+                    const unchanged = 'changes' in captured.data ? captured.data.changes.every(change => sameStrictJsonValue(change.before, change.applied))
+                        : sameStrictJsonValue(captured.data.before, captured.data.applied);
+                    if (unchanged) return { ...response, reversalUnavailableReason: 'no_change' as const };
+                }
+                const receipt = SettingsDeclarationMutationReversalV1Schema.safeParse({
+                    ...(captured.success ? captured.data : {}), scope: owner.accountScope, appliedVersion: result.settingsVersion,
+                });
+                return receipt.success ? { ...response, reversal: receipt.data } : response;
             }
             if (binding.allowedValues && !binding.allowedValues.some(allowed => allowed === requested.value)) return refuse('invalid_setting_value');
             if (binding.invertBoolean && typeof requested.value !== 'boolean') return refuse('invalid_setting_value');
@@ -554,43 +579,6 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             if (!value.success) return refuse('invalid_setting_value');
             const scalarValue = SettingsDeclarationValueV1Schema.parse(value.data);
             if (binding.scope === 'account') {
-                if (requested.reversal || requested.expectedSettingsVersion !== undefined) {
-                    const key = binding.key;
-                    if (requested.reversal && (!owner.accountScope || (scalarValue !== null && typeof scalarValue === 'object'))) return refuse('setting_conditional_mutation_unsupported');
-                    let result: void | OneShotAccountSettingsMutationResult<void>;
-                    try {
-                        result = await owner.mutateAccountSettings(raw => {
-                            throwIfAborted(context?.signal);
-                            if (!isCurrent()) throw new RejectedSettingMutation();
-                            return { ...raw, [key]: scalarValue };
-                        }, { signal: context?.signal, observeOutcome: true,
-                            ...(requested.expectedSettingsVersion === undefined ? {} : { expectedSettingsVersion: requested.expectedSettingsVersion, rebaseOnConflict: false }),
-                            ...(requested.reversal ? { capture: transition => {
-                                const before = rawScalar(transition.before, key);
-                                if ('value' in before && !ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue(before.value).success) throw new RejectedSettingMutation();
-                                return { beforeVersion: transition.beforeVersion, before, applied: rawScalar(transition.applied, key) };
-                            } } : {}) });
-                    } catch (error) { if (error instanceof RejectedSettingMutation) return refuse('invalid_setting_value'); throw error; }
-                    if (!result) return refuse('setting_conditional_mutation_unsupported');
-                    if (result.status !== 'applied') return refuse(`account_settings_mutation_${result.status === 'conflict' ? 'conflict' : 'outcome_unknown'}`);
-                    const response = { anchor: ref.anchor, value: binding.invertBoolean ? !scalarValue : scalarValue,
-                        ...(requested.expectedSettingsVersion === undefined ? {} : { settingsVersion: result.settingsVersion }) };
-                    if (!requested.reversal) return response;
-                    const captured = CapturedSettingMutationSchema.safeParse(result.captured);
-                    // Only the real owner's unchanged version and exact raw equality
-                    // establish no effect. A missing/malformed receipt proves neither.
-                    if (captured.success && result.settingsVersion === captured.data.beforeVersion
-                        && sameStrictJsonValue(captured.data.before, captured.data.applied)) {
-                        return { ...response, reversalUnavailableReason: 'no_change' as const };
-                    }
-                    const reversal = SettingsDeclarationMutationReversalV1Schema.safeParse({
-                        ...(typeof result.captured === 'object' && result.captured !== null ? result.captured : {}),
-                        scope: owner.accountScope, appliedVersion: result.settingsVersion,
-                    });
-                    // An invalid capture never becomes an invented Undo or no-change claim.
-                    if (!reversal.success) return response;
-                    return { ...response, reversal: reversal.data };
-                }
                 // The key and scalar value were admitted by the typed declaration and its exact canonical schema.
                 await owner.writeAccountSettings({ [binding.key]: scalarValue } as SettingsWriteDelta);
             } else {
@@ -598,11 +586,13 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             }
             return { anchor: ref.anchor, value: binding.invertBoolean ? !scalarValue : scalarValue };
         }
-        if (versionedRead && binding.scope === 'account' && 'key' in binding) {
+        if (versionedRead && binding.scope === 'account' && ('key' in binding || binding.kind === 'owner')) {
             if (!owner.readAccountSettingsSnapshot) return refuse('setting_conditional_mutation_unsupported');
             const snapshot = await owner.readAccountSettingsSnapshot();
             if (!isCurrent()) return refuse('setting_not_bound');
-            const value = settingsParse(snapshot.raw)[binding.key];
+            const settings = settingsParse(snapshot.raw);
+            const value = 'key' in binding ? settings[binding.key] : binding.read(settings);
+            if (value === SETTING_VALUE_UNAVAILABLE) return refuse('setting_value_unavailable');
             const output = SettingsDeclarationActionOutputSchemasV1['settings.get'].safeParse(value === undefined
                 ? { anchor: ref.anchor, unset: true, settingsVersion: snapshot.version }
                 : { anchor: ref.anchor, value: binding.invertBoolean ? !value : value, settingsVersion: snapshot.version });

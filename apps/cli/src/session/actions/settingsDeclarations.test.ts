@@ -13,6 +13,7 @@ import { createCliActionExecutor } from './createCliActionExecutor';
 import { createCliActionExecutorHarness } from './createCliActionExecutorHarness';
 import { createSignedInSummaryCatalogFixture } from './settingsCatalog.test-support';
 import { createCliSettingsCatalogServices } from './settingsCatalogServices';
+import { emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
 const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'settings.set': { enabled: true } } });
 
@@ -32,6 +33,13 @@ describe('CLI declared Account settings', () => {
     // checks, sparse mutation and the existing CAS retry owner remain real.
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: version,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (url.endsWith('/v1/account/entity-rows/connected-accounts/purposes')) return { status: 200, data: {
+        status: 'present', revision: 1, content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') },
+      } };
       if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content, version } };
       throw new Error(`Unexpected HTTP read: ${url}`);
     });
@@ -234,12 +242,16 @@ describe('CLI declared Account settings', () => {
     } } });
     const reversal = { kind: 'restore', scope: { serverId: 'settings-home', accountId: 'settings-account' },
       beforeVersion: 1, appliedVersion: 2, before: { unset: true }, applied: { value: 8 } } as const;
+    content = { t: 'plain', v: { ...(content.t === 'plain' ? content.v : {}), favoriteMachines: ['concurrent'] } };
+    version += 1;
+    concurrentContent = { t: 'plain', v: { ...(content.t === 'plain' ? content.v : {}), futureSetting: 'preserved' } };
+    conflict = true;
     expect(await owner.execute('settings.set', { anchor, value: 4, reversal }, user))
       .toMatchObject({ ok: true, result: { value: 4 } });
-    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['neighbor'] } });
+    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['concurrent'], futureSetting: 'preserved' } });
     expect(await owner.execute('settings.set', { anchor, value: 4, reversal }, user))
       .toMatchObject({ ok: false, errorCode: 'account_settings_conflict' });
-    expect(version).toBe(3);
+    expect(version).toBe(5);
   });
 
   it.each([

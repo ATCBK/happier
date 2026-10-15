@@ -8,6 +8,8 @@ import { settingsParse, applySettings } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { readSettingsPageGate } from '@/components/settings/catalog/pageCatalog';
 import { SOURCE_CONTROL_SETTINGS } from '@/components/settings/sourceControl/sourceControlSettings';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { normalizeVoiceSettingsServerDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 
 // Only native/platform boundaries are substituted; declaration and mutation owners stay real.
 vi.mock('expo-audio', () => ({ createAudioPlayer: () => ({ play: vi.fn(), remove: vi.fn(), addListener: () => ({ remove: vi.fn() }) }),
@@ -45,24 +47,54 @@ export function createSettingsResetParityHost(params: Readonly<{
     initial: Readonly<Record<string, unknown>>;
     mutationSnapshot: Readonly<Record<string, unknown>>;
     mutationServices?: Parameters<typeof createSettingsDeclarationAction>[0]['mutationServices'];
+    accountScope?: Parameters<typeof createSettingsDeclarationAction>[0]['accountScope'];
 }>): Readonly<{
     settingsDeclarationAction: NonNullable<ActionExecutorDeps['settingsDeclarationAction']>;
     readSettings(): Readonly<Record<string, unknown>>;
     readStoredSettings(): Readonly<Record<string, unknown>>;
     sourceControlAnchors: readonly string[];
+    changeUnrelatedSetting(): void;
 }> {
     let settings = settingsParse(params.initial);
     let stored: Readonly<Record<string, unknown>> = params.initial;
+    let version = 1;
     const settingsDeclarationAction = createSettingsDeclarationAction({
         host: { os: 'web', desktop: false }, tauriDesktop: false,
         readPageGate: readSettingsPageGate, isFeatureEnabled: async () => true,
         mutationServices: params.mutationServices,
+        accountScope: params.accountScope,
         readAccountSettings: async () => settings,
-        writeAccountSettings: async delta => { stored = { ...stored, ...delta }; settings = applySettings(settings, delta); },
-        mutateAccountSettings: async mutate => { stored = mutate(params.mutationSnapshot); settings = settingsParse(stored); },
+        writeAccountSettings: async delta => {
+            const next = normalizeVoiceSettingsServerDelta({ ...stored, ...delta }, stored);
+            if (!sameStrictJsonValue(next, stored)) version += 1;
+            stored = next;
+            settings = applySettings(settings, delta);
+        },
+        mutateAccountSettings: async (mutate, options) => {
+            if (!options?.observeOutcome) {
+                const next = normalizeVoiceSettingsServerDelta(mutate(params.mutationSnapshot), stored);
+                if (!sameStrictJsonValue(next, stored)) version += 1;
+                stored = next;
+                settings = settingsParse(stored);
+                return;
+            }
+            if (options.expectedSettingsVersion !== undefined && options.expectedSettingsVersion !== version) {
+                return { status: 'conflict', currentSettingsVersion: version };
+            }
+            const before = stored;
+            const beforeVersion = version;
+            const next = normalizeVoiceSettingsServerDelta(mutate(stored), stored);
+            const captured = options.capture?.({ before, beforeVersion, applied: next });
+            if (!sameStrictJsonValue(next, stored)) version += 1;
+            stored = next;
+            settings = settingsParse(stored);
+            return { status: 'applied', settingsVersion: version, value: undefined, captured };
+        },
+        readAccountSettingsSnapshot: async () => ({ raw: { ...stored }, version }),
         readLocalSettings: () => localSettingsDefaults,
         writeLocalSettings: () => { throw new Error('unexpected_device_write'); },
     });
     return { settingsDeclarationAction, readSettings: () => settings, readStoredSettings: () => stored,
-        sourceControlAnchors: Object.values(SOURCE_CONTROL_SETTINGS.settings).map(ref => ref.anchor) };
+        sourceControlAnchors: Object.values(SOURCE_CONTROL_SETTINGS.settings).map(ref => ref.anchor),
+        changeUnrelatedSetting() { stored = { ...stored, favoriteMachines: ['unrelated'] }; settings = settingsParse(stored); version += 1; } };
 }

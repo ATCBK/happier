@@ -475,6 +475,21 @@ and review follow-up retains its finding, thread and reply ids. Pending approval
 is not a completed control operation. Account quiet-hours and device overrides
 use their existing `settings.set` declaration anchors and setting owners.
 
+In 0.3 development, bound Account-key and Account-owner settings can capture their
+exact sparse mutation with `settings.set` and `reversal: { kind: 'capture' }`. The returned
+receipt records raw presence and values, including objects and compound
+mutations. Restore passes that receipt back with `kind: 'restore'` at the same
+declaration. Both App and CLI use the shared
+[`settingMutationReversal.ts`](../packages/protocol/src/actions/settings/settingMutationReversal.ts)
+owner to check the affected current keys before writing; unrelated Account
+changes do not invalidate the receipt. A changed affected key or different
+Home/Account refuses the restore. Originally absent keys are removed, rather
+than replaced with their effective defaults. Receipt versions describe the
+captured transition; callers need not supply a global Settings version for Undo.
+The App captures the writer's acknowledged raw transition after persistence
+normalization, including Voice normalization. Declaration bindings still limit
+the affected keys, and secret-bearing raw values cannot enter a receipt.
+
 In 0.3 development, Agent permission defaults, enabled state and executable-source
 preferences use the declared `settings.set` anchors `agents.defaultPermission`,
 `agents.enabled` and `agents.executableSource`. Their value is
@@ -2558,20 +2573,20 @@ In 0.3 development source, direct Account-key declarations accept
 `settings.set {anchor, value, expectedSettingsVersion}` performs one conditional
 CAS without rebasing on a conflict. The revision covers the whole Account
 settings document, so an unrelated intervening preference edit also conflicts.
-Scalar Account-key writes can request `reversal: {kind: 'capture'}`; the writer
+Account-key and Account-owner writes can request `reversal: {kind: 'capture'}`; the writer
 returns the captured Home/Account scope, exact raw unset/value states, and the
 committed before/applied versions. Undo submits the complete captured receipt
 as `reversal: {kind: 'restore', ...receipt}` through the same Action. The owner
-checks its actual scope, declaration, applied version and raw applied state,
-then restores only that key under the same CAS, ignoring the caller's `value`.
+checks its actual scope, declaration and the affected keys' raw applied state,
+then restores only those keys under the same CAS, ignoring the caller's `value`.
 Raw absence is restored as absence, including inverted-boolean declarations;
 when the declaration has no default, reads and restores return `unset: true`
 instead of a JSON value. History retention or pruning does not control Undo. Capture reports
 `reversalUnavailableReason: 'no_change'` only for the real owner's unchanged
 version and exact raw-state equality; it creates neither an Undo receipt nor a
 forced write. Ordinary writes without capture keep their existing result.
-Compound owner bindings and device/Home/Team bindings do not support this
-reversal contract. Headless hosts that cannot enforce these conditional requests
+Device/Home/Team bindings do not support this reversal contract.
+Headless hosts that cannot enforce these conditional requests
 use the existing answering-client placement, including otherwise headless
 Account anchors; a disconnected client returns connect-client recovery. They
 never downgrade conditions to ordinary writes. No-flag Account requests retain

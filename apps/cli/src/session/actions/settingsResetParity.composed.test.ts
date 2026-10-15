@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AccountSettingsV2UpdateRequestSchema, accountSettingsParse, type AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { createCliSettingsDeclarationAction } from './settingsDeclarationAction';
@@ -7,17 +7,20 @@ import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountS
 import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { createCliSettingsCatalogServices } from './settingsCatalogServices';
 import { createSignedInSummaryCatalogFixture } from './settingsCatalog.test-support';
+import { emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 type UiResetHost = Readonly<{
   settingsDeclarationAction: NonNullable<ActionExecutorDeps['settingsDeclarationAction']>;
   readSettings(): Readonly<Record<string, unknown>>;
   readStoredSettings(): Readonly<Record<string, unknown>>;
   sourceControlAnchors: readonly string[];
+  changeUnrelatedSetting(): void;
 }>;
 type UiResetHarnessModule = Readonly<{
   createSettingsResetParityHost(params: Readonly<{
     initial: Readonly<Record<string, unknown>>;
     mutationSnapshot: Readonly<Record<string, unknown>>;
     mutationServices?: Pick<ReturnType<typeof createCliSettingsCatalogServices>, 'readScmDiffSummaryCatalog'>;
+    accountScope?: { serverId: string; accountId: string };
   }>): UiResetHost;
 }>;
 // Runtime import follows the existing cross-Voice convention: UI aliases/globals stay out of CLI compilation.
@@ -41,15 +44,80 @@ function executor(settingsDeclarationAction: NonNullable<ActionExecutorDeps['set
   });
 }
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); resetInMemoryAccountSettingsContextForTests(); });
+afterEach(() => { vi.restoreAllMocks(); resetInMemoryAccountSettingsContextForTests(); });
 
 describe('public Settings reset parity', () => {
-  it('round-trips every Source control declaration through the real CLI and UI Settings Actions', async () => {
+  const values = {
+    explainChanges: false, summaryModel: '', outputLanguage: 'fr', prepareAfterTurn: true,
+    investigateSurroundingFiles: true, commitStrategy: 'git_staging', commitMessageGenerator: false,
+    commitMessageAgent: 'codex', commitMessageInstructions: 'Use a concise subject.', includeCoAuthoredBy: false,
+    confirmBeforePulling: false, confirmBeforePushing: false, pushRejection: 'manual', pullRequestPlacement: 'details',
+    diffRenderer: 'happier', diffLayout: 'split', syntaxHighlighting: 'advanced', changedFilesDensity: 'compact',
+    gitPaneLayout: 'tabs', changedFilesLayout: 'tree', showLineNumbersInDiffs: false,
+    showLineNumbersInToolViews: true, wrapLinesInDiffs: true, editorAutoSave: true, markdownEditMode: 'raw',
+    gitRouting: 'happier.scm.backend.sapling/sapling',
+    backendDefaultDiff: { backendId: 'happier.scm.backend.git/git', mode: 'pending' },
+  };
+  const services = createCliSettingsCatalogServices({});
+  let admitted: Awaited<ReturnType<typeof createSignedInSummaryCatalogFixture>> | undefined;
+  beforeAll(async () => {
+    admitted = await createSignedInSummaryCatalogFixture();
+    const catalog = await services.readScmDiffSummaryCatalog!(accountSettingsParse({}), '');
+    const model = catalog?.profiles.find(profile => profile.costTier === 'low' && profile.structuredOutput === 'supported');
+    if (!model) throw new Error('Admitted Agent must produce a supported low-cost model');
+    values.summaryModel = model.catalogId;
+  });
+  afterAll(async () => { await admitted?.dispose(); vi.unstubAllEnvs(); });
+
+  it('undoes the App Voice owner write using the acknowledged server-normalized transition', async () => {
+    const baseline = { favoriteMachines: ['neighbor'] };
+    const scope = { serverId: 'parity-home', accountId: 'parity-account' };
+    const host = uiHarness.createSettingsResetParityHost({ initial: baseline, mutationSnapshot: baseline, accountScope: scope });
+    const app = executor(host.settingsDeclarationAction);
+    const anchor = 'voiceDictation.language';
+    const context = { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId: 'settings.set' } } as const;
+    const capture = await app.execute('settings.set', { anchor, value: 'fr', reversal: { kind: 'capture' } }, context);
+    expect(capture).toMatchObject({ ok: true, result: { value: 'fr', reversal: expect.any(Object) } });
+    if (!capture.ok) throw new Error(JSON.stringify(capture));
+    const { reversal } = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(capture.result);
+    if (!reversal) throw new Error('Missing App receipt');
+    expect(host.readStoredSettings().voice).toMatchObject({ happierVoiceSettingsV1: true });
+    host.changeUnrelatedSetting();
+    expect(await app.execute('settings.set', { anchor, value: 'fr', reversal: { kind: 'restore', ...reversal } }, context))
+      .toMatchObject({ ok: true });
+    expect(host.readStoredSettings()).toEqual({ favoriteMachines: ['unrelated'] });
+  });
+
+  it('covers the authored Source control catalog and keeps saved results at their Machine owner', async () => {
+    const uiHost = uiHarness.createSettingsResetParityHost({ initial: {}, mutationSnapshot: {}, mutationServices: services });
+    expect([...Object.keys(values), 'savedWalkthroughs'].map(id => `sourceControl.${id}`).sort())
+      .toEqual([...uiHost.sourceControlAnchors].sort());
+    const cli = executor(createCliSettingsDeclarationAction({}));
+    for (const [owner, surface] of [[cli, 'cli'], [executor(uiHost.settingsDeclarationAction), 'ui']] as const) {
+      const list = await owner.execute('settings.list', { pageId: 'sourceControl' }, { surface });
+      if (!list.ok) throw new Error(JSON.stringify(list));
+      const listed = SettingsDeclarationActionOutputSchemasV1['settings.list'].parse(list.result);
+      expect(listed.items.map(item => item.anchor).sort()).toEqual([...uiHost.sourceControlAnchors].sort());
+      expect(await owner.execute('settings.get', { anchor: 'sourceControl.savedWalkthroughs' }, { surface }))
+        .toMatchObject({ ok: false, errorCode: 'setting_not_bound' });
+    }
+  });
+
+  const cases = (Object.keys(values) as (keyof typeof values)[]).map(id => ({ id, external: false }));
+  cases.push({ id: 'gitRouting', external: true }, { id: 'backendDefaultDiff', external: true });
+  it.each(cases)('round-trips $id (external: $external) through capture and restore on CLI and App', async ({ id, external }) => {
     const baseline = { favoriteMachines: ['neighbor'], scmDefaultDiffModeByBackend: { neighbor: 'both' } };
     let content: AccountSettingsStoredContentEnvelope = { t: 'plain', v: baseline };
     let version = 1;
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: version,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (url.endsWith('/v1/account/entity-rows/connected-accounts/purposes')) return { status: 200, data: {
+        status: 'present', revision: 1, content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') },
+      } };
       if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content, version } };
       throw new Error(`Unexpected HTTP read: ${url}`);
     });
@@ -61,40 +129,10 @@ describe('public Settings reset parity', () => {
       content = request.content;
       return { status: 200, data: { success: true, version: ++version } };
     });
-    const admitted = await createSignedInSummaryCatalogFixture();
-    try {
-    const services = createCliSettingsCatalogServices({});
-    const catalog = await services.readScmDiffSummaryCatalog!(accountSettingsParse({}), '');
-    const model = catalog?.profiles.find(profile => profile.costTier === 'low' && profile.structuredOutput === 'supported');
-    if (!model) throw new Error('Admitted Agent must produce a supported low-cost model');
-    const values = {
-      explainChanges: false, summaryModel: model.catalogId, outputLanguage: 'fr', prepareAfterTurn: true,
-      investigateSurroundingFiles: true, commitStrategy: 'git_staging', commitMessageGenerator: false,
-      commitMessageAgent: 'codex', commitMessageInstructions: 'Use a concise subject.', includeCoAuthoredBy: false,
-      confirmBeforePulling: false, confirmBeforePushing: false, pushRejection: 'manual', pullRequestPlacement: 'details',
-      diffRenderer: 'happier', diffLayout: 'split', syntaxHighlighting: 'advanced', changedFilesDensity: 'compact',
-      gitPaneLayout: 'tabs', changedFilesLayout: 'tree', showLineNumbersInDiffs: false,
-      showLineNumbersInToolViews: true, wrapLinesInDiffs: true, editorAutoSave: true, markdownEditMode: 'raw',
-      gitRouting: 'happier.scm.backend.sapling/sapling',
-      backendDefaultDiff: { backendId: 'happier.scm.backend.git/git', mode: 'pending' },
-    };
-    // Saved walkthroughs are Machine result operations, not an Account scalar preference.
-    const operations = ['savedWalkthroughs'];
-    const uiHost = uiHarness.createSettingsResetParityHost({ initial: baseline, mutationSnapshot: baseline,
-      mutationServices: services });
-    // Reconcile with the authored page, so a new or removed row cannot silently escape the sweep.
-    expect([...Object.keys(values), ...operations].map(id => `sourceControl.${id}`).sort())
-      .toEqual([...uiHost.sourceControlAnchors].sort());
-    const cli = executor(createCliSettingsDeclarationAction({ credentials: { token: 'source-control-parity', encryption: null } }));
-    const ui = executor(uiHost.settingsDeclarationAction);
-    for (const [owner, surface] of [[cli, 'cli'], [ui, 'ui']] as const) {
-      const list = await owner.execute('settings.list', { pageId: 'sourceControl' }, { surface });
-      expect(list.ok).toBe(true);
-      if (!list.ok) throw new Error(JSON.stringify(list));
-      const listed = SettingsDeclarationActionOutputSchemasV1['settings.list'].parse(list.result);
-      expect(listed.items.map(item => item.anchor).sort()).toEqual([...uiHost.sourceControlAnchors].sort());
-    }
-    for (const [id, value] of Object.entries(values)) {
+    const scope = { serverId: 'parity-home', accountId: 'parity-account' };
+    const token = `test.${Buffer.from(JSON.stringify({ sub: scope.accountId })).toString('base64url')}.test`;
+    const cli = executor(createCliSettingsDeclarationAction({ credentials: { token, encryption: null }, serverId: scope.serverId }));
+      const value = values[id];
       const anchor = `sourceControl.${id}`;
       const rawBefore = content.t === 'plain' ? content.v : {};
       const rowHost = uiHarness.createSettingsResetParityHost({ initial: rawBefore, mutationSnapshot: rawBefore,
@@ -105,12 +143,12 @@ describe('public Settings reset parity', () => {
       for (const [owner, surface] of [[cli, 'cli'], [rowUi, 'ui']] as const) {
         const context = { surface, authority: 'present_user', presentUserConfirmation: { actionId: 'settings.set' } } as const;
         const changed = await owner.execute('settings.set', { anchor, value }, context);
-        expect(changed, anchor).toMatchObject({ ok: true, result: { anchor, value } });
+        expect(changed, `${surface} ${anchor}: ${JSON.stringify(changed)}`).toMatchObject({ ok: true, result: { anchor, value } });
         if (!changed.ok) throw new Error(JSON.stringify(changed));
         SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(changed.result);
-        const read = await owner.execute('settings.get', { anchor }, { surface });
+        const read = await owner.execute('settings.get', { anchor, includeVersion: true }, { surface });
         const readValue = id === 'backendDefaultDiff' ? { neighbor: 'both', 'happier.scm.backend.git/git': 'pending' } : value;
-        expect(read, anchor).toMatchObject({ ok: true, result: { anchor, value: readValue } });
+        expect(read, anchor).toMatchObject({ ok: true, result: { anchor, value: readValue, settingsVersion: expect.any(Number) } });
         if (read.ok) SettingsDeclarationActionOutputSchemasV1['settings.get'].parse(read.result);
       }
       // Compare actual persistence deltas, excluding UI-only runtime defaults.
@@ -127,17 +165,39 @@ describe('public Settings reset parity', () => {
         }
       }
       expect(resetResults[1], anchor).toEqual(resetResults[0]);
-    }
-    for (const id of operations) {
-      for (const [owner, surface] of [[cli, 'cli'], [ui, 'ui']] as const) {
-        expect(await owner.execute('settings.get', { anchor: `sourceControl.${id}` }, { surface }))
-          .toMatchObject({ ok: false, errorCode: 'setting_not_bound' });
+
+      // Exact receipts must survive unrelated Account writes, including sparse raw absence,
+      // multi-key routing and object-valued backend maps, on either host.
+      const baselineRaw = { ...baseline };
+      content = { t: 'plain', v: baselineRaw };
+      version += 1;
+      const reversibleHost = uiHarness.createSettingsResetParityHost({ initial: baselineRaw, mutationSnapshot: baselineRaw,
+        accountScope: scope, mutationServices: services });
+      const reversibleValue = external && id === 'gitRouting' ? 'example.scm.community/custom'
+        : external && id === 'backendDefaultDiff' ? { backendId: 'example.scm.community/custom', mode: 'pending' } : value;
+      const captures = [];
+      for (const [owner, surface] of [[cli, 'cli'], [executor(reversibleHost.settingsDeclarationAction), 'ui']] as const) {
+        const context = { surface, authority: 'present_user', presentUserConfirmation: { actionId: 'settings.set' } } as const;
+        const capture = await owner.execute('settings.set', { anchor, value: reversibleValue, reversal: { kind: 'capture' } }, context);
+        expect(capture, `${surface} capture ${anchor}`).toMatchObject({ ok: true, result: { reversal: expect.any(Object) } });
+        if (!capture.ok) throw new Error(JSON.stringify(capture));
+        const result = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(capture.result);
+        if (!result.reversal) throw new Error(`Missing receipt: ${surface} ${anchor}`);
+        if (surface === 'cli') { content = { t: 'plain', v: { ...(content.t === 'plain' ? content.v : {}), favoriteMachines: ['unrelated'] } }; version += 1; }
+        else reversibleHost.changeUnrelatedSetting();
+        captures.push({ owner, surface, receipt: result.reversal });
       }
-    }
-    } finally {
-      await admitted.dispose();
-      vi.unstubAllEnvs();
-    }
+      for (const { owner, surface } of captures) {
+        // Each real producer's receipt is consumed by the other host, whose global version differs.
+        const receipt = captures.find(capture => capture.surface !== surface)?.receipt;
+        if (!receipt) throw new Error('Missing other host receipt');
+        const context = { surface, authority: 'present_user', presentUserConfirmation: { actionId: 'settings.set' } } as const;
+        const restored = await owner.execute('settings.set', { anchor, value: reversibleValue, reversal: { kind: 'restore', ...receipt } }, context);
+        expect(restored, `${surface} restore ${anchor}`).toMatchObject({ ok: true });
+        if (restored.ok) SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(restored.result);
+        const persisted = surface === 'cli' ? content.t === 'plain' ? content.v : {} : reversibleHost.readStoredSettings();
+        expect(persisted, `${surface} exact restoration ${anchor}`).toEqual({ ...baselineRaw, favoriteMachines: ['unrelated'] });
+      }
   });
 
   it('resets the owner-bound Agent mode while preserving concurrent neighboring policy on both hosts', async () => {

@@ -48,7 +48,6 @@ export async function executeUsageCoachAction(actionId: UsageCoachActionId, valu
         switch (reversal.kind) {
             case 'setting':
                 restored = await child('settings.set', { anchor: reversal.anchor, value: reversal.appliedValue,
-                    expectedSettingsVersion: reversal.owner.appliedVersion,
                     reversal: { kind: 'restore', ...reversal.owner } });
                 break;
             case 'model':

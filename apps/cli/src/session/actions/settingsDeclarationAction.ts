@@ -18,7 +18,7 @@ import type { StoredCredentials } from '@/persistence';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { readAccountSettingsV2Raw, updateAccountSettingsV2Once, updateAccountSettingsV2WithRetry } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
-import { executeCliScalarSettingReversal } from './scalarSettingReversal';
+import { executeCliSettingMutationReversal } from './settingMutationReversal';
 import { createCliSettingsCatalogServices, createCliVoiceSettingsBindingContext } from './settingsCatalogServices';
 import { createVoiceSettingsPersistenceOwner } from '@happier-dev/protocol/voice/settings/voiceSettingsPersistence';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -255,7 +255,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
         return AccountSettingMutationV1Schema.parse({ operations: Object.entries(persisted).map(([key, value]) => ({ op: 'set', key, value })) });
       };
       try {
-        if (requested.reversal) return await executeCliScalarSettingReversal({ declaration, requested,
+        if (requested.reversal) return await executeCliSettingMutationReversal({ declaration, requested,
           credentials, serverId: params.serverId, signal: context.signal, isCredentialCurrent: params.isCredentialCurrent,
           prepareMutation, readValue });
         const result = requested.expectedSettingsVersion === undefined

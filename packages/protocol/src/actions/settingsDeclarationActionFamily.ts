@@ -59,29 +59,41 @@ export const SettingsDeclarationDescriptorV1Schema = lazyZodSchema(() => z.stric
 const ValueResultSchema = lazyZodSchema(() => z.strictObject({ anchor: AnchorSchema, value: SettingsDeclarationValueV1Schema }));
 const UnsetResultSchema = lazyZodSchema(() => z.strictObject({ anchor: AnchorSchema, unset: z.literal(true) }));
 const SettingsVersionSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.int()));
-const SettingRawScalarSchema = lazyZodSchema(() => z.union([
+export const SettingRawValueV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ unset: z.literal(true) }),
-  z.strictObject({ value: SettingsDeclarationScalarChoiceV1Schema }),
+  z.strictObject({ value: SettingsDeclarationValueV1Schema }),
 ]));
-/** Exact captured Home/Account identity, raw presence and versions from the Account Settings CAS owner. */
-export const SettingsDeclarationMutationReversalV1Schema = lazyZodSchema(() => z.strictObject({
+const ReversalBasis = {
   scope: z.strictObject({ serverId: OperationIdSchema, accountId: OperationIdSchema }),
   beforeVersion: SettingsVersionSchema,
   appliedVersion: SettingsVersionSchema,
-  before: SettingRawScalarSchema,
-  applied: SettingRawScalarSchema,
-}).check(z.refine(value => value.appliedVersion === value.beforeVersion + 1)));
+};
+const SingleKeyReversal = { before: SettingRawValueV1Schema, applied: SettingRawValueV1Schema };
+const MultiKeyReversal = { changes: z.array(z.strictObject({ key: SettingKeySchema, ...SingleKeyReversal }))
+  .check(z.minLength(1), z.refine(changes => new Set(changes.map(change => change.key)).size === changes.length)) };
+/** One-key receipts retain their existing shape; compound mutations name every affected raw key. */
+export const SettingsDeclarationCapturedMutationV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ beforeVersion: SettingsVersionSchema, ...SingleKeyReversal }),
+  z.strictObject({ beforeVersion: SettingsVersionSchema, ...MultiKeyReversal }),
+]));
+const consecutiveVersions = (value: { beforeVersion: number; appliedVersion: number }) => value.appliedVersion === value.beforeVersion + 1;
+/** Versions describe the captured transition; restore CAS compares the affected current values. */
+export const SettingsDeclarationMutationReversalV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ ...ReversalBasis, ...SingleKeyReversal }).check(z.refine(consecutiveVersions)),
+  z.strictObject({ ...ReversalBasis, ...MultiKeyReversal }).check(z.refine(consecutiveVersions)),
+]));
 export type SettingsDeclarationMutationReversalV1 = z.infer<typeof SettingsDeclarationMutationReversalV1Schema>;
-const SettingReversalInputSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+const SettingReversalInputSchema = lazyZodSchema(() => z.union([
   z.strictObject({ kind: z.literal('capture') }),
-  z.safeExtend(SettingsDeclarationMutationReversalV1Schema, { kind: z.literal('restore') }),
+  z.strictObject({ kind: z.literal('restore'), ...ReversalBasis, ...SingleKeyReversal }).check(z.refine(consecutiveVersions)),
+  z.strictObject({ kind: z.literal('restore'), ...ReversalBasis, ...MultiKeyReversal }).check(z.refine(consecutiveVersions)),
 ]));
 
 export const SettingsDeclarationActionInputSchemasV1 = {
   'settings.list': z.strictObject({ pageId: z.optional(z.string().check(z.trim(), z.minLength(1))) }),
   'settings.get': z.strictObject({ anchor: AnchorSchema, key: z.optional(SettingKeySchema), target: z.optional(SettingsDeclarationTargetV1Schema), includeVersion: z.optional(z.literal(true)) }),
   'settings.set': z.strictObject({ anchor: AnchorSchema, key: z.optional(SettingKeySchema), value: SettingsDeclarationValueV1Schema, target: z.optional(SettingsDeclarationTargetV1Schema),
-    expectedSettingsVersion: z.optional(SettingsVersionSchema), reversal: z.optional(SettingReversalInputSchema) }).check(z.refine(value => value.reversal?.kind !== 'restore' || value.expectedSettingsVersion === undefined || value.expectedSettingsVersion === value.reversal.appliedVersion)),
+    expectedSettingsVersion: z.optional(SettingsVersionSchema), reversal: z.optional(SettingReversalInputSchema) }),
   'settings.reset': z.strictObject({ anchor: AnchorSchema, target: z.optional(SettingsDeclarationTargetV1Schema) }),
   'settings.invoke': z.strictObject({ anchor: AnchorSchema, input: z.optional(SettingsDeclarationOperationInputV1Schema) }),
 } as const;

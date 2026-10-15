@@ -52,6 +52,20 @@ describe('atmosphere picture operation input admission', () => {
 });
 
 describe('Settings declaration surface parity', () => {
+  it('admits exact object and multi-key receipts as bound-setting restore inputs', () => {
+    const basis = { kind: 'restore', scope: { serverId: 'home', accountId: 'account' }, beforeVersion: 1, appliedVersion: 2 };
+    expect(SettingsDeclarationActionInputSchemasV1['settings.set'].safeParse({
+      anchor: 'sourceControl.backendDefaultDiff', value: { backendId: 'external.scm/backend', mode: 'pending' },
+      reversal: { ...basis, before: { unset: true }, applied: { value: { 'external.scm/backend': 'pending' } } },
+    }).success).toBe(true);
+    expect(SettingsDeclarationActionInputSchemasV1['settings.set'].safeParse({
+      anchor: 'sourceControl.gitRouting', value: 'external.scm/backend',
+      reversal: { ...basis, changes: [
+        { key: 'scmBackendRouting', before: { unset: true }, applied: { value: 'plugin' } },
+        { key: 'scmGitRepoBackend', before: { unset: true }, applied: { value: 'external.scm/backend' } },
+      ] },
+    }).success).toBe(true);
+  });
   it('publishes reset with a strict target and eligible Voice discovery', () => {
     expect(SETTINGS_DECLARATION_ACTION_IDS_V1).toEqual([
       'settings.list', 'settings.get', 'settings.set', 'settings.reset', 'settings.invoke',

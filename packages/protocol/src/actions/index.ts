@@ -32,7 +32,7 @@ export * from '../connect/configurationActionsV1.js';
 export * from '../connect/executeConfigurationActionV1.js';
 export * from './settingsDeclarationActionFamily.js';
 export * from './settings/settingsOwnerActions.js';
-export * from './settings/rawSettingScalar.js';
+export * from './settings/settingMutationReversal.js';
 export * from './settings/homeSettingsDeclarationAction.js';
 export * from './settings/teamSettingsDeclarationAction.js';
 export * from './settings/sessionAutoFollowSettingsAction.js';
