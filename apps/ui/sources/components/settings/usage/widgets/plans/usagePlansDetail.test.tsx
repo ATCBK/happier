@@ -278,6 +278,49 @@ it('keeps unreported windows reachable behind one count and shows each reset onc
   expect(screen.findByTestId('reset.timeline')).toBeFalsy();
 });
 
+it('chooses the earliest settled depletion consistently instead of whichever account answered first', async () => {
+  const now = Date.now();
+  const later = quotaRead('later', now, [{ meterId: 'weekly', label: 'Weekly', usedPct: 80,
+    resetAtMs: now + DAY, windowDurationMs: 7 * DAY }]);
+  const earlier = quotaRead('earlier', now, [{ meterId: 'daily', label: 'Daily', usedPct: 90,
+    resetAtMs: now + HOUR, windowDurationMs: DAY }]);
+  const withDepletion = (read: ConnectedServiceQuotaGetResultV1, depletesAtMs: number) => ConnectedServiceQuotaGetResultV1Schema.parse({
+    ...read, pace: read.pace.map(row => ({ ...row, value: { ...row.value, depletesAtMs } })),
+  });
+  const reads = [withDepletion(later, now + 3 * HOUR), withDepletion(earlier, now + HOUR / 2)];
+  const { WidgetPresentationProvider } = await import('@happier-dev/plugin-ui');
+  const { UsageProjectionsWidget } = await import('../UsageProjectionsWidget');
+  const render = (quota: readonly ConnectedServiceQuotaGetResultV1[]) => wrap(<WidgetPresentationProvider value={{ size: 'medium',
+    footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width: 520, height: 260 } }}>
+    <UsageProjectionsWidget {...bodyProps(quota)} id="usage_projections" testID="proj" />
+  </WidgetPresentationProvider>);
+  const screen = await renderScreen(render(reads));
+  const aheadText = () => screen.findByTestId('proj.ahead')!.findAll(node => typeof node.type === 'string')
+    .flatMap(node => node.children.filter(child => typeof child === 'string')).join(' ');
+  expect(aheadText()).toContain('Plan earlier');
+  expect(aheadText()).not.toContain('Plan later');
+  await screen.update(render([...reads].reverse()));
+  expect(aheadText()).toContain('Plan earlier');
+});
+
+it('does not declare all projections missing when a settled paced window is behind Show all', async () => {
+  const now = Date.now();
+  const stale = quotaRead('stale', now, Array.from({ length: 8 }, (_, index) => ({ meterId: `stale-${index}`,
+    label: `Window ${index}`, usedPct: 20, resetAtMs: now + DAY, windowDurationMs: DAY })), { pace: [] });
+  const paced = quotaRead('paced', now, [{ meterId: 'weekly', label: 'Weekly', usedPct: 30,
+    resetAtMs: now + DAY, windowDurationMs: 7 * DAY }]);
+  const { WidgetPresentationProvider } = await import('@happier-dev/plugin-ui');
+  const { UsageProjectionsWidget } = await import('../UsageProjectionsWidget');
+  const screen = await renderScreen(wrap(<WidgetPresentationProvider value={{ size: 'medium',
+    footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width: 520, height: 260 } }}>
+    <UsageProjectionsWidget {...bodyProps([stale, paced])} id="usage_projections" testID="proj" />
+  </WidgetPresentationProvider>));
+  expect(screen.findByTestId('proj.showAll')).toBeTruthy();
+  expect(screen.findByTestId('proj.window.paced.weekly')).toBeFalsy();
+  expect(screen.findByTestId('proj.legend')).toBeTruthy();
+  expect(screen.findByTestId('proj.sharedReason')).toBeFalsy();
+});
+
 it('lists every reported window with its projection beside other widgets, without the burn-up or disclosures', async () => {
   const now = Date.now();
   const read = quotaRead('work', now, [{ meterId: 'weekly', label: 'Weekly', usedPct: 30,

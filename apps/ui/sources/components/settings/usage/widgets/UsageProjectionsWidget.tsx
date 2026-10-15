@@ -155,7 +155,9 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
   const list = presentation?.size === 'medium' || presentation?.size === 'wide';
   const { projection, nameOf, nowMs } = useUsagePlans(props.slice, props.model);
   useWidgetFrameBodyCaption(t('usage.board.plans.projectionsCaption'));
-  const paced = React.useMemo(() => selectUsagePacedWindows(projection.accounts), [projection.accounts]);
+  const settled = projection.accounts.length > 0 && readPendingPlanAccountCount(projection.accounts) === 0;
+  const paced = React.useMemo(() => settled ? [...selectUsagePacedWindows(projection.accounts)]
+    .sort((left, right) => left.window.key.localeCompare(right.window.key)) : [], [projection.accounts, settled]);
   // The viewer's pick, kept by window identity; a window that stops having a pace falls back to the default.
   const [pickedKey, setPickedKey] = React.useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = React.useState(false);
@@ -207,7 +209,6 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
   // Beside other widgets the body is a list of meters. Until every account has answered once it holds the
   // list's room (the rows its accounts are expected to report, the pace alert and the notes under them), so
   // reads fill the room instead of growing the page under the reader; a re-read after that never reserves.
-  const settled = projection.accounts.length > 0 && readPendingPlanAccountCount(projection.accounts) === 0;
   const firstReadReserve = useUsageMeterListFirstReadReserve(props.slice, readUsageKnownQuotaAccountCount(props.slice),
     settled, width !== null && width < STACKED_BELOW_PX);
   const reserve = list ? firstReadReserve : undefined;
@@ -247,7 +248,9 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
   const focusName = focus ? nameOf(focus.account) : null;
   const focusTitle = focus && focusName ? `${focusName.title} · ${focus.window.label}` : '';
   const pace = focus?.window.pace ?? null;
-  const depleting = rows.find((row) => row.window.pace?.depletesAtMs != null);
+  const depleting = settled ? rows.filter(row => row.window.pace?.depletesAtMs != null)
+    .sort((left, right) => left.window.pace!.depletesAtMs! - right.window.pace!.depletesAtMs!
+      || left.window.key.localeCompare(right.window.key))[0] : undefined;
   const range = pace?.empiricalRange
     ? t('usage.board.plans.rangeAtReset', {
         min: formatPlanPercent(pace.empiricalRange.min),
@@ -273,7 +276,8 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
     const lead = leadingUsageRows(rows, expanded);
     // One cause, said once: when every listed window lacks a projection for the same reason ("reading is
     // old"), the rows show their reset instead and the reason is one quiet line under the list.
-    const reasons = lead.rows.map((row) => (row.window.pace ? null : planWindowStatement(row.window, nowMs).text));
+    // A paced window behind Show all still disproves a whole-list missing-pace statement.
+    const reasons = rows.map((row) => (row.window.pace ? null : planWindowStatement(row.window, nowMs).text));
     const sharedReason = reasons.length > 1 && reasons[0] && reasons.every((reason) => reason === reasons[0]) ? reasons[0] : null;
     return (
       <View style={bodyStyle} onLayout={floor.onLayout} testID={`${props.testID}.projections`}>
