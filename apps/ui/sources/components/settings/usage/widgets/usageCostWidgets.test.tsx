@@ -47,6 +47,38 @@ function mountedCosts(unpriced = false) {
 }
 
 describe('one selected money basis across Usage bodies', () => {
+  it('keeps the Agent time slot stable and publishes only complete interval figures', async () => {
+    const props = mountedCosts();
+    const query = normalizeUsageQuery({ ...props.query, includeSessionEvidence: true });
+    const accounting = [{ query, status: 'available' as const, value: props.slice.accounting! }];
+    const cold = resolveUsagePageAggregation({ queries: [query], accounting });
+    const facts = [{ workId: 'work', evidenceId: 'turn', agentId: null, machineId: null,
+      kind: 'busy' as const, startMs: 0, endMs: 3_600_000 }];
+    const partial = resolveUsagePageAggregation({ queries: [query], accounting,
+      howYouWork: [{ query, asOfMs: day, detail: { status: 'partial', facts: facts.map(fact => ({ ...fact, endMs: null })) } }] });
+    const complete = resolveUsagePageAggregation({ queries: [query], accounting,
+      howYouWork: [{ query, asOfMs: day, detail: { status: 'available', facts } }] });
+    // Transcript coverage can be partial while every admitted busy interval is
+    // closed. Completeness of this duration belongs to the interval facet.
+    const completeIntervals = resolveUsagePageAggregation({ queries: [query], accounting,
+      howYouWork: [{ query, asOfMs: day, detail: { status: 'partial', facts } }] });
+    const pending = resolveUsagePageAggregation({ queries: [query], accounting, previous: complete,
+      sources: [{ source: 'how_you_work', status: 'pending' }] });
+    const refused = resolveUsagePageAggregation({ queries: [query], accounting, previous: complete,
+      howYouWork: [{ query, asOfMs: day, detail: { status: 'unknown' } }] });
+    const screen = await renderScreen(<UsagePeriodSummaryWidget {...props} query={query}
+      slice={cold.results[0]!} id="usage_period_summary" testID="summary" />);
+    const statLabels = () => screen.findAllByType(HappierDataMetric)
+      .filter(metric => metric.props.size === 'stat').map(metric => metric.props.label);
+    const expectedLabels = [t('usage.cost'), t('usage.board.page.mergedPrs'), t('usage.board.page.agentTime')];
+    for (const [batch, expected] of [[cold, '—'], [partial, '—'], [complete, 1], [completeIntervals, 1], [pending, 1], [partial, '—'], [refused, '—']] as const) {
+      await screen.update(<UsagePeriodSummaryWidget {...props} query={query}
+        slice={batch.results[0]!} id="usage_period_summary" testID="summary" />);
+      expect(statLabels()).toEqual(expectedLabels);
+      expect(screen.findAllByType(HappierDataMetric).find(metric => metric.props.label === t('usage.board.page.agentTime'))?.props.value)
+        .toBe(expected);
+    }
+  });
   it('uses reported then priced money per real QA row across Daily, Flow, Breakdowns, Leaders, Efficiency and Work', async () => {
     const query = normalizeUsageQuery({ metric: 'cost', breakdown: ['agent'], timeZoneOffsetMinutes: 120 });
     const captured = usageQaAccountingFixture();

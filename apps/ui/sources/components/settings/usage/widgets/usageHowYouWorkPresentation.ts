@@ -2,7 +2,7 @@ import type { HeatmapProps, IntervalTimelineInterval } from '@happier-dev/plugin
 import { isUsageNightHour } from '@happier-dev/protocol/usage/usageWorkIntervals';
 import { withUsageAccentAlpha } from '../usageAccent';
 import type { UsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHowYouWork';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
 
 /**
  * Presentation-only shaping of the How-you-work projection (Protocol `resolveUsageHowYouWork` owns
@@ -32,6 +32,20 @@ export function formatUsageDuration(ms: number): string {
     hours: Math.floor(minutes / 60),
     minutes: minutes % 60,
   });
+}
+
+/**
+ * "3h 12m", "18m", "40s": the same measured duration at a width that never wraps inside a statistic cell, from
+ * the platform's own narrow unit names for the reader's language. A measured nothing reads "0m", never blank.
+ */
+export function formatUsageDurationCompact(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  const unit = (value: number, name: 'hour' | 'minute' | 'second') =>
+    new Intl.NumberFormat(getPreferredLanguage(), { style: 'unit', unit: name, unitDisplay: 'narrow' }).format(value);
+  if (seconds > 0 && seconds < 60) return unit(seconds, 'second');
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return unit(minutes, 'minute');
+  return minutes % 60 === 0 ? unit(minutes / 60, 'hour') : `${unit(Math.floor(minutes / 60), 'hour')} ${unit(minutes % 60, 'minute')}`;
 }
 
 /** Work ids are the canonical `[sessionId, turnId]` key; anything else names no Session. */

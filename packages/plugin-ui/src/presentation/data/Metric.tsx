@@ -31,6 +31,8 @@ export type HappierDataMetricProps = Readonly<{
   showLabel?: boolean;
   /** One quiet line under the number ("plans + pay-as-you-go"). */
   caption?: string;
+  /** Hold the caption's line when there is none yet, so a figure that gains its caption does not grow its row. */
+  reserveCaption?: boolean;
   /** Visible ink only ("721M"); assistive technology keeps the exact value. */
   valueFormatter?: (value: number) => string;
   theme: HappierUiTheme;
@@ -178,6 +180,10 @@ export function HappierDataMetric(props: HappierDataMetricProps) {
       {props.caption ? (
         <HappierText style={text.caption} numberOfLines={2}>
           {props.caption}
+        </HappierText>
+      ) : props.reserveCaption ? (
+        <HappierText style={text.caption} numberOfLines={1}>
+          {NO_BREAK_SPACE}
         </HappierText>
       ) : null}
     </View>

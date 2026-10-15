@@ -7,6 +7,7 @@ import {
   sumUsageWaitingOnYouMs,
   usageNightGridPresentation,
   formatUsageUtcOffset,
+  formatUsageDurationCompact,
 } from './usageHowYouWorkPresentation';
 
 const MIN = 60_000;
@@ -147,5 +148,16 @@ describe('How you work presentation', () => {
   it('states the query calendar offset rather than assuming local time', () => {
     expect(formatUsageUtcOffset(120)).toBe('UTC+02:00');
     expect(formatUsageUtcOffset(-330)).toBe('UTC−05:30');
+  });
+});
+
+describe('Compact usage durations', () => {
+  it('reads a measured duration in narrow units that never wrap inside a statistic cell, and a measured nothing as zero', () => {
+    const HOUR = 60 * MIN;
+    expect(formatUsageDurationCompact(7 * HOUR + 56 * MIN)).toBe('7h 56m');
+    expect(formatUsageDurationCompact(3 * HOUR)).toBe('3h');
+    expect(formatUsageDurationCompact(18 * MIN)).toBe('18m');
+    expect(formatUsageDurationCompact(40_000)).toBe('40s');
+    expect(formatUsageDurationCompact(0)).toBe('0m');
   });
 });

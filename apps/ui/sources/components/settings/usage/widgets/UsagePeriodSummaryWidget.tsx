@@ -17,7 +17,7 @@ import {
   UsageBodyNoUsage,
 } from './usageBodyKit';
 import { usageCostKindPhrase } from '../usageCostPresentation';
-import { formatUsageDuration } from './usageHowYouWorkPresentation';
+import { formatUsageDurationCompact } from './usageHowYouWorkPresentation';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -49,7 +49,8 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
     props.slice.work?.outcomes.filter(
       (outcome) => outcome.pullRequest.state === 'merged',
     ) ?? null;
-  const intervals = props.slice.howYouWork?.intervals ?? null;
+  const measuredIntervals = props.slice.howYouWork?.intervals;
+  const intervals = measuredIntervals?.coverage === 'complete_for_supplied_facts' ? measuredIntervals : null;
   const subline = [
     delta !== null ? t('usage.board.page.vsPrevious') : null,
     t('usage.board.page.sessionsCount', {
@@ -95,7 +96,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         }
       />,
     );
-  if (merged)
+  if (props.query.includeWorkEvidence)
     stats.push(
       <HappierDataMetric
         key="merged"
@@ -103,13 +104,16 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         size="stat"
         showLabel
         label={t('usage.board.page.mergedPrs')}
-        value={merged.length}
+        value={merged?.length ?? UNKNOWN_VALUE}
+        reserveCaption
         caption={
-          merged.length > 0 ? t('usage.board.page.linkedByEvidence') : undefined
+          merged && merged.length > 0 ? t('usage.board.page.linkedByEvidence') : undefined
         }
       />,
     );
-  if (intervals)
+  // The query chooses the statistic; asynchronous arrivals only replace its
+  // value. An unanswered duration never temporarily becomes Active days.
+  if (props.query.includeSessionEvidence)
     stats.push(
       <HappierDataMetric
         key="agent"
@@ -117,14 +121,15 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         size="stat"
         showLabel
         label={t('usage.board.page.agentTime')}
-        value={intervals.agentTimeMs / HOUR_MS}
-        valueFormatter={() => formatUsageDuration(intervals.agentTimeMs)}
-        caption={t('usage.board.page.elapsedTime', {
-          time: formatUsageDuration(intervals.elapsedBusyMs),
-        })}
+        value={intervals ? intervals.agentTimeMs / HOUR_MS : UNKNOWN_VALUE}
+        valueFormatter={intervals ? () => formatUsageDurationCompact(intervals.agentTimeMs) : undefined}
+        reserveCaption
+        caption={intervals ? t('usage.board.page.elapsedTime', {
+          time: formatUsageDurationCompact(intervals.elapsedBusyMs),
+        }) : undefined}
       />,
     );
-  if (stats.length < 3)
+  else
     stats.push(
       <HappierDataMetric
         key="active"
