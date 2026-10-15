@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { setImmediate } from 'node:timers/promises';
 import retained from '../../../../../../packages/protocol/fixtures/0.2-retained-skill-path.json';
 import retainedFrontmatter from '../../../../../../packages/protocol/fixtures/0.2-retained-skill-frontmatter.json';
 import { PromptBundleBodyV1Schema, readSkillBundleContentV1, validatePromptBundleBodyV1AgainstSchemaId } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
@@ -60,6 +61,60 @@ async function fixture() {
   return { home, directory, input, artifacts, store, readIds };
 }
 describe('runner skill resolution', () => {
+  it('reads independent selected skills concurrently before authenticated folder delivery, preserving conflicts and failures', async () => {
+    const f = await fixture();
+    const older = { ...bundle('older', 'shared'), updatedAt: 1 };
+    const newer = { ...bundle('newer', 'shared'), updatedAt: 2 };
+    const broken = bundle('broken', 'broken');
+    const off = bundle('off', 'off');
+    const started: string[] = [];
+    let releasing = false;
+    const pending = new Map<string, { resolve: (artifact: AccountArtifact | null) => void; reject: (error: Error) => void }>();
+    // Artifact reads are the persistence boundary. Selection, content decoding,
+    // native scanning, conflict resolution and daemon materialization stay real.
+    const artifacts: SkillArtifactStore = {
+      list: async () => ({ items: [older, newer, broken, off], coverage: 'complete' }),
+      read: id => {
+        if (releasing) return Promise.resolve(null);
+        started.push(id);
+        return new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); });
+      },
+    };
+    const input = { ...f.input, accountSnapshot: { ...f.input.accountSnapshot!, promptLibraryCatalog: { status: 'ready' as const,
+      rows: [{ revision: 1, record: { key: 'skill-rules' as const, value: { v: 1 as const,
+        rules: ['older', 'newer', 'broken'].map(skillId => ({ id: `on-${skillId}`, skillId,
+          target: { t: 'allMachines' as const }, enabled: true, createdAt: 1, updatedAt: 1 })),
+      } } }], tombstones: [], diagnostics: [] } } };
+    const app = createDaemonControlApp({ getChildren: () => [], machineId: 'machine',
+      stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
+      requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'parallel-test', skillStore: f.store });
+    const url = await app.listen({ port: 0, host: '127.0.0.1' });
+    const work = resolveRunnerSkills(input, { artifacts, ensureSessionDir: content => ensureSkillSessionDirHttp(content,
+      { target: { httpPort: Number(new URL(url).port), controlToken: 'parallel-test' } }) });
+    try {
+      await setImmediate();
+      expect(started).toEqual(['older', 'newer', 'broken']);
+      pending.get('newer')!.resolve(newer);
+      pending.get('broken')!.reject(new Error('Artifact transport unavailable'));
+      pending.get('older')!.resolve(older);
+      const result = await work;
+      expect(result.plan.items.filter(item => ['older', 'newer', 'broken', 'off'].includes(item.skillId)))
+        .toEqual([
+          expect.objectContaining({ skillId: 'older', state: 'name_conflict' }),
+          expect.objectContaining({ skillId: 'newer', state: 'delivered', name: 'shared' }),
+          expect.objectContaining({ skillId: 'broken', state: 'unavailable', reason: 'content_unreadable' }),
+          expect.objectContaining({ skillId: 'off', state: 'off' }),
+        ]);
+      expect(result.delivery?.items).toEqual([expect.objectContaining({ skillId: 'newer', name: 'shared' })]);
+      expect(await readFile(join(result.delivery!.skillsRoot, 'shared', 'SKILL.md'), 'utf8')).toContain('name: shared');
+    } finally {
+      // Also release a serialized implementation after the deciding assertion fails.
+      releasing = true;
+      for (const read of pending.values()) read.resolve(null);
+      await work;
+      await app.close();
+    }
+  });
   it.each(['linux', 'win32'] as const)('reads the predecessor bundle through the catalog and authenticated daemon Session delivery on %s', async platform => {
     const f = await fixture();
     const retainedArtifact = { ...bundle('library', 'retained'), header: retained.header, body: JSON.stringify(retained.body) };

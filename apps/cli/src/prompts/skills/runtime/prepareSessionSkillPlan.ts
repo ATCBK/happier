@@ -24,14 +24,19 @@ export async function prepareSessionSkillPlan(input: Readonly<{
   const contents = new Map<string, SkillLibraryContent>();
   const unreadable = new Set<string>();
   const items: SkillLibraryItemV1[] = [];
-  for (const artifact of input.inventory) {
+  // Each selected Artifact has its own read/authority checks. Admit them
+  // together, then resolve names in inventory order after every read settles.
+  const opened = await Promise.all(input.inventory.map(async artifact => {
+    if (!selectedById.get(artifact.artifactId)?.selected) return null;
     let content: SkillLibraryContent | null = null;
-    if (selectedById.get(artifact.artifactId)?.selected) {
-      try { const opened = await input.artifacts.read(artifact.artifactId); content = opened ? readSkillArtifactContent(opened) : null; }
-      catch { content = null; }
-      await input.assertCurrent();
-      if (!content) unreadable.add(artifact.artifactId);
-    }
+    try { const artifactContent = await input.artifacts.read(artifact.artifactId); content = artifactContent ? readSkillArtifactContent(artifactContent) : null; }
+    catch { content = null; }
+    await input.assertCurrent();
+    return content;
+  }));
+  for (const [index, artifact] of input.inventory.entries()) {
+    const content = opened[index];
+    if (!content && selectedById.get(artifact.artifactId)?.selected) unreadable.add(artifact.artifactId);
     if (content) { contents.set(artifact.artifactId, content); items.push(content.item); }
     else items.push({ skillId: artifact.artifactId, name: String(artifact.header.title), digest: '', description: '',
       disableModelInvocation: false, userInvocable: true, updatedAt: artifact.updatedAt });
