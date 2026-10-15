@@ -209,8 +209,6 @@ async function renderSection() {
     await flushHookEffects({ cycles: 3 });
     if (state.loginState === 'logged_out') await vi.waitFor(() =>
         expect(screen.findByTestId('settings-overview-attention.agent:claude.action')).not.toBeNull());
-    if (state.pluginCapabilities) await vi.waitFor(() =>
-        expect(screen.findByTestId('settings-overview-attention.plugins:awaitingReview.action')).not.toBeNull());
     // Reading Home's attention is cache-only: neither the catalog nor the inventory may probe.
     expect(rpc).not.toHaveBeenCalled();
     const actions = screen.findAll((node) => typeof node.props?.testID === 'string'
@@ -272,7 +270,7 @@ describe('HubAttentionSection', () => {
         expect(screen.getTextContent()).toBe('');
     });
 
-    it('asks for a review when the Plugins machine last reported changes awaiting a decision', async () => {
+    it('leaves plugin trust reviews with the canonical approval Inbox instead of duplicating daemon review facts', async () => {
         const { createPluginInstallationReviewFixture } = await import('@happier-dev/protocol/testing/pluginInstallationReviewFixture');
         state.loginState = 'logged_in';
         state.profile = { connectedServicesV2: [], connectedAccountsV4: [] };
@@ -280,12 +278,9 @@ describe('HubAttentionSection', () => {
             { kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [], pendingChangeId: 'p-1', review: createPluginInstallationReviewFixture() },
             { kind: 'applying', pendingChangeId: 'p-2' },
         ]);
-        const { push, actions } = await renderSection();
-
-        const review = actions.find((node) => node.props.testID === 'settings-overview-attention.plugins:awaitingReview.action');
-        expect(review).toBeTruthy();
-        review!.props.onPress();
-        expect(push).toHaveBeenCalledWith('/settings/plugins');
+        const { screen, actions } = await renderSection();
+        expect(screen.findByTestId('settings-overview-attention.plugins:awaitingReview.action')).toBeNull();
+        expect(actions).toEqual([]);
         state.pluginCapabilities = null;
     });
 
