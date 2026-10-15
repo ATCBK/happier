@@ -494,10 +494,19 @@ describe('actionCatalog action-definition adapter', () => {
       query: 'session.message.send',
       limit: 1,
     });
+    const contributed = { ...actionSpecToActionDefinitionV1(spec, { surface: 'api' }), id: 'example.tools/actions/send-summary' };
+    const compact = searchSerializedActionSpecsForSurface({
+      surface: 'api', query: 'session.message.send', limit: 2, includeOutputSchema: false,
+      isActionEnabled: id => id === spec.id,
+      additionalDefinitions: [{ ...contributed, description: 'session.message.send' }],
+    });
 
     expect(apiDefinition?.outputSchema).toEqual(apiOutputJsonSchema);
     expect(apiSearchResult?.id).toBe('session.message.send');
     expect(apiSearchResult?.outputSchema).toEqual(apiOutputJsonSchema);
+    expect(compact.map(definition => definition.id)).toEqual([spec.id, contributed.id]);
+    for (const definition of compact) expect(Object.hasOwn(definition, 'outputSchema'), definition.id).toBe(false);
+    expect(searchSerializedActionSpecsForSurface({ surface: 'api', query: spec.id, limit: 1 })[0]).toBe(apiSearchResult);
     expect(actionSpecToActionDefinitionV1(spec).outputSchema).toEqual(internalOutputJsonSchema);
   });
 });

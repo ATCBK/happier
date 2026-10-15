@@ -342,7 +342,7 @@ export function searchSerializedActionSpecs(
   }), params);
 }
 
-function actionDefinitionToSummary(definition: ActionDefinitionSummaryV1): ActionDefinitionSummaryV1 {
+function actionDefinitionToSummary(definition: ActionDefinitionSummaryV1, includeOutputSchema = true): ActionDefinitionSummaryV1 {
   return {
     id: definition.id,
     title: definition.title,
@@ -362,7 +362,7 @@ function actionDefinitionToSummary(definition: ActionDefinitionSummaryV1): Actio
       ? {}
       : { executionPlacement: definition.executionPlacement }),
     ...(definition.toolExposure === undefined ? {} : { toolExposure: definition.toolExposure }),
-    ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
+    ...(!includeOutputSchema || definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
     ...(definition.execution === undefined ? {} : { execution: definition.execution }),
     ...(definition.sideEffectClass === undefined
       ? {}
@@ -379,7 +379,7 @@ type ActionDefinitionSearchCandidate = Readonly<{
 
 function searchActionDefinitionSummaryCandidates(
   candidates: readonly ActionDefinitionSearchCandidate[],
-  params?: Readonly<{ query?: string | null; limit?: number | null }>,
+  params?: Readonly<{ query?: string | null; limit?: number | null; includeOutputSchema?: boolean }>,
 ): readonly ActionDefinitionSummaryV1[] {
   const query = typeof params?.query === 'string' ? params.query.trim() : '';
   const normalizedQuery = normalizeActionSearchQuery(query);
@@ -396,7 +396,9 @@ function searchActionDefinitionSummaryCandidates(
       return left.candidate.definition.title.localeCompare(right.candidate.definition.title);
     })
     .slice(0, limit)
-    .map((entry) => entry.candidate.project?.() ?? entry.candidate.definition);
+    .map((entry) => params?.includeOutputSchema === false
+      ? entry.candidate.definition
+      : entry.candidate.project?.() ?? entry.candidate.definition);
 }
 
 export function searchActionDefinitionSummaries(
@@ -451,6 +453,8 @@ export function searchSerializedActionSpecsForSurface(params: Readonly<{
   surface?: keyof ActionSurfaces | null;
   query?: string | null;
   limit?: number | null;
+  /** Tool search discovers summaries; explicit detail reads retain the full contract. */
+  includeOutputSchema?: boolean;
   isActionEnabled?: (id: ActionId) => boolean;
   additionalDefinitions?: readonly ActionDefinitionSummaryV1[];
 }>): readonly SerializedActionSpec[] {
@@ -467,13 +471,14 @@ export function searchSerializedActionSpecsForSurface(params: Readonly<{
       !hostIds.has(definition.id)
       && (!params.surface || definition.surfaces[params.surface] === true)
     ))
-    .map(actionDefinitionToSummary);
+    .map(definition => actionDefinitionToSummary(definition, params.includeOutputSchema));
   return searchActionDefinitionSummaryCandidates([
     ...hostDefinitions,
     ...additionalDefinitions.map((definition) => ({ definition })),
   ], {
     query: params.query,
     limit: params.limit,
+    includeOutputSchema: params.includeOutputSchema,
   });
 }
 
