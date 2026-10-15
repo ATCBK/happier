@@ -7,9 +7,13 @@ import {
     SetSessionPinResponseSchema,
     SetSessionTagAssignmentsResponseSchema,
 } from "@happier-dev/protocol";
+import { SessionOrganizationChangeHintSchema } from "@happier-dev/protocol/changes";
+import { UpdateContainerSchema } from "@happier-dev/protocol/updates";
 
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { registerSessionOrganizationRoutes } from "@/app/api/routes/session/registerSessionOrganizationRoutes";
+import { getAccountStoredContentV3SocketRoom } from "@/app/api/socketRooms";
+import { eventRouter } from "@/app/events/connectionEventRouter";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
@@ -65,6 +69,17 @@ describe("session organization mutations on SQLite", () => {
         await app.ready();
         const headers = { "x-test-user-id": account.id };
         const pinUrl = `/v2/session-organization/pins/${session.id}`;
+        const deliveredUpdates: Array<{ rooms: string | string[]; payload: unknown }> = [];
+        // Socket.IO is the transport boundary; keep the real mutation, transaction,
+        // after-commit publisher, event routing, and wire consumer schemas beneath it.
+        eventRouter.setIo({
+            to: (rooms) => ({
+                emit: (event, payload) => {
+                    if (event === "update") deliveredUpdates.push({ rooms, payload });
+                },
+                disconnectSockets: () => {},
+            }),
+        });
         try {
             const pinned = await app.inject({ method: "PUT", url: pinUrl, headers,
                 payload: { surface: "rail", pinned: true, sortKey: "ignored" } });
@@ -95,7 +110,8 @@ describe("session organization mutations on SQLite", () => {
                 payload: { surface: "list", pinned: false } });
             expect(reclearedList.statusCode).toBe(200);
             expect(SetSessionPinResponseSchema.parse(reclearedList.json()).pin?.listPinned).toBe(false);
-            const reordered = await app.inject({ method: "POST", url: "/v2/session-organization/pins/reorder", headers, payload: {
+            deliveredUpdates.length = 0;
+            const reordered = await app.inject({ method: "PUT", url: "/v2/session-organization/order", headers, payload: {
                 scopeKind: "pinned", scopeKey: "root", entries: [{ itemKind: "session", itemKey: session.id, sortKey: "moved" }],
             } });
             expect(reordered.statusCode).toBe(200);
@@ -104,6 +120,19 @@ describe("session organization mutations on SQLite", () => {
             }] });
             await expect(db.sessionPin.findUnique({ where: { id: retained.id } })).resolves.toMatchObject({
                 listPinned: false, railPinned: true, sortKey: "moved", pinnedAt: new Date(1234),
+            });
+            const organizationChange = await db.accountChange.findUniqueOrThrow({ where: {
+                accountId_kind_entityId: { accountId: account.id, kind: "account", entityId: "session-organization" },
+            } });
+            expect(SessionOrganizationChangeHintSchema.parse(organizationChange.hint)).toEqual({
+                sessionOrganization: true, scope: "pins", sessionIds: [session.id],
+            });
+            const pinWakes = deliveredUpdates.filter(({ payload }) =>
+                UpdateContainerSchema.parse(payload).body.t === "account-change");
+            expect(pinWakes).toHaveLength(1);
+            expect(pinWakes[0]?.rooms).toBe(getAccountStoredContentV3SocketRoom(account.id));
+            expect(UpdateContainerSchema.parse(pinWakes[0]?.payload)).toMatchObject({
+                seq: organizationChange.cursor, body: { t: "account-change" },
             });
             const snapshot = await app.inject({ method: "GET", url: "/v2/session-organization", headers });
             expect(snapshot.statusCode).toBe(200);
@@ -139,6 +168,7 @@ describe("session organization mutations on SQLite", () => {
                 accountId: account.id, sessionId: session.id,
             } } })).resolves.toMatchObject({ listPinned: false, railPinned: true });
         } finally {
+            eventRouter.clearIo();
             await app.close();
         }
     });
