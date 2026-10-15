@@ -62,14 +62,17 @@ export async function prefetchCompletedCheckpointMessages(params: Readonly<{
             defaultBackendTarget = entry?.backendTarget.kind === 'backend' ? entry.backendTarget : entry?.compatibilityBackendTargets?.[0] ?? null;
         }
     }
-    const selection = resolveScmDiffSummaryModelSelection({
-        storedValue: params.settings['scm.diffSummary.modelProfileOverride'] ?? '', defaultBackendTarget,
+    const storedValue = params.settings['scm.diffSummary.modelProfileOverride'] ?? '';
+    const selection = storedValue.trim() ? resolveScmDiffSummaryModelSelection({
+        storedValue, defaultBackendTarget,
         catalogProfiles: entries.flatMap(entry => buildScmDiffSummaryModelProfiles({
             backendTarget: readBackendTargetRefV2(entry.backendTarget), models: getAgentStaticModels(entry.agentId, { catalogOnly: true }),
             agentFormats: entry.kind === 'builtInAgent' ? getAgentCore(entry.agentId)?.structuredOutput?.formats : null,
         })),
-    });
-    if (!selection.success || !current()) return;
+    }) : null;
+    if (selection && !selection.success) return;
+    const backendTarget = selection?.backendTarget ?? defaultBackendTarget;
+    if (!backendTarget || !current()) return;
     const controller = new AbortController();
     const retirement = params.lifetime.onRetire(() => {
         controller.abort();
@@ -81,10 +84,10 @@ export async function prefetchCompletedCheckpointMessages(params: Readonly<{
             if (!receipt || !current()) return;
             return prefetchScmDiffSummary({ sessionId: params.session.id, scope: params.lifetime.scope,
                 serverId: params.lifetime.scope.serverId, signal: controller.signal, shouldContinue: current,
-                backendTarget: selection.backendTarget, turnChangeSet: turn, settings: params.settings,
+                backendTarget, turnChangeSet: turn, settings: params.settings,
                 input: { cwd, source: { kind: 'turnCheckpoint', sessionId: params.session.id, turnId: turn.turnId,
                     checkpointReceiptId: receipt.id, evidenceMode: 'checkpoint' },
-                    modelSelector: selection.modelSelector, outputs: ['walkthrough'],
+                    ...(selection ? { modelSelector: selection.modelSelector } : {}), outputs: ['walkthrough'],
                 },
             });
         }));

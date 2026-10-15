@@ -81,6 +81,11 @@ requests. UI operations present that refusal through the existing recovery notic
 opt-in checkpoint prefetch uses the same admission. Explicit comparison capture
 remains available without generation.
 
+Checkpoint prefetch leaves an unset model preference unset on the generation
+request, just as Start does. The host's executable catalog chooses its default
+under current sign-in and admission facts. Only a saved model override becomes
+an explicit selector; the checkpoint trigger does not choose a static default.
+
 The canonical generation brief orders explanations from contracts and data
 shapes through their implementation to callers and UI, groups files by intent,
 and places proving tests beside their behavior. Mechanical files retain coverage

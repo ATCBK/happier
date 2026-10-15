@@ -5,6 +5,8 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 import { buildTurnChangeSetDiffInput } from '../../../../../cli/src/agent/tools/diff/buildTurnChangeSetDiffInput';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { AGENT_IDS, getAgentCore, getAgentStaticModels } from '@happier-dev/agents';
+import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
 
 // Authenticated SCM RPC and execution-run RPC are transport boundaries.
 const network = vi.hoisted(() => ({ generate: vi.fn() }));
@@ -65,7 +67,7 @@ beforeEach(async () => {
 afterEach(() => { retireScmDiffSummaryScope(scope); network.generate.mockReset(); standardCleanup(); });
 
 describe('completed checkpoint transcript prefetch', () => {
-    it('consumes durable final transcript evidence through the actual generate owner and reuses its run on replay', async () => {
+    it.each(['unset', 'saved'] as const)('preserves the %s model preference through checkpoint generation and reuses its run on replay', async preference => {
         network.generate.mockImplementation(async ({ payload }) => {
             const input = ScmDiffSummaryGenerateInputSchema.parse(payload);
             return ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: 'checkpoint-comparison',
@@ -77,7 +79,13 @@ describe('completed checkpoint transcript prefetch', () => {
                     ? { walkthrough: { state: 'pending' } } : { summary: { state: 'pending' } }, runId: 'checkpoint-run' });
         });
         const { lifetime } = createLifetime();
-        const params = { session, messages: [message()], settings: { 'scm.diffSummary.prefetch': true }, lifetime };
+        const saved = preference === 'saved' ? AGENT_IDS.flatMap(agentId => buildScmDiffSummaryModelProfiles({ backendTarget: { kind: 'backend', backendId: agentId },
+            models: getAgentStaticModels(agentId, { catalogOnly: true }), agentFormats: getAgentCore(agentId)?.structuredOutput?.formats }))
+            .find(profile => profile.structuredOutput === 'supported') : null;
+        if (preference === 'saved' && !saved?.modelSelector) throw new Error('Expected a structured model from the real Agent catalog');
+        const params = { session, messages: [message()], settings: { 'scm.diffSummary.prefetch': true,
+            ...(saved ? { 'scm.diffSummary.modelProfileOverride': saved.catalogId } : {}),
+        }, lifetime };
         await Promise.all([prefetchCompletedCheckpointMessages(params), prefetchCompletedCheckpointMessages(params)]);
         await prefetchCompletedCheckpointMessages(params);
         expect(network.generate, JSON.stringify({ http: harness.requests.map(({ serverUrl, path }) => ({ serverUrl, path })),
@@ -86,9 +94,11 @@ describe('completed checkpoint transcript prefetch', () => {
         expect(network.generate.mock.calls[0]?.[0]?.payload).toMatchObject({ cwd: '/repo', sessionId: session.id,
             source: { kind: 'turnCheckpoint', sessionId: session.id, turnId: turn.turnId,
                 checkpointReceiptId: 'checkpoint.finalized', evidenceMode: 'checkpoint' },
-            modelSelector: { backendTargetKey: expect.any(String), modelId: expect.any(String) }, outputs: ['walkthrough'],
+            outputs: ['walkthrough'],
         });
-        expect(network.generate.mock.calls[0]?.[0]?.payload.modelSelector.modelId).not.toBe('default');
+        const request = ScmDiffSummaryGenerateInputSchema.parse(network.generate.mock.calls[0]?.[0]?.payload);
+        if (preference === 'unset') expect(request).not.toHaveProperty('modelSelector');
+        else expect(request.modelSelector).toEqual(saved?.modelSelector);
         expect(Object.values(getScmDiffSummaryState().entriesByKey)).toEqual([expect.objectContaining({ executionRunId: 'checkpoint-run' })]);
         expect(selectSessionScmWalkthroughKey(getScmDiffSummaryState(), session.id,
             { kind: 'turnCheckpoint', turnId: turn.turnId }, 'walkthrough', serverAccountScopeKeySuffix(scope))).not.toBeNull();
