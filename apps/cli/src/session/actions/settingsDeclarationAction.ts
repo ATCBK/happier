@@ -149,14 +149,17 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       ? resolveBuiltInAccountSettingResetValueV1(declaration)
       : undefined;
     if (resetValue && !resetValue.success) return refuse('setting_reset_unsupported');
+    const resetRequest = actionId === 'settings.reset' ? SettingsDeclarationActionInputSchemasV1[actionId].parse(input) : undefined;
+    const { expected: resetExpected, ...resetInput } = resetRequest ?? {};
     const requested = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1[actionId].parse(input)
       : actionId === 'settings.reset' && resetValue?.success ? SettingsDeclarationActionInputSchemasV1['settings.set'].parse({
-        ...SettingsDeclarationActionInputSchemasV1[actionId].parse(input), value: resetValue.value,
+        ...resetInput, value: resetValue.value,
       })
       : undefined;
     const ownerActionId = actionId === 'settings.reset' ? 'settings.set' : actionId;
+    if (resetExpected !== undefined && storage.scope !== 'account') return refuse('setting_conditional_mutation_unsupported');
     if (storage.scope === 'home' || storage.scope === 'team') {
-      if (requested?.expectedSettingsVersion !== undefined || requested?.reversal || 'includeVersion' in parsed && parsed.includeVersion) return refuse('setting_conditional_mutation_unsupported');
+      if (resetExpected !== undefined || requested?.expectedSettingsVersion !== undefined || requested?.reversal || 'includeVersion' in parsed && parsed.includeVersion) return refuse('setting_conditional_mutation_unsupported');
       const binding = readPortableDomainSettingBindingV1(declaration);
       if (!binding) return refuse('setting_not_bound');
       const isCurrent = () => !context.signal?.aborted;
@@ -181,7 +184,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     const credentials = params.credentials;
     if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
     if (storage.kind === 'automationSettings') {
-      if (requested?.expectedSettingsVersion !== undefined || requested?.reversal || 'includeVersion' in parsed && parsed.includeVersion) return refuse('setting_conditional_mutation_unsupported');
+      if (resetExpected !== undefined || requested?.expectedSettingsVersion !== undefined || requested?.reversal || 'includeVersion' in parsed && parsed.includeVersion) return refuse('setting_conditional_mutation_unsupported');
       if (storage.field !== 'maxActiveRunsPerMachine' && storage.field !== 'runRetention') return refuse('setting_not_bound');
       return await createCliAutomationSettingsDeclarationAction({ credentials, serverId: params.serverId,
         serverHttpBaseUrl: params.serverHttpBaseUrl, isCredentialCurrent: params.isCredentialCurrent })({
@@ -252,12 +255,19 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
           && snapshot.providerConnectionsCatalog?.status === 'ready' ? readProviderSettingsForCli(snapshot).settings : null;
         const persisted = voicePersistence && Object.hasOwn(delta, 'voice')
           ? voicePersistence.normalizeVoiceSettingsServerDelta(voicePersistence.normalizeVoiceSettingsLocalDelta(delta, settings), raw, providerSettings) : delta;
-        return AccountSettingMutationV1Schema.parse({ operations: Object.entries(persisted).map(([key, value]) => ({ op: 'set', key, value })) });
+        return AccountSettingMutationV1Schema.parse({ operations: Object.entries(persisted).map(([key, value]) =>
+          resetExpected !== undefined && storage.key === key && !storage.path?.length
+            ? { op: 'reset', key } : { op: 'set', key, value }) });
       };
       try {
-        if (requested.reversal) return await executeCliSettingMutationReversal({ declaration, requested,
-          credentials, serverId: params.serverId, signal: context.signal, isCredentialCurrent: params.isCredentialCurrent,
-          prepareMutation, readValue });
+        if (requested.reversal || resetExpected !== undefined) {
+          const reversed = await executeCliSettingMutationReversal({ declaration, requested, resetExpected,
+            credentials, serverId: params.serverId, signal: context.signal, isCredentialCurrent: params.isCredentialCurrent,
+            prepareMutation, readValue });
+          if (actionId !== 'settings.reset' || 'ok' in reversed) return reversed;
+          const { settingsVersion: _settingsVersion, ...response } = reversed;
+          return response;
+        }
         const result = requested.expectedSettingsVersion === undefined
           ? await updateAccountSettingsV2WithRetry({ credentials, prepareMutation, signal: context.signal })
           : await updateAccountSettingsV2Once({ credentials, expectedVersion: requested.expectedSettingsVersion,

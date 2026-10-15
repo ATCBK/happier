@@ -63,6 +63,13 @@ export const SettingRawValueV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ unset: z.literal(true) }),
   z.strictObject({ value: SettingsDeclarationValueV1Schema }),
 ]));
+/** Expected raw values for a bound-key reset; no historical mutation receipt is required. */
+export const SettingsDeclarationResetExpectedV1Schema = lazyZodSchema(() => z.union([
+  SettingRawValueV1Schema,
+  z.strictObject({ changes: z.array(z.strictObject({ key: SettingKeySchema, applied: SettingRawValueV1Schema }))
+    .check(z.minLength(1), z.refine(changes => new Set(changes.map(change => change.key)).size === changes.length)) }),
+]));
+export type SettingsDeclarationResetExpectedV1 = z.infer<typeof SettingsDeclarationResetExpectedV1Schema>;
 const ReversalBasis = {
   scope: z.strictObject({ serverId: OperationIdSchema, accountId: OperationIdSchema }),
   beforeVersion: SettingsVersionSchema,
@@ -94,7 +101,8 @@ export const SettingsDeclarationActionInputSchemasV1 = {
   'settings.get': z.strictObject({ anchor: AnchorSchema, key: z.optional(SettingKeySchema), target: z.optional(SettingsDeclarationTargetV1Schema), includeVersion: z.optional(z.literal(true)) }),
   'settings.set': z.strictObject({ anchor: AnchorSchema, key: z.optional(SettingKeySchema), value: SettingsDeclarationValueV1Schema, target: z.optional(SettingsDeclarationTargetV1Schema),
     expectedSettingsVersion: z.optional(SettingsVersionSchema), reversal: z.optional(SettingReversalInputSchema) }),
-  'settings.reset': z.strictObject({ anchor: AnchorSchema, target: z.optional(SettingsDeclarationTargetV1Schema) }),
+  'settings.reset': z.strictObject({ anchor: AnchorSchema, target: z.optional(SettingsDeclarationTargetV1Schema),
+    expected: z.optional(SettingsDeclarationResetExpectedV1Schema) }),
   'settings.invoke': z.strictObject({ anchor: AnchorSchema, input: z.optional(SettingsDeclarationOperationInputV1Schema) }),
 } as const;
 export const SettingsDeclarationActionOutputSchemasV1 = {

@@ -2,7 +2,7 @@ import { ACCOUNT_SETTING_DEFINITIONS } from '../../account/settings/accountSetti
 import { AccountSettingMutationV1Schema, applyAccountSettingMutationV1, type AccountSettingMutationV1 } from '../../account/settings/accountSettingMutationV1.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { listSecretStringCarrierPathsV1 } from '../../crypto/settingsSecretStringSchemasV1.js';
-import { SettingRawValueV1Schema, type SettingsDeclarationMutationReversalV1 } from '../settingsDeclarationActionFamily.js';
+import { SettingRawValueV1Schema, type SettingsDeclarationMutationReversalV1, type SettingsDeclarationResetExpectedV1 } from '../settingsDeclarationActionFamily.js';
 
 function readRawSettingValue(raw: Readonly<Record<string, unknown>>, key: string) {
     const parsed = SettingRawValueV1Schema.safeParse(Object.hasOwn(raw, key) ? { value: raw[key] } : { unset: true });
@@ -28,15 +28,21 @@ export function captureSettingMutationV1(raw: Readonly<Record<string, unknown>>,
 
 /** Bound declarations, rather than receipt authors, decide which Account keys may be restored. */
 export function restoreSettingMutationV1(raw: Readonly<Record<string, unknown>>, mutation: AccountSettingMutationV1,
-    receipt: SettingsDeclarationMutationReversalV1):
+    receipt: SettingsDeclarationMutationReversalV1 | Readonly<{ kind: 'reset'; expected: SettingsDeclarationResetExpectedV1 }>):
     | Readonly<{ status: 'prepared'; mutation: AccountSettingMutationV1 }>
     | Readonly<{ status: 'invalid' | 'conflict' }> {
     const first = mutation.operations.length === 1 ? mutation.operations[0] : undefined;
-    const changes = 'changes' in receipt ? receipt.changes : first ? [{ key: first.key, before: receipt.before, applied: receipt.applied }] : [];
+    const reset = 'expected' in receipt ? applyAccountSettingMutationV1(raw, mutation) : undefined;
+    if (reset?.status === 'invalid') return { status: 'invalid' };
+    const changes = 'expected' in receipt
+        ? ('changes' in receipt.expected ? receipt.expected.changes
+            : first ? [{ key: first.key, applied: receipt.expected }] : []).map(change => ({ ...change,
+                before: readRawSettingValue(reset?.raw ?? raw, change.key) }))
+        : 'changes' in receipt ? receipt.changes : first ? [{ key: first.key, before: receipt.before, applied: receipt.applied }] : [];
     if (changes.length !== mutation.operations.length || mutation.operations.some(operation => !changes.some(change => change.key === operation.key))) return { status: 'invalid' };
-    if (changes.some(change => listSecretStringCarrierPathsV1(change).length > 0)) return { status: 'invalid' };
+    if (changes.some(change => !change.before || listSecretStringCarrierPathsV1(change).length > 0)) return { status: 'invalid' };
     if (changes.some(change => !sameStrictJsonValue(readRawSettingValue(raw, change.key), change.applied))) return { status: 'conflict' };
     const restored = AccountSettingMutationV1Schema.safeParse({ operations: changes.map(change =>
-        'unset' in change.before ? { op: 'reset', key: change.key } : { op: 'set', key: change.key, value: change.before.value }) });
+        change.before && 'unset' in change.before ? { op: 'reset', key: change.key } : { op: 'set', key: change.key, value: change.before && 'value' in change.before ? change.before.value : undefined }) });
     return restored.success ? { status: 'prepared', mutation: restored.data } : { status: 'invalid' };
 }

@@ -325,7 +325,9 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         if (!page || !ref) return refuse('setting_not_found');
         const versionedRead = actionId === 'settings.get' && SettingsDeclarationActionInputSchemasV1['settings.get'].parse(input).includeVersion === true;
         const settingWrite = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input) : undefined;
-        const conditionalWrite = settingWrite?.expectedSettingsVersion !== undefined || settingWrite?.reversal !== undefined;
+        const resetRequest = actionId === 'settings.reset' ? SettingsDeclarationActionInputSchemasV1[actionId].parse(input) : undefined;
+        const { expected: resetExpected, ...resetInput } = resetRequest ?? {};
+        const conditionalWrite = resetExpected !== undefined || settingWrite?.expectedSettingsVersion !== undefined || settingWrite?.reversal !== undefined;
         if ((versionedRead || conditionalWrite) && (ref.storage?.scope !== 'account'
             || !('key' in ref.storage || 'kind' in ref.storage && ref.storage.kind === 'owner'))) {
             return refuse('setting_conditional_mutation_unsupported');
@@ -345,7 +347,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             const binding = ref.storage;
             if (binding.scope === 'project') {
                 actionId = 'settings.set';
-                input = { ...parsed, value: 'home' };
+                input = { ...resetInput, value: 'home' };
             } else {
                 let resetValue: z.infer<typeof SettingsDeclarationValueV1Schema>;
                 if (binding.scope === 'account') {
@@ -373,7 +375,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 }
                 // Keep the original reset admission/confirmation; only its validated mutation intent is normalized.
                 actionId = 'settings.set';
-                input = { ...parsed, value: resetValue };
+                input = { ...resetInput, value: resetValue };
             }
         }
         if (actionId === 'settings.invoke') {
@@ -472,9 +474,9 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         if (actionId === 'settings.set') {
             if (!access.writable) return refuse('setting_read_only');
             const requested = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input);
-            if (requested.reversal || requested.expectedSettingsVersion !== undefined) {
-                if (binding.scope !== 'account' || requested.reversal && !owner.accountScope) return refuse('setting_conditional_mutation_unsupported');
-                const reversal = requested.reversal;
+            if (resetExpected !== undefined || requested.reversal || requested.expectedSettingsVersion !== undefined) {
+                if (binding.scope !== 'account' || (resetExpected !== undefined || requested.reversal) && !owner.accountScope) return refuse('setting_conditional_mutation_unsupported');
+                const reversal = resetExpected === undefined ? requested.reversal : { kind: 'reset' as const, expected: resetExpected };
                 if (reversal?.kind === 'restore' && (!owner.accountScope || reversal.scope.serverId !== owner.accountScope.serverId
                     || reversal.scope.accountId !== owner.accountScope.accountId)) return refuse('setting_reversal_scope_mismatch');
                 if (binding.allowedValues && !binding.allowedValues.some(allowed => allowed === requested.value)) return refuse('invalid_setting_value');
@@ -493,7 +495,8 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                     const delta = 'key' in binding && value?.success ? { [binding.key]: value.data } : prepared?.(settings);
                     if (!delta) throw new RejectedSettingMutation();
                     return AccountSettingMutationV1Schema.parse({ operations: Object.entries(normalizeVoiceSettingsLocalDelta(delta, settings))
-                        .map(([key, value]) => ({ op: 'set', key, value })) });
+                        .map(([key, value]) => resetExpected !== undefined && 'key' in binding && binding.key === key
+                            ? { op: 'reset', key } : { op: 'set', key, value }) });
                 };
                 let projected: unknown;
                 let result: void | OneShotAccountSettingsMutationResult<void>;
@@ -502,7 +505,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                         throwIfAborted(context?.signal);
                         if (!isCurrent()) throw new RejectedSettingMutation();
                         const mutation = mutationFor(raw);
-                        const restore = reversal?.kind === 'restore' ? restoreSettingMutationV1(raw, mutation, reversal) : undefined;
+                        const restore = reversal?.kind === 'restore' || reversal?.kind === 'reset' ? restoreSettingMutationV1(raw, mutation, reversal) : undefined;
                         if (restore?.status === 'conflict') throw new ConditionalSettingConflict();
                         if (restore?.status === 'invalid') throw new RejectedSettingMutation();
                         const next = applyAccountSettingMutationV1(raw, restore?.status === 'prepared' ? restore.mutation : mutation);
@@ -526,6 +529,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 if (result.status !== 'applied') return refuse(`account_settings_mutation_${result.status === 'conflict' ? 'conflict' : 'outcome_unknown'}`);
                 const response = { anchor: ref.anchor, ...(projected === undefined ? { unset: true as const } : { value: SettingsDeclarationValueV1Schema.parse(projected) }),
                     settingsVersion: result.settingsVersion };
+                if (resetExpected !== undefined) {
+                    const { settingsVersion: _settingsVersion, ...resetResponse } = response;
+                    return resetResponse;
+                }
                 if (reversal?.kind !== 'capture') return response;
                 const captured = SettingsDeclarationCapturedMutationV1Schema.safeParse(result.captured);
                 if (captured.success && result.settingsVersion === captured.data.beforeVersion) {

@@ -490,6 +490,18 @@ The App captures the writer's acknowledged raw transition after persistence
 normalization, including Voice normalization. Declaration bindings still limit
 the affected keys, and secret-bearing raw values cannot enter a receipt.
 
+An Account setting can also return to raw absence without a prior receipt:
+`settings.reset({ anchor: 'sourceControl.explainChanges', expected: { value: true } })`.
+The expected value is the raw stored value, not its projected default. Compound
+bindings accept `expected: { changes: [{ key, applied: { value } }, ...] }`, with
+`{ unset: true }` for an absent raw key. The same reversal owner validates the
+complete declaration-owned key set and compares current values on every Account
+CAS attempt. Whole-key declarations return to raw absence; nested and compound
+owners retain their sparse default mutation so sibling preferences survive.
+The reset applies only while the affected raw values still match; unrelated
+Settings writes can advance the Account version without blocking it.
+Omitting `expected` retains the ordinary default-value reset.
+
 In 0.3 development, Agent permission defaults, enabled state and executable-source
 preferences use the declared `settings.set` anchors `agents.defaultPermission`,
 `agents.enabled` and `agents.executableSource`. Their value is

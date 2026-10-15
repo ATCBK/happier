@@ -1,11 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { accountSettingsParse } from '../../account/settings/accountSettings.js';
 import { AccountSettingMutationV1Schema, applyAccountSettingMutationV1 } from '../../account/settings/accountSettingMutationV1.js';
-import { SettingsDeclarationMutationReversalV1Schema } from '../settingsDeclarationActionFamily.js';
+import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationMutationReversalV1Schema } from '../settingsDeclarationActionFamily.js';
 import { scmGitRoutingStorage } from './accountSettingBindings.js';
 import { captureSettingMutationV1, restoreSettingMutationV1 } from './settingMutationReversal.js';
 
 describe('bound setting mutation receipts', () => {
+    it('resets compound bound keys without historical receipt versions and refuses substituted or changed keys', () => {
+        const delta = scmGitRoutingStorage.mutate(accountSettingsParse({}), 'happier.scm.backend.git/git');
+        if (!delta) throw new Error('Routing default must be admitted');
+        const mutation = AccountSettingMutationV1Schema.parse({ operations: Object.keys(delta).map(key => ({ op: 'reset', key })) });
+        const raw = { favoriteMachines: ['concurrent'], scmGitRepoPreferredBackend: 'plugin',
+            scmGitRepoPreferredBackendQualifiedId: 'external.scm/backend' };
+        const request = SettingsDeclarationActionInputSchemasV1['settings.reset'].parse({ anchor: 'sourceControl.gitRouting', expected: {
+            changes: [
+                { key: 'scmGitRepoPreferredBackend', applied: { value: 'plugin' } },
+                { key: 'scmGitRepoPreferredBackendQualifiedId', applied: { value: 'external.scm/backend' } },
+            ],
+        } });
+        if (!request.expected) throw new Error('Expected conditional reset');
+        const restore = restoreSettingMutationV1(raw, mutation, { kind: 'reset', expected: request.expected });
+        expect(restore.status).toBe('prepared');
+        if (restore.status !== 'prepared') throw new Error('Expected reset');
+        expect(applyAccountSettingMutationV1(raw, restore.mutation)).toMatchObject({ status: 'applied', raw: { favoriteMachines: ['concurrent'] } });
+        expect(restoreSettingMutationV1({ ...raw, scmGitRepoPreferredBackend: 'git' }, mutation,
+            { kind: 'reset', expected: request.expected })).toEqual({ status: 'conflict' });
+        expect(restoreSettingMutationV1(raw, mutation, { kind: 'reset', expected: { changes: [
+            { key: 'favoriteMachines', applied: { value: ['concurrent'] } },
+        ] } })).toEqual({ status: 'invalid' });
+    });
+    it('applies the canonical nested reset mutation without removing its owning object', () => {
+        const raw = { voice: { enabled: true, assistantLanguage: 'fr' } };
+        const mutation = AccountSettingMutationV1Schema.parse({ operations: [{ op: 'set', key: 'voice',
+            value: { enabled: false, assistantLanguage: 'fr' } }] });
+        const reset = restoreSettingMutationV1(raw, mutation, { kind: 'reset', expected: { value: raw.voice } });
+        expect(reset.status).toBe('prepared');
+        if (reset.status !== 'prepared') throw new Error('Expected nested reset');
+        expect(applyAccountSettingMutationV1(raw, reset.mutation)).toMatchObject({ status: 'applied',
+            raw: { voice: { enabled: false, assistantLanguage: 'fr' } } });
+    });
     it('does not disclose a nested SecretString through an otherwise readable object setting receipt', () => {
         const voice = { enabled: false, retained: { apiKey: { _isSecretValue: true, value: 'test-only-secret' } } };
         const mutation = AccountSettingMutationV1Schema.parse({ operations: [{ op: 'set', key: 'voice', value: { ...voice, enabled: true } }] });
@@ -28,7 +61,9 @@ describe('bound setting mutation receipts', () => {
         const applied = applyAccountSettingMutationV1(baseline, mutation);
         if (applied.status === 'invalid') throw new Error(applied.reason);
         const concurrent = { ...applied.raw, favoriteMachines: ['concurrent'] };
-        const restore = restoreSettingMutationV1(concurrent, mutation, receipt);
+        // Host Action inputs carry this discriminator in addition to the captured receipt.
+        const restoreInput = { kind: 'restore' as const, ...receipt };
+        const restore = restoreSettingMutationV1(concurrent, mutation, restoreInput);
         expect(restore.status).toBe('prepared');
         if (restore.status !== 'prepared') throw new Error('Expected restore');
         expect(applyAccountSettingMutationV1(concurrent, restore.mutation)).toMatchObject({ status: 'applied', raw: { favoriteMachines: ['concurrent'] } });

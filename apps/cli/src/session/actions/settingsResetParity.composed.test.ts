@@ -47,6 +47,21 @@ function executor(settingsDeclarationAction: NonNullable<ActionExecutorDeps['set
 afterEach(() => { vi.restoreAllMocks(); resetInMemoryAccountSettingsContextForTests(); });
 
 describe('public Settings reset parity', () => {
+  it('resets raw Account presence on App without a receipt while preserving unrelated changes', async () => {
+    const initial = { favoriteMachines: ['neighbor'], 'scm.diffSummary.enabled': true };
+    const host = uiHarness.createSettingsResetParityHost({ initial, mutationSnapshot: initial,
+      accountScope: { serverId: 'parity-home', accountId: 'parity-account' } });
+    host.changeUnrelatedSetting();
+    const app = executor(host.settingsDeclarationAction);
+    const anchor = 'sourceControl.explainChanges';
+    const context = { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId: 'settings.reset' } } as const;
+    const result = await app.execute('settings.reset', { anchor, expected: { value: true } }, context);
+    expect(result).toEqual({ ok: true, result: { anchor, value: true } });
+    if (result.ok) SettingsDeclarationActionOutputSchemasV1['settings.reset'].parse(result.result);
+    expect(host.readStoredSettings()).toEqual({ favoriteMachines: ['unrelated'] });
+    expect(await app.execute('settings.reset', { anchor, expected: { value: true } }, context))
+      .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
+  });
   const values = {
     explainChanges: false, summaryModel: '', outputLanguage: 'fr', prepareAfterTurn: true,
     investigateSurroundingFiles: true, commitStrategy: 'git_staging', commitMessageGenerator: false,

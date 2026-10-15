@@ -171,6 +171,26 @@ describe('CLI declared Account settings', () => {
       .toMatchObject({ ok: false, errorCode: 'setting_target_mismatch' });
   });
 
+  it('conditionally resets raw presence without a receipt across unrelated Account writes and refuses affected-key drift', async () => {
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'settings-account' })).toString('base64url')}.signature`;
+    const owner = executor(token);
+    const anchor = 'sourceControl.explainChanges';
+    content = { t: 'plain', v: { favoriteMachines: ['neighbor'], 'scm.diffSummary.enabled': true } };
+    version = 1235;
+    concurrentContent = { t: 'plain', v: { favoriteMachines: ['concurrent'], 'scm.diffSummary.enabled': true } };
+    conflict = true;
+    const context = { ...user, presentUserConfirmation: { actionId: 'settings.reset' as const } };
+    const reset = await owner.execute('settings.reset', { anchor, expected: { value: true } }, context);
+    expect(reset).toEqual({ ok: true, result: { anchor, value: true } });
+    if (reset.ok) SettingsDeclarationActionOutputSchemasV1['settings.reset'].parse(reset.result);
+    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['concurrent'] } });
+    content = { t: 'plain', v: { favoriteMachines: ['concurrent'], 'scm.diffSummary.enabled': false } };
+    version += 1;
+    expect(await owner.execute('settings.reset', { anchor, expected: { value: true } }, context))
+      .toMatchObject({ ok: false, errorCode: 'account_settings_conflict' });
+    expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['concurrent'], 'scm.diffSummary.enabled': false } });
+  });
+
   it('isolates provider state through the consent owner without requiring catalog evidence or replacing configuration', async () => {
     const sharing = accountSettingsParse({}).connectedServicesProviderStateSharingSettingsV1;
     content = { t: 'plain', v: { favoriteMachines: ['neighbor'], connectedServicesProviderStateSharingSettingsV1: {

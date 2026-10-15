@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { AccountSettingMutationV1 } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
-import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationMutationReversalV1Schema, SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationMutationReversalV1Schema, SettingsDeclarationValueV1Schema, type SettingsDeclarationResetExpectedV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import type { PortableSettingDeclarationV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import { captureSettingMutationV1, restoreSettingMutationV1 } from '@happier-dev/protocol/actions/settings/settingMutationReversal';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -17,6 +17,7 @@ class SettingReversalRefused extends Error {
 export async function executeCliSettingMutationReversal(params: Readonly<{
   declaration: PortableSettingDeclarationV1;
   requested: z.output<typeof SettingsDeclarationActionInputSchemasV1['settings.set']>;
+  resetExpected?: SettingsDeclarationResetExpectedV1;
   credentials: StoredCredentials;
   serverId?: string;
   signal?: AbortSignal;
@@ -26,7 +27,7 @@ export async function executeCliSettingMutationReversal(params: Readonly<{
 }>) {
   const { declaration, requested } = params;
   const accountId = readAccountIdFromToken(params.credentials.token);
-  const reversal = requested.reversal;
+  const reversal = params.resetExpected === undefined ? requested.reversal : { kind: 'reset' as const, expected: params.resetExpected };
   if (!reversal || declaration.storage?.scope !== 'account' || !params.serverId || !accountId) return refuse('setting_conditional_mutation_unsupported');
   const scope = { serverId: params.serverId, accountId };
   if (reversal.kind === 'restore' && !sameStrictJsonValue(scope, reversal.scope)) return refuse('setting_reversal_scope_mismatch');
@@ -38,7 +39,7 @@ export async function executeCliSettingMutationReversal(params: Readonly<{
   let receipt: unknown;
   try {
     await assertCurrent();
-    if (reversal.kind === 'restore') {
+    if (reversal.kind === 'restore' || reversal.kind === 'reset') {
       const restore = async (raw: Readonly<Record<string, unknown>>) => {
         await assertCurrent();
         const mutation = await params.prepareMutation(raw);
@@ -73,7 +74,7 @@ export async function executeCliSettingMutationReversal(params: Readonly<{
   const projected = params.readValue(result.settings);
   const response = { anchor: declaration.anchor,
     ...(projected === undefined ? { unset: true as const } : { value: SettingsDeclarationValueV1Schema.parse(projected) }), settingsVersion: result.version };
-  if (reversal.kind === 'restore') return response;
+  if (reversal.kind === 'restore' || reversal.kind === 'reset') return response;
   if (result.status === 'unchanged') return { ...response, reversalUnavailableReason: 'no_change' as const };
   const parsed = SettingsDeclarationMutationReversalV1Schema.safeParse(receipt);
   return parsed.success ? { ...response, reversal: parsed.data } : response;
