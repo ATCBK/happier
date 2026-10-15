@@ -67,6 +67,9 @@ export async function answerClaudeUnifiedRegisteredDialog(params: Readonly<{
   if (currentOption.answer.kind === 'literal') {
     const failure = sendResultToFailure(await params.port.sendLiteralText(currentOption.answer.text));
     if (failure) return failed(failure.reason ?? failure.kind);
+  } else if (currentOption.answer.kind === 'key') {
+    const failure = await sendKey(params.port, currentOption.answer.key);
+    if (failure) return failure;
   } else {
     const targetLabel = currentOption.answer.targetLabel;
     const maxSteps = Math.max(1, captured.state.visibleDialogSelection?.options.length ?? 0);

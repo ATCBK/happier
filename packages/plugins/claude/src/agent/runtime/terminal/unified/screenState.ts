@@ -25,6 +25,8 @@ export type ClaudeUnifiedSafeguardPauseDialogOption = Readonly<{
 export type ClaudeUnifiedGenericNumberedDialog = Readonly<{
   context: readonly string[];
   options: readonly Readonly<{ choice: string; label: string }>[];
+  /** Native first-run notices with a single explicit continuation, not a selection list. */
+  confirmKey?: 'Enter';
   /** Stable, bounded representation of the exact visible context and options. */
   signature: string;
 }>;
@@ -717,9 +719,23 @@ function resolveDialogSelectionPresentation(
   return focused ? { kind: 'focused', options: focused.options } : null;
 }
 
+function resolveSecurityNotesContinuation(text: string): ClaudeUnifiedGenericNumberedDialog | null {
+  // Claude Code 2.1.296 first-run capture: no chooser/composer, only this native notice.
+  // Match the active page's terminal continuation so historical notes above a composer cannot
+  // acquire an Enter recipe. The existing dialog owner still waits for a user's decision.
+  const heading = /(?:^|\n)[^\S\n]*Security notes:[^\S\n]*\n/iu.exec(text);
+  const continuation = /(?:^|\n)[^\S\n]*Press Enter to continue(?:…|\.{3})[^\S\n]*(?:\n[^\S\n]*)*$/iu.exec(text);
+  if (!heading || !continuation || continuation.index <= heading.index) return null;
+  const context = text.slice(heading.index, continuation.index).split('\n')
+    .map(line => line.trim()).filter(Boolean);
+  const options = [{ choice: 'continue', label: 'Continue' }];
+  return { context, options, confirmKey: 'Enter', signature: JSON.stringify({ context, options, confirmKey: 'Enter' }) };
+}
+
 export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenParseContext): ClaudeScreenState {
   const text = normalizeClaudeCapturedScreen(rawText);
   const visibleTail = tailLines(text, 30);
+  const securityNotesContinuation = resolveSecurityNotesContinuation(visibleTail);
   const usageLimitSemanticMatch = (
     USAGE_LIMIT_DIALOG.test(visibleTail)
     || CROPPED_USAGE_LIMIT_DIALOG.test(visibleTail)
@@ -774,7 +790,7 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
   // Known matchers already establish the dialog class, so bind their mutable visible context/options
   // from the active tail instead of unrelated numbered scrollback. Unknown dialogs remain stricter:
   // their generic answer path requires exactly one bounded, unambiguous selection block.
-  const unrecognizedConfirmationDialogVisible =
+  const unrecognizedConfirmationDialogVisible = securityNotesContinuation !== null || (
     (NUMBERED_SELECTION_OPTION.test(text) || visibleDialogSelection?.kind === 'focused')
     && !activeComposerOwnsInput
     && !switchModelDialogVisible
@@ -784,9 +800,9 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
     && !effortChangeDialogVisible
     && !trustFolderPromptVisible
     && !permissionPromptVisible
-    && !permissionEditorOpen;
+    && !permissionEditorOpen);
   const unrecognizedConfirmationDialog = unrecognizedConfirmationDialogVisible
-    ? resolveGenericSelectionDialog(visibleTail, visibleNumberedDialog, visibleDialogSelection)
+    ? securityNotesContinuation ?? resolveGenericSelectionDialog(visibleTail, visibleNumberedDialog, visibleDialogSelection)
     : null;
 
   const anyDialog =

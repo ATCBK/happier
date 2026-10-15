@@ -59,6 +59,7 @@ export type ClaudeUnifiedDialogOption = Readonly<{
   description: string;
   answer:
     | Readonly<{ kind: 'literal'; text: string }>
+    | Readonly<{ kind: 'key'; key: 'Enter' }>
     | Readonly<{ kind: 'selection'; targetLabel: string }>
     | Readonly<{ kind: 'unavailable' }>;
   settingMutation?: ClaudeUnifiedDialogSettingMutation | undefined;
@@ -384,7 +385,9 @@ export function resolveClaudeUnifiedVisibleDialog(state: ClaudeScreenState): Cla
           candidate.choice,
           candidate.label,
           'Send this exact visible choice to Claude.',
-          state.visibleDialogSelection?.kind === 'focused'
+          generic.confirmKey
+            ? { kind: 'key', key: generic.confirmKey }
+            : state.visibleDialogSelection?.kind === 'focused'
             ? { kind: 'selection', targetLabel: candidate.label }
             : { kind: 'literal', text: candidate.choice },
         )),

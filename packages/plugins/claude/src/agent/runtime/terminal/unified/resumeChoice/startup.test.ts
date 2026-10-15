@@ -117,6 +117,54 @@ function pendingDecisionUntilAbort<T>(signal: AbortSignal | undefined): Promise<
 }
 
 describe('createClaudeUnifiedResumeChoiceStartupHandler', () => {
+  it('surfaces native security notes and continues only after the selected user decision', async () => {
+    // Own Claude Code 2.1.296 first-run capture on nl1; no composer or selectable rows.
+    const securityNotes = [
+      ' Security notes:',
+      '',
+      ' 1. Claude can make mistakes.',
+      "    You're responsible for Claude's actions and should always",
+      '    review them, especially when running code.',
+      '',
+      ' 2. Due to prompt injection risks, only use it with code you trust',
+      '    Learn more: https://code.claude.com/docs/en/security',
+      '',
+      ' Press Enter to continue…',
+      '',
+    ].join('\n');
+    type Decision = Readonly<{ decision: 'approved'; answers: Readonly<Record<string, string>> }>;
+    let decide: ((decision: Decision) => void) | undefined;
+    const requestDecision = vi.fn((_request: unknown, options?: Readonly<{ signal?: AbortSignal }>) =>
+      new Promise<Decision>((resolve, reject) => {
+        decide = resolve;
+        options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      }));
+    const port = createFakeControlPort({ captures: [securityNotes, IDLE_COMPOSER] });
+    const handler = createClaudeUnifiedResumeChoiceStartupHandler({
+      ctx: createContext(requestDecision), sessionId: 'session-1', port,
+      settleMs: 0, wait: async () => undefined,
+    });
+    try {
+      expect(await handler.handle(parseClaudeScreenState(securityNotes))).toBe('waiting_for_user');
+      expect(requestDecision).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'AskUserQuestion', input: expect.objectContaining({
+          questions: [expect.objectContaining({
+            question: expect.stringContaining('Due to prompt injection risks'),
+            options: [expect.objectContaining({ choice: 'continue', label: 'Continue' })],
+          })],
+        }),
+      }), expect.anything());
+      expect(port.sentKeys).toEqual([]);
+      decide?.({ decision: 'approved', answers: { claudeUnifiedTerminalGenericDialog: 'continue' } });
+      await vi.waitFor(() => expect(port.sentKeys).toEqual(['Enter']));
+      expect(port.sentLiteral).toEqual([]);
+      expect(await handler.handle(parseClaudeScreenState(`${securityNotes}\n${IDLE_COMPOSER}`)))
+        .toBe('unhandled');
+    } finally {
+      await handler.dispose();
+    }
+  });
+
   it('surfaces first-run theme selection when the native cursor is on its focused choice', async () => {
     // Claude Code 2.1.296, own isolated tmux launch on nl1 (DF75).
     // The terminal cursor sits on the chooser, which is not an editable composer.
