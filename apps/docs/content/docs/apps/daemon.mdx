@@ -117,13 +117,13 @@ To move them onto the new version yourself, run `happier daemon restart-session-
 In development builds, you can opt in to automatic runner restarts:
 
 ```bash
-happier daemon restart-session-runners --on-update on
+hdev daemon restart-session-runners --on-update on
 ```
 
 With this on, every time the daemon starts (after `self update`, an update started from the app, or a service
 restart after a manual install) it restarts the daemon-started session runners that are still on an older CLI. The
 sessions retain their identity and history. Runners already on the current version are not touched, and runners the
-daemon knows are in the middle of a turn are skipped; restart them later with `happier daemon restart-session-runners`. The setting is off
+daemon knows are in the middle of a turn are skipped; restart them later with `hdev daemon restart-session-runners`. The setting is off
 by default, is read when the daemon starts, and is turned off again with `--on-update off`.
 
 Activity checks use the daemon's observed turn state. A turn that starts while the daemon is down, or whose turn
