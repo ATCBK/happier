@@ -42,6 +42,7 @@ import { getPreferredLanguage } from '@/text';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
     resolveScmDiffSummarySettings,
+    SCM_DIFF_SUMMARY_SETTING_KEYS,
     type ScmDiffSummaryCatalogProfile,
 } from '@/settings/scmDiffSummary/settings';
 
@@ -230,16 +231,22 @@ function buildGenerateRequest(params: GenerateScmDiffSummaryParams): ScmDiffSumm
     const settings = resolveScmDiffSummarySettings({ storedSettings: params.settings ?? {}, catalogProfiles: params.catalogProfiles ?? [], uiLocale: getPreferredLanguage() });
     const override = settings.modelOverride?.catalogId;
     const outputLanguage = params.input.outputLanguage ?? settings.outputLanguage;
+    const { modelSelector: requestedSelector, ...input } = params.input;
+    const storedOverride = params.settings?.[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride] ?? '';
+    const followsAccountDefault = !requestedSelector && !override
+        && typeof storedOverride === 'string' && storedOverride.trim() === '';
     return {
-        ...params.input,
+        ...input,
         ...(outputLanguage ? { outputLanguage } : {}),
         investigateSurroundingFiles: params.input.investigateSurroundingFiles ?? settings.investigateSurroundingFiles,
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        modelSelector: {
+        // An unset preference belongs to the host's executable default owner.
+        // A static picker target must not narrow its native sign-in evidence.
+        ...(!followsAccountDefault ? { modelSelector: {
             backendTargetKey: buildBackendTargetKeyV2(params.backendTarget),
-            ...params.input.modelSelector,
+            ...requestedSelector,
             ...(settings.modelOverride?.modelSelector ?? (override?.startsWith('profile:') ? { profileId: override.slice('profile:'.length) } : override ? { backendTargetKey: override } : {})),
-        },
+        } } : {}),
         ...(params.intent === 'regenerate' ? { cachePolicy: { mode: 'bypass' } } : {}),
     };
 }
@@ -345,18 +352,6 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             storedSettings: params.settings ?? {},
             catalogProfiles: params.catalogProfiles ?? [],
         });
-        if (!resolvedSettings.enabled) {
-            // Like every other admission refusal, the store retains it so the view presents the typed recovery.
-            const error = 'SCM diff summary generation is disabled';
-            const errorCode = 'SCM_DIFF_SUMMARY_DISABLED';
-            setState(applyScmDiffSummaryEvent(state, {
-                type: 'request_failed', key, sessionId: params.sessionId ?? null, ...(params.machineId ? { machineId: params.machineId } : {}),
-                scopeKey: params.scope ? serverAccountScopeKeySuffix(params.scope) : undefined,
-                actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID, input: params.input,
-                error, errorCode, failedAtMs: nowMs(), intent,
-            }));
-            return { ok: false, key, error, errorCode, state, viewModel: selectScmDiffSummaryViewModel(state, key) };
-        }
         if (resolvedSettings.modelOverrideError) {
             const error = resolvedSettings.modelOverrideError === 'SCM_DIFF_SUMMARY_MODEL_UNSUPPORTED'
                 ? 'Structured output is unavailable for the selected model.'
@@ -465,11 +460,6 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             storedSettings: params.settings ?? {},
             catalogProfiles: params.catalogProfiles ?? [],
         });
-        // Background work never publishes the refusal a person's own Start would: nothing was asked for.
-        if (!resolvedSettings.enabled) {
-            return { ok: false, key, error: 'SCM diff summary generation is disabled', errorCode: 'SCM_DIFF_SUMMARY_DISABLED',
-                state, viewModel: selectScmDiffSummaryViewModel(state, key) };
-        }
         if (!resolvedSettings.prefetch) {
             return {
                 ok: false,

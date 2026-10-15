@@ -125,7 +125,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
             await generateScmDiffSummaryFromUserAction({ ...host, serverId: scope.serverId, scope,
                 shouldContinue: isCurrent, backendTarget: selected.backendTarget,
                 input: { cwd, source, ...(comparison.comparisonId ? { comparisonId: comparison.comparisonId } : {}),
-                    outputs: [...outputs], modelSelector: selected.modelSelector },
+                    outputs: [...outputs], ...(model ? { modelSelector: selected.modelSelector } : {}) },
                 settings: { ...getStorage().getState().settings, [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: model },
                 intent: viewModel ? 'regenerate' : 'generate' });
             // A refused generation is retained by the diff-summary store; its typed presentation is `generationFailure`.

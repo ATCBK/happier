@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -57,6 +57,7 @@ import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, s
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import type { DurableProviderInputAcceptanceV1 } from '@/agent/runtime/session/input/providerInputOutcome';
 import { ExecutionRunListResponseSchema, ExecutionRunStartFailureDetailsV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 // Reuse the composed journey's UI platform setup before loading the real producer.
 // Runtime URLs keep UI-only platform declarations out of CLI compilation.
 await import(new URL('../../../../ui/sources/dev/vitestSetup.ts', import.meta.url).href);
@@ -87,6 +88,14 @@ describe('SCM generation through real host admission', () => {
         const home = await mkdtemp(join(tmpdir(), 'scm-admission-home-'));
         directories.push(home);
         vi.stubEnv('HAPPIER_HOME_DIR', home);
+        for (const key of ['HOME', 'USERPROFILE', 'CLAUDE_CONFIG_DIR']) vi.stubEnv(key, home);
+        for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) vi.stubEnv(key, undefined);
+        const fileName = process.platform === 'win32' ? 'claude.cmd' : 'claude';
+        writeExecutableShimSync({ dir: home, fileName, contents: process.platform === 'win32'
+            ? '@echo off\r\necho {"loggedIn":false}\r\nexit /b 1\r\n'
+            : '#!/bin/sh\nprintf \'{"loggedIn":false}\'\nexit 1\n' });
+        vi.stubEnv('HAPPIER_CLAUDE_PATH', join(home, fileName));
+        vi.stubEnv('PATH', `${home}${delimiter}${process.env.PATH ?? ''}`);
         reloadConfiguration();
     });
     afterEach(async () => {
@@ -197,7 +206,9 @@ describe('SCM generation through real host admission', () => {
             { investigateSurroundingFiles: false, parentAvailable: false, automaticModel: false },
             { investigateSurroundingFiles: false, parentAvailable: true, automaticModel: true },
             { investigateSurroundingFiles: false, parentAvailable: false, automaticModel: true },
-        ])('admits UI commit generation with investigation $investigateSurroundingFiles, applied parent $parentAvailable and automatic model $automaticModel through the registered Run RPC', async ({ investigateSurroundingFiles, parentAvailable, automaticModel }) => {
+        ].map(config => ({ ...config, disabledOnly: false })).concat([
+            { investigateSurroundingFiles: false, parentAvailable: true, automaticModel: false, disabledOnly: true },
+        ]))('admits UI commit generation with investigation $investigateSurroundingFiles, applied parent $parentAvailable, automatic model $automaticModel and disabled-only $disabledOnly through the registered Run RPC', async ({ investigateSurroundingFiles, parentAvailable, automaticModel, disabledOnly }) => {
             const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-session-rpc-' });
             directories.push(fixture.rootPath);
             await writeFile(join(fixture.rootPath, 'surrounding.txt'), 'Captured surrounding context\n');
@@ -475,24 +486,28 @@ describe('SCM generation through real host admission', () => {
                     if (parentAvailable) assertBeforeStart = assertRunRefusals;
                     const savedBefore = await scmDiffSummaryResultStore.list();
                     const generationOperations = createScmDiffSummaryOperations({ actionExecutor: machineExecutor });
-                    const previousSettings = getActiveAccountSettingsSnapshot();
-                    try {
-                        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({
-                            'scm.diffSummary.enabled': false }), settingsVersion: 1, loadedAtMs: Date.now(),
-                            settingsSecretsReadKeys: [], scopeKey: 'disabled-generation-seam' });
-                        // The client projection deliberately says enabled. The
-                        // registered host Action owns the actual admission.
-                        const refused = await generationOperations.generateFromUserAction({ sessionId, backendTarget,
-                            input: { cwd: fixture.rootPath, source: { kind: 'workingTree' }, comparisonId: captured.comparison.id,
-                                sessionId, modelSelector: { modelId }, outputs: ['walkthrough', 'commitPlan'] },
-                            settings: { 'scm.diffSummary.enabled': true } });
-                        expect(refused).toMatchObject({ ok: false });
-                        expect(ScmDiffSummaryGenerateOutputSchema.parse(generationOperations.getState()
-                            .entriesByKey[refused.key]?.latestOutput)).toEqual({ success: false,
-                            errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: expect.any(String) });
-                        expect(ExecutionRunListResponseSchema.parse(await client.call('execution.run.list', {})).runs).toEqual([]);
-                    } finally {
-                        if (previousSettings) setActiveAccountSettingsSnapshot(previousSettings); else clearActiveAccountSettingsSnapshot();
+                    if (disabledOnly) {
+                        const previousSettings = getActiveAccountSettingsSnapshot();
+                        try {
+                            setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({
+                                'scm.diffSummary.enabled': false }), settingsVersion: 1, loadedAtMs: Date.now(),
+                                settingsSecretsReadKeys: [], scopeKey: 'disabled-generation-seam' });
+                            // The client projection deliberately says enabled. The
+                            // registered host Action owns the actual admission.
+                            const refused = await generationOperations.generateFromUserAction({ sessionId, backendTarget,
+                                input: { cwd: fixture.rootPath, source: { kind: 'workingTree' }, comparisonId: captured.comparison.id,
+                                    sessionId, modelSelector: { modelId }, outputs: ['walkthrough', 'commitPlan'] },
+                                settings: { 'scm.diffSummary.enabled': true } });
+                            expect(refused).toMatchObject({ ok: false });
+                            expect(ScmDiffSummaryGenerateOutputSchema.parse(generationOperations.getState()
+                                .entriesByKey[refused.key]?.latestOutput)).toEqual({ success: false,
+                                errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: expect.any(String) });
+                            expect(ExecutionRunListResponseSchema.parse(await client.call('execution.run.list', {})).runs).toEqual([]);
+                            expect(await scmDiffSummaryResultStore.list()).toEqual(savedBefore);
+                        } finally {
+                            if (previousSettings) setActiveAccountSettingsSnapshot(previousSettings); else clearActiveAccountSettingsSnapshot();
+                        }
+                        return;
                     }
                     const generationResponse = await generationOperations.generateFromUserAction({ sessionId, backendTarget,
                         input: {
@@ -510,9 +525,9 @@ describe('SCM generation through real host admission', () => {
                         const refused = ScmDiffSummaryGenerateOutputSchema.parse(
                             generationOperations.getState().entriesByKey[generationResponse.key]?.latestOutput);
                         expect(refused).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE' });
-                        expect(refused.resultId).toBeUndefined();
+                        expect(refused.resultId).toEqual(expect.any(String));
                         expect(refused.runId).toBeUndefined();
-                        expect(await scmDiffSummaryResultStore.list()).toEqual(savedBefore);
+                        expect((await scmDiffSummaryResultStore.list()).results).toHaveLength(savedBefore.results.length + 1);
                         expect(ExecutionRunListResponseSchema.parse(await client.call('execution.run.list', {})).runs).toEqual([]);
                         return;
                     }

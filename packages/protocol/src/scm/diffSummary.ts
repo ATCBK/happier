@@ -182,6 +182,7 @@ export type ScmDiffSummaryMetadata =
   z.infer<typeof ScmDiffSummaryMetadataSchema>;
 
 export const ScmDiffSummaryErrorCodeSchema = lazyZodSchema(() => z.enum([
+  'SCM_DIFF_SUMMARY_DISABLED',
   'TURN_CHANGE_SET_REQUIRED',
   'CHECKPOINT_NOT_FOUND',
   'CHECKPOINT_UNAVAILABLE',

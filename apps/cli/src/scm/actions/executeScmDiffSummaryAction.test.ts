@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, accountSettingsParse, buildBackendTargetKeyV2, type ScmComparisonSource } from '@happier-dev/protocol';
 import { getAgentStaticModels } from '@happier-dev/agents';
@@ -14,29 +14,49 @@ import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSu
 import { captureScmComparison } from '@/scm/comparisons/captureScmComparison';
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { createTempDirSync } from '@/testkit/fs/tempDir';
+import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
 
 describe('executeScmDiffSummaryAction', () => {
     const directories: string[] = [];
     afterEach(async () => {
+        vi.unstubAllEnvs();
         await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
     });
     async function changedRepository() {
+        // Native CLI execution/auth are the boundary; automatic model resolution stays real.
+        const home = createTempDirSync('summary-action-native-auth-');
+        directories.push(home);
+        const fileName = process.platform === 'win32' ? 'claude.cmd' : 'claude';
+        writeExecutableShimSync({ dir: home, fileName, contents: process.platform === 'win32'
+            ? '@echo off\r\nif defined ANTHROPIC_API_KEY (echo {"loggedIn":true}& exit /b 0)\r\necho {"loggedIn":false}\r\nexit /b 1\r\n'
+            : '#!/bin/sh\nif [ -n "$ANTHROPIC_API_KEY" ]; then printf \'{"loggedIn":true}\'; exit 0; fi\nprintf \'{"loggedIn":false}\'\nexit 1\n' });
+        for (const key of ['HOME', 'USERPROFILE', 'CLAUDE_CONFIG_DIR']) vi.stubEnv(key, home);
+        vi.stubEnv('HAPPIER_CLAUDE_PATH', join(home, fileName));
+        vi.stubEnv('PATH', `${home}${delimiter}${process.env.PATH ?? ''}`);
+        vi.stubEnv('ANTHROPIC_API_KEY', 'fixture-api-key');
         const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-summary-action-' });
         directories.push(fixture.rootPath);
         await writeFile(join(fixture.rootPath, fixture.trackedPath), 'Changed before admission\n');
         return fixture;
     }
 
-    it.each([undefined, 'summary-session'])('refuses Explain-off before capture, saved output or Run admission in scope %s', async (sessionId) => {
+    it.each([
+        { sessionId: undefined, comparisonId: undefined },
+        { sessionId: 'summary-session', comparisonId: undefined },
+        { sessionId: undefined, comparisonId: 'missing-disabled-comparison' },
+        { sessionId: 'summary-session', comparisonId: 'missing-disabled-comparison' },
+    ])('refuses Explain-off before capture/read, saved output or Run admission in scope $sessionId, comparison $comparisonId', async ({ sessionId, comparisonId }) => {
         const previous = getActiveAccountSettingsSnapshot();
         setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({ 'scm.diffSummary.enabled': false }),
             settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'disabled-account' });
         try {
             const executeCanonicalAction = vi.fn(async () => { throw new Error('Disabled generation must not admit a Run'); });
             const output = await executeScmDiffSummaryAction({ request: { cwd: '/missing-disabled-summary-repository',
-                source: { kind: 'workingTree' }, outputs: ['walkthrough', 'commitPlan'], cachePolicy: { mode: 'bypass' } },
+                source: { kind: 'workingTree' }, ...(comparisonId ? { comparisonId } : {}),
+                outputs: ['walkthrough', 'commitPlan'], cachePolicy: { mode: 'bypass' } },
                 ...(sessionId ? { sessionId } : {}), machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
             expect(output).toEqual({ success: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: expect.any(String) });
             expect(executeCanonicalAction).not.toHaveBeenCalled();
@@ -251,13 +271,31 @@ describe('executeScmDiffSummaryAction', () => {
 
     it('refuses detached generation without an admitted low-cost model while retaining its captured inventory', async () => {
         const fixture = await changedRepository();
+        for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) vi.stubEnv(key, undefined);
         const executeCanonicalAction = vi.fn();
         const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath, source: { kind: 'workingTree' },
-            modelSelector: { backendTargetKey: 'agent:happier.agent.codex/codex' } },
+            modelSelector: { backendTargetKey: 'agent:happier.agent.claude/claude' } },
             machineId: 'machine-low-tier-unavailable', backendTarget: BACKEND_TARGET, executeCanonicalAction });
         expect(output).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE',
             comparison: { inventory: { files: [expect.objectContaining({ path: fixture.trackedPath })] } } });
         expect(executeCanonicalAction).not.toHaveBeenCalled();
+    });
+
+    it('reports an unavailable automatic model when attached admission proves no applied parent or executable fallback', async () => {
+        const fixture = await changedRepository();
+        for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) vi.stubEnv(key, undefined);
+        const executeCanonicalAction = vi.fn(async () => ({ ok: false as const,
+            errorCode: 'execution_run_parent_selection_unavailable', error: 'Parent unavailable',
+            details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated') }));
+        const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath, source: { kind: 'workingTree' },
+            modelSelector: { backendTargetKey: 'agent:happier.agent.claude/claude' } },
+            sessionId: 'parent-unavailable', backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
+            executeCanonicalAction });
+        expect(output).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE', resultId: expect.any(String),
+            comparison: { inventory: { files: [expect.objectContaining({ path: fixture.trackedPath })] } },
+            outputs: { summary: { state: 'failed' } } });
+        expect(executeCanonicalAction).toHaveBeenCalledTimes(1);
+        expect(output.runId).toBeUndefined();
     });
 
     it('resolves canonical checkpoint receipts and keeps later pending changes out of turn evidence', async () => {

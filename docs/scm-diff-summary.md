@@ -74,6 +74,13 @@ Capture comparison evidence first, then optionally ask one analysis Run for
 `summary`, `walkthrough`, `commitPlan`, or a combination. Capture requires no
 model. Opening a Walkthrough destination does not start generation; Start does.
 
+The host generation Action reads the Account's Explain setting before capturing
+or reading comparison evidence, saving a result, or admitting a Run. Disabled
+generation returns `SCM_DIFF_SUMMARY_DISABLED` for Session, detached and automatic
+requests. UI operations present that refusal through the existing recovery notice;
+opt-in checkpoint prefetch uses the same admission. Explicit comparison capture
+remains available without generation.
+
 The canonical generation brief orders explanations from contracts and data
 shapes through their implementation to callers and UI, groups files by intent,
 and places proving tests beside their behavior. Mechanical files retain coverage
@@ -145,11 +152,21 @@ selection before summary-profile preparation so the saved generator and Run agre
 This is development-source behavior pending daemon and runner reload validation.
 
 The summary fallback (and detached generation) resolves an unset preference to a catalog model in the `low` cost tier
-with admitted structured-output support. The picker, prefetch and direct generation
+with admitted structured-output support. Automatic native candidates also require
+the Agent's existing sign-in probe to report signed in on the executing machine;
+static model membership alone does not establish executable credentials.
+An unset UI preference leaves the generation model selector absent so this
+host owner can choose from that evidence without a client-side Agent/model pin.
+Explicit selections and attached applied-parent routes retain Run admission.
+The picker, prefetch and direct generation
 Action consume the same selection owner; explicit selections retain precedence.
 Resolving the default does not persist a model preference. Without an admitted
 fallback candidate, a known attached parent remains usable; detached generation
 reports model unavailable and retains the captured inventory.
+If attached Run admission proves the parent unavailable and no fallback can be
+admitted, generation also returns `MODEL_UNAVAILABLE`, keeping its captured
+evidence and failed saved result available. An unknown Start outcome is not
+reclassified as an unavailable model or retried.
 The relative cost tier is not a token price: current catalogs supply no unit pricing,
 so clients must keep that cost unavailable rather than invent an amount.
 

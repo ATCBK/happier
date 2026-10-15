@@ -12,6 +12,7 @@ const boundary = vi.hoisted(() => ({
     calls: [] as Array<{ machineId: string; method: string; payload: unknown; serverId?: string | null; accountId?: string | null;
         authorization?: import('@happier-dev/protocol/rpc').SocketRpcAuthorizationContext }>,
     capabilities: async (): Promise<unknown> => ({ protocolVersion: 1, results: {} }),
+    models: null as (() => unknown) | null,
     savedResult: null as import('@happier-dev/protocol/scm').ScmDiffSummaryResult | null,
     savedSessionId: '',
     listBarrier: null as (() => Promise<void>) | null,
@@ -44,6 +45,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
         // constant must not be acknowledged as a fictitious workspace Run read.
         if (typeof request.method !== 'string' || !request.method) throw new Error('Socket RPC method is required');
         if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return boundary.capabilities();
+        if (request.method === RPC_METHODS.CAPABILITIES_INVOKE && boundary.models) return boundary.models();
         if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && boundary.runResponse) {
             await boundary.nativeRunBarrier?.();
             return boundary.runResponse;
@@ -178,14 +180,15 @@ afterEach(async () => {
     boundary.sessionCalls = [];
     boundary.accountRoute = null;
     boundary.generate = null;
+    boundary.models = null;
     boundary.router?.spies.push.mockClear();
     await servedHome?.dispose();
     servedHome = null;
 });
 
-async function createHome(serverUrl: string) {
+async function createHome(serverUrl: string, settings?: Readonly<Record<string, unknown>>) {
     servedHome = await serveActionHomes({
-        homes: [{ key: 'home', serverUrl, accountId: 'walkthrough-account', currentAccount: true }],
+        homes: [{ key: 'home', serverUrl, accountId: 'walkthrough-account', currentAccount: true, settings }],
         async route(request) {
             if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
                 features: { execution: { runs: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
@@ -202,15 +205,16 @@ async function createHome(serverUrl: string) {
 }
 
 async function mount(comparison: SessionScmReviewComparison, sessionId: string, storedModel = '', renderBar: (actions: React.ReactNode) => React.ReactNode = (actions) => actions, authenticated = true) {
-    const home = await createHome(`https://${sessionId}.example.test`);
+    const settings = { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
+        'scm.diffSummary.modelProfileOverride': storedModel };
+    const home = await createHome(`https://${sessionId}.example.test`, settings);
     const machine = createMachineFixture({ id: `machine:${sessionId}`, activeAt: Date.now(), storageMode: 'plain' });
     const session = createSessionFixture({ id: sessionId, serverId: home.id, active: true,
         metadata: { path: '/repo/exact', host: 'tester.local', machineId: machine.id, flavor: 'codex' } });
     getStorage().setState({ sessions: { [sessionId]: session }, machines: { [machine.id]: machine },
         machineListByServerId: { [home.id]: [machine] },
         ...(authenticated ? { profileScope: { serverId: home.id, accountId: 'walkthrough-account' } } : {}),
-        settings: { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
-            'scm.diffSummary.modelProfileOverride': storedModel } });
+        settings });
     getStorage().getState().applySessions([session]);
     if (authenticated) publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const screen = await renderScreen(<SessionWalkthroughView sessionId={sessionId} serverId={home.id}
@@ -515,6 +519,23 @@ describe('SessionWalkthroughView START through real generation and model owners'
             accountId: 'walkthrough-account', payload: expect.objectContaining({ sessionId, cwd: '/repo/exact', source, outputs: ['walkthrough'], modelSelector: selector }) })]);
         const entry = Object.values(getScmDiffSummaryState().entriesByKey).find((value) => value.sessionId === sessionId);
         expect(entry).toMatchObject({ sessionId, input: { source, modelSelector: selector }, latestOutput: { success: true, metadata: { source } } });
+    }, 120_000);
+
+    it('leaves an unset model to the host default owner when Start is pressed without choosing a model', async () => {
+        const { AgentModelsProbeObservationSchema } = await import('@happier-dev/protocol/capabilities');
+        boundary.models = () => ({ ok: true, result: AgentModelsProbeObservationSchema.parse({
+            source: 'static', availableModels: getAgentStaticModels('claude', { catalogOnly: true }), supportsFreeform: false,
+        }) });
+        boundary.capabilities = async () => ({ protocolVersion: 1, results: {
+            'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { backends: {
+                codex: { available: true, intents: ['scm_diff_summary'] },
+            } } },
+        } });
+        const { screen } = await mount({ kind: 'workingTree' }, 'automatic-model');
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('walkthrough-start');
+        await vi.waitFor(() => expect(generationCalls()).toHaveLength(1));
+        expect(generationCalls()[0]!.payload).not.toHaveProperty('modelSelector');
     }, 120_000);
 
     /** The first eligible model of the real picker: Start needs a settled machine and a chosen model. */

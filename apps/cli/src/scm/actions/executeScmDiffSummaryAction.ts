@@ -30,6 +30,12 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
     executeCanonicalAction: ExecuteCanonicalAction;
     signal?: AbortSignal;
 }>): Promise<ScmDiffSummaryGenerateOutput> {
+    const settings = getActiveAccountSettingsSnapshot()?.settings ?? accountSettingsParse({});
+    const resolvedSettings = resolveScmDiffSummarySettings({ storedSettings: settings, catalogProfiles: [] });
+    if (!resolvedSettings.enabled) {
+        return ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED',
+            error: 'SCM diff summary generation is disabled' });
+    }
     const sessionId = params.sessionId ?? params.request.sessionId;
     const captured = params.request.comparisonId ? await readCapturedScmComparison({
         cwd: params.request.cwd, comparisonId: params.request.comparisonId, source: params.request.source,
@@ -43,10 +49,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         ...(params.readPullRequestComparisonPage ? { readPullRequestComparisonPage: params.readPullRequestComparisonPage } : {}),
     });
     const requestedOutputs: readonly ScmDiffSummaryOutputKind[] = params.request.outputs ?? ['summary'];
-    const settings = getActiveAccountSettingsSnapshot()?.settings ?? accountSettingsParse({});
-    const outputLanguage = params.request.outputLanguage ?? resolveScmDiffSummarySettings({
-        storedSettings: settings, catalogProfiles: [],
-    }).outputLanguage;
+    const outputLanguage = params.request.outputLanguage ?? resolvedSettings.outputLanguage;
     let selector = params.request.modelSelector;
     let backendTarget = params.backendTarget;
     if (!selector?.modelId && !selector?.profileId) {
@@ -111,7 +114,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             return ScmDiffSummaryGenerateOutputSchema.parse({ ...output, ...(runId ? { runId } : {}),
                 ...(output.success && inputId ? { inputId } : {}) });
         };
-        const failed = async (reason: string, errorCode?: 'DIFF_UNAVAILABLE'): Promise<ScmDiffSummaryGenerateOutput> => {
+        const failed = async (reason: string, errorCode?: 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE'): Promise<ScmDiffSummaryGenerateOutput> => {
             // A concurrent manual edit or started/terminal publication owns the newer revision.
             const output = errorCode ? ScmDiffSummaryGenerateOutputSchema.parse({ ...envelope('failed', reason),
                 success: false, errorCode, error: reason }) : envelope('failed', reason);
@@ -168,6 +171,10 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         }
         if (!startResult.ok) {
             const noRunCreated = readExecutionRunStartRunCreation(startResult.details) === 'noRunCreated';
+            if (noRunCreated && startResult.errorCode === 'execution_run_parent_selection_unavailable'
+                && !params.request.modelSelector?.modelId && !params.request.modelSelector?.profileId) {
+                return failed('Diff-summary model is unavailable', 'MODEL_UNAVAILABLE');
+            }
             return failed(noRunCreated ? startResult.error : 'Diff-summary execution run start outcome is unknown',
                 noRunCreated && startResult.errorCode === 'DIFF_UNAVAILABLE' ? 'DIFF_UNAVAILABLE' : undefined);
         }

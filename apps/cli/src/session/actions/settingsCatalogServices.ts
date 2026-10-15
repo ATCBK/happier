@@ -6,6 +6,7 @@ import { readSettings, type StoredCredentials } from '@/persistence';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { readAgentStructuredOutputCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
 import { probeAgentModelsBestEffort } from '@/capabilities/probes/agentModelsProbe';
+import { probeAgentSignInStatus } from '@/capabilities/cliAuth/agentSignIn';
 import { readAgentRoutingIdForContributionIdentity, indexAgentRoutingIdsByContributionIdentity } from '@/plugins/projection/registry/agentRoutingIdentity';
 import { refreshActiveAcpCatalog, readActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
 import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -183,9 +184,9 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                 const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
                 const agents = [...registry.agentDefinitionsById.values()];
                 const routingIds = indexAgentRoutingIdsByContributionIdentity(agents);
-                const profiles = agents.flatMap(entry => {
+                const profiles = (await Promise.all(agents.map(async entry => {
                     const targets = entry.identity ? listAgentExecutionTargetsV1(entry.identity) : [];
-                    return targets.flatMap(executionTarget => {
+                    const candidates = targets.flatMap(executionTarget => {
                         const agentId = readAgentRoutingIdForContributionIdentity(routingIds, executionTarget.identity);
                         if (!agentId) return [];
                         const target = readBackendTargetRefV2({ kind: 'backend', backendId: agentId, sourceKind: 'built_in' });
@@ -194,7 +195,13 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                             models: entry.definition.modelConfig?.staticModels ?? getAgentStaticModels(entry.id, { catalogOnly: true }),
                             agentFormats: readAgentStructuredOutputCapabilities(entry.richDefinition?.definition)?.formats });
                     });
-                });
+                    // Static model/cost facts do not prove that a native route can execute.
+                    // Explicit routes and applied-parent inheritance stay with Run admission.
+                    if (candidates.length === 0) return [];
+                    const signIn = await probeAgentSignInStatus(entry.id);
+                    params.signal?.throwIfAborted();
+                    return signIn.status === 'signedIn' ? candidates : [];
+                }))).flat();
                 return { profiles, isCurrent: current => !params.signal?.aborted
                     && readCurrentContributionRegistry() === registry
                     && getActiveAccountSettingsSnapshotLifetimeToken() === lifetime

@@ -8,6 +8,7 @@ import { getPreferredLanguage } from '@/text';
 import { createUiScmAction } from '@/sync/ops/actions/scmActionDeps';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { encodeScmDiffSummaryModelOverride } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 
 // Execution-run RPCs are network boundaries; keep all domain and envelope logic real.
 vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
@@ -173,8 +174,14 @@ describe('SCM diff summary operations', () => {
         const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
         const ops = createScmDiffSummaryOperations({ generateSummary: generate });
         await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.modelProfileOverride':
-            'model:{"backendTargetKey":"agent:happier.agent.codex/codex","modelId":"catalog-model"}' } });
+            encodeScmDiffSummaryModelOverride({ backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'catalog-model' }) } });
         expect(generate.mock.calls[0]?.[1]?.modelSelector).toMatchObject({ backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'catalog-model' });
+    });
+    it('leaves an unset Account preference to executable host defaults without pinning the displayed catalog candidate', async () => {
+        const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
+        const ops = createScmDiffSummaryOperations({ generateSummary: generate });
+        await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.modelProfileOverride': '' } });
+        expect(generate.mock.calls[0]?.[1]).not.toHaveProperty('modelSelector');
     });
     it('reopens a machine-saved result in its exact Account without admitting a model', () => {
         const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
@@ -265,9 +272,12 @@ describe('SCM diff summary operations', () => {
         const ops = createScmDiffSummaryOperations({ generateSummary: generate, nowMs: () => 100 });
         const result = await ops.generateFromUserAction({ ...params, key: 'summary-key', serverId: ' server_1 ' });
         expect(generate).toHaveBeenCalledWith('session_1', expect.objectContaining({
-            ...input, sessionId: 'session_1', modelSelector: { backendTargetKey: buildBackendTargetKeyV2(backendTarget) },
+            ...input, sessionId: 'session_1',
             outputLanguage: getPreferredLanguage(),
         }), { serverId: 'server_1' });
+        // With no saved or requested model, the host owns executable defaults
+        // and the attached parent's applied route.
+        expect(generate.mock.calls[0]?.[1]).not.toHaveProperty('modelSelector');
         expect(result).toMatchObject({ ok: true, runId: 'run_1', viewModel: {
             status: 'running', executionRunId: 'run_1', comparison, outputs: pending.outputs, resultId: 'result_1', summaryMarkdown: null,
         } });
@@ -346,6 +356,7 @@ describe('SCM diff summary operations', () => {
     it('presents the generation owner refusal and uses opt-in durable-checkpoint-only prefetch', async () => {
         const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
         generate.mockResolvedValueOnce({ success: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: 'Explain changes is off' });
+        generate.mockResolvedValueOnce({ success: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: 'Explain changes is off' });
         const ops = createScmDiffSummaryOperations({ generateSummary: generate });
         // A person's own Start is refused like every other admission, retained as the typed failure the view presents ...
         expect(await ops.generateFromUserAction({ ...params, settings: { 'scm.diffSummary.enabled': false } })).toMatchObject({
@@ -353,13 +364,14 @@ describe('SCM diff summary operations', () => {
             viewModel: { status: 'failed', error: { reason: 'disabled', nextAction: 'enableExplain' } },
         });
         expect(generate).toHaveBeenCalledTimes(1);
-        // ... while background prefetch with Explain changes off asks for nothing and publishes no failure.
-        const quiet = await ops.prefetch({ ...params, key: 'background-key', settings: { 'scm.diffSummary.enabled': false, 'scm.diffSummary.prefetch': true } });
+        // Prefetch shares host admission even when the client projection says disabled.
+        const quiet = await ops.prefetch({ ...finalCheckpointParams, key: 'background-key', settings: { 'scm.diffSummary.enabled': false, 'scm.diffSummary.prefetch': true } });
         expect(quiet).toMatchObject({ ok: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED' });
-        expect(Object.keys(ops.getState().entriesByKey)).toHaveLength(1);
+        expect(generate).toHaveBeenCalledTimes(2);
+        expect(Object.keys(ops.getState().entriesByKey)).toHaveLength(2);
         expect(await ops.prefetch(params)).toMatchObject({ ok: false, errorCode: 'SCM_DIFF_SUMMARY_PREFETCH_DISABLED' });
         expect(await ops.prefetch({ ...params, input: { cwd: '/repo', source: { kind: 'workingTree' } }, settings: { 'scm.diffSummary.prefetch': true } })).toMatchObject({ ok: false, errorCode: 'SCM_DIFF_SUMMARY_PREFETCH_SOURCE_UNSUPPORTED' });
-        expect(generate).not.toHaveBeenCalled();
+        expect(generate).toHaveBeenCalledTimes(2);
         expect((await ops.prefetch(finalCheckpointParams)).ok).toBe(true);
     });
 
