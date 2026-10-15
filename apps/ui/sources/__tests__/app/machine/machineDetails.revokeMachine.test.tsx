@@ -25,6 +25,8 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import type { MachineUpdateMetadataRequest, MachineUpdateMetadataResponse } from '@happier-dev/protocol';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { MachineReplacementPickerModalProps } from '@/components/machines/MachineReplacementPickerModal';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 const testGlobal = globalThis as typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -135,6 +137,7 @@ installDisconnectedServerSocketBoundary((socket) => {
 
 type RenderedScreen = Awaited<ReturnType<typeof renderScreen>>;
 let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+const artifactStore = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 
 /** The Home's HTTP/persistence boundary; client revocation, CAS and projections remain real. */
 async function serveMachineHome(input: string | URL | Request, init?: RequestInit): Promise<Response> {
@@ -149,7 +152,8 @@ async function serveMachineHome(input: string | URL | Request, init?: RequestIni
     if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
     if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
     if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(createPlainProjectAccountRowListFixture());
-    if (path === '/v1/artifacts') return Response.json([]);
+    const artifactResponse = artifactStore.handle(path, init);
+    if (artifactResponse) return artifactResponse;
     if (path === '/v2/account/settings') {
         if (method === 'GET') return Response.json({ content: { t: 'plain', v: machineState.settings }, version: machineState.settingsVersion });
         if (machineState.settingsWriteFailure) return Response.json({ error: 'unavailable' }, { status: 503 });
@@ -342,9 +346,10 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         machineState.providerCatalogRevision = 1;
         machineState.providerCatalogWrites = [];
         machineState.requests = [];
+        artifactStore.clear();
         machineState.capabilityInvocations = [];
         machineState.daemonStops = [];
-        accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://machine-home.example.test',
+        accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://machine-home.example.test', serverIdentityId: 'srv_machine_home',
             accountId: 'account-a', request: serveMachineHome });
         machineState.serverId = accountConnection.home.id;
     });
@@ -553,7 +558,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         expect(machineState.settingsWrites).toHaveLength(3);
     });
 
-    it('confirms and revokes the machine', async () => {
+    it('revokes the machine through its UI policy waiver without a local confirmation', async () => {
         confirmSpy.mockResolvedValueOnce(true);
         machineState.settings = { providerSettingsV1: ProviderSettingsV1Schema.parse({
             ...DEFAULT_PROVIDER_SETTINGS_V1,
@@ -563,6 +568,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
                 endpointSetFingerprint: 'endpoint-set:v1:a', connectionSecurityFingerprint: 'connection-security:v1:a', confirmedAt: 1 })),
         }) };
         publishProviderCatalogFixture();
+        machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { 'machines.remove': ['ui'] } };
 
         // Remove machine closes the Details sub-page.
         routeParams.page = 'details';
@@ -582,7 +588,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
             await vi.waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/settings/machines'));
         });
 
-        expect(confirmSpy).toHaveBeenCalled();
+        expect(confirmSpy).not.toHaveBeenCalled();
         expect((await readVisibleMachine())?.revokedAt).toBeGreaterThan(0);
         const saved = machineState.providerCatalog!;
         expect(saved.machineGrants.map(grant => grant.machineId)).toEqual(['machine-2']);
@@ -597,6 +603,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
             machineGrants: [{ v: 1, machineId: 'machine-1', connectionId: 'pc_a',
                 endpointSetFingerprint: 'endpoint-set:v1:a', connectionSecurityFingerprint: 'connection-security:v1:a', confirmedAt: 1 }],
         }) };
+        machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { 'machines.remove': ['ui'] } };
         publishProviderCatalogFixture();
         machineState.settingsWriteFailure = true;
 
@@ -666,6 +673,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
                 experimentalBindingConfirmations: [],
             },
         };
+        machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { 'machines.remove': ['ui'] } };
         publishProviderCatalogFixture();
 
         // Remove machine closes the Details sub-page.
@@ -759,8 +767,9 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         ]);
     });
 
-    it('selects a replacement candidate from the picker', async () => {
+    it('selects a replacement candidate through its UI policy waiver without a local confirmation', async () => {
         confirmSpy.mockResolvedValueOnce(true);
+        machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { 'machines.replacement.set': ['ui'] } };
 
         const { MachinePageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachinePageScreen');
 
@@ -775,7 +784,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
             await vi.waitFor(() => expect(machineState.currentMachine.replacedByMachineId).toBe('machine-2'));
         });
 
-        expect(confirmSpy).toHaveBeenCalled();
+        expect(confirmSpy).not.toHaveBeenCalled();
         expect(machineState.requests.find(request => request.path.endsWith('/replacement'))).toMatchObject({
             method: 'POST', body: { replacementMachineId: 'machine-2', confirmActiveOldMachine: true },
         });
@@ -799,6 +808,78 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         expect((await readVisibleMachine())?.replacedByMachineId ?? null).toBe(actionId.endsWith('clear') ? 'machine-2' : null);
     });
 
+    it.each(['machines.replacement.set', 'machines.replacement.clear', 'machines.remove'] as const)(
+        'routes explicit Require Ask, rejection and approval for %s through the mounted continuation', async actionId => {
+        machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] },
+            actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } };
+        if (actionId === 'machines.replacement.clear') machineState.currentMachine = { ...machineState.currentMachine, replacedByMachineId: 'machine-2' };
+        routeParams.page = actionId === 'machines.remove' ? 'details' : undefined;
+        const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
+        const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+        const screen = await renderMachineSection(React.createElement(actionId === 'machines.remove' ? MachineSubPageScreen : MachinePageScreen));
+        const invoke = () => {
+            if (actionId === 'machines.remove') findRemoveMachineButton(screen).onPress();
+            else {
+                findHeaderMenuAction(screen, actionId.endsWith('set') ? 'machine-replacement-repair-open' : 'machine-replacement-repair-undo')!.onSelect();
+                if (actionId.endsWith('set')) readReplacementPickerProps()?.onSelectCandidate('machine-2', 'Replacement Machine');
+            }
+        };
+        const effects = () => machineState.requests.filter(request => request.method !== 'GET'
+            && (request.path.endsWith('/replacement') || request.path.endsWith('/revoke')));
+        await act(async () => invoke());
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            expect({ artifacts: artifactStore.list().length, effects: effects(), alerts: alertSpy.mock.calls,
+                paths: machineState.requests.map(request => `${request.method} ${request.path}`) }).toMatchObject({ artifacts: 1 });
+        });
+        expect(effects()).toEqual([]);
+        expect(confirmSpy).not.toHaveBeenCalled();
+        const rejectedId = artifactStore.list()[0]!.id;
+        await expect(decideApprovalAsInbox(machineState.serverId, rejectedId, 'reject')).resolves.toMatchObject({ ok: true });
+        await vi.waitFor(() => expect(alertSpy).toHaveBeenCalled());
+        expect(effects()).toEqual([]);
+        await act(async () => invoke());
+        await vi.waitFor(() => expect(artifactStore.list()).toHaveLength(2));
+        expect(effects()).toEqual([]);
+        const approvedId = artifactStore.list()[1]!.id;
+        await expect(decideApprovalAsInbox(machineState.serverId, approvedId, 'approve')).resolves.toMatchObject({ ok: true });
+        await vi.waitFor(() => expect(effects()).toHaveLength(1));
+        if (actionId === 'machines.remove') await vi.waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/settings/machines'));
+        else await vi.waitFor(async () => expect((await readVisibleMachine())?.replacedByMachineId).toBe(actionId.endsWith('set') ? 'machine-2' : null));
+    });
+
+    it.each(['machines.replacement.set', 'machines.replacement.clear', 'machines.remove'] as const)(
+        'honors default Ask and reset for %s at the canonical confirmation owner', async actionId => {
+        if (actionId === 'machines.replacement.clear') machineState.currentMachine = { ...machineState.currentMachine, replacedByMachineId: 'machine-2' };
+        routeParams.page = actionId === 'machines.remove' ? 'details' : undefined;
+        const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
+        const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+        const screen = await renderMachineSection(React.createElement(actionId === 'machines.remove' ? MachineSubPageScreen : MachinePageScreen));
+        const invoke = () => {
+            if (actionId === 'machines.remove') findRemoveMachineButton(screen).onPress();
+            else {
+                findHeaderMenuAction(screen, actionId.endsWith('set') ? 'machine-replacement-repair-open' : 'machine-replacement-repair-undo')!.onSelect();
+                if (actionId.endsWith('set')) readReplacementPickerProps()?.onSelectCandidate('machine-2', 'Replacement Machine');
+            }
+        };
+        const effects = () => machineState.requests.filter(request => request.method !== 'GET'
+            && (request.path.endsWith('/replacement') || request.path.endsWith('/revoke')));
+        confirmSpy.mockResolvedValueOnce(false);
+        await act(async () => invoke());
+        await vi.waitFor(() => expect(alertSpy).toHaveBeenCalled());
+        expect(confirmSpy).toHaveBeenCalledTimes(1);
+        expect(effects()).toEqual([]);
+        machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } };
+        await publishMachineFixture();
+        machineState.settings.actionsSettingsV1 = { v: 1 };
+        await publishMachineFixture();
+        confirmSpy.mockResolvedValueOnce(true);
+        await act(async () => invoke());
+        await vi.waitFor(() => expect(effects()).toHaveLength(1));
+        expect(confirmSpy).toHaveBeenCalledTimes(2);
+        expect(artifactStore.list()).toEqual([]);
+    });
+
     it('names an unnamed replacement as unnamed, never by its id', async () => {
         machineState.machinesByServerId['server-a'] = machineState.machinesByServerId['server-a']!.map((machine) =>
             machine.id === 'machine-2' ? { ...machine, metadata: { platform: 'darwin' } } : machine,
@@ -816,8 +897,9 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         expect(text).not.toContain('machine=machine-2');
     });
 
-    it('clears an existing explicit replacement relation', async () => {
+    it('clears a replacement through its UI policy waiver without a local confirmation', async () => {
         confirmSpy.mockResolvedValueOnce(true);
+        machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { 'machines.replacement.clear': ['ui'] } };
         machineState.currentMachine = {
             ...machineState.currentMachine,
             replacedByMachineId: 'machine-2',
@@ -837,7 +919,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
             await vi.waitFor(() => expect(machineState.currentMachine.replacedByMachineId).toBeNull());
         });
 
-        expect(confirmSpy).toHaveBeenCalled();
+        expect(confirmSpy).not.toHaveBeenCalled();
         expect(machineState.requests.find(request => request.path.endsWith('/replacement'))).toMatchObject({ method: 'DELETE' });
         expect((await readVisibleMachine())?.replacedByMachineId).toBeNull();
     });

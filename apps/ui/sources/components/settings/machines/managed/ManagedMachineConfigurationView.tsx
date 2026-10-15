@@ -172,8 +172,6 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const fieldRequests = React.useMemo(() => optionsInput.kind === 'ready' ? fields.map(field => ({ field,
         actionId: buildQualifiedPluginContributionKey({ pluginId: optionsInput.action.pluginId, localId: optionsInput.action.id }), draftInput: fieldInput })) : [],
         [fields, fieldInput, optionsInput]);
-    const fieldOptions = useInputFieldOptions({ requests: fieldRequests, enabled: !!draft && credentialsReady && optionsInput.kind === 'ready',
-        serverId: catalog.binding?.serverId ?? props.serverId, machineId: controller?.machineId, accountLifetime: catalog.binding });
     const { localized, mark } = presentation;
     const receiptMark = presentation.markAt(MANAGED_PROVISIONER_MARK_SIZE.receipt);
     const title = presentation.title ?? '';
@@ -190,7 +188,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const clearProtectedPreset = React.useCallback((code: string) => {
         retirePending(); reviewed.current = null; loadedPreset.current = null;
         setDraft(null); setPreset(null); setLimit(undefined); setSaved(null); setError(code);
-        setAccountSetup(null); setPendingCredential(null);
+        setAccountSetup(null); setPendingCredential(null); setTeamId('');
     }, [retirePending]);
     const readPreset = React.useMemo(() => presetClient && catalog.homeId && props.presetId
         ? async (options: MachinePresetCollectionOptions<ManagedMachinePresetV1>): Promise<MachinePresetCollectionSettledResult<ManagedMachinePresetV1>> => {
@@ -201,8 +199,10 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
                 : { kind: 'failed', code: result.value.code };
         } : null, [presetClient, catalog.homeId, props.presetId]);
     const presetQuery = useMachinePresetQuery({ serverId: props.serverId, homeId: catalog.homeId, presetId: props.presetId,
-        binding: catalog.binding, read: readPreset, refreshRevision: readRevision, onApprovalPending,
+        binding: catalog.binding, resolution: catalog.resolution, read: readPreset, refreshRevision: readRevision, onApprovalPending,
         onAccessLost: clearProtectedPreset, onInvalidated: retry });
+    const fieldOptions = useInputFieldOptions({ requests: fieldRequests, enabled: presetQuery.sameScope && !!draft && credentialsReady && optionsInput.kind === 'ready',
+        serverId: catalog.binding?.serverId ?? props.serverId, machineId: controller?.machineId, accountLifetime: catalog.binding });
     const teamDenied = !!props.presetId && (preset?.owner.kind === 'team' || !!teamId) && team.kind === 'bound'
         && (team.state.kind === 'ready' && !team.state.team.capabilities.viewTeam
             || team.state.kind === 'unavailable' && isAuthoritativeScopedSnapshotRefusal(team.state.error));
@@ -210,22 +210,22 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         if (teamDenied && presetQuery.state.value) presetQuery.withdraw('permission_denied');
     }, [teamDenied, presetQuery.state.value, presetQuery.withdraw]);
     React.useEffect(() => {
-        if (!catalogController || props.presetId || !provisioner) return;
+        if (!presetQuery.sameScope || !catalogController || props.presetId || !provisioner) return;
         const initial = catalogController;
         if (!machines.some(machine => machine.id === initial.machineId && machine.installationId === initial.installationId)) return;
         setDraft(current => current ?? createManagedConfiguratorDraft({ provisioner, controller: initial, name: title,
             optionsSelectors: props.initialOptionsSelectors }));
-    }, [catalogController, props.presetId, props.initialOptionsSelectors, provisioner, machines, title]);
+    }, [presetQuery.sameScope, catalogController, props.presetId, props.initialOptionsSelectors, provisioner, machines, title]);
     React.useEffect(() => {
-        if (!preset || !provisioner || teamDenied) return;
+        if (!presetQuery.sameScope || !preset || !provisioner || teamDenied) return;
         setDraft(current => current ?? { ...createManagedConfiguratorDraft({ provisioner, controller: catalogController ?? preset.controller, name: preset.recipe.name,
             credentials: preset.recipe.credentials, environment: preset.environment,
             preset: { id: preset.id, revision: preset.revision, name: preset.name, retention: preset.retention, wakeOnAcceptedMessage: preset.wakeOnAcceptedMessage } }),
             selected: { id: `preset:${preset.id}`, title: preset.name, launch: preset.recipe.choices } });
-    }, [preset, provisioner, catalogController, teamDenied]);
+    }, [presetQuery.sameScope, preset, provisioner, catalogController, teamDenied]);
 
     React.useEffect(() => {
-        if (!catalogProvisioner || !catalogController || catalogProvisioner.credentialPurposes === undefined) return;
+        if (!presetQuery.sameScope || !catalogProvisioner || !catalogController || catalogProvisioner.credentialPurposes === undefined) return;
         setDraft(current => {
             if (!current || current.controller.machineId !== catalogController.machineId
                 || current.controller.installationId !== catalogController.installationId) return current;
@@ -235,7 +235,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
             return { ...next, provisioner: catalogProvisioner, choicesSchema: createManagedConfiguratorDraft({ provisioner: catalogProvisioner,
                 controller: next.controller, name: next.name }).choicesSchema, optionStatus: 'loading', check: undefined };
         });
-    }, [catalogProvisioner, catalogController, draft?.credentials, draft?.provisioner]);
+    }, [presetQuery.sameScope, catalogProvisioner, catalogController, draft?.credentials, draft?.provisioner]);
 
     React.useEffect(() => {
         if (!pendingCredential || catalog.loading || catalogProvisioner === pendingCredential.basis && !catalog.error) return;
@@ -253,15 +253,15 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         setPendingCredential(null);
     }, [pendingCredential, catalog.loading, catalog.error, catalog.binding, catalogProvisioner, catalogController]);
 
-    // Credential retirement removes both presentation data and mutation custody, including open approvals.
+    // Retirement cancels credential custody immediately. The query's exact scope/access owner clears presentation.
     React.useEffect(() => {
         const binding = catalog.binding;
         if (!binding) return;
         const retirement = binding.onRetire(() => {
-            clearProtectedPreset('action_account_scope_changed'); setTeamId('');
+            retirePending(); reviewed.current = null; setAccountSetup(null); setPendingCredential(null);
         });
         return () => { retirement.dispose(); mutationAbort.current?.abort(); optionsAbort.current?.abort(); };
-    }, [catalog.binding, clearProtectedPreset, retirePending]);
+    }, [catalog.binding, retirePending]);
 
     React.useEffect(() => {
         if (teamDenied) return;
@@ -282,7 +282,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
 
     React.useEffect(() => {
         const binding = catalog.binding;
-        if (!binding || !catalog.homeId || !catalog.client || !controller) return;
+        if (!presetQuery.sameScope || !binding || !catalog.homeId || !catalog.client || !controller) return;
         if (!catalogProvisioner || !catalogController || !credentialsReady) {
             setDraft(current => current && current.optionStatus !== 'unavailable'
                 ? { ...current, optionStatus: 'unavailable', check: undefined } : current);
@@ -313,17 +313,17 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
                 : optionsInput.kind === 'unavailable' ? optionsInput.error : null);
         }).catch(() => { if (!abort.signal.aborted) { setError('unavailable'); setDraft(current => current ? { ...current, optionStatus: 'unavailable' } : current); } });
         return () => abort.abort();
-    }, [catalog.binding, catalog.homeId, catalog.client, catalogProvisioner, catalogController, controller?.machineId, controller?.installationId,
+    }, [presetQuery.sameScope, catalog.binding, catalog.homeId, catalog.client, catalogProvisioner, catalogController, controller?.machineId, controller?.installationId,
         draft?.credentials, draft?.provisioner, credentialsReady, optionsInput, selectorKey, readRevision]);
 
-    const effectiveDraft = React.useMemo(() => draft && accountSettings.settings
-        ? { ...draft, categoryPreferences: accountSettings.settings.machineRetentionDefaultsV1 } : null, [draft, accountSettings.settings]);
+    const effectiveDraft = React.useMemo(() => presetQuery.sameScope && draft && accountSettings.settings
+        ? { ...draft, categoryPreferences: accountSettings.settings.machineRetentionDefaultsV1 } : null, [presetQuery.sameScope, draft, accountSettings.settings]);
     const facts = React.useMemo(() => effectiveDraft ? managedConfiguratorFacts(effectiveDraft) : null, [effectiveDraft]);
     React.useEffect(() => { if (facts) reviewed.current = facts; }, [facts]);
     // A settings refresh may withdraw mutation authority, not what the person already reviewed.
     // A changed draft never borrows the old choice's facts, and only fresh `facts` can be submitted.
     const captured = reviewed.current;
-    const receiptFacts = facts ?? (catalog.binding?.isCurrent() && captured && draft?.selected
+    const receiptFacts = facts ?? (presetQuery.sameScope && catalog.binding?.isCurrent() && captured && draft?.selected
         && draft.name === captured.launch.name && draft.controller.machineId === captured.controller.machineId
         && draft.controller.installationId === captured.controller.installationId
         && pluginJsonValuesEqual(draft.credentials ?? [], captured.launch.credentials ?? [])
@@ -510,7 +510,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     if (props.presetId && (teamDenied || presetQuery.state.error && isMachinePresetAccessLost(presetQuery.state.error)))
         return <SurfaceStateCard kind="denied" title={t('machinePresets.accessLost')} testID="managed-config.error"
             action={{ label: t('managedMachines.actions.tryAgain'), onPress: retry }} />;
-    if (!provisioner) return <>
+    if (!presetQuery.sameScope || !provisioner) return <>
         {creationDisabledNotice}
         <ItemGroup title={t('managedMachines.config.managedFrom')} action={scope.chip} surface="none">
             <SurfaceStateCard kind={catalog.loading ? 'loading' : catalog.error ? 'error' : 'empty'} size="line"

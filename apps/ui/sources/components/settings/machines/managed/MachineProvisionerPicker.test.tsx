@@ -9,7 +9,7 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 
 installApprovalCommonModuleMocks({
@@ -366,7 +366,7 @@ describe('provisioner picker demand', () => {
           : { ok: false, errorCode: 'controller_unavailable', error: 'controller_unavailable' });
       },
     });
-    return { serverId, reads, release };
+    return { serverId, reads, release, provisioners };
   }
 
   it('keeps the answered checks on screen while the catalog is re-read', async () => {
@@ -389,6 +389,51 @@ describe('provisioner picker demand', () => {
     } finally {
       release();
     }
+    await screen.unmount();
+  });
+  it('keeps retained checks display-only when the replacement catalog fails, and enables Choose after recovery', async () => {
+    const { serverId, provisioners } = await arrangeCatalog({});
+    const onSelect = vi.fn();
+    const { MachineProvisionerPicker } = await import('./MachineProvisionerPicker');
+    const { useManagedControllerScope } = await import('./useManagedControllerScope');
+    const preferred = { machineId: 'controller', installationId: 'controller-installation' };
+    function FixedPicker() {
+      const scope = useManagedControllerScope({ serverId, preferred, testIDPrefix: 'fixed-controller' });
+      return <MachineProvisionerPicker serverId={serverId} scope={scope} onSelectProvisioner={onSelect} />;
+    }
+    harness.answer(serverId, '/v1/actions/machines.provisioners.check', { select: value => {
+      const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+      return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'machines.provisioners.check', requestId: request.requestId, execution: { ok: true,
+        result: { available: false, code: 'license_required', status: { key: 'alpha.license', fallback: 'License required' } } } }) };
+    } });
+    const screen = await renderPicker(<FixedPicker />);
+    const cards = () => screen.tree.findAll(node => Array.isArray(node.props.cards))
+      .flatMap(node => node.props.cards as { title: string; status: { label: string }; action: { disabled?: boolean; onPress(): void } }[]);
+    await vi.waitFor(async () => { await act(async () => {}); expect(cards().find(card => card.title === 'Alpha')?.status.label, 'initial check').toBe('License required'); });
+    harness.answer(serverId, '/v1/actions/machines.provisioners.list', { select: value => {
+      const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+      return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'machines.provisioners.list', requestId: request.requestId,
+        execution: { ok: false, errorCode: 'unavailable', error: 'unavailable' } }) };
+    } });
+    await act(async () => { await harness.addHome({ name: 'Refresh', serverUrl: 'https://refresh.example', serverIdentityId: 'srv_refresh', accountId: 'refresh' }); });
+    await vi.waitFor(async () => { await act(async () => {}); expect(cards().find(card => card.title === 'Alpha')?.action.disabled, 'failed catalog').toBe(true); });
+    expect(screen.findByTestId('managed-picker.unavailable')).not.toBeNull();
+    const retained = cards().find(card => card.title === 'Alpha');
+    expect(retained?.status.label).toBe('License required');
+    expect(retained?.action.disabled).toBe(true);
+    await act(async () => retained?.action.onPress());
+    expect(onSelect).not.toHaveBeenCalled();
+    harness.answer(serverId, '/v1/actions/machines.provisioners.list', { select: value => {
+      const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+      const controller = request.input && typeof request.input === 'object' && 'controller' in request.input ? request.input.controller : undefined;
+      if (!controller) throw new Error('Expected the requested controller');
+      return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'machines.provisioners.list', requestId: request.requestId,
+        execution: { ok: true, result: { controller, provisioners } } }) };
+    } });
+    await act(async () => screen.pressByTestId('managed-picker.unavailable-action'));
+    await vi.waitFor(async () => { await act(async () => {}); expect(cards().find(card => card.title === 'Alpha')?.action.disabled, 'recovered catalog').not.toBe(true); });
+    await act(async () => cards().find(card => card.title === 'Alpha')?.action.onPress());
+    expect(onSelect).toHaveBeenCalledOnce();
     await screen.unmount();
   });
   it('keeps the last catalog across a refreshed credential binding while the replacement reads', async () => {

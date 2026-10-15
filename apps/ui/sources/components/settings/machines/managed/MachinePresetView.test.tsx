@@ -14,6 +14,7 @@ import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/act
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { PluginJsonSchemaV2Schema, PluginProjectedActionV2Schema, type PluginJsonSchemaV2 } from '@happier-dev/protocol';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema, DaemonPluginActionSchemasReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { MachineProvisionersListResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
@@ -144,6 +145,68 @@ async function seedConfiguration(serverId: string) {
 }
 
 describe('reachable preset detail', () => {
+    it.each([false, true])('preserves the same Home/Account editor through credential rebinding (preset: %s)', async editingPreset => {
+        const serverId = await seed();
+        const scopeId = await seedConfiguration(serverId);
+        const screen = await renderSettingsView(<ManagedMachineConfigurationView serverId={scopeId}
+            provisioner={buildQualifiedPluginContributionKey(preset.recipe.provider)}
+            {...(editingPreset ? { presetId: preset.id, presetOnly: true } : {})} initialController={preset.controller} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.choice:large')).not.toBeNull());
+        await act(async () => screen.pressByTestId('managed-config.choice:large'));
+        if (editingPreset) await act(async () => screen.changeTextByTestId('managed-config.environment.setup.input', 'echo unsaved recipe'));
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.create')?.props.disabled).toBe(false));
+        const retiredCreate = screen.findByTestId('managed-config.create')?.props.onPress;
+        let release = () => {};
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        harness.answer(serverId, '/v1/actions/machines.provisioners.list', { select: async value => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+            await gate;
+            return { body: { v: 1, actionId: 'machines.provisioners.list', requestId: request.requestId,
+                execution: { ok: true, result: { controller: preset.controller, provisioners: [provisioner] } } } };
+        } });
+        try {
+            await act(async () => { await harness.addHome({ name: 'Refresh', serverUrl: 'https://refresh.example', serverIdentityId: 'srv_refresh', accountId: 'refresh' }); });
+            await flushHookEffects();
+            await retiredCreate?.();
+            expect(harness.requestsFor('/v1/actions/machines.managed.acquire')).toHaveLength(0);
+            expect(harness.requestsFor('/v1/machines/presets/update')).toHaveLength(0);
+            if (editingPreset) expect(screen.findByTestId('managed-config.environment.setup.input')?.props.value).toBe('echo unsaved recipe');
+            expect(screen.findAllByType(Item).find(node => node.props.testID === 'managed-config.choice:large')?.props.selected).toBe(true);
+        } finally { release(); }
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.create')?.props.disabled).toBe(false));
+        if (editingPreset) expect(screen.findByTestId('managed-config.environment.setup.input')?.props.value).toBe('echo unsaved recipe');
+        await act(async () => { await harness.switchAccount(serverId, 'other-owner'); });
+        await flushHookEffects();
+        expect(screen.findByTestId('managed-config.environment.setup.input')?.props.value).not.toBe('echo unsaved recipe');
+        await screen.unmount();
+    });
+    it('retains preset collection and detail across a same-Account rebind and withdraws them on Account loss', async () => {
+        const serverId = await seed();
+        harness.answer(serverId, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [preset] } });
+        const { useMachinePresets, useMachinePresetDetail } = await import('./useMachinePresets');
+        const homes = [serverId];
+        const visible: boolean[] = [];
+        const hook = await renderHook(() => {
+            const collection = useMachinePresets(homes);
+            const detail = useMachinePresetDetail(serverId, preset.id);
+            visible.push(collection.presetsByServerId[serverId]?.[0]?.id === preset.id && detail.state.value?.preset.id === preset.id);
+            return { collection, detail };
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().detail.state.value?.preset.id).toBe(preset.id));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().collection.presetsByServerId[serverId]?.[0]?.id).toBe(preset.id));
+        const start = visible.length;
+        await act(async () => { await harness.addHome({ name: 'Refresh', serverUrl: 'https://refresh.example', serverIdentityId: 'srv_refresh', accountId: 'refresh' }); });
+        await flushHookEffects();
+        expect(visible.slice(start).length).toBeGreaterThan(0);
+        expect(visible.slice(start).every(Boolean)).toBe(true);
+        harness.answer(serverId, '/v1/machines/presets/get', { body: { kind: 'refused', code: 'permission_denied' } });
+        harness.answer(serverId, '/v1/machines/presets/list', { status: 403, body: { kind: 'refused', code: 'permission_denied' } });
+        await act(async () => { await harness.switchAccount(serverId, 'other-owner'); });
+        await flushHookEffects();
+        expect(hook.getCurrent().detail.state.value).toBeNull();
+        expect(hook.getCurrent().collection.presetsByServerId[serverId]).toBeUndefined();
+        await hook.unmount();
+    });
     it('reopens retired resources from the Machines archive without returning them to its active list', async () => {
         const serverId = await seed();
         const scopeId = await seedConfiguration(serverId);

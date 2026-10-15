@@ -98,6 +98,7 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         return () => { abort.abort(); retirement.dispose(); };
     }, [catalog.binding, catalog.homeId, catalog.client, catalog.provisioners, controller, onApprovalPending]);
     const open = (contribution: string, connectPurpose?: string) => {
+        if (catalog.error || !catalog.binding?.isCurrent()) return;
         if (props.onSelectProvisioner) {
             if (controller && catalog.binding?.isCurrent()) props.onSelectProvisioner({ serverId: props.serverId, provisioner: contribution, controller,
                 ...(connectPurpose ? { connectPurpose } : {}) });
@@ -146,8 +147,8 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
                 }).catch(() => { if (!abort.signal.aborted && binding.isCurrent()) setError('unavailable'); });
             } } : { kind: 'choose', label: t(noAccount ? 'managedMachines.add.action.connect' : 'managedMachines.add.action.choose'),
                 onPress: () => open(id, noAccount ? provisioner.credentialPurposes?.[0]?.purpose.purpose : undefined),
-                // Nothing to start while this provisioner's check could not be read.
-                ...(unreadable ? { disabled: true } : {}) } }];
+                // Retained checks describe the card; the current controller catalog admits the handoff.
+                ...(catalog.error || !catalog.binding?.isCurrent() || unreadable ? { disabled: true } : {}) } }];
     });
     const controllerName = scope.machine ? getMachineDisplayName(scope.machine) ?? scope.machine.id : '';
     const observedMachines = React.useMemo(() => scope.machine ? [scope.machine] : [], [scope.machine]);

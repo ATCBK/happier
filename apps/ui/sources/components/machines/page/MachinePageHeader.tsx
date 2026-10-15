@@ -121,7 +121,7 @@ export function composeMachinePageHeaderFacts(input: Readonly<{
     const cliVersion = machine.daemonState?.cliVersion;
     if (cliVersion) facts.push({ key: 'cli', text: t('machineDetailPage.cliVersionFact', { version: cliVersion }) });
     if (input.replacedByMachineLabel) {
-        facts.push({ key: 'replaced', text: t('machineDetailPage.replacedByFact', { machine: input.replacedByMachineLabel }) });
+        facts.push({ key: 'replaced', text: `${t('machineDetailPage.replacedByFact', { machine: input.replacedByMachineLabel })} ${t('machine.replacementRepair.undoConfirmBody')}` });
     }
     return facts;
 }
@@ -297,7 +297,7 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
     const machineListByServerId = useMachineListByServerId();
     const machine = target.machine;
     const machineId = target.machineId;
-    const execution = useMountedActionExecution(target.serverId);
+    const execution = useMountedActionExecution(target.serverId, { openOnRequest: true });
     const [replacingMachineId, setReplacingMachineId] = React.useState<string | null>(null);
     const [isClearingReplacement, setIsClearingReplacement] = React.useState(false);
     const allMachines = React.useMemo(
@@ -320,15 +320,9 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
         }));
     }, [accountScope, allMachines, machineId, nowMs, reachabilityRevision]);
 
-    const replace = React.useCallback((replacementMachineId: string, label: string) => {
+    const replace = React.useCallback((replacementMachineId: string) => {
         if (!machineId || replacingMachineId) return;
         fireAndForget((async () => {
-            const confirmed = await Modal.confirm(
-                t('machine.replacementRepair.confirmTitle'),
-                t('machine.replacementRepair.confirmBody', { machine: label }),
-                { confirmText: t('machine.replacementRepair.confirmAction') },
-            );
-            if (!confirmed) return;
             setReplacingMachineId(replacementMachineId);
             try {
                 const outcome = await execution.execute('machines.replacement.set', {
@@ -336,7 +330,7 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
                     machineId,
                     replacementMachineId,
                     confirmActiveOldMachine: machine?.active === true,
-                }, { presentUserConfirmation: { actionId: 'machines.replacement.set' } });
+                });
                 const result = outcome.ok ? MachineReplacementOutputSchema.parse(outcome.result) : null;
                 if (!result?.ok) {
                     await Modal.alertAsync(t('common.error'), t('machine.replacementRepair.error'));
@@ -369,17 +363,11 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
     const clear = React.useCallback(() => {
         if (!machineId || isClearingReplacement) return;
         fireAndForget((async () => {
-            const confirmed = await Modal.confirm(
-                t('machine.replacementRepair.undoConfirmTitle'),
-                t('machine.replacementRepair.undoConfirmBody'),
-                { confirmText: t('machine.replacementRepair.undoAction') },
-            );
-            if (!confirmed) return;
             setIsClearingReplacement(true);
             try {
                 const outcome = await execution.execute('machines.replacement.clear', {
                     serverId: target.serverId, machineId,
-                }, { presentUserConfirmation: { actionId: 'machines.replacement.clear' } });
+                });
                 const result = outcome.ok ? MachineReplacementOutputSchema.parse(outcome.result) : null;
                 if (!result?.ok) {
                     await Modal.alertAsync(t('common.error'), t('machine.replacementRepair.error'));

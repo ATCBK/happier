@@ -57,7 +57,7 @@ export const MachineDetailsSection = React.memo(function MachineDetailsSection(p
     const machineId = machine.id;
     const machineServerId = props.serverId;
     const metadata = machine.metadata;
-    const stopExecution = useMountedActionExecution(machineServerId);
+    const stopExecution = useMountedActionExecution(machineServerId, { openOnRequest: true });
     const expectedSettingsScope = useAccountSettingsScope();
     const providerCatalog = useProviderCatalog(expectedSettingsScope);
     const [isRevokingMachine, setIsRevokingMachine] = React.useState(false);
@@ -73,16 +73,9 @@ export const MachineDetailsSection = React.memo(function MachineDetailsSection(p
         if (isRevokingMachine) return;
         if (machine.revokedAt && !providerCleanupPending) return;
         fireAndForget((async () => {
-            const confirmed = await Modal.confirm(
-                t('machine.actions.removeMachine'),
-                t('machine.actions.removeMachineConfirmBody'),
-                { confirmText: t('common.remove'), destructive: true },
-            );
-            if (!confirmed) return;
             setIsRevokingMachine(true);
             try {
-                const execution = await stopExecution.execute('machines.remove', { serverId: machineServerId, machineId },
-                    { presentUserConfirmation: { actionId: 'machines.remove' } });
+                const execution = await stopExecution.execute('machines.remove', { serverId: machineServerId, machineId });
                 const result = execution.ok ? MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS['machines.remove'].parse(execution.result) : null;
                 if (!result?.ok) {
                     if (result && 'machineRevoked' in result && result.machineRevoked) {
@@ -108,7 +101,7 @@ export const MachineDetailsSection = React.memo(function MachineDetailsSection(p
         ? t('settingsProviders.errors.machineCleanupPendingDescription')
         : machine.revokedAt
             ? t('machine.actions.removeMachineAlreadyRemoved')
-            : t('machine.actions.removeMachineSubtitle');
+            : t('machine.actions.removeMachineConfirmBody');
 
     return (
         <>

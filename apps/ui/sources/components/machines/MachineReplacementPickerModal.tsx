@@ -27,7 +27,7 @@ export function MachineReplacementPickerModal(props: MachineReplacementPickerMod
                         key={candidate.id}
                         testID={`machine-replacement-picker-candidate:${candidate.id}`}
                         title={candidate.label}
-                        subtitle={candidate.subtitle}
+                        subtitle={`${candidate.subtitle}\n${t('machine.replacementRepair.confirmBody', { machine: candidate.label })}`}
                         subtitleLines={0}
                         detail={candidate.online ? t('status.online') : t('status.offline')}
                         showChevron={false}
