@@ -5000,6 +5000,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     };
     const resolveTargetActionAuthorizationFacts = (
         action: ResolvedTargetAction,
+        purpose?: 'declaration',
     ): TargetActionAuthorizationFacts => {
         const activationTarget = resolveExactActivationTarget(action.pluginId);
         const current = activationTarget?.manifest.contributes.actions.some(
@@ -5010,6 +5011,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
         return resolvePluginFinalPolicyAuthorizationFacts({
             pluginId: action.pluginId,
             current,
+            // Discovery consumes the admitted declaration, not an applied handler.
+            // Invocation omits this purpose and retains exact applied eligibility.
+            ...(purpose ? { purpose } : {}),
             resourceSelections: resolveTargetActionResourceSelectionFacts(action),
         });
     };

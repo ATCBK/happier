@@ -53,6 +53,18 @@ function withInput(overrides: Partial<PluginActionPolicyInput>): PluginActionPol
 }
 
 describe('evaluatePluginActionPolicy', () => {
+  it('admits only a current cold declaration while preserving availability and resource policy', () => {
+    const declaration = withInput({ generation: { ...allowed.generation, appliedGeneration: null, targetGenerationMode: 'declared' } });
+    expect(evaluatePluginActionPolicy(declaration)).toMatchObject({ outcome: 'visible' });
+    expect(evaluatePluginActionPolicy({ ...declaration, generation: { ...declaration.generation, desiredGeneration: 'other' } }))
+      .toMatchObject({ outcome: 'unavailable', code: 'plugin_action_generation_retired' });
+    expect(evaluatePluginActionPolicy({ ...declaration, availability: { status: 'disabled', code: 'disabled' } }))
+      .toMatchObject({ outcome: 'disabled', code: 'disabled' });
+    expect(evaluatePluginActionPolicy({ ...declaration, resourceSelections: [{ id: 'account', required: true }] }))
+      .toMatchObject({ outcome: 'denied', code: 'plugin_action_resource_not_selected' });
+    expect(evaluatePluginActionPolicy({ ...declaration, generation: { ...declaration.generation, targetGenerationMode: 'current' } }))
+      .toMatchObject({ outcome: 'unavailable', code: 'plugin_action_generation_not_applied' });
+  });
   it('treats an exact admitted current generation as the package-trust fact', () => {
     expect(evaluatePluginActionPolicy(allowed)).toEqual({
       outcome: 'visible',

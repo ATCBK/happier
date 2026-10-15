@@ -499,7 +499,8 @@ export const PluginActionPresentUserAuthorizationFactsSchema = lazyZodSchema(() 
 }));
 
 export type PluginActionPresentUserAuthorizationFacts = Readonly<
-  Omit<PluginActionPolicyInput, 'availability' | 'confirmation'>
+  Omit<PluginActionPolicyInput, 'availability' | 'confirmation' | 'generation'>
+  & { generation: Readonly<z.infer<typeof PluginActionPresentUserAuthorizationFactsSchema>['generation']> }
 >;
 
 /**

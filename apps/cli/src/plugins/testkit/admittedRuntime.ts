@@ -19,6 +19,8 @@ import { resolvePluginStorePaths, PLUGIN_MANIFEST_RELATIVE_PATH } from '@/plugin
 import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
 import { assertContainedRegularGenerationFile, readCurrentCommittedPluginGenerations } from '@/plugins/store/registry/generationStore';
 import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
+import { resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 
 type RuntimeOptions = Omit<
     NonNullable<Parameters<typeof resolveExecutablePluginRuntimeRegistry>[0]>,
@@ -128,6 +130,8 @@ export async function createAuthoredAdmittedPluginRuntimeFixture(params: Readonl
     happyHomeDir?: string;
     controller?: PluginReloadController;
     runtimeOptions?: RuntimeOptions;
+    /** Omit the explicit plugin scope to exercise normal demand-only startup. */
+    coldStart?: boolean;
 }>): Promise<AuthoredAdmittedPluginRuntimeFixture> {
     const directory = await mkdtemp(join(tmpdir(), 'happier-authored-plugin-runtime-'));
     const happyHomeDir = params.happyHomeDir ?? join(directory, 'home');
@@ -196,7 +200,13 @@ export async function createAuthoredAdmittedPluginRuntimeFixture(params: Readonl
             ...(params.controller ? { controller: params.controller } : {}),
             runtimeOptions: {
                 ...params.runtimeOptions,
-                pluginIds: params.runtimeOptions?.pluginIds ?? manifests.map((manifest) => manifest.id),
+                // Use the installed fixture's real declaration producer without
+                // activating unrelated bundled background services. Omit the
+                // plugin-id scope so normal demand-only activation remains real.
+                ...(params.coldStart && !params.runtimeOptions?.contributes ? {
+                    contributes: createResolvedContributionRegistry(await resolvePluginContributes({ happyHomeDir })),
+                } : {}),
+                ...(params.coldStart ? {} : { pluginIds: params.runtimeOptions?.pluginIds ?? manifests.map((manifest) => manifest.id) }),
                 preparedActivationGraphsByPluginId,
             },
         });

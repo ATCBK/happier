@@ -53,6 +53,7 @@ import {
 import type { ConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { createPluginActionCallerMaterializationFixture } from './services/actionCaller.testkit';
 import type { TargetActionAuthorizationFacts } from '../policy/evaluate';
+import { resolvePluginFinalPolicyAuthorizationFacts } from '../policy/facts';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '../resolveExecutablePluginRuntimeRegistry';
 import { createPluginReloadController } from '../reload/controller';
 import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '../reload/runtimeLease';
@@ -61,6 +62,8 @@ import { createCommittedContributedActionDefinitionLister, createCommittedContri
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createUnavailablePluginServices } from './services/unavailable';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { PLUGIN_MANIFEST as TRIAGE_MANIFEST } from '../../../../../../packages/plugins/triage/src/manifest.js';
+import { withPluginInvocationAccountStorageAvailability } from './services/unavailable';
 
 type BuildRegistryParams = Omit<
     Parameters<typeof buildTargetActionInvocationRegistry>[0],
@@ -73,7 +76,7 @@ type BuildRegistryParams = Omit<
         pluginId: string;
         occurrenceId: string;
         qualifiedId: string;
-    }>) => TargetActionAuthorizationFacts;
+    }>, purpose?: 'declaration') => TargetActionAuthorizationFacts;
 }>;
 
 function buildRegistry(
@@ -527,6 +530,34 @@ function fact(overrides: Partial<PluginTargetActivationFact> = {}): PluginTarget
 }
 
 describe('buildTargetActionInvocationRegistry', () => {
+    it.each(['actions/read-v1', 'actions/administer-v1'])('discovers the actual Triage %s declaration cold while retaining Account storage policy', async (localId) => {
+        const declaration = TRIAGE_MANIFEST.contributes.actions.find(action => action.id === localId);
+        if (!declaration) throw new Error(`Missing Triage declaration ${localId}`);
+        const pluginManifest = normalizePluginManifestV2(createPluginManifestV2Fixture({ id: 'acme.alpha',
+            hostAccess: TRIAGE_MANIFEST.hostAccess, contributes: { actions: [declaration] } }));
+        const contributes = registry({ pluginManifest });
+        let accountAvailable = true;
+        const resolveHostPolicy = createTargetActionHostPolicyResolver({
+            createServiceBinding: (generation, id) => withPluginInvocationAccountStorageAvailability(
+                createLoggerAvailablePluginInvocationServiceBinding(generation, id), accountAvailable ? 'available' : 'unavailable'),
+        });
+        const target = buildRegistry({ contributes, targetRegistrations: [], targetActivationFacts: [], resolveHostPolicy,
+            resolveAuthorizationFacts: (_action, purpose) => resolvePluginFinalPolicyAuthorizationFacts({
+                pluginId: 'acme.alpha',
+                current: { occurrenceId: '7' as PluginRuntimeOccurrenceId, desiredOccurrenceId: '7' as PluginRuntimeOccurrenceId,
+                    appliedOccurrenceId: null, applied: false, selectedAccess: [],
+                    sourceCustody: { kind: 'managed', immutableGenerationId: 'immutable-alpha', installSource: 'archive' } },
+                ...(purpose ? { purpose } : {}),
+            }),
+        });
+        expect(target.has('acme.alpha', localId)).toBe(false);
+        expect(target.evaluateCatalogPolicy('acme.alpha', localId)).toMatchObject({ outcome: 'visible' });
+        accountAvailable = false;
+        expect(target.evaluateCatalogPolicy('acme.alpha', localId)).toMatchObject({
+            outcome: 'unavailable', code: 'plugin_host_access_service_unavailable',
+        });
+    });
+
     it.each(['client', 'daemon'] as const)('keeps a current %s Action discoverable before daemon activation', async (executionTarget) => {
         const contributes = registry({ pluginManifest: manifest({
             surfaces: ['agent', 'mcp', 'cli'],
@@ -546,7 +577,12 @@ describe('buildTargetActionInvocationRegistry', () => {
             targetActivationFacts: [],
             readCurrentPluginOccurrenceId: () => occurrenceId,
             readCurrentPluginSourceCustody: () => currentSourceCustody,
-            resolveAuthorizationFacts: () => authorizationFacts({ desiredGeneration: admitted ? '7' : null }),
+            resolveAuthorizationFacts: (_action, purpose) => resolvePluginFinalPolicyAuthorizationFacts({
+                pluginId: 'acme.alpha',
+                current: { occurrenceId, sourceCustody, desiredOccurrenceId: admitted ? occurrenceId : null,
+                    appliedOccurrenceId: null, applied: false, selectedAccess: [] },
+                ...(purpose ? { purpose } : {}),
+            }),
         });
         // These surfaces came through the real manifest and registry normalizers.
         expect(contributes.actions[0]?.definition).toMatchObject({

@@ -62,7 +62,9 @@ export function resolveRequiredPluginNetworkOrigins(params: Readonly<{
 export function resolvePluginFinalPolicyAuthorizationFacts(params: Readonly<{
   pluginId: string;
   current: PluginFinalPolicyCurrentRuntime | null;
-  targetGenerationMode?: PluginFinalPolicyTargetGenerationMode;
+  /** Declaration reads use the selected occurrence; execution requires application. */
+  purpose?: 'declaration';
+  targetGenerationMode?: Exclude<PluginFinalPolicyTargetGenerationMode, 'declared'>;
   resourceSelections?: PluginFinalPolicyAuthorizationFacts['resourceSelections'];
   scopedGrants?: PluginFinalPolicyAuthorizationFacts['scopedGrants'];
   operatingSystemAuthorization?: PluginFinalPolicyAuthorizationFacts['operatingSystemAuthorization'];
@@ -77,7 +79,7 @@ export function resolvePluginFinalPolicyAuthorizationFacts(params: Readonly<{
       targetGeneration,
       desiredGeneration,
       appliedGeneration,
-      targetGenerationMode: params.targetGenerationMode ?? 'current',
+      targetGenerationMode: params.purpose === 'declaration' ? 'declared' : params.targetGenerationMode ?? 'current',
     }),
     resourceSelections: Object.freeze([...(params.resourceSelections ?? [])]),
     scopedGrants: Object.freeze([...(params.scopedGrants ?? [])]),

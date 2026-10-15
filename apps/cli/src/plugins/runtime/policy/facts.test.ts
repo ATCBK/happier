@@ -23,6 +23,22 @@ const current = Object.freeze({
 });
 
 describe('resolvePluginFinalPolicyAuthorizationFacts', () => {
+  it('admits a current cold declaration while execution still requires the applied occurrence', () => {
+    const cold = { ...current, appliedOccurrenceId: null, applied: false };
+    const declaration = resolvePluginFinalPolicyAuthorizationFacts({
+      pluginId: 'acme.plugin', current: cold, purpose: 'declaration',
+    });
+    const evaluate = (facts: typeof declaration) => evaluatePluginFinalPolicy({
+      ...facts, serviceAvailability: [], currentIntent: 'notRequired',
+    });
+    expect(declaration.generation.appliedGeneration).toBeNull();
+    expect(evaluate(declaration)).toMatchObject({ outcome: 'visible' });
+    expect(evaluate(resolvePluginFinalPolicyAuthorizationFacts({ pluginId: 'acme.plugin', current: cold })))
+      .toMatchObject({ outcome: 'unavailable', code: 'plugin_final_generation_not_applied' });
+    expect(evaluate(resolvePluginFinalPolicyAuthorizationFacts({
+      pluginId: 'acme.plugin', current: { ...cold, desiredOccurrenceId: null }, purpose: 'declaration',
+    }))).toMatchObject({ outcome: 'unavailable', code: 'plugin_final_generation_retired' });
+  });
   it('binds every consumer to the direct applied generation without package-trust copies', () => {
     const authorization = resolvePluginFinalPolicyAuthorizationFacts({
       pluginId: 'acme.plugin',

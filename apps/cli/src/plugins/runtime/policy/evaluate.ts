@@ -109,8 +109,12 @@ export function projectTargetActionPresentUserAuthorizationFacts(
   authorization: TargetActionAuthorizationFacts,
   serviceAvailability: PluginActionPolicyInput['serviceAvailability'],
 ) {
+  const { targetGenerationMode, ...generation } = authorization.generation;
+  if (targetGenerationMode === 'declared') {
+    throw new Error('Declaration policy cannot authorize Action execution');
+  }
   return {
-    generation: { ...authorization.generation },
+    generation: { ...generation, ...(targetGenerationMode ? { targetGenerationMode } : {}) },
     resourceSelections: authorization.resourceSelections.map((selection) => ({ ...selection })),
     scopedGrants: authorization.scopedGrants.map((grant) => ({
       ...grant,

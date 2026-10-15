@@ -9,14 +9,14 @@ export type PluginFinalPolicyScope = Readonly<{
 }>;
 
 export type PluginFinalPolicyRequirementStatus = 'available' | 'denied' | 'unavailable' | 'notApplicable';
-export type PluginFinalPolicyTargetGenerationMode = 'current' | 'retained';
+export type PluginFinalPolicyTargetGenerationMode = 'current' | 'retained' | 'declared';
 
 export type PluginFinalPolicyInput = Readonly<{
   generation: Readonly<{
     targetGeneration: string;
     desiredGeneration: string | null;
     appliedGeneration: string | null;
-    /** Retained operations keep their target declaration while current policy narrows it. */
+    /** Declared reads require current admission; current/retained execution also requires application. */
     targetGenerationMode?: PluginFinalPolicyTargetGenerationMode;
   }>;
   resourceSelections: readonly Readonly<{
@@ -88,8 +88,9 @@ export function evaluatePluginFinalPolicy(input: PluginFinalPolicyInput): Plugin
     return decision(input, 'unavailable', 'plugin_final_generation_retired');
   }
   if (
-    input.generation.appliedGeneration === null
-    || input.generation.targetGeneration !== input.generation.appliedGeneration
+    input.generation.targetGenerationMode !== 'declared'
+    && (input.generation.appliedGeneration === null
+      || input.generation.targetGeneration !== input.generation.appliedGeneration)
   ) {
     return decision(input, 'unavailable', 'plugin_final_generation_not_applied');
   }

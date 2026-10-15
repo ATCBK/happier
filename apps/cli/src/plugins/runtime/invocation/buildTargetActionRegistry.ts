@@ -132,7 +132,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
     targetActivationFacts?: readonly PluginTargetActivationFact[];
     /** Reads mutable generation facts at each refresh/lazy activation boundary. */
     readTargetActivationFacts?: () => readonly PluginTargetActivationFact[];
-    resolveAuthorizationFacts: (action: ResolvedTargetAction) => TargetActionAuthorizationFacts;
+    resolveAuthorizationFacts: (action: ResolvedTargetAction, purpose?: 'declaration') => TargetActionAuthorizationFacts;
     /** Read-only runtime final-policy owner; this registry only delegates. */
     resolvePresentUserGatePolicy?: (
         pluginId: string,
@@ -274,18 +274,23 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
         const actionRegistryKey = buildQualifiedPluginContributionKey(createPluginContributionIdentity({ pluginId, localId }));
         const resolvedAction = params.contributes.actionsById?.get(actionRegistryKey);
         let catalogAction: Pick<ReturnType<typeof readActions>[number], 'definition' | 'occurrenceId' | 'sourceCustody'> | undefined;
-        if (resolvedAction?.definition.execution?.target === 'client') {
-            // Client handlers belong to the answering UI, not daemon activation.
-            // Catalog visibility still uses the same current occurrence and policy owner.
+        if (resolvedAction) {
+            // Discovery consumes admitted declarations. Daemon handlers activate
+            // on invocation; client handlers belong to the answering UI.
             const manifest = params.contributes.activationTargets.find((target) => target.pluginId === pluginId)?.manifest;
             const declaration = manifest?.contributes.actions.find((action) => action.id === localId);
             const occurrenceId = params.readCurrentPluginOccurrenceId?.(pluginId);
             const sourceCustody = params.readCurrentPluginSourceCustody?.(pluginId);
             if (
-                !manifest || declaration?.execution.target !== 'client'
+                !manifest || !declaration || declaration.execution.target !== resolvedAction.definition.execution?.target
                 || resolvedAction.pluginId !== pluginId || resolvedAction.definition.id !== localId
                 || occurrenceId == null || sourceCustody == null
             ) return null;
+            const activationFacts = params.readTargetActivationFacts?.() ?? params.targetActivationFacts;
+            // No fact is a cold declaration; an explicit inactive fact for this
+            // occurrence still suppresses a daemon contribution.
+            if (declaration.execution.target === 'daemon' && activationFacts?.some(fact =>
+                fact.pluginId === pluginId && fact.occurrenceId === occurrenceId && fact.status !== 'active')) return null;
             catalogAction = {
                 occurrenceId,
                 sourceCustody,
@@ -299,10 +304,6 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
                     }),
                 },
             };
-        } else {
-            catalogAction = readActions().find((candidate) => (
-                candidate.pluginId === pluginId && candidate.localId === localId
-            ));
         }
         if (!catalogAction?.sourceCustody) return null;
         const availability = resolveTargetActionAvailability({
@@ -341,7 +342,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
             }
             return evaluateTargetActionCatalogPolicy({
                 action,
-                authorizationFacts: params.resolveAuthorizationFacts(action),
+                authorizationFacts: params.resolveAuthorizationFacts(action, 'declaration'),
             });
         },
         ...(params.resolvePresentUserGatePolicy

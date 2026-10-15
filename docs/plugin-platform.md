@@ -35,6 +35,13 @@ admits their current declaration without synthesizing a daemon activation.
 Consumer retirement fences their Voice provider lifecycle through the existing
 occurrence owner.
 
+Action discovery also admits a cold daemon declaration through the shared final
+policy facts owner. Declaration policy requires the selected current occurrence
+and source custody, and still enforces inactive activation facts, HostAccess and
+availability. It does not claim an applied handler or activate plugin code.
+Invocation demands activation and uses applied execution policy; declaration
+facts cannot become present-user execution authorization.
+
 [`definePlugin`](../packages/plugin-sdk/src/definePlugin.ts) is the code-defined author path. It projects a portable manifest and compiles registration callbacks into the named `activate(api)` ABI declared in [`activation.ts`](../packages/plugin-sdk/src/activation.ts). Raw host-generated `contributes` is not an additional `definePlugin` author input.
 
 The canonical manifest schema and normalizer remain Protocol/platform-owned. [`manifest/v2.ts`](../packages/protocol/src/plugins/manifest/v2.ts) admits runtime API version 1 and an **optional** non-wildcard `engines.happier` range. Host/runtime ABI admission and package SemVer are separate contracts; do not infer a host compatibility range from a package version or source build identity. See [protocol evolution](compatibility.md#sdk-protocol-evolution).
