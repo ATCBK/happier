@@ -1698,6 +1698,14 @@ RPC is used to send commands over the Socket.IO connection:
 
 This mechanism allows the server and mobile clients to drive local actions without exposing a broad REST surface.
 
+In the current development CLI, live UI permission responses settle through
+`PermissionRequestCoordinator.completeRpcResponse`. The provider resumes and
+response side effects apply only after the existing Agent-state write acknowledges
+request completion. A failed write reaches the RPC caller while the live request
+remains retryable and independent pending requests remain intact. Native and
+automatic decisions, and detached late responses, retain their existing
+non-blocking reconciliation paths.
+
 ## Implementation references
 - CLI entry: `apps/cli/src/index.ts`
 - Daemon: `apps/cli/src/daemon`

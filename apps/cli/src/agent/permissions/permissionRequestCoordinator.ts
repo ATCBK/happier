@@ -290,6 +290,17 @@ export class PermissionRequestCoordinator<TResult> {
         return true;
     }
 
+    async completeRpcResponse(params: Readonly<{
+        context: PermissionRequestCoordinatorContext;
+        completion: PermissionRequestCoordinatorCompletion<TResult>;
+    }>): Promise<boolean> {
+        // A live UI answer must be persisted before the provider can continue. Late answers
+        // retain their existing detached/agent-state reconciliation and decision-cache behavior.
+        return params.context.status === 'live'
+            ? await this.completeResponseWithAck(params)
+            : this.completeResponse(params);
+    }
+
     async completeResponseWithAck(params: Readonly<{
         context: PermissionRequestCoordinatorContext;
         completion: PermissionRequestCoordinatorCompletion<TResult>;
