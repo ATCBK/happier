@@ -14,7 +14,7 @@ import { planSyncActionsFromChanges, plannedChangesAffectUsageQuery } from '@/sy
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
-import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
@@ -1884,6 +1884,43 @@ describe('usage query captured Resource adapter', () => {
       permissions: { pairedDecisionCount: 1, decisionLatencyMs: 200, byAnsweringClient: { ios: 1 } },
     });
     expect(JSON.stringify(result)).not.toContain('never-export-this');
+  });
+
+  it.each([403, 503])('does not publish a partial Agent-time total after one selected Session fails admission (%s)', async status => {
+    let failing = false;
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      const sessionId = request.path === '/v2/sessions/shared' ? 'shared'
+        : request.path === '/v2/sessions/other' ? 'other' : null;
+      if (sessionId) return failing && sessionId === 'shared'
+        ? Response.json({ error: 'unavailable' }, { status })
+        : Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionId,
+          createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
+          metadataVersion: 1, agentStateVersion: 1 }) });
+      if (request.path === '/v1/sessions/shared/turns' || request.path === '/v1/sessions/other/turns') {
+        const id = request.path.split('/')[3]!;
+        return Response.json({ v: 1, sessionId: id, updatedAt: 900, turns: [
+          { turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100,
+            terminalAt: id === 'shared' ? 400 : 700, updatedAt: 900 },
+        ] });
+      }
+      if (request.path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: Object.fromEntries(
+      ['shared', 'other'].map(id => [id, createSessionFixture({ id,
+        serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' })]),
+    ) });
+    const input = { queries: [normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false })] };
+    const settled = await readUiUsageQueryBatch(captured, input);
+    expect(settled.results[0]?.howYouWork?.intervals?.agentTimeMs).toBe(900);
+    failing = true;
+    publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['shared'], { changeKinds: ['session'], usageQueryAffects: true });
+    const replacement = await readUiUsageQueryBatch(captured, input, undefined, settled);
+    expect(replacement.results[0]?.howYouWork?.intervals, 'a surviving Session is not the full selected total').toBeNull();
+    failing = false;
+    const recovered = await readUiUsageQueryBatch(captured, input, undefined, replacement);
+    expect(recovered.results[0]?.howYouWork?.intervals?.agentTimeMs).toBe(900);
   });
 
   it('shares private Session evidence while seq is unchanged and isolates consumer retirement', async () => {

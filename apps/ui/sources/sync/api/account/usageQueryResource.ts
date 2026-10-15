@@ -500,10 +500,19 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
         const openedMessages = new Map([...selected].flatMap(([id, entry]) => entry?.openedMessages !== undefined
             ? [[id, entry.openedMessages] as const] : []));
         const completeMessageSessionIds = new Set([...selected].flatMap(([id, entry]) => entry?.completeMessageCoverage ? [id] : []));
-        return { query, asOfMs, sessions, detail: projectUsageQueryWorkEvidence({ query, scope: context.accountLifetime.scope,
+        const detail = projectUsageQueryWorkEvidence({ query, scope: context.accountLifetime.scope,
             currentScope: query.session === null ? active?.scope ?? null : context.accountLifetime.scope,
             isCurrent: context.accountLifetime.isCurrent() && (query.session !== null || active?.isCurrent() === true), sessions, openedMessages,
-            completeMessageSessionIds, contributions: byQuery.get(getUsageQueryKey(query)) }) };
+            completeMessageSessionIds, contributions: byQuery.get(getUsageQueryKey(query)) });
+        // A refused, failed or superseded Session read cannot turn the remaining
+        // lanes into a complete Agent-time total. Withdraw the aggregate until
+        // every selected Session is admitted; never retain withdrawn private facts.
+        const completeIntervals = (idsByQuery.get(getUsageQueryKey(query)) ?? []).every(id => {
+            const session = selected.get(id)?.session;
+            return session && session.access?.capabilities.readTranscript !== false
+                && isSessionContentReadable(readSessionContentAvailability(session));
+        });
+        return { query, asOfMs, sessions, detail: completeIntervals ? detail : { ...detail, facts: undefined, activityAtMs: undefined } };
     });
 }
 
