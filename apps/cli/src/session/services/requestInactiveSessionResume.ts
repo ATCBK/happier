@@ -14,6 +14,7 @@ import { awaitSpawnedSessionId } from './awaitSpawnedSessionId';
 import type { ActionExecutorContext, SessionInitialGoalRequestV1 } from '@happier-dev/protocol';
 import { randomUUID } from 'node:crypto';
 import { logger } from '@/ui/logger';
+import { resolveSessionStartupTimeoutMs } from '@/daemon/spawn/waitForSessionWebhook';
 
 const resumeDiagnosticCauseCodes = new Set<string>([
   ...Object.values(SPAWN_SESSION_ERROR_CODES),
@@ -235,7 +236,8 @@ export async function requestInactiveSessionResume(params: Readonly<{
           method,
           requestId: spawnRpcRequestId,
           request,
-          ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+          // Spawn belongs to startup, which can outlive the generic RPC cutoff.
+          timeoutMs: resolveSessionStartupTimeoutMs(params.timeoutMs),
           ...(params.signal ? { signal: params.signal } : {}),
           ...(params.externalAction ? { externalAction: params.externalAction } : {}),
         });

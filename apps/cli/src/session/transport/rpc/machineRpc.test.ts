@@ -95,6 +95,7 @@ import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sess
 import { openSessionRequesterBootstrapRpcRequestV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import * as persistence from '@/persistence';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { createManagedGuestActivityTransport } from '@/machines/managed/managedActivityTransport';
@@ -1554,7 +1555,7 @@ describe('callMachineRpc', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('correlates a stopped Session resume refusal with the exact emitted RPC before a late launch reply', async () => {
+  it.each(['success', 'cancelled', 'deadline'] as const)('binds a stopped Session resume to its startup lifetime without replay (%s)', async (outcome) => {
     vi.useFakeTimers();
     const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     axiosGet.mockResolvedValueOnce({ data: { machine: { storageMode: 'plain', id: 'machine-plain',
@@ -1565,8 +1566,11 @@ describe('callMachineRpc', () => {
       setTimeout(() => { replied = true; ack({ ok: true, result: { type: 'success', sessionId: 'stopped-session' } }); }, 28_120);
     });
     let result: Awaited<ReturnType<typeof requestInactiveSessionResume>> | undefined;
+    const cancellation = new AbortController();
     const pending = requestInactiveSessionResume({ credentials: { token: 'plain-token', encryption: null },
       sessionId: 'stopped-session', requestId: 'workflow:own-run:own-child:session-ready', waitForReady: true,
+      signal: cancellation.signal,
+      ...(outcome === 'deadline' ? { timeoutMs: 28_000 } : {}),
       rawSession: createSessionRecordFixture({ id: 'stopped-session', active: false, machineId: 'machine-plain', path: '/repo' }),
       metadata: { machineId: 'machine-plain', path: '/repo', claudeSessionId: 'native-session',
         runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } },
@@ -1575,22 +1579,62 @@ describe('callMachineRpc', () => {
       await vi.advanceTimersByTimeAsync(19_999);
       expect(result).toBeUndefined();
       await vi.advanceTimersByTimeAsync(1);
-      await pending;
-      expect(result).toMatchObject({ ok: false, code: 'timeout' });
+      expect(result).toBeUndefined();
       expect(replied).toBe(false);
       const emitted = socket.emit.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CALL)?.[1];
       expect(emitted).toMatchObject({ method: `machine-plain:${RPC_METHODS.SPAWN_HAPPY_SESSION}` });
-      expect(diagnostic).toHaveBeenCalledWith('[SessionResume] Readiness refused', expect.objectContaining({
-        requestId: 'workflow:own-run:own-child:session-ready', spawnRpcRequestId: emitted.requestId,
-        phase: 'spawn_rpc', cause: 'MACHINE_RPC_TIMEOUT', elapsedMs: 20_000, cancelled: false,
-      }));
+      if (outcome === 'cancelled') cancellation.abort();
       await vi.advanceTimersByTimeAsync(8_120);
+      await pending;
       expect(replied).toBe(true);
-      expect(result).toMatchObject({ ok: false, code: 'timeout' });
+      if (outcome === 'success') {
+        expect(result).toEqual({ ok: true });
+        expect(diagnostic).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ ok: false, code: outcome === 'deadline' ? 'timeout' : 'resume_failed' });
+        expect(diagnostic).toHaveBeenCalledWith('[SessionResume] Readiness refused', expect.objectContaining({
+          requestId: 'workflow:own-run:own-child:session-ready', spawnRpcRequestId: emitted.requestId,
+          phase: 'spawn_rpc', cancelled: outcome === 'cancelled',
+          ...(outcome === 'deadline' ? { cause: 'MACHINE_RPC_TIMEOUT', elapsedMs: 28_000 } : {}),
+        }));
+      }
       expect(socket.emit.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CALL)).toHaveLength(1);
     } finally {
+      cancellation.abort();
       await pending;
       diagnostic.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['replay', 'memory'] as const)('keeps the containing %s operation open beyond the generic RPC cutoff', async (operation) => {
+    const settings = await persistence.readSettings();
+    const settingsRead = vi.spyOn(persistence, 'readSettings').mockResolvedValue({ ...settings, machineId: 'machine-plain' });
+    vi.useFakeTimers();
+    const credentials = { token: 'plain-token', encryption: null };
+    axiosGet.mockResolvedValueOnce({ data: { machine: { storageMode: 'plain', id: 'machine-plain',
+      dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } } });
+    const receipt = operation === 'replay' ? { type: 'success', sessionId: 'continued-session' } : { ok: true };
+    socket.emit.mockImplementationOnce((_event, _payload, ack) => {
+      setTimeout(() => ack({ ok: true, result: receipt }), 28_120);
+    });
+    const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId: '', mode: 'plain', ctx: null });
+    const pending = (operation === 'replay'
+      ? deps.sessionContinueWithReplay!({ directory: '/repo',
+          backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
+          replay: { previousSessionId: 'stopped-session' } })
+      : deps.daemonMemoryEnsureUpToDate({ machineId: 'machine-plain', sessionId: 'stopped-session' })
+    ).then(value => ({ ok: true, value }), error => ({ ok: false, error }));
+    try {
+      await vi.advanceTimersByTimeAsync(28_120);
+      expect(await pending).toEqual({ ok: true, value: receipt });
+      const calls = socket.emit.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CALL);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[1]).toMatchObject({ method: `machine-plain:${operation === 'replay'
+        ? RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY : RPC_METHODS.DAEMON_MEMORY_ENSURE_UP_TO_DATE}` });
+    } finally {
+      await pending;
+      settingsRead.mockRestore();
       vi.useRealTimers();
     }
   });

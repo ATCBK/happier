@@ -1,11 +1,10 @@
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-
-const SESSION_HANDOFF_TARGET_RESUME_RPC_TIMEOUT_MS = 5 * 60_000;
+import { resolveSessionStartupTimeoutMs } from '@/daemon/spawn/waitForSessionWebhook';
 
 export function buildTrackedSessionHandoffMachineCall<T extends Readonly<{ method: string }>>(
   input: T,
 ): T & Readonly<{ timeoutMs?: number }> {
   return input.method === RPC_METHODS.SPAWN_HAPPY_SESSION
-    ? { ...input, timeoutMs: SESSION_HANDOFF_TARGET_RESUME_RPC_TIMEOUT_MS }
+    ? { ...input, timeoutMs: resolveSessionStartupTimeoutMs() }
     : input;
 }
