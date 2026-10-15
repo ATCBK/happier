@@ -1,4 +1,5 @@
 import { HomeHubLayoutV1Schema, type HomeHubLayoutValue } from '@happier-dev/protocol/home';
+import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
@@ -27,6 +28,7 @@ vi.mock('react-native-reanimated', async () => {
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { HomeLayoutEditor } = await import('./HomeLayoutEditor');
 const { EntityFlatReorderList } = await import('@/components/ui/treeDragDrop/ui/EntityFlatReorder');
+const { EntityDragGripChooser } = await import('@/components/ui/treeDragDrop/ui/EntityDragGripChooser');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { useHomeHubArtifactLayout } = await import('./useHomeHubArtifactLayout');
 const { useHomeHubLayout } = await import('./useHomeHubLayout');
@@ -66,6 +68,67 @@ function storedInstances(artifact: Readonly<{ layout(): { items?: HomeHubLayoutV
 }
 
 describe('Home Customize entity reorder binding', () => {
+    it.each([false, true])('round-trips every mixed Home section through the mounted Move chooser (concurrent add: %s)', async concurrentAdd => {
+        const artifact = createHomeHubArtifactHttpBoundary('account-a');
+        const vitals = (id: string, machineId: string) => ({ kind: 'widget' as const, size: 'small' as const,
+            instance: { v: 1 as const, id, definition: { kind: 'builtin' as const, id: 'machine_vitals' as const },
+                bindings: { machine: { kind: 'value' as const, value: { serverId: 'machine-home', machineId } } } } });
+        const group = (id: string) => ({ kind: 'group' as const, id, width: 'full' as const, frameStyle: 'card' as const,
+            dividers: 'hairline' as const, children: [vitals(`${id}-child`, 'offline-machine')] });
+        const before = HomeHubLayoutV1Schema.parse({ v: 1,
+            order: ['attention', 'first-vitals', 'unavailable-widget', 'start', 'first-group', 'moving-group', 'automations', 'setup', 'last-vitals'],
+            hidden: [], items: [vitals('first-vitals', 'online-machine'),
+                { kind: 'widget', instance: { v: 1, id: 'unavailable-widget',
+                    definition: { kind: 'artifact', artifactId: 'unavailable-definition' }, bindings: {} } },
+                group('first-group'), group('moving-group'), vitals('last-vitals', 'offline-machine')] });
+        artifact.seed(before);
+        let raced = false;
+        restoreActionLoader = await installRealActionExecutorModuleLoader();
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-chooser-preservation.test', accountId: 'account-a', request: async (url, init) => {
+            if (concurrentAdd && !raced && init?.method === 'POST' && new URL(String(url)).pathname === `/v1/artifacts/${artifact.artifactId}`) {
+                raced = true;
+                // A second client's write wins after this Action's read. The real HTTP
+                // boundary advances its CAS, so the chooser must replay on that winner.
+                const wire: unknown = JSON.parse(String(init.body));
+                if (!wire || typeof wire !== 'object') throw new Error('Expected an Artifact write');
+                const competing = { ...before, order: [...before.order, 'concurrent-vitals'],
+                    items: [...before.items, vitals('concurrent-vitals', 'offline-machine')] };
+                const response = await artifact.request(url, { ...init, body: JSON.stringify({ ...wire,
+                    body: encodePlainArtifactStoredContent({ body: JSON.stringify(competing) }) }) });
+                expect(await response.json()).toMatchObject({ success: true });
+            }
+            return artifact.request(url, init);
+        } });
+        const scope = { serverId: connection.home.id, accountId: 'account-a' };
+        storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
+        const screen = await renderScreen(<AccountShell><HomeLayoutEditor presentation="popover" /></AccountShell>);
+        await flushHookEffects({ cycles: 3 });
+        const list = () => screen.root.findByType(EntityFlatReorderList);
+        expect(list().props.binding.items.map((item: { id: string }) => item.id)).toEqual(before.order);
+        const grip = screen.findByTestId('home-layout.moving-group.grip')!;
+        // The real chooser is above its trigger, rather than a consumer-created reorder effect.
+        let chooser = grip.parent;
+        while (chooser && chooser.type !== EntityDragGripChooser) chooser = chooser.parent;
+        if (!chooser) throw new Error('Expected the section grip to belong to the Move chooser');
+        const mountedChooser = chooser;
+        await act(async () => { mountedChooser.props.onOpenChange(true); });
+        const { t } = await import('@/text');
+        const chooserProps: React.ComponentProps<typeof EntityDragGripChooser> = mountedChooser.props;
+        const option = chooserProps.sections.flatMap(section => section.options)
+            .find(entry => entry.label === t('entityDragDrop.preview.moveAbove', { target: t('settingsOverview.homeStartSection') }));
+        if (!option || option.disabled) throw new Error('Expected Move above Start a session to be available');
+        await act(async () => { chooserProps.onSelect(option.id); });
+        await flushHookEffects({ cycles: 3 });
+        const after = HomeHubLayoutV1Schema.parse(artifact.layout());
+        expect(artifact.writes).toHaveLength(concurrentAdd ? 2 : 1);
+        expect(after.order).toEqual(['attention', 'first-vitals', 'unavailable-widget', 'moving-group', 'start', 'first-group', 'automations', 'setup', 'last-vitals',
+            ...(concurrentAdd ? ['concurrent-vitals'] : [])]);
+        expect(new Map(after.items.map(item => [item.kind === 'group' ? item.id : item.instance.id, item])))
+            .toEqual(new Map([...before.items, ...(concurrentAdd ? [vitals('concurrent-vitals', 'offline-machine')] : [])]
+                .map(item => [item.kind === 'group' ? item.id : item.instance.id, item])));
+        expect(after.hidden).toEqual(before.hidden);
+        expect(list().props.binding.items.map((item: { id: string }) => item.id)).toEqual(after.order);
+    });
     it.each([{ kind: 'group', pending: false }, { kind: 'widget', pending: false },
         { kind: 'group', pending: true }, { kind: 'widget', pending: true }] as const)
     ('explains a cold Home failure from the $kind frame rename and retains its draft (pending: $pending)', async ({ kind, pending }) => {
