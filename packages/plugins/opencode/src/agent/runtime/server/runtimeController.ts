@@ -521,6 +521,10 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     nextAssistantHistoryRefreshAtMs = 0;
   };
 
+  const ownsActiveHostTurn = (turnId: string | null): boolean => (
+    turnId !== null && state.turnInFlight && state.activeTurnId === turnId
+  );
+
   const observeCurrentTurnMessageId = (messageId: string): void => {
     if (!state.turnInFlight || !messageId) return;
     state.currentTurnObservedMessageIds.add(messageId);
@@ -611,10 +615,12 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
 
   const adoptCurrentProviderUserMessageFromAuthoritativeInventory = async (
     messages: readonly unknown[],
+    hostTurnId: string,
   ): Promise<
     | Readonly<{ status: 'resolved'; providerUserMessageId: string }>
     | Readonly<{ status: 'missing' | 'ambiguous' }>
   > => {
+    if (!ownsActiveHostTurn(hostTurnId)) return { status: 'missing' };
     const resolution = resolveCurrentProviderUserMessageAnchor(messages);
     if (resolution.status !== 'resolved') return resolution;
     const projection = classifyOpenCodeMessageForProjection(messages[resolution.index]);
@@ -624,6 +630,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     state.currentTurnProviderUserMessageId = projection.messageId;
     state.currentTurnProviderUserMessageIds.add(projection.messageId);
     await markProviderUserMessageAsHappierAuthored(projection.messageId);
+    if (!ownsActiveHostTurn(hostTurnId)) return { status: 'missing' };
     observeCurrentTurnMessageId(projection.messageId);
     return {
       status: 'resolved',
@@ -633,8 +640,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
 
   const markCurrentProviderUserMessageFromHistoryBestEffort = async (
     reason: string,
+    hostTurnId: string,
   ): Promise<void> => {
-    if (!state.turnInFlight || !state.providerSessionId) return;
+    if (!ownsActiveHostTurn(hostTurnId) || !state.providerSessionId) return;
     let messages: readonly unknown[];
     try {
       messages = await client.sessionMessages({ sessionId: state.providerSessionId });
@@ -645,7 +653,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       });
       return;
     }
-    await adoptCurrentProviderUserMessageFromAuthoritativeInventory(messages);
+    await adoptCurrentProviderUserMessageFromAuthoritativeInventory(messages, hostTurnId);
   };
 
   type AssistantHistoryProjectionResult = Readonly<{
@@ -668,8 +676,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
 
   const publishObservedAssistantMessagesFromHistory = async (
     messages: readonly unknown[],
+    hostTurnId: string,
   ): Promise<AssistantHistoryProjectionResult> => {
-    if (!state.turnInFlight || !state.providerSessionId) return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
+    if (!ownsActiveHostTurn(hostTurnId) || !state.providerSessionId) return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
     const currentProviderUserMessageAnchor = resolveCurrentProviderUserMessageAnchor(messages);
     const currentProviderUserMessageAnchorIndex = currentProviderUserMessageAnchor.status === 'resolved'
       ? currentProviderUserMessageAnchor.index
@@ -681,12 +690,14 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     let providerSessionError: unknown | null = null;
     let providerSessionErrorProviderId: string | null = null;
     for (let index = 0; index < messages.length; index += 1) {
+      if (!ownsActiveHostTurn(hostTurnId)) return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
       const message = messages[index];
       const projection = classifyOpenCodeMessageForProjection(message);
       if (projection.kind === 'user_transcript') {
         if (index === currentProviderUserMessageAnchorIndex && projection.messageId) {
           state.currentTurnProviderUserMessageIds.add(projection.messageId);
           await markProviderUserMessageAsHappierAuthored(projection.messageId);
+          if (!ownsActiveHostTurn(hostTurnId)) return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
           observeCurrentTurnMessageId(projection.messageId);
         }
         continue;
@@ -704,6 +715,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       const parts = Array.isArray(record?.parts) ? record.parts : [];
       const text = readProjectedTranscriptText(message);
       for (const rawPart of parts) {
+        if (!ownsActiveHostTurn(hostTurnId)) return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
         const toolPart = readOpenCodeToolPart(rawPart);
         if (!toolPart) continue;
         foregroundToolTracker.observeToolPart({ part: toolPart });
@@ -717,6 +729,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           mcpToolPolicy: params.mcpToolPolicy,
         });
       }
+      if (!ownsActiveHostTurn(hostTurnId)) return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
       if (providerSessionError === null) {
         const info = asRecord(record?.info);
         const error = info?.error;
@@ -741,6 +754,8 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       await publishOpenCodeRuntimeEvent(publishRuntimeEvent, {
         kind: 'transcript-agent-message-committed',
         ...projectOpenCodeRuntimeScope(params.scope),
+        ...(state.currentTurnProviderUserMessageIds.has(readNonBlankOpaqueIdentifier(projection.info?.parentID) ?? '')
+          ? { turnId: hostTurnId } : {}),
         emittedAtMs: Date.now(),
         agentId: 'opencode',
         localId: buildOpenCodeRuntimeTranscriptLocalId(state.providerSessionId, messageId),
@@ -772,9 +787,10 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
   ): Promise<
     AssistantHistoryProjectionResult
   > => {
+    const hostTurnId = state.activeTurnId;
     const providerSessionId = state.providerSessionId;
     let providerUserMessageId = state.currentTurnProviderUserMessageId;
-    if (!state.turnInFlight || !providerSessionId || !providerUserMessageId) {
+    if (!hostTurnId || !state.turnInFlight || !providerSessionId || !providerUserMessageId) {
       return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
     }
     if (state.currentTurnTerminalAssistantMessageIds.size > 0) {
@@ -795,9 +811,11 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       });
       return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
     }
+    if (!ownsActiveHostTurn(hostTurnId)) return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
 
     const providerUserMessageResolution =
-      await adoptCurrentProviderUserMessageFromAuthoritativeInventory(messages);
+      await adoptCurrentProviderUserMessageFromAuthoritativeInventory(messages, hostTurnId);
+    if (!ownsActiveHostTurn(hostTurnId)) return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
     if (providerUserMessageResolution.status === 'resolved') {
       providerUserMessageId = providerUserMessageResolution.providerUserMessageId;
     }
@@ -846,7 +864,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
     }
     observeCurrentTurnMessageId(messageId);
-    return await publishObservedAssistantMessagesFromHistory([candidate.message]);
+    return await publishObservedAssistantMessagesFromHistory([candidate.message], hostTurnId);
   };
 
   const markPromptResponseMessagesAsCurrentTurnEvidence = (
@@ -1077,7 +1095,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
   const inspectPromptSubmissionResponseForFinality = async (
     response: unknown,
     providerUserMessageId: string,
+    hostTurnId: string,
   ): Promise<void> => {
+    if (!ownsActiveHostTurn(hostTurnId)) return;
     const messages = normalizeOpenCodePromptResponseMessages(response);
     if (messages.length === 0) return;
     const currentTurnMessages = markPromptResponseMessagesAsCurrentTurnEvidence(
@@ -1085,11 +1105,13 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       providerUserMessageId,
     );
     if (currentTurnMessages.length === 0) return;
-    const historyProjection = await publishObservedAssistantMessagesFromHistory(currentTurnMessages).catch((error: unknown) => {
+    const historyProjection = await publishObservedAssistantMessagesFromHistory(currentTurnMessages, hostTurnId).catch((error: unknown) => {
       params.ctx.logger.debug('[OpenCodeServer] prompt response assistant transcript projection failed', { error });
       return EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT;
     });
+    if (!ownsActiveHostTurn(hostTurnId)) return;
     if (await failCurrentTurnForPromptResponseError(historyProjection)) return;
+    if (!ownsActiveHostTurn(hostTurnId)) return;
     await completeTurnIfReady({}, historyProjection);
   };
 
@@ -1221,9 +1243,12 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     error: unknown,
     options: Readonly<{ historyAlreadyInspected?: boolean; providerId?: string | null }> = {},
   ): Promise<boolean> => {
+    const hostTurnId = state.activeTurnId;
+    if (!hostTurnId || !ownsActiveHostTurn(hostTurnId)) return false;
     if (options.historyAlreadyInspected !== true) {
-      await markCurrentProviderUserMessageFromHistoryBestEffort('agent_session_error');
+      await markCurrentProviderUserMessageFromHistoryBestEffort('agent_session_error', hostTurnId);
     }
+    if (!ownsActiveHostTurn(hostTurnId)) return false;
     const turnId = claimOpenCodeActiveTurnForTerminalEvent(state);
     if (!turnId) return false;
     const emittedAtMs = Date.now();
@@ -2123,10 +2148,13 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     forceHistoryRefresh = false,
   ): Promise<void> => {
     if (!state.turnInFlight || !state.currentTurnIdleObserved) return;
+    const hostTurnId = state.activeTurnId;
     const historyProjection = await reconcileExactCurrentTurnTerminalAssistantFromAuthoritativeInventoryBestEffort(
       forceHistoryRefresh,
     );
+    if (!ownsActiveHostTurn(hostTurnId)) return;
     if (await failCurrentTurnForPromptResponseError(historyProjection)) return;
+    if (!ownsActiveHostTurn(hostTurnId)) return;
     await completeTurnIfReady({ type: 'idle' }, historyProjection);
   };
 
@@ -2314,7 +2342,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         submittedAtMs: promptSubmittedAtMs,
       });
       const failPromptSubmission = async (error: unknown): Promise<void> => {
-        if (!nativeCommand) await markCurrentProviderUserMessageFromHistoryBestEffort('prompt_submission_failed');
+        if (!ownsActiveHostTurn(turnId)) return;
+        if (!nativeCommand) await markCurrentProviderUserMessageFromHistoryBestEffort('prompt_submission_failed', turnId);
+        if (!ownsActiveHostTurn(turnId)) return;
         const failedTurnId = claimOpenCodeActiveTurnForTerminalEvent(state);
         if (failedTurnId) {
           const emittedAtMs = Date.now();
@@ -2339,7 +2369,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         message: string,
         cause?: unknown,
       ): Promise<OpenCodePromptIdentityUnresolvedError> => {
-        const failedTurnId = claimOpenCodeActiveTurnForTerminalEvent(state);
+        const failedTurnId = ownsActiveHostTurn(turnId) ? claimOpenCodeActiveTurnForTerminalEvent(state) : null;
         if (failedTurnId) {
           const emittedAtMs = Date.now();
           resetCurrentTurnObservations();
@@ -2430,6 +2460,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           ...(state.promptVariant ? { variant: state.promptVariant } : {}),
           ...(state.promptConfig ? { config: state.promptConfig } : {}),
         });
+        assertPromptTurnStillOwnsDispatch();
         void refreshCommandCatalog().catch((error: unknown) => params.ctx.logger.warn('opencode_command_catalog_read_failed', { error }));
         const admittedMessageId = readNonBlankOpaqueIdentifier(asRecord(promptSubmission)?.id);
         let providerUserMessageId: string;
@@ -2438,6 +2469,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           state.currentTurnProviderUserMessageId = admittedMessageId;
           state.currentTurnProviderUserMessageIds.add(admittedMessageId);
           await markProviderUserMessageAsHappierAuthored(admittedMessageId);
+          assertPromptTurnStillOwnsDispatch();
           observeCurrentTurnMessageId(admittedMessageId);
         } else {
           let authoritativeMessages: readonly unknown[];
@@ -2449,8 +2481,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
               error,
             );
           }
+          assertPromptTurnStillOwnsDispatch();
           const providerUserMessageResolution =
-            await adoptCurrentProviderUserMessageFromAuthoritativeInventory(authoritativeMessages);
+            await adoptCurrentProviderUserMessageFromAuthoritativeInventory(authoritativeMessages, turnId);
           if (providerUserMessageResolution.status !== 'resolved') {
             throw await failPromptIdentityResolution(
               providerUserMessageResolution.status === 'ambiguous'
@@ -2460,6 +2493,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           }
           providerUserMessageId = providerUserMessageResolution.providerUserMessageId;
         }
+        assertPromptTurnStillOwnsDispatch();
         state.currentTurnPromptAcceptedAtMs = Date.now();
         if (promptAgent && (params.dialect ?? 'v1') === 'v1') {
           modeCatalog = { ...modeCatalog, currentModeId: promptAgent, observedAt: state.currentTurnPromptAcceptedAtMs };
@@ -2469,6 +2503,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           void inspectPromptSubmissionResponseForFinality(
             promptSubmission,
             providerUserMessageId,
+            turnId,
           ).catch((error: unknown) => {
             params.ctx.logger.debug('[OpenCodeServer] failed to inspect prompt response evidence', { error });
           });
@@ -2494,16 +2529,19 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     },
     async waitForTurnCompletion() {
       if (!state.turnInFlight || !state.activeTurnId || !state.providerSessionId) return;
+      const hostTurnId = state.activeTurnId;
       await managedServerTurnInterruptionSupervisor.observeManagedServiceSnapshot();
-      if (!state.turnInFlight || !state.activeTurnId || !state.providerSessionId) return;
+      if (!ownsActiveHostTurn(hostTurnId) || !state.providerSessionId) return;
       let status: unknown;
       try {
         status = await client.sessionStatus({ sessionId: state.providerSessionId });
       } catch (error) {
+        if (!ownsActiveHostTurn(hostTurnId)) return;
         if (await failCurrentTurnForManagedServerTerminalFailure()) return;
         params.ctx.logger.debug('[OpenCodeServer] status poll failed during turn completion', { error });
         return;
       }
+      if (!ownsActiveHostTurn(hostTurnId)) return;
       await maybeFailOnOpenCodeRetryStatus({
         ctx: params.ctx,
         publishRuntimeEvent,
@@ -2522,7 +2560,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         return;
       }
       const historyProjection = await reconcileExactCurrentTurnTerminalAssistantFromAuthoritativeInventoryBestEffort();
+      if (!ownsActiveHostTurn(hostTurnId)) return;
       if (await failCurrentTurnForPromptResponseError(historyProjection)) return;
+      if (!ownsActiveHostTurn(hostTurnId)) return;
       await completeTurnIfReady(status, historyProjection);
     },
     subscribeRuntimeEvents(handler) {

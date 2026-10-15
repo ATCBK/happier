@@ -5,7 +5,7 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type { OpenCodeRuntimeTurnOperations } from './operations.js';
-import { asRecord, normalizeString } from './openCodeParsing.js';
+import { asRecord, readNonBlankOpaqueIdentifier } from './openCodeParsing.js';
 import { projectOpenCodeTurnCancellationCause, projectOpenCodeRuntimeIssueDiagnostic } from './openCodeRuntimeEvents.js';
 import { buildOpenCodePromptParts, OpenCodePromptProjectionError } from './promptParts.js';
 
@@ -50,12 +50,16 @@ export function createOpenCodeExecutionRunConversation(params: Readonly<{
       return;
     }
     if (event.kind === 'transcript-agent-message-committed') {
-      const text = normalizeString(asRecord(event.body)?.message);
-      if (text && activeTurnId) {
+      const body = asRecord(event.body);
+      const text = typeof body?.message === 'string' ? body.message : '';
+      const sidechainId = readNonBlankOpaqueIdentifier(body?.sidechainId);
+      if (text && (body?.type === 'message' || body?.type === 'thinking')) {
         publish({
-          kind: 'message-delta',
-          turnId: activeTurnId,
-          channel: 'assistant',
+          kind: 'transcript-message-committed',
+          ...(event.turnId ? { turnId: event.turnId } : {}),
+          ...(sidechainId ? { sidechainId } : {}),
+          messageId: event.localId,
+          role: body.type === 'thinking' ? 'reasoning' : 'assistant',
           text,
           emittedAtMs: event.emittedAtMs,
         });
@@ -116,7 +120,7 @@ export function createOpenCodeExecutionRunConversation(params: Readonly<{
         publishProviderIdentity();
         return { status: 'admitted' };
       } catch (error) {
-        activeTurnId = null;
+        if (activeTurnId === request.delivery.turnId) activeTurnId = null;
         return {
           status: 'rejected',
           diagnostic: diagnostic(

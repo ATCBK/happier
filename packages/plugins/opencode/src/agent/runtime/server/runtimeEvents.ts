@@ -73,6 +73,7 @@ export type OpenCodeRuntimeEvent =
     }>)
   | (EventBase & Readonly<{
       kind: 'transcript-agent-message-committed';
+      turnId?: string;
       agentId: 'opencode';
       localId: string;
       body: unknown;

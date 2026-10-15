@@ -175,6 +175,7 @@ function mapRuntimeEvent(
     messageId: event.localId,
     role: body?.type === 'thinking' ? 'reasoning' : 'assistant',
     text: message,
+    ...(event.turnId ? { turnId: event.turnId } : {}),
     ...sidechain,
   };
 }

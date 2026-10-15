@@ -6,7 +6,7 @@ import {
 } from '@happier-dev/plugin-sdk/testing';
 import type { AgentRuntimeContext, AgentSessionModelsSource } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentSessionRuntimeEventSchema, type AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
-import { createExecutionRunHostBackendFromConversationRuntime, type AgentExecutionRunEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentExecutionRunEventSchema, createExecutionRunHostBackendFromConversationRuntime, type AgentExecutionRunConversationEventV1, type AgentExecutionRunEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ManagedServiceSnapshot } from '@happier-dev/plugin-sdk/managed-services';
 import type { ConnectedAccountBindingSummary, ConnectedAccountsService } from '@happier-dev/plugin-sdk/connected-accounts';
 import { PluginError } from '@happier-dev/plugin-sdk';
@@ -403,6 +403,143 @@ describe('OpenCode catalog observation', () => {
 });
 
 describe('createOpenCodeServerRuntime', () => {
+  it('preserves proven foreground commits and child scope through the detached Run adapter', async () => {
+    const { ctx, harness } = createContextFixture();
+    const client = createClientFixture();
+    let providerUserMessageId = '';
+    client.sessionPromptImplementation.mockImplementationOnce(async input => {
+      providerUserMessageId = input.messageId ?? '';
+    });
+    const operations = await createStartedRuntime({ ctx, client, harness, executionRunId: 'scope-run' });
+    const conversation = createOpenCodeExecutionRunConversation({
+      operations, executionRunId: 'scope-run', disposeOperations: () => operations.resetOrDisposeRuntime(),
+    });
+    const conversationEvents: AgentExecutionRunConversationEventV1[] = [];
+    conversation.watch(event => conversationEvents.push(event));
+    const run = await createExecutionRunHostBackendFromConversationRuntime({
+      request: { kind: 'create', runId: 'scope-run', cwd: '/repo',
+        profile: { pluginId: 'happier.agent.opencode', localId: 'opencode' }, input: { text: 'hello' } },
+      openConversation: async () => conversation,
+    });
+    const events: AgentExecutionRunEvent[] = [];
+    run.watch(event => events.push(AgentExecutionRunEventSchema.parse(event)));
+    try {
+      await vi.waitFor(() => expect(providerUserMessageId).not.toBe(''));
+      const child = normalizeOpenCodeV2Event('session.created', { sessionID: 'scope-child', parentID: 'ses-1' });
+      await operations.handleProviderEvent({ payload: { type: child.type, properties: child.properties } });
+      const childText = normalizeOpenCodeV2Event('session.text.ended', {
+        sessionID: 'scope-child', assistantMessageID: 'child-message', ordinal: 0, text: 'child-only-output',
+      });
+      await operations.handleProviderEvent({ payload: { type: childText.type, properties: childText.properties } });
+      expect(events.filter(event => event.kind === 'output-delta' || event.kind === 'output-message-committed')).toEqual([]);
+      expect(conversationEvents).toContainEqual(expect.objectContaining({
+        kind: 'transcript-message-committed', text: 'child-only-output', sidechainId: 'scope-child',
+      }));
+      expect(conversationEvents.find(event => event.kind === 'transcript-message-committed' && event.text === 'child-only-output')).not.toHaveProperty('turnId');
+
+      await operations.handleProviderEvent({ payload: { type: 'message.updated', properties: {
+        info: { id: 'old-assistant', role: 'assistant', sessionID: 'ses-1', parentID: 'old-user', time: { completed: 2 } },
+      } } });
+      client.setMessages([
+        { info: { id: 'old-assistant', role: 'assistant', sessionID: 'ses-1', parentID: 'old-user',
+            time: { created: 1, completed: 2 } }, parts: [{ type: 'text', text: 'historical-output' }] },
+        { info: { id: providerUserMessageId, role: 'user', sessionID: 'ses-1', time: { created: Date.now() } },
+          parts: [{ type: 'text', text: 'hello' }] },
+        { info: { id: 'foreground-assistant', role: 'assistant', sessionID: 'ses-1', parentID: providerUserMessageId,
+            time: { created: Date.now() + 1, completed: Date.now() + 2 } },
+          parts: [{ type: 'text', text: 'foreground-output' }] },
+      ]);
+      await operations.handleProviderEvent({ payload: { type: 'session.idle', properties: { sessionID: 'ses-1' } } });
+      expect(events.filter(event => event.kind === 'output-delta' || event.kind === 'output-message-committed')).toEqual([
+        expect.objectContaining({ kind: 'output-message-committed', messageId: 'opencode:ses-1:foreground-assistant', text: 'foreground-output' }),
+      ]);
+      expect(conversationEvents).toContainEqual(expect.objectContaining({
+        kind: 'transcript-message-committed', turnId: 'scope-run-turn-1',
+        messageId: 'opencode:ses-1:foreground-assistant', text: 'foreground-output',
+      }));
+    } finally { await run.dispose(); }
+  });
+
+  it.each(['history', 'provider-error'] as const)('does not grant a replacement turn authority to a cancelled turn %s read', async observation => {
+    const { ctx, harness } = createContextFixture();
+    const client = createClientFixture();
+    let oldUserMessageId = '';
+    client.sessionPromptImplementation.mockImplementationOnce(async input => { oldUserMessageId = input.messageId ?? ''; });
+    const operations = await createStartedRuntime({ ctx, client, harness, executionRunId: 'history-run' });
+    const conversation = createOpenCodeExecutionRunConversation({
+      operations, executionRunId: 'history-run', disposeOperations: () => operations.resetOrDisposeRuntime(),
+    });
+    const events: AgentExecutionRunConversationEventV1[] = [];
+    conversation.watch(event => events.push(event));
+    try {
+      const input = (turnId: string) => ({ inputIds: [turnId], input: { text: turnId },
+        delivery: { kind: 'newTurn' as const, turnId } });
+      await conversation.send(input('old-turn'));
+      const oldUserId = (await client.sessionMessages({ sessionId: 'ses-1' }))[0];
+      expect(oldUserMessageId).not.toBe('');
+      let releaseHistory!: (messages: readonly unknown[]) => void;
+      let enteredHistory!: () => void;
+      const historyEntered = new Promise<void>(resolve => { enteredHistory = resolve; });
+      vi.mocked(client.sessionMessages).mockImplementationOnce(async () => {
+        enteredHistory();
+        return await new Promise<readonly unknown[]>(resolve => { releaseHistory = resolve; });
+      });
+      const oldObservation = observation === 'history'
+        ? operations.waitForTurnCompletion()
+        : operations.handleProviderEvent({ payload: { type: 'session.status', properties: {
+            sessionID: 'ses-1', status: { type: 'error', error: { message: 'Old provider failure' } },
+          } } });
+      await historyEntered;
+      await conversation.cancel!({ turnId: 'old-turn', reason: 'user' });
+      await conversation.send(input('new-turn'));
+      releaseHistory([oldUserId, {
+        info: { id: 'late-old-assistant', role: 'assistant', sessionID: 'ses-1', parentID: oldUserMessageId,
+          time: { created: Date.now(), completed: Date.now() + 1 } },
+        parts: [{ type: 'text', text: 'late-old-output' }],
+      }]);
+      await oldObservation;
+      expect(events.filter(event => event.kind === 'transcript-message-committed' && event.turnId === 'new-turn')).toEqual([]);
+      expect(events.filter(event => event.kind === 'turn-complete' && event.turnId === 'new-turn')).toEqual([]);
+      expect(events.filter(event => event.kind === 'turn-failed' && event.turnId === 'new-turn')).toEqual([]);
+    } finally { await conversation.dispose(); }
+  });
+
+  it.each(['resolved', 'rejected', 'identity-history-rejected'] as const)('keeps the replacement turn cancellable when an older prompt response is %s', async settlement => {
+    const { ctx, harness } = createContextFixture();
+    const client = createClientFixture();
+    let releasePrompt!: () => void;
+    let enteredPrompt!: () => void;
+    const promptEntered = new Promise<void>(resolve => { enteredPrompt = resolve; });
+    const awaitOldResponse = async () => {
+      enteredPrompt();
+      await new Promise<void>(resolve => { releasePrompt = resolve; });
+      if (settlement !== 'resolved') throw new Error('Old provider request rejected');
+    };
+    if (settlement === 'identity-history-rejected') {
+      vi.mocked(client.sessionMessages).mockImplementationOnce(async () => {
+        await awaitOldResponse();
+        return [];
+      });
+    } else {
+      client.sessionPromptImplementation.mockImplementationOnce(awaitOldResponse);
+    }
+    const operations = await createStartedRuntime({ ctx, client, harness, executionRunId: 'response-run' });
+    const conversation = createOpenCodeExecutionRunConversation({
+      operations, executionRunId: 'response-run', disposeOperations: () => operations.resetOrDisposeRuntime(),
+    });
+    try {
+      const input = (turnId: string) => ({ inputIds: [turnId], input: { text: turnId },
+        delivery: { kind: 'newTurn' as const, turnId } });
+      const oldSend = conversation.send(input('old-turn'));
+      await promptEntered;
+      await conversation.cancel!({ turnId: 'old-turn', reason: 'user' });
+      await expect(conversation.send(input('new-turn'))).resolves.toMatchObject({ status: 'admitted' });
+      releasePrompt();
+      await expect(oldSend).resolves.toMatchObject({ status: 'rejected' });
+      await expect(conversation.cancel!({ turnId: 'new-turn', reason: 'user' })).resolves.toMatchObject({ status: 'requested' });
+    } finally { await conversation.dispose(); }
+  });
+
   it('publishes commands activated by a real V2 prompt after the cold inventory was empty', async () => {
     const client = createClientFixture();
     const operations = await createStartedRuntime({ client });
@@ -2634,6 +2771,9 @@ describe('createOpenCodeServerRuntime', () => {
       ]);
     });
     const runtime = await createStartedRuntime({ ctx, client, harness });
+    const native = createNativeSessionRuntimeForTest(runtime);
+    const nativeEvents: AgentSessionRuntimeEvent[] = [];
+    const subscription = native.watch(event => nativeEvents.push(AgentSessionRuntimeEventSchema.parse(event)));
 
     beginTestHostTurn(runtime);
     await runtime.sendTurnPrompt('run pwd');
@@ -2674,12 +2814,19 @@ describe('createOpenCodeServerRuntime', () => {
     }));
     expect(runtimeEvents[assistantCommitIndex]).toEqual(expect.objectContaining({
       kind: 'transcript-agent-message-committed',
+      turnId,
       localId: 'opencode:ses-1:msg-history-assistant',
       body: {
         type: 'message',
         message: 'The repo path is /repo.',
       },
     }));
+    expect(nativeEvents).toContainEqual(expect.objectContaining({
+      kind: 'transcript-message-committed', turnId,
+      messageId: 'opencode:ses-1:msg-history-assistant', text: 'The repo path is /repo.',
+    }));
+    subscription.dispose();
+    await native.dispose();
   });
 
   it('does not duplicate OpenCode tool events when history repeats live-published parts', async () => {
