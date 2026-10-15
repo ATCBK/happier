@@ -443,7 +443,6 @@ export function startSocket(app: Fastify) {
             registerReleasedUiV021SessionEndSocketEvent({
                 socket,
                 accountId: userId,
-                connection,
             });
         }
         if (connection.connectionType === "session-scoped") {
