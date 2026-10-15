@@ -49,6 +49,9 @@ type Cell = Readonly<{
 }>;
 type Run = Readonly<{ pool: UsagePlanPool | null; cells: readonly Cell[] }>;
 
+/** Only a run of two or more members is a group worth an outline; a pool of one reads as its account does. */
+const isFramedRun = (run: Run) => run.pool !== null && run.cells.length > 1;
+
 /**
  * The bar keeps the Account's own order. A pool's members sit together where its first member is, in
  * the selector's own preference order when that read answered; nothing is ranked across pools.
@@ -122,15 +125,15 @@ function buildRuns(
 }
 
 /**
- * The runs that sit alone in a two-up row: an account that no pool holds, with no second account after it
- * before a pool (which takes the whole row) or the end.
+ * The runs that sit alone in a two-up row: an account outside any framed pool, with no second account after
+ * it before a framed pool (which takes the whole row) or the end.
  */
 function readLoneHalfRuns(runs: readonly Run[]): ReadonlySet<Run> {
   const lone = new Set<Run>();
   let first: Run | null = null;
   const closeRow = () => { if (first) lone.add(first); first = null; };
   for (const run of runs) {
-    if (run.pool) { closeRow(); continue; }
+    if (isFramedRun(run)) { closeRow(); continue; }
     if (first) first = null;
     else first = run;
   }
@@ -239,11 +242,12 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
         {runs.map((run) => (
           <React.Fragment key={run.pool?.key ?? run.cells[0]!.account.key}>
             <View
+              testID={isFramedRun(run) ? `${props.testID}.pool.${run.pool!.groupId}` : undefined}
               style={[
                 styles.run,
-                run.pool ? styles.pool : null,
+                isFramedRun(run) ? styles.pool : null,
                 cellBasis
-                  ? { flexBasis: run.pool ? '100%' : '47%', flexGrow: 1 }
+                  ? { flexBasis: isFramedRun(run) ? '100%' : '47%', flexGrow: 1 }
                   : { flexGrow: run.cells.length, flexBasis: 0 },
               ]}
             >
@@ -253,7 +257,7 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
                   cell={cell}
                   name={nameOf(cell.account)}
                   nowMs={nowMs}
-                  basis={run.pool ? cellBasis : undefined}
+                  basis={isFramedRun(run) ? cellBasis : undefined}
                   testID={`${props.testID}.cell.${cell.account.accountId}`}
                 />
               ))}

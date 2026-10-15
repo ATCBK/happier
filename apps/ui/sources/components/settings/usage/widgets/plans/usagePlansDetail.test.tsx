@@ -625,6 +625,24 @@ it("lists a pool in the selector's own order and builds the why detail from its 
   expect(screen.getTextContent()).not.toContain(t('usage.board.plans.hintLoading'));
 });
 
+it('gives a pool the selector lists no member for one quiet line, not a strategy block', async () => {
+  const now = Date.now();
+  const weekly: Meter = { meterId: 'weekly', label: 'Weekly', usedPct: 20, resetAtMs: now + 2 * DAY, windowDurationMs: 7 * DAY };
+  const group = { service, groupId: 'empty' };
+  const selection = { selected: null, reason: 'no_eligible_members' as const, excluded: [],
+    decisionTrace: { activeProfileId: null, reason: 'no_eligible_members' as const, strategy: 'expiry_first' as const,
+      selectionBasis: 'no_eligible_members' as const, sticky: false, orderedEligibleCandidates: [], candidates: [] } };
+  const props = bodyProps(['a', 'b'].map((id) => quotaRead(id, now, [weekly])), [{ query, value: [{ group,
+    memberAccountIds: ['a', 'b'], activeAccountId: null,
+    selection: { status: 'available', machineId: 'witnessed-selector', value: { group, observedAtMs: now, selection } } }] }]);
+  const { UsageCapacityWidget } = await import('../UsageCapacityWidget');
+  const screen = await renderScreen(wrap(<UsageCapacityWidget {...props} serverId="home" id="usage_capacity" testID="cap" />));
+  expect(screen.findHostByTestId('cap.usedFirst.empty')).toBeTruthy();
+  expect(screen.getTextContent()).toContain(t('usage.board.plans.whyNone'));
+  expect(screen.findByTestId('cap.usedFirst.empty.why')).toBeNull();
+  expect(screen.getTextContent()).not.toContain('Expiring first');
+});
+
 it('states one unreadable-order cause once under every pool that shares it (H30)', async () => {
   const now = Date.now();
   const weekly: Meter = { meterId: 'weekly', label: 'Weekly', usedPct: 20, resetAtMs: now + 2 * DAY, windowDurationMs: 7 * DAY };

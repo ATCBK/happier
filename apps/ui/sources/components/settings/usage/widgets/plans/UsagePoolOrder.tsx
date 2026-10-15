@@ -233,6 +233,14 @@ function PoolQueue(
   const trace = selection.decisionTrace;
   const strategy = getPoolStrategyPresentation(trace.strategy);
   const members = readUsagePoolMembers(props.pool, props.accounts, selection);
+  // A pool the selector lists no member for has no order, strategy or reason to show: one quiet line.
+  if (members.length === 0) {
+    return (
+      <View testID={props.testID} style={styles.pool}>
+        <UsagePlanSectionHead title={title} meta={!props.causeBelow && state.refreshError ? unreadText(state.refreshError) : t('usage.board.plans.whyNone')} />
+      </View>
+    );
+  }
   return (
     <View testID={props.testID} style={styles.pool}>
       <UsagePlanSectionHead
@@ -388,6 +396,9 @@ export function UsagePoolSteps(props: PoolOrderProps) {
           props.accounts,
           state.selection,
         );
+        if (members.length === 0) {
+          return <UsagePlanSectionHead key={pool.key} title={label} meta={!sharedCause && state.refreshError ? unreadText(state.refreshError) : t('usage.board.plans.whyNone')} />;
+        }
         const steps = members
           .filter((member) => member.rank !== null)
           .slice(0, 3);

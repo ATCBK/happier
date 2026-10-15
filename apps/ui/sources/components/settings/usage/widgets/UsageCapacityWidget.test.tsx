@@ -48,6 +48,37 @@ it('renders every overlapping pool membership without duplicating standalone Acc
   expect(screen.findAllHostsByTestId('capacity.cell.standalone')).toHaveLength(1);
 });
 
+it('outlines only a pool of two or more members; a pool of one reads as its account does', async () => {
+  const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
+  const query = normalizeUsageQuery({});
+  const quota = ['work', 'personal', 'solo'].map(accountId => {
+    const recordKey = { providerId: 'anthropic', accountSubjectId: accountId, subjectKind: 'account', quotaScope: 'account' } as const;
+    return ConnectedServiceQuotaGetResultV1Schema.parse({
+      source: { ref: { service, accountId }, bindingKind: 'account' },
+      current: { v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+        providerId: 'anthropic', accountSubject: { kind: 'providerSubject', id: accountId },
+        observedAtMs: Date.now(), fetchedAtMs: Date.now(), staleAfterMs: 60_000,
+        source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data', meters: [], planLabel: null },
+      pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' },
+    });
+  });
+  const slice = resolveUsagePageAggregation({ queries: [query], quota: { status: 'available', value: quota },
+    pools: [{ query, value: [
+      { group: { service, groupId: 'duo' }, memberAccountIds: ['work', 'personal'], activeAccountId: 'work', selection: { status: 'pending' } },
+      { group: { service, groupId: 'one' }, memberAccountIds: ['solo'], activeAccountId: 'solo', selection: { status: 'pending' } },
+    ] }],
+  }).results[0]!;
+  const model = { requestedQuery: null, shownQuery: null, slice, pending: false, error: null,
+    freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} } satisfies UsageWidgetBodyModel;
+  const { UsageCapacityWidget } = await import('./UsageCapacityWidget');
+  const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+    <UsageCapacityWidget id="usage_capacity" model={model} slice={slice} query={query} serverId="home" testID="capacity" />
+  </InjectedAuthProvider>);
+  expect(screen.findHostByTestId('capacity.pool.duo')).not.toBeNull();
+  expect(screen.findHostByTestId('capacity.pool.one')).toBeNull();
+  expect(screen.findHostByTestId('capacity.cell.solo')).not.toBeNull();
+});
+
 it('keeps each reset and renewal as an exact point when the shared plot cannot fit', async () => {
   const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
   const query = normalizeUsageQuery({});
