@@ -1,22 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import { delimiter, join } from 'node:path';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { writeTextFileSync } from '@/testkit/fs/fileHelpers';
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
-import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
-import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { accountSettingsParse, isBackendTargetDisabledByAccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
 import { ScmDiffSummaryModelCatalogObservationV1Schema } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { probeAgentSignInStatus } from '@/capabilities/cliAuth/agentSignIn';
 import { resetAgentModelsProbeCacheForTests } from '@/capabilities/probes/agentModelsProbe';
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, clearActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { createCliActionDeps } from './createCliActionDeps';
+import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
+import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContributionIdentityV1, listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 describe('Summary native model discovery', () => {
     it('discovers a new native model through the public Summary Action while retaining automatic default evidence', async () => {
+        const requests: string[] = [];
         const home = createTempDirSync('summary-native-discovery-');
         const modelFile = join(home, 'models.json');
         writeTextFileSync(modelFile, JSON.stringify([{ id: 'initial-model', displayName: 'Initial model', isDefault: true }]));
@@ -47,7 +52,7 @@ describe('Summary native model discovery', () => {
         const previous = getActiveAccountSettingsSnapshot();
         let admitted: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
         try {
-            admitted = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController, runtimeOptions: { pluginIds: ['happier.agent.codex'],
+            admitted = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController, runtimeOptions: { pluginIds: ['happier.agent.codex', 'happier.agent.custom-acp'],
                 // Account persistence is the real external boundary; an empty
                 // record lets native plugin Settings resolve without live credentials.
                 accountSettingsRecordAdapter: { bindOperation: async () => ({
@@ -55,13 +60,44 @@ describe('Summary native model discovery', () => {
                 }) },
             } });
             resetAgentModelsProbeCacheForTests();
-            const settings = accountSettingsParse({});
-            const credentials = { token: 'native-summary-discovery', encryption: null };
-            const acpCatalog = { status: 'ready' as const, revision: 'absent' as const, record: { v: 1 as const, definitions: [] } };
-            setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings: {}, settingsVersion: 1,
+            expect([...readCurrentContributionRegistry().agentDefinitionsById.values()].some(entry => isCustomAcpAgentContributionIdentityV1(entry.identity)),
+                JSON.stringify({ agents: [...readCurrentContributionRegistry().agentDefinitionsById.values()].map(entry => ({ id: entry.id, identity: entry.identity })),
+                    diagnostics: admitted.registry.pluginDiagnosticsByPluginId['happier.agent.custom-acp'] })).toBe(true);
+            const configuredTargetKey = buildBackendTargetKeyV2(listAgentExecutionTargetsV1(CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, ['missing-configured-agent'])[0]!);
+            const rawSettings = { backendEnabledByTargetKey: { ...Object.fromEntries(
+                [...readCurrentContributionRegistry().agentDefinitionsById.values()].flatMap(entry => entry.identity
+                    ? listAgentExecutionTargetsV1(entry.identity).map(target => [buildBackendTargetKeyV2(target), entry.id === 'codex']) : [])),
+                [configuredTargetKey]: true } };
+            const settings = accountSettingsParse(rawSettings);
+            expect(isBackendTargetDisabledByAccountSettings(settings, configuredTargetKey)).toBe(false);
+            const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'native-summary-account', tokenEpoch: 0 })).toString('base64url')}.signature`,
+                encryption: null, credentialProvenance: 'stored_session' as const };
+            const acpCatalog = { status: 'ready' as const, revision: 1, record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
+                id: 'missing-configured-agent', name: 'missing-configured-agent', title: 'Missing Agent',
+                launch: { kind: 'command' as const, command: join(home, 'absent-agent'), args: [] }, env: {},
+                capabilities: { supportsLoadSession: false, supportsModes: 'unknown' as const, supportsModels: 'yes' as const,
+                    supportsConfigOptions: 'unknown' as const, promptImageSupport: 'no' as const }, createdAt: 1, updatedAt: 1,
+            }] }) };
+            setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings, settingsVersion: 1,
                 scopeKey: resolveAccountSettingsScopeKey(credentials), loadedAtMs: 1, settingsSecretsReadKeys: [], acpCatalog });
-            const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, sessionId: 'native-summary', mode: 'plain', ctx: null,
-                machineActionDirectTargetTransport: { machineId: 'native-model-machine', invoke: async () => { throw new Error('Unexpected recursion'); } } }));
+            // Exercise the actual CLI factory: it creates invocation Account custody
+            // from bootstrap, rather than a test-created operation context.
+            vi.spyOn(axios, 'get').mockImplementation(async url => {
+                const path = new URL(String(url)).pathname;
+                requests.push(path);
+                if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: rawSettings } } };
+                if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+                    settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+                if (path === ACP_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: { status: 'present', revision: 1,
+                    content: { t: 'plain', v: acpCatalog.record } } };
+                if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) return { status: 200, data: { status: 'present', revision: 1,
+                    content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') } } };
+                if (path.startsWith('/v1/account/entity-rows/')) return { status: 200, data: { status: 'absent' } };
+                return { status: 404, data: {} };
+            });
+            const executor = createCliActionExecutorFromCredentials({ credentials,
+                pluginActionExecutionOwner: 'current_process',
+                machineActionDirectTargetTransport: { machineId: 'native-model-machine', invoke: async () => { throw new Error('Unexpected recursion'); } } });
             const observe = async (discover = false) => {
                 const result = await executor.execute('agents.models.list', { purpose: 'scm_diff_summary', machineId: 'native-model-machine',
                     ...(discover ? { discoveryTargetKey: 'agent:happier.agent.codex/codex' } : {}) }, { surface: 'cli', authority: 'present_user' });
@@ -69,9 +105,14 @@ describe('Summary native model discovery', () => {
                 if (!result.ok || !result.result || typeof result.result !== 'object' || !('scmDiffSummaryCatalog' in result.result)) throw new Error('Missing native catalog');
                 return ScmDiffSummaryModelCatalogObservationV1Schema.parse(result.result.scmDiffSummaryCatalog);
             };
-            expect(await probeAgentSignInStatus('codex')).toMatchObject({ status: 'signedIn' });
             const initial = await observe();
-            expect(initial.profiles).toEqual(expect.arrayContaining([expect.objectContaining({ modelSelector: {
+            expect(initial).toMatchObject({ probeFailures: [{ backendTargetKey: configuredTargetKey,
+                spawnFailure: { reason: 'other', errno: 'ENOENT' } }] });
+            expect(JSON.stringify(initial)).not.toContain(join(home, 'absent-agent'));
+            expect(initial.profiles, JSON.stringify({ initial,
+                requests,
+                purpose: getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog?.status,
+                agents: [...readCurrentContributionRegistry().agentDefinitionsById.keys()] })).toEqual(expect.arrayContaining([expect.objectContaining({ modelSelector: {
                 backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'initial-model' }, structuredOutput: 'supported' })]));
             writeTextFileSync(modelFile, JSON.stringify([{ id: 'discovered-model', displayName: 'Discovered model', isDefault: true }]));
             expect((await observe()).profiles).toEqual(initial.profiles);
@@ -94,6 +135,7 @@ describe('Summary native model discovery', () => {
         } finally {
             await admitted?.dispose();
             resetAgentModelsProbeCacheForTests();
+            vi.restoreAllMocks();
             if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
             vi.unstubAllEnvs(); removeTempDirSync(home);
         }

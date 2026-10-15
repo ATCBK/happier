@@ -4,10 +4,13 @@ import { describe, expect, it } from 'vitest';
 
 import { AcpBackend } from '../AcpBackend';
 import {
+  createAcpSubprocessEnvScope,
   createAcpTestTransportHandler,
   writeAcpTestAgentScript,
 } from '../testkit/subprocessHarness';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { SpawnFailureError } from '@/processes/spawnFailure/classifySpawnFailure';
+import { createDaemonShutdownController, type DaemonShutdownRequest } from '@/daemon/lifecycle/shutdown';
 
 type StartupMethod = 'initialize' | 'authenticate' | 'session/load';
 
@@ -85,6 +88,47 @@ function countRequests(requestLogPath: string, method: StartupMethod): number {
 }
 
 describe('AcpBackend startup timeout retry safety', () => {
+  it.each(['start', 'load'] as const)('rejects an absent executable as a typed %s failure and keeps other operations usable', async operation => {
+    await withTempDir('happier-acp-missing-executable-', async dir => {
+      const environment = createAcpSubprocessEnvScope();
+      environment.patch({ HAPPIER_DEBUG_ARTIFACTS_DIR: join(dir, 'artifacts') });
+      const backend = new AcpBackend({ agentName: 'missing-configured-agent', cwd: dir,
+        command: join(dir, 'absent-agent'), args: [], transportHandler: createAcpTestTransportHandler() });
+      const daemonEvents = ['SIGINT', 'SIGTERM', 'uncaughtException', 'unhandledRejection', 'exit', 'beforeExit'] as const;
+      const priorListeners = new Map(daemonEvents.map(event => [event, new Set(process.listeners(event))] as const));
+      const shutdowns: DaemonShutdownRequest[] = [];
+      const daemon = createDaemonShutdownController();
+      void daemon.resolvesWhenShutdownRequested.then(request => { shutdowns.push(request); });
+      try {
+        const result = operation === 'start' ? backend.startSession() : backend.loadSession('retained-session');
+        await expect(result).rejects.toBeInstanceOf(SpawnFailureError);
+        await expect(result).rejects.toMatchObject({
+          code: 'ENOENT',
+          message: expect.stringMatching(/check.*command.*working directory/i),
+          spawnFailure: { reason: 'other', errno: 'ENOENT' },
+          cause: { code: 'ENOENT' },
+        });
+        // An independent operation must still start after the failed OS spawn.
+        const scriptPath = writeStallingAcpAgentScript({ dir, requestLogPath: join(dir, 'healthy.log'), stallMethod: 'authenticate' });
+        const healthy = new AcpBackend({ agentName: 'healthy-agent', cwd: dir,
+          command: process.execPath, args: [scriptPath], transportHandler: createAcpTestTransportHandler() });
+        try {
+          await expect(healthy.startSession()).resolves.toEqual({ sessionId: 'test-session' });
+          expect(shutdowns).toEqual([]);
+        } finally {
+          await healthy.dispose();
+        }
+      } finally {
+        await backend.dispose();
+        environment.restore();
+        for (const event of daemonEvents) {
+          for (const listener of process.listeners(event)) {
+            if (!priorListeners.get(event)?.has(listener)) process.removeListener(event, listener);
+          }
+        }
+      }
+    });
+  });
   it.each([
     { method: 'initialize' as const, operation: 'start' as const },
     { method: 'authenticate' as const, operation: 'start' as const },

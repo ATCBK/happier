@@ -13,8 +13,10 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import spawn from 'cross-spawn';
 import { observeProcessLaunch } from '@/processes/launchNotification';
+import { SpawnFailureError } from '@/processes/spawnFailure/classifySpawnFailure';
 import {
   RequestError,
   type SessionNotification,
@@ -732,7 +734,36 @@ export class AcpBackend implements CatalogAcpBackend {
       this.recentStderrDiagnostics = [];
       this.lastProcessExitDetail = null;
 
-	    this.process = spawn(spec.command, spec.args, spec.options);
+      try {
+        this.process = spawn(spec.command, spec.args, spec.options);
+        // Install lifecycle observers before stderr artifact setup yields to I/O.
+        // Failed spawns emit `error` on the next tick, even with valid stdio pipes.
+        this.process.on('error', (err) => {
+          logger.debug(`[AcpBackend] Process error:`, err);
+          this.failPendingResponseWait(err instanceof Error ? err : new Error(String(err)));
+          this.emit({ type: 'status', status: 'error', detail: err.message });
+        });
+        this.process.on('exit', (code, signal) => {
+          const hasSignal = typeof signal === 'string' && signal.trim().length > 0;
+          const hasNonZeroCode = typeof code === 'number' && Number.isFinite(code) && code !== 0;
+          const hasUnknownExit = code === null && !hasSignal;
+          if (!this.disposed && (hasSignal || hasNonZeroCode || hasUnknownExit)) {
+            logger.debug(`[AcpBackend] Process exited with code ${code}, signal ${signal}`);
+            const detail = hasSignal ? `Signal: ${signal}` : `Exit code: ${typeof code === 'number' ? code : 1}`;
+            this.lastProcessExitDetail = detail;
+            this.failPendingResponseWait(new Error(detail));
+            this.emit({ type: 'status', status: 'error', detail });
+          }
+          if (!this.disposed) this.options.onProcessExit?.({ code, signal });
+          void this.stderrAppender?.close().catch(() => {});
+          this.stderrAppender = null;
+        });
+        // A PID proves OS spawn admission. Otherwise await the native spawn/error
+        // fact so an absent executable never proceeds into protocol initialization.
+        if (typeof this.process.pid !== 'number') await once(this.process, 'spawn');
+      } catch (error) {
+        throw new SpawnFailureError(error, { syscall: 'spawn' });
+      }
 	    observeProcessLaunch(this.process);
 
 	    if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
@@ -796,34 +827,6 @@ export class AcpBackend implements CatalogAcpBackend {
         }
       }
     });
-
-    this.process.on('error', (err) => {
-      // Log to file only, not console
-      logger.debug(`[AcpBackend] Process error:`, err);
-      this.failPendingResponseWait(err instanceof Error ? err : new Error(String(err)));
-      this.emit({ type: 'status', status: 'error', detail: err.message });
-    });
-
-	    this.process.on('exit', (code, signal) => {
-	      const hasSignal = typeof signal === 'string' && signal.trim().length > 0;
-	      const hasNonZeroCode = typeof code === 'number' && Number.isFinite(code) && code !== 0;
-	      const hasUnknownExit = code === null && !hasSignal;
-
-	      if (!this.disposed && (hasSignal || hasNonZeroCode || hasUnknownExit)) {
-	        logger.debug(`[AcpBackend] Process exited with code ${code}, signal ${signal}`);
-	        const detail = hasSignal ? `Signal: ${signal}` : `Exit code: ${typeof code === 'number' ? code : 1}`;
-	        this.lastProcessExitDetail = detail;
-	        this.failPendingResponseWait(new Error(detail));
-	        this.emit({ type: 'status', status: 'error', detail });
-	      }
-
-	      if (!this.disposed) {
-	        this.options.onProcessExit?.({ code, signal });
-	      }
-
-	      void this.stderrAppender?.close().catch(() => {});
-	      this.stderrAppender = null;
-	    });
 
     // Create Web Streams from Node streams
     const streams = nodeToWebStreams(

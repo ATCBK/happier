@@ -8,6 +8,7 @@ import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { SpawnFailureV1Schema, type SpawnFailureV1 } from '../../machines/processes/spawnFailureV1.js';
 
 /** Read-only observation of the executing machine's admitted summary candidates. */
 const ScmDiffSummaryCatalogProfileSchema = lazyZodSchema(() => z.strictObject({
@@ -20,6 +21,7 @@ export const ScmDiffSummaryModelCatalogObservationV1Schema = lazyZodSchema(() =>
     profiles: z.array(ScmDiffSummaryCatalogProfileSchema),
     automaticProfiles: z.array(ScmDiffSummaryCatalogProfileSchema),
     discoveryTargetKeys: z.array(BackendTargetKeyV2Schema),
+    probeFailures: z.optional(z.array(z.strictObject({ backendTargetKey: BackendTargetKeyV2Schema, spawnFailure: SpawnFailureV1Schema }))),
 }));
 
 export type ScmDiffSummarySettingsV1 = Pick<AccountSettings, 'scm.diffSummary.prefetch' | 'scm.diffSummary.modelProfileOverride'>
@@ -32,6 +34,7 @@ export type ScmDiffSummaryCatalogMutationServicesV1<T extends ScmDiffSummarySett
         profiles: readonly ScmDiffSummaryCatalogProfile[];
         automaticProfiles?: readonly ScmDiffSummaryCatalogProfile[];
         discoveryTargetKeys?: readonly string[];
+        probeFailures?: readonly Readonly<{ backendTargetKey: string; spawnFailure: SpawnFailureV1 }>[];
         isCurrent: (settings: T) => boolean;
     }> | null>;
 }>;

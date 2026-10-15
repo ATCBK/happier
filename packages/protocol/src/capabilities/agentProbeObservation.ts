@@ -1,6 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ProviderModelDescriptorV1Schema } from '../models/descriptor.js';
 import { ProbedCatalogOptionSchema } from './probedCatalogOption.js';
+import { SpawnFailureV1Schema } from '../machines/processes/spawnFailureV1.js';
 import { z } from 'zod/mini';
 
 /** Native preflight observations, distinct from the public inventory projection. */
@@ -29,6 +30,7 @@ export const AgentModelsProbeObservationSchema = lazyZodSchema(() => z.strictObj
   supportsFreeform: z.boolean(),
   observedAt: z.optional(z.number().check(z.nonnegative())),
   refreshError: z.optional(z.boolean()),
+  spawnFailure: z.optional(SpawnFailureV1Schema),
   cacheable: z.optional(z.boolean()),
   runtimeDescriptorV1Accepted: z.optional(z.boolean()),
 }));

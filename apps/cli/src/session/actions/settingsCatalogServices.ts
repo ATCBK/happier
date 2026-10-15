@@ -31,6 +31,7 @@ import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/
 import { resolveSpawnConnectedServicesDefaultDisposition } from '@/session/services/spawnConnectedServicesDefaults';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 
 export type CliSettingsCatalogServicesV1 = ScmDiffSummaryCatalogMutationServicesV1<AccountSettings>
     & VoiceSettingsMutationServicesV1<AccountSettings> & Readonly<{
@@ -136,11 +137,11 @@ export function createCliSettingsCatalogServices(params: Readonly<{
             ...(acpCatalog ? { acpCatalogSnapshot: acpCatalog } : {}), ...(params.signal ? { signal: params.signal } : {}),
         });
         params.signal?.throwIfAborted();
-        if (probe.source === 'unavailable') return null;
-        const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: target, models: probe.availableModels,
+        const profiles = probe.source === 'unavailable' ? [] : buildScmDiffSummaryModelProfiles({ backendTarget: target, models: probe.availableModels,
             catalogModels: parsedKey?.definition.modelConfig?.staticModels ?? getAgentStaticModels(agentId, { catalogOnly: true }),
             agentFormats: configured ? null : readAgentStructuredOutputCapabilities(parsedKey?.richDefinition?.definition)?.formats });
-        return { profiles, isCurrent: (current: AccountSettings) => !params.signal?.aborted
+        return { profiles, ...(probe.spawnFailure ? { probeFailures: [{ backendTargetKey: buildBackendTargetKeyV2(target), spawnFailure: probe.spawnFailure }] } : {}),
+            isCurrent: (current: AccountSettings) => !params.signal?.aborted
             && readCurrentContributionRegistry() === registry
             && accountIsCurrent(lifetime)
             && (!acpCatalog || readAccountSnapshot()?.acpCatalog === acpCatalog)
@@ -253,7 +254,15 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                     acpCatalog, backendTargetKey === options.discoveryTargetKey)));
                 const profiles = [...new Map([...automatic.profiles, ...selectedCatalogs.flatMap(catalog => catalog?.profiles ?? [])]
                     .map(profile => [profile.catalogId, profile])).values()];
-                return { profiles, automaticProfiles: automatic.profiles, discoveryTargetKeys,
+                const failuresByTarget = new Map((automatic.probeFailures ?? []).map(failure => [failure.backendTargetKey, failure]));
+                [...requestedTargets].forEach((target, index) => {
+                    const catalog = selectedCatalogs[index];
+                    if (!catalog) return;
+                    failuresByTarget.delete(target);
+                    for (const failure of catalog.probeFailures ?? []) failuresByTarget.set(failure.backendTargetKey, failure);
+                });
+                const probeFailures = [...failuresByTarget.values()];
+                return { profiles, automaticProfiles: automatic.profiles, discoveryTargetKeys, ...(probeFailures.length ? { probeFailures } : {}),
                     isCurrent: current => automatic.isCurrent(current) && readCurrentContributionRegistry() === registry
                         && (!acpCatalog || readAccountSnapshot()?.acpCatalog === acpCatalog)
                         && selectedCatalogs.every(catalog => !catalog || catalog.isCurrent(current)) };
@@ -263,6 +272,7 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                 const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
                 const agents = [...registry.agentDefinitionsById.values()];
                 const discoveryTargetKeys = new Set<string>();
+                const probeFailures: Array<{ backendTargetKey: string; spawnFailure: SpawnFailureV1 }> = [];
                 const routingIds = indexAgentRoutingIdsByContributionIdentity(agents);
                 const purposeCatalog = params.credentials ? await readActiveConnectedAccountCatalog({
                     credentials: params.credentials, key: 'purposes', signal: params.signal,
@@ -289,17 +299,20 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                         const target = readBackendTargetRefV2({ kind: 'backend', backendId: agentId, sourceKind: 'built_in' });
                         if (isBackendTargetDisabledByAccountSettings(settings, target)) return [];
                         discoveryTargetKeys.add(buildBackendTargetKeyV2(target));
-                        const models = staticModels.length ? staticModels : (await probeSummaryModels({
+                        const observation = staticModels.length ? null : await probeSummaryModels({
                             agentId, cwd: process.cwd(), accountSettings: settings,
                             catalogEntry: registry.catalogEntriesById[agentId], backendTarget: convertBackendTargetRefV2ToV1(target),
                             ...(params.credentials ? { credentials: params.credentials } : {}), signal: params.signal,
-                        })).availableModels;
+                        });
+                        if (observation?.spawnFailure) probeFailures.push({ backendTargetKey: buildBackendTargetKeyV2(target), spawnFailure: observation.spawnFailure });
+                        const models = observation?.availableModels ?? staticModels;
                         return buildScmDiffSummaryModelProfiles({ backendTarget: target,
                             models,
                             agentFormats: readAgentStructuredOutputCapabilities(entry.richDefinition?.definition)?.formats });
                     }))).flat();
                 }))).flat();
-                return { profiles, discoveryTargetKeys: [...discoveryTargetKeys], isCurrent: current => !params.signal?.aborted
+                return { profiles, discoveryTargetKeys: [...discoveryTargetKeys], ...(probeFailures.length ? { probeFailures } : {}),
+                    isCurrent: current => !params.signal?.aborted
                     && readCurrentContributionRegistry() === registry
                     && accountIsCurrent(lifetime)
                     && (purposeCatalog?.status !== 'ready' || readAccountSnapshot()?.connectedPurposeCatalog === purposeCatalog)

@@ -643,7 +643,8 @@ export function createCliActionInventoryDeps(params: Readonly<{
         const current = await readAccountSettings();
         if (!catalog || !current || !catalog.isCurrent(current) || !await services.isCurrent()) return { items: [], source: 'unavailable' };
         return { items: [], scmDiffSummaryCatalog: ScmDiffSummaryModelCatalogObservationV1Schema.parse({ profiles: catalog.profiles,
-          automaticProfiles: catalog.automaticProfiles, discoveryTargetKeys: catalog.discoveryTargetKeys }) };
+          automaticProfiles: catalog.automaticProfiles, discoveryTargetKeys: catalog.discoveryTargetKeys,
+          ...(catalog.probeFailures?.length ? { probeFailures: catalog.probeFailures } : {}) }) };
       }
       const agentId = args.agentId;
       const backendTargetKey = typeof (args as { backendTargetKey?: unknown }).backendTargetKey === 'string'
