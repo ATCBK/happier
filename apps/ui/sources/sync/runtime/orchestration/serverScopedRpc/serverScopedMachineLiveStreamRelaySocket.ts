@@ -117,13 +117,47 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         },
     }) as ServerScopedRelaySocket<MachineLiveStreamRelayEnvelopeV1>;
 
+    // Capture admission can finish after a viewer disappears. Keep this logical carrier until
+    // its ingestion subscriber has sent the final Stop and released its interest.
+    const readers = new Set<() => void>();
+    let closing = false;
+    let disconnectStarted = false;
+    let completion: Promise<void> | null = null;
+    let resolveCompletion: (() => void) | undefined;
+    let rejectCompletion: ((error: unknown) => void) | undefined;
+    const finishDisconnect = () => {
+        if (!closing || disconnectStarted || (readers.size > 0 && params.accountLifetime?.isCurrent() !== false)) return;
+        disconnectStarted = true;
+        void socket.disconnect().then(resolveCompletion, rejectCompletion);
+    };
     return {
         scopeUserId: socket.scopeUserId,
         machineId: socket.machineId,
         viewerId: socket.scopeUserId,
         socketId: socket.socketId ?? '',
-        sendEnvelope: socket.sendEnvelope,
-        onEnvelope: socket.onEnvelope,
-        disconnect: socket.disconnect,
+        sendEnvelope: envelope => {
+            if (!disconnectStarted && (!closing || (envelope.message.kind === 'control' && envelope.message.control.kind === 'stop'))) {
+                socket.sendEnvelope(envelope);
+            }
+        },
+        onEnvelope: listener => {
+            if (closing) return () => {};
+            const unsubscribe = socket.onEnvelope(envelope => { if (!closing) listener(envelope); });
+            const release = () => {
+                if (!readers.delete(release)) return;
+                unsubscribe();
+                finishDisconnect();
+            };
+            readers.add(release);
+            return release;
+        },
+        disconnect: () => {
+            if (!completion) {
+                closing = true;
+                completion = new Promise<void>((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; });
+                finishDisconnect();
+            }
+            return completion;
+        },
     };
 }

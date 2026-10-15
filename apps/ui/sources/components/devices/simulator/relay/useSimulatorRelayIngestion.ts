@@ -153,6 +153,7 @@ export function useSimulatorRelayIngestion(
         if (!enabled || !transport) return;
         let disposed = false;
         let ended = false;
+        let openSettled = false;
         let renewalTimer: ReturnType<typeof setTimeout> | undefined;
         const clearRenewal = () => {
             if (renewalTimer !== undefined) clearTimeout(renewalTimer);
@@ -308,13 +309,18 @@ export function useSimulatorRelayIngestion(
             })
             .catch(() => {
                 if (!disposed) { ended = true; clearRenewal(); dispatch({ type: 'error', reasonCode: 'relay_open_failed' }); }
+            })
+            .finally(() => {
+                openSettled = true;
+                if (disposed) unsubscribe();
             });
 
         return () => {
             disposed = true;
             clearRenewal();
-            unsubscribe();
             stop();
+            // A late accepted capture needs its own final Stop before the carrier retires.
+            if (openSettled) unsubscribe();
         };
     }, [attempt, enabled, transport, serverId, simulatorId, sourceMachineId, targetMachineId, streamId, streamFamily, sourceId, sourceOccurrenceId]);
 

@@ -99,14 +99,27 @@ describe('resolveServerScopedMachineLiveStreamRelaySocket', () => {
         expect(client.socketId).toBe('viewer-socket-1');
 
         const listener = vi.fn();
-        client.onEnvelope(listener);
+        const unsubscribe = client.onEnvelope(listener);
         const envelope = makeStartEnvelope();
         client.sendEnvelope(envelope);
 
-        expect(apiSocketOnSpy).toHaveBeenCalledWith(listener);
+        const receive = apiSocketOnSpy.mock.calls[0][0];
+        receive(envelope);
+        expect(listener).toHaveBeenCalledWith(envelope);
         expect(apiSocketSendSpy).toHaveBeenCalledWith(envelope);
 
-        client.disconnect();
+        const closing = client.disconnect();
+        listener.mockClear();
+        receive(envelope);
+        expect(listener).not.toHaveBeenCalled();
+        apiSocketSendSpy.mockClear();
+        client.sendEnvelope(envelope);
+        expect(apiSocketSendSpy).toHaveBeenCalledWith(envelope);
+        unsubscribe();
+        await closing;
+        apiSocketSendSpy.mockClear();
+        client.sendEnvelope(envelope);
+        expect(apiSocketSendSpy).not.toHaveBeenCalled();
         expect(createEphemeralServerSocketClientSpy).not.toHaveBeenCalled();
     });
 
