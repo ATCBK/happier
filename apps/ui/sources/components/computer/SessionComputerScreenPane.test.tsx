@@ -122,17 +122,21 @@ describe('SessionComputerScreenPane retained source', () => {
         phase = 'mounting the real Computer body';
         const { SessionComputerScreenPane } = await import('./SessionComputerScreenPane');
         const { ComputerScreenViewer } = await import('./ComputerScreenViewer');
+        const { useRouter } = await import('expo-router');
         const store = createRetainedPresentationSlotsStore();
         const destinationId = 'computer-destination';
         const slotId = `${createSessionPaneScopeId(sessionId, home.id, destinationId)}:viewer:computer`;
         function Harness(props: Readonly<{ shell: 'pane' | 'floating' | 'closed' }>) {
+            // The existing Expo test boundary supplies the destination's platform navigation.
+            // Keep the real retained destination and approval owners beneath it.
+            const navigation = useRouter();
             const pane = props.shell === 'pane' ? <SessionComputerScreenPane
                 sessionId={sessionId} serverId={home.id} machineId={machineId} />
                 : props.shell === 'floating' ? <SessionComputerScreenPane
                     sessionId={sessionId} serverId={home.id} machineId={machineId} presentationSlotId={slotId} /> : null;
             return <SessionViewerSourceAccountScopeProvider accountLifetime={accountLifetime}><RetainedPresentationSlotsProvider store={store}>
-                {props.shell === 'pane' ? <DestinationInstanceHost tabId={destinationId}
-                    ref={{ kind: 'session', params: { id: sessionId } }} pathname={`/session/${sessionId}`} focused visible>
+                {props.shell !== 'closed' ? <DestinationInstanceHost tabId={destinationId}
+                    ref={{ kind: 'session', params: { id: sessionId } }} pathname={`/session/${sessionId}`} focused visible navigation={navigation}>
                     {pane}
                 </DestinationInstanceHost> : pane}
             </RetainedPresentationSlotsProvider></SessionViewerSourceAccountScopeProvider>;
