@@ -988,7 +988,9 @@ export async function startDaemon(
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
     const pidToSpawnResultResolver = new Map<number, (result: SpawnSessionResult) => void>();
     const pidToSpawnWebhookTimeout = new Map<number, NodeJS.Timeout>();
+    let hasPendingRunnerRestarts = () => false;
     const beforeShutdown = createBeforeShutdownDrain({
+      hasPendingRunnerRestarts: () => hasPendingRunnerRestarts(),
       admissionDrain,
       pidToAwaiter,
       pidToSpawnResultResolver,
@@ -2085,6 +2087,8 @@ export async function startDaemon(
       stopRequesterSessionForHandoff,
       isSessionAlreadyRunning,
       sessionRunnerStatus,
+      restartStaleSessionRunnersAfterDaemonStart,
+      hasPendingRunnerRestarts: readPendingRunnerRestarts,
       onChildExited,
       onTrackedSessionHealthy,
       controlPort,
@@ -2335,6 +2339,7 @@ export async function startDaemon(
       isShuttingDown: isDaemonQuiescing,
       processEnv: process.env,
     });
+    hasPendingRunnerRestarts = readPendingRunnerRestarts;
     processLeftBehindPass = sessionControlLeftBehindPass;
     await processLeftBehindPass.firstPass();
     const requesterForProcessOwner: Parameters<typeof createProcessActionExecutor>[0]['requesterForOwner'] = (owner, roots) => {
@@ -4150,6 +4155,9 @@ export async function startDaemon(
     });
 
     logger.debug('[DAEMON RUN] Daemon started successfully, waiting for shutdown request');
+
+    // Reattach and restart dependencies are ready. The pass contains and logs its failures.
+    void restartStaleSessionRunnersAfterDaemonStart();
 
     // Wait for shutdown request
     const shutdownRequest = await resolvesWhenShutdownRequested;

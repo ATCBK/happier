@@ -18188,8 +18188,60 @@ describe('startDaemonSessionControlRuntime', () => {
         }
     });
 
+    it('finishes an already-signalled refresh through respawn during shutdown while ordinary spawn stays closed', async () => {
+        const tracked: TrackedSession = { pid: 9991, happySessionId: 'sess-refresh-drain', startedBy: 'daemon',
+            processCommand: 'node /tmp/versions/0.2.10/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+            processCommandHash: 'a'.repeat(64), processStartTimeMs: 100, vendorResumeId: 'thread-drain',
+            spawnOptions: { directory: '/tmp/project', resume: 'thread-drain', existingSessionId: 'sess-refresh-drain',
+                backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' } } };
+        const pidToTrackedSession = new Map([[tracked.pid, tracked]]);
+        let shuttingDown = false;
+        let signalSent = false;
+        const processKill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+            if (Math.abs(pid) === tracked.pid && signal === 'SIGTERM') { signalSent = true; return true; }
+            if (signal === 0) throw Object.assign(new Error('missing fixture process'), { code: 'ESRCH' });
+            return true;
+        });
+        const pidSafetyModule = await import('../pidSafety');
+        const pidSafety = vi.spyOn(pidSafetyModule, 'isPidSafeHappySessionProcess').mockResolvedValue(true);
+        const realSignal = await vi.importActual<typeof import('../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal')>('../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal');
+        requestConnectedServiceSessionRestartSignalMock.mockImplementationOnce(realSignal.requestConnectedServiceSessionRestartSignal);
+        vi.mocked(executeSpawnSessionRequest).mockClear();
+        fetchSessionByIdCompatMock.mockResolvedValue(null);
+        const runtime = await startDaemonSessionControlRuntime({ machineId: 'machine-1',
+            credentials: { token: 'token-daemon', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
+            api: {} as never, connectedServicesMaterializationBaseDir: '/tmp/connected-services',
+            getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
+            pidToTrackedSession, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+            getApiMachineForSessions: () => null, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+            connectedServicesRestartRequestedPids: new Set(), beforeShutdown: vi.fn(), onHappySessionWebhook: vi.fn(), requestShutdown: vi.fn(),
+            isShuttingDown: () => shuttingDown, processEnv: { HAPPIER_DAEMON_SESSION_RESPAWN_ENABLED: 'false' },
+        });
+        const handlers = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0];
+        const refresh = handlers?.handleSessionRunnerRestart?.({ sessionId: 'sess-refresh-drain', mode: 'force_current_cli', reason: 'daemon_restart_session_runners_command' });
+        let refreshResult: unknown;
+        void refresh?.then(result => { refreshResult = result; });
+        try {
+            await vi.waitFor(() => expect([signalSent, refreshResult]).toEqual([true, undefined]));
+            shuttingDown = true;
+            await expect(runtime.spawnSession({ directory: '/tmp/new-project' })).resolves.toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE });
+            await runtime.onChildExited(tracked.pid, { reason: 'process-exited', code: null, signal: 'SIGTERM' });
+            await vi.waitFor(() => expect(executeSpawnSessionRequest).toHaveBeenCalled());
+            await expect(refresh).resolves.toMatchObject({ ok: true, status: 'restarted' });
+            expect(runtime.hasPendingRunnerRestarts()).toBe(false);
+        } finally {
+            processKill.mockRestore(); pidSafety.mockRestore(); await runtime.stopControlServer();
+        }
+    });
+
     it('forces respawn for connected-service restart-request exits before clearing the restart marker', async () => {
         vi.mocked(executeSpawnSessionRequest).mockClear();
+        let releaseSpawn!: () => void;
+        const spawnMayFinish = new Promise<void>(resolve => { releaseSpawn = resolve; });
+        vi.mocked(executeSpawnSessionRequest).mockImplementationOnce(async () => {
+            await spawnMayFinish;
+            return { type: 'success', sessionId: 'sess-connected-service-restart' };
+        });
         const connectedServicesRestartRequestedPids = new Set<number>([9999]);
         const pidToTrackedSession = new Map<number, TrackedSession>([
             [
@@ -18241,8 +18293,10 @@ describe('startDaemonSessionControlRuntime', () => {
             },
         });
 
+        expect(runtime.hasPendingRunnerRestarts()).toBe(true);
         await runtime.onChildExited(9999, { reason: 'process-exited', code: null, signal: 'SIGTERM' });
         expect(connectedServicesRestartRequestedPids.has(9999)).toBe(false);
+        expect(runtime.hasPendingRunnerRestarts()).toBe(true);
 
         await vi.waitFor(() => {
             expect(executeSpawnSessionRequest).toHaveBeenCalledWith(expect.objectContaining({
@@ -18251,15 +18305,17 @@ describe('startDaemonSessionControlRuntime', () => {
                     backendTarget: { kind: 'backend', backendId: 'gemini', sourceKind: 'built_in' },
                     connectedServiceMaterializationIdentityV1: connectedServiceMaterializationIdentity,
                     connectedServices: {
-                        v: 1,
+                        v: 2,
                         bindingsByServiceId: {
-                            gemini: { source: 'connected', selection: 'profile', profileId: 'gemini-backup' },
+                            'happier.agent.gemini/gemini-account': { source: 'connected', selection: 'profile', profileId: 'gemini-backup' },
                         },
                     },
                 }),
             }));
         });
 
+        releaseSpawn();
+        await vi.waitFor(() => expect(runtime.hasPendingRunnerRestarts()).toBe(false));
         vi.mocked(executeSpawnSessionRequest).mockClear();
         await runtime.stopControlServer();
     });
@@ -18872,18 +18928,24 @@ describe('startDaemonSessionControlRuntime', () => {
         expect(tracked.activeTurnId).toBe('session-turn:current');
     });
 
-    it('rejects exact custody when the authoritative marker write fails', async () => {
+    it.each([false, true])('rejects exact custody when the authoritative marker write fails (overlapping begin: %s)', async (overlap) => {
         const tracked: TrackedSession = {
             startedBy: 'daemon',
             happySessionId: 'sess-marker-failed',
             pid: 77,
             sessionRunnerPid: 78,
+            processCommand: 'node /tmp/versions/0.2.10/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+            processCommandHash: 'a'.repeat(64),
+            processStartTimeMs: 100,
+            vendorResumeId: 'thread-exact',
             spawnOptions: {
                 directory: '/tmp/project',
+                resume: 'thread-exact',
                 backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
             },
         };
-        updateSessionMarkerActiveTurnMock.mockResolvedValueOnce(false);
+        let releaseMarker!: (value: boolean) => void;
+        updateSessionMarkerActiveTurnMock.mockImplementationOnce(() => new Promise<boolean>(resolve => { releaseMarker = resolve; }));
         const runtime = await startDaemonSessionControlRuntime({
             machineId: 'machine-1',
             credentials: {
@@ -18909,11 +18971,38 @@ describe('startDaemonSessionControlRuntime', () => {
         });
         const controlServerInput = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0];
 
-        await expect(controlServerInput?.handleConnectedServiceTurnLifecycle?.({
+        const settingsDir = await mkdtemp(join(tmpdir(), 'happier-startup-refresh-settings-'));
+        const previousSettingsFile = configuration.settingsFile;
+        configuration.settingsFile = join(settingsDir, 'settings.json');
+        await writeFile(configuration.settingsFile, JSON.stringify({ schemaVersion: 6, restartSessionRunnersOnUpdate: true }));
+        onTestFinished(async () => { configuration.settingsFile = previousSettingsFile; await rm(settingsDir, { recursive: true, force: true }); });
+        let releaseSecondMarker: ((value: boolean) => void) | undefined;
+        if (overlap) updateSessionMarkerActiveTurnMock.mockImplementationOnce(() => new Promise<boolean>(resolve => { releaseSecondMarker = resolve; }));
+        const lifecycle = controlServerInput?.handleConnectedServiceTurnLifecycle?.({
             sessionId: 'sess-marker-failed',
             turnId: 'session-turn:exact-1',
             event: 'prompt_or_steer',
-        })).resolves.toEqual({
+        });
+        const secondLifecycle = overlap ? controlServerInput?.handleConnectedServiceTurnLifecycle?.({
+            sessionId: 'sess-marker-failed', turnId: 'session-turn:exact-2', event: 'task_started',
+        }) : undefined;
+        try {
+            if (overlap) {
+                releaseMarker(false);
+                await lifecycle;
+            }
+            await expect(controlServerInput?.handleSessionRunnerRestart?.({
+                sessionId: 'sess-marker-failed', mode: 'force_current_cli', dryRun: true,
+                reason: 'daemon_restart_session_runners_command',
+            })).resolves.toMatchObject({ status: 'busy', reasonCode: 'turn_in_progress' });
+            const startupPass = await runtime.restartStaleSessionRunnersAfterDaemonStart();
+            expect(startupPass).toMatchObject({ status: 'completed', result: {
+                restartedCount: 0, skippedCount: 1,
+                results: [expect.objectContaining({ status: 'busy', reasonCode: 'turn_in_progress' })],
+            } });
+        } finally { releaseMarker(false); releaseSecondMarker?.(false); }
+        await secondLifecycle;
+        await expect(lifecycle).resolves.toEqual({
             status: 'continue',
             turnCustody: {
                 status: 'ignored_marker_not_updated',
@@ -18922,14 +19011,11 @@ describe('startDaemonSessionControlRuntime', () => {
         });
 
         expect(removeRuntimeAuthFailureReportOutboxItemsForSessionMock).not.toHaveBeenCalled();
-        await expect(runtime.connectedServicePredictiveSwitchGuard({
-            sessionId: 'sess-marker-failed',
-            serviceId: 'openai-codex',
-            groupId: 'codex-team',
-            activeProfileId: 'primary',
-            agentId: 'codex',
-            reason: 'soft_threshold',
-        })).resolves.toEqual({ status: 'allow' });
+        await expect(controlServerInput?.handleSessionRunnerRestart?.({
+            sessionId: 'sess-marker-failed', mode: 'force_current_cli', dryRun: true,
+            reason: 'daemon_restart_session_runners_command',
+        })).resolves.toMatchObject({ status: 'dry_run_restartable' });
+        await runtime.stopControlServer();
     });
 
     it('acknowledges exact custody before provider proof and a later supersession settle on disposal', async () => {

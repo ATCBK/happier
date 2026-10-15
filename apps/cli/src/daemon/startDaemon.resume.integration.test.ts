@@ -283,6 +283,7 @@ const sessionRespawnManagerCapture = vi.hoisted(() => ({
   createSessionRunnerRespawnManager: vi.fn((params: { enabled: boolean }) => {
     const freshResumeCommits: Array<ReturnType<typeof vi.fn>> = [];
     const manager = {
+      hasPendingIntendedRestarts: vi.fn(() => false),
       markStopRequested: vi.fn(),
       prepareFreshExplicitResumeAdmission: vi.fn(() => {
         const commit = vi.fn();

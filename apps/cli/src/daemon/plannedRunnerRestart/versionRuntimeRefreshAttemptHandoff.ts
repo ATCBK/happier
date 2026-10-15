@@ -105,7 +105,11 @@ export function createVersionRuntimeRefreshAttemptHandoff<TCompletion>(params: R
   return {
     create,
     settle,
-    has: (sessionId: string, pid: number): boolean => attemptsBySessionAndPid.has(key(sessionId, pid)),
+    hasPending: (): boolean => attemptsBySessionAndPid.size > 0,
+    has: (sessionId: string, pid: number, tracked?: TrackedSession): boolean => {
+      const attempt = attemptsBySessionAndPid.get(key(sessionId, pid));
+      return !!attempt && (tracked === undefined || attempt.tracked === tracked);
+    },
     join: (input: Readonly<{
       sessionId: string;
       previousPid: number;

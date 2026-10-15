@@ -26,6 +26,7 @@ export type DaemonChildExit = Readonly<{ reason: string; code: number | null; si
 export type SessionRunnerRespawnDisposition = 'ignored' | 'scheduled' | 'terminal';
 
 export type SessionRunnerRespawnManager = Readonly<{
+  hasPendingIntendedRestarts: () => boolean;
   markStopRequested: (sessionId: string, request: StopRequest) => void;
   prepareFreshExplicitResumeAdmission: (sessionId: string) => () => void;
   handleUnexpectedExit: (
@@ -173,7 +174,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   jitterMs: number;
   isSessionAlreadyRunning: (sessionId: string) => boolean | Promise<boolean>;
   readStartupFailure?: (input: Readonly<{ sessionId: string; trackedSession: TrackedSession }>) => Promise<SessionRuntimeIssueV1 | null>;
-  spawnSession: (opts: SpawnSessionOptions) => Promise<unknown>;
+  spawnSession: (opts: SpawnSessionOptions, predecessor: Readonly<{ sessionId: string; previousPid: number; trackedSession: TrackedSession; intended: boolean }>) => Promise<unknown>;
   resolveRespawnOptions?: SessionRunnerRespawnOptionsResolver;
   onRespawnSuccess?: (input: Readonly<{
     sessionId: string;
@@ -418,7 +419,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         );
 
         void params
-          .spawnSession(respawnOptions)
+          .spawnSession(respawnOptions, { sessionId, previousPid, trackedSession, intended: existing.intended })
           .then((result) => {
             if (result && typeof result === 'object'
               && 'errorCode' in result
@@ -502,6 +503,10 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   };
 
   return {
+    hasPendingIntendedRestarts: () => {
+      for (const state of stateBySessionId.values()) if (state.intended) return true;
+      return false;
+    },
     markStopRequested: (sessionIdRaw: string, request: StopRequest) => {
       const sessionId = normalizeSessionId(sessionIdRaw);
       if (!sessionId) return;

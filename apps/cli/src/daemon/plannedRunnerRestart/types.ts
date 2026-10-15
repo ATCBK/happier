@@ -37,6 +37,7 @@ export type PlannedRunnerRestartNotSignaledReason =
   | 'activity_in_progress'
   | 'source_cutover_requirement_missing'
   | 'runner_identity_changed'
+  | 'shutting_down'
   | SessionRunnerRestartDisabledReason;
 
 export type PlannedRunnerRestartSignalGateResult =

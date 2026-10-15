@@ -159,6 +159,8 @@ export interface Settings {
   machineIdConfirmedByServerByServerId?: Record<string, boolean | undefined>
   machineReplacementCandidatesByServerIdByAccountId?: Record<string, Record<string, MachineReplacementCandidate> | undefined>
   daemonAutoStartWhenRunningHappy?: boolean
+  /** Opt-in startup refresh of stale runners; known active turns are skipped. */
+  restartSessionRunnersOnUpdate?: boolean
   chromeMode?: boolean
   plugins?: {
     devWatch?: boolean

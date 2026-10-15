@@ -187,6 +187,25 @@ hdev self update
 
 There is no separate public background-service installer endpoint today. Install the CLI first, then use setup or service commands on the machine you want to configure.
 
+### Refresh session runners after a CLI update
+
+Restarting the daemon preserves sessions. Each session runner continues using the CLI runtime it started with.
+To refresh eligible stale runners yourself, run `happier daemon restart-session-runners`; add `--dry-run` to preview.
+
+In development builds, you can opt in to automatic refresh at daemon startup:
+
+```bash
+hdev daemon restart-session-runners --on-update on
+```
+
+This setting is off by default and is read each time the daemon starts, including after a CLI update or service restart.
+The pass skips runners already current and runners the daemon observes as busy, including persisted active turns.
+Skipped runners are not retried automatically; run `hdev daemon restart-session-runners` later when ready.
+
+Activity notifications can be missed while the daemon is unavailable. The automatic pass can then interrupt active work
+that the daemon has not observed. Keep the setting off and use the manual command if you need to choose when runners restart.
+Turn it off again with `hdev daemon restart-session-runners --on-update off`.
+
 ### Side-by-side installs (stable vs preview vs dev)
 
 You can install all three public lanes side-by-side (`happier`, `hprev`, `hdev`) without them overwriting each other.

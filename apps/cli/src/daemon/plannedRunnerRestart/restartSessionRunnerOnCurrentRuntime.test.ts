@@ -23,6 +23,8 @@ import {
   resolveRequestAuthSourceCutoverRequirement,
 } from './requestAuthSourceCutover';
 import { applyTrackedSessionTurnLifecycle } from '../sessions/applyTrackedSessionTurnLifecycle';
+import { requestPlannedRunnerRestart } from './requestPlannedRunnerRestart';
+import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
 
 function currentIdentity(version: string): SessionRunnerEntrypointIdentity {
   return {
@@ -75,6 +77,46 @@ function providerRecoveryRequest() {
 }
 
 describe('restartSessionRunnerOnCurrentRuntime', () => {
+  it('keeps final shutdown cancellation within the existing public restart response schema', async () => {
+    const tracked = trackedSession();
+    const restartRequestedPids = new Set<number>();
+    let shuttingDown = false;
+    let probes = 0;
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      const result = await restartSessionRunnerOnCurrentRuntime({
+        request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'daemon_restart_session_runners_command' },
+        tracked,
+        currentIdentity: currentIdentity('0.2.11'),
+        requestRestart: async input => await requestPlannedRunnerRestart({
+          sessionId: input.sessionId,
+          tracked: input.tracked,
+          canSignal: input.canSignal,
+          deferral: { kind: 'none' },
+          restartRequestedPids,
+          pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+          isShuttingDown: () => shuttingDown,
+          isProcessSafeToSignal: async () => {
+            if (++probes === 2) shuttingDown = true;
+            return true;
+          },
+          requestSignal: signal => requestConnectedServiceSessionRestartSignal({
+            pid: tracked.pid,
+            delayMs: 0,
+            shouldSignal: signal.shouldSignal,
+            onSignalFailure: signal.onSignalFailure,
+            onProcessAlreadyMissing: signal.onProcessAlreadyMissing,
+          }),
+        }),
+      });
+      expect(RestartSessionRunnerResultV1Schema.parse(result)).toEqual({ ok: false, status: 'busy', sessionId: 'sess-1' });
+      expect(kill).not.toHaveBeenCalled();
+      expect(restartRequestedPids.size).toBe(0);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
   it('admits capability selection restart on the current version and preserves the existing vendor resume snapshot', async () => {
     const tracked = trackedSession();
     const request = RestartSessionRunnerRequestV1Schema.parse({ sessionId: 'sess-1', mode: 'force_current_cli', reason: 'capability_selection_change' });
@@ -1106,6 +1148,18 @@ describe('restartSessionRunnerOnCurrentRuntime', () => {
 });
 
 describe('restartAllSessionRunnersOnCurrentRuntime', () => {
+  it('stops a bulk pass between runners when shutdown begins', async () => {
+    let open = true;
+    const result = await restartAllSessionRunnersOnCurrentRuntime({
+      mode: 'if_stale', reason: 'restart_session_runners_on_update_config', currentIdentity: currentIdentity('0.2.11'),
+      trackedSessions: [trackedSession(), trackedSession({ pid: 4243, happySessionId: 'sess-2' })],
+      requestRestart: async () => { open = false; return { signaled: true }; },
+      shouldContinue: () => open,
+    });
+    expect(result.results.map(entry => entry.sessionId)).toEqual(['sess-1']);
+    expect(result.restartedCount).toBe(1);
+  });
+
   it.each([
     [
       'process birth',

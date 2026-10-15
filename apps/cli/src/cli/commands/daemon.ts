@@ -17,7 +17,7 @@ import { getLatestDaemonLog } from '@/ui/logger';
 import { runDoctorCommand } from '@/ui/doctor';
 import { listDaemonStatusesForAllKnownServers, stopAllDaemonsBestEffort } from '@/daemon/multiDaemon';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
-import { readSettings, readStoredCredentials } from '@/persistence';
+import { readSettings, readStoredCredentials, updateSettings } from '@/persistence';
 import { configuration } from '@/configuration';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
@@ -126,6 +126,7 @@ function printDaemonHelp(): void {
     `  ${cmd('happier daemon restart')}               Restart the daemon (stop → start)`,
     `  ${cmd('happier daemon restart --restart-session-runners')}  Restart the daemon, then refresh daemon-started session runners`,
     `  ${cmd('happier daemon restart-session-runners')}  Refresh stale daemon-started session runners`,
+    `  ${cmd('happier daemon restart-session-runners --on-update on|off')}  Set automatic stale-runner refresh at daemon startup`,
     `  ${cmd('happier daemon stop')}                  Stop a manual daemon (sessions stay alive; use happier service stop for installed background services)`,
     `  ${cmd('happier daemon stop --kill-sessions')}  Stop a manual daemon and its tracked sessions`,
     `  ${cmd('happier daemon stop --all')}            Stop daemons for all configured servers`,
@@ -494,6 +495,31 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
 
   if (daemonSubcommand === 'restart-session-runners') {
     const jsonRequested = args.includes('--json');
+    const onUpdateIndex = args.indexOf('--on-update');
+    if (onUpdateIndex >= 0) {
+      const value = args[onUpdateIndex + 1]?.trim().toLowerCase();
+      const conflict = ['--session-id', '--dry-run', '--force-current-cli'].find(flag => args.includes(flag));
+      let failure: { error: string; message: string } | null = null;
+      if (value !== 'on' && value !== 'off') {
+        failure = { error: 'invalid_on_update_value', message: '`--on-update` requires `on` or `off`.' };
+      } else if (conflict) {
+        failure = { error: 'on_update_conflicting_options', message: `--on-update only changes the setting and cannot be combined with ${conflict}.` };
+      } else {
+        try {
+          await updateSettings(current => ({ ...current, restartSessionRunnersOnUpdate: value === 'on' }));
+        } catch (error) {
+          failure = { error: 'settings_update_failed', message: `Failed to save the setting: ${error instanceof Error ? error.message : String(error)}` };
+        }
+      }
+      if (failure) {
+        if (jsonRequested) await printDaemonJson({ ok: false, ...failure });
+        else console.error(errorFrame('Automatic runner refresh setting failed', [failure.message]));
+        process.exit(1);
+      }
+      if (jsonRequested) await printDaemonJson({ ok: true, restartSessionRunnersOnUpdate: value === 'on' });
+      else console.log(ok(`Automatic session runner restart after updates: ${value}${value === 'on' ? ' (takes effect the next time the daemon starts)' : ''}`));
+      process.exit(0);
+    }
     const dryRun = args.includes('--dry-run');
     const mode = parseDaemonSessionRunnerRestartMode(args);
     const sessionIdOption = parseDaemonSessionIdOption(args);

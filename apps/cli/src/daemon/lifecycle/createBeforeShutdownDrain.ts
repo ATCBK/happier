@@ -9,6 +9,7 @@ type PendingRpcDrainApiMachine = Pick<ApiMachineClient, 'awaitPendingRpcRequests
 
 export type CreateBeforeShutdownDrainParams = Readonly<{
     admissionDrain?: DaemonAdmissionDrain;
+    hasPendingRunnerRestarts?: () => boolean;
     pidToAwaiter: Map<number, unknown>;
     pidToSpawnResultResolver: Map<number, SpawnResultResolver>;
     pidToSpawnWebhookTimeout: Map<number, NodeJS.Timeout>;
@@ -61,25 +62,32 @@ export function createBeforeShutdownDrain(
         if (beforeShutdownOnce) return await beforeShutdownOnce;
         beforeShutdownOnce = (async () => {
             const initialInFlightSpawns = params.pidToAwaiter.size;
+            const hasPendingRunnerRestarts = () => params.hasPendingRunnerRestarts?.() === true;
             const hasPendingRpcRequests = params.getApiMachineForSessions() !== null;
-            if (initialInFlightSpawns === 0 && !hasPendingRpcRequests) {
+            if (initialInFlightSpawns === 0 && !hasPendingRunnerRestarts() && !hasPendingRpcRequests) {
                 await drainFinalRuntimeWork(params);
                 return;
             }
 
             logger.debug('[DAEMON RUN] Shutdown requested with in-flight work; deferring shutdown', {
                 inFlightSpawns: initialInFlightSpawns,
+                pendingRunnerRestarts: hasPendingRunnerRestarts(),
                 pendingRpcDrainEnabled: hasPendingRpcRequests,
                 graceMs: params.shutdownSpawnDrainGraceMs,
                 pollMs: params.shutdownSpawnDrainPollMs,
             });
 
             const start = Date.now();
-            while (params.pidToAwaiter.size > 0 && Date.now() - start < params.shutdownSpawnDrainGraceMs) {
+            while ((params.pidToAwaiter.size > 0 || hasPendingRunnerRestarts()) && Date.now() - start < params.shutdownSpawnDrainGraceMs) {
                 // eslint-disable-next-line no-await-in-loop
                 await new Promise((resolve) => setTimeout(resolve, params.shutdownSpawnDrainPollMs));
             }
 
+            if (hasPendingRunnerRestarts()) {
+                logger.warn('[DAEMON RUN] Planned runner restart(s) did not drain before shutdown', {
+                    graceMs: params.shutdownSpawnDrainGraceMs,
+                });
+            }
             const remaining = params.pidToAwaiter.size;
             if (remaining === 0) {
                 logger.debug('[DAEMON RUN] In-flight spawn(s) drained; checking pending RPC requests');

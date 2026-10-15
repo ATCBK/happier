@@ -257,7 +257,7 @@ import {
 import type { ExternalActionIngressOwner } from '@/rpc/handlers/externalAction';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
-import { readStoredCredentialsForServerId, sameStoredCredentials, type StoredCredentials } from '@/persistence';
+import { readSettings, readStoredCredentialsForServerId, sameStoredCredentials, type StoredCredentials } from '@/persistence';
 
 import type { ConnectedServiceDaemonAuthBridgeRegistration } from '../connectedServices/daemonAuthBridgeTypes';
 import type { DeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
@@ -765,6 +765,7 @@ import {
   connectedServiceTurnLifecycleContinue,
 } from '../connectedServices/connectedServiceTurnLifecycleContract';
 import { requestPlannedRunnerRestart } from '../plannedRunnerRestart/requestPlannedRunnerRestart';
+import { restartStaleRunnersAfterDaemonStart } from '../plannedRunnerRestart/restartStaleRunnersAfterDaemonStart';
 import { createVersionRuntimeRefreshAttemptHandoff } from '../plannedRunnerRestart/versionRuntimeRefreshAttemptHandoff';
 import type {
   PlannedRunnerRestartNotSignaledReason,
@@ -2669,6 +2670,8 @@ export async function startDaemonSessionControlRuntime(
     stopSession: (sessionId: string, options?: StopSessionOptions) => Promise<StopSessionResult>;
     stopRequesterSessionForHandoff: (sessionId: string, expectedSpawnNonce: string) => Promise<'stopped' | 'already_inactive' | 'failed'>;
     isSessionAlreadyRunning: (sessionId: string) => Promise<boolean>;
+    restartStaleSessionRunnersAfterDaemonStart: () => ReturnType<typeof restartStaleRunnersAfterDaemonStart>;
+    hasPendingRunnerRestarts: () => boolean;
     sessionRunnerStatus: Readonly<{
       get: (
         request: SessionRunnerStatusGetRequestV1,
@@ -2799,6 +2802,7 @@ export async function startDaemonSessionControlRuntime(
   }>
 > {
   let notifySessionLiveWorkChanged: () => void = () => {};
+  let controlRuntimeResourcesDisposed = false;
   const isRuntimePublicationQuiescing =
     params.admissionDrain?.isPublicationQuiescing ??
     params.isShuttingDown ??
@@ -5444,9 +5448,13 @@ export async function startDaemonSessionControlRuntime(
   };
   const spawnSessionWithAdmission = async (
     options: SpawnSessionOptions,
-    behavior: Readonly<{ freshExplicitResume: boolean }>,
+    behavior: Readonly<{ freshExplicitResume: boolean; completingPlannedRestart?: boolean }>,
   ): Promise<SpawnSessionResult> => {
-    if (params.isShuttingDown?.() === true) {
+    const canCompletePlannedRestart = () => behavior.completingPlannedRestart === true
+      && !controlRuntimeResourcesDisposed
+      && !shutdownCancellationDomains.daemonWorkSignal.aborted;
+    const mayCompletePlannedRestart = canCompletePlannedRestart();
+    if (params.isShuttingDown?.() === true && !mayCompletePlannedRestart) {
       return {
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
@@ -5466,6 +5474,15 @@ export async function startDaemonSessionControlRuntime(
       {
         ...options,
         machineId: params.machineId,
+        ...(mayCompletePlannedRestart
+          ? {
+              beforeSessionRunnerLaunch: async () => {
+                if (!canCompletePlannedRestart()) return false;
+                if (options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()) return false;
+                return canCompletePlannedRestart();
+              },
+            }
+          : {}),
       },
       {
         nudgeAlreadyRunningPendingQueue: true,
@@ -6027,7 +6044,16 @@ export async function startDaemonSessionControlRuntime(
       return rawSession?.id === sessionId && rawSession.latestTurnStatus === 'failed'
         ? rawSession.lastRuntimeIssue ?? null : null;
     },
-    spawnSession: spawnSessionForInternalResume,
+    // Only the current intended respawn cycle may finish during shutdown drain.
+    // An existing version handoff must also retain this exact predecessor.
+    spawnSession: (options, predecessor) => spawnSessionWithAdmission(options, {
+      freshExplicitResume: false,
+      completingPlannedRestart: predecessor.intended && (
+        versionRuntimeRefreshAttemptHandoff.has(
+          predecessor.sessionId, predecessor.previousPid, predecessor.trackedSession,
+        ) || !versionRuntimeRefreshAttemptHandoff.has(predecessor.sessionId, predecessor.previousPid)
+      ),
+    }),
     resolveRespawnOptions: async (input) =>
       await resolveRespawnSessionOptionsWithRuntimeSnapshot({
         ...input,
@@ -6117,9 +6143,16 @@ export async function startDaemonSessionControlRuntime(
         });
       },
     });
+  // A begin marker write may await disk before exact custody is accepted. Inhibit restarts
+  // during that observation without giving rejected lifecycle input authority in the queue.
+  // Separate entries keep overlapping begins protected until each observation settles.
+  const pendingTurnBegins = new Set<Readonly<{ sessionId: string }>>();
   const resolveSessionRunnerActivityDisabledReason = (
     sessionId: string,
   ): SessionRunnerRestartDisabledReason | null => {
+    for (const begin of pendingTurnBegins) {
+      if (begin.sessionId === sessionId) return 'turn_in_progress';
+    }
     const tracked = findTrackedSessionByHappySessionId(
       params.pidToTrackedSession.values(),
       sessionId,
@@ -6207,6 +6240,7 @@ export async function startDaemonSessionControlRuntime(
       },
       restartRequestedPids: params.connectedServicesRestartRequestedPids,
       pidToTrackedSession: params.pidToTrackedSession,
+      isShuttingDown: isRuntimePublicationQuiescing,
       observeRunnerRetirement: observeSessionRunnerRetirement,
       canSignal: async () => {
         await assertSessionAccountCurrent(input.sessionId, accountContext);
@@ -6287,6 +6321,7 @@ export async function startDaemonSessionControlRuntime(
       deferral: { kind: 'none' },
       restartRequestedPids: params.connectedServicesRestartRequestedPids,
       pidToTrackedSession: params.pidToTrackedSession,
+      isShuttingDown: isRuntimePublicationQuiescing,
       canSignal:
         input.canSignal ??
         (() =>
@@ -11372,7 +11407,6 @@ export async function startDaemonSessionControlRuntime(
   let browserDiagnosticsRoutesPublished = false;
   let browserRecordingRoutesPublished = false;
   let refreshBrowserRouteOwnersInFlight: Promise<void> | null = null;
-  let controlRuntimeResourcesDisposed = false;
   let managedServiceDurabilityOwner: ManagedServiceDurabilityOwner | null =
     null;
   let managedServiceEndpointReadOwner: ReturnType<
@@ -17817,6 +17851,7 @@ export async function startDaemonSessionControlRuntime(
       },
       handleSessionRunnerRestartAll: async (request) => {
         return await restartAllSessionRunnersOnCurrentRuntime({
+          shouldContinue: () => !isRuntimePublicationQuiescing(),
           mode: request.mode,
           reason: request.reason,
           dryRun: request.dryRun === true,
@@ -17963,75 +17998,40 @@ export async function startDaemonSessionControlRuntime(
             return CONNECTED_SERVICE_TURN_LIFECYCLE_SOURCE_CUTOVER_BLOCK;
           }
         }
-        const turnCustody = await applyTrackedSessionTurnLifecycle({
-          trackedSessions: params.pidToTrackedSession.values(),
-          sessionId: input.sessionId,
-          event: input.event,
-          ...(input.turnId ? { turnId: input.turnId } : {}),
-          ...(pendingSourceCutover &&
-          input.event === 'prompt_or_steer' &&
-          input.activeTurnId !== undefined
-            ? {
-                activeTurnIdWitness: input.activeTurnId,
-              }
-            : {}),
-        });
-        const acceptsDownstreamLifecycle =
-          turnCustody.status === 'recorded' ||
-          turnCustody.status === 'ignored_missing_exact_turn';
-        if (!acceptsDownstreamLifecycle || controlRuntimeResourcesDisposed) {
-          return connectedServiceTurnLifecycleContinue(turnCustody);
-        }
-        const runtimeTargetAtAcceptance =
-          connectedServiceRuntimeRegistry.getBySessionId(input.sessionId) ??
-          null;
-        connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
-          sessionId: input.sessionId,
-          event: input.event,
-        });
-        // Exact marker custody is the control response boundary. Provider proof and report-outbox
-        // supersession are downstream settlement: keep their established order, but do not let
-        // either strand the runner's accepted begin/terminal lifecycle acknowledgement.
-        void Promise.resolve()
-          .then(async () => {
-            if (
-              controlRuntimeResourcesDisposed ||
-              (runtimeTargetAtAcceptance !== null &&
-                !isCurrentRuntimeGenerationTarget(runtimeTargetAtAcceptance))
-            ) {
-              return;
-            }
-            if (
-              isProviderActivityTurnLifecycleEvent(
-                input.event,
-                input.terminalStatus,
-              )
-            ) {
-              if (turnCustody.status === 'recorded') {
-                connectedServiceRuntimeAuthSwitchAttempts.recordTurnLifecycle({
-                  sessionId: input.sessionId, event: input.event, terminalStatus: input.terminalStatus,
-                });
-                await temporaryThrottleScheduler.recordTurnLifecycle({
-                  sessionId: input.sessionId,
-                  event: input.event,
-                  terminalStatus: input.terminalStatus,
-                  observedAtMs: lifecycleObservedAtMs,
-                });
-              }
-              const providerOutcome = runtimeTargetAtAcceptance
-                ? await verifyProviderActivityOutcome({
-                    target: runtimeTargetAtAcceptance,
-                    reportedSelectionsEnvRaw:
-                      input.connectedServiceSelectionsEnvRaw,
-                    event:
-                      input.event === 'task_started'
-                        ? 'task_started'
-                        : 'assistant_message_end',
-                  }).catch(() => ({
-                    status: 'unavailable' as const,
-                    reason: 'provider_outcome_verification_failed',
-                  }))
-                : { status: 'unsupported' as const };
+        const pendingBegin = { sessionId: input.sessionId };
+        if (input.event === 'prompt_or_steer' || input.event === 'task_started') pendingTurnBegins.add(pendingBegin);
+        try {
+          const turnCustody = await applyTrackedSessionTurnLifecycle({
+            trackedSessions: params.pidToTrackedSession.values(),
+            sessionId: input.sessionId,
+            event: input.event,
+            ...(input.turnId ? { turnId: input.turnId } : {}),
+            ...(pendingSourceCutover &&
+            input.event === 'prompt_or_steer' &&
+            input.activeTurnId !== undefined
+              ? {
+                  activeTurnIdWitness: input.activeTurnId,
+                }
+              : {}),
+          });
+          const acceptsDownstreamLifecycle =
+            turnCustody.status === 'recorded' ||
+            turnCustody.status === 'ignored_missing_exact_turn';
+          if (!acceptsDownstreamLifecycle || controlRuntimeResourcesDisposed) {
+            return connectedServiceTurnLifecycleContinue(turnCustody);
+          }
+          const runtimeTargetAtAcceptance =
+            connectedServiceRuntimeRegistry.getBySessionId(input.sessionId) ??
+            null;
+          connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
+            sessionId: input.sessionId,
+            event: input.event,
+          });
+          // Exact marker custody is the control response boundary. Provider proof and report-outbox
+          // supersession are downstream settlement: keep their established order, but do not let
+          // either strand the runner's accepted begin/terminal lifecycle acknowledgement.
+          void Promise.resolve()
+            .then(async () => {
               if (
                 controlRuntimeResourcesDisposed ||
                 (runtimeTargetAtAcceptance !== null &&
@@ -18039,60 +18039,101 @@ export async function startDaemonSessionControlRuntime(
               ) {
                 return;
               }
-              await recordConnectedServiceContinuationProviderActivity({
+              if (
+                isProviderActivityTurnLifecycleEvent(
+                  input.event,
+                  input.terminalStatus,
+                )
+              ) {
+                if (turnCustody.status === 'recorded') {
+                  connectedServiceRuntimeAuthSwitchAttempts.recordTurnLifecycle({
+                    sessionId: input.sessionId, event: input.event, terminalStatus: input.terminalStatus,
+                  });
+                  await temporaryThrottleScheduler.recordTurnLifecycle({
+                    sessionId: input.sessionId,
+                    event: input.event,
+                    terminalStatus: input.terminalStatus,
+                    observedAtMs: lifecycleObservedAtMs,
+                  });
+                }
+                const providerOutcome = runtimeTargetAtAcceptance
+                  ? await verifyProviderActivityOutcome({
+                      target: runtimeTargetAtAcceptance,
+                      reportedSelectionsEnvRaw:
+                        input.connectedServiceSelectionsEnvRaw,
+                      event:
+                        input.event === 'task_started'
+                          ? 'task_started'
+                          : 'assistant_message_end',
+                    }).catch(() => ({
+                      status: 'unavailable' as const,
+                      reason: 'provider_outcome_verification_failed',
+                    }))
+                  : { status: 'unsupported' as const };
+                if (
+                  controlRuntimeResourcesDisposed ||
+                  (runtimeTargetAtAcceptance !== null &&
+                    !isCurrentRuntimeGenerationTarget(runtimeTargetAtAcceptance))
+                ) {
+                  return;
+                }
+                await recordConnectedServiceContinuationProviderActivity({
+                  sessionId: input.sessionId,
+                  observedAtMs: lifecycleObservedAtMs,
+                  ...(providerOutcome.status === 'unsupported'
+                    ? {}
+                    : {
+                        providerOutcomeTargets:
+                          providerOutcome.status === 'verified'
+                            ? providerOutcome.targets
+                            : [],
+                      }),
+                });
+              }
+              if (
+                controlRuntimeResourcesDisposed ||
+                (runtimeTargetAtAcceptance !== null &&
+                  !isCurrentRuntimeGenerationTarget(runtimeTargetAtAcceptance))
+              ) {
+                return;
+              }
+              // Runtime-auth report-outbox supersession remains owned by its canonical cleaner.
+              await connectedServiceRecoverySupersessionCleaner({
                 sessionId: input.sessionId,
-                observedAtMs: lifecycleObservedAtMs,
-                ...(providerOutcome.status === 'unsupported'
-                  ? {}
-                  : {
-                      providerOutcomeTargets:
-                        providerOutcome.status === 'verified'
-                          ? providerOutcome.targets
-                          : [],
-                    }),
+                event: {
+                  kind: 'turn_lifecycle',
+                  event: input.event,
+                  ...(input.terminalStatus
+                    ? { terminalStatus: input.terminalStatus }
+                    : {}),
+                },
+                updatedBeforeMs: lifecycleObservedAtMs,
               });
-            }
-            if (
-              controlRuntimeResourcesDisposed ||
-              (runtimeTargetAtAcceptance !== null &&
-                !isCurrentRuntimeGenerationTarget(runtimeTargetAtAcceptance))
-            ) {
-              return;
-            }
-            // Runtime-auth report-outbox supersession remains owned by its canonical cleaner.
-            await connectedServiceRecoverySupersessionCleaner({
-              sessionId: input.sessionId,
-              event: {
-                kind: 'turn_lifecycle',
-                event: input.event,
-                ...(input.terminalStatus
-                  ? { terminalStatus: input.terminalStatus }
-                  : {}),
-              },
-              updatedBeforeMs: lifecycleObservedAtMs,
+            })
+            .catch((error) => {
+              logger.debug(
+                '[DAEMON RUN] Connected-service turn lifecycle downstream settlement failed after custody (non-fatal)',
+                {
+                  sessionId: input.sessionId,
+                  event: input.event,
+                  error: serializeAxiosErrorForLog(error),
+                },
+              );
             });
-          })
-          .catch((error) => {
-            logger.debug(
-              '[DAEMON RUN] Connected-service turn lifecycle downstream settlement failed after custody (non-fatal)',
-              {
-                sessionId: input.sessionId,
-                event: input.event,
-                error: serializeAxiosErrorForLog(error),
-              },
+          if (
+            pendingSourceCutover &&
+            turnCustody.status === 'recorded' &&
+            (input.event === 'assistant_message_end' ||
+              input.event === 'turn_cancelled')
+          ) {
+            await requestPendingRequestAuthSourceCutoverAtBoundary(
+              pendingSourceCutover,
             );
-          });
-        if (
-          pendingSourceCutover &&
-          turnCustody.status === 'recorded' &&
-          (input.event === 'assistant_message_end' ||
-            input.event === 'turn_cancelled')
-        ) {
-          await requestPendingRequestAuthSourceCutoverAtBoundary(
-            pendingSourceCutover,
-          );
+          }
+          return connectedServiceTurnLifecycleContinue(turnCustody);
+        } finally {
+          pendingTurnBegins.delete(pendingBegin);
         }
-        return connectedServiceTurnLifecycleContinue(turnCustody);
       },
       handleConnectedServiceQuotaRecoveryCreditConsume: async (input) => {
         const coordinator = params.getConnectedServiceQuotasCoordinator();
@@ -18905,6 +18946,24 @@ export async function startDaemonSessionControlRuntime(
       return result.status === 'stopped' ? 'stopped' : 'failed';
     },
     isSessionAlreadyRunning,
+    hasPendingRunnerRestarts: () => versionRuntimeRefreshAttemptHandoff.hasPending()
+      || params.connectedServicesRestartRequestedPids.size > 0
+      || sessionRunnerRespawnManager.hasPendingIntendedRestarts(),
+    restartStaleSessionRunnersAfterDaemonStart: () => restartStaleRunnersAfterDaemonStart({
+      readSettings,
+      isShuttingDown: isRuntimePublicationQuiescing,
+      restart: () => ({
+        currentIdentity: resolveCurrentSessionRunnerLaunchIdentity(),
+        resolveCurrentIdentity: resolveCurrentSessionRunnerLaunchIdentity,
+        trackedSessions: Array.from(params.pidToTrackedSession.values()),
+        requestRestart: requestSessionRunnerVersionRuntimeRefresh,
+        resolveActivityDisabledReason: resolveSessionRunnerActivityDisabledReason,
+        resolveAgentRuntimeCurrentness: resolveTrackedRunnerRuntimeCurrentness,
+        refreshTrackedSessionRuntimeSnapshot: refreshTrackedSessionRuntimeSnapshotForPlannedRestart,
+      }),
+      logDebug: (message, payload) => logger.debug(message, payload),
+      logWarn: (message, payload) => logger.warn(message, payload),
+    }),
     sessionRunnerStatus: {
       get: resolveSessionRunnerStatus,
       getV2: resolveSessionRunnerStatusV2,

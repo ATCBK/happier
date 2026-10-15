@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { configuration } from '@/configuration';
+import { readSettings } from '@/persistence';
 import { dirname, join } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { renderSystemdServiceUnit } from '@happier-dev/cli-common/service';
@@ -79,6 +82,37 @@ vi.mock('@/daemon/multiDaemon', () => ({
 import { handleDaemonCliCommand } from './daemon';
 
 describe('handleDaemonCliCommand: daemon restart', () => {
+    it('persists --on-update without daemon IPC and reads the stored opt-in back', async () => {
+        await withTempDir('happier-runner-update-setting-', async homeDir => {
+            const original = { happyHomeDir: configuration.happyHomeDir, settingsFile: configuration.settingsFile };
+            Object.assign(configuration, { happyHomeDir: homeDir, settingsFile: join(homeDir, 'settings.json') });
+            const output = captureStdoutJsonOutput();
+            vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit:${code}`); }) as never);
+            try {
+                for (const enabled of [true, false]) {
+                    await expect(handleDaemonCliCommand({ args: ['daemon', 'restart-session-runners', '--on-update', enabled ? 'on' : 'off', '--json'], rawArgv: [], terminalRuntime: null })).rejects.toThrow('exit:0');
+                    expect(JSON.parse(await readFile(configuration.settingsFile, 'utf8'))).toMatchObject({ restartSessionRunnersOnUpdate: enabled });
+                    expect(await readSettings()).toMatchObject({ restartSessionRunnersOnUpdate: enabled });
+                }
+                expect(restartAllSessionRunnersMock).not.toHaveBeenCalled();
+                expect(restartSessionRunnerMock).not.toHaveBeenCalled();
+            } finally { output.restore(); Object.assign(configuration, original); }
+        });
+    });
+
+    it.each([
+        [['--on-update', 'maybe'], 'invalid_on_update_value'],
+        [['--on-update', 'on', '--dry-run'], 'on_update_conflicting_options'],
+    ])('rejects invalid setting options without daemon IPC (%s)', async (options, error) => {
+        const output = captureStdoutJsonOutput();
+        vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit:${code}`); }) as never);
+        try {
+            await expect(handleDaemonCliCommand({ args: ['daemon', 'restart-session-runners', ...options, '--json'], rawArgv: [], terminalRuntime: null })).rejects.toThrow('exit:1');
+            expect(output.json()).toMatchObject({ ok: false, error });
+            expect(restartAllSessionRunnersMock).not.toHaveBeenCalled();
+        } finally { output.restore(); }
+    });
+
     const envScope = createEnvKeyScope([
         'HAPPIER_HOME_DIR',
         'HAPPIER_ACTIVE_SERVER_ID',

@@ -24,6 +24,7 @@ export type RequestPlannedRunnerRestartParams = Readonly<{
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
   requestSignal: (request: PlannedRunnerRestartSignalRequest) => Promise<PlannedRunnerRestartSignalResult>;
   canSignal?: () => PlannedRunnerRestartSignalGateResult | Promise<PlannedRunnerRestartSignalGateResult>;
+  isShuttingDown?: () => boolean;
   isProcessSafeToSignal?: (params: Readonly<{
     pid: number;
     expectedProcessCommandHash?: string;
@@ -162,7 +163,13 @@ export async function requestPlannedRunnerRestart(
             : allowedByActivityGate;
           return false;
         }
-        return await exactProcessWitnessIsCurrent();
+        if (!await exactProcessWitnessIsCurrent()) return false;
+        // Shutdown can begin during either awaited process or activity probe.
+        if (params.isShuttingDown?.()) {
+          notSignaledReason = 'shutting_down';
+          return false;
+        }
+        return true;
       },
       onSignalFailure: (error) => {
         clearUnsignaledRequest(params.onSignalFailureLogMessage

@@ -154,6 +154,7 @@ function mapRestartNotSignaledReasonToDisabledReason(
     || reason === 'stale_owner'
     || reason === 'unsafe_process'
     || reason === 'superseded'
+    || reason === 'shutting_down'
     || reason === 'runner_identity_changed'
   ) {
     return null;
@@ -620,6 +621,7 @@ export async function restartAllSessionRunnersOnCurrentRuntime(input: Readonly<{
     tracked: TrackedSession,
   ) => Promise<SessionRunnerAgentRuntimeCurrentness>;
   refreshTrackedSessionRuntimeSnapshot?: RefreshTrackedSessionRuntimeSnapshot;
+  shouldContinue?: () => boolean;
 }>): Promise<RestartAllSessionRunnersResult> {
   const results: RestartSessionRunnerResult[] = [];
   const restartTargets = input.trackedSessions.map((tracked) => ({
@@ -628,6 +630,7 @@ export async function restartAllSessionRunnersOnCurrentRuntime(input: Readonly<{
       captureRunnerRestartIdentityWitness(tracked),
   }));
   for (const target of restartTargets) {
+    if (input.shouldContinue && !input.shouldContinue()) break;
     const { tracked, expectedRunnerProcessIdentity } = target;
     const sessionId = normalizeString(tracked.happySessionId);
     if (!sessionId) continue;

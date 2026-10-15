@@ -25,6 +25,40 @@ function makeTracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
 }
 
 describe('requestPlannedRunnerRestart', () => {
+  it.each(['none', 'connected_service_switch'] as const)('does not signal after shutdown begins during the final process probe (%s)', async (kind) => {
+    const tracked = makeTracked();
+    const restartRequestedPids = new Set<number>();
+    const handoff = createVersionRuntimeRefreshAttemptHandoff<RestartSessionRunnerCompletion>({
+      timeoutMs: 60_000, timeoutCompletion: { ok: false, status: 'partial_failure' },
+      supersededCompletion: { ok: false, status: 'partial_failure' },
+      cancelledCompletion: { ok: false, status: 'partial_failure' },
+    });
+    const target = { sessionId: 'sess-1', previousPid: tracked.pid, tracked };
+    let shuttingDown = false;
+    let probes = 0;
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const queue = createConnectedServiceSwitchDeferralQueue({ timeoutMs: 60_000, disableDeferral: false });
+    try {
+      const request = { sessionId: 'sess-1', tracked, restartRequestedPids,
+        completion: { hasPending: () => handoff.has('sess-1', tracked.pid),
+          join: () => handoff.join(target), create: () => handoff.create(target) },
+        pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        deferral: kind === 'none' ? { kind } : { kind, source: 'automatic' as const,
+          policy: 'defer_until_turn_boundary' as const, target: { serviceId: 'svc', profileId: 'p', generation: 2 }, turnDeferralQueue: queue },
+        isShuttingDown: () => shuttingDown,
+        isProcessSafeToSignal: async () => { if (++probes === 2) shuttingDown = true; return true; },
+        requestSignal: (input: PlannedRunnerRestartSignalRequest) => requestConnectedServiceSessionRestartSignal({
+          pid: tracked.pid, delayMs: 0, shouldSignal: input.shouldSignal,
+          onSignalFailure: input.onSignalFailure, onProcessAlreadyMissing: input.onProcessAlreadyMissing,
+        }),
+      };
+      await expect(requestPlannedRunnerRestart(request)).resolves.toEqual({ signaled: false, notSignaledReason: 'shutting_down' });
+      expect(kill).not.toHaveBeenCalled();
+      expect(restartRequestedPids.size).toBe(0);
+      expect(handoff.hasPending()).toBe(false);
+    } finally { kill.mockRestore(); await queue.cancelAll('daemon_shutdown'); }
+  });
+
   it('reserves the tracked pid before signaling and leaves respawn reservation for requested signal', async () => {
     const tracked = makeTracked();
     const restartRequestedPids = new Set<number>();

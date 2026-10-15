@@ -7,11 +7,38 @@ import {
 import {
     createProviderLaunchResourceScope,
 } from '@/providers/lifecycle/resourceScope';
+import { createVersionRuntimeRefreshAttemptHandoff } from '../plannedRunnerRestart/versionRuntimeRefreshAttemptHandoff';
 import { createBeforeShutdownDrain } from './createBeforeShutdownDrain';
 import { createDaemonAdmissionDrain } from './admissionDrain';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations';
 
 describe('createBeforeShutdownDrain', () => {
+    it('drains an already-signalled refresh before a replacement enters the spawn map', async () => {
+        vi.useFakeTimers();
+        const handoff = createVersionRuntimeRefreshAttemptHandoff({ timeoutMs: 60_000,
+            timeoutCompletion: 'timeout', supersededCompletion: 'superseded', cancelledCompletion: 'cancelled' });
+        const attempt = handoff.create({ sessionId: 'session', previousPid: 42,
+            tracked: { pid: 42, startedBy: 'daemon', happySessionId: 'session' } });
+        let finished = false;
+        const beforeShutdown = createBeforeShutdownDrain({
+            pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+            shutdownSpawnDrainGraceMs: 100, shutdownSpawnDrainPollMs: 10,
+            getApiMachineForSessions: () => null, hasPendingRunnerRestarts: () => handoff.hasPending(),
+            buildUnexpectedSpawnResult: (errorMessage) => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage }),
+        });
+        const shutdown = beforeShutdown().then(() => { finished = true; });
+        try {
+            await vi.advanceTimersByTimeAsync(10);
+            expect(finished).toBe(false);
+            handoff.transferPid('session', 42, 43);
+            handoff.settle('session', 43, 'success');
+            await vi.advanceTimersByTimeAsync(10);
+            await shutdown;
+            await expect(attempt.promise).resolves.toBe('success');
+            expect(finished).toBe(true);
+        } finally { handoff.settle('session', 42, 'cancelled'); handoff.settle('session', 43, 'cancelled'); vi.useRealTimers(); }
+    });
+
     it.each(['no-machine', 'rpc-drained', 'rpc-grace-expired', 'machine-detached'] as const)(
         'retains finite process custody through unconfirmed Stop before plugin disposal (%s)',
         async (shutdownPath) => {

@@ -1974,6 +1974,30 @@ lost correlation surfaces the canonical `outcomeUnknown` result with its
 [Pending delivery architecture](pending-delivery.md#execution-run-targets) for
 the queued/blocked lifecycle behind those codes.
 
+## Automatic session-runner refresh (0.3 development)
+
+`hdev daemon restart-session-runners --on-update on|off` changes the optional local
+`restartSessionRunnersOnUpdate` setting through the existing locked settings writer,
+without contacting the daemon. It defaults off. Once startup reattach and control
+runtime composition finish, `startDaemon` invokes the session-control runtime's
+nonblocking startup pass. That pass delegates `if_stale` and reason
+`restart_session_runners_on_update_config` to the existing bulk/per-runner restart
+owners, preserving exact process witnesses, Agent-runtime currentness, resume
+eligibility and known turn custody. It skips observed busy runners without retry.
+Missed notifications, including during daemon downtime, can leave activity
+unobserved; this opt-in does not provide fresh runner-owned idle admission.
+
+The planned signal primitive checks the daemon admission owner's shutdown state
+after its awaited identity/activity probes. Bulk passes stop before the next
+runner once shutdown begins. The existing shutdown spawn-drain budget also covers
+pending refresh handoffs, including the interval after signal and before a spawn
+awaiter exists. Restart reservations and the respawn owner's existing intended-cycle
+state also cover connected-service restarts. Only the current intended respawn cycle
+may complete before control-runtime disposal; a version handoff must match its exact
+predecessor. Ordinary spawn/resume stays closed. Begin-marker
+observations temporarily inhibit restarts without publishing rejected lifecycle
+input into the turn queue; accepted terminal lifecycle precedes slow recovery cleanup.
+
 ## Local state and configuration
 
 ```mermaid

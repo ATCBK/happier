@@ -562,6 +562,99 @@ describe('Custom ACP fresh daemon launch composition', () => {
     }
   }, 180_000);
 
+  it.each([false, true])('admits an intended shutdown replacement through the real spawn owner and settles its terminal refusal (late disposal: %s)', async (disposeDuringLaunch) => {
+    let daemon: Awaited<ReturnType<typeof startDaemonSessionControlRuntime>> | undefined;
+    let shuttingDown = false;
+    let launchReached = false;
+    let signalSent = false;
+    let physicalLaunchReached = false;
+    const sessionId = 'cpr536restart0000000000001';
+    const originalFetch = globalThis.fetch;
+    const spies: Array<{ mockRestore(): void }> = [];
+    const target = AgentExecutionTargetV1Schema.parse({ kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'alpha' });
+    const base = params('alpha', async () => false);
+    let producedDescriptor: ReturnType<typeof RuntimeDescriptorV1Schema.parse> | undefined;
+    await executeSpawnSessionRequest(params('alpha', async () => {
+      const bootstrapDir = join(storage.home, 'tmp', 'runner-agent-session-bootstraps');
+      const [file] = await readdir(bootstrapDir);
+      const bootstrap = AgentRuntimeRunnerBootstrapV1Schema.parse(JSON.parse(await readFile(join(bootstrapDir, file!), 'utf8')));
+      producedDescriptor = bootstrap.launch?.runtimeDescriptorV1;
+      return false;
+    }));
+    if (!producedDescriptor) throw new Error('Real spawn preparation did not publish the retained descriptor');
+    storage.runnerWrapperPid = process.pid + 1_000_000;
+    storage.runnerCommand = `${process.execPath} /tmp/versions/0.2.10/package-dist/index.mjs custom-acp --happy-starting-mode remote --started-by daemon`;
+    storage.runnerExited = false;
+    const tracked: TrackedSession = { startedBy: 'daemon', pid: storage.runnerWrapperPid,
+      happySessionId: sessionId, processCommand: storage.runnerCommand, processStartTimeMs: 2,
+      processCommandHash: (await import('node:crypto')).createHash('sha256').update(storage.runnerCommand).digest('hex'),
+      vendorResumeId: 'pr536-native-thread', spawnOptions: { ...base.options, agentTarget: target,
+        backendTarget: projectResolvedAgentBackendTarget(target, producedDescriptor.agentId),
+        runtimeDescriptorV1: producedDescriptor, existingSessionId: sessionId, resume: 'pr536-native-thread',
+        beforeSessionRunnerLaunch: async () => {
+          launchReached = true;
+          expect(shuttingDown).toBe(true);
+          if (!disposeDuringLaunch) return false;
+          const bootstrapDir = join(storage.home, 'tmp', 'runner-agent-session-bootstraps');
+          const [file] = await readdir(bootstrapDir);
+          storage.runnerBootstrapPath = join(bootstrapDir, file!);
+          storage.runnerSpawn = () => { physicalLaunchReached = true; throw new Error('Physical launch reached after control disposal'); };
+          await daemon?.stopControlServer();
+          return true;
+        } } };
+    const trackedSessions = new Map([[tracked.pid, tracked]]);
+    const row = { ...createSessionNotificationContextFixture(sessionId), encryptionMode: 'plain' as const };
+    const actualKill = process.kill;
+    spies.push(vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (Math.abs(pid) === tracked.pid) {
+        if (signal === 0 && storage.runnerExited) throw Object.assign(new Error('Synthetic predecessor exited'), { code: 'ESRCH' });
+        if (signal !== 0) signalSent = true;
+        return true;
+      }
+      return actualKill(pid, signal);
+    }));
+    spies.push(vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname === `/v2/sessions/${sessionId}`) return homeResponse({ session: row });
+      if (pathname === '/v1/account/encryption/currentness') return homeResponse(createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
+      if (pathname === '/v1/auth/ping') return homeResponse({ ok: true });
+      if (pathname === '/v1/artifacts') return homeResponse([]);
+      throw new Error(`Unexpected test Home GET ${pathname}`);
+    }));
+    try {
+      daemon = await startDaemonSessionControlRuntime({ machineId: 'df38-machine', serverId: 'df38-home',
+        serverBaseUrl: configuration.serverUrl, credentials: storage.credentials, api,
+        connectedServicesMaterializationBaseDir: join(storage.home, 'connected-services'),
+        getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
+        pidToTrackedSession: trackedSessions, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+        getApiMachineForSessions: () => null, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+        connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {}, onHappySessionWebhook: () => {},
+        requestShutdown: () => {}, isShuttingDown: () => shuttingDown,
+        processEnv: { HAPPIER_DAEMON_SESSION_RESPAWN_MAX_ATTEMPTS: '1', HAPPIER_DAEMON_SESSION_INTENDED_RESTART_MAX_ATTEMPTS: '1',
+          HAPPIER_DAEMON_SESSION_RESPAWN_BASE_DELAY_MS: '50', HAPPIER_DAEMON_SESSION_RESPAWN_JITTER_MS: '0' } });
+      const persistence = await import('@/persistence');
+      const currentSettings = await persistence.readSettings();
+      spies.push(vi.spyOn(persistence, 'readSettings').mockResolvedValueOnce({ ...currentSettings, restartSessionRunnersOnUpdate: true }));
+      const refresh = daemon.restartStaleSessionRunnersAfterDaemonStart();
+      await vi.waitFor(() => expect(signalSent).toBe(true));
+      shuttingDown = true;
+      await expect(daemon.spawnSession({ directory: storage.home })).resolves.toMatchObject({ type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' });
+      storage.runnerExited = true;
+      await daemon.onChildExited(tracked.pid, { reason: 'process-exited', code: null, signal: 'SIGTERM' });
+      await vi.waitFor(() => expect(launchReached).toBe(true));
+      const response = await refresh;
+      expect(response).toMatchObject({ status: 'completed', result: { failedCount: 1 } });
+      expect(physicalLaunchReached).toBe(false);
+      await vi.waitFor(() => expect(daemon?.hasPendingRunnerRestarts()).toBe(false));
+    } finally {
+      await daemon?.stopControlServer();
+      for (const spy of spies.reverse()) spy.mockRestore();
+      vi.stubGlobal('fetch', originalFetch);
+      storage.runnerCommand = ''; storage.runnerExited = false; storage.runnerWrapperPid = 0;
+      storage.runnerSpawn = null; storage.runnerBootstrapPath = '';
+    }
+  });
+
   it('carries the admitted bootstrap through the real catalog runner into strict model ingress', async () => {
     // Process exit and file logging are OS boundaries. No runner, catalog,
     // model resolver or host runtime is replaced. Absent daemon authority
