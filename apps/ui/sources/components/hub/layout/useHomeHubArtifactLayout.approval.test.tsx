@@ -2,6 +2,7 @@ import * as React from 'react';
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -30,7 +31,11 @@ it('offers review when the real Home queue creates a group-removal approval with
     connection = await restoreServerAccountForTest({ serverUrl: 'https://home-group-approval.test', accountId: 'account-a', request: homes.request });
     installHomeGovernanceBoundaries(homes);
     const scope = { serverId, accountId: 'account-a' };
-    storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
+    const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+        actions: { 'widgets.item.remove': { approvalRequiredSurfaces: ['ui'] } },
+    }) };
+    storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope, settings });
+    homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
     const executor = createDefaultActionExecutor();
     expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'group_add', group: {
         kind: 'group', id: 'own-group', title: 'Release checks', width: 'full', frameStyle: 'card', dividers: 'hairline',

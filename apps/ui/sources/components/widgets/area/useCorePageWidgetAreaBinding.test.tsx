@@ -79,7 +79,9 @@ it('keeps an untouched Usage widget unchanged while its configured UI edit await
 });
 
 it('reports a pending new Usage view without treating its approval as an applied layout', async () => {
-    setActionPolicy(normalizeActionsSettingsV1({ v: 1 }));
+    setActionPolicy(normalizeActionsSettingsV1({ v: 1,
+        actions: { 'widgets.area.layout.create': { approvalRequiredSurfaces: ['ui'] } },
+    }));
     const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
         { id: 'overview', name: 'Overview', items: [] },
     ] };
@@ -117,7 +119,9 @@ it('keeps an edited preset and offers no Undo while Reset is awaiting approval',
         await act(async () => { expect(await port.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Personal' })).toMatchObject({ ok: true }); });
         const artifactId = buildWidgetSurfaceArtifactIdV1(binding!.surface!);
         const before = artifacts.readPlainBody(artifactId);
-        setActionPolicy(normalizeActionsSettingsV1({ v: 1 }));
+        setActionPolicy(normalizeActionsSettingsV1({ v: 1,
+            actions: { 'widgets.area.layout.reset': { approvalRequiredSurfaces: ['ui'] } },
+        }));
         await screen.pressByTestIdAsync('pending.preset.reset');
         await vi.waitFor(() => expect(readPresentationNotice()).toMatchObject({ severity: 'info', message: 'widgetAdd.areaApprovalPending' }));
         expect(readPresentationNotice()?.undo).toBeUndefined();
@@ -142,7 +146,9 @@ it('retains the selected user view while Delete awaits approval', async () => {
         await act(async () => { expect(await hook.getCurrent().binding.selectLayout('personal')).toMatchObject({ ok: true }); });
         const personal = hook.getCurrent().layouts.state.dashboards.find(row => row.name === 'Personal')!;
         const before = artifacts.readPlainBody(personal.artifactId);
-        setActionPolicy(normalizeActionsSettingsV1({ v: 1 }));
+        setActionPolicy(normalizeActionsSettingsV1({ v: 1,
+            actions: { 'widgets.area.layout.delete': { approvalRequiredSurfaces: ['ui'] } },
+        }));
         let removed!: ReturnType<ReturnType<typeof hook.getCurrent>['layouts']['remove']>;
         await act(async () => { removed = hook.getCurrent().layouts.remove(personal); });
         await vi.waitFor(() => expect(hook.getCurrent().layouts.approvalId).toBeTypeOf('string'));
