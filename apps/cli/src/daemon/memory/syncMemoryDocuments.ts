@@ -1,4 +1,5 @@
 import type { MemorySearchQueryV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
 import { MemoryDocBodyV1StoredSchema, MEMORY_ARCHIVE_TOPIC_TITLE_V1, projectMemoryDocIndexV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { PromptDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptDocV2';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -8,7 +9,7 @@ import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/
 import { prepareSessionPromptStackInputs } from '@/agent/prompting/coding/sessionPromptStack';
 import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
-import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionInventoryPage } from '@/daemon/sessions/sessionInventoryVisibility';
 import type { StoredCredentials } from '@/persistence';
@@ -67,16 +68,23 @@ export async function syncMemoryDocuments(params: Readonly<{
     assertAccount();
     const accountMode = (await fetchAccountEncryptionCurrentness({ token: params.credentials.token, signal: params.signal })).mode;
     nextPhase('session_inventory');
-    const sessionIds = new Set<string>();
-    if (params.scope.type === 'session') sessionIds.add(params.scope.sessionId);
+    const sessions = new Map<string, RawSessionRecord>();
+    if (params.scope.type === 'session') {
+      const session = await fetchSessionById({ token: params.credentials.token, sessionId: params.scope.sessionId, signal: params.signal });
+      if (session) sessions.set(session.id, session);
+    }
     else {
       // Document attachments are current context, not transcript backfill/history coverage.
       for (const scope of params.includeArchivedSessions ? ['active', 'archived'] as const : ['active'] as const) {
         let cursor: string | undefined;
         const seen = new Set<string>();
         for (;;) {
-          const page = await fetchSessionInventoryPage({ token: params.credentials.token, scope, cursor, signal: params.signal });
-          for (const session of page.sessions) sessionIds.add(session.id);
+          const page = await fetchSessionInventoryPage({ token: params.credentials.token, scope, cursor,
+            limit: SESSION_LIST_PAGE_MAX_LIMIT, signal: params.signal });
+          if (page.metadataUpgradeRequiredCount) throw new Error('session_inventory_incomplete');
+          // The authenticated page already carries the complete metadata tuple.
+          // Keep this admission's records instead of re-fetching every Session.
+          for (const session of page.sessions) sessions.set(session.id, session);
           if (!page.hasNext) break;
           if (!page.nextCursor || seen.has(page.nextCursor)) throw new Error('session_inventory_incomplete');
           seen.add(page.nextCursor);
@@ -98,13 +106,14 @@ export async function syncMemoryDocuments(params: Readonly<{
         if (!read) { read = reader.readArtifact(ref); reads.set(key(ref), read); }
         return read;
       };
-      const admit = async (sessionId?: string) => {
+      let accountCatalogRefreshed = false;
+      let profileCatalogRefreshed = false;
+      const admit = async (session?: RawSessionRecord) => {
+        const sessionId = session?.id;
         nextPhase('session_metadata');
         let metadata: Record<string, unknown> | null = null;
         let machineId = params.machineId;
-        if (sessionId) {
-          const session = await fetchSessionById({ token: params.credentials.token, sessionId, signal: params.signal });
-          if (!session) return;
+        if (session) {
           if (!params.includeArchivedSessions && session.archivedAt != null) return;
           metadata = tryDecryptSessionOwnerMetadataView({ credentials: params.credentials, accountEncryptionMode: accountMode, rawSession: session });
           if (!metadata) throw new Error('context_source_unavailable');
@@ -115,7 +124,12 @@ export async function syncMemoryDocuments(params: Readonly<{
         nextPhase('prompt_inputs');
         const prepared = await prepareSessionPromptStackInputs({ credentials: params.credentials, metadata, sessionId,
           machineId, directory: typeof metadata?.path === 'string' ? metadata.path : undefined,
-          serverId: home.serverId, signal: params.signal, refreshCatalogs: true, accountContext });
+          serverId: home.serverId, signal: params.signal, accountContext,
+          refreshCatalogs: !accountCatalogRefreshed || (typeof metadata?.profileId === 'string' && !profileCatalogRefreshed) });
+        // Currentness assertions and invalidation still run for every Session;
+        // a finite admission shares the fresh Account/Profile catalog reads.
+        accountCatalogRefreshed = true;
+        if (prepared.profileId) profileCatalogRefreshed = true;
         if (prepared.scope?.accountId !== home.accountId) throw new Error('context_source_unavailable');
         assertions.push(prepared.assertCurrentAccount);
         nextPhase('prompt_admission');
@@ -157,7 +171,7 @@ export async function syncMemoryDocuments(params: Readonly<{
         }
       };
       if (params.scope.type === 'global') await admit();
-      for (const id of sessionIds) await admit(id);
+      for (const session of sessions.values()) await admit(session);
       const assertCurrent = () => {
         params.signal?.throwIfAborted();
         for (const assert of assertions) assert();
