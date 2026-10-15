@@ -76,6 +76,7 @@ import { HomeIdleResettle } from '@/components/atmosphere/HomeIdleResettle';
 import { HomeHero, useHomeHeroFrame } from './HomeHero';
 import { LookChip, type LookTarget } from '@/components/atmosphere/look/LookChip';
 import { subscribeHomeCustomizeRequest } from './header/homeCustomizeRequest';
+import { useHomeHubGuidanceKind } from './useHomeHubGuidanceKind';
 
 // The Home on the status line: its name, and where it lives while nothing is running (J1).
 const renderHomeLine = (detail: 'full' | 'name') => <HomeWhereLine detail={detail} separated />;
@@ -405,7 +406,9 @@ function HomeNewRowTarget(props: Readonly<{
  * getting-started guidance is the home instead.
  */
 export const HomeHub = React.memo(function HomeHub() {
-    const guidance = useSessionGettingStartedGuidanceBaseModel();
+    const observedGuidance = useSessionGettingStartedGuidanceBaseModel();
+    const homeUnavailable = useActiveHomeUnavailable();
+    const guidance = { ...observedGuidance, kind: useHomeHubGuidanceKind(observedGuidance.kind, homeUnavailable) };
     const greeting = useReturningGreeting();
     const title = useHomeGreeting();
     const layout = useHomeHubLayout();
@@ -477,7 +480,6 @@ export const HomeHub = React.memo(function HomeHub() {
     }), [phone, placement, planetSource]);
     const homeReport = React.useMemo(() => ({ waiting: homeLoading, target: momentTarget, drawn: homePlanetDrawn, orientation: momentOrientation }),
         [homeLoading, homePlanetDrawn, momentOrientation, momentTarget]);
-    const homeUnavailable = useActiveHomeUnavailable();
     const loadingMoment = useHomeLoadingMoment({
         waiting: homeLoading && isAtmosphereMomentOn(atmosphere.moments, 'loading'), start: 'mount', abort: homeUnavailable, paused: false,
         reducedMotion: atmosphere.reducedMotion, theme: homeTheme, pane: hubPane,
