@@ -352,6 +352,7 @@ export function Select(props: SelectProps): ReactElement {
 const SELECT_MENU_SEPARATOR = ' · ';
 
 const SELECT_FIELD_PLACEHOLDER_TRANSLATION_KEY = 'happier.plugin-ui.select.choose';
+const SELECT_FIELD_COUNT_TRANSLATION_KEY = 'happier.plugin-ui.select.count';
 
 function planFormSelect(props: SelectProps) {
   return planHappierSelectOptions({
@@ -371,10 +372,14 @@ function SelectMenu(props: SelectProps & Readonly<{ appearance: 'menu' | 'field'
   const translate = usePluginTranslation();
   const plan = planFormSelect(props);
   const chosen = plan.options.filter((entry) => entry.selected);
-  // One choice is named; several are counted, so the trigger stays compact.
+  // One choice is named; several are counted, so the trigger stays compact. A field box stands alone
+  // beside its row title, so its count says what it counts; a toolbar menu's trailing number is enough.
   const summary = chosen.length === 0
     ? null
-    : chosen.length === 1 ? chosen[0]!.option.label : String(chosen.length);
+    : chosen.length === 1 ? chosen[0]!.option.label
+      : props.appearance === 'field'
+        ? translate(SELECT_FIELD_COUNT_TRANSLATION_KEY, `${chosen.length} selected`, { count: chosen.length })
+        : String(chosen.length);
   const placeholder = translate(SELECT_FIELD_PLACEHOLDER_TRANSLATION_KEY, 'Choose…');
   const trigger = props.appearance === 'field'
     ? summary ?? placeholder

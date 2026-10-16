@@ -3,7 +3,7 @@ import { View } from 'react-native';
 
 import { ScmDiffSummaryFailureNotice } from '@/components/sessions/files/comparison/ScmDiffSummaryFailureNotice';
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
-import { ScmDiffSummaryStartOptions, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
+import { ScmDiffSummaryStartOptions, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting, useSummaryModelChoice } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 import { t } from '@/text';
 
@@ -32,7 +32,7 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
     const plan = props.plan;
     const bound = plan.binding;
     const openExplainSetting = useOpenExplainChangesSetting();
-    const [choosingModel, setChoosingModel] = React.useState(false);
+    const modelChoice = useSummaryModelChoice(bound.modelChoices);
     const canStart = plan.supportedComparison && bound.canSend && bound.launch.canLaunchExecutionRuns;
     const addToSaved = plan.addToSaved;
     const start = React.useMemo(() => {
@@ -67,13 +67,13 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
     const actions = React.useMemo(() => (onShowInGit ? { ...plan.actions, onShowInGit } : plan.actions), [onShowInGit, plan.actions]);
     const failureNotice = plan.phase === 'ready' && bound.generationFailure ? (
         <ScmDiffSummaryFailureNotice testID="commit-proposal" failure={bound.generationFailure}
-            onChooseModel={() => setChoosingModel(true)} onEnableExplain={openExplainSetting}
+            onChooseModel={modelChoice.choose} onEnableExplain={openExplainSetting}
             onRetry={canStart ? () => { void bound.onStart(['commitPlan']); } : undefined} />
     ) : null;
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
             {props.renderBar(plan.proposal?.groups.length ?? null)}
-            {choosingModel ? <ScmDiffSummaryModelPicker value={bound.model} onChange={bound.setModel} modelChoices={bound.modelChoices}
+            {modelChoice.choosing ? <ScmDiffSummaryModelPicker value={bound.model} onChange={bound.setModel} modelChoices={bound.modelChoices}
                 machineId={bound.machine?.machineId} serverId={bound.serverId} /> : null}
             <CommitProposalView
                 proposal={plan.proposal}

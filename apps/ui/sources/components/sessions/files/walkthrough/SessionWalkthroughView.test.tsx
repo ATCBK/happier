@@ -599,8 +599,13 @@ describe('SessionWalkthroughView START through real generation and model owners'
         expect(screen.getTextContent()).not.toContain('Provider xyz');
         expect(screen.getTextContent()).not.toContain('MODEL_UNAVAILABLE');
         expect(screen.findAllByType(ScmDiffSummaryModelPicker)).toHaveLength(0);
-        await screen.pressByTestIdAsync('walkthrough-choose-model');
-        expect(screen.findAllByType(ScmDiffSummaryModelPicker)).toHaveLength(1);
+        // The action puts the picker on screen with its choices open; the open popover listens to the browser window, which this host lacks.
+        vi.stubGlobal('window', { addEventListener: () => {}, removeEventListener: () => {}, setTimeout, clearTimeout, visualViewport: undefined });
+        try {
+            await screen.pressByTestIdAsync('walkthrough-choose-model');
+            expect(screen.findAllByType(ScmDiffSummaryModelPicker)).toHaveLength(1);
+            expect(screen.findAllByType(ScmDiffSummaryModelPicker)[0]!.props.modelChoices.open).toBe(true);
+        } finally { vi.unstubAllGlobals(); }
     }, 120_000);
 
     it('keeps Start unavailable while Explain changes is off, says so, and leads to the setting', async () => {

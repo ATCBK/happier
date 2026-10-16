@@ -1636,6 +1636,7 @@ const ptValues = {
     ...commitProposalTranslations.pt,
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations.pt,
     pluginSurfaces: {
+        selectCount: '{count} selecionados',
         state: {
             loading: { title: 'A carregar conteúdo do plugin', reason: 'A mostrar o conteúdo disponível enquanto o Happier carrega a atualização mais recente.' },
             refreshing: { title: 'A atualizar conteúdo do plugin', reason: 'A mostrar o último conteúdo disponível enquanto o Happier procura atualizações.' },
@@ -12224,7 +12225,7 @@ settingsSession: {
         summaryRunner: {
           title: "Gerador de resumos (sob demanda)",
           backendTitle: "Motor",
-          backendPlaceholder: "claude (ex.)",
+          chooseBackendFirst: "Escolha primeiro um backend",
           searchBackendsPlaceholder: "Buscar backends…",
           modelTitle: "Modelo (LLM)",
           modelPlaceholder: "default (ex.)",

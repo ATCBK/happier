@@ -189,6 +189,71 @@ describe('Summary model discovery', () => {
         }));
         await screen.unmount();
     });
+    /** One configured Agent on one Machine whose strict catalog observation is whatever `execute` answers. */
+    async function mountPickerOver(name: string, execute: () => unknown) {
+        const serverUrl = `https://${name}.example.test`;
+        const serverIdentityId = `srv_${name.replaceAll('-', '_')}`;
+        const accountId = `${name}-account`;
+        const token = `test.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 1,
+            provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.test`;
+        const homeId = await homes.addHome({ name, serverUrl, serverIdentityId,
+            accountId, credentials: { token }, accountEncryptionMode: 'plain', currentAccount: true });
+        const scope = { serverId: homeId, accountId };
+        const target = { kind: 'backend' as const, backendId: 'review-bot', configuredBackendId: 'review-bot' };
+        const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'review-bot', name: 'review-bot', title: 'Review Bot',
+            launch: { kind: 'command' as const, command: 'review-cli', args: ['acp'] }, env: {}, createdAt: 1, updatedAt: 1 }] });
+        homes.answer(homeId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 1, content: { t: 'plain', v: record } }) });
+        homes.answer(homeId, '/v1/account/encryption/currentness', { body: {
+            mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+        const machine = createMachineFixture({ id: `${name}-machine`, activeAt: Date.now() });
+        const boundary = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId,
+            machineId: machine.id, actionId: 'agents.models.list', tokenEpoch: 1, execute });
+        for (const path of ['/v1/machines', '/v1/actions/agents.models.list/execution-authorization', '/v1/actions/agents.models.list']) {
+            homes.answer(homeId, path, { select: async input => {
+                const response = await boundary.handle(new URL(path, serverUrl), input === undefined ? undefined
+                    : { method: 'POST', body: JSON.stringify(input) });
+                if (!response) throw new Error(`Unexpected catalog boundary path: ${path}`);
+                return { body: await response.json() };
+            } });
+        }
+        getStorage().setState({ settingsScope: scope, profileScope: scope,
+            machines: { [machine.id]: machine }, machineListByServerId: { [homeId]: [machine] } });
+        const screen = await renderSettingsView(<ScmDiffSummaryModelPicker value="" onChange={vi.fn()}
+            machineId={machine.id} serverId={homeId} defaultBackendTarget={target} />);
+        const menu = () => screen.findAll(node => node.type === DropdownMenu)[0];
+        await act(async () => { menu().props.onOpenChange(true); });
+        return { screen, menu, target };
+    }
+    const catalogOf = (target: { kind: 'backend'; backendId: string; configuredBackendId: string }, failure?: unknown) => ({ items: [],
+        scmDiffSummaryCatalog: { profiles: [], automaticProfiles: [], discoveryTargetKeys: [buildBackendTargetKeyV2(target)],
+            ...(failure ? { probeFailures: [{ backendTargetKey: buildBackendTargetKeyV2(target), spawnFailure: failure }] } : {}) } });
+    const reviewBot = { kind: 'backend' as const, backendId: 'review-bot', configuredBackendId: 'review-bot' };
+    it.each([
+        { errno: 'ENOENT', title: 'Not installed on this machine', next: 'Check its command and working directory, then try again.' },
+        { errno: 'EACCES', title: 'Can’t run on this machine', next: 'Check its execution permissions, then try again.' },
+        { errno: undefined, title: 'Couldn’t start on this machine', next: 'Try again in a moment.' },
+    ])('says why an Agent that cannot start is unavailable ($errno) instead of listing nothing', async ({ errno, title, next }) => {
+        // The Machine's strict observation: no model could be listed because the Agent's process did not start.
+        const { screen, menu } = await mountPickerOver(`summary-probe-failure-${errno ?? 'other'}`.toLowerCase(),
+            () => catalogOf(reviewBot, errno ? { reason: 'other', errno } : { reason: 'too_many_open_files' }));
+        const items = () => menu().props.items as ReadonlyArray<{ id: string; title: string; subtitle?: string; category: string }>;
+        await vi.waitFor(() => expect(items().map(item => item.title)).toEqual([title]));
+        // The Agent keeps its section with one row that says what happened and what to check; pressing it asks again.
+        // No model row is invented, and neither the errno nor the command's path reaches the person.
+        expect(items()[0]).toMatchObject({ id: `backend-discovery:${buildBackendTargetKeyV2(reviewBot)}`, subtitle: next });
+        expect(JSON.stringify(items())).not.toMatch(/E[A-Z]{3,}\b|review-cli/u);
+        await screen.unmount();
+    });
+    it.each([
+        { name: 'summary-empty-loading', label: 'Loading models…', execute: () => new Promise(() => {}) },
+        { name: 'summary-empty-refused', label: 'Couldn’t load models. Try again.', execute: () => { throw new Error('machine unreachable'); } },
+        { name: 'summary-empty-none', label: 'No models found', execute: () => ({ items: [], scmDiffSummaryCatalog: { profiles: [], automaticProfiles: [], discoveryTargetKeys: [] } }) },
+    ])('says why the menu is empty rather than "No commands found": $name', async ({ name, label, execute }) => {
+        const { screen, menu } = await mountPickerOver(name, execute);
+        await vi.waitFor(() => expect(menu().props.emptyLabel).toBe(label));
+        await screen.unmount();
+    });
     it('offers no Load models operation, and no placeholder model row, when no machine can answer it', async () => {
         const screen = await renderSettingsView(<ScmDiffSummaryModelPicker value="" onChange={vi.fn()} />);
         const items: ReadonlyArray<{ id: string; title: string }> = screen.findAll(node => node.type === DropdownMenu)[0]!.props.items;

@@ -1433,6 +1433,7 @@ const frValues = {
     ...commitProposalTranslations.fr,
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations.fr,
     pluginSurfaces: {
+        selectCount: '{count} sélectionnés',
         state: {
             loading: { title: 'Chargement du contenu du plugin', reason: 'Affichage du contenu disponible pendant que Happier charge la dernière mise à jour.' },
             refreshing: { title: 'Actualisation du contenu du plugin', reason: 'Affichage du dernier contenu disponible pendant que Happier vérifie les mises à jour.' },
@@ -11847,7 +11848,7 @@ settingsSession: {
         summaryRunner: {
           title: "Générateur de résumé (à la demande)",
           backendTitle: "Back-end",
-          backendPlaceholder: "claude",
+          chooseBackendFirst: "Choisis d’abord un backend",
           searchBackendsPlaceholder: "Rechercher un backend…",
           modelTitle: "Modèle",
           modelPlaceholder: "default",

@@ -15,17 +15,23 @@ import { t } from '@/text';
 import type { useScmDiffSummaryBinding } from './useScmDiffSummaryBinding';
 
 /**
- * The copy of a refused or failed generation, from the diff-summary store's typed presentation: one sentence
- * and, for every reason but a plain retry (Start is the retry), the next step. Codes never reach the person.
+ * The copy of a refused or failed generation, from the diff-summary store's typed presentation: one sentence and,
+ * for every reason but a plain retry (Start is the retry), the next step. Codes never reach the person. A next step
+ * that is an action (choose a model, turn Explain changes on) is `action`, offered only where there is something to
+ * press; a next step with nothing to press (update the machine, reconnect it) is `nextStep`, a sentence of its own.
  */
 export function describeScmDiffSummaryFailure(failure: ScmDiffSummaryFailurePresentation): Readonly<{
     message: string;
     nextStep: string | null;
+    action: string | null;
     nextAction: ScmDiffSummaryFailurePresentation['nextAction'];
 }> {
+    const next = failure.nextAction === 'retry' ? null : t(failure.nextActionKey);
+    const pressable = failure.nextAction === 'chooseModel' || failure.nextAction === 'enableExplain';
     return {
         message: t(failure.messageKey),
-        nextStep: failure.nextAction === 'retry' ? null : t(failure.nextActionKey),
+        nextStep: pressable ? null : next,
+        action: pressable ? next : null,
         nextAction: failure.nextAction,
     };
 }
@@ -84,11 +90,11 @@ export function ScmDiffSummaryStartOptions(props: Readonly<{
                         </View>
                         {failure?.nextAction === 'chooseModel' && props.onChooseModel ? (
                             <View style={styles.nextStepLink}>
-                                <TextLinkButton testID={`${props.testID}-choose-model`} tone="strong" label={failure.nextStep!} onPress={props.onChooseModel} />
+                                <TextLinkButton testID={`${props.testID}-choose-model`} tone="strong" label={failure.action!} onPress={props.onChooseModel} />
                             </View>
                         ) : failure?.nextAction === 'enableExplain' && props.onEnableExplain ? (
                             <View style={styles.nextStepLink}>
-                                <TextLinkButton testID={`${props.testID}-enable-explain`} tone="strong" label={failure.nextStep!} onPress={props.onEnableExplain} />
+                                <TextLinkButton testID={`${props.testID}-enable-explain`} tone="strong" label={failure.action!} onPress={props.onEnableExplain} />
                             </View>
                         ) : failure?.nextStep ? <Text style={styles.nextStep}>{failure.nextStep}</Text> : null}
                     </>
@@ -96,6 +102,17 @@ export function ScmDiffSummaryStartOptions(props: Readonly<{
             </View>
         </View>
     );
+}
+
+/**
+ * The model choice of a surface that already shows a result: the picker is not on screen until the person is sent
+ * to it (a refusal's "Choose model", a refresh with no usable model), and then it opens with its choices showing.
+ */
+export function useSummaryModelChoice(modelChoices: Readonly<{ setOpen: (open: boolean) => void }>): Readonly<{ choosing: boolean; choose: () => void }> {
+    const [choosing, setChoosing] = React.useState(false);
+    const { setOpen } = modelChoices;
+    const choose = React.useCallback(() => { setChoosing(true); setOpen(true); }, [setOpen]);
+    return { choosing, choose };
 }
 
 /** Opens the setting that turns Explain changes on: the next step of a refusal for it being off. */

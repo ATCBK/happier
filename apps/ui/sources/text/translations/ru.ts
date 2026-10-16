@@ -1425,6 +1425,7 @@ const ruValues = {
     ...commitProposalTranslations.ru,
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations.ru,
     pluginSurfaces: {
+        selectCount: 'Выбрано: {count}',
         state: {
             loading: { title: 'Загрузка содержимого плагина', reason: 'Пока Happier загружает последнее обновление, отображается доступное содержимое.' },
             refreshing: { title: 'Обновление содержимого плагина', reason: 'Пока Happier проверяет обновления, отображается последнее доступное содержимое.' },
@@ -11937,7 +11938,7 @@ settingsSession: {
         summaryRunner: {
           title: "Генератор сводок (по запросу)",
           backendTitle: "Бэкенд",
-          backendPlaceholder: "claude (пример)",
+          chooseBackendFirst: "Сначала выберите бэкенд",
           searchBackendsPlaceholder: "Поиск бэкендов…",
           modelTitle: "Модель (LLM)",
           modelPlaceholder: "default (пример)",

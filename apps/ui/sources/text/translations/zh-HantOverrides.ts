@@ -1493,6 +1493,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
     },
   },
   pluginSurfaces: {
+      selectCount: '已選擇 {count} 項',
     state: {
       loading: { title: '正在載入外掛內容', reason: 'Happier 載入最新更新時，將顯示目前可用的內容。' },
       refreshing: { title: '正在重新整理外掛內容', reason: 'Happier 檢查更新時，將顯示上次可用的內容。' },
@@ -10169,7 +10170,7 @@ settingsSession: {
               summaryRunner: {
                   title: '摘要執行器（按需）',
                   backendTitle: '後端',
-                  backendPlaceholder: 'claude',
+                  chooseBackendFirst: '請先選擇後端',
                   searchBackendsPlaceholder: '搜尋後端…',
                   modelTitle: '模型',
                   modelPlaceholder: 'default',

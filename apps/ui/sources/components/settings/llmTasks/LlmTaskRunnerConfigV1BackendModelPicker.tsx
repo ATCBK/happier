@@ -133,7 +133,6 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
         popoverBoundaryRef={props.popoverBoundaryRef}
         itemTrigger={{
           title: t('settingsSession.replayResume.summaryRunner.backendTitle'),
-          subtitle: t('settingsSession.replayResume.summaryRunner.backendPlaceholder'),
           detailFormatter: () => selectedBackendLabel,
           itemProps: { testID: props.backendTestID, ...(showLabels ? {} : { showDivider: true }) },
         }}
@@ -167,6 +166,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
         variant="selectable"
         search={true}
         searchPlaceholder={t('settingsSession.replayResume.summaryRunner.searchModelsPlaceholder')}
+        emptyLabel={selectedGroup ? t('walkthroughSettings.noModels') : t('settingsSession.replayResume.summaryRunner.chooseBackendFirst')}
         selectedId={modelId}
         showCategoryTitles={false}
         matchTriggerWidth={true}

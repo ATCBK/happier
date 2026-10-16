@@ -16,7 +16,7 @@ import type { SessionScmReviewComparison } from '@/components/sessions/panes/det
 import { resolveScmDiffSummaryDiscussionTarget } from '@/sync/domains/scm/diffSummary/discussion';
 import { writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
-import { ScmDiffSummaryStartOptions, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
+import { ScmDiffSummaryStartOptions, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting, useSummaryModelChoice } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { applySavedScmDiffSummaryResult } from '@/sync/ops/scmDiffSummary/generate';
 import { getStorage } from '@/sync/domains/state/storage';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
@@ -65,6 +65,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     const bound = props.bound;
     const { scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
         error, setError, model, setModel, modelChoices, modelAvailable, selected, starting } = bound;
+    const modelChoice = useSummaryModelChoice(modelChoices);
     const displayHomeId = scope?.serverId ?? props.serverId;
     // Subscribe to attribution, not heartbeat objects. Exact Home lookup and
     // machine naming stay at their existing owners while the machine is offline.
@@ -79,7 +80,6 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     } : null;
     const boundStart = bound.onStart;
     const onStart = React.useCallback(() => boundStart(), [boundStart]);
-    const [choosingModel, setChoosingModel] = React.useState(false);
     const openExplainSetting = useOpenExplainChangesSetting();
     const key = viewModel?.requestKey;
     const runId = viewModel?.executionRunId ?? null;
@@ -220,7 +220,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
             {props.renderBar(<>{reviewActions}{conversationAction}</>)}
-            {choosingModel ? <ScmDiffSummaryModelPicker value={model} onChange={setModel} modelChoices={modelChoices} machineId={machine?.machineId} serverId={props.serverId} /> : null}
+            {modelChoice.choosing ? <ScmDiffSummaryModelPicker value={model} onChange={setModel} modelChoices={modelChoices} machineId={machine?.machineId} serverId={props.serverId} /> : null}
             <WalkthroughView
                 reading={reading ?? EMPTY_WALKTHROUGH_READING}
                 scopeLabel={props.scopeLabel}
@@ -240,7 +240,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 update={saved?.updateNotice ? { message: t('walkthrough.saved.updated'), onUndo } : null}
                 stale={capturedComparison?.freshness === 'stale' ? { ...(canSend && launch.canLaunchExecutionRuns ? { onRefresh: () => {
                     if (!bound.isCurrent()) return;
-                    if (!selected.success || !modelAvailable) setChoosingModel(true);
+                    if (!selected.success || !modelAvailable) modelChoice.choose();
                     else void onStart();
                 } } : {}) } : null}
                 start={{ options: <ScmDiffSummaryStartOptions {...scmDiffSummaryStartOptionsOf(bound, { testID: 'walkthrough-start-options', modelTestID: 'walkthrough-model-choice',
@@ -250,7 +250,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 failure={bound.generationFailure}
                 onEnableExplain={openExplainSetting}
                 onRetry={onStart}
-                onChooseModel={() => setChoosingModel(true)}
+                onChooseModel={modelChoice.choose}
                 endedConversation={saved && sessionId && discussion?.kind !== 'continue' ? { onStartNew, onAskSession } : null}
                 notify={machine?.machineId && cwd && runId && capturedComparison && viewModel?.resultId
                     ? <RunWorkNotifications serverId={props.serverId}

@@ -29,12 +29,12 @@ export function ScmDiffSummaryFailureNotice(props: Readonly<{
     const chooseModel = described.nextAction === 'chooseModel' ? props.onChooseModel : undefined;
     const enableExplain = described.nextAction === 'enableExplain' ? props.onEnableExplain : undefined;
     const link = chooseModel
-        ? { testID: `${props.testID}-choose-model`, label: described.nextStep!, onPress: chooseModel }
-        : enableExplain ? { testID: `${props.testID}-enable-explain`, label: described.nextStep!, onPress: enableExplain }
+        ? { testID: `${props.testID}-choose-model`, label: described.action!, onPress: chooseModel }
+        : enableExplain ? { testID: `${props.testID}-enable-explain`, label: described.action!, onPress: enableExplain }
         : failed && props.onChooseModel ? { testID: `${props.testID}-choose-model`, label: t('walkthrough.notice.chooseModel'), onPress: props.onChooseModel }
         : null;
     // A step with nothing to press (update the machine, reconnect it) is part of the sentence.
-    const text = link || !described.nextStep ? described.message : `${described.message} ${described.nextStep}`;
+    const text = described.nextStep ? `${described.message} ${described.nextStep}` : described.message;
     return (
         <WalkthroughNotice testID={`${props.testID}-notice-failed`} tone={failed ? 'danger' : 'warning'} icon={failed ? 'x-circle' : 'warning'}
             phone={props.phone} message={text}

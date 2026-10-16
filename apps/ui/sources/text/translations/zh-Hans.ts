@@ -1411,6 +1411,7 @@ const zhHansValues = {
     ...walkthroughSettingsTranslations['zh-Hans'],
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations['zh-Hans'],
     pluginSurfaces: {
+        selectCount: '已选择 {count} 项',
         state: {
             loading: { title: '正在加载插件内容', reason: 'Happier 加载最新更新时，将显示当前可用内容。' },
             refreshing: { title: '正在刷新插件内容', reason: 'Happier 检查更新时，将显示上次可用的内容。' },
@@ -11679,7 +11680,7 @@ settingsSession: {
       summaryRunner: {
         title: "摘要运行器（按需）",
         backendTitle: "后端",
-        backendPlaceholder: "claude（示例）",
+        chooseBackendFirst: "请先选择后端",
         searchBackendsPlaceholder: "搜索后端…",
         modelTitle: "模型（LLM）",
         modelPlaceholder: "default（示例）",

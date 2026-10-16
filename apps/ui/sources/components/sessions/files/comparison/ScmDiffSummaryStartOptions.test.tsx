@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
+import { renderHook, renderScreen } from '@/dev/testkit';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -15,7 +16,7 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: key => key });
 });
 
-const { ScmDiffSummaryStartOptions } = await import('./ScmDiffSummaryStartOptions');
+const { ScmDiffSummaryStartOptions, useSummaryModelChoice } = await import('./ScmDiffSummaryStartOptions');
 const { SPECIMEN_START_FAILURES } = await import('@/components/dev/changes/walkthroughSpecimenFixture');
 
 describe('ScmDiffSummaryStartOptions', () => {
@@ -34,6 +35,22 @@ describe('ScmDiffSummaryStartOptions', () => {
         await screen.pressByTestIdAsync('start-options-choose-model');
         expect(onChooseModel).toHaveBeenCalledTimes(1);
     });
+
+    it('leaves an action nobody can press out of the refusal, instead of a dangling clause', async () => {
+        const screen = await renderScreen(<ScmDiffSummaryStartOptions testID="start-options" failure={SPECIMEN_START_FAILURES.model} message={null} />);
+        expect(screen.getTextContent()).toBe('walkthrough.generationFailure.modelUnavailable');
+    });
+
+    it('sends the person to the model choice and opens its choices, from every surface that shows a result', async () => {
+        const setOpen = vi.fn();
+        const hook = await renderHook(() => useSummaryModelChoice({ setOpen }));
+        expect(hook.getCurrent().choosing).toBe(false);
+        await act(async () => { hook.getCurrent().choose(); });
+        expect(hook.getCurrent().choosing).toBe(true);
+        expect(setOpen).toHaveBeenCalledWith(true);
+        await hook.unmount();
+    });
+
 
     it('keeps the refusal room when nothing was refused, so a refusal never moves the state', async () => {
         const screen = await renderScreen(<ScmDiffSummaryStartOptions testID="start-options" failure={null} message={null} />);

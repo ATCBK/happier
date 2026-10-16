@@ -64,7 +64,7 @@ function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ m
                 <Icon name={open ? 'caret-up' : 'caret-down'} size={12} color={theme.colors.text.tertiary} />
             </HappierPressable>
         ) };
-    return <DropdownMenu open={choices.open} onOpenChange={choices.setOpen} items={choices.items} selectedId={choices.selectedItem?.id ?? props.value} search searchPlaceholder={t('walkthroughSettings.searchModels')}
+    return <DropdownMenu open={choices.open} onOpenChange={choices.setOpen} items={choices.items} selectedId={choices.selectedItem?.id ?? props.value} search searchPlaceholder={t('walkthroughSettings.searchModels')} emptyLabel={choices.emptyLabel}
         variant="selectable" closeOnSelect={false} showCategoryTitles categoryDecorations={choices.sections}
         {...(inline ? inlineTrigger : { matchTriggerWidth: true, connectToTrigger: true, ...rowTrigger })}
         onSelect={(id) => {

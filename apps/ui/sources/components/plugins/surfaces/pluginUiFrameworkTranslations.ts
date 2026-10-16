@@ -39,6 +39,8 @@ export function resolvePluginUiFrameworkTranslations(): Readonly<Record<string, 
         'happier.plugin-ui.list.moreActions': t('ui.pluginUi.moreActions'),
         'happier.plugin-ui.collection.board.empty': t('ui.pluginUi.collectionEmpty'),
         'happier.plugin-ui.select.choose': t('common.choose'),
+        // A template: a multiple choice names how many are chosen, and the plugin-ui field fills `{count}`.
+        'happier.plugin-ui.select.count': t('pluginSurfaces.selectCount'),
         'happier.plugin-ui.select.empty': t('settingsAgents.noOptionsAvailable'),
         'happier.plugin-ui.select.search': t('common.search'),
         'happier.plugin-ui.select.noMatches': t('common.noMatches'),

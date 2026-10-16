@@ -1580,6 +1580,7 @@ const jaValues = {
     ...commitProposalTranslations.ja,
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations.ja,
     pluginSurfaces: {
+        selectCount: '{count} 件を選択',
         state: {
             loading: { title: 'プラグインコンテンツを読み込み中', reason: 'Happier が最新の更新を読み込む間、利用可能なコンテンツを表示しています。' },
             refreshing: { title: 'プラグインコンテンツを更新中', reason: 'Happier が更新を確認する間、最後に利用できたコンテンツを表示しています。' },
@@ -12390,7 +12391,7 @@ settingsSession: {
         summaryRunner: {
           title: "要約ランナー（オンデマンド）",
           backendTitle: "バックエンド",
-          backendPlaceholder: "claude（例）",
+          chooseBackendFirst: "先にバックエンドを選んでください",
           searchBackendsPlaceholder: "バックエンドを検索…",
           modelTitle: "モデル（LLM）",
           modelPlaceholder: "default（例）",

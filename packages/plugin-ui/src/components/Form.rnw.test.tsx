@@ -1073,6 +1073,23 @@ describe('shared control visuals (D6)', () => {
     mount.unmount();
   });
 
+  it('names how many are chosen in a multiple field Select, not a bare number', async () => {
+    const mount = mountWithPalette(
+      <Form.Select
+        label="Offer it on"
+        presentation="field"
+        multiple
+        value={['newest', 'oldest', 'smart']}
+        options={fieldOrderOptions}
+        onChange={() => undefined}
+      />,
+    );
+
+    const trigger = mount.container.querySelector<HTMLElement>('[aria-haspopup="menu"]');
+    expect(trigger?.textContent).toBe('3 selected');
+    mount.unmount();
+  });
+
   it('presents a segmented Select as a labelled radiogroup with arrow-key selection', async () => {
     const onChange = vi.fn();
     function Harness() {

@@ -1410,6 +1410,7 @@ const itValues = {
     ...commitProposalTranslations.it,
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations.it,
     pluginSurfaces: {
+        selectCount: '{count} selezionati',
         state: {
             loading: { title: 'Caricamento del contenuto del plugin', reason: 'Viene mostrato il contenuto disponibile mentre Happier carica l’ultimo aggiornamento.' },
             refreshing: { title: 'Aggiornamento del contenuto del plugin', reason: 'Viene mostrato l’ultimo contenuto disponibile mentre Happier verifica la presenza di aggiornamenti.' },
@@ -12318,7 +12319,7 @@ settingsSession: {
         summaryRunner: {
           title: "Generatore di riepiloghi (su richiesta)",
           backendTitle: "Motore",
-          backendPlaceholder: "claude (es.)",
+          chooseBackendFirst: "Scegli prima un backend",
           searchBackendsPlaceholder: "Cerca backend…",
           modelTitle: "Modello (LLM)",
           modelPlaceholder: "default (es.)",

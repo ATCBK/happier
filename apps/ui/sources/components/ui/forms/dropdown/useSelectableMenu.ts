@@ -7,10 +7,6 @@ import {
     useHappierMenuInteraction,
 } from '@happier-dev/plugin-ui/presentation';
 
-function toCategoryId(title: string): string {
-    return title.toLowerCase().replace(/\s+/g, '-');
-}
-
 /**
  * Items that name no category form one untitled group: a menu never invents a heading ("General",
  * "Results") the caller did not write.
@@ -24,7 +20,8 @@ function groupByCategory(items: ReadonlyArray<SelectableMenuItem>): SelectableMe
     }, {} as Record<string, SelectableMenuItem[]>);
 
     return Object.entries(grouped).map(([title, groupedItems]) => ({
-        id: title ? toCategoryId(title) : '__uncategorized__',
+        // The title is the grouping key above, so it is also the section's identity: no two sections can share a React key.
+        id: title || '__uncategorized__',
         title,
         items: groupedItems,
     }));

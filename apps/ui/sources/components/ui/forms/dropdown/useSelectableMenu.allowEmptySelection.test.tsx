@@ -30,6 +30,20 @@ describe('useSelectableMenu (allowEmptySelection)', () => {
     await hook.unmount();
   });
 
+  it('keeps sections whose titles differ only by case or spacing distinct, so no two share a key', async () => {
+    const { useSelectableMenu } = await import('./useSelectableMenu');
+    const items: SelectableMenuItem[] = [
+      { id: 'a', title: 'Find more models', category: 'Goose', left: null, right: null },
+      { id: 'b', title: 'Find more models', category: 'goose', left: null, right: null },
+      { id: 'c', title: 'Find more models', category: 'QA A', left: null, right: null },
+      { id: 'd', title: 'Find more models', category: 'QA-A', left: null, right: null },
+    ];
+    const hook = await renderHook(() => useSelectableMenu({ items, onRequestClose: () => {} }));
+    const ids = hook.getCurrent().filteredCategories.map((category) => category.id);
+    expect(new Set(ids).size).toBe(4);
+    await hook.unmount();
+  });
+
   it('never invents a group title for items that name no category, browsing or searching', async () => {
     const { useSelectableMenu } = await import('./useSelectableMenu');
     const items: SelectableMenuItem[] = [

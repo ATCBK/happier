@@ -1274,6 +1274,7 @@ const enSessionRemotePermissionGrants =
   sessionRemotePermissionGrantTranslations.en;
 
 const enPluginSurfaces = {
+  selectCount: '{count} selected',
   state: {
     loading: {
       title: 'Loading plugin content',
@@ -14597,7 +14598,7 @@ const enSettingsSession = {
     summaryRunner: {
       title: 'Summary runner (on-demand)',
       backendTitle: 'Backend',
-      backendPlaceholder: 'claude',
+      chooseBackendFirst: 'Choose a backend first',
       searchBackendsPlaceholder: 'Search backends…',
       modelTitle: 'Model',
       modelPlaceholder: 'default',

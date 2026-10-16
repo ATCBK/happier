@@ -62,4 +62,11 @@ describe('task runner model options', () => {
     expect(backendMenu?.props.selectedId).toBe('');
     expect(modelMenu?.props.items.some((item: { id: string }) => item.id === 'default')).toBe(false);
   });
+  it('tells a model menu with no backend to choose one first, and never shows an example id as the backend row', async () => {
+    const screen = await renderScreen(<LlmTaskRunnerConfigV1BackendModelPicker value={null} onChange={() => {}} />);
+    const [backendMenu, modelMenu] = screen.findAllByType(DropdownMenu);
+    expect(modelMenu?.props.items).toEqual([]);
+    expect(modelMenu?.props.emptyLabel).toBe('settingsSession.replayResume.summaryRunner.chooseBackendFirst');
+    expect(backendMenu?.props.itemTrigger.subtitle).toBeUndefined();
+  });
 });

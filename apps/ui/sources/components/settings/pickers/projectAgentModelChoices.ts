@@ -34,6 +34,8 @@ export function projectAgentModelChoices(params: Readonly<{
     executableProfiles?: readonly ScmDiffSummaryCatalogProfile[];
     automaticProfiles?: readonly ScmDiffSummaryCatalogProfile[];
     discoveryTargetKeys?: readonly string[];
+    /** An Agent that could not start keeps its group: the person is told why instead of finding it gone. */
+    probeFailureTargetKeys?: readonly string[];
     selected?: ProviderBoundModelRef | null;
     defaultBackendTarget?: BackendTargetRefV2 | null;
     defaultModelTitle: string;
@@ -53,7 +55,7 @@ export function projectAgentModelChoices(params: Readonly<{
             ? (params.executableProfiles ?? []).filter(profile => profile.modelSelector?.backendTargetKey === targetKey)
             : buildScmDiffSummaryModelProfiles({ backendTarget: target, models, catalogModels: source.catalogModels, agentFormats: source.agentFormats });
         const discoverable = params.purpose === 'walkthrough' ? params.discoveryTargetKeys?.includes(targetKey) === true : source.discoverable;
-        if (params.purpose === 'walkthrough' && profiles.length === 0 && !discoverable) return [];
+        if (params.purpose === 'walkthrough' && profiles.length === 0 && !discoverable && params.probeFailureTargetKeys?.includes(targetKey) !== true) return [];
         const offered = selectAgentModelProfilesForPurpose(profiles, params.purpose);
         for (const profile of offered) {
             const modelSelector = profile.modelSelector;

@@ -1204,6 +1204,7 @@ export const de: TranslationStructure = {
     ...commitProposalTranslations.de,
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations.de,
     pluginSurfaces: {
+        selectCount: '{count} ausgewählt',
         state: {
             loading: {
                 title: 'Plugin-Inhalt wird geladen',
@@ -12003,7 +12004,7 @@ settingsSession: {
               summaryRunner: {
                   title: 'Runner für Zusammenfassungen (bei Bedarf)',
                   backendTitle: 'Backend',
-                  backendPlaceholder: 'claude',
+                  chooseBackendFirst: 'Wähle zuerst ein Backend',
                   searchBackendsPlaceholder: 'Backends suchen…',
                   modelTitle: 'Modell',
                   modelPlaceholder: 'default',

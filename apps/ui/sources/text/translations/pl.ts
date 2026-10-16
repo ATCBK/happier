@@ -1424,6 +1424,7 @@ const plValues = {
     ...commitProposalTranslations.pl,
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations.pl,
     pluginSurfaces: {
+        selectCount: 'Wybrano: {count}',
         state: {
             loading: { title: 'Ładowanie treści wtyczki', reason: 'Wyświetlana jest dostępna treść, podczas gdy Happier ładuje najnowszą aktualizację.' },
             refreshing: { title: 'Odświeżanie treści wtyczki', reason: 'Wyświetlana jest ostatnia dostępna treść, podczas gdy Happier sprawdza aktualizacje.' },
@@ -11927,7 +11928,7 @@ settingsSession: {
         summaryRunner: {
           title: "Generator podsumowań (na żądanie)",
           backendTitle: "Silnik",
-          backendPlaceholder: "claude (np.)",
+          chooseBackendFirst: "Najpierw wybierz backend",
           searchBackendsPlaceholder: "Szukaj backendów…",
           modelTitle: "Model (LLM)",
           modelPlaceholder: "default (np.)",

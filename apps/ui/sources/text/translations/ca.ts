@@ -1432,6 +1432,7 @@ const caValues = {
     ...commitProposalTranslations.ca,
     sessionRemotePermissionGrants: sessionRemotePermissionGrantTranslations.ca,
     pluginSurfaces: {
+        selectCount: '{count} seleccionats',
         state: {
             loading: { title: 'S’està carregant el contingut del connector', reason: 'Es mostra el contingut disponible mentre Happier carrega l’última actualització.' },
             refreshing: { title: 'S’està actualitzant el contingut del connector', reason: 'Es mostra l’últim contingut disponible mentre Happier comprova si hi ha actualitzacions.' },
@@ -11126,7 +11127,7 @@ settingsSession: {
                 summaryRunner: {
                     title: 'Generador de resums (a demanda)',
                     backendTitle: 'Motor',
-                    backendPlaceholder: 'claude (ex.)',
+                    chooseBackendFirst: 'Tria primer un backend',
                     searchBackendsPlaceholder: 'Cerca backends…',
                     modelTitle: 'Model (LLM)',
                     modelPlaceholder: 'default (ex.)',

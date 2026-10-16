@@ -102,10 +102,10 @@ export const en = {
     // Why a start was refused, and the next step: written for any output (Walkthrough, Commits), never a code.
     generationFailure: {
         invalidRequest: 'This machine couldn’t read the request. Its Happier may be out of date.',
-        reviewRequest: 'Update this machine’s Happier, then try again',
+        reviewRequest: 'Update this machine’s Happier, then try again.',
         modelUnavailable: 'The selected model isn’t available right now.',
         machineUnavailable: 'Happier can’t reach this machine.',
-        reconnectMachine: 'Reconnect it, then try again',
+        reconnectMachine: 'Reconnect it, then try again.',
         disabled: '“Explain changes” is off.',
         enableExplain: 'Turn it on in settings',
     },

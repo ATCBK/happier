@@ -19,10 +19,18 @@ import { readScmDiffSummaryModelCatalogForMachine } from '@/sync/ops/actions/scm
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import type { ScmDiffSummaryModelCatalogObservationV1Schema } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 import { projectAgentModelChoices, readAgentModelChoiceTarget as targetFor, type AgentModelChoicePurpose } from './projectAgentModelChoices';
 export type { AgentModelSelection } from './projectAgentModelChoices';
+
+/** The person's words for an Agent whose process did not start: what happened and what to check, never the errno or a path. */
+function describeAgentStartFailure(failure: SpawnFailureV1): Readonly<{ title: string; next: string }> {
+    if (failure.errno === 'ENOENT') return { title: t('walkthroughSettings.startFailure.notInstalled.title'), next: t('walkthroughSettings.startFailure.notInstalled.next') };
+    if (failure.errno === 'EACCES' || failure.errno === 'EPERM') return { title: t('walkthroughSettings.startFailure.cannotRun.title'), next: t('walkthroughSettings.startFailure.cannotRun.next') };
+    return { title: t('walkthroughSettings.startFailure.other.title'), next: t('walkthroughSettings.startFailure.other.next') };
+}
 
 /** One offered-model projection for Settings, the picker, and restored generation controls. */
 export function useAgentModelChoices(params: Readonly<{
@@ -60,6 +68,7 @@ export function useAgentModelChoices(params: Readonly<{
         machineId: string; serverId: string; catalog: ReturnType<typeof ScmDiffSummaryModelCatalogObservationV1Schema.parse>;
     }> | null>(null);
     const [catalogRefresh, setCatalogRefresh] = React.useState(0);
+    const [catalogReadFailed, setCatalogReadFailed] = React.useState(false);
     const summaryServerId = params.serverId || getActiveServerSnapshot().serverId;
     const catalogBindings = useServerCredentialAccountScopeBindings([summaryServerId]);
     const catalogLifetime = catalogBindings.values().next().value ?? null;
@@ -77,17 +86,21 @@ export function useAgentModelChoices(params: Readonly<{
                 pendingDiscoveryTarget.current = null;
                 const catalog = await readScmDiffSummaryModelCatalogForMachine(account, machineId, abort.signal,
                     { discoveryTargetKey: requestedDiscoveryTarget, modelSelector: decodeScmDiffSummaryModelOverride(params.value) });
-                if (!abort.signal.aborted && catalogLifetime.isCurrent()) setSummaryCatalog(catalog
-                    ? { lifetime: catalogLifetime, machineId, serverId: summaryServerId, catalog } : null);
-            } catch { if (!abort.signal.aborted) setSummaryCatalog(null); }
+                if (!abort.signal.aborted && catalogLifetime.isCurrent()) {
+                    setSummaryCatalog(catalog ? { lifetime: catalogLifetime, machineId, serverId: summaryServerId, catalog } : null);
+                    setCatalogReadFailed(catalog === null);
+                }
+            } catch { if (!abort.signal.aborted) { setSummaryCatalog(null); setCatalogReadFailed(true); } }
             finally { account?.dispose(); }
         })();
         return () => { abort.abort(); account?.dispose(); };
     }, [purpose, observing, params.machineId, params.value, summaryServerId, daemon.inputs, backendEnabledByTargetKey, catalogRefresh, discoveryTargetKey, catalogLifetime]);
     const executableCatalog = summaryCatalog && summaryCatalog.machineId === params.machineId && summaryCatalog.serverId === summaryServerId
         && summaryCatalog.lifetime === catalogLifetime && summaryCatalog.lifetime.isCurrent() ? summaryCatalog.catalog : null;
+    // Why an Agent could not list models, by target: the Machine's typed observation, never a path or native message.
+    const probeFailures = new Map((executableCatalog?.probeFailures ?? []).map(failure => [failure.backendTargetKey, failure.spawnFailure]));
     const catalogInput = { executableProfiles: executableCatalog?.profiles, automaticProfiles: executableCatalog?.automaticProfiles,
-        discoveryTargetKeys: executableCatalog?.discoveryTargetKeys };
+        discoveryTargetKeys: executableCatalog?.discoveryTargetKeys, probeFailureTargetKeys: [...probeFailures.keys()] };
     const selectedModelSelection = selected?.backendTargetKey && selected.modelId
         ? ProviderBoundModelRefSchema.parse({ agentTargetKey: selected.backendTargetKey, providerConnectionId: null, modelId: selected.modelId }) : null;
     const selectedEntry = entries.find((entry) => {
@@ -137,7 +150,8 @@ export function useAgentModelChoices(params: Readonly<{
     for (const { entry, target, offered: usable, hiddenModelCount: hidden, discoverable, customModelIdAllowed } of projected.groups) {
         // Only models that can write a walkthrough are offered. An agent with none keeps its section only where a
         // machine can ask it for models that could: one whose format supports it, a configured agent, or the one asked.
-        if (usable.length === 0 && !(params.machineId && discoverable)) continue;
+        const startFailure = probeFailures.get(buildBackendTargetKeyV2(target));
+        if (usable.length === 0 && !(params.machineId && discoverable) && !startFailure) continue;
         sections[entry.title] = { icon: React.createElement(AgentIcon, { agentId: entry.agentId, size: 18 }),
             ...(hidden > 0 ? { note: t('walkthroughSettings.hiddenModels', { count: hidden }) } : {}) };
         for (const profile of usable) {
@@ -154,14 +168,18 @@ export function useAgentModelChoices(params: Readonly<{
                 subtitle: t('settingsSession.replayResume.summaryRunner.customModelIdSubtitle') });
         }
         // Finding more models is one operation at the end of its agent's section, offered only where a machine can answer it.
-        if (!params.machineId || !discoverable) continue;
+        if (!params.machineId || !discoverable && !startFailure) continue;
         const targetKey = buildBackendTargetKeyV2(target);
         const id = `backend-discovery:${targetKey}`;
         discoveryTargets.set(id, targetKey);
         const probing = probeEntry === entry;
         const failed = purpose === 'runner' && probing && probe.probe.failed;
         // The row keeps its height while discovery runs: only its trailing spinner and, on failure, its wording change.
-        items.push({ id, category: entry.title, title: failed ? t('walkthroughSettings.loadModelsFailed') : t('walkthroughSettings.loadModels'),
+        // An Agent that could not start says so in this row, under its known models, and pressing it asks again.
+        const row = startFailure ? describeAgentStartFailure(startFailure) : null;
+        items.push({ id, category: entry.title,
+            title: row?.title ?? (failed ? t('walkthroughSettings.loadModelsFailed') : t('walkthroughSettings.loadModels')),
+            ...(row ? { subtitle: row.next } : {}),
             rightElement: purpose === 'runner' && probing && !failed && probe.probe.phase !== 'idle' ? React.createElement(ActivitySpinner, { size: 'small' }) : undefined });
     }
     const defaultSelection = defaultProfile ? selections.get(defaultProfile.catalogId) : undefined;
@@ -171,7 +189,12 @@ export function useAgentModelChoices(params: Readonly<{
         || (purpose === 'walkthrough' && defaultSelection ? defaultProfile!.catalogId : '');
     const restoredSelection = selections.get(effectiveId);
     if (params.value && restoredSelection) selections.set(params.value, restoredSelection);
-    return { open, setOpen, discoveryTargetKey, setDiscoveryTargetKey, selections, discoveryTargets, customModelTargets, items, sections,
+    // An empty menu says why: the Machine has not answered yet, the answer could not be read, or nothing is offered.
+    const awaitingCatalog = purpose === 'walkthrough' && observing && Boolean(params.machineId) && !executableCatalog;
+    const emptyLabel = awaitingCatalog
+        ? t(catalogReadFailed ? 'walkthroughSettings.loadModelsFailed' : 'walkthroughSettings.loadingModels')
+        : t('walkthroughSettings.noModels');
+    return { open, setOpen, emptyLabel, discoveryTargetKey, setDiscoveryTargetKey, selections, discoveryTargets, customModelTargets, items, sections,
         catalogProfiles, defaultProfile, groups: projected.groups,
         selectedItem: items.find(item => item.id === effectiveId), selectionAvailable: selections.has(params.value),
         onRefresh: purpose === 'walkthrough' ? () => setCatalogRefresh(value => value + 1) : probe.probe.onRefresh };
