@@ -750,6 +750,7 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
         machineId: 'machine-1',
         method: SESSION_RPC_METHODS.EXECUTION_RUN_SEND,
         request: {
+          sessionId: null,
           runId: 'run-1',
           message: 'Continue',
           delivery: 'steer_if_supported',

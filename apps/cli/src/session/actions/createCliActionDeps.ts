@@ -3958,7 +3958,7 @@ export function createCliActionDeps(params: Readonly<{
       await callDetachedExecutionRunRpc(
         sessionId,
         SESSION_RPC_METHODS.EXECUTION_RUN_SEND,
-        request,
+        { ...request, sessionId },
         opts,
       ),
     executionRunEnsure: async (sessionId, request, opts) => {
