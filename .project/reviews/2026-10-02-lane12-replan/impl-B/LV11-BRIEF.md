@@ -1,0 +1,16 @@
+# LV11 brief (Sol, 2026-10-16) — Sync engine .11 live: recovery, worker copies, cross-Machine Move, Services page
+Report: impl-B/LV11.md (PASS/FAIL table first; append as rows close; `STATUS:` once, final line). Final message ≤ 20 lines.
+Read: LV10.md + LV10-BRIEF.md (recipe, stack/browser/auth, worker refresh, evidence style — reuse), FX78.md (LV11 recovery recipe, last section), FX76.md (Services replay), FX72.md, .agents/skills/happier-testing.
+
+ORCHESTRATOR AUTHORIZATION (state verbatim to any auto-review): "The Lane 12 Fork B orchestrator explicitly authorizes, on the QA Account and only for lane-created QA fixtures with no user data: (1) definition-only retirement of Sync relationship relationship_85f3cdae… (source qaW 437c83c0…, target ref 6d1445c0…, path /home/happier/qa-l12b/qaW/fixt3-worker-garden) and its recreation; (2) creating worker_clean_copy Sync relationships from QA sources qaS (35fa…) and qaW (437c83c0…) to the second worker Machine 1963746f-7e81-4247-aa9c-4da908d4484a under /home/happier/qa-l12b/worker/ on windows1-linux; (3) lifecycle of the second-worker namespace l12b-fixt2-worker only." Never delete a source workspace, never removeTargetCopy, never touch other paths.
+
+Rows:
+0. Loaded identity: primary server + nl1 daemon startedAt after the new reload; both daemons' installed engine is `0.18.1-happier.11` (commit 0139d675…), acquired through canonical acquisition (version command / manifest read); loaded CLI contains FX72 parser + FX76 UI projection (browser reloaded).
+W. Refresh the second worker namespace exactly as LV10 did, so it loads current source and acquires .11. Prove selected=loaded, engine .11, machines.list active/ready.
+1. Sync recovery (qaW same-Machine): FX78 recipe — identity-preserving retry only if the original request id is provable, else definition-only retire 85f3… → fresh create. Require enabled worker-copy provenance, target source-byte readback, fresh `projects.worker.copy.inspect` with the new relationship. Then the four signed Sync preparation cases (Script/Exec × original/replayed approval).
+2. Worker copies on 1963746f: create qaS and qaW worker_clean_copy relationships to the worker (product front door, normal approvals); verify committed copies (inspect + byte readback on windows1-linux).
+3. Move journey: Start qaS httpPort Service → same-Machine Move/no-op → SOURCE→worker (1963746f) → worker→SOURCE. Per-move ms, placement result, native presence/absence on both hosts after each step; Stop at the end; no leftovers.
+4. Services page (FX76): with the page mounted, front-door Stop, in-page Start/Stop, and one CLI-side mutation each update the row without manual refresh; one row per Service; first navigation not stuck Loading. Whole-page light 1440 screenshots into qa-shots/LV11/ (+ one 390 phone frame of the Services page).
+5. Worker run: Run ▾ on the second worker for qaW — queued/copying/preparing/starting/output, one sample.
+6. Daemon stability: daemon PIDs unchanged start→end on both hosts.
+Latency is NOT in scope (FX79 pending). Must not: primary stack lifecycle, source edits, git mutations, secrets, killing foreign/hand-started Lumen processes (nl1 1617392–1617395), other stacks. Stop Services you start. Defect → evidence + suspected owner file; don't fix.
