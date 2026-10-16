@@ -340,7 +340,15 @@ export const WIDGET_DEFINITION_ACTION_SPECS_V1: readonly (PreNormalizedActionSpe
 }>)[] = WIDGET_DEFINITION_ACTION_IDS_V1.map(id => {
   const read = id === 'widgets.definition.list' || id === 'widgets.definition.get';
   return {
-    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title: WIDGET_DEFINITION_ACTION_COPY[id][0],
+    id, approvalPolicy: {
+      uiConfirmation: 'policy',
+      ...(id === 'widgets.definition.update' ? { uiConfirmationForInput: (input: unknown) => {
+        const update = WidgetDefinitionActionInputSchemasV1['widgets.definition.update'].safeParse(input);
+        // Names and content are reversible edits; changing the guest network
+        // retains review even when the definition is otherwise editable directly.
+        return !update.success || update.data.patch.networkOverride !== undefined;
+      } } : {}),
+    }, approval: { result: 'required' }, title: WIDGET_DEFINITION_ACTION_COPY[id][0],
     description: id === 'widgets.definition.list'
       ? 'List reusable Account widget summaries. Each definition may include author (kind: person, agent, or plugin) and createdAt (creation timestamp); definitions saved before these provenance facts existed omit them.'
       : id === 'widgets.definition.update'

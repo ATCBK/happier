@@ -750,6 +750,25 @@ describe('isApprovalRequiredByActionsSettings', () => {
     }).required).toBe(false);
   });
 
+  it('admits reversible widget definition names and content directly while network changes confirm', () => {
+    const actionId = 'widgets.definition.update' as const;
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const [patch, required] of [
+      [{ name: 'Renamed' }, false],
+      [{ networkOverride: { network: 'open' } }, true],
+      [{ body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'New content' } } } }, false],
+    ] as const) {
+      const input = { account: { serverId: 'home', accountId: 'account' }, artifactId: 'widget', patch };
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: EMPTY_SETTINGS }).required).toBe(required);
+      for (const surface of ['agent', 'mcp'] as const) {
+        expect(resolveActionApprovalRouting({ actionId, spec, input, context: { surface, authority: 'account_automation' }, settings: EMPTY_SETTINGS }).required).toBe(true);
+      }
+      const ask = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: ask }).required).toBe(true);
+    }
+  });
+
   it('resolves contributed manifest defaults, waivers, and Ask-first through the same settings owner', () => {
     const actionId = 'acme.alpha/actions/run' as const;
     const context = { surface: 'agent' as const };
