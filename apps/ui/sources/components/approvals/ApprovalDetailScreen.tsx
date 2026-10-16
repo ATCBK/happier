@@ -190,13 +190,13 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
   // One reading of the arguments decides both what the card shows and whether the
   // decision may be taken, so an invisible field can never sit behind a live
   // Approve button.
-  const builtInApproveAdmission = React.useMemo(() => (
-    parsed?.kind === 'built_in' && parsed.request.status === 'open'
+  const approveAdmission = React.useMemo(() => (
+    (parsed?.kind === 'built_in' || parsed?.kind === 'target') && parsed.request.status === 'open'
       ? resolveApprovalRequestApproveAdmission(parsed.request)
       : null
   ), [parsed]);
-  const actionFields = React.useMemo(() => builtInApproveAdmission?.presentation
-    ?? (parsed?.kind === 'built_in' ? describeApprovalRequestFields(parsed.request) : null), [builtInApproveAdmission, parsed]);
+  const actionFields = React.useMemo(() => approveAdmission?.presentation
+    ?? (parsed?.kind === 'built_in' || parsed?.kind === 'target' ? describeApprovalRequestFields(parsed.request) : null), [approveAdmission, parsed]);
   // A Project's setup or command reads as the machine and the exact command, not as its protocol operands.
   const projectCommand = React.useMemo(
     () => (parsed?.kind === 'built_in' ? readProjectCommandApproval(parsed.request) : null),
@@ -204,7 +204,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
   );
   const projectCommandTitle = useProjectCommandApprovalTitle(projectCommand);
   const projectCommandDecisions = projectCommand ? describeProjectCommandApprovalDecisions(projectCommand) : null;
-  const approvalWithheld = builtInApproveAdmission?.status === 'unavailable';
+  const approvalWithheld = approveAdmission?.status === 'unavailable';
 
   const request = parsed?.request ?? null;
   const confidentialAction = parsed?.kind === 'built_in' && isConfidentialSecretApprovalAction(parsed.request.actionId);

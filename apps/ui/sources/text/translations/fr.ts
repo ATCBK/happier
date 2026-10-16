@@ -1726,6 +1726,7 @@ const frValues = {
     decisionAuthorityError: "Cette connexion ne permet pas d’approuver les demandes. Connecte-toi à ce Home avec la clé de récupération de ton compte, ou approuve depuis un autre appareil connecté à ton compte.",
     staleFailure: "Cette demande n'est plus à jour, donc elle n'a pas été exécutée. Consulte la dernière demande dans la boîte de réception.",
     technicalDetails: "Détails techniques",
+    confidentialSupplied: "Fournie et gardée masquée",
     unsafeDetailsTitle: "Ces détails ne peuvent pas être affichés en toute sécurité",
     unsafeDetailsBody: "Happier n’a pas pu afficher cette demande exactement telle qu’elle a été envoyée ; elle ne peut donc pas être approuvée. Refuse-la ou demande qu’elle soit renvoyée.",
     approveUnavailableHint: "L’approbation est indisponible tant que ces détails ne peuvent pas être affichés en toute sécurité.",

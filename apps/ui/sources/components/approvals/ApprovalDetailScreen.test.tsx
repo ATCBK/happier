@@ -19,6 +19,7 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installApprovalCommonModuleMocks } from './approvalsTestHelpers';
+import { createTriageSelectedPrStartApprovalInput } from '../../../../../packages/plugins/triage/src/sessions/testkit/entrySessionTestkit.test-support';
 
 const loadActivitySpinner = async () =>
   (await import('@/components/ui/feedback/ActivitySpinner')).ActivitySpinner;
@@ -381,7 +382,8 @@ function createTargetActionApprovalArtifact() {
       createdBy: { surface: 'agent', agentId: 'codex', sessionId: 'session-1' },
       requestedSurface: 'agent',
       qualifiedActionId: 'acme.publisher/actions/releases/publish',
-      input: { secretToken: 'must-not-render', body: 'private draft' },
+      input: { releaseTag: 'v1.2.3-public-release' },
+      secretInputPaths: [],
       accountId: 'account-secret',
       resourceId: 'resource-secret',
       sourceCustody: {
@@ -1036,7 +1038,7 @@ describe('ApprovalDetailScreen', () => {
     expect(screen.findByTestId('approvals.approve')).toBeNull();
   });
 
-  it('renders a redacted plugin target action and updates only that artifact', async () => {
+  it('renders the exact plugin target input and updates only that artifact', async () => {
     currentArtifact = createTargetActionApprovalArtifact();
     const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
     const screen = await renderScreen(
@@ -1050,6 +1052,7 @@ describe('ApprovalDetailScreen', () => {
     );
     expect(text).toContain('acme.publisher');
     expect(text).toContain('releases/publish');
+    expect(text).toContain('v1.2.3-public-release');
     expect(text).toContain('bundled_first_party');
     expect(text).not.toContain('must-not-render');
     expect(text).not.toContain('account-secret');
@@ -1073,6 +1076,37 @@ describe('ApprovalDetailScreen', () => {
       subjectFingerprint: 'b'.repeat(64),
       decision: { kind: 'approve' },
     });
+  });
+
+  it('shows the real Triage credential identity and approves its complete admitted input', async () => {
+    const input = createTriageSelectedPrStartApprovalInput();
+    const base = createTargetActionApprovalArtifact();
+    const request = TargetActionApprovalRequestV1Schema.parse({ ...JSON.parse(base.body),
+      qualifiedActionId: 'happier.triage/actions/sessions/start-entry-v1', input,
+    });
+    currentArtifact = { ...base, header: buildTargetActionApprovalArtifactHeaderV1(request), body: JSON.stringify(request) };
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="target-artifact-1" />);
+    expect(readRenderedText(screen)).toContain(JSON.stringify(input.prepareReviewWorkspaceSelection));
+    expect(screen.findByTestId('approvals.approve')?.props.disabled).toBe(false);
+    await screen.pressByTestIdAsync('approvals.approve');
+    expect(JSON.parse(updateArtifactWithHeaderSpy.mock.calls[0]![2])).toMatchObject({ status: 'approved', input });
+  });
+
+  it('withholds plugin approval when a secret operand hides the effect despite unrelated readable input', async () => {
+    const artifact = createTargetActionApprovalArtifact();
+    currentArtifact = { ...artifact, body: JSON.stringify({
+      ...JSON.parse(artifact.body),
+      input: { releaseTag: 'must-not-render', benign: null }, secretInputPaths: ['releaseTag'],
+    }) };
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="target-artifact-1" />);
+    expect(readRenderedText(screen)).not.toContain('must-not-render');
+    expect(screen.findByTestId('approvals.approve')?.props.disabled).toBe(true);
+    expect(screen.findByTestId('approvals.reject')?.props.disabled).toBe(false);
+    await screen.pressByTestIdAsync('approvals.approve');
+    expect(updateArtifactWithHeaderSpy).not.toHaveBeenCalled();
+    expect(replayApprovalRequestAtExactDaemonSpy).not.toHaveBeenCalled();
   });
 
   it('routes an API target-action approval to its stamped daemon instead of mutating the Artifact locally', async () => {

@@ -98,6 +98,21 @@ it('names reviewed skills and the exact Home machine, keeping their ids in Techn
     expect(screen.getTextContent()).toContain(machineId);
 });
 
+it('shows a declared confidential input as supplied under its declared title, beside the exact public JSON, in both anatomies', async () => {
+    const presentation: ApprovalActionFieldsPresentation = { rows: [
+        { kind: 'value', path: 'input.token', title: 'Release token', value: '', valueFormat: 'confidential' },
+        { kind: 'value', path: 'input.releaseTag', title: 'Release tag', value: '"v1.2.0"' },
+    ], unrepresentable: null };
+    for (const anatomy of ['page', 'card'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy} presentation={presentation} />);
+        const text = screen.getTextContent();
+        expect(text).toContain('Release token');
+        expect(text).toContain(t('approvals.confidentialSupplied'));
+        expect(text).toContain('"v1.2.0"');
+        expect(text).not.toContain(t('common.unavailable'));
+    }
+});
+
 const initialState = storage.getState();
 const profiles: string[] = [];
 

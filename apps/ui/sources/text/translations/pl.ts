@@ -1717,6 +1717,7 @@ const plValues = {
     decisionAuthorityError: "Ten sposób logowania nie pozwala zatwierdzać żądań. Zaloguj się do tego Home kluczem odzyskiwania konta albo zatwierdź żądanie na innym urządzeniu zalogowanym do konta.",
     staleFailure: "Ta prośba nie jest już aktualna, więc nie została wykonana. Sprawdź najnowszą prośbę w skrzynce odbiorczej.",
     technicalDetails: "Szczegóły techniczne",
+    confidentialSupplied: "Podano i ukryto",
     unsafeDetailsTitle: "Tych szczegółów nie można bezpiecznie wyświetlić",
     unsafeDetailsBody: "Happier nie mógł wyświetlić tego żądania dokładnie tak, jak zostało wysłane, więc nie można go zatwierdzić. Odrzuć je lub poproś o ponowne wysłanie.",
     approveUnavailableHint: "Zatwierdzenie jest niedostępne, dopóki tych szczegółów nie można bezpiecznie wyświetlić.",

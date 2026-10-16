@@ -1873,6 +1873,7 @@ const jaValues = {
     decisionAuthorityError: "このログインではリクエストを承認できません。アカウントの復旧キーでこのHomeにログインするか、アカウントでログイン済みの別の端末から承認してください。",
     staleFailure: "この依頼は最新ではないため、実行されませんでした。受信トレイで最新の依頼を確認してください。",
     technicalDetails: "技術的な詳細",
+    confidentialSupplied: "指定済み（非表示）",
     unsafeDetailsTitle: "この内容は安全に表示できません",
     unsafeDetailsBody: "送信されたとおりに表示できなかったため、このリクエストは承認できません。拒否するか、再送を依頼してください。",
     approveUnavailableHint: "この内容を安全に表示できない間は承認できません。",

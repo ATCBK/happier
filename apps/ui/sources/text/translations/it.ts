@@ -1703,6 +1703,7 @@ const itValues = {
     decisionAuthorityError: "Questo accesso non consente di approvare le richieste. Accedi a questo Home con la chiave di recupero del tuo account oppure approva da un altro dispositivo con un accesso account.",
     staleFailure: "Questa richiesta non è più attuale, quindi non è stata eseguita. Controlla la richiesta più recente nella posta in arrivo.",
     technicalDetails: "Dettagli tecnici",
+    confidentialSupplied: "Fornito e mantenuto nascosto",
     unsafeDetailsTitle: "Questi dettagli non possono essere mostrati in sicurezza",
     unsafeDetailsBody: "Happier non è riuscito a mostrare questa richiesta esattamente come è stata inviata, quindi non può essere approvata. Rifiutala oppure chiedi di inviarla di nuovo.",
     approveUnavailableHint: "L'approvazione non è disponibile finché questi dettagli non possono essere mostrati in sicurezza.",

@@ -120,7 +120,10 @@ function ApprovalValueItem(props: Readonly<{
     anatomy?: 'page';
 }>) {
     const { row } = props;
+    // A declared confidential input is held by the original request and never shown: it reads as
+    // supplied under its declared title, not as a missing or unavailable value.
     const literal = row.valueFormat === 'unavailable' ? t('common.unavailable')
+        : row.valueFormat === 'confidential' ? t('approvals.confidentialSupplied')
         : row.valueFormat === 'boolean' ? t(row.value === 'true' ? 'common.yes' : 'common.no') : row.value;
     const reading = useApprovalReferenceReading(row.reference, literal, props.serverId);
     const title = nameApprovalReferenceLabel(row.title, row.reference, reading.named);

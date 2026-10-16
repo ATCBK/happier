@@ -1929,6 +1929,7 @@ const ptValues = {
     decisionAuthorityError: "Este início de sessão não permite aprovar pedidos. Inicia sessão neste Home com a chave de recuperação da tua conta, ou aprova noutro dispositivo com uma sessão de conta.",
     staleFailure: "Este pedido já não está atualizado, por isso não foi executado. Revê o pedido mais recente na caixa de entrada.",
     technicalDetails: "Detalhes técnicos",
+    confidentialSupplied: "Fornecido e mantido oculto",
     unsafeDetailsTitle: "Estes detalhes não podem ser mostrados com segurança",
     unsafeDetailsBody: "O Happier não conseguiu mostrar este pedido exatamente como foi enviado, por isso não pode ser aprovado. Recuse-o ou peça que seja enviado novamente.",
     approveUnavailableHint: "A aprovação fica indisponível enquanto estes detalhes não puderem ser mostrados com segurança.",

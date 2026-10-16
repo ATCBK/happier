@@ -1592,6 +1592,7 @@ const enApprovals = {
     'This sign-in cannot approve requests. Sign in to this Home with your account recovery key, or approve from another device with an account sign-in.',
   staleFailure: "This request is no longer current, so it wasn't executed. Review the latest request in Inbox.",
   technicalDetails: 'Technical details',
+  confidentialSupplied: 'Supplied and kept hidden',
   unsafeDetailsTitle: 'These details cannot be shown safely',
   unsafeDetailsBody:
     'Happier could not display this request exactly as it was sent, so it cannot be approved. Reject it, or ask for it to be sent again.',

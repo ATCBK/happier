@@ -1725,6 +1725,7 @@ const caValues = {
         decisionAuthorityError: 'Aquest inici de sessió no permet aprovar sol·licituds. Inicia sessió en aquest Home amb la clau de recuperació del teu compte, o aprova des d’un altre dispositiu amb una sessió de compte.',
         staleFailure: "Aquesta sol·licitud ja no és vigent, així que no s'ha executat. Revisa la sol·licitud més recent a la safata d'entrada.",
         technicalDetails: 'Detalls tècnics',
+        confidentialSupplied: 'Proporcionat i mantingut ocult',
         unsafeDetailsTitle: 'Aquests detalls no es poden mostrar amb seguretat',
         unsafeDetailsBody: 'Happier no ha pogut mostrar aquesta sol·licitud exactament tal com es va enviar, així que no es pot aprovar. Rebutja-la o demana que la tornin a enviar.',
         approveUnavailableHint: 'L\'aprovació no està disponible mentre aquests detalls no es puguin mostrar amb seguretat.',
