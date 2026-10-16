@@ -37,6 +37,19 @@ proof. This is not a second accounting ledger or an inferred attribution shim.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.
 
+## MCP Test ingress (0.3 development)
+
+Current MCP Test Actions and UI requests address a saved server with `t: 'byId'`.
+The daemon's V1 RPC reader separately retains `t: 'draft'` for the released
+`ui-web-v0.2.17-preview.19` client at
+`b8d1c449c46ab4dfa8637db36b66f643d149e66d`: its `McpServerTestPanel`
+sends the unsaved server and optional binding. The ingress adapter folds the
+binding's configuration overrides into the draft before passing it through the
+canonical reach resolver and daemon test pipeline. It adds no catalog write or
+second test pipeline. Remove this ingress when support for those released 0.2
+clients testing against an upgraded daemon ends. The moving predecessor at
+`f18aba940c5c56e5b24454e176c836c171098a2d` still produces that request.
+
 ## Map the seam
 
 For the changed concept, identify:
@@ -414,6 +427,15 @@ the current prompt-stack authoring placement contract. Existing rows and
 captured duplication retain their stored placements through the row owner.
 
 ### Tolerant stored-data readers
+
+Development Session creation provenance retains earlier immutable recipes through
+the canonical recipe stored projection. A stored string directory becomes a path
+intent, and the former nullable `mcpSelection` carrier becomes the current
+`capabilitySelection` carrier, preserving explicit MCP choices and null. This also applies when
+opening the recipe inside Account-owned Session metadata. Current writes still
+require the current directory and capability fields; malformed or missing known
+provenance remains invalid. The projection preserves creation retry meaning and
+does not discard the birth record to make the enclosing metadata readable.
 
 Session capability Actions in 0.3 development source keep the released
 `mcpSelectionV1` and `mcpSelectionRestartRequiredV1` shapes. The generic metadata
@@ -840,6 +862,16 @@ predecessor's Details and URL owners create only `terminal:embedded` with a
 when predecessor workspace state is absent; an unresolved current instance is
 unavailable rather than a request to create another shell.
 
+The current device-local terminal member also accepts optional
+`openCancelled: true`. Omission preserves the preceding open behavior; a decline
+survives leaf replacement until explicit Open or Restart. The member, target,
+approval reference and layout remain closed schemas. This development-only
+presentation field changes neither terminal RPCs nor approval authority. The
+clean moving predecessor at `f18aba940c5c56e5b24454e176c836c171098a2d`
+has no `terminal/workspace.ts` member producer; its absent workspace continues
+through the existing default-member reader. No reverse 0.3-to-0.2 layout writer
+or migration is added.
+
 ### Terminal-host account settings (development)
 
 The same released UI at `a357c65536ba89669422977d6f7daf9aa0d17e73`
@@ -1123,6 +1155,15 @@ ceiling. Optional subscription monetary facts distinguish provider-observed
 paid amounts from versioned, dated list prices; absence is not a zero cost or an
 inferred payment.
 
+In development page reads, the B owner derives `pageFacts` before returning to
+the Usage Resource: all earlier-curve points and exclusions, witnessed reset
+windows and the latest immutable reset witness. Together with current meters,
+pace and ended-window results, these are the facts Plans consumes. Packed
+observations remain in B's protected persisted document, rather than being
+repeated in each Resource slice. Exact-history requests still return every
+requested record. This is an undeployed 0.3 read-projection change; neither the
+retained 0.2 record shape nor the protected document's encoding changes.
+
 An exact-history client can drain its requested range through one captured quota
 Action read. The client starts at the existing page
 size, grows later pages by the accepted volume, and publishes current capacity
@@ -1136,14 +1177,41 @@ semantics and exact witness reads remain unchanged.
 The development V4 history operation also admits
 `{ recordId, projection: { range, resolution: 'accepted_observations' } }`.
 Its closed read result is `{ projection, complete }`; a missing materialization
-is explicitly incomplete. A qualified PUT to that same route accepts a closed
+is explicitly incomplete. HEAD on this demand returns no body and exposes
+`x-happier-usage-projection-complete` under `Cache-Control: no-store`. The client
+then reads the stable `/history/document?recordId=…` resource, whose coverage is
+relative to its stored range, and uses the HEAD result for the actual demand.
+The document supports standard HTTP revalidation with `ETag`,
+`Cache-Control: private, no-cache` and `Vary: Authorization`. Matching conditional
+reads return an empty 304 only after qualified source, Account-mode and
+accepted-prefix admission. Moving range endpoints do not change the document URL.
+HTTP transports retain their own representation; no Usage response cache or timer
+is added. Missing HEAD support or an unexposed metadata header uses the original
+GET contract. Transports without HTTP caching still receive a full document.
+The first document GET, cache eviction, or a newly published projection can
+transfer a body; a successful PUT does not itself prime the transport's GET cache.
+A qualified PUT to that same route accepts a closed
 Account-mode protected projection with its record, range, accepted count and
 frontier. The server admits only a complete accepted range and preserves other
 record metadata. Clients open the protected content and validate its identity;
 plain coverage metadata must also agree with its packed observations. The
-dictionary format is lossless and introduces no retention horizon or polling
-policy. The exact paged and immutable-witness operations retain their shapes.
+`meter_readings_runs_v1` dictionary format separates meter definitions from
+changing readings and groups consecutive equal material. Every immutable id and
+exact clock delta remains, preserving irregular poll times and sample counts.
+New projections omit historical per-fetch diagnostics. Current readings, exact pages
+and immutable witnesses retain those diagnostics and their existing shapes.
+No retention horizon or polling policy is introduced.
 Existing records without this metadata remain readable and backfill on demand.
+The current encoding marker is required on new development projection writes
+and in the packed body. Stored reads tolerate a missing metadata hint: the
+protected body's encoding determines whether it is current. The server retires
+recognized superseded plain bodies; the authorized client classifies opaque
+bodies only after authenticated opening. Superseded bodies are repacked from
+exact history through the same qualified replacement path, even at unchanged
+accepted count/frontier; an unmarked opaque document cannot suppress that write.
+Mode, authentication and malformed current-body failures do not become backfill.
+No decoder for superseded development encodings is retained. The plain/E2EE content
+envelope, exact-history API and immutable reset witnesses are unchanged.
 This is an undeployed 0.3 read materialization, not a predecessor writer, a second
 allowance authority or a promise of reverse 0.2 process compatibility.
 
@@ -1314,6 +1382,12 @@ rows remain complete even when the boundary Account is renamed or deleted.
 This replaces the unshipped creation-time cursor in place with a new query
 binding, without retaining that intermediate ordering or adding a second codec.
 
+The development Home Account list response carries optional `total`: all Home
+Accounts before pagination, including suspended and disabled Accounts, counted
+in the same transaction as the page. Overview uses this exact people total;
+answers without it retain the loaded-row count and `+` while more pages remain.
+This extends the undeployed V1 read response without changing cursor semantics.
+
 ### Direct sharing and Account erasure (development)
 
 The development Account-erasure transaction preserves direct grants that the erased
@@ -1427,6 +1501,14 @@ client fails closed when that bit or the typed routes are unavailable and retain
 local-only behavior; it does not send draft records through generic Account KV routes. A capable
 server reserves the draft KV prefix so old generic-KV clients cannot read or overwrite typed draft
 rows.
+
+In 0.3 development source, unsent child-conversation, Plan, Review and Delegate launchers use that
+same repository. Their text, references, attachments and explicit launch selection occupy separate
+`happier` extension fields on the parent Session draft, keyed by launch intent and role or Discussion origin.
+The parent's message composer remains independent. Reload restores the saved launcher identity and
+choice, including when hydration finishes after mount; accepted submission clears only its captured
+fields, preserving edits made while admission was pending. These fields use the existing draft
+envelope and encryption/CAS owners. Loaded UI validation remains separate from source availability.
 
 Development V2 draft operations use the same repository, physical rows and CAS while preserving
 strict V1 reads, writes, conflicts, cursors and events. V2-only Run/discussion and Project Open
