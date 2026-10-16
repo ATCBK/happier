@@ -23,10 +23,10 @@ export function resolveRetainedVersionIds(params: Readonly<{
   appendUnique(keep, params.previousVersionId);
 
   for (const versionId of params.orderedVersionIdsNewestFirst) {
-    appendUnique(keep, versionId);
     if (keep.length >= retainCount) {
       break;
     }
+    appendUnique(keep, versionId);
   }
 
   const prune = params.orderedVersionIdsNewestFirst.filter((versionId) => !keep.includes(versionId));

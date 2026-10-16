@@ -4,6 +4,14 @@ import type { SystemTaskSpec } from '@happier-dev/protocol';
 import { SystemTaskExecutionError } from '@happier-dev/cli-common/systemTasks';
 import type { NativeSshModule } from '@happier-dev/ssh-native';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { buildRemoteSelfDownloadFirstPartyInstallCommand } from '@happier-dev/cli-common/systemTasks';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 const HOME_TARGET = {
     profileId: 'home-profile',
@@ -45,6 +53,7 @@ function readInstallationTextResult(command: string) {
         return { status: 0, stdout: JSON.stringify({ platform: 'linux', arch: 'x86_64' }), stderr: '' };
     }
     if (command === VERIFIED_INSTALL_COMMAND) return { status: 0, stdout: '', stderr: '' };
+    if (command.includes('for version_path in')) return { status: 0, stdout: 'current=\nprevious=\n', stderr: '' };
     return null;
 }
 
@@ -205,6 +214,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
     });
 
     it('installs the remote CLI through the verified native self-download hook for fresh remotes', async () => {
+        if (process.platform === 'win32') return; // Remote shell fixtures require a POSIX test host.
         const loaded = await import('./nativeTask').catch(() => null);
         expect(loaded).not.toBeNull();
 
@@ -225,6 +235,24 @@ describe('runNativeRemoteSshBootstrapTask', () => {
             cancelRequest: vi.fn(async () => undefined),
         } satisfies NativeSshModule;
         const commands: string[] = [];
+        const home = await mkdtemp(join(tmpdir(), 'happier-native-retention-'));
+        const installRoot = join(home, '.happier', 'cli');
+        for (const id of ['0.9.0', '1.0.0', '1.1.0', 'local-stable-1792190545251']) {
+            await mkdir(join(installRoot, 'versions', id), { recursive: true });
+            await writeFile(join(installRoot, 'versions', id, 'happier'), id);
+        }
+        await symlink('versions/1.1.0', join(installRoot, 'current'));
+        await symlink('versions/1.0.0', join(installRoot, 'previous'));
+        const payload = join(home, 'payload');
+        await mkdir(payload);
+        await writeFile(join(payload, 'happier'), '#!/bin/sh\nexit 0\n');
+        const archive = join(home, 'payload.tar.gz');
+        await promisify(execFile)('tar', ['-czf', archive, '-C', home, 'payload']);
+        const installCommand = buildRemoteSelfDownloadFirstPartyInstallCommand({
+            componentId: 'happier-cli', versionId: '1.2.3',
+            archive: { name: 'payload.tar.gz', url: pathToFileURL(archive).href },
+            expectedSha256: createHash('sha256').update(await readFile(archive)).digest('hex'),
+        });
         const commandRunner = {
             runJsonCommand: vi.fn(async ({ command }: { command: string }) => {
                 commands.push(command);
@@ -254,25 +282,33 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                         stderr: '',
                     };
                 }
-                return { status: 0, stdout: '', stderr: '' };
+                if (command === installCommand) {
+                    expect((await readdir(join(installRoot, 'versions'))).sort()).toEqual(['1.0.0', '1.1.0']);
+                }
+                const result = await promisify(execFile)('/bin/sh', ['-c', command], { env: { ...process.env, HOME: home } });
+                return { status: 0, ...result };
             }),
         };
 
-        await expect(loaded!.runNativeRemoteSshBootstrapTask({
-            taskId: 'task-a',
-            nativeModule,
-            spec: createRemoteBootstrapSpec(),
-            commandRunner,
-            resolveInstallPlan: async () => ({
-                binaryPath: '$HOME/.happier/cli/current/happier',
-                versionId: '1.2.3',
-                source: 'https://downloads.example.test/happier.tar.gz',
-                command: 'verified self-download install command',
-            }),
-        })).resolves.toEqual({
-            machineId: 'machine-fresh',
-        });
-        expect(commands).toContain('verified self-download install command');
+        try {
+            await expect(loaded!.runNativeRemoteSshBootstrapTask({
+                taskId: 'task-a',
+                nativeModule,
+                spec: createRemoteBootstrapSpec(),
+                commandRunner,
+                resolveInstallPlan: async () => ({
+                    binaryPath: '$HOME/.happier/cli/current/happier',
+                    versionId: '1.2.3',
+                    source: 'https://downloads.example.test/happier.tar.gz',
+                    command: installCommand,
+                }),
+            })).resolves.toEqual({
+                machineId: 'machine-fresh',
+            });
+            expect(commands).toContain(installCommand);
+            expect((await readdir(join(installRoot, 'versions'))).sort()).toEqual(['1.1.0', '1.2.3']);
+            expect(await readFile(join(installRoot, 'previous', 'happier'), 'utf8')).toBe('1.1.0');
+        } finally { await rm(home, { recursive: true, force: true }); }
     });
 
     it('normalizes failed auth status probes as unauthenticated so pairing can continue', async () => {

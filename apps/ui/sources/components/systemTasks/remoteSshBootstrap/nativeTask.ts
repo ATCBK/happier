@@ -5,6 +5,7 @@ import {
     buildRemoteBootstrapCommand,
     createOpenSshHappierJsonExecutor,
     createRemoteSshBootstrapMachineTaskKind,
+    executeRemoteSelfDownloadFirstPartyInstallPlan,
     normalizeRemoteReleaseArch,
     normalizeRemoteReleaseOs,
     parseRemoteBootstrapMachineParams,
@@ -179,8 +180,9 @@ async function installRemoteCliViaNativeSelfDownload(params: Readonly<{
             os,
             arch,
         });
-    const installResult = await params.runTextCommand(plan.command, {
-        execTimeoutMs: 600_000,
+    const installResult = await executeRemoteSelfDownloadFirstPartyInstallPlan({
+        componentId: 'happier-cli', channel, plan,
+        runRemoteText: (command) => params.runTextCommand(command, { execTimeoutMs: 600_000 }),
     });
     if (installResult.status !== 0) {
         throw new SystemTaskExecutionError(

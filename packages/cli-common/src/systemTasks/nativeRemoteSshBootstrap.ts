@@ -3,6 +3,7 @@ export {
   type RemoteBootstrapCommandLabel,
 } from './ssh/remoteBootstrapCommandBuilder.js';
 export {
+  executeRemoteSelfDownloadFirstPartyInstallPlan,
   resolveRemoteSelfDownloadFirstPartyInstallPlan,
   type RemoteSelfDownloadFirstPartyInstallPlan,
 } from './ssh/remoteSelfDownloadFirstPartyInstallCommand.js';
