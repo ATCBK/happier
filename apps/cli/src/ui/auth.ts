@@ -1045,6 +1045,15 @@ async function authAndPrepareMachineIfNeeded(
     let machineSetup: Readonly<{ machineId: string }> | null = null;
     let accountMaterialRecoveryRequired = false;
 
+    if (process.env.HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE !== undefined) {
+        // The private-custody reader already validates this child's exact Home
+        // and Session. It runs on the admitted Machine, without selecting or
+        // registering a new requester Machine in the custodian's settings.
+        const requester = credentials?.requesterSessionCredentialScope?.requesterSession;
+        if (!credentials || !requester) throw new Error('requester_session_credentials_unavailable');
+        return { credentials, machineId: requester.attribution.machineId };
+    }
+
     if (credentials && opts.requireAccountMaterial === true) {
         const authenticatedCredentials = credentials;
         const target = await resolveCurrentCliHomeTarget();
