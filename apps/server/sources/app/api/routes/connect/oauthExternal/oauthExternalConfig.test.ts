@@ -90,4 +90,46 @@ describe('resolveWebAppOAuthReturnUrlFromRequestHeaders', () => {
     });
     expect(resolved).toBe('http://127.0.0.1:8081/base/oauth/github');
   });
+
+  it('returns into the Tauri desktop webview origin when its scheme is an allowed return scheme', () => {
+    const resolved = resolveWebAppOAuthReturnUrlFromRequestHeaders({
+      env: {
+        HAPPIER_PUBLIC_SERVER_URL: 'https://stack.example.test',
+        HAPPIER_WEBAPP_URL: 'https://stack.example.test',
+        HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES: 'happier,tauri',
+      },
+      providerId: 'okta',
+      headers: {
+        origin: 'tauri://localhost',
+      },
+    });
+    expect(resolved).toBe('tauri://localhost/oauth/okta');
+  });
+
+  it('ignores the Tauri desktop webview origin when its scheme is not an allowed return scheme', () => {
+    const resolved = resolveWebAppOAuthReturnUrlFromRequestHeaders({
+      env: {
+        HAPPIER_WEBAPP_URL: 'https://stack.example.test',
+        HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES: 'happier',
+      },
+      providerId: 'okta',
+      headers: {
+        origin: 'tauri://localhost',
+      },
+    });
+    expect(resolved).toBeNull();
+  });
+
+  it('ignores a non-loopback host on the Tauri scheme', () => {
+    const resolved = resolveWebAppOAuthReturnUrlFromRequestHeaders({
+      env: {
+        HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES: 'tauri',
+      },
+      providerId: 'okta',
+      headers: {
+        origin: 'tauri://evil.example.test',
+      },
+    });
+    expect(resolved).toBeNull();
+  });
 });

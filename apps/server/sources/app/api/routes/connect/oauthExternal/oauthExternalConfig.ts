@@ -26,6 +26,12 @@ function parseAllowedOAuthReturnSchemes(env: NodeJS.ProcessEnv): Set<string> {
     return schemes;
 }
 
+const DESKTOP_WEBVIEW_SCHEMES = new Set(["tauri"]);
+
+function isDesktopWebviewScheme(protocol: string): boolean {
+    return DESKTOP_WEBVIEW_SCHEMES.has(protocol.replace(/:$/, "").toLowerCase());
+}
+
 function isSafeWebRedirectUrl(env: NodeJS.ProcessEnv, url: URL): boolean {
     const scheme = url.protocol.replace(/:$/, "").toLowerCase();
     if (scheme === "https") return true;
@@ -125,9 +131,9 @@ export function resolveWebAppOAuthReturnUrlFromRequestHeaders(params: {
         try {
             const url = new URL(raw);
             if (!isLoopbackHostname(url.hostname)) continue;
-            if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+            if (url.protocol !== "http:" && url.protocol !== "https:" && !isDesktopWebviewScheme(url.protocol)) continue;
             const loopbackUiBasePath = resolveLoopbackUiBasePath(url.pathname, uiPrefix, configuredWebAppBasePath);
-            const returnUrl = `${url.origin}${loopbackUiBasePath.replace(/\/+$/, "")}/oauth/${encodeURIComponent(providerId)}`;
+            const returnUrl = `${url.protocol}//${url.host}${loopbackUiBasePath.replace(/\/+$/, "")}/oauth/${encodeURIComponent(providerId)}`;
             const normalized = tryNormalizeSafeWebRedirectUrl(params.env, returnUrl);
             if (normalized) return normalized;
         } catch {
