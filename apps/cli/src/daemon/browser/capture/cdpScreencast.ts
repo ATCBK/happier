@@ -26,6 +26,7 @@ export type BrowserCdpScreencastProducer = Readonly<{
 type Capture = {
     handle: BrowserSidecarCdpPageHandle;
     consumers: Set<Consumer>;
+    lastFrame: BrowserCdpScreencastFrame | null;
     started: Promise<boolean>;
     stopping: Promise<void> | null;
     closed: boolean;
@@ -49,6 +50,7 @@ export function createBrowserCdpScreencastProducer(input: Readonly<{
     function close(key: string, capture: Capture): Promise<void> {
         if (capture.stopping) return capture.stopping;
         capture.closed = true;
+        capture.lastFrame = null;
         capture.unsubscribe();
         capture.stopping = (async () => {
             try {
@@ -95,7 +97,7 @@ export function createBrowserCdpScreencastProducer(input: Readonly<{
                 // The shared CDP connection identifies page notifications by attached session.
                 if (!handle?.sessionId || !subscribe) return null;
                 const created: Capture = {
-                    handle, consumers: new Set(), started: Promise.resolve(false), stopping: null,
+                    handle, consumers: new Set(), lastFrame: null, started: Promise.resolve(false), stopping: null,
                     closed: false, unsubscribe: () => undefined,
                 };
                 capture = created;
@@ -116,6 +118,7 @@ export function createBrowserCdpScreencastProducer(input: Readonly<{
                             ...(typeof dimensions.deviceWidth === 'number' && dimensions.deviceWidth > 0 ? { width: dimensions.deviceWidth } : {}),
                             ...(typeof dimensions.deviceHeight === 'number' && dimensions.deviceHeight > 0 ? { height: dimensions.deviceHeight } : {}),
                         };
+                        created.lastFrame = frame;
                         for (const subscriber of [...created.consumers]) {
                             if (subscriber.purpose !== 'humanViewer' && control?.isObservationHeld()) continue;
                             try { subscriber.onFrame(frame); } catch (error) { report(subscriber, error); }
@@ -135,6 +138,12 @@ export function createBrowserCdpScreencastProducer(input: Readonly<{
                     });
             } else {
                 capture.consumers.add(consumer);
+                // Chromium only emits on repaint. A newly admitted human viewer needs the
+                // current picture even while another viewer/recording keeps this capture alive.
+                // Observation subscribers still wait for fresh, non-confidential evidence.
+                if (consumer.purpose === 'humanViewer' && capture.lastFrame) {
+                    try { consumer.onFrame(capture.lastFrame); } catch (error) { report(consumer, error); }
+                }
             }
             const current = capture;
             if (!await current.started || current.closed) return null;

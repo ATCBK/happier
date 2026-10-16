@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MachineLiveStreamRelayEnvelopeV1 } from '@happier-dev/protocol';
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { BrowserEventBatchV1Schema } from '@happier-dev/protocol/browser/events/v1';
+import { MachineLiveStreamDecodedEnvelopeV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { createBrowserSidecarCdpControlAdapter, type BrowserSidecarCdpEventSubscriber } from '../sidecar/controlAdapter';
 import { createBrowserAutomationDaemonService } from '../automation/service';
 import { createBrowserAutomationCdpAdapter } from '../automation/adapters/cdp';
@@ -246,6 +247,19 @@ describe('browser live capture', () => {
             expect(envelopes.filter(envelope => envelope.message.kind === 'frame' && envelope.message.frame.payloadKind !== 'metadata')).toMatchObject([
                 { message: { frame: { streamId: 'stream', sequence: expect.any(Number), payloadBase64: 'AQID', codecId: 'image.mjpeg' } } },
             ]);
+            // A second tab or a remounted viewer joins the same static page: Chromium need not
+            // repaint, and restarting its shared screencast would disrupt the existing viewer.
+            const lateStart = { ...start, streamId: 'late-human', authorization: { ...start.authorization,
+                payload: { ...start.authorization.payload, streamId: 'late-human' } } };
+            expect(await relay.start(lateStart, 'present_user')).toEqual({ ok: true, streamId: 'late-human' });
+            const lateImage = envelopes.find(envelope => envelope.message.kind === 'frame'
+                && envelope.message.frame.streamId === 'late-human' && envelope.message.frame.payloadKind === 'image_keyframe');
+            expect(lateImage).toBeDefined();
+            expect(MachineLiveStreamDecodedEnvelopeV1Schema.parse(lateImage)).toMatchObject({ message: { frame: {
+                streamId: 'late-human', payloadBase64: 'AQID', codecId: 'image.mjpeg',
+            } } });
+            expect(commands.filter(command => command.method === 'Page.startScreencast')).toHaveLength(1);
+            expect(commands.filter(command => command.method === 'Page.screencastFrameAck')).toHaveLength(1);
             expect(browserEvents()).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'controllerChanged', state: expect.objectContaining({ controller: 'none' }) })]));
             for (const listener of [...listeners]) listener({ method: 'Page.frameNavigated', sessionId: 'cdp-page',
                 params: { frame: { id: 'main', loaderId: 'next-document', url: 'https://example.test/next' } } });
@@ -296,6 +310,10 @@ describe('browser live capture', () => {
             const observationStart = { ...start, streamId: 'observation', authorization: { ...start.authorization,
                 payload: { ...start.authorization.payload, streamId: 'observation' } } };
             expect(await relay.start(observationStart)).toEqual({ ok: true, streamId: 'observation' });
+            // Agent/recording observation must wait for a fresh frame, never inherit a retained
+            // human picture which may have been captured during a confidential hold.
+            expect(envelopes.filter(envelope => envelope.message.kind === 'frame'
+                && envelope.message.frame.streamId === 'observation' && envelope.message.frame.payloadKind !== 'metadata')).toEqual([]);
             for (const listener of [...listeners]) listener({ method: 'Page.screencastFrame', sessionId: 'cdp-page',
                 params: { sessionId: 3, data: 'BwgJ', metadata: { deviceWidth: 400, deviceHeight: 200 } } });
             const metadataFor = (streamId: string) => envelopes.filter(envelope => envelope.message.kind === 'frame'
