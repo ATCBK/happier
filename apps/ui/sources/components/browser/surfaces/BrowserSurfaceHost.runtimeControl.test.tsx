@@ -243,7 +243,7 @@ describe('BrowserSurfaceHost runtime control registration', () => {
         expect(screen.findByType('iframe').props.src).toBe('https://preview.happier.test/surface');
     });
 
-    it('A3: routes a daemon-authoritative navigate through the supplied sendDaemonCommand seam (no route_unavailable)', async () => {
+    it('routes daemon navigation and retains Close when unrelated Browser catalogs fail', async () => {
         const browserSessionId = 'browser_session_sidecar';
         const viewId = 'view_sidecar';
         const externalTarget = {
@@ -297,17 +297,22 @@ describe('BrowserSurfaceHost runtime control registration', () => {
             // The real sender awaits its daemon RPC before publishing response
             // events; hold that external reply until local dispatch has settled.
             await daemonReply.promise;
-            const events = [BrowserEventV1Schema.parse({ kind: 'navigationCommitted', eventId: 'event_committed',
-                browserSessionId, viewId, currentUrl: command.kind === 'navigate' ? command.url : '', occurredAt: 1_003 })];
+            const events = [BrowserEventV1Schema.parse(command.kind === 'closeView'
+                ? { kind: 'viewClosed', eventId: 'event_closed', browserSessionId, viewId, occurredAt: 1_004 }
+                : { kind: 'navigationCommitted', eventId: 'event_committed', browserSessionId, viewId,
+                    currentUrl: command.kind === 'navigate' ? command.url : '', occurredAt: 1_003 })];
             onEvents?.(events);
             return { ok: true, result: { v: 1, commandId: command.commandId, status: 'dispatched', adapterKind: 'chromiumSidecar', events } };
         });
-        const screen = await renderScreen(
+        const renderHost = (catalogFailed: boolean) => (
             <BrowserSurfaceHost
                 browserSessionId={browserSessionId}
                 platform="desktop"
                 initialBrowserState={initialBrowserState}
                 sendDaemonCommand={sendDaemonCommand}
+                launchpadRefreshStatus={catalogFailed ? 'error' : 'idle'}
+                launchpadRefreshError={catalogFailed ? 'local_service_preview_refresh_failed' : null}
+                pluginUiInteractionEnabled={!catalogFailed}
                 policy={{
                     browserEnabled: true,
                     viewTargetsEnabled: true,
@@ -317,8 +322,9 @@ describe('BrowserSurfaceHost runtime control registration', () => {
                     recordingEnabled: false,
                 }}
                 testID="browser-surface"
-            />,
+            />
         );
+        const screen = await renderScreen(renderHost(false));
         await flushHookEffects();
 
         const execute = createDefaultRuntimeActionExecutor();
@@ -355,5 +361,16 @@ describe('BrowserSurfaceHost runtime control registration', () => {
             currentUrl: 'https://browser.example.test/next', pendingUrl: null,
         });
         expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('browser.example.test/next');
+
+        await screen.update(renderHost(true));
+        expect(screen.findByType(BrowserShell).props.state.viewsById[viewId]).toMatchObject({
+            currentUrl: 'https://browser.example.test/next',
+        });
+        const close = { kind: 'closeView', commandId: 'command_sidecar_close', browserSessionId, viewId } satisfies BrowserCommandV1;
+        let closed: unknown;
+        await act(async () => { closed = await execute({ actionId: 'browser.view.close', input: close, context: {} }); });
+        await flushHookEffects();
+        expect(closed).toMatchObject({ status: 'dispatched', events: [expect.objectContaining({ kind: 'viewClosed' })] });
+        expect(screen.findByType(BrowserShell).props.state.viewsById[viewId]).toBeUndefined();
     });
 });
