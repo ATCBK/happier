@@ -9,6 +9,7 @@ import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerpr
 import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import type { ProjectAccountRowsSnapshot } from '@/sync/store/domains/projectAccountRows';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 // The Machine RPC transport is a network boundary; the observation reader, Trust API and Account
 // admission beneath it remain real.
@@ -274,11 +275,25 @@ describe('Project Trust captured UI Account API', () => {
         } finally { release?.(); }
         expect(await readResult).toMatchObject({ status: 'rejected', error: { code: 'action_account_scope_changed' } });
         scope = { ...scope, accountId: 'replacement' };
-        homes.answer(scope.serverId, mutatePath, { select: () => {
-            return { body: { status: 'updated', revision: 5, cursor: 1 }, respondAfter: homes.switchAccount(scope.serverId, 'third-account') };
-        } });
-        expect(await api.rememberReviewedProjectEffect(scope, { ...value, currentEffectDigest: value.reviewedEffectDigest, expectedRevision: 4 }))
-            .toEqual({ status: 'updated', revision: 5, cursor: 1 });
+        homes.answer(scope.serverId, mutatePath, { body: { status: 'updated', revision: 5, cursor: 1 } });
+        setRuntimeFetch(async (input, init) => {
+            const response = await homes.request(input, init);
+            if (new URL(String(input)).pathname === mutatePath) {
+                const readJson = response.json.bind(response);
+                // HTTP has acknowledged the write before its body is delivered to the caller.
+                // Retiring before Response creation instead represents an unknown write outcome.
+                response.json = async () => {
+                    const receipt = await readJson();
+                    await homes.switchAccount(scope.serverId, 'third-account');
+                    return receipt;
+                };
+            }
+            return response;
+        });
+        try {
+            expect(await api.rememberReviewedProjectEffect(scope, { ...value, currentEffectDigest: value.reviewedEffectDigest, expectedRevision: 4 }))
+                .toEqual({ status: 'updated', revision: 5, cursor: 1 });
+        } finally { installHomeGovernanceBoundaries(homes); }
     });
 });
 
