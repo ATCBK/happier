@@ -151,6 +151,8 @@ export type WidgetFrameProps = Readonly<{
      * surface and the dividers, so this frame (always plain there) draws no hairline of its own.
      */
     grouped?: boolean;
+    /** First in its area: a plain widget's hairline separates it from the one above, so the first draws none. */
+    leadsArea?: boolean;
     accessibilityLabel?: string;
 }>;
 
@@ -371,7 +373,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             cardStyle={styles.card}
             gradient={resolveThemeSurfaceFinish(theme, 'card')}
             renderMaterialSurface={renderThemeMaterialSurface}
-            {...(props.grouped ? {} : { dividerColor: theme.colors.border.default })}
+            {...(props.grouped || (props.leadsArea && props.frameStyle === 'plain') ? {} : { dividerColor: theme.colors.border.default })}
             mark={mark}
             title={props.titleMeta && typeof props.title === 'string' ? (
                 <View style={styles.titleWithMeta}>

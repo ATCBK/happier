@@ -139,16 +139,21 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         {props.proposeCommits}
     </>;
     // The phone menu already lists Start review and Propose commits as rows; only the view's own parts join it.
-    const renderPhoneHeader = (fileCount: number | null, actions?: React.ReactNode, sections?: readonly ScmComparisonMenuSection[]) => <ScmComparisonPhoneHeader
+    const renderPhoneHeader = (fileCount: number | null, actions?: React.ReactNode, sections?: readonly ScmComparisonMenuSection[], fileActions = true) => <ScmComparisonPhoneHeader
         view={props.view} views={views} scope={{ options: props.scopeOptions, current: props.comparison,
             currentEvidenceSessionId: props.evidenceSessionId,
             currentLabel: props.scopeLabel, fileCount: countShown(fileCount), onSelect: props.onSelectComparison }}
         onSelectView={selectView} onBack={props.onClose}
-        onStartReview={props.onStartReview ?? (() => {})} reviewDisabled={props.reviewDisabled || !props.onStartReview}
-        reviewDisabledReason={props.reviewDisabledReason} onProposeCommits={props.onProposeCommits} extraActions={actions} sections={sections} />;
+        onStartReview={props.onStartReview ?? (() => {})} reviewDisabled={props.reviewDisabled || !props.onStartReview || !fileActions}
+        reviewDisabledReason={props.reviewDisabledReason} onProposeCommits={fileActions ? props.onProposeCommits : null} extraActions={actions} sections={sections} />;
     const renderBar = (actions?: React.ReactNode) => stacked
         ? renderPhoneHeader(props.fileCount ?? reading?.source.fileCount ?? null, actions)
         : <ScmComparisonBar leading={renderLeading(props.fileCount ?? null)} trailing={<>{actions}{trailing}</>} />;
+    // While a state stands in for the files (loading, not a repository, unreachable), the bar keeps its
+    // place and its views, but nothing offers to act on files that are not there.
+    const renderStateBar = () => stacked
+        ? renderPhoneHeader(null, undefined, undefined, false)
+        : <ScmComparisonBar leading={renderLeading(null)} trailing={props.barActions} />;
     const chrome: ScmReviewComparisonChrome = {
         renderBar: stacked ? (coverage, actions, sections) => renderPhoneHeader(coverage.fileCount, actions, sections) : undefined,
         renderBarLeading: (coverage) => renderLeading(coverage.fileCount),
@@ -186,6 +191,6 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         {stacked && props.hostSwitch ? <View style={HOST_SWITCH_STACKED_STYLE}>{props.hostSwitch}</View> : null}
         {props.view === 'walkthrough' ? props.renderWalkthrough(context)
             : props.view === 'commits' && props.renderCommits ? props.renderCommits(context)
-                : props.filesState ? <>{renderBar()}{props.filesState}</> : props.renderFiles(chrome)}
+                : props.filesState ? <>{renderStateBar()}{props.filesState}</> : props.renderFiles(chrome)}
     </View>;
 });

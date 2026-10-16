@@ -854,6 +854,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                         : bodyCaption ?? bindingLabel ?? sourceName ?? undefined}
                 meta={bodyMeta}
                 grouped={parent !== undefined}
+                leadsArea={props.index === 0}
                 fill
                 // A core page's rows take their content height (A6/A7): no fixed viewport, size and width kept.
                 {...(surface.owner.kind === 'corePage' ? { bodyHeight: 'content' as const } : {})}

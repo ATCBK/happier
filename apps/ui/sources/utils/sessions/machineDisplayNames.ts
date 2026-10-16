@@ -142,7 +142,9 @@ export function resolveMachineDisplayNameParts(machines: readonly MachineNameSou
     for (const machine of machines) {
         const base = baseById.get(machine.id)!;
         const collidingIds = idsByName.get(base.toLocaleLowerCase()) ?? [];
-        if (collidingIds.length < 2) {
+        // A machine still loading its name has a placeholder, not an identity: an id suffix on it
+        // would read as the machine's name until the real one arrives.
+        if (collidingIds.length < 2 || isMachineDisplayHydrating(machine)) {
             names.set(machine.id, { name: base, hint: null });
             continue;
         }

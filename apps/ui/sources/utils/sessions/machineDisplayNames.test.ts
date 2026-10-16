@@ -111,6 +111,13 @@ describe('locked machines', () => {
         expect(getMachineDisplayName(hydrating)).toBe(t('common.loading'));
         expect(describeMachineLockedReason(hydrating)).toBeNull();
     });
+
+    it('never gives machines still loading their names an id suffix, which would read as their identity', () => {
+        const names = resolveMachineDisplayNames([{ id: 'd06f1111', metadata: null }, { id: '8b442222', metadata: null }, m('c-3', 'Laptop')]);
+        expect(names.get('d06f1111')).toBe(t('common.loading'));
+        expect(names.get('8b442222')).toBe(t('common.loading'));
+        expect(names.get('c-3')).toBe('Laptop');
+    });
 });
 
 describe('describeMachineLockedReason', () => {

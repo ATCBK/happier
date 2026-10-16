@@ -166,7 +166,9 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
     </View>
   );
 
-  if (fit.narrow) {
+  // A lone layout has nothing to switch to: its name stands as the area's title and opens the same
+  // list (Create), rather than a strip of one tab (lab p-overview HOMEp/FIT).
+  if (fit.narrow || props.layouts.length < 2) {
     return (
       <View testID={testID} style={styles.narrow} onLayout={fit.onBarLayout}>
         <LayoutCurrentNameMenu
