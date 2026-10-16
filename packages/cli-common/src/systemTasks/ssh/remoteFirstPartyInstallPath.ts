@@ -106,7 +106,9 @@ export function buildRemoteFirstPartyPromotionCommand(params: Readonly<{
   return [
     `mkdir -p ${versionsDir}`,
     `rm -rf ${versionDir}`,
-    `cp -R ${payloadRootExpression} ${versionDir}`,
+    // Both remote strategies stage under the install home; consume that extracted
+    // tree without allocating a second full payload on the guest filesystem.
+    `mv ${payloadRootExpression} ${versionDir}`,
     `chmod +x ${versionBinaryPath}`,
     `if [ -L ${currentPath} ]; then prev="$(readlink ${currentPath} || true)"; if [ -n "$prev" ]; then ln -sfn "$prev" ${previousPath}; fi; fi`,
     `ln -sfn ${versionDir} ${currentPath}`,

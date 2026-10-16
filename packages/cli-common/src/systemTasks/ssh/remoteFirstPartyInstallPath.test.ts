@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readlink, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readlink, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -34,9 +34,10 @@ describe('remote first-party install layout', () => {
     const payload = join(root, 'payload');
     try {
       await mkdir(home);
-      await mkdir(payload);
-      await writeFile(join(payload, 'happier'), '#!/bin/sh\nexit 0\n');
       for (const versionId of ['1.2.3', '1.2.4']) {
+        await mkdir(payload, { recursive: true });
+        await writeFile(join(payload, 'happier'), '#!/bin/sh\nexit 0\n');
+        const stagedBinary = await stat(join(payload, 'happier'));
         const command = buildRemoteFirstPartyPromotionCommand({
           layout: resolveRemoteFirstPartyInstallLayout({ componentId: 'happier-cli', channel: 'stable', versionId }),
           payloadRootExpression: '"$payload_root"',
@@ -44,6 +45,9 @@ describe('remote first-party install layout', () => {
         await promisify(execFile)('/bin/sh', ['-c', command], {
           cwd: root, env: { ...process.env, HOME: home, payload_root: payload },
         });
+        // Same-filesystem staging must not allocate a second payload's worth of disk.
+        const installedBinary = await stat(join(home, '.happier', 'cli', 'versions', versionId, 'happier'));
+        expect({ device: installedBinary.dev, inode: installedBinary.ino }).toEqual({ device: stagedBinary.dev, inode: stagedBinary.ino });
       }
       const installRoot = join(home, '.happier', 'cli');
       expect(await readlink(join(installRoot, 'current'))).toBe(join(installRoot, 'versions', '1.2.4'));

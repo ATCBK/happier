@@ -81,7 +81,13 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
         });
         if (response.status < 200 || response.status >= 300) {
             const failure = ManagedErrorV1Schema.safeParse(response.data);
-            throw new ManagedMachineControllerError(failure.success ? failure.data.code : [404, 405, 501].includes(response.status) ? 'admission_unavailable' : 'managed_controller_request_failed');
+            // Global Home refusals use { error, statusCode }, outside the managed
+            // domain enum. Retain only a machine-readable code, never diagnostics.
+            const data: unknown = response.data;
+            const serverCode = data && typeof data === 'object' && 'error' in data
+                && typeof data.error === 'string' && /^[a-z][a-z0-9_]*$/.test(data.error) ? data.error : undefined;
+            throw new ManagedMachineControllerError(failure.success ? failure.data.code : serverCode
+                ?? ([404, 405, 501].includes(response.status) ? 'admission_unavailable' : 'managed_controller_request_failed'), response.status);
         }
         return response.data;
     }

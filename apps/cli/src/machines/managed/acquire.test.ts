@@ -959,7 +959,7 @@ describe('managed acquisition durable custody', () => {
         }, { requestId: 'request' }, 'machines.managed.bootstrap.retry');
         expect(await client.isCurrent(bound)).toBe(false);
     });
-    it.each(['permission_denied', 'transport', 'replaced-resource'] as const)('keeps the native currentness refusal typed before handler IO (%s)', async refusal => {
+    it.each(['permission_denied', 'server-conflict', 'transport', 'replaced-resource'] as const)('keeps the native currentness refusal typed before handler IO (%s)', async refusal => {
         const homeId = 'srv_native_currentness';
         const native = nativeFixture({ credentialPurposes: [] });
         const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', resource: {
@@ -972,6 +972,7 @@ describe('managed acquisition durable custody', () => {
                 expectedIntentRevision: retained.intentRevision, controller, requestId: 'retained-creation' });
             if (++reads === 1) return { status: 200, data: { machine: retained } };
             if (refusal === 'permission_denied') return { status: 403, data: { code: 'permission_denied' } };
+            if (refusal === 'server-conflict') return { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
             if (refusal === 'transport') throw new Error('Private transport diagnostic must not reach the operation');
             return { status: 200, data: { machine: { ...retained, resource: { ...retained.resource!, value: { replaced: true } } } } };
         });
@@ -984,9 +985,11 @@ describe('managed acquisition durable custody', () => {
         const action = 'machines.managed.bootstrap.retry' as const;
         const client = createManagedMachineControllerClient(driverInput, options, action);
         const invocation = createManagedNativeInvocation({ input: driverInput, options, client, machine: retained, action }, () => retained);
-        const code = refusal === 'transport' ? 'managed_controller_request_failed' : refusal === 'replaced-resource' ? 'intent_changed' : refusal;
+        const code = refusal === 'transport' ? 'managed_controller_request_failed' : refusal === 'replaced-resource' ? 'intent_changed'
+            : refusal === 'server-conflict' ? 'database_transaction_conflict_exhausted' : refusal;
         await expect(invocation.invoke('exec', { resource: {}, argv: ['true'] })).rejects.toMatchObject({
             name: 'ManagedMachineControllerError', code, message: code,
+            ...(refusal === 'server-conflict' ? { status: 503 } : refusal === 'permission_denied' ? { status: 403 } : {}),
         });
         expect(native.effects()).toBe(0);
         expect(native.activations()).toBe(0);
