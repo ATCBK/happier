@@ -1,5 +1,6 @@
+import * as React from 'react';
 import { t } from '@/text';
-import { getCachedServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { getCachedServerFeaturesSnapshot, subscribeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import {
     readServerProfileHomeName,
     resolveUniqueServerProfileByUrl,
@@ -45,6 +46,18 @@ export function resolveHomeDisplayNameForServerIdentity(serverIdentityId: string
  */
 export function resolveHomeDisplayLabel(profile: HomeDisplayProfile | null | undefined, _fallbackId: string): string {
     return resolveHomeDisplayName(profile) ?? t('settingsAccount.thisHomeTitle');
+}
+
+/** `resolveHomeDisplayName` for a mounted surface; null while the Home has no name (say "this Home"). */
+export function useHomeDisplayName(profile: HomeDisplayProfile | null | undefined): string | null {
+    const getName = React.useCallback(() => resolveHomeDisplayName(profile), [profile]);
+    return React.useSyncExternalStore(subscribeServerFeaturesSnapshot, getName, getName);
+}
+
+/** Mounted Home labels observe only their resolved text, so unrelated feature changes stay local. */
+export function useHomeDisplayLabel(profile: HomeDisplayProfile | null | undefined): string {
+    const getLabel = React.useCallback(() => resolveHomeDisplayLabel(profile, ''), [profile]);
+    return React.useSyncExternalStore(subscribeServerFeaturesSnapshot, getLabel, getLabel);
 }
 
 /**

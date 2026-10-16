@@ -5,6 +5,12 @@ import { createDeferred, homeAccountRowFixture, homeAdministrationEventFixture, 
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
 import { homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
 
+// The native confirmation dialog is a user-interaction boundary; these cases accept the intent.
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
+
 /**
  * The Home operation wrappers, through the path they actually take.
  *
@@ -18,11 +24,13 @@ import { homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGove
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+// Cold source transformation is collection work, outside the contract's mutation deadline.
+const homeOperations = await import('./homeGovernanceOperations');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 
 async function operations() {
-    return await import('./homeGovernanceOperations');
+    return homeOperations;
 }
 
 async function addHome(): Promise<string> {
@@ -422,6 +430,28 @@ describe('home governance mutations', () => {
 });
 
 describe('home settings, mail delivery and audit', () => {
+    it('refreshes the exact Home public presentation after a live settings write despite a warm features cache', async () => {
+        const home = await addHome();
+        const other = await harness.addHome({ name: 'Home B', serverUrl: 'https://home-b.example', accountId: 'account-b', active: true });
+        const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+        const { primeServerFeaturesSnapshot, getCachedServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const features = (displayName: string) => ({ ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1 as const, displayName } });
+        primeServerFeaturesSnapshot({ serverId: home, snapshot: { status: 'ready', features: features('Acme') } });
+        primeServerFeaturesSnapshot({ serverId: other, snapshot: { status: 'ready', features: features('Other') } });
+        harness.answer(home, '/v1/home/settings/set', { body: homeSettingsProjectionFixture({ revision: 4 }) });
+        harness.answer(home, '/v1/features', { body: features('Studio') });
+        const { setHomeSettings } = await operations();
+        const outcome = await setHomeSettings({ scope: { serverId: home, accountId: 'account-admin' }, expectedRevision: 3,
+            values: { HAPPIER_HOME_DISPLAY_NAME: 'Studio' } });
+        expect(outcome.kind).toBe('succeeded');
+        await vi.waitFor(() => expect(getCachedServerFeaturesSnapshot({ serverId: home })).toMatchObject({
+            status: 'ready', features: { homePresentation: { displayName: 'Studio' } },
+        }));
+        expect(getCachedServerFeaturesSnapshot({ serverId: other })).toMatchObject({
+            status: 'ready', features: { homePresentation: { displayName: 'Other' } },
+        });
+    });
+
     it('writes settings against the read revision and returns the Home projection without re-reading governance', async () => {
         const home = await addHome();
         const saved = homeSettingsProjectionFixture({ revision: 4 });

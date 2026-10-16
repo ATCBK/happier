@@ -97,6 +97,8 @@ export type HomeAccountListInputV1 = z.infer<typeof HomeAccountListInputV1Schema
 export const HomeAccountListResultV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(HomeAccountRowV1Schema),
   nextCursor: z.nullable(z.string().check(z.minLength(1), z.maxLength(HOME_ACCOUNT_PAGE_CURSOR_MAX_LENGTH_V1))),
+  /** All Home Accounts, including inactive Accounts, before pagination. */
+  total: z.optional(z.number().check(z.int(), z.minimum(0))),
 }));
 
 export type HomeAccountListResultV1 = z.infer<typeof HomeAccountListResultV1Schema>;

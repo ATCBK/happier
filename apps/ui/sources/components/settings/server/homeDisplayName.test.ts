@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { renderHook, standardCleanup } from '@/dev/testkit';
 
 import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
+
+afterEach(standardCleanup);
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -95,6 +99,31 @@ describe('resolveHomeDisplayName', () => {
 });
 
 describe('resolveHomeDisplayLabel', () => {
+    it('updates subscribed labels only when this Home name changes', async () => {
+        const { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+        const { useHomeDisplayLabel } = await import('./homeDisplayName');
+        const saved = profile({ name: 'Studio' });
+        let renders = 0;
+        const hook = await renderHook(() => { renders += 1; return useHomeDisplayLabel(saved); });
+        const initialRenders = renders;
+        try {
+            await act(async () => primeServerFeaturesSnapshot({ serverId: 'another-home', snapshot: {
+                status: 'ready', features: createRootLayoutFeaturesResponse(),
+            } }));
+            expect(renders).toBe(initialRenders);
+            await act(async () => primeServerFeaturesSnapshot({ serverId: saved.id, snapshot: {
+                status: 'ready', features: { ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1, displayName: 'Northwind' } },
+            } }));
+            expect(hook.getCurrent()).toBe('Northwind');
+        } finally {
+            await act(async () => {
+                deleteServerFeaturesSnapshot({ serverId: saved.id });
+                deleteServerFeaturesSnapshot({ serverId: 'another-home' });
+            });
+        }
+    });
+
     it('shows a named Home by its name', async () => {
         const { resolveHomeDisplayLabel } = await import('./homeDisplayName');
         expect(resolveHomeDisplayLabel(profile({ name: 'Studio' }), 'home-a')).toBe('Studio');

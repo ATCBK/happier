@@ -418,11 +418,14 @@ const HomeOverviewOwnership = React.memo(function HomeOverviewOwnership(props: R
                         icon={<Icon name="user-circle" />}
                         iconBoxSize={OWNER_AVATAR_SIZE}
                         subtitle={t('homeGovernance.overviewPage.peopleSummary', {
-                            people: roster.rows.length,
-                            more: roster.hasMore,
+                            people: roster.total ?? roster.rows.length,
+                            more: roster.total === null && roster.hasMore,
                             owners: context.projection.activeOwnerCount,
-                            // Only a complete roster can count its admins.
-                            admins: roster.hasMore ? null : roster.rows.filter((row) => row.homeRole === 'admin').length,
+                            // The Home pages owners, then admins, then members: the admins are all listed once the
+                            // roster is complete or has reached its first member.
+                            admins: roster.hasMore && !roster.rows.some((row) => row.homeRole === 'member')
+                                ? null
+                                : roster.rows.filter((row) => row.homeRole === 'admin').length,
                         })}
                         onPress={() => router.push(homeAdministrationPeoplePath(context.scope.serverId) as never)}
                     />

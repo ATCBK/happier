@@ -394,6 +394,7 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
     const storagePendingShown = storage !== undefined && storage.fixedBy === null && storageSelected !== null
         && storageSelected !== storage.running;
     const recommendedTab = selected.recommendedProvisioningMode ?? 'inherited';
+    const recommendationFits = selected.recommendedProvisioningMode === null || modes.includes(selected.recommendedProvisioningMode);
     const wideningCard = (anchor: WideningAnchor) => (widening?.anchor === anchor ? (
         <HomeConsequenceNotice
             key={`widening:${anchor}`}
@@ -634,7 +635,9 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                     onChange={(set) => patch({ permittedAccountModes: [...ACCOUNT_MODE_SET_MODES[set]] })}
                     disabled={!interactive}
                 /></SettingAnchor>
-                <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.recommendedProvisioningMode}><SegmentedChoiceItem<AccountMode | 'inherited'>
+                {/* A recommendation chooses between types; with one type allowed it has nothing to choose, unless a
+                    stored one no longer fits and must stay reachable to be fixed. */}
+                {modes.length > 1 || !recommendationFits ? <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.recommendedProvisioningMode}><SegmentedChoiceItem<AccountMode | 'inherited'>
                     testID="home-policy-auth-recommended"
                     testIDPrefix="home-policy-auth-recommended"
                     title={t('homeGovernance.recommendedMode')}
@@ -650,7 +653,7 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                     value={recommendedTab}
                     onChange={(mode) => patch({ recommendedProvisioningMode: mode === 'inherited' ? null : mode })}
                     disabled={!interactive}
-                /></SettingAnchor>
+                /></SettingAnchor> : null}
                 {wideningCard('encryption')}
             </ItemGroup>
 

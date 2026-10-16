@@ -338,6 +338,7 @@ export type HomeGovernanceActionResultById = {
             };
         }[];
         nextCursor: string | null;
+        total?: number | undefined;
     };
     readonly "home.accounts.search": {
         accounts: {

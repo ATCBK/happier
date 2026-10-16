@@ -60,7 +60,7 @@ installSettingsViewCommonModuleMocks({
     },
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        const mock = createModalModuleMock();
+        const mock = createModalModuleMock({ confirmResult: true });
         modal.show = mock.spies.show as unknown as (config: unknown) => string;
         modal.prompt = mock.spies.prompt as unknown as { mockResolvedValueOnce: (value: string | null) => void };
         return mock.module;
@@ -72,6 +72,10 @@ installSettingsViewCommonModuleMocks({
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
+const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+// Load the production graph after installing boundaries, before individual interaction deadlines.
+const { HomeConsoleShell } = await import('./HomeConsoleNavigation');
+const { HomeAdministrationOverviewScreen } = await import('./HomeAdministrationOverviewScreen');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const ACCOUNTS_PATH = '/v1/home/accounts/list';
@@ -119,8 +123,6 @@ async function resetEngines() {
 
 async function renderOverview(home: string): Promise<RenderScreenResult> {
     route.pathname = `/settings/home/${home}`;
-    const { HomeConsoleShell } = await import('./HomeConsoleNavigation');
-    const { HomeAdministrationOverviewScreen } = await import('./HomeAdministrationOverviewScreen');
     await resetEngines();
     return renderScreen(
         <HomeConsoleShell serverId={home} rail="console"><HomeAdministrationOverviewScreen serverId={home} /></HomeConsoleShell>,
@@ -256,7 +258,7 @@ describe('Home console Overview (A)', () => {
     it('reads on through the roster until every active owner is listed', async () => {
         const home = await addHome();
         harness.answer(home, ACCOUNTS_PATH, {
-            body: { items: [homeAccountRowFixture('account-di'), homeAccountRowFixture('account-bo', { homeRole: 'owner' })], nextCursor: 'page-2' },
+            body: { items: [homeAccountRowFixture('account-di', { homeRole: 'admin' }), homeAccountRowFixture('account-bo', { homeRole: 'owner' })], nextCursor: 'page-2' },
             select: (input) => ((input as { cursor?: string } | null)?.cursor === 'page-2'
                 ? { body: { items: [homeAccountRowFixture('account-ada', { homeRole: 'owner' })], nextCursor: 'page-3' } }
                 : undefined),
@@ -271,16 +273,87 @@ describe('Home console Overview (A)', () => {
             .toContain('homeGovernance.overviewPage.peopleSummary(people=3,more=true,owners=2,admins=null)');
     });
 
+    it('counts the admins of a long roster once a member row proves the ranked admins are all listed', async () => {
+        const home = await addHome();
+        // The Home pages owners, then admins, then members: a member on the first page means no admin is left behind.
+        harness.answer(home, ACCOUNTS_PATH, {
+            body: {
+                items: [
+                    homeAccountRowFixture('account-ada', { homeRole: 'owner' }),
+                    homeAccountRowFixture('account-bo', { homeRole: 'owner' }),
+                    homeAccountRowFixture('account-cy', { homeRole: 'admin' }),
+                    homeAccountRowFixture('account-di'),
+                ],
+                nextCursor: 'page-2',
+            },
+        });
+
+        const screen = await renderOverview(home);
+        await waitForHomeGovernance(() => expect(ids(screen)).toContain('home-overview-people'));
+        expect(screen.getTextContent())
+            .toContain('homeGovernance.overviewPage.peopleSummary(people=4,more=true,owners=2,admins=1)');
+    });
+
+    it('shows the exact Home people total even when only the first roster page is loaded', async () => {
+        const home = await addHome();
+        harness.answer(home, ACCOUNTS_PATH, {
+            body: {
+                items: [
+                    homeAccountRowFixture('account-ada', { homeRole: 'owner' }),
+                    homeAccountRowFixture('account-bo', { homeRole: 'owner' }),
+                    homeAccountRowFixture('account-cy', { homeRole: 'admin' }),
+                    homeAccountRowFixture('account-di'),
+                ],
+                nextCursor: 'page-2',
+                total: 73,
+            },
+        });
+
+        const screen = await renderOverview(home);
+        await waitForHomeGovernance(() => expect(ids(screen).some((id) =>
+            id === 'home-overview-people' || id === 'home-overview-ownership-failed')).toBe(true));
+        expect(screen.getTextContent())
+            .toContain('homeGovernance.overviewPage.peopleSummary(people=73,more=false,owners=2,admins=1)');
+    });
+
+    it('does not count admins while a long roster has shown only owners and admins', async () => {
+        const home = await addHome();
+        harness.answer(home, ACCOUNTS_PATH, {
+            body: {
+                items: [
+                    homeAccountRowFixture('account-ada', { homeRole: 'owner' }),
+                    homeAccountRowFixture('account-bo', { homeRole: 'owner' }),
+                    homeAccountRowFixture('account-cy', { homeRole: 'admin' }),
+                ],
+                nextCursor: 'page-2',
+            },
+        });
+
+        const screen = await renderOverview(home);
+        await waitForHomeGovernance(() => expect(ids(screen)).toContain('home-overview-people'));
+        expect(screen.getTextContent())
+            .toContain('homeGovernance.overviewPage.peopleSummary(people=3,more=true,owners=2,admins=null)');
+    });
+
     it('renames the Home where its name is shown, through the one settings writer (DR-08)', async () => {
         const home = await addHome();
         const name = (value: string) => homeSettingEntryFixture('HAPPIER_HOME_DISPLAY_NAME', {
             value, source: 'home', declaration: { type: 'string', section: 'reach', group: 'identity' },
         });
+        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        primeServerFeaturesSnapshot({ serverId: home, snapshot: { status: 'ready', features: {
+            ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1, displayName: 'Acme' },
+        } } });
         harness.answer(home, SETTINGS_PATH, { body: homeSettingsProjectionFixture({ revision: 3, entries: [name('Acme')] }) });
         harness.answer(home, SETTINGS_SET_PATH, { body: homeSettingsProjectionFixture({ revision: 4, entries: [name('Studio')] }) });
+        harness.answer(home, '/v1/features', { body: {
+            ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1, displayName: 'Studio' },
+        } });
 
         const screen = await renderOverview(home);
         await waitForHomeGovernance(() => expect(ids(screen)).toContain('home-overview-name.rename'));
+        const header = () => screen.tree.root.findAllByProps({ testID: 'home-admin-header' }).find((node) => typeof node.props.title === 'string');
+        expect(header()?.props.title).toBe('Acme');
         await act(async () => screen.pressByTestId('home-overview-name.rename'));
         expect(harness.requestsFor(SETTINGS_SET_PATH)).toHaveLength(0);
         await act(async () => screen.changeTextByTestId('home-overview-name.input', 'Studio'));
@@ -290,7 +363,10 @@ describe('Home console Overview (A)', () => {
             expect(harness.requestsFor(SETTINGS_SET_PATH).map((request) => request.input)).toEqual([
                 { expectedRevision: 3, values: { HAPPIER_HOME_DISPLAY_NAME: 'Studio' } },
             ]);
+            expect(header()?.props.title).toBe('Studio');
         });
+        await screen.pressByTestIdAsync('home-overview-name.rename');
+        expect(screen.findByTestId('home-overview-name.input')?.props.value).toBe('Studio');
     });
 
     it('keeps a refused rename in the inline draft rather than opening an error dialog', async () => {

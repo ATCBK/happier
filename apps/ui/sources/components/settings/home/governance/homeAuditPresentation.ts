@@ -6,6 +6,7 @@ import {
     type HomeAuthenticationPolicyV1,
     type HomeGovernancePolicyFieldV1,
 } from '@happier-dev/protocol/home/governance';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { resolveHomeAccountStatusPresentation } from '@/sync/domains/home/governance/homeAccountAdministration';
@@ -222,7 +223,12 @@ function describe(event: HomeAdministrationEventV1, viewer: string | null, names
                 verb: event.action === 'home.settings.discard'
                     ? t('homeGovernance.activity.discardedSetting', { setting })
                     : t('homeGovernance.activity.changedSetting', { setting }),
-                area: email ? t('homeGovernance.activity.areaEmail') : t('homeGovernance.activity.areaServerSettings'),
+                area: email
+                    ? t('homeGovernance.activity.areaEmail')
+                    // The Home's name is edited on Overview; every other setting lives on Server settings.
+                    : summary.key === SERVER_CONFIG.HAPPIER_HOME_DISPLAY_NAME.key
+                        ? t('homeGovernance.overview')
+                        : t('homeGovernance.activity.areaServerSettings'),
                 changes: [change],
             };
         }

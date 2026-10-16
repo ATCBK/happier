@@ -563,6 +563,7 @@ export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
 
     const last = positions.length > limit ? positions[limit - 1] : undefined;
     const activeOwnerCount = await countActiveHomeOwnersInTx(tx);
+    const total = await tx.account.count();
     const teamOwnership = actorAuthority.eraseAccounts
         ? await readTeamOwnershipErasureDecisionsInTx(tx, { accountIds: page.map((row) => row.id) })
         : null;
@@ -573,6 +574,7 @@ export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
     return {
         status: "ok",
         result: {
+            total,
             items: await Promise.all(page.map(async (row) => {
                 const projected = await projectHomeAccountRowForViewerInTx(tx, {
                     actorAccountId: input.actorAccountId,

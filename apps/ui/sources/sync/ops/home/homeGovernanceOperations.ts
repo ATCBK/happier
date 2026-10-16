@@ -41,6 +41,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { invalidateHomeGovernance } from '@/sync/engine/home/governance/homeGovernanceEngine';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { scopedHomeActionExecutor } from '@/sync/ops/actions/scopedHomeActionExecutor';
+import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { classifyHomeActionOutcome, type HomeActionOutcome } from './homeActionOutcome';
 
 export { classifyHomeActionOutcome as classifyHomeGovernanceActionOutcome } from './homeActionOutcome';
@@ -484,7 +485,7 @@ export function getHomeEmptiness(params: Readonly<{
  * Stores Home setting values against the revision the caller last read. `null` clears a stored
  * value; secrets travel only as Replace or Clear, never as a value.
  */
-export function setHomeSettings(params: Readonly<{
+export async function setHomeSettings(params: Readonly<{
     scope: ServerAccountScope;
     expectedRevision: number;
     values: Readonly<Record<string, unknown>>;
@@ -492,7 +493,7 @@ export function setHomeSettings(params: Readonly<{
     /** Discard: the Home returns every pending restart value to what its server started with. */
     discardPendingRestart?: true;
 }>): Promise<HomeGovernanceValueMutationOutcome<HomeSettingsProjectionV1>> {
-    return mutateForValue({
+    const outcome = await mutateForValue({
         scope: params.scope,
         actionId: 'home.settings.set',
         input: {
@@ -503,6 +504,14 @@ export function setHomeSettings(params: Readonly<{
         },
         parse: (value) => HomeSettingsProjectionV1Schema.safeParse(value),
     });
+    if (outcome.kind === 'succeeded') {
+        // Live settings also feed public Home identity/capabilities. Keep last-known facts while
+        // replacing the exact Home's TTL-backed (and persisted) features answer in the background.
+        fireAndForget(getServerFeaturesSnapshot({ serverId: params.scope.serverId, force: true }), {
+            tag: 'homeGovernanceOperations.refreshSettingsFeatures',
+        });
+    }
+    return outcome;
 }
 
 /** The key and reason of a `home_settings_invalid` refusal, or `null` for any other failure. */

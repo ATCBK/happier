@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { HomeAccountListResultV1Schema } from "@happier-dev/protocol/home/governance";
 
 import { auth } from "@/app/auth/auth";
 import { HOME_GOVERNANCE_POLICY_ID } from "@/app/home/governance/governancePolicy";
@@ -97,6 +98,27 @@ afterEach(async () => {
 });
 
 describe("Home governance routes", () => {
+    it("returns the exact Home account total on every page, including inactive people", async () => {
+        const app = createTestApp();
+        const owner = await createAccount("owner");
+        await createAccount("member");
+        await createAccount("admin", "suspended");
+        await createAccount("member", "disabled");
+
+        let cursor: string | null = null;
+        const seen = new Set<string>();
+        do {
+            const response = await post(app, "/v1/home/accounts/list", owner.token, { limit: 1, cursor });
+            expect(response.statusCode, response.body).toBe(200);
+            const page = response.json();
+            expect(page.total).toBe(4);
+            expect(HomeAccountListResultV1Schema.safeParse(page).success).toBe(true);
+            seen.add(page.items[0].accountId);
+            cursor = page.nextCursor;
+        } while (cursor);
+        expect(seen.size).toBe(4);
+    });
+
     it("answers whether an owner's Home has any sessions, other people or Teams", async () => {
         const app = createTestApp();
         const owner = await createAccount("owner");
@@ -269,7 +291,7 @@ describe("Home governance routes", () => {
         const seen = [first.json().items[0].accountId, second.json().items[0].accountId];
         expect(new Set(seen)).toEqual(new Set([owner.accountId, member.accountId]));
         expect(second.json().nextCursor).toBeNull();
-        expect(Object.keys(first.json()).sort()).toEqual(["items", "nextCursor"]);
+        expect(Object.keys(first.json()).sort()).toEqual(["items", "nextCursor", "total"]);
         const invalidCursor = await post(app, "/v1/home/accounts/list", owner.token, {
             limit: 1,
             cursor: "not-a-home-account-cursor",

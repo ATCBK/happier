@@ -331,6 +331,16 @@ describe('SignInPolicyEditor', () => {
         expect(screen.findByTestId('home-policy-auth-mode:e2ee-switch')).toBeNull();
     });
 
+    it('offers the recommended account type only while people can choose between both', async () => {
+        const { screen } = await renderEditor();
+
+        // E2EE-only leaves nothing to recommend; the row would have no effect.
+        expect(screen.findByTestId('home-policy-auth-recommended')).toBeNull();
+        await screen.pressByTestIdAsync('home-policy-auth-modes:both');
+        expect(screen.findByTestId('home-policy-auth-recommended:e2ee')).not.toBeNull();
+        expect(screen.findByTestId('home-policy-auth-recommended:plain')).not.toBeNull();
+    });
+
     it('keeps a stored method the deployment no longer lists visible until it is removed, and requires a valid recommendation', async () => {
         const { screen, serverId, projection } = await renderEditor({
             authentication: {

@@ -4,7 +4,7 @@ import {
     resolveTeamViewState,
     type TeamViewState,
 } from '@/components/settings/teams/teamViewState';
-import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { useHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { createServerAccountScope, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
@@ -70,7 +70,7 @@ export function useTeamBinding(serverIdRaw: string, teamIdRaw: string): TeamBind
         () => (address ? getServerProfileById(address.serverId) : null),
         [address],
     );
-    const homeName = resolveHomeDisplayLabel(profile, address?.serverId ?? '');
+    const homeName = useHomeDisplayLabel(profile);
 
     const resolution = useServerCredentialAccountScopeResolution(address?.serverId ?? null);
     const scope = resolution.kind === 'bound' ? resolution.scope : null;

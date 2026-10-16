@@ -303,6 +303,13 @@ describe("featuresRoutes", () => {
             const payload = response.json();
             expect(payload.homePresentation).toEqual({ v: 1, displayName: "Studio" });
             expect(payload.accountServicePresentation).toBeUndefined();
+            await db.homeSettings.update({
+                where: { id: 'home' }, data: { revision: 2, values: { HAPPIER_HOME_DISPLAY_NAME: 'Northwind' } },
+            });
+            const renamed = await app.inject({ method: 'GET', url: '/v1/features' });
+            expect(renamed.statusCode).toBe(200);
+            expect(renamed.json().homePresentation).toEqual({ v: 1, displayName: 'Northwind' });
+            expect(renamed.headers['cache-control']).toBe('no-store');
         });
     });
 

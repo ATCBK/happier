@@ -4,7 +4,7 @@ import {
     resolveHomeGovernanceViewState,
     type HomeGovernanceViewState,
 } from '@/components/settings/home/governance/homeGovernanceViewState';
-import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { useHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 
@@ -56,7 +56,7 @@ export function useHomeAdministration(serverIdRaw: string): HomeAdministrationBi
         () => (serverId ? getServerProfileById(serverId) : null),
         [serverId],
     );
-    const homeName = resolveHomeDisplayLabel(profile, '');
+    const homeName = useHomeDisplayLabel(profile);
 
     const { resolution, binding } = useServerCredentialAccountScopeBinding(serverId);
     const scope: ServerAccountScope | null = resolution.kind === 'bound' ? resolution.scope : null;

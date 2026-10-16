@@ -13,6 +13,8 @@ export type HomeAccountRosterStatus = 'loading' | 'loading_more' | 'ready' | 'er
 
 export type HomeAccountRoster = Readonly<{
     rows: readonly HomeAccountRowV1[];
+    /** Exact Home total when supplied; null for an older list response. */
+    total: number | null;
     status: HomeAccountRosterStatus;
     /** Retained across a failed page load so the list never blanks. */
     error: HomeDomainFailure | null;
@@ -23,6 +25,7 @@ export type HomeAccountRoster = Readonly<{
 
 type RosterState = Readonly<{
     rows: readonly HomeAccountRowV1[];
+    total: number | null;
     status: HomeAccountRosterStatus;
     error: HomeDomainFailure | null;
     cursor: string | null;
@@ -32,6 +35,7 @@ type RosterState = Readonly<{
 
 const INITIAL: RosterState = Object.freeze({
     rows: Object.freeze([]) as readonly HomeAccountRowV1[],
+    total: null,
     status: 'loading' as const,
     error: null,
     cursor: null,
@@ -99,6 +103,7 @@ export function useHomeAccountRoster(
                 const incoming = outcome.value.items;
                 return {
                     rows: mode === 'more' ? [...previous.rows, ...incoming] : incoming,
+                    total: outcome.value.total ?? null,
                     status: 'ready',
                     error: null,
                     cursor: outcome.value.nextCursor,
@@ -130,6 +135,7 @@ export function useHomeAccountRoster(
 
     return React.useMemo(() => Object.freeze({
         rows: state.rows,
+        total: state.total,
         status: state.status,
         error: state.error,
         hasMore: state.hasMore,

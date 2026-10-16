@@ -252,6 +252,9 @@ describe('Home policy mutation input', () => {
 describe('Home account projections', () => {
   it('uses the canonical page result shape without retaining an unreleased accounts arm', () => {
     expect(HomeAccountListResultV1Schema.safeParse({ items: [], nextCursor: null }).success).toBe(true);
+    expect(HomeAccountListResultV1Schema.safeParse({ items: [], nextCursor: null, total: 0 }).success).toBe(true);
+    expect(HomeAccountListResultV1Schema.safeParse({ items: [], nextCursor: null, total: -1 }).success).toBe(false);
+    expect(HomeAccountListResultV1Schema.safeParse({ items: [], nextCursor: null, total: 1.5 }).success).toBe(false);
     expect(HomeAccountListResultV1Schema.safeParse({ accounts: [], nextCursor: null }).success).toBe(false);
   });
 

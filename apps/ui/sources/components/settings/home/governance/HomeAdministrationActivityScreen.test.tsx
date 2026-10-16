@@ -85,6 +85,12 @@ describe('HomeAdministrationActivityScreen', () => {
                         summary: { secret: true, key: 'HAPPIER_AUTH_EMAIL_SMTP_PASSWORD', from: 'unset', to: 'set' },
                     }),
                     homeAdministrationEventFixture({
+                        id: 'evt-name',
+                        action: 'home.settings.set',
+                        target: { kind: 'setting', id: 'HAPPIER_HOME_DISPLAY_NAME', profile: null },
+                        summary: { secret: false, key: 'HAPPIER_HOME_DISPLAY_NAME', from: 'Acme', to: 'Northwind Studio' },
+                    }),
+                    homeAdministrationEventFixture({
                         id: 'evt-role',
                         action: 'account.role.set',
                         target: { kind: 'account', id: 'account-ben', profile: accountDisplayProfileFixture('Ben') },
@@ -125,6 +131,9 @@ describe('HomeAdministrationActivityScreen', () => {
         expect(password).toContain('homeGovernance.activity.areaEmail');
         expect(password).toContain('homeGovernance.activity.secretUnset → homeGovernance.activity.secretSet');
         expect(password).not.toContain('homeGovernance.email.password  ');
+        // The Home's name is edited on Overview, so that is the area it names.
+        expect(textUnder(screen.findByTestId('home-activity-row:evt-name'))).toContain('homeGovernance.overview');
+        expect(textUnder(screen.findByTestId('home-activity-row:evt-name'))).not.toContain('homeGovernance.activity.areaServerSettings');
         expect(textUnder(screen.findByTestId('home-activity-row:evt-role')))
             .toContain('Ada homeGovernance.activity.changedRole(target=Ben)');
         expect(textUnder(screen.findByTestId('home-activity-row:evt-left')))
