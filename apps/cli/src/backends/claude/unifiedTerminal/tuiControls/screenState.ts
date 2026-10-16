@@ -100,6 +100,13 @@ export type ClaudeScreenState = Readonly<{
    * submits `/effort medium/effort medium` (incident cmq7pyqkj, U1).
   */
   composerContent: string | null;
+  /**
+   * Content of the bash-mode prompt line (`!  echo hi`, footer `! for shell mode`), null outside
+   * bash mode. Kept apart from `composerContent` on purpose: a bash-mode prompt is not a message
+   * composer, so it must not satisfy any readiness, steering or clearing check. Only delivery of a
+   * message that itself starts with `!` reads it, to see that message staged before pressing Enter.
+   */
+  shellComposerContent: string | null;
   composerCursorRelation: 'at_content_start' | 'inside_or_after_content' | null;
   modeMarker: ClaudeTuiModeMarker | null;
   visibleModel: string | null;
@@ -205,6 +212,12 @@ const EFFORT_STATUS_LINE = /\beffort:\s*([a-z]+)\b/im;
 // lines (`❯ 1. Yes`) — the same `❯` glyph marks dialog choices — so a dialog never reads as an
 // interactive composer (fail-closed: an ambiguous numbered line is treated as not-a-composer).
 const COMPOSER_LINE = /(?:^|\n)[^\S\n]*(?:[│|][^\S\n]*)?(?:>|›|❯)(?![^\S\n]*(?:\d+\.|[◯◉○●◐◑]))[^\S\n]*(.*?)[^\S\n]*(?:[│|][^\S\n]*)?(?:\n|$)/;
+// Bash mode (a leading `!` in the prompt) draws its prompt line with `!`, and its footer hint
+// `! for shell mode` is a `!` line too, so `!` only counts while that footer follows it: the footer
+// cannot match itself. Deliberately NOT part of COMPOSER_LINE: text typed in bash mode runs as a
+// shell command, so a bash-mode prompt must never read as a message composer (readiness, steering
+// and clearing all keep failing closed on it).
+const SHELL_COMPOSER_LINE = /(?:^|\n)[^\S\n]*(?:[│|][^\S\n]*)?!(?=[\s\S]*\n[^\S\n]*! for shell mode)[^\S\n]*(.*?)[^\S\n]*(?:[│|][^\S\n]*)?(?:\n|$)/;
 const SLASH_SUGGESTION_LINE = /(?:^|\n)[^\S\n]*\/[a-z][a-z0-9-]*\b/i;
 // Agents/selection panel (live capture 2026-06-12 11:50, runner pid 58731): the selector header
 // renders `↑/↓ to select` and the focus cursor renders as `❯ ◯ <agent-type> <title>` rows. The
@@ -529,6 +542,11 @@ function lastMatch(pattern: RegExp, text: string): RegExpExecArray | null {
   return last;
 }
 
+function readShellComposerContent(text: string): string | null {
+  const match = lastMatch(new RegExp(SHELL_COMPOSER_LINE.source, `${SHELL_COMPOSER_LINE.flags}g`), text);
+  return match === null ? null : (match[1] ?? '').trim();
+}
+
 /**
  * The screen keeps OLDER effort confirmations in scrollback (live capture 2026-06-11), so the
  * authoritative signal is the one lowest on screen: the match with the largest index wins.
@@ -821,6 +839,7 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
     userDraftPresent,
     selectionListVisible: rewindSelectionVisible || SELECTION_CURSOR_ROW.test(text) || (SELECTION_LIST_HINT.test(text) && !hasComposer),
     composerContent,
+    shellComposerContent: readShellComposerContent(text),
     composerCursorRelation: composerState.cursorRelation,
     modeMarker,
     visibleModel: resolveVisibleModel(text),

@@ -300,4 +300,41 @@ describe('createClaudePromptSubmitVerificationPolicy', () => {
       ].join('\n'),
     })).toBe(false);
   });
+
+  // Live capture (Claude Code 2.1.301): a prompt starting with `!` flips Claude into bash mode on
+  // paste, the `!` is consumed and the rest sits on a `!`-marked prompt line above the
+  // `! for shell mode` footer. Without recognizing it the text was never seen as staged, Enter was
+  // never sent, and the command stayed in the terminal prompt.
+  describe('bash mode (prompt starting with "!")', () => {
+    const RULE = '────────────────────────────────────────────────';
+    const FOOTER = '  ! for shell mode';
+    const bashScreen = (promptLine: string) => ['', RULE, promptLine, RULE, FOOTER].join('\n');
+    const normalEmptyScreen = ['', RULE, '❯ ', RULE, '  ⏵⏵ auto mode on (shift+tab to cycle)'].join('\n');
+
+    it('sees the prompt staged on the bash-mode prompt line, and still pending until the command ran', () => {
+      const policy = createClaudePromptSubmitVerificationPolicy();
+      const promptText = '! echo hi';
+
+      expect(policy.isPromptStagedBeforeSubmit({ promptText, screenText: bashScreen('!  echo hi') })).toBe(true);
+      expect(policy.isPromptStillPendingAfterSubmit({ promptText, screenText: bashScreen('!  echo hi') })).toBe(true);
+      expect(policy.isPromptStillPendingAfterSubmit({ promptText, screenText: normalEmptyScreen })).toBe(false);
+    });
+
+    it('does not take other text on the bash-mode prompt line for the authorized prompt', () => {
+      const policy = createClaudePromptSubmitVerificationPolicy();
+      const promptText = '! echo hi';
+
+      expect(policy.isPromptStagedBeforeSubmit({ promptText, screenText: bashScreen('!  ls') })).toBe(false);
+      expect(policy.isPromptStagedBeforeSubmit({ promptText, screenText: bashScreen('! Try "fix typecheck errors"') })).toBe(false);
+    });
+
+    it('does not read the footer hint as the staged prompt', () => {
+      const policy = createClaudePromptSubmitVerificationPolicy();
+
+      expect(policy.isPromptStagedBeforeSubmit({
+        promptText: '! for shell mode',
+        screenText: bashScreen('! Try "fix typecheck errors"'),
+      })).toBe(false);
+    });
+  });
 });
