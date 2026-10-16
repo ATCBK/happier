@@ -1,0 +1,44 @@
+import * as React from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import { renderScreen } from '@/dev/testkit';
+import { useProjectRouteHeaderOptions } from './useProjectRouteHeaderOptions';
+
+const windowSize = vi.hoisted(() => ({ width: 1440, height: 900 }));
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ useWindowDimensions: () => ({ ...windowSize, scale: 1, fontScale: 1 }) });
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock().module;
+});
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+
+function Probe(props: { onOptions: (options: Readonly<Record<string, unknown>>) => void }) {
+    const options = useProjectRouteHeaderOptions({
+        workspaceRef: null, testIdPrefix: 'project-header', showWorktreesButton: true,
+        onToggleWorktrees: () => {}, onOpenTerminal: () => {},
+    });
+    props.onOptions(options);
+    return null;
+}
+
+describe('Project route header options', () => {
+    it.each([
+        ['phone', 390, 844, true],
+        ['desktop', 1440, 900, false],
+    ] as const)('on a %s publishes Back, branch and terminal only for the native bar', async (_label, width, height, published) => {
+        windowSize.width = width;
+        windowSize.height = height;
+        let seen: Readonly<Record<string, unknown>> | null = null;
+        const screen = await renderScreen(<Probe onOptions={(options) => { seen = options; }} />);
+        try {
+            // Desktop's Project header owns the checkout (branch) and Terminal in its own tab bar (DA R-12);
+            // lending the phone bar's controls would draw a second Back/branch/terminal row beside a page title.
+            expect(typeof seen!.headerLeft === 'function').toBe(published);
+            expect(typeof seen!.headerRight === 'function').toBe(published);
+        } finally {
+            await screen.unmount();
+        }
+    });
+});

@@ -11,6 +11,7 @@ import { ProjectHeaderActions } from './ProjectHeaderActions';
 import { resolveProjectRouteHeaderTitle } from './projectRouteState';
 import { useProjectRouteRouterRef } from './useProjectRouteRouterRef';
 import { Icon } from '@/components/ui/icons/Icon';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 export function useProjectRouteHeaderOptions(params: Readonly<{
     workspaceRef: WorkspaceRefV1 | null;
@@ -27,6 +28,10 @@ export function useProjectRouteHeaderOptions(params: Readonly<{
     const routerRef = useProjectRouteRouterRef();
     const navigation = useNavigation();
     const { theme } = useUnistyles();
+    // Back, worktrees and Terminal are the phone bar's controls. Wider screens draw the Project
+    // header (`ProjectShellHeader`), whose tab bar owns the checkout (branch) and Terminal; lending
+    // these too drew a second Back/branch/terminal row beside the page title (DA R-12).
+    const phoneBar = useDeviceType() === 'phone';
     const navigationRef = React.useRef(navigation);
     navigationRef.current = navigation;
     const onBack = params.onBack;
@@ -60,6 +65,7 @@ export function useProjectRouteHeaderOptions(params: Readonly<{
             color: theme.colors.chrome.header.foreground,
         },
         headerShadowVisible: false,
+        ...(phoneBar ? {
         headerLeft: () => (
             <Pressable
                 testID={`${params.testIdPrefix}-back`}
@@ -83,7 +89,9 @@ export function useProjectRouteHeaderOptions(params: Readonly<{
                 onOpenTerminal={params.onOpenTerminal}
             />
         ),
+        } : {}),
     }), [
+        phoneBar,
         handleBack,
         params.activeRootPath,
         params.onBack,
