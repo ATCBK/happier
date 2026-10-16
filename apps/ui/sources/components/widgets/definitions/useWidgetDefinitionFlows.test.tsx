@@ -1,6 +1,6 @@
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WIDGET_SIZE_POLICY_V1, type WidgetInstanceV1, type WidgetSizeDeclarationV1 } from '@happier-dev/protocol/widgets';
+import { WIDGET_SIZE_POLICY_V1, WidgetDefinitionV1Schema, type WidgetInstanceV1, type WidgetSizeDeclarationV1 } from '@happier-dev/protocol/widgets';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel: the harness
 // installs its network boundaries with `vi.doMock`, which only reaches modules imported afterwards.
@@ -682,6 +682,29 @@ describe('widget definition flows', () => {
             if (kind === 'inline') expect(screen.getTextContent()).toContain(DRAFT.name);
             expect(harness.requests.slice(before).some(request => /^\/v1\/artifacts\//.test(request.path))).toBe(false);
         } finally { await act(async () => { screen.tree.unmount(); }); }
+    });
+
+    it('renews a mounted widget definition after same-Account activation and restoration', async () => {
+        const serverId = await addDefinitionHome();
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const { useWidgetDefinition } = await import('@/sync/domains/widgets/useWidgetDefinition');
+        const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
+        const { act } = await import('react-test-renderer');
+        const snapshot = getActiveServerSnapshot();
+        const definition = WidgetDefinitionV1Schema.parse({ ...DRAFT, v: 1, id: 'inline-checks', provenance: { source: { kind: 'authored' } } });
+        const scope = { serverId, accountId: ACCOUNT_ID, owner: { kind: 'home' as const } };
+        publishAppliedActiveServerSnapshot(snapshot, false);
+        const hook = await renderHook(() => useWidgetDefinition(scope, { kind: 'inline', definition }));
+        try {
+            expect(hook.getCurrent().state).toBe('unavailable');
+            await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+            expect(hook.getCurrent()).toMatchObject({ state: 'available', definition });
+            await act(async () => { publishAppliedActiveServerSnapshot(snapshot, false); });
+            expect(hook.getCurrent().definition).toBeNull();
+            await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+            expect(hook.getCurrent().definition).toBe(definition);
+        } finally { await hook.unmount(); publishAppliedActiveServerSnapshot(snapshot); }
     });
 
     it('dismisses About on a phone while loading, after an unavailable read, and for a resolved widget', async () => {

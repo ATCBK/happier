@@ -15,8 +15,7 @@ import { useConfiguredWidgetTarget } from '@/sync/domains/widgets/useConfiguredW
 import type { WidgetInputRepairOutcome } from '@/sync/domains/widgets/widgetBinding';
 import { useWidgetDefinition } from '@/sync/domains/widgets/useWidgetDefinition';
 import { useWidgetInstanceDescriptor } from './useWidgetInstanceDescriptor';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { HostedHtmlSurfaceAdapter } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
 import { useSessionCallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/useSessionCallerHostedHtmlRuntime';
@@ -81,8 +80,7 @@ function AuthoredReadyBody(props: WidgetSurfaceProps & Readonly<{ descriptor: Wi
     const resolution = useConfiguredWidgetTarget(props);
     const latest = React.useRef(resolution);
     latest.current = resolution;
-    const viewer = useActiveServerAccountScope();
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer]);
+    const lifetime = useActiveServerAccountScopeLifetime();
     const definition = props.descriptor.authoredDefinition!;
     const isCurrent = React.useCallback(() => {
         if (latest.current !== resolution || resolution.status !== 'ready' || !lifetime?.isCurrent() || props.isCurrent?.() === false) return false;

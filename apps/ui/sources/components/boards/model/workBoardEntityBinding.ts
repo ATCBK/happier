@@ -1,8 +1,7 @@
 import * as React from 'react';
 import type { EntityDragScopeV1, EntityDropAdmissionV1, EntityDropEffectV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
 import { useEntityDragDropRuntime, type EntityDragDropRuntime } from '@/components/ui/treeDragDrop';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { workBoardWidgetSurface, type WorkBoardEntityContext } from './workBoardEntityDrop';
 import { useDispatchWorkBoardIntent } from './useWorkBoards';
@@ -22,8 +21,8 @@ export type WorkBoardEntityBinding = Readonly<{
 
 export function useWorkBoardEntityBinding(context: Omit<WorkBoardEntityContext, 'scope'>, enabled = true): WorkBoardEntityBinding | null {
     const runtime = useEntityDragDropRuntime();
-    const scope = useActiveServerAccountScope();
-    const lifetime = captureActiveServerAccountScopeLifetime();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const scope = lifetime?.scope ?? null;
     const dispatch = useDispatchWorkBoardIntent(context);
     const widgetSurface = React.useMemo(() => scope && enabled ? workBoardWidgetSurface(scope, context.board.id) : null, [scope, enabled, context.board.id]);
     const movement = useWidgetMovementAdmission(widgetSurface, context.board);

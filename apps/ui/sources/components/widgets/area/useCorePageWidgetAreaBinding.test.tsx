@@ -55,6 +55,29 @@ beforeEach(() => {
     }));
 });
 
+it('renews named layouts after same-Account activation without a Profile scope change', async () => {
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const snapshot = getActiveServerSnapshot();
+    publishAppliedActiveServerSnapshot(snapshot, false);
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [{ id: 'overview', name: 'Overview', items: [] }] };
+    const hook = await renderHook(() => {
+        const binding = useCorePageWidgetAreaBinding(input);
+        return { binding, layouts: useWidgetAreaLayouts({ surface: binding.surface, execute: binding.executeLayoutAction }) };
+    });
+    try {
+        expect(hook.getCurrent().binding.surface).toBeNull();
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+        await vi.waitFor(() => expect(hook.getCurrent().layouts.state.dashboards.map(row => row.name)).toEqual(['Overview']));
+        const retiredPort = hook.getCurrent().binding.port!;
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot, false); });
+        expect(hook.getCurrent().binding.surface).toBeNull();
+        expect(await retiredPort.execute({ actionId: 'widgets.item.list' })).toMatchObject({ ok: false, errorCode: 'widget_area_scope_retired' });
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+        await vi.waitFor(() => expect(hook.getCurrent().layouts.state.dashboards.map(row => row.name)).toEqual(['Overview']));
+    } finally { await hook.unmount(); publishAppliedActiveServerSnapshot(snapshot); }
+});
+
 it('keeps an untouched Usage widget unchanged while its configured UI edit awaits canonical approval', async () => {
     setActionPolicy(normalizeActionsSettingsV1({ v: 1,
         actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } },

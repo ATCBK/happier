@@ -16,7 +16,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { useWorkBoardEntityBinding } from './workBoardEntityBinding';
-import { useAcknowledgedWorkBoard, useDispatchWorkBoardIntent, useWorkBoard, useWorkBoardSaveQueue, useWorkBoardSaveState } from './useWorkBoards';
+import { useAcknowledgedWorkBoard, useDispatchWorkBoardIntent, useWorkBoard, useWorkBoardReadState, useWorkBoardSaveQueue, useWorkBoardSaveState } from './useWorkBoards';
 import { projectBoardMembership } from './boardMembership';
 import type { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest } from '@/sync/domains/artifacts/artifactTypes';
 import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
@@ -24,6 +24,8 @@ import { readPresentationNotice, retirePresentationNotice } from '@/components/s
 // HTTP, device credential storage and native theme are system boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
 vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[]) => runtimeFetch(...args) }));
+// Successful mutation scenarios consent at the physical dialog boundary; Action policy stays real.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('react-native', async () => {
     const native = await import('@/dev/testkit/mocks/reactNative');
@@ -103,6 +105,24 @@ async function mountAccount(name: string, boards: readonly WorkBoardV1[], enable
 }
 
 describe('mounted WorkBoard Action settlement', () => {
+    it.each([false, true])('opens a fresh client before Account activation and renews after restoration (Session index ready: %s)', async isDataReady => {
+        const board = createWorkBoardV1({ id: 'fresh-client', name: 'Fresh client Board' });
+        const b = await mountAccount('fresh-client', [board]);
+        const snapshot = getActiveServerSnapshot();
+        publishAppliedActiveServerSnapshot(snapshot, false);
+        storage.setState({ isDataReady });
+        const hook = await renderHook(() => ({ board: useWorkBoard(board.id), read: useWorkBoardReadState() }), { wrapper: b.wrapper });
+        expect(hook.getCurrent().board).toBeNull();
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+        await vi.waitFor(() => expect(hook.getCurrent().read.status).toBe('ready'));
+        expect(storage.getState().isDataReady).toBe(isDataReady);
+        expect(hook.getCurrent().board?.name).toBe(board.name);
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot, false); });
+        expect(hook.getCurrent().board).toBeNull();
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+        await vi.waitFor(() => expect(hook.getCurrent().board?.name).toBe(board.name));
+    });
+
     it('edits a retained placement through admitted Actions while preserving its stored ref', async () => {
         const ref = { surface: { serverId: 'cli-profile', accountId: 'board-account', owner: { kind: 'workBoard' as const, boardId: 'retained-edit' } }, instanceId: 'copy' };
         const instance = { v: 1 as const, id: 'copy', definition: { kind: 'inline' as const, definition: {

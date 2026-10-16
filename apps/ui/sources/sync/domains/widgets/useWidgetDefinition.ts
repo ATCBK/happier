@@ -1,7 +1,6 @@
 import * as React from 'react';
 import type { WidgetDefinitionRefV1, WidgetDefinitionV1, WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
-import { useActiveServerAccountScope, useArtifact } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScopeLifetime, useArtifact } from '@/sync/domains/state/storage';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { readWidgetDefinitionForInstanceV1 } from './widgetDefinitionRead';
@@ -10,10 +9,10 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 /** Existing per-Artifact invalidation feeds the canonical Action read, never a second byte store. */
 export type MountedWidgetDefinitionV1 = Readonly<{ definition: WidgetDefinitionV1 | null; state: 'loading' | 'available' | 'unavailable'; reasonCode?: string }>;
 export function useWidgetDefinition(scope: WidgetSurfaceRefV1, reference: WidgetDefinitionRefV1, enabled = true, admittedViewer?: ServerAccountScope): MountedWidgetDefinitionV1 {
-    const viewer = useActiveServerAccountScope();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const viewer = lifetime?.scope ?? null;
     const artifactId = reference.kind === 'artifact' ? reference.artifactId : '';
     const artifact = useArtifact(artifactId);
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer?.serverId, viewer?.accountId]);
     const [opened, setOpened] = React.useState<Readonly<{ artifactId: string; definition: WidgetDefinitionV1 | null; cached: boolean; reasonCode?: string }> | null>(null);
     const current = enabled && !!lifetime?.isCurrent() && !!viewer && areServerProfileIdentifiersEquivalent(viewer.serverId, scope.serverId)
         && (viewer.accountId === scope.accountId || reference.kind === 'inline' && areServerAccountScopesEqual(viewer, admittedViewer));

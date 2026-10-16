@@ -4,8 +4,8 @@ import { buildHomeHubArtifactIdV1, type HomeHubArtifactTransportV1 } from '@happ
 import { useOptionalAuth } from '@/auth/context/AuthContext';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { storage, useActiveServerAccountScope, useIsDataReady } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { storage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
+import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { apiSocket } from '@/sync/api/session/apiSocket';
@@ -29,14 +29,13 @@ const unavailable = createHomeHubAccountStore({ accountId: 'unavailable', transp
 
 function useHomeHubAccountStore() {
     const credentials = useOptionalAuth()?.credentials ?? null;
-    const scope = useActiveServerAccountScope();
-    const ready = useIsDataReady();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const scope = lifetime?.scope ?? null;
     const server = useActiveServerSnapshot(credentials !== null);
-    const lifetime = captureActiveServerAccountScopeLifetime();
     let store: Store | typeof unavailable = unavailable;
     let accountId: string | null = null;
     try { if (credentials) accountId = parseToken(credentials.token); } catch { /* Authentication has not established an Account. */ }
-    if (ready && credentials && scope && lifetime && accountId === scope.accountId && scope.serverId === server.serverId && server.serverUrl) {
+    if (credentials && scope && lifetime && accountId === scope.accountId && scope.serverId === server.serverId && server.serverUrl) {
         let byCredentials = stores.get(lifetime);
         if (!byCredentials) { byCredentials = new WeakMap(); stores.set(lifetime, byCredentials); }
         let mounted = byCredentials.get(credentials);

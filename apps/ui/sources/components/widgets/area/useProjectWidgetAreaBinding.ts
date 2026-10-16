@@ -8,10 +8,10 @@ import { ProjectSourcesReadOutputV1Schema, type ProjectSourceV1 } from '@happier
 import type { WidgetSurfaceContext, WidgetSurfaceContextSlot } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { widgetProvidedContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { readProjectWidgetAreaContextV1 } from '@/sync/domains/widgets/projectWidgetAreaContext';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { ProjectAttachedDashboardSelection } from '@/components/projects/detail/projectRouteState';
-import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { useProjectSource } from '@/components/projects/sources/useProjectSources';
 import { executeWidgetEntityMovement, widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
@@ -72,8 +72,8 @@ function hasDashboardAttachment(source: ProjectSourceV1 | null | undefined, sele
 
 /** One captured Project layout binding; the Action and Artifact owners retain all access policy. */
 export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput): ProjectWidgetAreaBinding {
-    const viewer = useActiveServerAccountScope();
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer?.serverId, viewer?.accountId]);
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const viewer = lifetime?.scope ?? null;
     const demand = React.useMemo(() => readProjectWidgetAreaContextV1({ serverId: props.serverId, projectRef: props.projectRef, activeCheckout: props.activeCheckout }),
         [props.activeCheckout, props.projectRef, props.serverId]);
     const sourceRead = useProjectSource(lifetime?.isCurrent() && selectActiveServerAccountScopeForServer(viewer, props.serverId) ? lifetime : null,

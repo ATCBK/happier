@@ -5,8 +5,8 @@ import type { WorkBoardIntentV1, WorkBoardV1, WorkBoardsV1 } from '@happier-dev/
 import { useOptionalAuth } from '@/auth/context/AuthContext';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { storage, useActiveServerAccountScope, useIsDataReady } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { storage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
+import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { apiSocket } from '@/sync/api/session/apiSocket';
@@ -29,14 +29,14 @@ const unavailable = createWorkBoardAccountStore({ read: refuse, list: refuse, cr
 /** All mounted Board surfaces share one projection/queue in the canonical active Account lifetime. */
 function useBoardStore(bodyDemand = 'headers') {
     const credentials = useOptionalAuth()?.credentials ?? null;
-    const scope = useActiveServerAccountScope();
-    const ready = useIsDataReady();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const scope = lifetime?.scope ?? null;
     const server = useActiveServerSnapshot(credentials !== null);
-    const lifetime = captureActiveServerAccountScopeLifetime();
     let store: MountedBoards | typeof unavailable = unavailable;
     let accountId: string | null = null;
     try { if (credentials) accountId = parseToken(credentials.token); } catch { /* No Account identity can be established. */ }
-    if (ready && credentials && scope && lifetime && accountId === scope.accountId
+    // Session-index readiness does not govern this Account Artifact reader.
+    if (credentials && scope && lifetime && accountId === scope.accountId
         && scope.serverId === server.serverId && server.serverUrl) {
         let byCredentials = stores.get(lifetime);
         if (!byCredentials) { byCredentials = new WeakMap(); stores.set(lifetime, byCredentials); }
@@ -108,8 +108,8 @@ function useBoardStore(bodyDemand = 'headers') {
 /** Present-user capability ingress; the Account's raw queue remains below Action admission. */
 export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'scope'>): WorkBoardSaveQueue {
     const store = useBoardStore();
-    const scope = useActiveServerAccountScope();
-    const lifetime = captureActiveServerAccountScopeLifetime();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const scope = lifetime?.scope ?? null;
     const latestContext = React.useRef(context); latestContext.current = context;
     return React.useMemo(() => {
         const queue = store.queue;
