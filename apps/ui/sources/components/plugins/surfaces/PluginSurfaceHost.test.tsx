@@ -7885,7 +7885,7 @@ describe('PluginSurfacePlacementHost', () => {
         expect(mountedProbeEffects).toEqual(['mount', 'unmount']);
     });
 
-    it('EU-5a: carries openSurface launch input into the canonical render context and replaces it on reopen', async () => {
+    it('EU-5a: carries instance launch input into both rendering and surface-scoped Resources and replaces it on reopen', async () => {
         await pluginSurfaceAccountLifetime.setScope({ serverId: 'server_1', accountId: 'account-a' }, { serverIdentityId: 'srv_server_1' });
         reactNativeSurfaceProps.length = 0;
         const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
@@ -7900,6 +7900,9 @@ describe('PluginSurfacePlacementHost', () => {
         const baseProjection = {
             ...reactNativeProjection,
             generation: 52,
+            resourcesById: { 'acme.browser/count': {
+                id: 'count', pluginId: 'acme.browser', resourceKind: 'config', scope: 'surface', contentType: 'application/json',
+            } },
             reactNativeBundlesById: {
                 'reactNativeBundle:acme.browser:native-panel': {
                     ...reactNativeProjection.reactNativeBundlesById['reactNativeBundle:acme.browser:native-panel'],
@@ -7958,6 +7961,7 @@ describe('PluginSurfacePlacementHost', () => {
                 pluginUiProjection={generatedProjection}
                 sessionId="session-launch"
                 platform="web"
+                mountInstanceKey="inline-copy:count"
                 launchInput={launchInput as never}
                 reactNativeLoaderBackend={{
                     backendId: 'commonJs',
@@ -7966,7 +7970,7 @@ describe('PluginSurfacePlacementHost', () => {
                 }}
             />
         );
-        type LaunchProps = { renderContext?: { launchInput?: unknown } };
+        type LaunchProps = { renderContext?: RenderContext };
 
         // Opened without input: the key is ABSENT, not `undefined`, so an author
         // can distinguish "no launch input" from an explicit value.
@@ -7979,11 +7983,22 @@ describe('PluginSurfacePlacementHost', () => {
         await screen.update(renderPlacement({ itemId: 'first' }));
         expect((reactNativeSurfaceProps.at(-1) as LaunchProps).renderContext?.launchInput)
             .toEqual({ itemId: 'first' });
+        const firstContext = (reactNativeSurfaceProps.at(-1) as LaunchProps).renderContext!;
+        await expect(firstContext.hostApi.readResource('count')).resolves.toMatchObject({ contentType: 'application/json' });
+        expect(resourceReadMock).toHaveBeenCalledWith('machine_1', expect.objectContaining({
+            context: { kind: 'surface', mountInstanceKey: 'inline-copy:count', launchInput: { itemId: 'first' } },
+        }));
 
         // Reopening replaces the launch input; it is never merged with the previous one.
         await screen.update(renderPlacement({ filter: 'second' }));
         expect((reactNativeSurfaceProps.at(-1) as LaunchProps).renderContext?.launchInput)
             .toEqual({ filter: 'second' });
+        const secondContext = (reactNativeSurfaceProps.at(-1) as LaunchProps).renderContext!;
+        await expect(secondContext.hostApi.readResource('count')).resolves.toMatchObject({ contentType: 'application/json' });
+        expect(resourceReadMock).toHaveBeenLastCalledWith('machine_1', expect.objectContaining({
+            context: { kind: 'surface', mountInstanceKey: 'inline-copy:count', launchInput: { filter: 'second' } },
+        }));
+        await screen.unmount();
     });
 
     it('EU-5b: keeps app.page launch facts out of the hosted-web frame URL', async () => {

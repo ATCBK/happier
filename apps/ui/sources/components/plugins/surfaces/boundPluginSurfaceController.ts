@@ -200,8 +200,8 @@ export type BoundPluginSurfaceFacts = Readonly<{
     resourceCapability?: PluginUiResourceBindingCapabilityV1;
     /**
      * The exact already-validated context the host owns for this Resource
-     * consumer. Targeted children use the closed Protocol surface arm; ordinary
-     * destination/global/session mounts intentionally leave it absent.
+     * consumer. Instance-bearing mounts use the closed Protocol surface arm;
+     * a Composer Session uses its exact Session arm. Singleton mounts omit it.
      */
     resourceContext?: PluginResourceContextV1;
     /** Exact normalized daemon projection for the selected target/generation. */

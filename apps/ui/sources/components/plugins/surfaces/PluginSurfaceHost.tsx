@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { cloneStrictPluginJsonValue } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { scopedHomeActionExecutor } from '@/sync/ops/actions/scopedHomeActionExecutor';
@@ -2239,6 +2240,15 @@ function PluginSurfaceHostMount(props: Readonly<(
             : ephemeralBinding
                 ? `ephemeral:${ephemeralBinding.surface.contribution.pluginId}:${ephemeralBinding.surface.contribution.localId}`
             : props.mountInstanceKey;
+    // Ordinary configured copies have the same host-owned instance/input pair
+    // as targeted children. Rendering and surface Resources read one frozen
+    // snapshot; neither a plugin nor a sibling copy can rewrite that context.
+    const ordinaryLaunchInput = React.useMemo(() => props.launchInput === undefined ? undefined
+        : cloneStrictPluginJsonValue(props.launchInput, 'surface.launchInput') as PluginUiLaunchInputV1,
+    [props.launchInput]);
+    const ordinaryResourceContext = React.useMemo(() => mountedInstanceKey ? Object.freeze({
+        kind: 'surface' as const, mountInstanceKey: mountedInstanceKey, launchInput: ordinaryLaunchInput ?? null,
+    }) : undefined, [mountedInstanceKey, ordinaryLaunchInput]);
     const availabilityReader = useActivePluginAccountAvailabilityReader();
     // Registry projections are immutable for the lifetime of one render input.
     // Parse that exact input once rather than cloning its normalized binding on
@@ -2833,6 +2843,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             occurrenceId: mountedTarget?.occurrenceId ?? null,
             executionOrigin,
             resourceCapability,
+            ...(ordinaryResourceContext ? { resourceContext: ordinaryResourceContext } : {}),
             pluginProjectionById: mountedMachineInputs?.pluginProjectionById ?? null,
             pluginUiProjection: mountedPluginUiProjection,
             targetedContributions,
@@ -3579,7 +3590,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             ? composerBinding.mount.input
             : ephemeralBinding
                 ? props.launchInput ?? null
-            : props.launchInput;
+            : ordinaryLaunchInput;
     const mountSubPath = hasEmbeddedRendererMount ? undefined : props.subPath;
     const mountInstanceKey = targetedBinding
         ? targetedRequest!.instanceKey
