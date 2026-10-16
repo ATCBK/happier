@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import * as Unistyles from 'react-native-unistyles';
 import { HappierInputField, WidgetSizePicker } from '@happier-dev/plugin-ui/presentation';
 import { composeWidgetGroupContextV1, createWidgetSurfaceArtifactPortV1, instantiateWidgetLayoutFragmentGroupV1, resolveConfiguredWidgetInputs, type WidgetLayoutFragmentSummaryV1, type WidgetSizeV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { createWorkBoardArtifactBoundary } from '../../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
@@ -20,6 +21,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { SessionCurrentProjectionRecordV1Schema, SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { darkTheme, lightTheme } from '@/theme';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -201,6 +203,29 @@ describe('WidgetAddSurface', () => {
         expect(fragment).toEqual(original);
     });
 
+    it('retains the phone setup step and edited inputs through appearance changes', async () => {
+        const rec = recorder();
+        const candidate: WidgetCandidate = { ...SIGNUPS, inputs: { fields: [{ path: 'label', title: 'Label', widget: 'text' }] } };
+        const sections: WidgetAddSection[] = [{ id: 'plugins', title: 'Analytics', entries: [widgetEntry(candidate, rec)] }];
+        const runtime = Unistyles.useUnistyles();
+        const appearance = vi.spyOn(Unistyles, 'useUnistyles').mockReturnValue({ ...runtime, theme: lightTheme });
+        const close = () => {};
+        const scene = () => <WidgetAddPanel testID="add" title="Add to Board" searchPlaceholder="Search widgets"
+            addLabel="Add to Board" composition="push" phone sections={sections} onRequestClose={close} />;
+        try {
+            const screen = await renderScreen(scene());
+            await act(async () => { screen.pressByTestId(`add.entry.${candidate.key}`); });
+            await act(async () => { screen.changeTextByTestId('add.detail.field.label.input', 'Keep this setup'); });
+            for (const theme of [darkTheme, lightTheme]) {
+                appearance.mockReturnValue({ ...runtime, theme });
+                await screen.update(scene());
+                expect(screen.findByTestId('add.detail.field.label.input')?.props.value).toBe('Keep this setup');
+                expect(screen.getTextContent()).toContain(`preview:${candidate.key}`);
+            }
+            expect(rec.submits).toEqual([]);
+        } finally { appearance.mockRestore(); }
+    });
+
     it('opens with nothing selected and mounts only the selected widget’s live body', async () => {
         const rec = recorder();
         const sections: WidgetAddSection[] = [{ id: 'plugins', title: 'Analytics', entries: [widgetEntry(SIGNUPS, rec), widgetEntry(SUMMARY, rec, { context: THIS_SESSION })] }];
@@ -375,8 +400,12 @@ describe('WidgetAddSurface', () => {
         screen.changeTextByTestId('add.search', 'kanban');
         await flushHookEffects({ cycles: 2 });
         expect(screen.findAllByTestId('add.noMatch').length).toBeGreaterThan(0);
-        screen.changeTextByTestId('add.search', '');
+        // An empty search is never a dead end: the ask stays offered, and Clear brings the list back.
+        expect(screen.findAllByTestId('add.entry.ask').length).toBeGreaterThan(0);
+        await act(async () => { screen.pressByTestId('add.clearSearch'); });
         await flushHookEffects({ cycles: 2 });
+        expect(screen.getTextContent()).toContain('Signups this week');
+        expect(screen.findAllByTestId('add.noMatch')).toHaveLength(0);
         await act(async () => { screen.pressByTestId('add.entry.ask'); });
         await flushHookEffects({ cycles: 2 });
         expect(screen.getTextContent()).toContain('Put something on Home that shows');
