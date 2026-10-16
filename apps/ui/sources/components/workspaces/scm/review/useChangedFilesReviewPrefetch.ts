@@ -48,7 +48,7 @@ export function useChangedFilesReviewPrefetch(input: Readonly<{
     const prefetchConcurrencySetting = useSetting('scmReviewPrefetchConcurrency');
     const fetchUnifiedDiffForPath = input.fetchUnifiedDiffForPath;
 
-    const viewabilityEnabled = Boolean(input.sessionId) && input.rows.length > 0;
+    const viewabilityEnabled = input.rows.length > 0;
 
     const prefetchEnabled = (
         Boolean(input.sessionId)
@@ -77,21 +77,18 @@ export function useChangedFilesReviewPrefetch(input: Readonly<{
             if (!row || row.kind !== 'file') continue;
             const path = row.file?.fullPath;
             if (!path) continue;
-            if (input.isCollapsed(path)) continue;
             if (seen.has(path)) continue;
             seen.add(path);
             out.push(path);
         }
-        if (out.length > 0) return out;
+        if (viewableRowIndices.length > 0) return out;
 
         const initialRequested = Array.isArray(input.initialRequestedPaths)
             ? input.initialRequestedPaths.map((p) => (typeof p === 'string' ? p.trim() : '')).filter((p) => p.length > 0)
             : [];
-        if (initialRequested.length > 0) return initialRequested;
+        if (initialRequested.length > 0) return initialRequested.slice(0, 1);
 
-        const ahead = viewabilityConfig.aheadCount;
-        const behind = viewabilityConfig.behindCount;
-        const initialCount = Math.max(1, ahead + behind + 1);
+        const initialCount = 1;
         const initial: string[] = [];
         for (const file of input.reviewFiles.slice(0, initialCount)) {
             if (file?.fullPath) initial.push(file.fullPath);
@@ -181,7 +178,9 @@ export function useChangedFilesReviewPrefetch(input: Readonly<{
         if (!prefetchWindowPaths || prefetchWindowPaths.length === 0) return;
 
         const visible = new Set<string>(requestedPaths ?? []);
-        const toPrefetch = prefetchWindowPaths.filter((p) => !visible.has(p));
+        // The foreground loader owns visible demand. Buffer acquisition is useful
+        // only for expanded rows; it shares that loader's acquisition cache.
+        const toPrefetch = prefetchWindowPaths.filter((p) => !visible.has(p) && !input.isCollapsed(p));
         if (toPrefetch.length === 0) return;
 
         prefetchScheduler.prefetch({
@@ -190,7 +189,7 @@ export function useChangedFilesReviewPrefetch(input: Readonly<{
             diffArea: input.diffArea,
             paths: toPrefetch,
         });
-    }, [input.diffArea, input.sessionId, input.snapshotSignature, prefetchEnabled, prefetchWindowPaths, requestedPaths, prefetchScheduler]);
+    }, [input.diffArea, input.isCollapsed, input.sessionId, input.snapshotSignature, prefetchEnabled, prefetchWindowPaths, requestedPaths, prefetchScheduler]);
 
     const maxDiffLoadConcurrency = prefetchEnabled ? prefetchConcurrency : 1;
     return { prefetchEnabled, requestedPaths, prefetchWindowPaths, onViewableItemsChanged, viewableRowIndices, maxDiffLoadConcurrency };

@@ -643,8 +643,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     });
 
     React.useEffect(() => {
-        collapsedKeysRef.current = collapsedKeys;
-    }, [collapsedKeys]);
+        collapsedKeysRef.current = new Set(allKeys.filter(path => !expandedKeys.has(path)));
+    }, [allKeys, expandedKeys]);
 
     const reportScrollTop = React.useCallback((nextTop: number) => {
         if (!Number.isFinite(nextTop)) return;
@@ -879,14 +879,11 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
 
     const requestedDiffPaths = React.useMemo(() => {
         if (findOpen) return allKeys;
-        if (!tooLargeForExpansion) return prefetch.requestedPaths;
+        if (!tooLargeForExpansion) return prefetch.requestedPaths?.filter(path => expandedKeys.has(path)) ?? [];
 
         const requested = new Set<string>();
         for (const path of prefetch.requestedPaths ?? []) {
-            if (typeof path === 'string' && path.trim().length > 0) requested.add(path);
-        }
-        for (const path of prefetch.prefetchWindowPaths ?? []) {
-            if (typeof path === 'string' && path.trim().length > 0) requested.add(path);
+            if (typeof path === 'string' && path.trim().length > 0 && expandedKeys.has(path)) requested.add(path);
         }
         for (const path of expandedKeys) {
             if (typeof path === 'string' && path.trim().length > 0) requested.add(path);
@@ -902,11 +899,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         }
         if (out.length > 0) return out;
 
-        const fallbackPath = prefetch.requestedPaths?.find((path) => (
-            typeof path === 'string' && path.trim().length > 0
-        ));
-        return fallbackPath ? [fallbackPath] : prefetch.requestedPaths;
-    }, [findOpen, allKeys, expandedKeys, prefetch.prefetchWindowPaths, prefetch.requestedPaths, reviewListFiles, tooLargeForExpansion]);
+        return [];
+    }, [findOpen, allKeys, expandedKeys, prefetch.requestedPaths, reviewListFiles, tooLargeForExpansion]);
 
     const { diffStateSource } = useChangedFilesReviewDiffLoading({
         sessionId,
@@ -917,8 +911,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         tooLarge,
         selectedPath: '',
         snapshotSignature,
-        diffCache: prefetch.prefetchEnabled ? scmDiffCache : null,
-        requestedPaths: requestedDiffPaths ?? undefined,
+        diffCache: scmDiffCache,
+        requestedPaths: requestedDiffPaths,
         maxConcurrency: prefetch.maxDiffLoadConcurrency,
         minRefetchMs: diffAutoRefreshIntervalMs,
         refreshToken: diffRefreshToken,

@@ -27,7 +27,7 @@ function resolveReviewDiffPathsToEnsure(input: Readonly<{
     reviewFiles: readonly ScmFileStatus[];
 }>): string[] {
     const pathsToEnsure: string[] = [];
-    if (input.requestedPaths && input.requestedPaths.length > 0) {
+    if (input.requestedPaths !== null) {
         pathsToEnsure.push(...input.requestedPaths);
     } else if (input.tooLarge) {
         const path = input.selectedPath || input.reviewFiles[0]?.fullPath;
@@ -85,7 +85,7 @@ export function useChangedFilesReviewDiffLoading(input: {
     } = input;
 
     const requestedPathsNormalized = React.useMemo<readonly string[] | null>(() => {
-        if (!Array.isArray(requestedPaths) || requestedPaths.length === 0) return null;
+        if (!Array.isArray(requestedPaths)) return null;
         const out: string[] = [];
         for (const p of requestedPaths) {
             if (typeof p !== 'string') continue;
@@ -93,13 +93,11 @@ export function useChangedFilesReviewDiffLoading(input: {
             if (trimmed.length === 0) continue;
             out.push(trimmed);
         }
-        return out.length > 0 ? out : null;
+        return out;
     }, [requestedPaths]);
 
     const requestedPathsKey = React.useMemo(() => {
-        const normalized = requestedPathsNormalized;
-        if (!normalized) return '';
-        return normalized.join('\u0000');
+        return JSON.stringify(requestedPathsNormalized);
     }, [requestedPathsNormalized]);
 
     const requestedPathsNormalizedRef = React.useRef<readonly string[] | null>(null);
@@ -187,7 +185,9 @@ export function useChangedFilesReviewDiffLoading(input: {
                 if (lastFetchAtMs > 0) {
                     // Default behavior is stale-while-revalidate: do not refetch already-loaded diffs
                     // unless explicitly requested (refreshToken/snapshotSignature clears lastFetchAt).
-                    if (minRefetchMsResolved === null) {
+                    // A snapshot's lifetime is owned by SCM invalidation, not render
+                    // timing. Equal status counts alone are not its signature.
+                    if (snapshotSignature || minRefetchMsResolved === null) {
                         return;
                     }
                     if (minRefetchMsResolved > 0 && (nowMs - lastFetchAtMs) < minRefetchMsResolved) {
