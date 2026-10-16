@@ -9,6 +9,7 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -70,6 +71,12 @@ beforeEach(async () => {
     const machine = storage.getState().machineListByServerId[administration.serverIds[0]!]![0]!;
     await homes.addHome({ name: 'Memory Home', serverUrl: 'https://prompt-administration-1.example.test',
         serverIdentityId: 'srv_prompt_administration_1', accountId: 'account-a' });
+    homes.answer(administration.serverIds[0]!, '/v1/account/encryption/currentness', {
+        body: createPlainAccountEncryptionCurrentnessFixture(),
+    });
+    homes.answer(administration.serverIds[0]!, '/v1/machines', {
+        body: [createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' })],
+    });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://prompt-administration-1.example.test',
         accountId: 'account-a', request: homes.request });
     installHomeGovernanceBoundaries(homes);
@@ -78,6 +85,7 @@ beforeEach(async () => {
             machineAdministrationTargetsLocalV1: { 'memory.settings': administration.targets[0]! } },
     });
     storage.getState().activateProfileScope({ serverId: administration.serverIds[0]!, accountId: 'account-a' });
+    await sync.refreshMachines();
 });
 afterEach(async () => {
     standardCleanup();
@@ -99,7 +107,9 @@ async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: rea
         <MemorySearchPanel testID="search" serverId={administration.serverIds[0]!} />
     </InjectedAuthProvider>);
     await flushHookEffects();
-    expect(screen.findByTestId('search.input')?.props.editable).toBe(true);
+    await act(async () => {
+        await vi.waitFor(() => expect(screen.findByTestId('search.input')?.props.editable).toBe(true));
+    });
     await act(async () => screen.findByTestId('search.input')!.props.onChangeText('fact'));
     await act(async () => {
         await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(true));
@@ -111,7 +121,6 @@ async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: rea
 describe('MemorySearchPanel corpus coverage', () => {
     it('renders admitted loaded and indexed facts through the real selected-daemon summary path', async () => {
         const serverId = administration.serverIds[0]!;
-        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
             v: 1, index: ['one', 'two'].map(id => ({ id, text: id, createdAtMs: 1, sourceSessionRef: null })),
             topics: [{ title: 'detail', summary: 'Topic', facts: [{ id: 'topic', text: 'Detail', createdAtMs: 1, sourceSessionRef: null }] }],
@@ -134,7 +143,6 @@ describe('MemorySearchPanel corpus coverage', () => {
     });
     it('keeps a fresh summary stable and refuses late scoped status after its context changes', async () => {
         const serverId = administration.serverIds[0]!;
-        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
             v: 1, index: [{ id: 'key', text: 'Key fact', createdAtMs: 1, sourceSessionRef: null }], topics: [],
         }));
@@ -176,7 +184,7 @@ describe('MemorySearchPanel corpus coverage', () => {
         const screen = await search({ state: 'pending' }, [document, transcript]);
         expect(screen.findByTestId('search.remembered.0')).toBeTruthy();
         expect(screen.findByTestId('search.session.0')).toBeTruthy();
-        expect(screen.findByTestId('search.documentsCoverage-spinner')).toBeTruthy();
+        expect(screen.findByTestId('search.documentsCoverage-loading-spinner')).toBeTruthy();
     });
     it.each(['pending', 'unavailable'] as const)('does not claim ready-empty while document coverage is %s', async (state) => {
         const screen = await search({ state }, []);
