@@ -1,7 +1,7 @@
 import { t } from '@/text';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
 
-export function formatPathRelativeToHome(path: string, homeDir?: string): string {
+export function formatPathRelativeToHome(path: string, homeDir?: string | null): string {
     if (!homeDir) return path;
 
     const normalizedHome = homeDir.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
