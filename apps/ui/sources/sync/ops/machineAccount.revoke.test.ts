@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -18,6 +18,8 @@ import { resetProviderCatalogEngineForTests } from '@/sync/engine/settings/provi
 import { machineRevokeFromAccount, machineRevokeWithProviderCleanup, machineReplaceInAccount,
     machineClearReplacementFromAccount } from './machineAccount';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 beforeAll(loadSyncSingletonForTests);
 let disposeHome: (() => Promise<void>) | undefined;
@@ -235,7 +237,8 @@ describe('machine Account operations through captured HTTP', () => {
             method: 'POST', body: { replacementMachineId: 'new', confirmActiveOldMachine: true },
         });
         await expect(machineClearReplacementFromAccount('old')).resolves.toEqual({ ok: true });
-        expect(state.requests.at(-1)).toMatchObject({ path: '/v1/machines/old/replacement', method: 'DELETE' });
+        expect(state.requests.filter(request => request.path === '/v1/machines/old/replacement').at(-1))
+            .toMatchObject({ path: '/v1/machines/old/replacement', method: 'DELETE' });
         await expect(machineReplaceInAccount({ oldMachineId: 'old', replacementMachineId: ' ' }))
             .resolves.toEqual({ ok: false, status: 400, error: 'replacement_machine_id_required' });
     });
