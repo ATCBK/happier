@@ -93,7 +93,7 @@ export function useWorkflowRunComposerModal(params: Readonly<{
             {({ maxHeight, maxWidth }) => (
                 <FloatingOverlay maxHeight={maxHeight} surfaceChrome="theme"
                     containerStyle={{ width: Math.min(maxWidth, 520) }}>
-                    <WorkflowRunComposer {...composerProps} autoFocusComposer={composerProps.autoFocusComposer ?? true} />
+                    <WorkflowRunComposer {...composerProps} autoFocusComposer={composerProps.autoFocusComposer ?? true} triggerNamesShortcut />
                 </FloatingOverlay>
             )}
         </Popover>

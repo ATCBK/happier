@@ -374,6 +374,24 @@ describe('workflow composer admission', () => {
         expect(onRun).toHaveBeenCalledWith({ brief: 'Release' });
     });
 
+    it('names the run key once: hung from a trigger that already shows it, Start keeps the command but drops its hint', async () => {
+        getStorage().getState().applySettingsLocal({ keyboardShortcutsV2Enabled: true });
+        const onRun = vi.fn();
+        let executeCommand: ReturnType<typeof useKeyboardCommand> = () => false;
+        function Commands() { executeCommand = useKeyboardCommand(); return null; }
+        const screen = await renderScreen(
+            <KeyboardShortcutProvider handlers={{}}>
+                <WorkflowRunComposer inputs={[{ name: 'brief', valueType: 'string', required: true }]} triggerNamesShortcut
+                    values={{ brief: 'Release' }} onChangeValues={() => {}} onRun={onRun} onCancel={() => {}} />
+                <Commands />
+            </KeyboardShortcutProvider>,
+        );
+        expect(screen.findByTestId('workflow-run-inputs-shortcut')).toBeNull();
+        const { act } = await import('react-test-renderer');
+        await act(async () => { executeCommand('workflow.run'); });
+        expect(onRun).toHaveBeenCalledWith({ brief: 'Release' });
+    });
+
     it('keeps Start unavailable for a definition rejected by the canonical validator', async () => {
         const definition = createWorkflowDefinitionFixture({ defaults: STARTABLE_DEFAULTS });
         const onRun = vi.fn();

@@ -28,6 +28,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useKeyboardShortcutHandlers } from '@/keyboard';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
+import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
 import { buildWorkflowRunStartInputs, projectWorkflowRunInputFields, type WorkflowRunInputFieldState } from '@/sync/domains/workflows/workflowAuthoring';
 import { formatWorkflowInputValue } from '@/sync/domains/workflows/workflowInputText';
@@ -87,6 +88,8 @@ export type WorkflowRunComposerProps = Readonly<{
     startDisabled?: boolean;
     /** The opening launcher requests focus once its caller input and Start are ready. */
     autoFocusComposer?: boolean;
+    /** Hangs from the control that already names the run key (Run now): Start does not repeat it. */
+    triggerNamesShortcut?: boolean;
     testIDPrefix?: string;
     workflowName?: string;
     preview?: string;
@@ -117,7 +120,10 @@ export type WorkflowRunInputPresentation = Readonly<Record<string, Readonly<{
 /** One start presentation; FIN owns defaults, validation and the admitted input map. */
 export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const runShortcut = useKeyboardShortcutLabel('workflow.run');
+    const shortcutLabel = useKeyboardShortcutLabel('workflow.run');
+    // The key is said once: not beside a trigger that already names it, and not on a phone, which has no keys.
+    const phone = useDeviceType() === 'phone';
+    const runShortcut = phone || props.triggerNamesShortcut === true ? undefined : shortcutLabel;
     const prefix = props.testIDPrefix ?? 'workflow-run-inputs';
     const acceptedRepeat = props.materializedLeaves !== undefined;
     // Replay admission validates the immutable accepted bindings, not today's authored defaults or catalog.
