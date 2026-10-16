@@ -9,6 +9,7 @@ import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { useSessionCockpitSurfaceNavigation } from '@/components/workspaceCockpit/session/SessionCockpitSurfaceNavigation';
 
 import { SessionViewerControllerProvider } from './SessionViewerControllerProvider';
 import type { SessionViewerSource } from './sessionViewerPresentation';
@@ -19,7 +20,8 @@ import { useSessionViewerMachineId } from './useSessionViewerMachine';
  * sources live on the Session's own machine (the Watch opener's rule); desktop dock presents the
  * same retained body in its pane (Computer in Details, Browser in the right pane). The Computer
  * is presentable whenever the Session has a Machine, reachable or not, so its viewer can say the
- * Machine isn't answering; the Browser needs a reachable one.
+ * Machine isn't answering; the Browser needs a reachable one. A phone has no pane to dock into: its
+ * dock is Chat's reading flow, and opening the viewer from another cockpit surface returns there.
  */
 export function SessionViewerScope(
   props: React.PropsWithChildren<
@@ -45,8 +47,17 @@ export function SessionViewerScope(
       (source === 'computer' ? computerMachineId : machineId) !== null,
     [computerMachineId, machineId],
   );
+  const surfaceNavigation = useSessionCockpitSurfaceNavigation();
+  const surfaceNavigationRef = React.useRef(surfaceNavigation);
+  surfaceNavigationRef.current = surfaceNavigation;
   const openDocked = React.useCallback(
     (source: SessionViewerSource) => {
+      if (phone) {
+        // A phone docks the viewer into Chat's reading flow; from any other cockpit surface the
+        // open request reveals that surface rather than presenting a second copy beside the page.
+        surfaceNavigationRef.current?.switchSurface('chat');
+        return;
+      }
       if (source === 'computer') {
         if (!computerMachineId) return;
         paneRef.current.openDetailsTab(
@@ -62,7 +73,7 @@ export function SessionViewerScope(
       paneRef.current.openRight({ tabId: 'browser' });
       paneRef.current.setRightTab('browser');
     },
-    [computerMachineId, machineId],
+    [computerMachineId, machineId, phone],
   );
   return (
     <SessionViewerControllerProvider

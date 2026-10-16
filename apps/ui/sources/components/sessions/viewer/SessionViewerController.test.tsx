@@ -133,7 +133,27 @@ describe('SessionViewerController', () => {
       hook.getCurrent().controller.port.apply({ kind: 'viewer.close' });
     });
     expect(hook.getCurrent().controller.state.mode).toBe('closed');
-    expect(openDocked).not.toHaveBeenCalled();
+    // The phone's dock is the reading flow of Chat: opening reveals it, nothing else does.
+    expect(openDocked).toHaveBeenCalledTimes(1);
+    expect(openDocked).toHaveBeenCalledWith('browser');
+    await hook.unmount();
+  });
+
+  it('reveals the phone dock on every open request, including one for the source already docked', async () => {
+    const { render, openDocked } = mountController({ phone: true });
+    const hook = await render();
+    await act(async () => {
+      hook.getCurrent().controller.port.apply({ kind: 'viewer.open', source: 'computer' });
+    });
+    expect(openDocked).toHaveBeenLastCalledWith('computer');
+    await act(async () => {
+      expect(hook.getCurrent().controller.port.apply({ kind: 'viewer.open', source: 'computer' })).toEqual({ status: 'unchanged' });
+    });
+    expect(openDocked).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      hook.getCurrent().controller.port.apply({ kind: 'viewer.close' });
+    });
+    expect(openDocked).toHaveBeenCalledTimes(2);
     await hook.unmount();
   });
 

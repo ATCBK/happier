@@ -3,6 +3,7 @@ import type { FrameRect } from '@happier-dev/plugin-ui/presentation';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { readSessionComposerPresentationTargetAtAddress } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { useSessionViewerPresentationState } from './SessionViewerDestinationScope';
 
 import {
   createSessionViewerPresenceStore,
@@ -13,7 +14,6 @@ import {
   type SessionViewerSourceFacts,
 } from './SessionViewerController';
 import {
-  CLOSED_SESSION_VIEWER,
   resolveSessionViewerPresentation,
   type SessionViewerLocalIntent,
   type SessionViewerPresentationPort,
@@ -38,14 +38,15 @@ export function SessionViewerControllerProvider(
       sessionId: string;
       serverId: string | null;
       canPresentSource: (source: SessionViewerSource) => boolean;
-      /** Desktop dock: the pane presentation of the same retained body. */
+      /**
+       * Where the docked body is presented: the desktop pane showing the same retained body, or on a
+       * phone the Chat reading flow it docks into. Called when the presentation asks to reveal it.
+       */
       openDocked: (source: SessionViewerSource) => void;
     }>
   >,
 ): React.ReactElement {
-  const [state, setState] = React.useState<SessionViewerPresentationState>(
-    CLOSED_SESSION_VIEWER,
-  );
+  const { state, setState, readState } = useSessionViewerPresentationState(props.sessionId, props.serverId);
   // Keep the desktop placement while a narrow viewport presents the same source in reading flow.
   const presentedState = React.useMemo(() => projectViewportPresentation(state, props.phone), [props.phone, state]);
   const [facts, setFacts] = React.useState<SessionViewerController['facts']>(
@@ -54,7 +55,6 @@ export function SessionViewerControllerProvider(
   const [presence] = React.useState(createSessionViewerPresenceStore);
   const [readingInset, setReadingInsetState] =
     React.useState<Readonly<{ left: number; right: number }>>(NO_SESSION_VIEWER_INSET);
-  const stateRef = React.useRef(state);
   const inputRef = React.useRef(props);
   inputRef.current = props;
 
@@ -68,12 +68,11 @@ export function SessionViewerControllerProvider(
   }, [semanticScope]);
   const applyPresentation = React.useCallback((intent: SessionViewerLocalIntent) => {
     const { phone, canPresentSource, openDocked } = inputRef.current;
-    const next = resolveSessionViewerPresentation(projectViewportPresentation(stateRef.current, phone), intent, {
+    const next = resolveSessionViewerPresentation(readState(), intent, {
       phone,
       canPresentSource,
     });
     if (next.result.status === 'applied') {
-      stateRef.current = next.state;
       setState(next.state);
       if (!phone && intent.kind === 'viewer.dock' && next.state.source)
         openDocked(next.state.source);
@@ -86,8 +85,12 @@ export function SessionViewerControllerProvider(
       // Docked on desktop means its pane presents it: reopening reveals that pane again.
       openDocked(intent.source);
     }
+    // A phone's dock is the reading flow of Chat, which may not be the surface in view: every open
+    // request, applied or already presented, reveals it.
+    if (phone && intent.kind === 'viewer.open' && (next.result.status === 'applied' || next.result.status === 'unchanged'))
+      openDocked(intent.source);
     return next.result;
-  }, []);
+  }, [readState, setState]);
   const executeAction = React.useMemo(() => createFrontDoorActionExecute(undefined, accountBinding ? {
     currentSessionPresentationApply: {
       serverId: accountBinding.serverId,
@@ -123,15 +126,14 @@ export function SessionViewerControllerProvider(
   }, [accountBinding, executeAction, props.serverId, props.sessionId, semanticScope]);
   const apply: SessionViewerController['apply'] = applyPresentation;
   const setRect = React.useCallback((rect: FrameRect | null) => {
-    const current = stateRef.current;
+    const current = readState();
     if (current.rect === rect) return;
-    stateRef.current = {
+    setState({
       ...current,
       rect,
       width: rect?.width ?? current.width,
-    };
-    setState(stateRef.current);
-  }, []);
+    });
+  }, [readState, setState]);
   const publishFacts = React.useCallback(
     (source: SessionViewerSource, next: SessionViewerSourceFacts | null) => {
       setFacts((current) => {

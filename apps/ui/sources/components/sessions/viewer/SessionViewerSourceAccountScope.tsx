@@ -3,7 +3,7 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 
 const SessionViewerSourceAccountScope = React.createContext<ServerAccountScopeLifetime | null>(null);
 
-/** Borrow the Session shell's admitted Home/Account authority; never resolve another one. */
+/** Borrow the Session destination's (or standalone shell's) admitted Home/Account authority. */
 export function SessionViewerSourceAccountScopeProvider(props: React.PropsWithChildren<Readonly<{
     accountLifetime: ServerAccountScopeLifetime | null;
 }>>): React.ReactElement {

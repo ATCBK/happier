@@ -21,6 +21,7 @@ import { SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/acti
 import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
 import { getSessionSplitCanvasRuntimeController, getSessionSplitCanvasRuntimeSnapshot } from '@/components/sessions/canvas/sessionSplitCanvasRuntime';
 import { SessionCanvasTabGroup } from '@/components/sessions/canvas/SessionCanvasLeaf';
+import { SessionViewerSourceAccountScopeProvider } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
 
 // Static Session consumers capture the Socket factory during collection; install
 // the canonical external boundary before those imports, then configure it below.
@@ -29,21 +30,29 @@ vi.mock('socket.io-client', async (importOriginal) =>
 
 installDisconnectedServerSocketBoundary();
 
+const viewport = vi.hoisted(() => ({ width: 1400, height: 900 }));
+
 // Native SDK/navigation boundaries only; Session, hydration, pane and activation owners stay real.
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({ Platform: { OS: 'web' }, useWindowDimensions: () => ({ width: 1400, height: 900 }) });
+    return createReactNativeWebMock({ Platform: { OS: 'web' }, useWindowDimensions: () => viewport });
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ pathname: '/session/focused' }).module;
 });
+vi.mock('@react-navigation/native', async () =>
+    (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock({ renderInitialNavigatorScreen: true }));
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
     useSafeAreaFrame: () => ({ x: 0, y: 0, width: 1400, height: 900 }),
 }));
 
-afterEach(standardCleanup);
+afterEach(async () => {
+    viewport.width = 1400;
+    viewport.height = 900;
+    await standardCleanup();
+});
 const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-shell' })).toString('base64url')}.signature` };
 
 async function withSessionFixture(run: (serverId: string) => Promise<void>) {
@@ -99,6 +108,45 @@ async function measureCanvas(screen: Awaited<ReturnType<typeof renderScreen>>) {
 }
 
 describe('SessionDestinationBody workspace activation', () => {
+    it('keeps the open Computer viewer through the real desktop/phone shell replacement and resets for another Session', async () => {
+        await withSessionFixture(async serverId => {
+            storage.setState({ isDataReady: true, settings: { ...storage.getState().settings, mobileWorkspaceExperienceV1: 'cockpit' } });
+            const body = (id = 'focused') => <InjectedAuthProvider credentials={credentials}><AppPaneProvider>
+                <DestinationInstanceHost tabId="responsive-viewer" ref={{ kind: 'session', params: { id, serverId } }}
+                    pathname={`/session/${id}`} focused visible navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+                    <SessionDestinationBody />
+                </DestinationInstanceHost>
+            </AppPaneProvider></InjectedAuthProvider>;
+            const screen = await renderScreen(body());
+            await measureCanvas(screen);
+            await screen.pressByTestIdAsync('session-header-computer-button');
+            // The local Action actually opened the viewer before the responsive shell is replaced.
+            expect(screen.findHostByTestId('session-viewer-host')).not.toBeNull();
+            const sourceLifetime = screen.findAllByType(SessionViewerSourceAccountScopeProvider)
+                .map(provider => provider.props.accountLifetime).find(lifetime => lifetime?.isCurrent());
+            expect(sourceLifetime?.isCurrent()).toBe(true);
+            viewport.width = 390;
+            viewport.height = 844;
+            await screen.update(body());
+            // A picker opened by the old shell still borrows this exact viewing authority.
+            expect(sourceLifetime?.isCurrent()).toBe(true);
+            await vi.waitFor(() => expect(screen.findHostByTestId('session-viewer-sticky')).not.toBeNull());
+            viewport.width = 1400;
+            viewport.height = 900;
+            await screen.update(body());
+            await measureCanvas(screen);
+            expect(screen.findHostByTestId('session-viewer-host')).not.toBeNull();
+            await screen.update(body('companion'));
+            await measureCanvas(screen);
+            expect(sourceLifetime?.isCurrent()).toBe(false);
+            expect(screen.findHostByTestId('session-viewer-host')).toBeNull();
+            viewport.width = 390;
+            viewport.height = 844;
+            await screen.update(body('companion'));
+            expect(screen.findHostByTestId('session-viewer-sticky')).toBeNull();
+        });
+    });
+
     it('binds an unfocused visible pane Action to its own canvas while preserving the focused publication', async () => {
         await withSessionFixture(async serverId => {
             storage.setState({ isDataReady: true });

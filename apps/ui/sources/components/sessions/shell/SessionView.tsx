@@ -101,6 +101,7 @@ import { SessionHeaderSubagentsButton } from '@/components/sessions/actions/Sess
 import { SessionHeaderTerminalButton } from '@/components/sessions/actions/SessionHeaderTerminalButton';
 import { CurrentSessionPresentationSurface } from '@/components/sessions/presentation/CurrentSessionPresentationSurface';
 import { useComposerScopePluginPresentation } from '@/components/sessions/presentation/useComposerScopePluginPresentation';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { useComposerPresentationInputEffects } from '@/components/sessions/presentation/useComposerPresentationInputEffects';
 import { presentSessionTeamCredentialDenial } from '@/components/sessions/presentation/sessionTeamCredentialDenialPresentation';
 import {
@@ -359,6 +360,7 @@ import { submitAppSessionComposerMessage } from '@/components/sessions/transcrip
 import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { HappyError } from '@/utils/errors/errors';
 import { getErrorMessage } from '@/utils/errors/getErrorMessage';
+import { readGoalOperationResult } from '@/sync/ops/sessionGoalOperationResult';
 import { resolveNonSteerableSendPlan, type NonSteerableSendPlan } from '@/components/sessions/agentInput/nonSteerableSendPreflight';
 import { createSyncBackedSubmitPort } from '@/sync/domains/session/input/syncBackedSubmitPort';
 import {
@@ -606,6 +608,7 @@ import { ComposerAuxiliaryFrame } from './view/ComposerAuxiliaryFrame';
 import { SessionComputerPresenceLine } from '@/components/computer/SessionComputerPresenceLine';
 import { SessionViewerHost } from '@/components/sessions/viewer/SessionViewerHost';
 import { SessionViewerScope } from '@/components/sessions/viewer/SessionViewerScope';
+import { useSessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
 import { SessionViewerStickySlot } from '@/components/sessions/viewer/SessionViewerStickySlot';
 import { COMPOSER_CONTENT_HORIZONTAL_INSET } from '@/components/sessions/agentInput/composerContentInset';
 import { WarningActionBanner } from './view/WarningActionBanner';
@@ -2655,6 +2658,8 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
         return null;
     })();
 
+    const cockpitSurfaceOverride = sessionStateSurface === null && Boolean(props.contentOverride);
+
     return (
         <SessionWorkSourcesProvider value={sessionWorkSources}>
         <SessionBrowserContextRuntimeProvider runtime={sessionBrowserContextRuntime}>
@@ -2712,7 +2717,7 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
                 style={{ flex: 1 }}
                 {...pane.overlayFocusReturnCaptureProps}
             >
-                {rendersLoadedSessionView ? null : sessionHeader}
+                {rendersLoadedSessionView || cockpitSurfaceOverride ? null : sessionHeader}
                 {sessionStateSurface !== null ? (
                     embedded ? (
                         <EmbeddedSessionStatePublication
@@ -2721,8 +2726,14 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
                             arrangement={props.embeddedArrangement}
                         />
                     ) : sessionStateSurface.node
-                  ) : props.contentOverride ? (
-                      props.contentOverride
+                  ) : cockpitSurfaceOverride ? (
+                      // Another cockpit surface's page (Browser, Files, Git, ...) keeps the Session's viewer
+                      // owner mounted around its header, so the session actions can open the Computer from
+                      // any phone projection (the loaded Chat view mounts the same owner around its panes).
+                      <SessionViewerScope sessionId={sessionId} serverId={currentSessionRouteServerId || null}>
+                          {sessionHeader}
+                          {props.contentOverride}
+                      </SessionViewerScope>
                   ) : !session || !rendersLoadedSessionView ? (
                       null
                   ) : (
@@ -3087,7 +3098,8 @@ function SessionViewLoadedContent({
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     const composerTextStore = useComposerTextStore(() => {
         if (!isEmbedWindowContext() || !sessionAccountScope) return '';
-        const text = getSessionDraftSnapshot(sessionAccountScope, { kind: 'session', sessionId })?.document.composer.text.value;
+        const draft = getSessionDraftSnapshot(sessionAccountScope, { kind: 'session', sessionId })?.document;
+        const text = draft && 'composer' in draft ? draft.composer.text.value : undefined;
         return typeof text === 'string' ? text : '';
     });
     const [composerDocumentRenderEpoch, setComposerDocumentRenderEpoch] = React.useState(0);
@@ -3199,6 +3211,8 @@ function SessionViewLoadedContent({
     const sessionRouteServerId = (routeServerId ?? '').trim()
         || resolveServerIdForSessionIdFromLocalCache(sessionId)
         || getActiveServerSnapshot().serverId;
+    const viewerDestination = useSessionViewerDestinationScope(sessionId, sessionRouteServerId);
+    const viewerAccountLifetime = viewerDestination?.accountLifetime ?? sessionAccountLifetime;
     const sessionComposerAddress = React.useMemo(() => ({
         serverId: sessionRouteServerId,
         sessionId,
@@ -3848,7 +3862,7 @@ function SessionViewLoadedContent({
     const managedWakeNames = React.useMemo(() => ({
         controllerName: getMachineDisplayName(managedWakeController) ?? t('common.machine'),
         machineName: managedPendingMachine?.launch.name ?? getMachineDisplayName(sessionMachineRecord) ?? t('common.machine'),
-        homeName: resolveHomeDisplayLabel(getServerProfileById(sessionAccountScope?.serverId ?? '')),
+        homeName: resolveHomeDisplayLabel(getServerProfileById(sessionAccountScope?.serverId ?? ''), sessionAccountScope?.serverId ?? ''),
         agentName: currentAgentLabel,
     }), [managedWakeController, managedPendingMachine?.launch.name, sessionMachineRecord, sessionAccountScope?.serverId, currentAgentLabel]);
     // `sessions.agentSwitching` is server-represented and fails closed. The
@@ -4011,43 +4025,59 @@ function SessionViewLoadedContent({
         nativeGoalOwner: sessionNativeGoalOwner,
         agentLabel: sessionGoalAgentLabel,
     }), [goalControlMachineId, sessionGoalAgentLabel, sessionId, sessionNativeGoalOwner]);
+    const sessionGoalCaller = React.useMemo(() => new AbortController(), [sessionAccountLifetime, sessionId]);
+    React.useEffect(() => {
+        const retirement = sessionAccountLifetime?.onRetire(() => sessionGoalCaller.abort());
+        return () => {
+            retirement?.dispose();
+            sessionGoalCaller.abort();
+        };
+    }, [sessionAccountLifetime, sessionGoalCaller]);
     const setSessionGoalForView = React.useCallback(
-        async (request: SessionWorkStateGoalSetRequest): Promise<SessionWorkStateOperationResult> => {
+        async (request: SessionWorkStateGoalSetRequest, signal?: AbortSignal): Promise<SessionWorkStateOperationResult> => {
             if (!sessionAccountScope || !sessionAccountLifetime?.isCurrent()) {
                 return {
                     ok: false as const,
                     error: 'Session Account authority is unavailable',
                 };
             }
-            const result = await actionExecutor.execute('session.goal.set', { sessionId, ...request }, {
-                surface: 'ui',
-                defaultSessionId: sessionId,
-                serverId: sessionAccountScope.serverId,
-            });
-            return result.ok
-                ? { ok: true }
-                : { ok: false, error: result.error };
+            const cancellation = mergeAbortSignals([sessionGoalCaller.signal, signal]);
+            try {
+                const result = await actionExecutor.execute('session.goal.set', { sessionId, ...request }, {
+                    surface: 'ui',
+                    defaultSessionId: sessionId,
+                    serverId: sessionAccountScope.serverId,
+                    signal: cancellation.signal,
+                });
+                return readGoalOperationResult(result.ok ? result.result : result);
+            } finally {
+                cancellation.dispose();
+            }
         },
-        [actionExecutor, sessionAccountLifetime, sessionAccountScope, sessionId],
+        [actionExecutor, sessionAccountLifetime, sessionAccountScope, sessionGoalCaller, sessionId],
     );
     const clearSessionGoalForView = React.useCallback(
-        async (): Promise<SessionWorkStateOperationResult> => {
+        async (signal?: AbortSignal): Promise<SessionWorkStateOperationResult> => {
             if (!sessionAccountScope || !sessionAccountLifetime?.isCurrent()) {
                 return {
                     ok: false as const,
                     error: 'Session Account authority is unavailable',
                 };
             }
-            const result = await actionExecutor.execute('session.goal.clear', { sessionId }, {
-                surface: 'ui',
-                defaultSessionId: sessionId,
-                serverId: sessionAccountScope.serverId,
-            });
-            return result.ok
-                ? { ok: true }
-                : { ok: false, error: result.error };
+            const cancellation = mergeAbortSignals([sessionGoalCaller.signal, signal]);
+            try {
+                const result = await actionExecutor.execute('session.goal.clear', { sessionId }, {
+                    surface: 'ui',
+                    defaultSessionId: sessionId,
+                    serverId: sessionAccountScope.serverId,
+                    signal: cancellation.signal,
+                });
+                return readGoalOperationResult(result.ok ? result.result : result);
+            } finally {
+                cancellation.dispose();
+            }
         },
-        [actionExecutor, sessionAccountLifetime, sessionAccountScope, sessionId],
+        [actionExecutor, sessionAccountLifetime, sessionAccountScope, sessionGoalCaller, sessionId],
     );
     // UIW1 live workflow activity and the managed Workflow Runs whose provenance is this Session
     // (`originSessionId` is the canonical Run-list filter; the Session does not own these Runs and they
@@ -7755,6 +7785,7 @@ function SessionViewLoadedContent({
                     ? 'running' : 'draft',
                 selection: modelSelectionDisposition?.proposedSelectionV2?.ref ?? modelSelectionDisposition?.contextSelection ?? null,
                 appliedSelection: modelSelectionDisposition?.activeSelection ?? null,
+                reportedSelection: modelSelectionDisposition?.lastAppliedSelection ?? null,
                 appliedProviderSource: providerLaunchBinding ? {
                     connectionId: providerLaunchBinding.connectionId, ...providerLaunchBinding.displaySnapshot,
                 } : null,
@@ -8224,11 +8255,11 @@ function SessionViewLoadedContent({
                             if (controller && sessionAccountScope) router.push(machineCollectionHref({ serverId: sessionAccountScope.serverId,
                                 machineId: controller.machineId })); }}
                         onCheckNow={() => fireAndForget(handleManagedWakeRecovery('inspect'), { tag: 'SessionView.managedWake.inspect' })}
-                        {...(pendingActivationPresentation.managedWakeProjection.canRetryAgentStart && pendingActivationPresentation.row
+                        {...(pendingActivationPresentation.managedWakeProjection?.canRetryAgentStart && pendingActivationPresentation.row
                             ? { onRetry: () => fireAndForget(handleManagedWakeRecovery('retry'), { tag: 'SessionView.managedWake.retry' }) } : {})}
-                        {...(pendingActivationPresentation.managedWakeProjection.canResumeRuntime && pendingActivationPresentation.row
+                        {...(pendingActivationPresentation.managedWakeProjection?.canResumeRuntime && pendingActivationPresentation.row
                             ? { onResume: () => fireAndForget(handleManagedWakeRecovery('resume'), { tag: 'SessionView.managedWake.resume' }) } : {})}
-                        {...(pendingActivationPresentation.managedWakeProjection.canWithdraw && pendingActivationPresentation.row
+                        {...(pendingActivationPresentation.managedWakeProjection?.canWithdraw && pendingActivationPresentation.row
                             ? { onWithdraw: () => fireAndForget(handleManagedWakeRecovery('withdraw'), { tag: 'SessionView.managedWake.withdraw' }) } : {})}
                     />,
                 } satisfies AgentInputStatusBadge]
@@ -10458,7 +10489,7 @@ function SessionViewLoadedContent({
     );
     const sidebarSurfaceScope = React.useMemo(() => createSessionPaneSurfaceScope(sessionId, sessionPluginRuntime), [sessionId, sessionPluginRuntime]);
     const wrapPaneScopeContent = React.useCallback((content: React.ReactElement) => (
-        <SessionViewerSourceAccountScopeProvider accountLifetime={sessionAccountLifetime}>
+        <SessionViewerSourceAccountScopeProvider accountLifetime={viewerAccountLifetime}>
             <SessionViewerScope sessionId={sessionId} serverId={sessionRouteServerId}>
             <SessionCompanionRevealOwner
                 address={companionAddress}
@@ -10473,7 +10504,7 @@ function SessionViewLoadedContent({
             </SessionViewerScope>
         </SessionViewerSourceAccountScopeProvider>
     ), [
-        sessionAccountLifetime,
+        viewerAccountLifetime,
         sessionRouteServerId,
         sessionId,
         sidebarSurfaceScope,
