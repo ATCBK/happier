@@ -20,14 +20,15 @@ type Slot =
 
 /**
  * The visible sections in order, consecutive cards grouped into rows. Every other section is its own
- * slot keyed by its id, and a card row is keyed by its first card, so data arriving in one section
- * (usage, machines, a widget's rows) never changes the page's structure or remounts a neighbour.
+ * slot keyed by its id. A card run belongs to the preceding non-card boundary, independently of
+ * which cards are visible or first, so edits within a run preserve its unaffected children.
  */
 function buildSlots(sections: readonly HomeHubSection<WidgetCandidate>[]): Slot[] {
     const slots: Slot[] = [];
     let run: Placed[] = [];
+    let runKey = 'cards:root';
     const flush = () => {
-        if (run.length > 0) slots.push({ kind: 'cards', key: `cards:${run[0]!.section.id}`, entries: run });
+        if (run.length > 0) slots.push({ kind: 'cards', key: runKey, entries: run });
         run = [];
     };
     sections.forEach((section, index) => {
@@ -38,6 +39,7 @@ function buildSlots(sections: readonly HomeHubSection<WidgetCandidate>[]): Slot[
         }
         flush();
         slots.push({ kind: 'single', key: section.id, entry: { section, index } });
+        runKey = `cards:after:${section.id}`;
     });
     flush();
     return slots;
@@ -90,12 +92,10 @@ function CardRow(props: Readonly<{ slot: Extract<Slot, { kind: 'cards' }>; rende
         <ItemGroup surface="none">
             <CardGrid testID={`home-hub.${slot.key}`} columns={HOME_HUB_CARD_ROW_COLUMNS} onColumnCountChange={setColumns}>
                 {slot.entries.map((entry) => {
-                    if (!spanning.has(entry.section.id)) {
-                        return <React.Fragment key={entry.section.id}>{renderSection(entry.section, entry.index, { ownsRow: false })}</React.Fragment>;
-                    }
-                    const ownsRow = columns > 1 && !spansRow(entry.section);
+                    const span = spanning.has(entry.section.id) ? 'row' : undefined;
+                    const ownsRow = span === 'row' && columns > 1 && !spansRow(entry.section);
                     return (
-                        <CardGridCell key={entry.section.id} span="row">
+                        <CardGridCell key={entry.section.id} span={span}>
                             {renderSection(entry.section, entry.index, { ownsRow })}
                         </CardGridCell>
                     );
