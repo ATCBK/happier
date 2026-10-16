@@ -138,7 +138,7 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
                 && current.intentRevision === machine.intentRevision
                 && pluginJsonValuesEqual(current.launch, machine.launch)
                 && (action === 'machines.managed.inspect' || current.creationState === 'active'
-                    || (action === 'machines.managed.delete' && options.policyPurpose?.kind === 'creation-cleanup'
+                    || (action === 'machines.managed.delete'
                         && current.creationState === 'canceled' && current.desired === 'delete' && current.desiredWhen === 'now'
                         && current.archivedAt === undefined && (current.allocation === 'bound' && Boolean(current.resource)
                             || current.allocation === 'may-exist' && Boolean(current.nativeOperationRef))))

@@ -1043,6 +1043,71 @@ describe('managed acquisition durable custody', () => {
         expect(await createManagedMachineControllerClient(connection, { requestId: 'request' }, 'machines.managed.inspect').isCurrent(canceled)).toBe(true);
         expect(await createManagedMachineControllerClient(connection, { requestId: 'request' }, 'machines.managed.bootstrap.retry').isCurrent(canceled)).toBe(false);
     });
+    it.each(['bound', 'pending'] as const)('keeps approved canceled %s cleanup current without admitting other effects', async target => {
+        const canceled = ManagedMachineV1Schema.parse({ ...machine, creationState: 'canceled', intentRevision: 1,
+            desired: 'delete', desiredWhen: 'now', cleanup: { disposition: 'pending', reason: 'creation_canceled' },
+            ...(target === 'bound' ? { allocation: 'bound', resource: {
+                contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { id: 'paid-resource' },
+            } } : { allocation: 'may-exist', nativeOperationRef: {
+                contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { requestId: 'paid-operation' },
+            } }),
+        });
+        const http = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine: canceled } });
+        const connection = { token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller,
+            runtimeRegistry: { contributes: createResolvedContributionRegistry({}) } as ResolvedExecutablePluginRuntimeRegistry, ...accountInputs };
+        const client = createManagedMachineControllerClient(connection, { requestId: 'approved-cleanup' }, 'machines.managed.delete');
+        expect(await client.isCurrent(canceled)).toBe(true);
+        expect(await createManagedMachineControllerClient(connection, { requestId: 'approved-cleanup' }, 'machines.managed.power.set').isCurrent(canceled)).toBe(false);
+        expect(await createManagedMachineControllerClient(connection, { requestId: 'approved-cleanup' }, 'machines.managed.bootstrap.retry').isCurrent(canceled)).toBe(false);
+        const archived = { ...canceled, archivedAt: 1 };
+        http.mockResolvedValue({ status: 200, data: { machine: archived } });
+        expect(await client.isCurrent(archived)).toBe(false);
+    });
+    it('executes approved canceled cleanup through the real intent and native custody owners', async () => {
+        const homeId = 'srv_canceled_cleanup';
+        const resource = { contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {} };
+        let retained = ManagedMachineV1Schema.parse({ ...machine, homeId, creationState: 'canceled', intentRevision: 2,
+            allocation: 'bound', resource, desired: 'delete', desiredWhen: 'now',
+            cleanup: { disposition: 'pending', reason: 'creation_canceled' } });
+        const destroyed: unknown[] = [];
+        const native = nativeFixture({ privateNative: true,
+            nativeRoleResults: { inspect: { observedAt: 1, availability: 'absent' } },
+            onNativeRole: (role, body) => { if (role === 'destroy') destroyed.push(body); },
+        });
+        // Home HTTP and the native provider are boundaries. Admission parsing,
+        // intent execution, operation acceptance and private custody remain real.
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            const path = new URL(String(url)).pathname;
+            if (path.endsWith('/report-intent')) {
+                expect(body).toMatchObject({ result: { kind: 'confirmed' }, observation: { availability: 'absent' } });
+                retained = ManagedMachineV1Schema.parse({ ...retained, allocation: 'confirmed-absent', cleanup: undefined,
+                    observation: { observedAt: 1, availability: 'absent' } });
+            }
+            return { status: 200, data: { machine: retained,
+                ...(path.endsWith('/admit-control') ? { replayed: false } : {}),
+                ...(path.endsWith('/submit-intent') ? { submitted: true } : {}),
+            } };
+        });
+        const homeTarget = resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId,
+            canonicalServerUrl: 'https://home.example', revision: 1, endpoints: [{ kind: 'https', url: 'https://home.example' }] }, authority: 'current_connection' });
+        const cleanup = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId,
+            controller, runtimeRegistry: native.runtimeRegistry, ...accountInputs, homeTarget });
+        const actionInput = { homeId, managedId: retained.id, when: 'now', expectedRevision: 1, intent: 'delete', reviewedDependencies: true };
+        const operations = createHostActionOperationRuntime({ machineId: controller.machineId,
+            resolveAccountId: async () => 'owner', generateOperationId: () => 'canceled-cleanup' });
+        let work: Promise<JsonValue | null> | undefined;
+        await operations.observeExecution({ actionId: 'machines.managed.delete', input: actionInput, actionRequestId: 'approved-cleanup',
+            execute: async context => {
+                work = cleanup.execute('machines.managed.delete', actionInput, { requestId: 'approved-cleanup', context, signal: context.signal });
+                return { ok: true, result: await work };
+            } });
+        await expect(work).resolves.toMatchObject({ kind: 'accepted', managedId: retained.id });
+        expect(destroyed).toEqual([{ resource: resource.value }]);
+        expect(retained).toMatchObject({ creationState: 'canceled', allocation: 'confirmed-absent' });
+        expect(await operations.handlers.getV2({ operationId: 'canceled-cleanup', waitForTerminal: true })).toMatchObject({
+            kind: 'found', operation: { state: 'succeeded' },
+        });
+    });
     it('reopens retry from the authenticated controller context using the retained creation correlation', async () => {
         const enrolled = { ...machine, allocation: 'bound', resource: {
             contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { id: 'paid-resource' },

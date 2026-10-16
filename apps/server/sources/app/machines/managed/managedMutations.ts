@@ -189,7 +189,11 @@ export async function admitManagedControl(params: Readonly<{
         } else {
             const pendingCleanup = request.action === 'machines.managed.delete' && request.input.when === 'now'
                 && await hasPendingManagedCleanupTargetInTx(tx, row);
-            if (row.creationState !== "active" || (!(row.allocation === "bound" && row.resource) && !pendingCleanup)) throw new ManagedMachineError("resource_mismatch");
+            const canceledCleanup = request.action === 'machines.managed.delete' && request.input.when === 'now'
+                && row.creationState === 'canceled' && row.archivedAt === null
+                && row.desired === 'delete' && row.desiredWhen === 'now';
+            if ((row.creationState !== "active" && !canceledCleanup)
+                || (!(row.allocation === "bound" && row.resource) && !pendingCleanup)) throw new ManagedMachineError("resource_mismatch");
             const launch = readManagedLaunchSnapshot(row.launch);
             const declaration = await resolveManagedDeclarationInTx(tx, { homeId: row.homeId, custodianAccountId: row.custodianAccountId, controller, provider: launch.provider });
             if (!declaration || declaration.schemaVersion !== launch.schemaVersion) throw new ManagedMachineError("provider_unavailable");

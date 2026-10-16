@@ -137,7 +137,7 @@ export async function reconcileManagedIntent(params: ManagedMachineReconciliatio
     try {
         if (draining && !bridge) bridge = createManagedGuestActivityTransport(params.input, options, machine);
         client.assertConnection(machine);
-        const canceledCleanup = params.action === 'machines.managed.delete' && options.policyPurpose?.kind === 'creation-cleanup'
+        const canceledCleanup = params.action === 'machines.managed.delete'
             && machine.creationState === 'canceled' && machine.desired === 'delete' && machine.desiredWhen === 'now' && machine.archivedAt === undefined;
         const pendingCleanup = machine.allocation === 'may-exist' && !machine.resource && Boolean(machine.nativeOperationRef)
             && (machine.desired === 'delete' || params.action === 'machines.managed.inspect' && machine.submittedNativeEffect?.intent === 'delete');

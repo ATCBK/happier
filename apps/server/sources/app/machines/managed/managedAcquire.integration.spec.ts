@@ -26,6 +26,7 @@ import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { resolveMachineAccessInTx } from '@/app/machines/machineAccess';
 import { createAuthenticatedRouteRequest } from '@/app/api/testkit/requestFixtures';
 import { machinesRoutes } from '@/app/api/routes/machines/machinesRoutes';
+import { ManagedAdmissionOutputV1Schema, ManagedControllerMachineOutputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 
 describe("managed acquisition durable authority", () => {
     let harness: LightSqliteHarness;
@@ -541,6 +542,53 @@ describe("managed acquisition durable authority", () => {
         const request = { requesterAccountId: account.id, custodianAccountId: account.id, requestEnvelopeDigest: "verified-original-private-continuation", input: { input, requestId: `managed-${suffix}-request`, continuationPresent: true } };
         return { homeId, account, controller, controllerKeys, manifest, declaration, input, request, launch, native };
     }
+
+    it('retries approved cleanup of a canceled bound resource through the current controller without reviving creation', async () => {
+        const { homeId, account, controller, request } = await createManagedComputeFixture('canceled-cleanup-retry');
+        const created = await admitManagedAcquire(request);
+        const correlation = { homeId, managedId: created.machine.id, expectedIntentRevision: 0,
+            requestId: request.input.requestId, controller };
+        const resource = { contributionRef: request.input.input.selection.launch.provider, schemaVersion: 1,
+            value: { id: 'canceled-cleanup-resource' } };
+        await submitManagedAcquire(correlation);
+        await reportManagedAcquire({ ...correlation, result: { kind: 'bound', resource } });
+        await cancelManagedCreation({ actorAccountId: account.id, input: { homeId, managedId: created.machine.id, expectedIntentRevision: 0 } });
+        const app = fastify().withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+        // Authentication is the HTTP boundary; row/currentness, authorization and schemas stay real.
+        app.decorate('authenticate', async (incoming: FastifyRequest) => {
+            const body = incoming.body as { action?: string; requestId?: string };
+            Object.assign(incoming, createAuthenticatedRouteRequest({ userId: account.id,
+                externalActionExecutionAuthorized: true, externalActionExecutionMachineId: controller.machineId,
+                externalActionEffectActionId: body.action ?? 'machines.managed.delete',
+                externalActionExecutionRequestId: body.requestId,
+                externalActionExecutionCustodianAccountId: account.id,
+            }), { headers: incoming.headers, body: incoming.body });
+        });
+        registerManagedMachineRoutes(app);
+        onTestFinished(() => app.close());
+        const target = { homeId, managedId: created.machine.id, when: 'now' as const, expectedRevision: 1 };
+        const revive = await app.inject({ method: 'POST', url: '/v1/machines/managed/controller/admit-control', payload: {
+            action: 'machines.managed.power.set', requestId: 'canceled-revive', input: { ...target, intent: 'start' },
+        } });
+        expect(revive.statusCode).toBe(409);
+        expect(revive.json()).toEqual({ code: 'resource_mismatch' });
+        const payload = { action: 'machines.managed.delete', requestId: 'canceled-cleanup-approved',
+            input: { ...target, intent: 'delete', reviewedDependencies: true } };
+        const response = await app.inject({ method: 'POST', url: '/v1/machines/managed/controller/admit-control', payload });
+        expect(response.statusCode, response.body).toBe(200);
+        const admitted = ManagedAdmissionOutputV1Schema.parse(response.json());
+        expect(admitted).toMatchObject({ replayed: false, machine: { creationState: 'canceled', intentRevision: 2,
+            desired: 'delete', resource, cleanup: { disposition: 'pending' } } });
+        const replay = await app.inject({ method: 'POST', url: '/v1/machines/managed/controller/admit-control', payload });
+        expect(ManagedAdmissionOutputV1Schema.parse(replay.json())).toMatchObject({ replayed: true, machine: { intentRevision: 2 } });
+        const current = await app.inject({ method: 'POST', url: '/v1/machines/managed/controller/current', payload: {
+            ...correlation, expectedIntentRevision: 2, requestId: payload.requestId,
+        } });
+        expect(current.statusCode, current.body).toBe(200);
+        expect(ManagedControllerMachineOutputV1Schema.parse(current.json())).toMatchObject({ machine: { resource, creationState: 'canceled' } });
+        expect(await db.managedMachine.count({ where: { custodianAccountId: account.id } })).toBe(1);
+    });
 
     it('retains an accepted native destroy operation until the provisioner confirms deletion', async () => {
         const { homeId, account, controller, manifest, request, launch, native } = await createManagedComputeFixture('destroy-custody',
