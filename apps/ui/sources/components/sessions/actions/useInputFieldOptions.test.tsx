@@ -12,7 +12,10 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { storage } from '@/sync/domains/state/storage';
+import type { InputFieldOptionsState } from './inputFieldOptionsStore';
+import { recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
@@ -51,7 +54,7 @@ beforeEach(async () => { await harness.reset(); rpc.read.mockReset(); resetScope
     setRuntimeFetch(async (input, init) => {
         const url = new URL(String(input));
         const home = harness.findByServerUrl(url.origin);
-        if (url.pathname !== '/v1/auth/ping' || !home) throw new Error(`Unexpected options readiness request: ${url.href}`);
+        if (url.pathname !== '/v1/auth/ping' || !home) return harness.request(input, init);
         return Response.json(new Headers(init?.headers).get('Authorization') === `Bearer ${home.token}` ? { ok: true } : { error: 'unauthorized' },
             { status: new Headers(init?.headers).get('Authorization') === `Bearer ${home.token}` ? 200 : 401 });
     });
@@ -63,6 +66,20 @@ afterEach(async () => {
     resetRuntimeFetch();
 });
 const field = { path: 'repository', inputType: repositoryInputTypeRef };
+const periodField = { path: 'period', inputType: { hostType: 'usageQuery', field: 'period' } } as const;
+
+function MixedOptionsProbe(props: Readonly<{ serverId: string; workflow: string; observePeriod(state: InputFieldOptionsState): void }>) {
+    const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+    const consumer = { kind: 'workflow' as const, workflow: props.workflow };
+    const options = useInputFieldOptions({ serverId: props.serverId, enabled: !!binding, accountLifetime: binding,
+        requests: [field, periodField].map(field => ({ field, consumer, draftInput: { period: {} } })) });
+    const period = options.state(periodField);
+    props.observePeriod(period);
+    return <View testID="mixed.options" accessibilityLabel={options.state(field).status} accessibilityHint={options.resolveOptions.pickerContext?.machineId ?? undefined}>
+        {period.options.map(option => <Text key={option.label}>{option.label}</Text>)}
+        {options.state(field).options.map(option => <Text key={option.label}>{option.label}</Text>)}
+    </View>;
+}
 
 function OptionsProbe(props: Readonly<{ serverId: string; workflow: string; restricted?: boolean }>) {
     const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
@@ -92,16 +109,17 @@ function NativeSessionOptionsProbe(props: Readonly<{ serverId: string }>) {
     </View>;
 }
 
-async function createTypedWorkflow(serverId: string, accountId: string, definitionId = '00000000-0000-4000-8000-000000000051') {
+async function createTypedWorkflow(serverId: string, accountId: string, definitionId = '00000000-0000-4000-8000-000000000051', mixed = false) {
     const machine = createPlainMachineRowFixture({ id: 'controller-a', accountId });
     harness.answer(serverId, 'GET /v1/machines/controller-a', { body: { machine } });
     harness.answer(serverId, 'GET /v1/machines', { body: [machine] });
     const result = await scopedHomeActionExecutor({ serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId })('workflow.definition.create', {
-        definitionId, definition: { version: 1, inputs: [{ name: 'repository', valueType: 'json', required: true, inputType: repositoryInputTypeRef }],
+        definitionId, definition: { version: 1, inputs: [{ name: 'repository', valueType: 'json', required: true, inputType: repositoryInputTypeRef },
+            ...(mixed ? [{ name: 'period', valueType: 'json' as const, required: true, inputType: periodField.inputType }] : [])],
             defaults: {}, blocks: [{ kind: 'wait', id: 'review', document: { text: 'Review', references: [], attachments: [] }, result: { kind: 'text' } }] },
         metadata: { title: 'Input fixture' },
     }, { surface: 'ui', authority: 'present_user', serverId, runtimeAccountId: accountId });
-    expect(result.ok).toBe(true);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
     expect(harness.artifacts(serverId).list()).toHaveLength(1);
     return definitionId;
 }
@@ -112,6 +130,41 @@ function reply(label: string) {
 }
 
 describe('qualified input field options scope', () => {
+    it('retains host choices while a refused plugin sibling changes fallback relay', async () => {
+        const serverId = await harness.addHome({ name: 'Mixed inputs', serverUrl: 'https://mixed-options.example', accountId: 'viewer', currentAccount: true });
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        setRuntimeFetch(harness.request);
+        const workflow = await createTypedWorkflow(serverId, 'viewer', undefined, true);
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://mixed-options.example', accountId: 'viewer', request: harness.request });
+        installHomeGovernanceBoundaries(harness);
+        setRuntimeFetch(harness.request);
+        const observations: InputFieldOptionsState[] = [];
+        const body = () => <MixedOptionsProbe serverId={serverId} workflow={workflow} observePeriod={state => observations.push(state)} />;
+        rpc.read.mockResolvedValue(reply('Serving repository'));
+        await act(async () => { storage.getState().applyMachines([createMachineFixture({ id: 'controller-a', activeAt: Date.now() })]); });
+        const screen = await renderScreen(body());
+        try {
+            await vi.waitFor(() => {
+                expect(screen.getTextContent()).toContain('Last 30 days');
+                expect(screen.findByTestId('mixed.options')?.props.accessibilityLabel).toBe('failed');
+            });
+            const settled = observations.at(-1)!;
+            const mark = observations.length;
+            const replacement = createPlainMachineRowFixture({ id: 'controller-b', accountId: 'viewer' });
+            harness.answer(serverId, 'GET /v1/machines/controller-b', { body: { machine: replacement } });
+            await act(async () => {
+                const machine = createMachineFixture({ id: 'controller-b', activeAt: Date.now() });
+                storage.getState().applyMachines([machine]);
+                storage.setState(state => ({ machineListByServerId: { ...state.machineListByServerId,
+                    [resolveServerProfileScopeIdForIdentifier(serverId)]: [machine] } }));
+                recordMachineRequestFailed({ serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'viewer', machineId: 'controller-a' });
+            });
+            await screen.update(body());
+            await vi.waitFor(() => expect(screen.findByTestId('mixed.options')?.props.accessibilityHint).toBe('controller-b'));
+            expect(observations.slice(mark).every(state => state.status === 'ready' && state.options === settled.options)).toBe(true);
+            expect(screen.getTextContent()).toContain('Last 30 days');
+        } finally { await screen.unmount(); await connection.dispose(); }
+    });
     it('offers an unopened Project session for Local services through the shared resolver and current Home HTTP reader', async () => {
         const serverId = await harness.addHome({ name: 'Project Home', serverUrl: 'https://native-session-options.example',
             accountId: 'viewer', currentAccount: true });

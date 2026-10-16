@@ -1,4 +1,5 @@
 import * as React from 'react';
+import * as Unistyles from 'react-native-unistyles';
 import { expect, it, vi } from 'vitest';
 import { WidgetDefinitionV1Schema, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
@@ -7,6 +8,7 @@ import { useConfiguredWidgetTarget } from '@/sync/domains/widgets/useConfiguredW
 import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/widgetBinding';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary, createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { buildWidgetDefinitionArtifactHeaderV1 } from '@happier-dev/protocol/widgets/widgetDefinitionArtifactV1';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
@@ -34,6 +36,13 @@ import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPlugin
 import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
 import { widgetProjectionOf, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
+import { darkTheme, lightTheme } from '@/theme';
+import { createWorkBoardV1, WorkBoardV1Schema } from '@happier-dev/protocol/boards/workBoardV1';
+import { buildWorkBoardArtifactHeaderV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { resolveUiAccountActionFallbackMachineId } from '@/sync/ops/actions/accountActionDeps';
+import { recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 
 // Statically imported surface consumers reach Sync; install its external Socket boundary before that graph loads.
 vi.mock('socket.io-client', async importOriginal =>
@@ -197,15 +206,23 @@ it.each(['declarative', 'html', 'installed'] as const)('renders a published inli
 });
 
 it.each([
-    ['follow', 'corePage'], ['pin', 'corePage'], ['pin', 'home'], ['project-follow', 'project'], ['session-follow', 'corePage'],
+    ['follow', 'corePage'], ['pin', 'corePage'], ['pin', 'home'], ['project-follow', 'project'], ['session-follow', 'corePage'], ['pin', 'workBoard'],
 ] as const)('renders Usage through real %s admission on an unmaterialized %s host', async (bindingKind, host) => {
     const disposeActionLoader = await installRealActionExecutorModuleLoader();
     const http = createHomeHubArtifactHttpBoundary('viewer');
+    const board = createWorkBoardV1({ id: 'board-one', name: 'Overview' });
+    const boardHttp = createLayoutArtifactHttpBoundary('viewer', { artifactId: board.id, kind: 'work-board.v1',
+        defaultLayout: board, parseLayout: value => WorkBoardV1Schema.parse(value), buildHeader: buildWorkBoardArtifactHeaderV1 });
+    boardHttp.seed(board);
+    let usageReads = 0;
     const connection = await restoreServerAccountForTest({ serverUrl: `https://usage-${bindingKind}-admission.test`,
         accountId: 'viewer', request: async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/machines') return Response.json({ machines: [] });
+            if (host === 'workBoard' && (path === '/v1/features' || path === '/v1/features/authenticated')) return Response.json(createRootLayoutFeaturesResponse());
+            if (host === 'workBoard' && path.startsWith(`/v1/artifacts/${board.id}`)) return boardHttp.request(url, init);
             if (path !== '/v2/usage/query') return http.request(url, init);
+            usageReads += 1;
             const totals: UsageAnalyticsQueryResponse['totals'] = { eventCount: 1,
                 tokens: { input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 15 },
                 cost: { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' } };
@@ -215,8 +232,9 @@ it.each([
     if (!account) throw new Error('Expected current viewer Account');
     const scope: WidgetSurfaceRefV1 = { ...account, owner: host === 'home' ? { kind: 'home' }
         : host === 'project' ? { kind: 'project', projectId: 'project-one' }
+        : host === 'workBoard' ? { kind: 'workBoard', boardId: 'board-one' }
         : { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
-    const query = normalizeUsageQuery({ period: { startMs: 1000 }, agents: bindingKind === 'pin' ? ['codex'] : [], metric: 'tokens',
+    const query = normalizeUsageQuery({ period: host === 'workBoard' ? { relative: '30days' } : { startMs: 1000 }, agents: bindingKind === 'pin' ? ['codex'] : [], metric: 'tokens',
         projects: host === 'project' ? ['project-one'] : [], session: bindingKind === 'session-follow' ? ['session-one'] : null });
     const definition = { kind: 'builtin', id: 'usage_period_summary' } as const;
     const descriptor = readWidgetDescriptor(null, definition)!;
@@ -233,13 +251,42 @@ it.each([
     </InjectedAuthProvider>;
     const pageContext = readUsageWidgetPageContext(readUsageWidgetPageScope(query));
     const providedContext = host === 'home' ? {} : host === 'project' ? { projects: pageContext.projects! } : pageContext;
+    if (host === 'workBoard') {
+        await getServerFeaturesSnapshot({ serverId: account.serverId });
+        storage.getState().applyMachines([createMachineFixture({ id: 'new-relay', activeAt: Date.now() })]);
+        recordMachineRequestFailed({ ...account, machineId: 'new-relay' });
+        expect(resolveUiAccountActionFallbackMachineId(account)).toBeNull();
+    }
     const screen = await renderScreen(body(providedContext));
+    let restoreAppearance: (() => void) | undefined;
     try {
         await flushHookEffects({ cycles: 30 });
         await vi.waitFor(() => {
             expect(screen.tree.root.findAllByType(ConfiguredWidgetRefusal).map(node => node.props.resolution)).toEqual([]);
             expect(screen.tree.root.findAllByType(HappierDataMetric).map(node => node.props.value)).toContain(15);
         });
+        if (host === 'workBoard') {
+            const metrics = screen.tree.root.findAllByType(HappierDataMetric);
+            // A native Account input does not acquire Machine identity merely because
+            // an unrelated daemon becomes reachable before an appearance render.
+            await React.act(async () => { recordMachineRequestSucceeded({ ...account, machineId: 'new-relay' }); });
+            expect(resolveUiAccountActionFallbackMachineId(account)).toBe('new-relay');
+            await flushHookEffects({ cycles: 30 });
+            const reads = usageReads;
+            const runtime = Unistyles.useUnistyles();
+            const themeBoundary = vi.spyOn(Unistyles, 'useUnistyles');
+            restoreAppearance = () => { themeBoundary.mockRestore(); };
+            for (const theme of [darkTheme, lightTheme]) {
+                themeBoundary.mockReturnValue({ ...runtime, theme });
+                await screen.update(body(providedContext));
+                await flushHookEffects({ cycles: 10 });
+                expect(screen.tree.root.findAllByType(ConfiguredWidgetRefusal)).toEqual([]);
+                const currentMetrics = screen.tree.root.findAllByType(HappierDataMetric);
+                expect(currentMetrics).toHaveLength(metrics.length);
+                currentMetrics.forEach((metric, index) => expect(metric).toBe(metrics[index]));
+                expect(usageReads).toBe(reads);
+            }
+        }
         if (bindingKind === 'follow') {
             // The page can retain a selected Agent absent from this period's choice inventory.
             const changed = normalizeUsageQuery({ ...query, agents: ['claude'] });
@@ -249,7 +296,7 @@ it.each([
         }
         expect(http.writes).toEqual([]);
     } finally {
-        await screen.unmount(); await connection.dispose(); disposeActionLoader(); invalidateUsageQueryResources();
+        restoreAppearance?.(); await screen.unmount(); await connection.dispose(); disposeActionLoader(); invalidateUsageQueryResources();
     }
 });
 
