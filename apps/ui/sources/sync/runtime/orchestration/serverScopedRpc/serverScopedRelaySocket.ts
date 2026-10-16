@@ -46,6 +46,7 @@ export type ServerScopedRelaySocket<TPayload> = Readonly<{
     machineId: string;
     sendEnvelope: (payload: TPayload) => void;
     onEnvelope: (listener: (payload: TPayload) => void) => () => void;
+    onSocketIdChange: (listener: () => void) => () => void;
     disconnect: () => Promise<void>;
     socketId?: string;
     viewerId?: string;
@@ -70,6 +71,7 @@ export function createServerScopedRelaySocket<TPayload>(params: Readonly<{
         socketId?: string;
     }>;
     getActiveSocketId?: () => string;
+    onActiveSocketIdChange?: (listener: () => void) => () => void;
     getScopedSocketId?: (socket: {
         emit: (event: string, payload: TPayload) => void;
         on: (event: string, listener: (payload: TPayload) => void) => void;
@@ -88,6 +90,7 @@ export function createServerScopedRelaySocket<TPayload>(params: Readonly<{
         activeTransport: params.createActiveTransport,
         scopedTransport: (socket, context) => params.createScopedTransport(socket, context),
         getActiveSocketId: params.getActiveSocketId,
+        onActiveSocketIdChange: params.onActiveSocketIdChange,
         getScopedSocketId: params.getScopedSocketId,
     });
 }
@@ -103,6 +106,7 @@ export async function resolveServerScopedRelaySocket<TPayload>(params: Readonly<
         socketId?: string;
     } | SocketAwareScopedTransportFactory<TPayload>;
     getActiveSocketId?: () => string;
+    onActiveSocketIdChange?: (listener: () => void) => () => void;
     getScopedSocketId?: (socket: ScopedSocketClientLike<TPayload>) => string;
 }>): Promise<ServerScopedRelaySocket<TPayload>> {
     const accountLifetime = params.accountLifetime;
@@ -126,6 +130,7 @@ export async function resolveServerScopedRelaySocket<TPayload>(params: Readonly<
             scopeUserId,
             machineId: context.machineId,
             get socketId() { return params.getActiveSocketId?.(); },
+            onSocketIdChange: params.onActiveSocketIdChange ?? (() => () => {}),
             sendEnvelope: params.activeTransport.send,
             onEnvelope: params.activeTransport.on,
             disconnect: async () => {},
@@ -165,6 +170,14 @@ export async function resolveServerScopedRelaySocket<TPayload>(params: Readonly<
             scopeUserId,
             machineId: context.machineId,
             get socketId() { return params.getScopedSocketId?.(connectedSocket) ?? scopedTransport.socketId ?? connectedSocket.getSocketId(); },
+            onSocketIdChange: listener => {
+                connectedSocket.on('connect', listener);
+                connectedSocket.on('disconnect', listener);
+                return () => {
+                    connectedSocket.off('connect', listener);
+                    connectedSocket.off('disconnect', listener);
+                };
+            },
             sendEnvelope: scopedTransport.send,
             onEnvelope: scopedTransport.on,
             disconnect: async () => {
@@ -208,6 +221,16 @@ function retainSourceAccountRelay<TPayload>(socket: ServerScopedRelaySocket<TPay
     return {
         ...socket,
         get socketId() { return socket.socketId; },
+        onSocketIdChange: listener => {
+            if (!isCurrent()) return () => {};
+            const unsubscribe = socket.onSocketIdChange(() => { if (isCurrent()) listener(); });
+            const release = () => {
+                if (!subscriptions.delete(release)) return;
+                unsubscribe();
+            };
+            subscriptions.add(release);
+            return release;
+        },
         sendEnvelope: payload => { if (isCurrent()) socket.sendEnvelope(payload); },
         onEnvelope: listener => {
             if (!isCurrent()) return () => {};

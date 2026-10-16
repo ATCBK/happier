@@ -29,9 +29,11 @@ export type ServerScopedMachineLiveStreamRelaySocket = Readonly<{
      * The per-tab socket id of THIS viewer connection. When present the server relay delivers
      * frames to exactly this tab via `io.to(socketId)`. If unavailable, the simulator product
      * path fails closed before opening the relay. May change across reconnects — read at
-     * relay-open time.
+     * relay-open time. Mounted readers subscribe through `onSocketIdChange`.
      */
     socketId: string;
+    /** Notify mounted readers when Socket.IO retires or replaces this connection. */
+    onSocketIdChange: (listener: () => void) => () => void;
     sendEnvelope: (payload: MachineLiveStreamRelayEnvelopeV1) => void;
     onEnvelope: (listener: (payload: MachineLiveStreamRelayEnvelopeV1) => void) => () => void;
     disconnect: () => Promise<void>;
@@ -50,6 +52,7 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         timeoutMs: params.timeoutMs,
         missingScopeUserProfileErrorMessage: 'Active account profile id is unavailable for machine live-stream relay',
         getActiveSocketId: () => apiSocket.getSocketId(),
+        onActiveSocketIdChange: listener => apiSocket.onStatusChange(listener),
         createActiveTransport: {
             send: (payload) => {
                 apiSocket.sendMachineLiveStreamRelayEnvelope(payload);
@@ -120,6 +123,7 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
     // Capture admission can finish after a viewer disappears. Keep this logical carrier until
     // its ingestion subscriber has sent the final Stop and released its interest.
     const readers = new Set<() => void>();
+    const connectionReaders = new Set<() => void>();
     let closing = false;
     let disconnectStarted = false;
     let completion: Promise<void> | null = null;
@@ -135,6 +139,16 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         machineId: socket.machineId,
         viewerId: socket.scopeUserId,
         get socketId() { return socket.socketId ?? ''; },
+        onSocketIdChange: listener => {
+            if (closing) return () => {};
+            const unsubscribe = socket.onSocketIdChange(listener);
+            const release = () => {
+                if (!connectionReaders.delete(release)) return;
+                unsubscribe();
+            };
+            connectionReaders.add(release);
+            return release;
+        },
         sendEnvelope: envelope => {
             if (!disconnectStarted && (!closing || (envelope.message.kind === 'control' && envelope.message.control.kind === 'stop'))) {
                 socket.sendEnvelope(envelope);
@@ -154,6 +168,7 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         disconnect: () => {
             if (!completion) {
                 closing = true;
+                for (const release of connectionReaders) release();
                 completion = new Promise<void>((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; });
                 finishDisconnect();
             }
