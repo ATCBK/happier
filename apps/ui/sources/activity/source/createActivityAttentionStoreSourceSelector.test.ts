@@ -1,5 +1,6 @@
 import { projectLegacySessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import * as linkedSessionMetadata from '@happier-dev/protocol/sessions/external/linked-metadata';
 
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
@@ -32,6 +33,38 @@ function expectNoObjectKeysOrValuesOnRecords(action: () => void, guardedRecords:
 }
 
 describe('createActivityAttentionStoreSourceSelector', () => {
+    it('parses shared linked metadata once across real store readers and refreshes replacement metadata', () => {
+        const previous = storage.getState();
+        const metadata = { path: '/repo', host: 'localhost', externalSessionV1: {
+            v: 1 as const, agentId: 'codex', machineId: 'machine-a', remoteSessionId: 'remote-a',
+            source: { kind: 'codexHome' as const, home: 'user' as const },
+        } };
+        const parse = vi.spyOn(linkedSessionMetadata, 'readNonAuthoritativeLinkedExternalSessionV1FromMetadata');
+        const session = createSessionFixture({ id: 'linked', serverId: 'home-a', metadata });
+        const row = buildSessionListRenderableFromSession(session);
+        const selector = createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false });
+        const stop = storage.subscribe(state => selector(state));
+        try {
+            storage.setState({ sessions: { linked: session }, sessionListRowsByServerId: { 'home-a': { linked: row } },
+                ordinarySessionListMembershipByServerId: { 'home-a': ['linked'] } });
+            const first = selector(storage.getState());
+            for (let index = 0; index < 10; index++) {
+                storage.setState({ lastSyncAt: index });
+                // A second mounted Activity surface uses its own semantic selector,
+                // but the immutable linked input has not changed.
+                createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false })(storage.getState());
+            }
+            expect(selector(storage.getState())).toBe(first);
+            expect(parse.mock.calls.filter(([input]) => input === metadata)).toHaveLength(1);
+            const updated = { ...metadata, externalSessionV1: { ...metadata.externalSessionV1, remoteSessionId: 'remote-b' } };
+            storage.setState({ sessions: { linked: { ...session, metadata: updated } },
+                sessionListRowsByServerId: { 'home-a': { linked: { ...row, metadata: updated } } } });
+            const next = selector(storage.getState());
+            expect(next).not.toBe(first);
+            expect(next.sessionsById.linked.metadata?.externalSessionV1).toMatchObject({ remoteSessionId: 'remote-b' });
+            expect(parse.mock.calls.filter(([input]) => input === updated)).toHaveLength(1);
+        } finally { stop(); parse.mockRestore(); storage.setState(previous); }
+    });
     it.each(['hydrated', 'list'] as const)('updates pending-navigation eligibility when %s content availability changes', async (kind) => {
         const { buildPendingNavigationFromSource } = await import('./buildPendingNavigationFromSource');
         const session = createSessionFixture({ id: 'waiting', serverId: 'home-a', active: true,
