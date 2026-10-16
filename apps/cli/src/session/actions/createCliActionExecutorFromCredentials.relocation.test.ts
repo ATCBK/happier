@@ -86,10 +86,10 @@ describe('CLI relocation source routing', () => {
       .resolves.toMatchObject({ kind: 'settled', result: { ok: false, errorCode: 'invalid_parameters' } });
     expect(boundary.actions).toEqual([]);
   });
-  it('resolves the accepted qualified source through real rows and SDK transport, not the current native worker or configured Machine', async () => {
+  it.each(['cli', 'agent', 'mcp'] as const)('routes %s relocation through the accepted SOURCE using real rows and SDK transport', async surface => {
     const boundary = await network();
     const executor = createCliActionExecutorFromCredentials({ credentials, serverId: 'source-home', serverApiUrl: boundary.endpoint });
-    await expect(executor.execute('projects.service.relocate', input, { surface: 'cli' })).resolves.toMatchObject({ ok: true });
+    await expect(executor.execute('projects.service.relocate', input, { surface })).resolves.toMatchObject({ ok: true });
     expect(boundary.actions).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'source-coordinator' } })]);
   });
   it('refuses captured source target conflicts before PAT dispatch rather than widening their authority', async () => {
