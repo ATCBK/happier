@@ -93,5 +93,17 @@ describe('buildOrdinarySessionListHomeState', () => {
         });
         expect(failed.phase).toBe('error');
         expect(failed.failureReason).toBe('network');
+
+        // An "offline" observation published when the socket last dropped is stale once the transport is back:
+        // the Home is answering, so the roster must not call it unreachable while pages are still arriving.
+        const reconnected = buildOrdinarySessionListHomeState({
+            serverId: 'home-a',
+            requestedQueryKey: 'query:home-a',
+            sessionIds: ['s1'],
+            observation: { phase: 'offline', lastSuccessAt: null },
+            lifecycle: lifecycle(),
+            online: true,
+        });
+        expect(reconnected.phase).toBe('ready');
     });
 });
