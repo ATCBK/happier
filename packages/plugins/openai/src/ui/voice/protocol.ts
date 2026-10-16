@@ -120,7 +120,7 @@ const OpenAiResponseBaseSchema = z.object({
 const OpenAiResponseSchema = withVoiceSchemaField(
   OpenAiResponseBaseSchema,
   'output',
-  VoiceRealtimeJsonValueSchema.array().optional(),
+  z.optional(z.array(VoiceRealtimeJsonValueSchema)),
 );
 const OpenAiResponseDoneEventBaseSchema = z.object({
   type: z.literal('response.done'),
@@ -293,7 +293,7 @@ const OpenAiClientEventWithSessionSchema = withVoiceSchemaField(
 const OpenAiClientEventSchema = withVoiceSchemaField(
   OpenAiClientEventWithSessionSchema,
   'response',
-  VoiceRealtimeJsonValueSchema.optional(),
+  z.optional(VoiceRealtimeJsonValueSchema),
 );
 
 function isOpenAiRecord(value: unknown): value is Record<string, unknown> {
