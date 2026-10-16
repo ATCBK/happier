@@ -10,7 +10,7 @@ import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
 import { useWidgetFrameSurfaceDefault } from '@/components/widgets/frame/useWidgetFrameStyle';
-import { buildWidgetDefinitionActions, buildWidgetFrameStyleActions, buildWidgetInstanceActions, buildWidgetMoveActions, buildWidgetSizeActions, orderWidgetMenu } from '@/components/widgets/frame/widgetFrameMenu';
+import { buildWidgetDefinitionActions, buildWidgetFrameStyleActions, buildWidgetInstanceActions, buildWidgetMoveActions, buildWidgetSizeActions, orderWidgetMenu, WIDGET_MENU_MAX_HEIGHT_PX } from '@/components/widgets/frame/widgetFrameMenu';
 import { renderWidgetSizeMenuSection, stepWidgetSizeControl, type WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
 import { useWidgetInputsEditor } from '@/components/widgets/surface/useWidgetInputsEditor';
 import { useWidgetDefinitionFlows } from '@/components/widgets/definitions/useWidgetDefinitionFlows';
@@ -167,6 +167,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
                                 overflowTriggerAccessibilityLabel={t('boards.widgets.menuA11y', { widget: title })}
                                 onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
                                 renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${props.testID}.size`)}
+                                overflowMaxHeightCap={WIDGET_MENU_MAX_HEIGHT_PX}
                                 actions={actions}
                             />
                         </View>

@@ -29,7 +29,12 @@ import { BoardSessionFilterControl } from './BoardSessionFilterControl';
  */
 
 const POPOVER_WIDTH_PX = 400;
-const POPOVER_MAX_HEIGHT_PX = 640;
+/**
+ * Tall enough that every setting down to Delete board shows at once on a desktop window (about 740 px,
+ * 800 with the Sessions filter's row), so nothing hides behind an unmarked inner scroll; the popover
+ * still shrinks to a shorter window and scrolls there.
+ */
+const POPOVER_MAX_HEIGHT_PX = 800;
 const SECTIONS: readonly WorkBoardSectionV1[] = ['needs_you', 'running', 'my_machines'];
 
 export const BoardSettingsButton = React.memo(function BoardSettingsButton(props: Readonly<{
