@@ -41,6 +41,7 @@ import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1, RemoteHostCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowReadResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { AccountSettingsPersistedObjectSchema } from '@happier-dev/protocol/account/settings/accountSettingsPersistedObject';
 import { openEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
@@ -1832,6 +1833,8 @@ describe('managed acquisition durable custody', () => {
             if (new URL(path).pathname === NOTIFICATION_CHANNELS_ROUTE_V1) return { status: 200, data: NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === MCP_SERVER_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: McpServerCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === ACP_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
+            if (new URL(path).pathname === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`) return { status: 200,
+                data: PromptLibraryRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return { status: 200, data: ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === REMOTE_HOST_ROWS_ROUTE_V1) return { status: 200, data: RemoteHostCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === NOTIFICATION_CHANNELS_ROUTE_V1) return { status: 200, data: NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'absent' }) };

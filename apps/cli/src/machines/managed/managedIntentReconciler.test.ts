@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTarget';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
-import { ProviderObservationV1Schema, type ProviderObservationV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
+import { ManagedControllerIntentReportV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import type { ProviderObservationV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { signMachineInstallationProof, verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import type { ManagedActivityBridgeResultV1 } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { MANAGED_POLICY_PROOF_HEADER, ManagedPolicyAdmissionInputV1Schema, decodeManagedPolicyProofV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
@@ -96,14 +97,16 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
             return { status: 200, data: { machine, submitted: first } };
         }
         if (path.endsWith('/report-intent')) {
-            reports.push(body);
-            if (body && typeof body === 'object' && 'result' in body && body.result && typeof body.result === 'object'
-                && 'kind' in body.result && body.result.kind === 'refused') {
+            // Native producer output must satisfy the real Home report consumer.
+            const report = ManagedControllerIntentReportV1Schema.parse(body);
+            reports.push(report);
+            if (report.result.kind === 'refused') {
                 machine = { ...machine, submittedNativeEffect: undefined };
             }
-            if (body && typeof body === 'object' && 'observation' in body) {
-                machine = { ...machine, observation: ProviderObservationV1Schema.parse(body.observation) };
-                if (machine.observation?.availability === 'absent') machine = { ...machine, allocation: 'confirmed-absent', submittedNativeEffect: undefined };
+            if (report.observation) {
+                machine = { ...machine, observation: report.observation };
+                if (machine.observation?.availability === 'absent') machine = { ...machine, allocation: 'confirmed-absent',
+                    nativeOperationRef: undefined, submittedNativeEffect: undefined };
             }
         }
         return { status: 200, data: { machine } };
@@ -191,12 +194,12 @@ describe('managed native intent through the accepted Action', () => {
         test.setMachine({ allocation: 'may-exist', resource: undefined, enrolledMachineId: undefined,
             nativeOperationRef: { contributionRef: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, value: {} } });
         await expect(test.run()).rejects.toMatchObject({ code: 'native_intent_unconfirmed' });
-        const retained = test.readMachine().nativeOperationRef;
         if (action === 'inspect') await test.driver.execute('machines.managed.inspect', {
             homeId: test.readMachine().homeId, managedId: test.readMachine().id,
         }, test.options);
         else await test.run();
-        expect(test.readMachine()).toMatchObject({ id: 'managed', allocation: 'confirmed-absent', nativeOperationRef: retained });
+        expect(test.readMachine()).toMatchObject({ id: 'managed', allocation: 'confirmed-absent' });
+        expect(test.readMachine().nativeOperationRef).toBeUndefined();
         expect(test.readMachine().submittedNativeEffect).toBeUndefined();
         expect(test.readMachine().resource).toBeUndefined();
         expect(test.effects.filter(role => role === 'destroy')).toEqual(['destroy']);

@@ -155,7 +155,9 @@ export async function reconcileManagedIntent(params: ManagedMachineReconciliatio
         const reconcileOutstanding = async (outstanding: NonNullable<ManagedMachineV1['submittedNativeEffect']>) => {
             const correlation = { homeId: machine.homeId, managedId: machine.id,
                 expectedIntentRevision: outstanding.intentRevision, requestId: outstanding.requestId, controller: outstanding.controller };
-            if (outstanding.intent === 'delete' && machine.nativeOperationRef) {
+            // A bound resource's retained operation is deletion custody. An
+            // unbound allocation still carries its acquisition/cleanup identity.
+            if (outstanding.intent === 'delete' && machine.resource && machine.nativeOperationRef) {
                 const result = MachineProvisionerDestroyResultV1Schema.parse(await native.invoke('destroy', {
                     nativeOperation: machine.nativeOperationRef.value,
                 }));

@@ -274,6 +274,8 @@ export function fixture(options: Readonly<{
     // invocation, policy admission and handler execution remain real.
     const runtimeRegistry = {
         contributes, targetActionInvocations,
+        // The daemon's placement resolver is a host/environment boundary.
+        resolveCurrentPluginApprovalReplayPlacement: async () => ({ serverId: 'home-1', machineId: 'controller-1' }),
         readPluginOccurrenceId: () => currentOccurrenceId,
         activateContributionsOnDemand: async () => {
             activations += 1;

@@ -27,7 +27,9 @@ async function withReleaseMirror(run: (releases: string[]) => Promise<void>) {
   const releases: string[] = [];
   // GitHub is the external boundary; enrollment, task composition and HTTP selection stay real.
   const mirror = createServer((request, response) => {
-    releases.push(request.url ?? '');
+    // Loopback discovery can probe `/`; only release API requests belong to
+    // this installer boundary. Unset-override cases below require the tag read.
+    if (request.url?.startsWith('/repos/')) releases.push(request.url);
     response.writeHead(400, { 'content-type': 'application/json' });
     response.end('{}');
   });
