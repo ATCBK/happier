@@ -145,7 +145,7 @@ export function buildProjectOpenDraft(state: ProjectOpenChoiceState): OpenProjec
   } : subject?.kind === 'repository' ? { kind: 'repository' as const, selector: subject.selector }
     : subject?.kind === 'workspace' ? { kind: 'workspace' as const, workspaceId: subject.workspace.id }
     : subject?.kind === 'folder' ? { kind: 'folder' as const, path:
-      OpenProjectInputV1Schema.shape.source.options[1].shape.path.safeParse(subject.path).success ? subject.path : '' } : undefined;
+      OpenProjectInputV1Schema.shape.source.def.options[1].shape.path.safeParse(subject.path).success ? subject.path : '' } : undefined;
   let materialization: OpenProjectDraftSelectionV1['materialization'];
   switch (state.use) {
     case 'existing': materialization = { kind: 'attach' }; break;
