@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { AccountProfileSchema, PluginProjectionV2Schema, RPC_METHODS, type PublicActionInputById } from '@happier-dev/protocol';
+import { AccountProfileSchema, PluginProjectionV2Schema, RPC_METHODS, createWorkBoardV1, type PublicActionInputById } from '@happier-dev/protocol';
 import { flushHookEffects, renderScreen as renderBaseScreen, standardCleanup } from '@/dev/testkit';
 import { HappierInputField } from '@happier-dev/plugin-ui/presentation';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
@@ -15,6 +15,9 @@ import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/e
 import { widgetProjectionEntry } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
+import { createWorkBoardAccountStore } from '@/components/boards/model/workBoardAccountStore';
+import { buildAccountWidgetAddSections } from './accountWidgetAddSections';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -131,6 +134,55 @@ const candidate: WidgetCandidate = { key: 'acme.options/checks', title: 'Checks'
     ] } };
 
 describe('WidgetSetupStep discovery', () => {
+    it('retries the same add after gallery entries rebuild, then permits an intentional new copy', async () => {
+        const board = createWorkBoardV1({ id: 'retry-board', name: 'Overview' });
+        const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
+        let lostAck = false;
+        let readable = true;
+        const store = createWorkBoardAccountStore({ ...persistence.transport,
+            read: async (id, options) => { if (!readable) throw new Error('Read-back unavailable'); return persistence.transport.read(id, options); },
+            update: async input => {
+                const result = await persistence.transport.update(input);
+                if (!lostAck) { lostAck = true; readable = false; throw new Error('Acknowledgement lost'); }
+                return result;
+            },
+        }, () => true);
+        const target = { ...scope, owner: { kind: 'workBoard', boardId: board.id } } as const;
+        const completed = vi.fn();
+        let entriesBuilt = 0;
+        function GalleryStep() {
+            const boards = React.useSyncExternalStore(store.subscribe, store.getBoards, store.getBoards);
+            const sections = buildAccountWidgetAddSections({ candidates: [{ ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } }],
+                instances: boards.boards[0]?.widgets?.map(item => item.instance) ?? [], scope: target,
+                labels: { count: count => `${count} here`, submit: 'Add' },
+                addInstance: async (instance, size) => {
+                    const result = await store.queue.dispatch({ kind: 'widget_add', boardId: board.id,
+                        ref: { surface: target, instanceId: instance.id }, instance, ...(size ? { size } : {}) });
+                    if (result.status !== 'applied') throw new Error(result.code);
+                },
+            });
+            entriesBuilt++;
+            const setup = sections.flatMap(section => section.entries).find(entry => entry.id === `plugin-${candidate.key}`)!.setup!();
+            return <WidgetSetupStep setup={setup} phone={false} presentation="pane" onDone={completed} testID="retry-copy" />;
+        }
+        const screen = await renderScreen(<GalleryStep />);
+        await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
+        await vi.waitFor(() => expect(store.queue.getState().failure).not.toBeNull());
+        expect(completed).not.toHaveBeenCalled();
+        const beforeRebuild = entriesBuilt;
+        readable = true;
+        await act(async () => { await store.refresh(); });
+        expect(entriesBuilt).toBeGreaterThan(beforeRebuild);
+        expect(persistence.acknowledged().boards[0]?.widgets).toHaveLength(1);
+        await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
+        await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+        expect(persistence.acknowledged().boards[0]?.widgets).toHaveLength(1);
+        await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
+        await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(2));
+        const ids = persistence.acknowledged().boards[0]?.widgets?.map(item => item.instance.id);
+        expect(ids).toHaveLength(2);
+        expect(new Set(ids).size).toBe(2);
+    });
     it('does not claim a mounted error preview is live data when its inputs resolve', async () => {
         const setup = buildWidgetCandidateSetup({ candidate: { ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } },
             scope, audience: 'personal', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }),
@@ -146,7 +198,7 @@ describe('WidgetSetupStep discovery', () => {
         expect(screen.root.findByType(WidgetPreviewStage).props.caption).toBe('widgetAdd.preview');
     });
 
-    it('shows an unreachable Home while a dispatched save remains pending, then accepts its actual receipt', async () => {
+    it('keeps a dispatched save busy across a Home disconnect until its late receipt arrives', async () => {
         const previous = storage.getState();
         const applied = getAppliedActiveServerSnapshot();
         const available = isAppliedActiveServerRuntimeAvailable();
@@ -162,9 +214,9 @@ describe('WidgetSetupStep discovery', () => {
         try {
             await act(async () => { screen.findByTestId('pending-home.submit')!.props.onPress(); });
             await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
-            expect(screen.findByTestId('pending-home.why')!.props.children).toBe('settingsPlugins.targetSelection.unreachableThisHome');
+            expect(screen.getTextContent()).not.toContain('settingsPlugins.targetSelection.unreachableThisHome');
             expect(screen.findByTestId('pending-home.submit')!.props.disabled).toBe(true);
-            expect(screen.findAllByType(RoundButton).find(node => node.props.testID === 'pending-home.submit')!.props.loading).toBe(false);
+            expect(screen.findAllByType(RoundButton).find(node => node.props.testID === 'pending-home.submit')!.props.loading).toBe(true);
             expect(completed).not.toHaveBeenCalled();
             await act(async () => { finish({ ok: true }); });
             expect(completed).toHaveBeenCalledWith({ ok: true });

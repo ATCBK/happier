@@ -90,8 +90,22 @@ export function buildAccountWidgetAddSections(input: AccountWidgetAddInput): rea
         const definition = widgetDefinitionOfCandidate(candidate);
         const copies = countWidgetInstances(input.instances, definition);
         const configurable = isConfigurableWidgetCandidate(candidate);
-        const add = (bindings: WidgetInputBindingsV1, size?: WidgetSizeV1) => input.addInstance({ v: 1, id: randomUUID(), definition, bindings },
-            input.scope ? normalizeWidgetSizeForSurfaceV1(input.scope.owner.kind, size, candidate.sizeDeclaration) : undefined);
+        let instanceId: string | null = null;
+        let pending: Promise<WidgetSetupCommandResult> | null = null;
+        const add = (bindings: WidgetInputBindingsV1, size?: WidgetSizeV1) => {
+            if (pending) return pending;
+            instanceId ??= randomUUID();
+            const instance: WidgetInstanceV1 = { v: 1, id: instanceId, definition, bindings };
+            pending = Promise.resolve().then(() => input.addInstance(instance,
+                input.scope ? normalizeWidgetSizeForSurfaceV1(input.scope.owner.kind, size, candidate.sizeDeclaration) : undefined))
+                .then(result => {
+                    // Approval has custody too. Only a resolved successful invocation
+                    // permits an intentional Add another to allocate a different copy.
+                    if (!result || result.ok) instanceId = null;
+                    return result;
+                }).finally(() => { pending = null; });
+            return pending;
+        };
         const renderSetupPreview = input.renderSetupPreview;
         const setup = buildWidgetCandidateSetup({
             candidate, context, audience: 'personal', mode: { kind: 'add', submitLabel: input.labels.submit },

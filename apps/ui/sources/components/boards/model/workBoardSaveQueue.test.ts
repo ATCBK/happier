@@ -16,6 +16,65 @@ function boundary() {
 }
 
 describe('WorkBoard Account Artifact save queue', () => {
+    it.each(['inputs', 'size'] as const)('does not acknowledge an older uncertain add as a changed %s request', async changed => {
+        const b = boundary();
+        let readable = true;
+        const store = createWorkBoardAccountStore({ ...b.transport,
+            read: async (id, options) => { if (!readable) throw new Error('Read-back unavailable'); return b.transport.read(id, options); },
+            update: async input => { await b.transport.update(input); readable = false; throw new Error('Acknowledgement lost'); },
+        }, () => true);
+        const instance = { v: 1, id: 'changed-copy', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } as const;
+        const ref = { surface: { serverId: 'home-a', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'b1' } }, instanceId: instance.id } as const;
+        expect(await store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref, instance, size: 'medium' })).toMatchObject({ status: 'unknown' });
+        const committed = b.rows.get('b1');
+        readable = true;
+        expect(await store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref,
+            instance: changed === 'inputs' ? { ...instance, bindings: { session: { kind: 'value', value: 'changed-session' } } } : instance,
+            size: changed === 'size' ? 'wide' : 'medium',
+        })).toMatchObject({ status: 'refused', code: 'widget_instance_already_exists' });
+        expect(b.rows.get('b1')).toBe(committed);
+    });
+    it('reads back a committed add after its acknowledgement is lost', async () => {
+        const b = boundary();
+        const store = createWorkBoardAccountStore({ ...b.transport, update: async input => {
+            await b.transport.update(input);
+            throw new Error('Acknowledgement lost');
+        } }, () => true);
+        const instance = { v: 1, id: 'lost-ack', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } as const;
+        const ref = { surface: { serverId: 'home-a', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'b1' } }, instanceId: instance.id } as const;
+        expect(await store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref, instance })).toMatchObject({ status: 'applied' });
+        expect(store.queue.getState()).toEqual({ pending: [], failure: null });
+        expect(store.getBoard('b1')?.widgets?.map(item => item.instance.id)).toEqual(['lost-ack']);
+        expect(b.rows.get('b1')?.revision.bodyVersion).toBe(2);
+    });
+    it.each(['before_retry', 'during_retry'] as const)('reconciles one add when its original write commits %s', async lateCommit => {
+        const b = boundary();
+        let original: Parameters<typeof b.transport.update>[0] | undefined;
+        let readUnavailable = true;
+        const store = createWorkBoardAccountStore({ ...b.transport,
+            read: async (id, options) => {
+                if (original && readUnavailable) throw new Error('Read-back unavailable');
+                return b.transport.read(id, options);
+            },
+            update: async input => {
+                if (!original) { original = input; throw new Error('Write outcome unknown'); }
+                if (lateCommit === 'during_retry') await b.transport.update(original);
+                return b.transport.update(input);
+            },
+        }, () => true);
+        const instance = { v: 1, id: 'late-copy', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } as const;
+        const ref = { surface: { serverId: 'home-a', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'b1' } }, instanceId: instance.id } as const;
+        expect(await store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref, instance })).toMatchObject({ status: 'unknown' });
+        // An unavailable read-back cannot authorize another write.
+        expect(await store.queue.retry()).toMatchObject({ status: 'unknown' });
+        expect(b.rows.get('b1')?.revision.bodyVersion).toBe(1);
+        readUnavailable = false;
+        if (lateCommit === 'before_retry') await b.transport.update(original!);
+        expect(await store.queue.retry()).toMatchObject({ status: 'applied' });
+        expect(store.queue.getState()).toEqual({ pending: [], failure: null });
+        expect(store.getBoard('b1')?.widgets?.map(item => item.instance.id)).toEqual(['late-copy']);
+        expect(b.rows.get('b1')?.revision.bodyVersion).toBe(2);
+    });
     it('keeps every external-store snapshot stable when an inventory refresh changes nothing', async () => {
         const b = boundary();
         const releaseView = b.store.retainView(() => () => {}, 'headers');

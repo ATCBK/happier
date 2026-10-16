@@ -20,7 +20,6 @@ import { WidgetPreviewWell, WidgetFlowPanel } from '@/components/widgets/flow/Wi
 import { WidgetPreviewStage } from '@/components/widgets/flow/WidgetPreviewStage';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
-import { useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
@@ -108,14 +107,17 @@ export function WidgetSetupStep(props: Readonly<{
     const [pickedOptions, setPickedOptions] = React.useState<Readonly<Record<string, readonly WidgetSetupValue[]>>>({});
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
-    // The Add pane stays open after an Add (another can follow): its button then offers another copy.
-    const [added, setAdded] = React.useState(false);
-    const pendingHomeIds = React.useMemo(() => busy && props.serverId ? [props.serverId] : [], [busy, props.serverId]);
-    const homeUnreachable = useFailureExplainedByUnreachableHome(pendingHomeIds);
+    // Gallery counts and server echoes rebuild entries. The unresolved invocation
+    // keeps custody until its own receipt; a rebuilt entry cannot turn Retry into Add.
+    const submission = React.useRef<WidgetSetup['submit'] | null>(null);
+    // The Add pane stays open after acknowledgement. Approval keeps custody of
+    // this request; only an applied Add offers an intentional additional copy.
+    const [completion, setCompletion] = React.useState<'added' | 'approvalPending' | null>(null);
     const resolution = React.useMemo(() => setup.resolve(draft), [draft, setup]);
     const blocker = describeWidgetSetupBlocker(setup.fields, resolution);
     // Finishable once nothing blocks; a per-viewer input is each viewer's own and never blocks.
-    const finishable = widgetSetupBlockingIssues(setup.fields, resolution).length === 0 && !props.blockedReason;
+    const finishable = completion !== 'approvalPending' && widgetSetupBlockingIssues(setup.fields, resolution).length === 0
+        && (!props.blockedReason || submission.current !== null);
     const pane = props.presentation === 'pane';
 
     // Choices come from the one options resolver, read only while this step is open.
@@ -154,10 +156,12 @@ export function WidgetSetupStep(props: Readonly<{
         setBusy(true);
         setError(null);
         try {
-            const result = await setup.submit(draft);
+            submission.current ??= setup.submit;
+            const result = await submission.current(draft);
             if (result.ok) {
+                submission.current = null;
                 AccessibilityInfo.announceForAccessibility?.(result.approvalPending ? t('widgetAdd.areaApprovalPending') : t('widgetAdd.saved', { widget: setup.title }));
-                if (!result.approvalPending) setAdded(true);
+                setCompletion(result.approvalPending ? 'approvalPending' : 'added');
                 props.onDone(result);
                 return;
             }
@@ -344,16 +348,15 @@ export function WidgetSetupStep(props: Readonly<{
         ...(props.footerAccessory && finishable ? { footerAccessory: props.footerAccessory } : {}),
         noteTestID: `${props.testID}.why`,
         error,
-        note: homeUnreachable ? t('settingsPlugins.targetSelection.unreachableThisHome')
-            : blocker ? t('widgetAdd.stillNeeded', { field: blocker.title }) : props.blockedReason ?? props.notice ?? consequence,
+        note: blocker ? t('widgetAdd.stillNeeded', { field: blocker.title }) : props.blockedReason ?? props.notice ?? consequence,
         ...(props.backLabel ? { backLabel: props.backLabel } : {}),
         primary: {
             testID: `${props.testID}.submit`,
-            label: pane && added ? t('widgetAdd.addAnother') : setup.submitLabel,
+            label: pane && completion === 'added' ? t('widgetAdd.addAnother') : setup.submitLabel,
             ...(pane ? { icon: 'plus' as const } : {}),
             onPress: () => { void submit(); },
             disabled: busy || !finishable,
-            busy: busy && !homeUnreachable,
+            busy,
             busyNote: pane ? t('widgetAdd.adding') : t('widgetAdd.savingInputs'),
         },
     } satisfies Omit<React.ComponentProps<typeof WidgetFlowPanel>, 'children'>;

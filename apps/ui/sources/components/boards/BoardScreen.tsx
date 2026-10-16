@@ -219,8 +219,12 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
         const ref = { surface: widgetSurface, instanceId: instance.id };
         ownAdds.current.add(instance.id);
         const outcome = await dispatchIntent({ kind: 'widget_add', boardId: board.id, ref, instance, ...(options.size ? { size: options.size } : {}) });
-        if (outcome.status !== 'applied') throw new Error(outcome.code);
+        if (outcome.status === 'pending') return { ok: true as const, approvalPending: true as const };
+        if (outcome.status !== 'applied') throw Object.assign(new Error(outcome.code), {
+            code: outcome.status === 'unknown' ? 'outcome_unknown' : outcome.code,
+        });
         if (options.place && mode === 'canvas') setPlacingKey(buildWorkBoardWidgetKeyV1(ref));
+        return { ok: true as const };
     }, [board.id, dispatchIntent, mode, widgetSurface]);
     const addWidgets = React.useMemo(() => ({ scope: widgetSurface, instances: widgetInstances, addInstance: addWidgetInstance }),
         [addWidgetInstance, widgetInstances, widgetSurface]);

@@ -20,6 +20,13 @@ import { useAcknowledgedWorkBoard, useDispatchWorkBoardIntent, useWorkBoard, use
 import { projectBoardMembership } from './boardMembership';
 import type { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest } from '@/sync/domains/artifacts/artifactTypes';
 import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { buildAccountWidgetAddSections } from '@/components/widgets/add/accountWidgetAddSections';
+import { WidgetSetupStep } from '@/components/widgets/add/WidgetSetupStep';
+import type { WidgetSetupSubmitResult } from '@/components/widgets/add/widgetSetupModel';
+import { selectBuiltinWidgetCandidates } from '@/components/widgets/widgetCatalog';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import type { AddToBoardWidgets } from '@/components/boards/header/AddToBoardPopover';
+import { runWidgetSetupCommand } from '@/components/widgets/surface/widgetSurfaceSetup';
 
 // HTTP, device credential storage and native theme are system boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
@@ -62,6 +69,8 @@ async function mountAccount(name: string, boards: readonly WorkBoardV1[], enable
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent(buildWorkBoardArtifactHeaderV1(board)),
         body: encodePlainArtifactStoredContent({ body: JSON.stringify(board) }), headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }]));
     let offline = false;
+    let loseWriteAck = false;
+    let blockArtifactReads = false;
     let releaseWrite: (() => void) | null = null;
     let writeGate = Promise.resolve();
     runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
@@ -72,6 +81,7 @@ async function mountAccount(name: string, boards: readonly WorkBoardV1[], enable
             declarationTransport: 'http-header-and-socket-auth-v1' } } });
         if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
+        if (path.startsWith('/v1/artifacts') && init?.method !== 'POST' && init?.method !== 'DELETE' && blockArtifactReads) throw new Error('Read-back unavailable');
         if (path === '/v1/artifacts' && init?.method !== 'POST') return json([...rows.values()]);
         const id = path.split('/')[3];
         const row = rows.get(id!);
@@ -94,17 +104,102 @@ async function mountAccount(name: string, boards: readonly WorkBoardV1[], enable
             if (request.expectedHeaderVersion !== row.headerVersion || request.expectedBodyVersion !== row.bodyVersion) return json({ success: false, error: 'version-mismatch' });
             const next = { ...row, header: request.header!, body: request.body!, headerVersion: row.headerVersion + 1, bodyVersion: (row.bodyVersion ?? 0) + 1 };
             rows.set(row.id, next);
+            if (loseWriteAck) { loseWriteAck = false; blockArtifactReads = true; throw new Error('Acknowledgement lost'); }
             return json({ success: true, headerVersion: next.headerVersion, bodyVersion: next.bodyVersion });
         }
         return row ? json(row) : json({ error: 'not_found' }, 404);
     });
     const wrapper = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={credentials}>{children}</InjectedAuthProvider>;
-    return { home, rows, wrapper, offline(value: boolean) { offline = value; }, hold() {
+    return { home, rows, wrapper, offline(value: boolean) { offline = value; }, loseNextWriteAcknowledgement() {
+        loseWriteAck = true;
+        return () => { blockArtifactReads = false; };
+    }, hold() {
         writeGate = new Promise<void>(resolve => { releaseWrite = resolve; }); return () => releaseWrite?.();
     } };
 }
 
 describe('mounted WorkBoard Action settlement', () => {
+    it('keeps the unknown outcome through the rendered Board add handler when read-back is unavailable', async () => {
+        const board = createWorkBoardV1({ id: 'board-add-unknown-message', name: 'Pending add' });
+        const b = await mountAccount('add-unknown-message', [board]);
+        const screen = await renderScreen(<BoardScreen boardId={board.id} />, { wrapper: b.wrapper });
+        await vi.waitFor(() => expect(screen.findByTestId('board-header.add')).not.toBeNull());
+        // Consume the real BoardScreen handler exposed to its Add surface; only
+        // HTTP loses the acknowledgement and rejects the subsequent read-back.
+        const widgets = screen.root.find(node => node.props.board?.id === board.id && typeof node.props.widgets?.addInstance === 'function')
+            .props.widgets as AddToBoardWidgets;
+        const instance = { v: 1, id: 'unknown-message-copy', definition: { kind: 'builtin', id: 'machine_fleet' }, bindings: {} } as const;
+        const restoreReads = b.loseNextWriteAcknowledgement();
+        try {
+            await act(async () => { expect(await runWidgetSetupCommand(() => widgets.addInstance(instance, { place: false }), 'widgetAdd.addFailed'))
+                .toEqual({ ok: false, message: 'entityDragDrop.preview.unknownDetail' }); });
+            expect(b.rows.get(board.id)?.bodyVersion).toBe(2);
+        } finally { restoreReads(); }
+    });
+    it('recovers the same uncertain add through the real Action ingress after read-back returns', async () => {
+        const board = createWorkBoardV1({ id: 'board-add-retry', name: 'Retry' });
+        const b = await mountAccount('add-retry', [board]);
+        const hook = await renderHook(() => ({ dispatch: useDispatchWorkBoardIntent(), board: useWorkBoard(board.id), save: useWorkBoardSaveState() }), { wrapper: b.wrapper });
+        await vi.waitFor(() => expect(hook.getCurrent().board?.id).toBe(board.id));
+        const instance = { v: 1, id: 'uncertain-copy', definition: { kind: 'builtin', id: 'machine_fleet' }, bindings: {} } as const;
+        const intent = { kind: 'widget_add', boardId: board.id, ref: {
+            surface: { serverId: b.home.id, accountId: 'board-account', owner: { kind: 'workBoard', boardId: board.id } }, instanceId: instance.id,
+        }, instance } as const;
+        const restoreReads = b.loseNextWriteAcknowledgement();
+        await act(async () => { expect(await hook.getCurrent().dispatch(intent)).toMatchObject({ status: 'unknown' }); });
+        const committed = b.rows.get(board.id);
+        expect(committed?.bodyVersion).toBe(2);
+        restoreReads();
+        await act(async () => { expect(await hook.getCurrent().dispatch(intent)).toMatchObject({ status: 'applied' }); });
+        expect(b.rows.get(board.id)).toBe(committed);
+        expect(hook.getCurrent().board?.widgets?.map(item => item.instance.id)).toEqual([instance.id]);
+        expect(hook.getCurrent().save).toEqual({ pending: [], failure: null });
+    });
+    it('offers another copy after acknowledgement and blocks button or keyboard Add while the real Action awaits approval', async () => {
+        const board = createWorkBoardV1({ id: 'board-add-pending', name: 'Add' });
+        const b = await mountAccount('add-pending', [board]);
+        const surface = { serverId: b.home.id, accountId: 'board-account', owner: { kind: 'workBoard', boardId: board.id } } as const;
+        const candidate = selectBuiltinWidgetCandidates().find(row => row.definition?.kind === 'builtin' && row.definition.id === 'machine_fleet')!;
+        const commandRef = { current: null as (() => void) | null };
+        const receipt: { current: WidgetSetupSubmitResult | null } = { current: null };
+        function AddStep() {
+            const dispatch = useDispatchWorkBoardIntent();
+            const current = useWorkBoard(board.id);
+            const sections = buildAccountWidgetAddSections({ candidates: [candidate], instances: current?.widgets?.map(item => item.instance) ?? [],
+                scope: surface, labels: { count: count => `${count} here`, submit: 'Add to board' }, addInstance: async (instance, size) => {
+                    const outcome = await dispatch({ kind: 'widget_add', boardId: board.id, ref: { surface, instanceId: instance.id }, instance, ...(size ? { size } : {}) });
+                    if (outcome.status === 'pending') return { ok: true, approvalPending: true };
+                    if (outcome.status !== 'applied') throw new Error(outcome.code);
+                    return { ok: true };
+                } });
+            const setup = sections.flatMap(section => section.entries)[0]!.setup!();
+            return <WidgetSetupStep setup={setup} phone={false} presentation="pane" commandRef={commandRef}
+                onDone={result => { receipt.current = result; }} testID="board-add-step" />;
+        }
+        const screen = await renderScreen(<AddStep />, { wrapper: b.wrapper });
+        await screen.pressByTestIdAsync('board-add-step.submit');
+        await vi.waitFor(() => expect(receipt.current).toEqual({ ok: true }));
+        expect(screen.findAllByType(RoundButton).find(node => node.props.testID === 'board-add-step.submit')!.props.title).toBe('widgetAdd.addAnother');
+        const committed = b.rows.get(board.id);
+        expect(committed?.bodyVersion).toBe(2);
+        await act(async () => { storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+            actions: { 'boards.apply': { approvalRequiredSurfaces: ['ui'] } } }) } }); });
+        await screen.pressByTestIdAsync('board-add-step.submit');
+        await vi.waitFor(() => expect(receipt.current).toEqual({ ok: true, approvalPending: true }));
+        expect(screen.findByTestId('board-add-step.submit')!.props.disabled).toBe(true);
+        expect(b.rows.get(board.id)).toBe(committed);
+        const approvals = [...b.rows.values()].filter(row => row.id !== board.id);
+        expect(approvals).toHaveLength(1);
+        // Even if policy later permits direct writes, the existing request still
+        // belongs to approval. Repeated controls cannot silently create another copy.
+        await act(async () => { storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1 }) } }); });
+        await act(async () => { commandRef.current?.(); });
+        await screen.pressByTestIdAsync('board-add-step.submit');
+        await vi.waitFor(() => expect(screen.findAllByType(RoundButton).find(node => node.props.testID === 'board-add-step.submit')!.props.loading).toBe(false));
+        expect(receipt.current).toEqual({ ok: true, approvalPending: true });
+        expect(b.rows.get(board.id)).toBe(committed);
+        expect([...b.rows.values()].filter(row => row.id !== board.id)).toEqual(approvals);
+    });
     it.each([false, true])('opens a fresh client before Account activation and renews after restoration (Session index ready: %s)', async isDataReady => {
         const board = createWorkBoardV1({ id: 'fresh-client', name: 'Fresh client Board' });
         const b = await mountAccount('fresh-client', [board]);

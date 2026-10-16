@@ -54,7 +54,7 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
         return page;
     } };
     const port = createWorkBoardArtifactPortV1(inventoryTransport, { shouldContinue, onBoard: acceptBoard });
-    const queue = createWorkBoardSaveQueue({ port: { read: port.read, apply: async (intent, signal) => {
+    const queue = createWorkBoardSaveQueue({ port: { readBoard: port.readBoard, apply: async (intent, signal) => {
         const result = await port.apply(intent, signal);
         writes++;
         const id = intent.kind === 'create' ? intent.board.id : intent.boardId;

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { WORK_BOARD_ARTIFACT_KIND_V1, type WorkBoardArtifactTransportV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 import { WorkBoardActionOutputSchemasV1 } from '@happier-dev/protocol/boards/actionsV1';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { WorkBoardIntentV1, WorkBoardV1, WorkBoardsV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import { useOptionalAuth } from '@/auth/context/AuthContext';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
@@ -136,11 +137,11 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
                 return { status: 'refused', code: isCurrent() ? 'board_action_unavailable' : 'board_scope_retired' };
             }
             const sizeOutcome = intent.kind === 'widget_size' ? classifyWidgetDefinitionCommandResult('widgets.item.size.set', result) : null;
-            if (sizeOutcome?.kind === 'approvalPending' && intent.kind === 'widget_size') {
+            if (sizeOutcome?.kind === 'approvalPending' || !sizeOutcome && result.ok && ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) {
                 queue.dismissFailure();
-                publishPresentationNotice({ key: `${intent.boardId}:${intent.ref.instanceId}:size`, severity: 'info',
+                publishPresentationNotice({ key: intent.kind === 'widget_size' ? `${intent.boardId}:${intent.ref.instanceId}:size` : 'board:approval', severity: 'info',
                     message: t('widgetAdd.areaApprovalPending') });
-                // Approval owns the request now; no optimistic or persisted size acknowledgement is fabricated.
+                // Approval owns the request now; no optimistic or persisted acknowledgement is fabricated.
                 return { status: 'pending', code: 'approval_required' };
             }
             if (sizeOutcome?.kind === 'applied' || !sizeOutcome && result.ok && WorkBoardActionOutputSchemasV1['boards.apply'].safeParse(result.result).success)
