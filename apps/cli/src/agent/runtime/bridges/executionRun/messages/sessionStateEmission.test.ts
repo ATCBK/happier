@@ -154,6 +154,13 @@ describe('createExecutionRunControllerMessageHandler', () => {
       },
     });
     const options = { localId: 'native-fact', provenance: { kind: 'non_dependent' as const, source: 'external' as const } };
+    const reservation = projection.enqueueAgentMessageCommitted!('codex', {
+      type: 'output', data: { type: 'progress', marker: 'source_fact_consumed', reason: 'host_prompt_echo' },
+    }, { ...options, localId: 'native-echo-reservation' });
+    await Promise.resolve();
+    expect(written).toMatchObject([{ body: { type: 'output', sidechainId: 'sidechain-exact' } }]);
+    await expect(reservation).resolves.toEqual({ persisted: true, delivered: false });
+    written.length = 0;
     const publication = projection.enqueueAgentMessageCommitted!('codex', {
       type: 'message', message: 'Run fact', sidechainId: 'untrusted-sidechain',
     }, options);
@@ -165,6 +172,9 @@ describe('createExecutionRunControllerMessageHandler', () => {
     current = false;
     await expect(projection.enqueueAgentMessageCommitted!('codex', { type: 'message', message: 'stale' }, options))
       .rejects.toMatchObject({ code: 'execution_run_transcript_custody_unavailable' });
+    await expect(projection.enqueueAgentMessageCommitted!('codex', {
+      type: 'output', data: { type: 'progress', marker: 'source_fact_consumed', reason: 'host_prompt_echo' },
+    }, options)).rejects.toMatchObject({ code: 'execution_run_transcript_custody_unavailable' });
     expect(written).toHaveLength(1);
   });
 

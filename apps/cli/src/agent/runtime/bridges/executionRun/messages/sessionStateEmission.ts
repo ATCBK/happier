@@ -36,6 +36,21 @@ type ExecutionRunSidechainEnqueue<TRest extends unknown[], TResult> = (
   ...rest: TRest
 ) => Promise<TResult>;
 
+export async function runWithExecutionRunTranscriptCustody<T>(args: Readonly<{
+  controller: ExecutionRunBackendController;
+  isCurrent(): boolean;
+  requiresAcceptedInput?: boolean;
+  write(): Promise<T>;
+}>): Promise<T> {
+  if (!args.isCurrent() || args.controller.cancelled) throw createExecutionRunTranscriptCustodyError();
+  const acceptance = args.controller.pendingInputAcceptance;
+  if (args.requiresAcceptedInput !== false && acceptance && await acceptance !== 'accepted') {
+    throw createExecutionRunTranscriptCustodyError();
+  }
+  if (!args.isCurrent() || args.controller.cancelled) throw createExecutionRunTranscriptCustodyError();
+  return await args.write();
+}
+
 export function createExecutionRunTranscriptProjection<TRest extends unknown[], TResult>(args: Readonly<{
   controller: ExecutionRunBackendController;
   sidechainId: string;
@@ -48,11 +63,13 @@ export function createExecutionRunTranscriptProjection<TRest extends unknown[], 
   const enqueue = args.session.enqueueAgentMessageCommitted;
   if (!enqueue) return Object.freeze({});
   return Object.freeze({
-    async enqueueAgentMessageCommitted(provider: ACPProvider, body: ACPMessageData, ...rest: TRest) {
-      if (!args.isCurrent() || args.controller.cancelled) throw createExecutionRunTranscriptCustodyError();
-      const acceptance = args.controller.pendingInputAcceptance;
-      if (acceptance && await acceptance !== 'accepted') throw createExecutionRunTranscriptCustodyError();
-      return await enqueue(provider, { ...body, sidechainId: args.sidechainId }, ...rest);
+    enqueueAgentMessageCommitted(provider: ACPProvider, body: ACPMessageData, ...rest: TRest) {
+      return runWithExecutionRunTranscriptCustody({ ...args,
+        // Native SDKs reserve this content-free echo fact before transport acceptance.
+        requiresAcceptedInput: !(body.type === 'output' && body.data.type === 'progress'
+          && body.data.marker === 'source_fact_consumed' && body.data.reason === 'host_prompt_echo'),
+        write: () => enqueue(provider, { ...body, sidechainId: args.sidechainId }, ...rest),
+      });
     },
   });
 }
