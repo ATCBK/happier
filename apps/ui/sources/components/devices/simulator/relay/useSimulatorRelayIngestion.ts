@@ -136,6 +136,9 @@ export function useSimulatorRelayIngestion(
     viewerCapabilitiesRef.current = viewerCapabilities;
 
     const openedStreamIdentityKeyRef = React.useRef<string | null>(null);
+    // One mounted subscriber may reuse its daemon stream id after hide/show or retry.
+    // A late successful start still owes Stop; finish it before activating that id again.
+    const previousOpenRef = React.useRef<Promise<void> | null>(null);
 
     const {
         transport,
@@ -246,7 +249,8 @@ export function useSimulatorRelayIngestion(
             }, remainingMs / 2);
         };
 
-        const unsubscribe = transport.onEnvelope((raw) => {
+        let unsubscribe = () => {};
+        const subscribe = () => transport.onEnvelope((raw) => {
             if (disposed || ended) return;
             const parsed = MachineLiveStreamRelayEnvelopeV1Schema.safeParse(raw);
             if (!parsed.success) return;
@@ -292,13 +296,21 @@ export function useSimulatorRelayIngestion(
             }
         });
 
-        void openMachineLiveStreamRelayClient({
+        const previousOpen = previousOpenRef.current;
+        const open = () => openMachineLiveStreamRelayClient({
             ...clientInput,
             onAuthorized: (request) => {
                 if (request.authorization) scheduleRenewal(request.authorization.payload.exp);
             },
-        })
+        });
+        const completion = (async () => {
+            if (previousOpen) await previousOpen;
+            if (disposed) return;
+            unsubscribe = subscribe();
+            return await open();
+        })()
             .then((result) => {
+                if (!result) return;
                 // Cleanup can precede registration at the source. Stop the exact
                 // viewer again when a late successful start becomes reachable.
                 if (disposed) { if (result.ok) stop(); return; }
@@ -314,6 +326,7 @@ export function useSimulatorRelayIngestion(
                 openSettled = true;
                 if (disposed) unsubscribe();
             });
+        previousOpenRef.current = completion;
 
         return () => {
             disposed = true;

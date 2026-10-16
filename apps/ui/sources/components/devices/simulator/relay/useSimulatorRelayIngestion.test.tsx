@@ -155,6 +155,52 @@ describe('useSimulatorRelayIngestion', () => {
         if (platformOsDescriptor) Object.defineProperty(Platform, 'OS', platformOsDescriptor);
     });
 
+    it.each(['hide/show', 'retry'] as const)('orders a reused stream behind a delayed start and its final Stop: %s', async (transition) => {
+        const fake = createFakeTransport();
+        const live = new Set<string>();
+        let finishFirst!: () => void;
+        let starts = 0;
+        const transport: SimulatorRelayTransport = {
+            ...fake.transport,
+            send: (event, envelope) => {
+                fake.transport.send(event, envelope);
+                if (envelope.message.kind === 'control' && envelope.message.control.kind === 'stop') {
+                    live.delete(envelope.message.control.streamId);
+                }
+            },
+        };
+        const input: UseSimulatorRelayIngestionInput = {
+            ...baseInput(transport),
+            startDaemonRelay: async ({ startRequest }) => {
+                starts += 1;
+                live.add(startRequest.streamId);
+                if (starts === 1) await new Promise<void>(resolve => { finishFirst = resolve; });
+                return { ok: true, streamId: startRequest.streamId };
+            },
+        };
+        const hook = await renderHook((props: UseSimulatorRelayIngestionInput) => useSimulatorRelayIngestion(props), { initialProps: input });
+        expect(live.has(STREAM_ID)).toBe(true);
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(1))));
+        const held = hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl;
+        if (transition === 'hide/show') {
+            await hook.rerender({ ...input, enabled: false });
+            await hook.rerender(input);
+        } else {
+            await act(async () => hook.getCurrent().retry());
+        }
+        await act(async () => { finishFirst(); });
+        // The daemon's Stop addresses the current entry by id, so a late Stop must
+        // finish before a replacement with that id can become active.
+        expect(live.has(STREAM_ID)).toBe(true);
+        expect(starts).toBe(2);
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]).toMatchObject({ phase: 'reconnecting', lastFrameUrl: held });
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(2, { payloadBase64: 'BAUG' }))));
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.phase).toBe('playing');
+        await hook.unmount();
+        expect(live.size).toBe(0);
+        expect(fake.listenerCount()).toBe(0);
+    });
+
     it('retries the same source on its existing transport, retaining the frame until fresh pixels arrive', async () => {
         const fake = createFakeTransport();
         const openedSources: (string | undefined)[] = [];
