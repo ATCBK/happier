@@ -117,6 +117,8 @@ export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z.strictObje
     workspace: z.optional(WorkspaceAddressV1Schema),
     cwd: z.optional(WorkspaceRefV1WriteSchema.shape.rootPath),
     declaration: z.optional(ProjectServiceDeclarationRefV1Schema),
+    // Captured by the admitted native start; omission grants no execution class.
+    execution: z.optional(z.enum(['primary', 'portable'])),
     // Observed managed lifetime is separate from an available launcher action/HTTP readiness.
     serviceState: z.optional(z.enum(['starting', 'running', 'detecting', 'healthy', 'unhealthy', 'stopping', 'stopped', 'failed'])),
     readiness: z.optional(z.enum(['ready', 'not_ready', 'not_reported'])),

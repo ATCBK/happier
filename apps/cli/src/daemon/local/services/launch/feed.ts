@@ -93,6 +93,7 @@ function managedTarget(handle: ProjectManagedServiceHandle): LocalServiceLaunchT
         workspace: { serverId: handle.workspace.serverId, workspaceId: handle.workspace.id,
             machineId: handle.workspace.machineId, rootPath: handle.workspace.rootPath },
         declaration: handle.declaration, cwd: handle.cwd,
+        ...(handle.execution ? { execution: handle.execution } : {}),
         title: formatLocalServiceLauncherTitle(selection.kind === 'manifest' ? selection.name : selection.source.target),
         subtitle: handle.cwd, confidence: 'high',
         state: snapshot.state === 'starting' ? 'starting' : 'available',

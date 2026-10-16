@@ -76,6 +76,7 @@ describe('createLocalServiceLauncherFeed', () => {
             workspace: { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 },
             declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'native-service' } },
             cwd: process.cwd(), serviceId: 'native-service', specIdentity: 'native-service', isCurrent: () => true,
+            ...(nativePhase === 'unknown' ? { execution: 'portable' as const } : {}),
             requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
             processSpec: { mode: { kind: 'native',
                 instance: { adapter: { pluginId: 'fixture.plugin', localId: 'native-service' }, nativeResourceId: 'exact-instance' },
@@ -94,6 +95,8 @@ describe('createLocalServiceLauncherFeed', () => {
                 unavailableReason: nativePhase === 'unknown' ? 'managed_service_native_state_unknown' : 'managed_service_native_cleanup_unconfirmed',
             })]);
             expect(owner.listProjectServices()).toEqual([handle]);
+            if (nativePhase === 'unknown') expect(snapshot.targets[0]).toHaveProperty('execution', 'portable');
+            else expect(snapshot.targets[0]).not.toHaveProperty('execution');
         } finally { await handle.stop(); await owner.dispose(); }
     });
 
