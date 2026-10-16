@@ -8,6 +8,7 @@ import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFram
 import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { t } from '@/text';
 import {
   UsageResetCelebration,
@@ -356,7 +357,12 @@ function CapacityCell(
   const usedUpDetail = cell.excluded === null && staleDetail === null && usedUp && countdown
     ? `${t('usage.board.plans.cellUsedUp')} · ${countdown}`
     : null;
-  const detail = cell.excluded ?? staleDetail ?? usedUpDetail;
+  // An account that answered with no comparable window (a mailbox, a service without an allowance) says
+  // so; a read still in flight, not yet read or failed keeps the quiet dash.
+  // A `not_loaded` placeholder is not an answer: only an observed empty result gets the negative caption.
+  const current = cell.account.read?.current;
+  const noAllowance = remaining === null && current != null && wasConnectedServiceQuotaObserved(current);
+  const detail = cell.excluded ?? staleDetail ?? usedUpDetail ?? (noAllowance ? t('usage.board.plans.cellNoAllowance') : null);
   const value =
     remaining === null
       ? '—'

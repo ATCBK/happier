@@ -14707,6 +14707,7 @@ settingsSession: {
             capacityNoReadsReason: "连接订阅账号即可查看每个套餐的剩余额度。",
             openConnectedServices: "已连接的服务",
             cellUnknown: "未报告",
+            cellNoAllowance: "未报告额度",
             cellUsedUp: "已用完",
             cellLeft: ({ percent }: { percent: string | number }) => `剩余 ${percent}`,
             cellStale: ({ time }: { time: string | number }) => `上次读取 ${time}`,

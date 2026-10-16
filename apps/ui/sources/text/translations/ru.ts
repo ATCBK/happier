@@ -15016,6 +15016,7 @@ settingsSession: {
             capacityNoReadsReason: "Подключите аккаунт с подпиской, чтобы видеть остаток каждого тарифа.",
             openConnectedServices: "Подключённые сервисы",
             cellUnknown: "нет данных",
+            cellNoAllowance: "лимит не сообщён",
             cellUsedUp: "исчерпан",
             cellLeft: ({ percent }: { percent: string | number }) => `осталось ${percent}`,
             cellStale: ({ time }: { time: string | number }) => `последнее чтение ${time}`,

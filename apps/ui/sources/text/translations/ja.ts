@@ -15359,6 +15359,7 @@ settingsSession: {
             capacityNoReadsReason: "サブスクリプションアカウントを接続すると、各プランの残りが表示されます。",
             openConnectedServices: "接続済みサービス",
             cellUnknown: "未報告",
+            cellNoAllowance: "上限の報告なし",
             cellUsedUp: "使い切り",
             cellLeft: ({ percent }: { percent: string | number }) => `残り ${percent}`,
             cellStale: ({ time }: { time: string | number }) => `最終読み込み ${time}`,

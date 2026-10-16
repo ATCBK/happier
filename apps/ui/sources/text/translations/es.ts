@@ -15086,6 +15086,7 @@ settingsSession: {
             capacityNoReadsReason: "Conecta una cuenta de suscripción para ver lo que le queda a cada plan.",
             openConnectedServices: "Servicios conectados",
             cellUnknown: "sin datos",
+            cellNoAllowance: "sin límite informado",
             cellUsedUp: "agotado",
             cellLeft: ({ percent }: { percent: string | number }) => `quedan ${percent}`,
             cellStale: ({ time }: { time: string | number }) => `leído por última vez ${time}`,

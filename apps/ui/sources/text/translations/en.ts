@@ -18701,6 +18701,7 @@ const enUsage = {
       capacityNoReadsReason: "Connect a subscription account to see what each plan has left.",
       openConnectedServices: "Connected services",
       cellUnknown: "not reported",
+      cellNoAllowance: "no allowance reported",
       cellUsedUp: "used up",
       cellLeft: ({ percent }: { percent: string | number }) => `${percent} left`,
       cellStale: ({ time }: { time: string | number }) => `last read ${time}`,

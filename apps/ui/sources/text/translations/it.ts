@@ -15457,6 +15457,7 @@ settingsSession: {
             capacityNoReadsReason: "Collega un account in abbonamento per vedere cosa resta a ogni piano.",
             openConnectedServices: "Servizi collegati",
             cellUnknown: "non riportato",
+            cellNoAllowance: "nessun limite riportato",
             cellUsedUp: "esaurito",
             cellLeft: ({ percent }: { percent: string | number }) => `${percent} rimasto`,
             cellStale: ({ time }: { time: string | number }) => `ultima lettura ${time}`,

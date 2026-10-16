@@ -15214,6 +15214,7 @@ settingsSession: {
             capacityNoReadsReason: "Verbinde ein Abo-Konto, um zu sehen, was jedem Tarif bleibt.",
             openConnectedServices: "Verbundene Dienste",
             cellUnknown: "nicht gemeldet",
+            cellNoAllowance: "keine Kontingentangabe",
             cellUsedUp: "aufgebraucht",
             cellLeft: ({ percent }: { percent: string | number }) => `${percent} übrig`,
             cellStale: ({ time }: { time: string | number }) => `zuletzt gelesen ${time}`,

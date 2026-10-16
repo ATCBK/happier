@@ -169,6 +169,31 @@ it('names only pending accounts once in the held headline row, and drops it once
   expect((await render(settled)).findByTestId('capacity.reading')).toBeNull();
 });
 
+it.each([['loaded_data', true], ['not_loaded', false]] as const)('says only an account that reported no allowance has none to show (%s), never an unread placeholder (R5A-03)', async (state, observed) => {
+  const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
+  const query = normalizeUsageQuery({});
+  const recordKey = { providerId: 'anthropic', accountSubjectId: 'mail', subjectKind: 'account', quotaScope: 'account' } as const;
+  const read = ConnectedServiceQuotaGetResultV1Schema.parse({
+    source: { ref: { service, accountId: 'mail' }, bindingKind: 'account' },
+    current: { v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+      providerId: 'anthropic', accountSubject: { kind: 'providerSubject', id: 'mail' },
+      observedAtMs: observed ? Date.now() : 0, fetchedAtMs: observed ? Date.now() : 0, staleAfterMs: 60_000,
+      source: 'providerHttp', confidence: 'confirmed', state, meters: [], planLabel: null },
+    pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' },
+  });
+  const slice = resolveUsagePageAggregation({ queries: [query], quota: { status: 'available', value: [read] } }).results[0]!;
+  const model = { requestedQuery: null, shownQuery: null, slice, pending: false, error: null,
+    freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} } satisfies UsageWidgetBodyModel;
+  const { UsageCapacityWidget } = await import('./UsageCapacityWidget');
+  const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+    <UsageCapacityWidget id="usage_capacity" model={model} slice={slice} query={query} serverId="home" testID="capacity" />
+  </InjectedAuthProvider>);
+  expect(screen.findHostByTestId('capacity.cell.mail')).not.toBeNull();
+  // An observed empty result says so; a not-yet-read placeholder keeps the quiet reading state.
+  if (observed) expect(screen.getTextContent()).toContain(t('usage.board.plans.cellNoAllowance'));
+  else expect(screen.getTextContent()).not.toContain(t('usage.board.plans.cellNoAllowance'));
+});
+
 it.each(['pending', 'not_loaded'] as const)('shows an observed headline with first-read progress (%s) and replaces it when a tighter account answers', async status => {
   const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
   const query = normalizeUsageQuery({});

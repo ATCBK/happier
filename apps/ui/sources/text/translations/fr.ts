@@ -14958,6 +14958,7 @@ settingsSession: {
             capacityNoReadsReason: "Connecte un compte d'abonnement pour voir ce qu'il reste à chaque forfait.",
             openConnectedServices: "Services connectés",
             cellUnknown: "non communiqué",
+            cellNoAllowance: "aucune limite communiquée",
             cellUsedUp: "épuisé",
             cellLeft: ({ percent }: { percent: string | number }) => `${percent} restant`,
             cellStale: ({ time }: { time: string | number }) => `lu pour la dernière fois ${time}`,
