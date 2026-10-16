@@ -35,6 +35,7 @@ import type {
     SessionServerStartDraftTarget,
 } from './serverStartDraftComposer';
 import {
+    findSessionServerStartCandidateForDirectory,
     presentSessionServerStartCandidate,
     resolveSessionServerStartCandidateSelection,
 } from './serverStartDraftCandidateSelection';
@@ -164,6 +165,10 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
         seededDirectory ?? selectedPlacement.directory ?? machine?.metadata?.homeDir ?? ''
     ));
     const [directoryEdited, setDirectoryEdited] = React.useState(false);
+    // A row reads as selected only while the working directory is that checkout; the chosen Machine and Home outlive it.
+    const directoryCandidateIndex = findSessionServerStartCandidateForDirectory({
+        candidates: props.seed.candidates, target: selectedTarget, directory,
+    });
     const [error, setError] = React.useState(false);
 
     React.useEffect(() => {
@@ -268,7 +273,7 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
                             : `${candidate.serverId}:${candidate.machineId}:${candidate.rootPath}`}
                         title={presentation.title}
                         subtitle={presentation.subtitle}
-                        selected={index === selectedCandidateIndex}
+                        selected={index === directoryCandidateIndex}
                         onPress={() => {
                             setError(false);
                             setSelectedCandidateIndex(index);
