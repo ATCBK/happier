@@ -82,7 +82,16 @@ leases. New acquisition refuses unavailable or replaced authority with a typed
 result; unknown operations on an older daemon cannot become an empty snapshot.
 Omitted child selection consumes the parent's applied model/auth reader, while
 explicit `agentDefault` and incompatible-Agent choice retain the canonical
-child-selection rules. The daemon's applied-parent reader and Run credential
+child-selection rules. Inheritance joins the Session's internal controls-installation
+notification, then the existing applied-selection registration promise. Complete
+explicit selections for every requested role do not read or wait for the parent.
+Cancellation, controls withdrawal or replacement,
+and fenced applied authority still refuse with
+`execution_run_parent_selection_unavailable` and `noRunCreated`. Local file
+diagnostics identify the unavailable reader or authority predicate. There is no
+separate public readiness probe or startup deadline; each attempt rechecks applied
+custody. A first parent turn alone does not certify the parallel daemon registration.
+The daemon's applied-parent reader and Run credential
 materialization resolve the accepted runner through canonical tracked Session
 identity, including wrapper launchers. The reader uses that Session's existing
 runtime-registry target; Session exit retires Run credential authority using its

@@ -385,6 +385,7 @@ function readRecordProperty(value: unknown, key: string): unknown {
 
 const SESSION_CONNECTION_STATE_EVENT = 'session-connection-state';
 const SESSION_SYNC_SERVER_CONTRACT_EVENT = 'session-sync-server-contract';
+const SESSION_RUNTIME_CONTROLS_EVENT = 'session-runtime-controls';
 const EXECUTION_RUN_WORKER_UPDATE_SOURCE_EVENT = 'execution-run-worker-update-source';
 type SessionSocketAckWriteEvent =
     | 'session-publisher-authority-check'
@@ -593,6 +594,7 @@ export class ApiSessionClient extends EventEmitter {
     private readonly semanticSessionEndMutationId = `session-end:${randomUUID()}`;
     private endSessionAndClosePromise: Promise<void> | null = null;
     private readonly sessionRuntimeControls: Partial<SessionRuntimeControls> = {};
+    private sessionRuntimeControlsSettled = false;
     readonly executionRuns: HappyMcpExecutionRunService;
     /** Existing native runtime accessor installed by applyRunnerMcpSessionContext. */
     declare getBackendTarget?: import('@/mcp/startHappyServer').HappyMcpSessionClient['getBackendTarget'];
@@ -1561,6 +1563,11 @@ export class ApiSessionClient extends EventEmitter {
             session: this,
             getSessionMetadata: () => this.getMetadataSnapshot(),
             sessionRuntimeControls: this.sessionRuntimeControls,
+            waitForSessionRuntimeControls: (signal) => this.waitForSessionRuntimeControls(signal),
+            waitForAppliedChildSelectionReader: async (signal) => (
+                await this.waitForSessionRuntimeControls(signal)
+                && typeof this.sessionRuntimeControls.readAppliedChildSelection === 'function'
+            ),
             enqueueSessionUserMessage: (request) => this.enqueueSessionUserMessage(request),
             enqueueUserTextMessageCommitted: (text, opts) => this.enqueueUserTextMessageCommitted(text, opts),
             enqueueAgentMessageCommitted: (provider, body, opts) =>
@@ -2058,10 +2065,33 @@ export class ApiSessionClient extends EventEmitter {
         this.wakePendingMaterialization();
     }
 
+    private async waitForSessionRuntimeControls(signal?: AbortSignal): Promise<boolean> {
+        const lifetime = signal
+            ? AbortSignal.any([signal, this.socketAckAbortController.signal])
+            : this.socketAckAbortController.signal;
+        if (lifetime.aborted || this.closed) return false;
+        if (this.sessionRuntimeControlsSettled) return true;
+        return await new Promise<boolean>((resolve) => {
+            const finish = (ready: boolean) => {
+                this.off(SESSION_RUNTIME_CONTROLS_EVENT, onControls);
+                lifetime.removeEventListener('abort', onAbort);
+                resolve(ready);
+            };
+            const onControls = () => finish(true);
+            const onAbort = () => finish(false);
+            this.on(SESSION_RUNTIME_CONTROLS_EVENT, onControls);
+            lifetime.addEventListener('abort', onAbort, { once: true });
+            if (lifetime.aborted || this.closed) finish(false);
+            else if (this.sessionRuntimeControlsSettled) finish(true);
+        });
+    }
+
     setSessionRuntimeControls(controls: SessionRuntimeControls | null): void {
         const hadGoalControls = typeof this.sessionRuntimeControls.setGoal === 'function'
             || typeof this.sessionRuntimeControls.clearGoal === 'function';
         applySessionRuntimeControls(this.sessionRuntimeControls, controls);
+        this.sessionRuntimeControlsSettled = true;
+        this.emit(SESSION_RUNTIME_CONTROLS_EVENT);
         this.sessionRuntimeControls.preparePendingMessageComposerAdmission = async (request) => (
             await this.transcriptApi.preparePendingMessageComposerAdmission(request)
         );
@@ -3953,6 +3983,12 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     async close() {
+        // Withdraw native controls before asynchronous disposal so startup
+        // observers can produce their terminal unsupported response while the
+        // reply transport is still available.
+        applySessionRuntimeControls(this.sessionRuntimeControls, null);
+        this.sessionRuntimeControlsSettled = true;
+        this.emit(SESSION_RUNTIME_CONTROLS_EVENT);
         this.presenceStopped = true;
         if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);
         this.presenceTimer = null;

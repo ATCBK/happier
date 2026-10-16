@@ -368,6 +368,53 @@ describe('startExecutionRun', () => {
       }
     },
   );
+  it.each([true, false])('joins parent startup only for an omitted Voice role (explicit commit: %s)', async explicitCommit => {
+    const runs = new Map<string, ExecutionRunState>();
+    const controllers = new Map<string, ExecutionRunController>();
+    const createRuntime = () => createProvisioningRuntime();
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime });
+    const backendTarget = { kind: 'builtInAgent', agentId: 'codex' } as const;
+    const chatSelection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'voice-chat' };
+    const commitSelection = { ...chatSelection, modelId: 'voice-commit' };
+    let releaseInstallation!: () => void;
+    const installation = new Promise<void>(resolve => { releaseInstallation = resolve; });
+    const startupWaits: boolean[] = [];
+    const starting = startExecutionRun({
+      params: { sessionId: 'parent_session_1', intent: 'voice_agent', backendTarget,
+        modelSelection: chatSelection, ...(explicitCommit ? { intentInput: { commitModelSelection: commitSelection } } : {}),
+        permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+        bootstrapMode: 'none' },
+      childSelectionContext: { lifecycle: 'attached', readAppliedParentSelection: async options => {
+        startupWaits.push(options?.waitForReady === true);
+        if (explicitCommit) throw new Error('Complete explicit Voice choices must never read parent startup');
+        if (!options?.waitForReady) return { status: 'unavailable' };
+        // Applied native parent configuration is an external runtime fact.
+        await installation;
+        return { status: 'applied', backendTarget, modelId: 'parent-model', connectedServices: null };
+      } },
+      parentProvider: 'codex', sendAcp: async () => {}, streamedTranscriptSession: null, createRuntime,
+      getNowMs: () => 1, budgetRegistry: null, runs, controllers, enqueueMarkerWrite: async () => {},
+      writeActivityMarker: async () => {}, finishRun: async () => {}, executeBoundedRun: async () => {},
+      send: async () => ({ ok: true }), voiceAgentManager,
+    });
+    try {
+      if (!explicitCommit) {
+        await vi.waitFor(() => expect(startupWaits).toEqual([true]));
+        expect(runs.size).toBe(0);
+        releaseInstallation();
+      }
+      const started = await starting;
+      expect(startupWaits).toEqual(explicitCommit ? [] : [true]);
+      expect(runs.get(started.runId)?.voiceAgentConfig).toMatchObject({
+        chatModelId: 'voice-chat', commitModelId: explicitCommit ? 'voice-commit' : 'parent-model',
+      });
+    } finally {
+      releaseInstallation();
+      await starting.catch(() => undefined);
+      await voiceAgentManager.dispose();
+    }
+  });
+
   it('refuses unsupported inherited Team Voice custody before publishing a Run', async () => {
     const runs = new Map<string, ExecutionRunState>();
     const controllers = new Map<string, ExecutionRunController>();

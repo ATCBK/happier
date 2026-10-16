@@ -7,6 +7,7 @@ import { readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/role
 import { SessionAccessGrantSetActionInputV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessActionsV1';
 import type { AccountSettings, ActionExecutorDeps, TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
 import { notifyDaemonConnectedServiceUsageLimitWaitResumeCancel } from '@/daemon/controlClient';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -154,6 +155,9 @@ export function registerSessionClientRuntimeHandlers(
         getCurrentWorkspaceWrites?: () => 'allow' | 'deny' | undefined;
         prepareWorkspaceWritesPolicy?: RoleWorkspaceWritesPolicyPreparer;
         sessionRuntimeControls?: SessionRuntimeControls | null;
+        waitForSessionRuntimeControls?: (signal?: AbortSignal) => Promise<boolean>;
+        /** Join the owning Session's initial control installation, without a separate startup deadline. */
+        waitForAppliedChildSelectionReader?: (signal: AbortSignal) => Promise<boolean>;
         enqueueSessionUserMessage: (request: Readonly<{
             callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1;
             text: string;
@@ -314,6 +318,7 @@ export function registerSessionClientRuntimeHandlers(
     let ownerAccountSettingsForRuntime: AccountSettings | null = null;
     let ownerAccountOperationContext: SavedSecretOperationContextV1 | undefined;
     let disposed = false;
+    const runtimeControlsLifetime = new AbortController();
     const ownerAccountIsCurrent = async () => {
         if (disposed) return false;
         const credentials = await readOwnerAccountCredentials();
@@ -357,8 +362,23 @@ export function registerSessionClientRuntimeHandlers(
         })
         : undefined;
     const readCodingPromptBehavior = () => params.sessionRuntimeControls?.readCodingPromptBehavior?.() ?? null;
-    const readAppliedChildSelection = async () => await params.sessionRuntimeControls?.readAppliedChildSelection?.()
-        ?? { status: 'unavailable' as const };
+    const readAppliedChildSelection = async (options?: Readonly<{ waitForReady?: boolean }>) => {
+        if (options?.waitForReady && !params.sessionRuntimeControls?.readAppliedChildSelection && !disposed) {
+            await params.waitForAppliedChildSelectionReader?.(runtimeControlsLifetime.signal);
+        }
+        const controls = params.sessionRuntimeControls;
+        const reader = controls?.readAppliedChildSelection;
+        if (disposed || !reader) {
+            const reason = controls ? 'applied_child_selection_reader_unavailable' : 'session_runtime_controls_unavailable';
+            logger.infoFile('[Session] Applied parent selection unavailable', {
+                sessionId: params.sessionId, runnerPid: process.pid, reason,
+            });
+            return { status: 'unavailable' as const };
+        }
+        const selection = await reader();
+        return disposed || params.sessionRuntimeControls?.readAppliedChildSelection !== reader
+            ? { status: 'unavailable' as const } : selection ?? { status: 'unavailable' as const };
+    };
     const sessionInteractionHost = parentSessionForTools
         ? {
             session: parentSessionForTools,
@@ -1104,5 +1124,6 @@ export function registerSessionClientRuntimeHandlers(
         }),
     });
     return { refreshDemandedMcpCatalog: ownerAccountSnapshots.refreshDemandedMcpCatalog,
-        dispose: async () => { disposed = true; await ownerAccountSnapshots.dispose(); await sessionHandlersRegistration.dispose(); } };
+        dispose: async () => { disposed = true; runtimeControlsLifetime.abort();
+            await ownerAccountSnapshots.dispose(); await sessionHandlersRegistration.dispose(); } };
 }

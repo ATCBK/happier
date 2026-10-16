@@ -113,8 +113,7 @@ export type ExecutionRunHostRunScopeBinding = Readonly<{
 }>;
 
 export type NativeAgentSessionInteractionHostBinding = Readonly<{
-    readAppliedChildSelection?: () => import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection
-        | Promise<import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection>;
+    readAppliedChildSelection?: import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelectionReader;
     /** Parent Session custody used by the hidden retained Voice interaction. */
     session: Pick<ApiSessionClient,
         | 'sessionId'

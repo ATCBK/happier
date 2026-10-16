@@ -16,7 +16,7 @@ import { buildBackendTargetKey } from '@happier-dev/protocol/backends/targets/ba
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ExecutionRunScmDiffSummaryInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
-import { readExecutionRunAppliedParentModelId, resolveExecutionRunChildSelection, type ResolvedExecutionRunChildSelection } from './runtime/openInputs';
+import { executionRunChildSelectionNeedsAppliedParent, readExecutionRunAppliedParentModelId, resolveExecutionRunChildSelection, type ResolvedExecutionRunChildSelection } from './runtime/openInputs';
 import type { AcpConfigOptionOverridesV1, BackendTargetRefV1, ConnectedServiceBindingsV2, ExecutionRunConnectedServicesLaunchV1, ExecutionRunUserTranscriptDirective, ExecutionRunBridgeLifecycleHookEventIdV1, ExecutionRunListRequest, ExecutionRunPublicState, ExecutionRunStartRequest, ExecutionRunResultContractV1, ProviderBoundModelRef, TeamCredentialProviderModelSelectionV1, SessionRunPromptReadActionIdV1, SessionRunPromptContextV1, SessionInputCausalPermissionAuthorityV1, SecretReferenceOverlayV1, StructuredQuestionAnswersV1 } from '@happier-dev/protocol';
 import { SessionRunPromptContextV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import type { SessionInputAdmissionResultV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -1878,8 +1878,11 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
       try {
         if (params.intent === 'scm_diff_summary' && params.sessionId !== null && !params.workflowRunId) {
           const input = ExecutionRunScmDiffSummaryInputV1Schema.parse(params.intentInput ?? {});
-          const parent = await Promise.resolve().then(() => this.sessionInteractionHost?.readAppliedChildSelection?.())
-            .catch(() => ({ status: 'unavailable' as const })) ?? { status: 'unavailable' as const };
+          const needsAppliedParent = executionRunChildSelectionNeedsAppliedParent({ ...params, lifecycle: 'attached' });
+          const parent = needsAppliedParent
+            ? await Promise.resolve().then(() => this.sessionInteractionHost?.readAppliedChildSelection?.({ waitForReady: true }))
+              .catch(() => ({ status: 'unavailable' as const })) ?? { status: 'unavailable' as const }
+            : { status: 'unavailable' as const };
           if (params.modelId === undefined && params.modelSelection === undefined && params.teamCredentialModel === undefined
             && params.childSelection === undefined && !params.profileId && params.connectedServices === undefined
             && !params.connectedServicesDefaultServiceIds?.length

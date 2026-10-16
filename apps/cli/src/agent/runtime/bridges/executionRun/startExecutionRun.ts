@@ -70,7 +70,7 @@ import type { ExecutionRunTranscriptPublisher } from './executionRunTranscriptPu
 import { isExecutionRunControllerCurrent, settleExecutionRunController } from './settleExecutionRunController';
 import { createExactTurnUsageAccumulator } from '@/usage/exactTurnUsage';
 import { assertExecutionRunStructuredOutputModelAllowed } from './structuredOutputAdmission';
-import { resolveExecutionRunChildSelection, type ExecutionRunAppliedParentSelection, type ResolvedExecutionRunChildSelection } from './runtime/openInputs';
+import { executionRunChildSelectionNeedsAppliedParent, resolveExecutionRunChildSelection, type ExecutionRunAppliedParentSelection, type ExecutionRunAppliedParentSelectionReader, type ResolvedExecutionRunChildSelection } from './runtime/openInputs';
 
 type SendAcp = ExecutionRunTranscriptPublisher;
 
@@ -249,7 +249,7 @@ type StartExecutionRunArgs = Readonly<{
   /** Host-private scope and opened-parent reader; never an authored Run input. */
   childSelectionContext?: Readonly<{
     lifecycle: 'attached' | 'independent';
-    readAppliedParentSelection?: () => Promise<ExecutionRunAppliedParentSelection> | ExecutionRunAppliedParentSelection;
+    readAppliedParentSelection?: ExecutionRunAppliedParentSelectionReader;
     resolvedSelection?: ResolvedExecutionRunChildSelection;
   }>;
   admitInheritedProviderSelection?: (selection: ResolvedExecutionRunChildSelection, runId: string) => Promise<void>;
@@ -444,14 +444,29 @@ async function startAdmittedExecutionRun(
   let parent: ExecutionRunAppliedParentSelection | undefined;
   try {
     const lifecycle = args.childSelectionContext?.lifecycle ?? 'independent';
-    if (lifecycle === 'attached' && !args.childSelectionContext?.resolvedSelection) {
+    const originalParams = args.params;
+    const voiceInput = originalParams.intent === 'voice_agent'
+      ? ExecutionRunVoiceAgentIntentInputV1Schema.parse(originalParams.intentInput ?? {}) : null;
+    const primaryModelId = voiceInput ? originalParams.modelId ?? originalParams.chatModelId : originalParams.modelId;
+    const voiceCommitSelectionInput = voiceInput ? {
+      backendTarget: originalParams.backendTarget,
+      lifecycle,
+      modelId: originalParams.commitModelId === 'default' ? undefined : originalParams.commitModelId,
+      modelSelection: originalParams.commitModelId === 'default' ? null : voiceInput.commitModelSelection,
+      connectedServices: originalParams.connectedServices,
+      connectedServicesDefaultServiceIds: originalParams.connectedServicesDefaultServiceIds,
+    } : null;
+    const needsAppliedParent = executionRunChildSelectionNeedsAppliedParent({ ...originalParams, lifecycle, modelId: primaryModelId })
+      || (voiceCommitSelectionInput !== null && executionRunChildSelectionNeedsAppliedParent(voiceCommitSelectionInput));
+    if (needsAppliedParent && !args.childSelectionContext?.resolvedSelection) {
       try {
-        parent = await args.childSelectionContext?.readAppliedParentSelection?.() ?? { status: 'unavailable' };
+        parent = await args.childSelectionContext?.readAppliedParentSelection?.({
+          waitForReady: true,
+        }) ?? { status: 'unavailable' };
       } catch {
         parent = { status: 'unavailable' };
       }
     }
-    const originalParams = args.params;
     const agentTargetKey = buildBackendTargetKeyV2(readBackendTargetRefV2(originalParams.backendTarget));
     const defaults = originalParams.childSelection === 'agentDefault'
       ? ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema.parse(originalParams.accountSettings?.providerDefaultModelSelectionsByAgentTargetKeyV1 ?? {}) : null;
@@ -461,7 +476,7 @@ async function startAdmittedExecutionRun(
     childSelection = args.childSelectionContext?.resolvedSelection ?? resolveExecutionRunChildSelection({
       backendTarget: originalParams.backendTarget,
       lifecycle,
-      modelId: originalParams.intent === 'voice_agent' ? originalParams.modelId ?? originalParams.chatModelId : originalParams.modelId,
+      modelId: primaryModelId,
       modelSelection: originalParams.modelSelection,
       teamCredentialModel: originalParams.teamCredentialModel,
       connectedServices: originalParams.connectedServices,
@@ -476,15 +491,9 @@ async function startAdmittedExecutionRun(
       }
       await args.admitInheritedProviderSelection(childSelection, runId);
     }
-    if (originalParams.intent === 'voice_agent') {
-      const voiceInput = ExecutionRunVoiceAgentIntentInputV1Schema.parse(originalParams.intentInput ?? {});
+    if (voiceCommitSelectionInput) {
       voiceCommit = resolveExecutionRunChildSelection({
-        backendTarget: originalParams.backendTarget,
-        lifecycle,
-        modelId: originalParams.commitModelId === 'default' ? undefined : originalParams.commitModelId,
-        modelSelection: originalParams.commitModelId === 'default' ? null : voiceInput.commitModelSelection,
-        connectedServices: originalParams.connectedServices,
-        connectedServicesDefaultServiceIds: originalParams.connectedServicesDefaultServiceIds,
+        ...voiceCommitSelectionInput,
         parent,
       });
       if (childSelection.teamCredentialModel || voiceCommit.teamCredentialModel) {
