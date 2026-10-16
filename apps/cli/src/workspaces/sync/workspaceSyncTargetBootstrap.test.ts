@@ -22,6 +22,7 @@ const rootOwnershipManager = createWorkspaceRootOwnershipManager({
   lockDirectory: join(tmpdir(), `workspace-sync-bootstrap-locks-${process.pid}`),
 });
 const crashChildPath = join(dirname(fileURLToPath(import.meta.url)), 'workspaceSyncTargetBootstrap.child.ts');
+const sourceRuntimePreloadPath = fileURLToPath(new URL('../../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url));
 const fakeMaterializationReceipt = {
   v: 1 as const,
   previousTargetName: null,
@@ -57,7 +58,7 @@ async function killBootstrapChildAtBoundary(input: Readonly<{
   staging: string;
   ready: string;
 }>): Promise<void> {
-  const child = spawn(process.execPath, ['--import', 'tsx', crashChildPath, input.mode, input.target, input.staging, input.ready], {
+  const child = spawn(process.execPath, ['--import', sourceRuntimePreloadPath, crashChildPath, input.mode, input.target, input.staging, input.ready], {
     cwd: join(dirname(crashChildPath), '../../..'),
     env: process.env,
     stdio: ['ignore', 'ignore', 'pipe'],
