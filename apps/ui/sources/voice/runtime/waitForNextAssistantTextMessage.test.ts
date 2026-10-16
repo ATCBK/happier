@@ -125,6 +125,29 @@ describe('waitForNextAssistantTextMessage', () => {
     }
   });
 
+  it('keeps the submitted input boundary when older replies hydrate after baseline capture', async () => {
+    const controller = new AbortController();
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    const waiting = waitForNextAssistantTextMessage('s1', baseline.baselineIds, baseline.baselineCount, controller.signal, 'voice-input');
+    const oldReply = { id: 'old', kind: 'agent-text', text: 'An earlier answer.', seq: 16, localId: null, createdAt: 1 } satisfies Message;
+    const user = { id: 'user', kind: 'user-text', text: 'My new question.', seq: 17, localId: 'voice-input', createdAt: 2 } satisfies Message;
+    try {
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [oldReply.id], messagesById: { [oldReply.id]: oldReply },
+      }) } });
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [oldReply.id, user.id], messagesById: { [oldReply.id]: oldReply, [user.id]: user },
+      }) } });
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      const reply = { id: 'new', kind: 'agent-text', text: 'The answer to your new question.', seq: 18, localId: null, createdAt: 3 } satisfies Message;
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [oldReply.id, user.id, reply.id], messagesById: { [oldReply.id]: oldReply, [user.id]: user, [reply.id]: reply },
+      }) } });
+      await expect(waiting).resolves.toBe(reply.text);
+    } finally { controller.abort(); await waiting; }
+  });
+
   it.each([['completed', 18], ['failed', undefined]] as const)('waits for the final reply when a %s projection arrives before the transcript (final sequence %s)', async (status, finalAssistantMessageSeq) => {
     const controller = new AbortController();
     const baseline = captureAssistantTextMessageBaseline('s1');

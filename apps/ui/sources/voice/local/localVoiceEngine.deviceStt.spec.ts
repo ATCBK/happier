@@ -26,6 +26,7 @@ import {
     localVoiceHomeId,
     acknowledgeLocalVoicePendingEnqueue,
     publishLocalVoiceAssistantMessage,
+    publishLocalVoiceSubmittedUserMessage,
     localVoiceSpeechOutputBoundary,
     readLocalVoiceHttpRequests,
 } from './localVoiceEngine.testHarness';
@@ -120,6 +121,7 @@ describe('local voice engine device STT (experimental)', () => {
             emitSpeechRecEvent('end');
         });
         localVoicePendingEnqueue.mockImplementationOnce(async request => {
+            await publishLocalVoiceSubmittedUserMessage(request);
             await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'reply-one', text: 'The weather will be sunny tomorrow.' });
             return acknowledgeLocalVoicePendingEnqueue(request);
         });
@@ -130,8 +132,8 @@ describe('local voice engine device STT (experimental)', () => {
             import('@/hooks/session/useSessionRealtimeTranscriptConsumer'),
         ]);
         const transcriptDetail = await renderHook(() => useSessionRealtimeTranscriptConsumer('s1', localVoiceHomeId));
+        const engine = await loadLocalVoiceEngineWithCompatState();
         try {
-            const engine = await loadLocalVoiceEngineWithCompatState();
             const { resolveSessionLiveConsumption } = await import('@/sync/runtime/sessionLiveConsumption');
             await engine.toggleLocalVoiceTurn('s1');
             emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'what is the forecast', confidence: 0.9 }] });
@@ -181,6 +183,7 @@ describe('local voice engine device STT (experimental)', () => {
             await initialTurn;
             await engine.stopLocalVoiceSession();
         } finally {
+            await engine.stopLocalVoiceSession();
             // The real hook retires its transcript-consumer registration before
             // the incumbent fixture ends this Account's connection lifetime.
             await transcriptDetail.unmount();

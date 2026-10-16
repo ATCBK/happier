@@ -118,10 +118,17 @@ export async function waitForNextAssistantTextMessageEntry(
 
     const check = () => {
       try {
+        const submittedMessages = submittedUserLocalId ? getSessionMessages(sessionId) : null;
+        const submittedUserIndex = submittedMessages?.findIndex((message) =>
+          message.kind === 'user-text' && message.localId === submittedUserLocalId) ?? -1;
+        // Demand may hydrate older replies after the baseline was captured.
+        // An admitted input supplies the canonical transcript boundary even
+        // before its turn projection or server sequence has arrived.
+        if (submittedUserLocalId && submittedUserIndex < 0) return;
         const matches = collectAssistantTextMessageEntriesSinceBaseline(
           sessionId,
           baselineIds,
-          baselineCount,
+          submittedUserLocalId ? submittedUserIndex + 1 : baselineCount,
         );
         if (matches.length > 0) {
           done(matches[0] ?? null);
@@ -131,9 +138,7 @@ export async function waitForNextAssistantTextMessageEntry(
         // sequence can bind this wait to a turn; latest-turn status can belong
         // to an older or concurrent input from another client.
         if (!submittedUserLocalId) return;
-        const user = getSessionMessages(sessionId).find((message) =>
-          message.kind === 'user-text' && message.localId === submittedUserLocalId);
-        const userSeq = user?.seq;
+        const userSeq = submittedMessages?.[submittedUserIndex]?.seq;
         if (typeof userSeq !== 'number') return;
         const turn = storage.getState().sessions[sessionId]?.sessionTurns?.turns.find((candidate) =>
           candidate.transcriptAnchors?.startUserMessageSeq === userSeq
