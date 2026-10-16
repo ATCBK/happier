@@ -6,9 +6,6 @@ import type { SessionReminderPresentation } from '@/sync/domains/session/organiz
 export const SESSION_ROW_ACTION_SELECT_ID = 'selection.select';
 /** Opens the row's Session: the first row of the Bots roster's compact menu. */
 export const SESSION_ROW_ACTION_OPEN_ID = 'row.open';
-export const SESSION_ROW_ACTION_OPEN_SPLIT_RIGHT_ID = 'openInSplitRight';
-export const SESSION_ROW_ACTION_OPEN_SPLIT_DOWN_ID = 'openInSplitDown';
-export const SESSION_ROW_ACTION_REVEAL_IN_CURRENT_SPLIT_ID = 'revealInCurrentSplit';
 
 export type SessionRowMoreMenuBuildParams = Readonly<{
     target: SessionActionTarget;

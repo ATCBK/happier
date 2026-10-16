@@ -1690,8 +1690,6 @@
     "sources/sync/domains/session/resume/resumeSessionPayload.test.ts",
     "sources/sync/domains/session/sequence/realtimeSessionSeq.test.ts",
     "sources/sync/domains/session/sessionPayloadConsumptionTelemetry.test.ts",
-    "sources/sync/domains/session/sessionSplitCanvasPersistence.test.ts",
-    "sources/sync/domains/session/sessionSplitCanvasScope.test.ts",
     "sources/sync/domains/session/sessionStorageKind.test.ts",
     "sources/sync/domains/session/sessionSurfaceVisibility.test.ts",
     "sources/sync/domains/session/spawn/spawnAttemptKey.test.ts",

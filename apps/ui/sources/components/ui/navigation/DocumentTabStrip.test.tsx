@@ -8,6 +8,9 @@ import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestH
 import { DocumentTabStrip } from './DocumentTabStrip';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 
+/** The node mock sees React Native's host ScrollView by its mocked host name. */
+const isHostScrollView = (type: unknown) => type === 'ScrollView';
+
 installPanelCommonModuleMocks();
 
 function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof createEntityDragDropRuntime>; variant: 'bar' | 'rail'; sourceOnly?: boolean }>) {
@@ -225,9 +228,9 @@ describe('DocumentTabStrip actions', () => {
             renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
             testIds={{ tab: id => `tab-${id}` }} />;
         const screen = await renderScreen(strip('a'), {
-            createNodeMock: element => (element.type === 'ScrollView' ? { scrollTo } : null),
+            createNodeMock: element => (isHostScrollView(element.type) ? { scrollTo } : null),
         });
-        const scroller = screen.root.findAll(node => node.type === 'ScrollView');
+        const scroller = screen.root.findAll(node => isHostScrollView(node.type));
         expect(scroller).toHaveLength(1);
         const inScroller = (key: string) => scroller[0]!.findAll(node => node.props?.testID === `tab-${key}`).length > 0;
         // Every unpinned tab stays in the strip (nothing is truncated behind a count); the pinned one leads outside it.

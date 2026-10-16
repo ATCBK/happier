@@ -4,7 +4,7 @@ import { getSessionName, resolveLockedSessionTitle } from './sessionUtils';
 
 /**
  * A session's name as every surface shows it (a tab, a drag preview, a chooser): the session title
- * owner's, locked titles included. One derivation, so a workspace tab and a Session canvas tab
+ * owner's, locked titles included. One derivation, so a workspace tab and a drag preview
  * cannot name the same session differently.
  */
 export function sessionDisplayTitle(source: Parameters<typeof getSessionName>[0] | null): string | null {

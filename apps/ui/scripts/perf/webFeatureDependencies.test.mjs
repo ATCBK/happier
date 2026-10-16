@@ -93,7 +93,6 @@ for (const [feature, entry, dependency] of [
 test('session presentation consumers share one demand boundary instead of eagerly importing the transcript', async () => {
     const entries = [
         'components/onboarding/tour/stage/StageSessionDetail.tsx',
-        'components/sessions/canvas/SessionCanvasLeaf.tsx',
         'components/workspaceCockpit/session/SessionCockpitSurfaceScreen.tsx',
         'components/sessions/panes/SessionInPane.tsx',
         'components/sessions/shell/SessionDestinationBody.tsx',

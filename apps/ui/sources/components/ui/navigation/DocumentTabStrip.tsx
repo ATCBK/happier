@@ -130,9 +130,9 @@ export type DocumentTabStripProps<T extends DocumentTabItem> = Readonly<{
     testIds?: DocumentTabStripTestIds;
     /**
      * `strip` (default): the Details strip — tabs scroll, each shows its pin and close.
-     * `bar`: the workspace bar (workspace lab T) — tabs shrink instead of scrolling (the consumer
-     * passes only the tabs that fit), a pinned tab is its mark alone, and close appears on hover and
-     * on the open tab in one always-reserved trailing slot. Pinning lives in the tab's menu.
+     * `bar`: the workspace bar (workspace lab T) — pinned marks stay fixed, while every other tab
+     * shrinks to its minimum width and then scrolls. Close appears on hover and on the open tab
+     * in one always-reserved trailing slot. Pinning lives in the tab's menu.
      * `rail`: the phone's open-tabs rail (phone-nav lab R) — the bar's anatomy as pills that scroll
      * sideways: each tab rests on a hairline, the open one takes the selection fill and its close,
      * and `subtitle` reads as a quiet count after the title (a split's panes).
