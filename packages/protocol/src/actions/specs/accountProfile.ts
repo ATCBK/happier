@@ -17,6 +17,7 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'account.name.set', approval: { result: 'required', flow: 'deferred' }, title: 'Set your name',
+    approvalPolicy: { uiConfirmation: 'direct' },
     description: 'Set what people should call you on this Home. Empty clears the name.',
     safety: 'danger', sideEffectClass: 'write', cliPath: ['account', 'name', 'set'],
     path: '/v1/account/profile', inputSchema: AccountNameUpdateRequestV1Schema,
@@ -25,6 +26,7 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'account.username.set', approval: { result: 'required', flow: 'deferred' }, title: 'Set your username',
+    approvalPolicy: { uiConfirmation: 'direct' },
     description: 'Set your own username when this Home’s Friends policy permits it.',
     safety: 'danger', sideEffectClass: 'write', cliPath: ['account', 'username', 'set'],
     path: '/v1/account/username', inputSchema: AccountUsernameUpdateRequestV1Schema,

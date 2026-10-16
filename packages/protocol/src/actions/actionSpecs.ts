@@ -3109,6 +3109,18 @@ const MANAGED_GITHUB_APP_ACTION_SPECS = MANAGED_GITHUB_APP_ACTION_IDS_V1.map(
     const isSafeRead = id === 'identity.githubApps.list';
     return {
       id, approval: { result: 'required' },
+      ...(['identity.githubApps.remove', 'identity.githubApps.create', 'identity.githubApps.manifestSetup.start',
+        'identity.githubApps.verifyInstallation'].includes(id)
+        ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
+      ...(id === 'identity.githubApps.update' ? { approvalPolicy: {
+        uiConfirmation: 'direct' as const,
+        uiConfirmationForInput: (input: unknown) => {
+          const parsed = MANAGED_GITHUB_APP_ACTION_INPUT_SCHEMAS_V1['identity.githubApps.update'].safeParse(input);
+          // Metadata is reversible; replaced or cleared write-only keys cannot
+          // be restored from the Home's redacted registration projection.
+          return !parsed.success || Object.keys(parsed.data.patch.secrets ?? {}).length > 0;
+        },
+      } } : {}),
       title: row.title,
       description: row.description,
       safety: row.safety,
@@ -4764,7 +4776,9 @@ const ARTIFACT_ACCESS_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly
   safety: id === 'artifact.access.grants.list' ? 'safe' : 'danger',
   sideEffectClass: id === 'artifact.access.grants.list' ? 'read' : 'write',
   // Anything a person can do here an agent can do too (owner rule; INT review F-18): the same
-  // authority and approval policy as Session access grants, so widening access still asks.
+  // authority and approval policy as Session access grants, so widening access still asks. The
+  // present user pressing Add or Remove in the share sheet is the confirmation, as for Session grants.
+  ...(id === 'artifact.access.grants.list' ? {} : { approvalPolicy: { uiConfirmation: 'direct' as const } }),
   requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],
   bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') },
   surfaces: { ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false },
@@ -4807,6 +4821,9 @@ const ARTIFACT_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly<{
   return {
     id, approval: { result: 'required' },
     ...(id === 'artifact.public_link.audit' ? { approvalPolicy: { agentDefault: 'egress' as const } } : {}),
+    // Opening the share sheet reads the document's links; a present-user read is not confirmed.
+    ...(id === 'artifact.public_link.list' ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
+    ...(id === 'artifact.public_link.create' ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
     title: ARTIFACT_ACTION_COPY[id][0], description: 'Read, publish and manage ordinary Account Artifacts through their mode-aware store.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read || id === 'artifact.public_link.list' ? 'read' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: id === 'artifact.publish_from_file' || id === 'artifact.export' ? 'machine' : 'account',
@@ -8692,7 +8709,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     cli: SESSION_DISCUSSION_CREATE_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.post', approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.discussion.post', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     title: 'Post a discussion message',
     description: 'Post one authored message to a human discussion. Every Session collaborator sees it. An Agent posts under its own authenticated execution Account with visible “via agent” attribution; it never posts as the person who asked.',
     safety: 'danger',
@@ -9243,7 +9260,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'POST', path: '/v2/sessions/access-grants/list' },
   },
   {
-    id: 'session.access.grant.set', approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.access.grant.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     title: 'Set Session access',
     safety: 'danger',
     requiredAuthority: 'account_automation',
@@ -9259,7 +9276,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'POST', path: '/v2/sessions/access-grants/set' },
   },
   {
-    id: 'session.access.grant.remove', approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.access.grant.remove', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     title: 'Remove Session access',
     safety: 'danger',
     requiredAuthority: 'account_automation',
@@ -9275,7 +9292,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'POST', path: '/v2/sessions/access-grants/remove' },
   },
   {
-    id: 'session.access.context.set', approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.access.context.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     title: 'Set the Team a Session belongs to',
     safety: 'danger',
     requiredAuthority: 'account_automation',
@@ -9360,7 +9377,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'GET', path: '/v1/sessions/:sessionId/public-share' },
   },
   {
-    id: 'session.public_link.create', approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.public_link.create', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     approvalNarrowing: {
       narrow(original, chosen) {
         const source = SessionPublicLinkCreateActionInputV1Schema.safeParse(original);
@@ -9387,7 +9404,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'POST', path: '/v1/public-shares' },
   },
   {
-    id: 'session.public_link.remove', approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.public_link.remove', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     title: 'Remove Session public link',
     safety: 'danger',
     requiredAuthority: 'account_automation',

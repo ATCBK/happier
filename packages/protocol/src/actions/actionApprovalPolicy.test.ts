@@ -34,6 +34,301 @@ async function loadRoutingResolver() {
 }
 
 describe('isApprovalRequiredByActionsSettings', () => {
+  it.each([
+    'artifact.access.grants.set',
+    'artifact.access.grants.remove',
+    'artifact.public_link.list',
+    'account.name.set',
+    'account.username.set',
+    'session.discussion.post',
+    'session.access.grant.set',
+    'session.access.grant.remove',
+    'session.access.context.set',
+    'session.public_link.remove',
+    'session.public_link.create',
+    'artifact.public_link.create',
+    'teams.archive',
+    'teams.restore',
+    'teams.members.suspend',
+    'teams.members.reactivate',
+    'teams.members.remove',
+    'teams.members.leave',
+    'teams.members.management.set',
+    'teams.groups.archive',
+    'teams.groups.members.remove',
+    'teams.invitations.create',
+    'teams.invitations.revoke',
+    'teams.invitations.reissue',
+    'teams.invitations.accept',
+    'teams.credentials.delete',
+    'teams.credentials.externalKeys.revoke',
+    'teams.credentials.externalKeys.revokeAll',
+    'teams.identity.connections.remove',
+    'home.identity.connections.remove',
+    'teams.externalGroupBindings.set',
+    'teams.externalGroupBindings.remove',
+    'teams.directory.sources.create',
+    'teams.directory.sources.pause',
+    'teams.directory.sources.remove',
+    'home.accounts.role.set',
+    'home.accounts.disable',
+    'home.accounts.enable',
+    'home.accounts.delete',
+    'home.accounts.signOutEverywhere',
+    'identity.providers.remove',
+    'identity.githubApps.remove',
+    'teams.policy.set',
+    'teams.members.add',
+    'teams.members.role.set',
+    'teams.groups.members.add',
+    'teams.groups.restore',
+    'teams.directory.sources.sync',
+    'teams.directory.sources.resume',
+    'teams.credentials.limits.upsert',
+    'teams.credentials.limits.delete',
+    'teams.credentials.test',
+    'teams.credentials.externalKeys.authorize',
+    'teams.identity.connections.enable',
+    'teams.identity.connections.disable',
+    'teams.identity.connections.test.start',
+    'teams.identity.connections.test.consume',
+    'home.identity.connections.enable',
+    'home.identity.connections.disable',
+    'home.identity.connections.test.start',
+    'home.identity.connections.test.consume',
+    'home.mailDelivery.test',
+    'home.search.rebuild',
+    'identity.providers.create',
+    'identity.providers.update',
+    'identity.providers.validate',
+    'identity.providers.test.start',
+    'identity.providers.test.consume',
+    'identity.providers.enable',
+    'identity.providers.disable',
+    'identity.githubApps.create',
+    'identity.githubApps.manifestSetup.start',
+    'identity.githubApps.verifyInstallation',
+  ] as const)('applies declared direct %s only for the present user on UI', actionId => {
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const settings of [undefined, EMPTY_SETTINGS]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, settings, context }).required).toBe(false);
+      for (const surface of ['agent', 'cli', 'mcp'] as const) {
+        if (!spec.surfaces[surface]) continue;
+        expect(resolveActionApprovalRouting({ actionId, spec, settings,
+          context: { ...context, surface } }).required, surface).toBe(true);
+      }
+      for (const ambiguous of [undefined, null, approvalContext('session_agent')]) {
+        expect(resolveActionApprovalRouting({ actionId, spec, settings,
+          context: ambiguous }).required, 'ambiguous').toBe(true);
+      }
+      expect(resolveActionApprovalRouting({ actionId, spec, settings,
+        context: { surface: 'ui', authority: 'account_automation' } }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, settings,
+        context: { surface: 'ui' } }).required).toBe(true);
+    }
+    const ask = normalizeActionsSettingsV1({ v: 1,
+      actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
+      approvalWaivedSurfaces: { [actionId]: ['ui'] },
+    });
+    expect(resolveActionApprovalRouting({ actionId, spec, context, settings: ask }).required).toBe(true);
+  });
+
+  it.each([
+    'teams.credentials.externalKeys.create',
+    'teams.members.history.prepare',
+    'identity.providers.secret.replace',
+    'home.governance.claim',
+  ] as const)('retains the default UI confirmation for %s', actionId => {
+    const spec = getActionSpec(actionId);
+    for (const settings of [undefined, EMPTY_SETTINGS]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, settings,
+        context: { surface: 'ui', authority: 'present_user' } }).required).toBe(true);
+    }
+  });
+
+  it.each([
+    [{ expectedRevision: 0, values: { HAPPIER_HOME_DISPLAY_NAME: 'Studio' } }, false],
+    [{ expectedRevision: 2, values: { HAPPIER_HOME_DISPLAY_NAME: null } }, false],
+    [{ expectedRevision: 2, values: { HAPPIER_HOME_DISPLAY_NAME: 'Studio', HAPPIER_PUBLIC_SERVER_URL: 'https://home.test' } }, false],
+    [{ expectedRevision: 2, values: { HAPPIER_PUBLIC_SERVER_URL: 'https://home.test' } }, false],
+    [{ expectedRevision: 2, values: { HAPPIER_HOME_DISPLAY_NAME: 'Studio' }, secrets: {} }, false],
+    [{ expectedRevision: 2, values: {}, secrets: { SMTP_PASSWORD: { replace: 'new-secret' } } }, true],
+    [{ expectedRevision: 2, values: {}, secrets: { SMTP_PASSWORD: { clear: true } } }, true],
+    [{ expectedRevision: 2, values: {}, discardPendingRestart: true }, true],
+    [{ expectedRevision: 2, values: {} }, true],
+    [{ expectedRevision: 2, values: { HAPPIER_HOME_DISPLAY_NAME: false } }, true],
+    [{ expectedRevision: 2, values: { HAPPIER_HOME_DISPLAY_NAME: ['Studio'] } }, true],
+    [{ values: { HAPPIER_HOME_DISPLAY_NAME: 'Studio' } }, true],
+    [{ expectedRevision: 2, values: { HAPPIER_HOME_DISPLAY_NAME: 'Studio' }, unknown: true }, true],
+    [null, true], [undefined, true],
+  ] as const)('FA-4 admits reversible Home setting writes directly: %j', (input, required) => {
+    const actionId = 'home.settings.set';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const settings of [undefined, EMPTY_SETTINGS]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, context, settings, input }).required).toBe(required);
+    }
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      if (!spec.surfaces[surface]) continue;
+      expect(resolveActionApprovalRouting({ actionId, spec, input,
+        context: { surface, authority: 'account_automation' } }).required).toBe(true);
+    }
+    expect(resolveActionApprovalRouting({ actionId, spec, input, context,
+      settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+    }).required).toBe(true);
+  });
+
+  it('FA-4 admits valid mixed Home policy edits and retains malformed-input confirmation', () => {
+    const actionId = 'home.policy.set';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    const authentication = { expectedRevision: 6, authenticationPolicy: {
+      v: 1, enabledMethodIds: ['key_challenge'], permittedAccountModes: ['e2ee'],
+      admission: 'closed', signInService: null,
+    } };
+    for (const settings of [undefined, EMPTY_SETTINGS]) {
+      for (const input of [authentication, { ...authentication, confirmWidening: true },
+        { ...authentication, teamCreationPolicy: 'self_service' },
+        { ...authentication, teamsVisibleToMembers: false },
+        { expectedRevision: 6, teamProviderPolicy: null },
+        { expectedRevision: 6, identityNetworkPolicy: null },
+      ]) {
+        expect(resolveActionApprovalRouting({ actionId, spec, context, settings, input }).required).toBe(false);
+        expect(resolveActionApprovalRouting({ actionId, spec, input, settings,
+          context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+      }
+      for (const input of [undefined, null, { expectedRevision: 6 },
+        { ...authentication, teamCreationPolicy: 'all_members' },
+        { ...authentication, authenticationPolicy: { v: 2 } },
+        { ...authentication, unknown: true },
+      ]) expect(resolveActionApprovalRouting({ actionId, spec, context, settings, input }).required, JSON.stringify(input)).toBe(true);
+    }
+    expect(resolveActionApprovalRouting({ actionId, spec, context, input: authentication,
+      settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+    }).required).toBe(true);
+  });
+
+  it.each(['teams.identity.workos.adminPortalLink.create', 'home.identity.workos.adminPortalLink.create'] as const)(
+    'FA-4 retains confirmation for unreviewed directory setup at %s', actionId => {
+      const spec = getActionSpec(actionId);
+      const context = { surface: 'ui', authority: 'present_user' } as const;
+      const base = { v: 1, connectionId: 'connection-1', ...(actionId.startsWith('teams.') ? { teamId: 'team-1' } : {}) };
+      for (const input of [undefined, null, { ...base, intent: 'dsync' }]) {
+        expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(true);
+      }
+      for (const input of [{ ...base, intent: 'sso' }, { ...base, intent: 'dsync', directorySourceId: 'source-1' }]) {
+        expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(false);
+        expect(resolveActionApprovalRouting({ actionId, spec, input,
+          context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+        expect(resolveActionApprovalRouting({ actionId, spec, context, input,
+          settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+        }).required).toBe(true);
+      }
+    },
+  );
+
+  it('FA-4 keeps an Agent request to set the person’s name behind approval', () => {
+    const actionId = 'account.name.set';
+    expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), input: { name: 'Ada' },
+      context: { surface: 'agent', authority: 'account_automation' }, settings: EMPTY_SETTINGS,
+    }).required).toBe(true);
+  });
+
+  it('FA-4 admits reversible reachability enable and already-reviewed disable', () => {
+    const actionId = 'home.reachability.iroh.set';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const input of [undefined, null, { mode: 'other' }, { mode: 'enabled', unknown: true }]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(true);
+    }
+    for (const mode of ['enabled', 'disabled'] as const) {
+      const input = { mode };
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(false);
+      expect(resolveActionApprovalRouting({ actionId, spec, input,
+        context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input,
+        settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+      }).required).toBe(true);
+    }
+  });
+
+  it('FA-4 honors Settings → Actions require approval for a now-direct Team policy edit', () => {
+    const actionId = 'teams.policy.set';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    expect(resolveActionApprovalRouting({ actionId, spec, context, settings: EMPTY_SETTINGS }).required).toBe(false);
+    const settings = normalizeActionsSettingsV1({ v: 1, actions: {
+      [actionId]: { approvalRequiredSurfaces: ['ui'] },
+    } });
+    expect(resolveActionApprovalRouting({ actionId, spec, context, settings }).required).toBe(true);
+  });
+
+  it('FA-4 retains Agent approval for a now-direct Team policy edit', () => {
+    const actionId = 'teams.policy.set';
+    expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), settings: EMPTY_SETTINGS,
+      context: { surface: 'agent', authority: 'account_automation' },
+    }).required).toBe(true);
+  });
+
+  it('FA-4 distinguishes reversible credential edits from new audience disclosure', () => {
+    const audience = { allMembersDeliveryMode: null, groupGrants: [], memberGrants: [] };
+    const create = { teamId: 'team-1', resourceId: 'resource-1', displayName: 'Shared',
+      source: { v: 1, kind: 'provider_connection', connectionId: 'connection-1',
+        connectionSecurityFingerprint: 'connection-security:v1:test', credentialSlotId: 'apiKey' },
+      disclosureCeiling: 'brokered_only', sessionUsePolicy: 'team_context_required',
+      brokerPlacement: { kind: 'machine', machineId: 'machine-1' }, requestPolicy: null,
+      ...audience, usageLimits: [],
+    };
+    const ref = { resourceId: 'resource-1', expectedRevision: 1 };
+    const replacement = { enabled: true, displayName: 'Shared', sessionUsePolicy: 'team_context_required',
+      requestPolicy: null, ...audience, usageLimitDelta: { upserts: [], deleteIds: [] } };
+    const cases = [
+      ['teams.credentials.create', create, false],
+      ['teams.credentials.create', { ...create, allMembersDeliveryMode: 'direct' }, true],
+      ['teams.credentials.create', { ...create, memberGrants: [{ teamMembershipId: 'member-1', deliveryMode: 'brokered' }] }, true],
+      ['teams.credentials.update', { ...ref, displayName: 'Renamed', enabled: false }, false],
+      ['teams.credentials.update', { ...ref, replacement }, false],
+      ['teams.credentials.update', { ...ref, replacement: { ...replacement, allMembersDeliveryMode: 'brokered' } }, true],
+      ['teams.credentials.update', { ...ref, disclosureCeiling: 'direct_allowed' }, true],
+      ['teams.credentials.audience.set', { ...ref, ...audience }, false],
+      ['teams.credentials.audience.set', { ...ref, ...audience, groupGrants: [{ teamGroupId: 'group-1', deliveryMode: 'direct' }] }, true],
+    ] as const;
+    for (const [actionId, input, required] of cases) {
+      const spec = getActionSpec(actionId);
+      expect(spec.inputSchema.safeParse(input).success, actionId).toBe(true);
+      const context = { surface: 'ui', authority: 'present_user' } as const;
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input, settings: EMPTY_SETTINGS }).required,
+        JSON.stringify(input)).toBe(required);
+      expect(resolveActionApprovalRouting({ actionId, spec, input,
+        context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input,
+        settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+      }).required).toBe(true);
+      for (const malformed of [undefined, null, { ...input, unknown: true }]) {
+        expect(resolveActionApprovalRouting({ actionId, spec, context, input: malformed }).required).toBe(true);
+      }
+    }
+  });
+
+  it('FA-4 admits GitHub App metadata edits but retains secret replacement confirmation', () => {
+    const actionId = 'identity.githubApps.update';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    const base = { owner: { kind: 'home' }, registrationId: 'app-1', expectedRevision: 1 };
+    for (const [patch, required] of [
+      [{ githubAppSlug: 'renamed' }, false], [{ secrets: {} }, false],
+      [{ secrets: { privateKey: 'replacement' } }, true], [{ secrets: { clientSecret: null } }, true],
+    ] as const) {
+      const input = { ...base, patch };
+      expect(spec.inputSchema.safeParse(input).success).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(required);
+    }
+    for (const input of [undefined, null, { ...base, patch: { unknown: true } }]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(true);
+    }
+  });
+
   it('defaults declared dangerous registry writes to approval and honors surface waivers',()=>{
     for(const [id,surface,required]of [
       ['registries.sources.create','ui',true],['registries.sources.delete','ui',true],
@@ -724,10 +1019,10 @@ describe('isApprovalRequiredByActionsSettings', () => {
     expect(decision).toEqual({ required: true, flow: 'deferred', result: 'required' });
   });
 
-  it('requires confirmation for declared dangerous UI actions for a present user by default', () => {
+  it('requires confirmation for an irreversible unreviewed Home claim by default', () => {
     const decision = resolveActionApprovalRouting({
-      actionId: 'teams.invitations.create' as any,
-      spec: getActionSpec('teams.invitations.create'),
+      actionId: 'home.governance.claim',
+      spec: getActionSpec('home.governance.claim'),
       settings: EMPTY_SETTINGS,
       context: { surface: 'ui', authority: 'present_user' } as any,
     });

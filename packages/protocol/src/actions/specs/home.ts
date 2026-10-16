@@ -70,6 +70,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   {
     ...homeDomainActionRow({
       id: 'home.search.rebuild', approval: {result: 'required'}, title: 'Rebuild Home search index',
+      approvalPolicy: { uiConfirmation: 'direct' },
       description: 'Rebuild this Personal Home’s derived search index from its canonical transcript rows.',
       safety: 'danger', sideEffectClass: 'danger', cliPath: ['home', 'search', 'rebuild'],
       path: '/v1/home/search/rebuild', inputSchema: HomeGovernanceGetInputV1Schema,
@@ -164,6 +165,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.accounts.role.set', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Set Home role',
     description: 'Change one Account\'s Home role. The Home enforces its last-owner invariant.',
     safety: 'danger',
@@ -179,6 +181,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.accounts.disable', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Disable Home Account',
     description: 'Place one Account on a reversible hold, ending its access to this Home.',
     safety: 'danger',
@@ -191,6 +194,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.accounts.enable', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Re-enable Home Account',
     description: 'Lift a reversible hold and restore one Account\'s access to this Home.',
     safety: 'danger',
@@ -203,6 +207,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.accounts.delete', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Delete Home Account',
     description: 'Erase one Account through the Home\'s single erasure owner. Incomplete cleanup is reported explicitly.',
     safety: 'danger',
@@ -215,6 +220,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.accounts.signOutEverywhere', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Sign a Home Account out everywhere',
     description: 'End every signed-in session of one Account. API tokens stay valid until the Account is disabled.',
     safety: 'danger',
@@ -227,6 +233,11 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.policy.set', approval: {result: 'required'},
+    approvalPolicy: {
+      uiConfirmation: 'direct',
+      // Governance edits are reversible; sign-in widening retains its inline review.
+      uiConfirmationForInput: (input) => !HomeGovernancePolicySetInputV1Schema.safeParse(input).success,
+    },
     title: 'Set Home policy',
     description: 'Update this Home\'s governance policy against the revision the caller last read.',
     safety: 'danger',
@@ -269,6 +280,20 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.settings.set', approval: {result: 'required'},
+    approvalPolicy: {
+      uiConfirmation: 'direct',
+      // Ordinary values are reversible. Write-only secrets and discarded
+      // pending restart values cannot be recovered through the settings UI.
+      uiConfirmationForInput: (input) => {
+        const parsed = HomeSettingsSetInputV1Schema.safeParse(input);
+        if (!parsed.success) return true;
+        const { values, secrets, discardPendingRestart } = parsed.data;
+        const name = values.HAPPIER_HOME_DISPLAY_NAME;
+        return (secrets !== undefined && Object.keys(secrets).length > 0) || discardPendingRestart === true
+          || Object.keys(values).length === 0
+          || (Object.hasOwn(values, 'HAPPIER_HOME_DISPLAY_NAME') && !(typeof name === 'string' || name === null));
+      },
+    },
     title: 'Set Home settings',
     description: 'Store Home setting values against the revision the caller last read. A deployment env value still wins; restart settings apply at the next server start.',
     safety: 'danger',
@@ -294,6 +319,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.mailDelivery.test', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Send a test email',
     description: 'Send a fixed test message through this Home\'s mail settings. A failure reports its class only.',
     safety: 'danger',
@@ -328,6 +354,11 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.reachability.iroh.set', approval: {result: 'required'},
+    approvalPolicy: {
+      uiConfirmation: 'direct',
+      // Enable is reversible; disable already reviews permanent identity retirement.
+      uiConfirmationForInput: (input) => !HomeReachabilityIrohSetInputV1Schema.safeParse(input).success,
+    },
     title: 'Turn direct connections on or off',
     description: 'Turning direct (Iroh) connections off retires the current direct-connection identity for good; turning them on creates a new one. Addresses and sign-ins stay the same.',
     safety: 'danger',

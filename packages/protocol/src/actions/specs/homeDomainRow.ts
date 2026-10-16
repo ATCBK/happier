@@ -32,6 +32,7 @@ type HomeDomainActionRowInput<
 > = Readonly<{
   id: TActionId;
   approval: PreNormalizedActionSpec['approval'];
+  approvalPolicy?: PreNormalizedActionSpec['approvalPolicy'];
   title: string;
   description: string;
   safety: 'safe' | 'danger';
@@ -91,6 +92,7 @@ export function homeDomainActionRow<
 > {
   return {
     id: spec.id, approval: spec.approval,
+    ...(spec.approvalPolicy ? { approvalPolicy: spec.approvalPolicy } : {}),
     title: spec.title,
     description: spec.description,
     safety: spec.safety,
