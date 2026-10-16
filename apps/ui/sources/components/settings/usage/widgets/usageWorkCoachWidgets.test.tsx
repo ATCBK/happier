@@ -25,6 +25,7 @@ import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolve
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { UsageProjectLedgerWidget } from './UsageProjectLedgerWidget';
 import { UsageSessionValueWidget } from './UsageSessionValueWidget';
+import { UsageHumanLoopWidget } from './UsageHumanLoopWidget';
 import { UsageOutcomesWidget } from './UsageOutcomesWidget';
 import { UsageCoachWidget } from './UsageCoachWidget';
 import { storage } from '@/sync/domains/state/storage';
@@ -309,6 +310,17 @@ describe('Work and Coach widget bodies', () => {
     // The Session without a binding never borrows the Agent's name, and an unknown provider is not
     // information: no "Provider: Not recorded" line (quiet truth).
     expect(screen.getTextContent()).not.toContain('Not recorded');
+  });
+  it('leads "What they waited for" with the longest waits and keeps the long tail behind Show all', async () => {
+    const base = resolveUsageHowYouWork({ period: { startMs: 0, endMs: 1000 }, timeZoneOffsetMinutes: 0, detail: { status: 'available', facts: [] } });
+    const byTool = Array.from({ length: 12 }, (_, index) => ({ toolId: `tool${index}`, requestCount: 1, pairedDecisionCount: 1, decisionLatencyMs: (12 - index) * 60_000 }));
+    const howYouWork = { ...base, permissions: { requestCount: 12, pairedDecisionCount: 12, decisionLatencyMs: 78 * 60_000, unknownRequestTimeCount: 0,
+      unknownDecisionTimeCount: 0, byAnsweringClient: { ios: 0, android: 0, web: 0, desktop: 0, unknown: 0 }, byTool } };
+    const screen = await renderScreen(<UsageHumanLoopWidget {...props} slice={{ ...slice, howYouWork }} id="usage_human_loop" testID="loop" />);
+    expect(screen.getTextContent()).toContain('tool0');
+    expect(screen.getTextContent()).not.toContain('tool11');
+    await screen.pressByTestIdAsync('loop.tools.more');
+    expect(screen.getTextContent()).toContain('tool11');
   });
   it('opens a selected Session autopsy with exact contribution, checkpoint and witnessed wait phases', async () => {
     const sessionQuery = normalizeUsageQuery({ ...query, session: 's1' });

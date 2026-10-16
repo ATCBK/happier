@@ -14,8 +14,10 @@ import { t } from '@/text';
 import { usageSeriesColor } from '../usageAccent';
 import {
   UsageBodyInsufficient,
+  leadingUsageRows,
   UsageCoverageLine,
   usagePeriodPhrase,
+  UsageShowAllRows,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
@@ -54,6 +56,7 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
   const howYouWork = props.slice.howYouWork;
   const permissions = howYouWork?.permissions ?? null;
   const inputs = howYouWork?.inputs ?? null;
+  const [toolsExpanded, setToolsExpanded] = React.useState(false);
   // The period names the cell even before anything is readable; the frame's follow label ("This page") says nothing here.
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   const tools = React.useMemo(
@@ -92,6 +95,7 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
   const unpaired = permissions
     ? permissions.unknownRequestTimeCount + permissions.unknownDecisionTimeCount
     : 0;
+  const toolLead = leadingUsageRows(tools, toolsExpanded);
   const answering = permissions ? readUsageAnsweringShares(permissions) : null;
   const wide = width !== undefined && width >= TWO_COLUMN_MIN_WIDTH_PX;
   return (
@@ -147,12 +151,20 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
               testID={`${props.testID}.tools`}
               label={t('usage.board.howYouWork.waitedFor')}
               basis={t('usage.board.howYouWork.waitTime')}
-              rows={tools}
+              rows={toolLead.rows}
               total={permissions?.decisionLatencyMs ?? null}
               valueFormatter={formatUsageDuration}
               unknownLabel={t('usage.board.howYouWork.notRecorded')}
               size={wide ? 'full' : 'tile'}
             />
+            {tools.length > toolLead.rows.length || toolsExpanded ? (
+              <UsageShowAllRows
+                testID={`${props.testID}.tools.more`}
+                total={tools.length}
+                expanded={toolsExpanded}
+                onToggle={() => setToolsExpanded((value) => !value)}
+              />
+            ) : null}
           </View>
         ) : null}
         {answering && answering.witnessed > 0 ? (
