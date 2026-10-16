@@ -6,6 +6,16 @@ import { ENTITY_DRAG_DELIVERY_MIME_V1, entityDragKindV1, type EntityDragKindV1 }
 import { isSecondaryEntityRowControl } from '@happier-dev/plugin-sdk/ui/client';
 export { isSecondaryEntityRowControl };
 
+let blankImage: HTMLImageElement | null = null;
+/** A transparent 1×1 image, made once when the first source attaches, so it is decoded by the first drag. */
+function blankDragImage(): HTMLImageElement {
+    if (!blankImage) {
+        blankImage = new Image(1, 1);
+        blankImage.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    }
+    return blankImage;
+}
+
 /** Browser gesture boundary only: the carry handle is the sole lifecycle authority. */
 export function useEntityDragDomBinding(input: Readonly<{
     runtime: EntityDragDropRuntime;
@@ -49,6 +59,7 @@ export function useEntityDragDomBinding(input: Readonly<{
         }
         retireHost();
         host.current = element;
+        blankDragImage(); // Decoded before the first drag starts.
         element.setAttribute('draggable', latest.current.enabled ? 'true' : 'false');
         const move = (event: DragEvent) => {
             if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) carry.current?.move({ x: event.clientX, y: event.clientY });
@@ -66,6 +77,8 @@ export function useEntityDragDomBinding(input: Readonly<{
             };
             // Human-readable identity enables native browser drag delivery; it is never decoded.
             if (event.dataTransfer) {
+                // The realm's carried card is the only thing that rides the pointer: no browser ghost of the row.
+                event.dataTransfer.setDragImage?.(blankDragImage(), 0, 0);
                 event.dataTransfer.effectAllowed = 'copyMove';
                 event.dataTransfer.setData(ENTITY_DRAG_DELIVERY_MIME_V1, '');
                 const description = current.describe?.();

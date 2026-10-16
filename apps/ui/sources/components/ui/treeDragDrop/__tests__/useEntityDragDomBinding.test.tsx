@@ -16,6 +16,30 @@ function dragEvent(type: string, x = 50) {
 }
 
 describe('entity DOM carry boundary', () => {
+    it('lets the realm card be the only thing carried: the browser draws no ghost of the row', async () => {
+        const runtime = createEntityDragDropRuntime();
+        const scope = { serverId: 'home', accountId: 'account' };
+        runtime.registerSource({ id: 'source', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'destination', scope, href: '/inbox' }) });
+        const sourceHook = await renderHook(() => useEntityDragDomBinding({ runtime, sourceId: 'source', enabled: true, describe: () => 'Inbox' }));
+        const source = document.createElement('div');
+        source.textContent = 'Inbox';
+        document.body.append(source);
+        act(() => { sourceHook.getCurrent()(source); });
+        const images: Array<Readonly<{ image: Element; x: number; y: number }>> = [];
+        const start = dragEvent('dragstart');
+        Object.defineProperty(start, 'dataTransfer', { value: {
+            setData: () => undefined,
+            setDragImage: (image: Element, x: number, y: number) => { images.push({ image, x, y }); },
+        } });
+        try {
+            act(() => { source.dispatchEvent(start); });
+            expect(runtime.getSnapshot().phase).toBe('carrying');
+            expect(images).toHaveLength(1);
+            expect(images[0]!.image).not.toBe(source);
+            expect(images[0]!.image.textContent ?? '').toBe('');
+        } finally { runtime.cancel('test'); source.remove(); }
+    });
     it.each(['applied', 'refused', 'cancelled'] as const)('suppresses the pointer release activation after a %s carry without swallowing the next press', async (outcome) => {
         const runtime = createEntityDragDropRuntime();
         const scope = { serverId: 'home', accountId: 'account' };
