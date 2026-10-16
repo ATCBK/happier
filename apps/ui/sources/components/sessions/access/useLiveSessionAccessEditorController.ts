@@ -1,12 +1,13 @@
 import * as React from 'react';
 import type { PrincipalRefV1, SessionGrantMutationV1 } from '@happier-dev/protocol';
+import type { SessionAccessCandidatesInspectResponseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import { useSessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
-import { createSessionAccessClient, SessionAccessApiError, SessionAccessApprovalPendingError } from '@/sync/api/session/sessionAccessApi';
+import { createSessionAccessClient, inspectSessionAccessCandidates, SessionAccessApiError, SessionAccessApprovalPendingError } from '@/sync/api/session/sessionAccessApi';
 import { readSessionDataKeyEnvelopeCollectionPage, prepareSessionDataKeyEnvelopesDetached } from '@/sync/api/session/sessionDataKeyEnvelopesApi';
 import { t } from '@/text';
 import { HappyError } from '@/utils/errors/errors';
@@ -28,8 +29,10 @@ import type {
     SessionAccessEditorController,
     SessionAccessEncryptionRecipientsView,
     SessionAccessUiError,
+    SessionAccessUiReason,
+    SessionAccessCandidateRowModel,
 } from './sessionAccessEditorTypes';
-import { presentSessionAccessFailure } from './presentSessionAccessFailure';
+import { presentSessionAccessFailure, presentSessionAccessReason } from './presentSessionAccessFailure';
 import { useSessionAccessApprovalHold } from './useSessionAccessApprovalHold';
 import { migrateSessionForSharing } from './migrateSessionForSharing';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
@@ -438,6 +441,85 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         scope:input.scope,sessionId:input.sessionId,availability,contextTeams,
         operations:current.operations,revision:directoryRevision,enabled:projection.accessMode==='editable',
     });
+    const [candidatePolicy, setCandidatePolicy] = React.useState<Readonly<{
+        scopeKey: string;
+        primaryTeamId: string;
+        context: SessionAccessCandidatesInspectResponseV1['context'];
+        error?: SessionAccessUiReason;
+    }> | null>(null);
+    const unavailablePolicyReason: SessionAccessUiReason = {
+        code: 'session_access_context_policy_unavailable', message: t('session.access.contextPolicyUnavailable'),
+    };
+    const inspectCandidatePolicy = React.useCallback(async (subjects: readonly PrincipalRefV1[], signal?: AbortSignal) => {
+        const primaryTeamId = stateRef.current.scopeKey === scopeKey ? stateRef.current.snapshot?.primaryTeamId : undefined;
+        if (!primaryTeamId) return null;
+        try {
+            const result = await inspectSessionAccessCandidates({ scope: { serverId: input.scope.serverId, accountId: input.scope.accountId }, sessionId: input.sessionId,
+                availability, subjects, signal, isCurrent: isScopeCurrent });
+            if (!isScopeCurrent() || signal?.aborted) return null;
+            if (result.context?.teamId !== primaryTeamId) throw new SessionAccessApiError('session_access_context_policy_unavailable');
+            setCandidatePolicy((previous) => previous?.scopeKey === scopeKey && previous.primaryTeamId === primaryTeamId
+                && !previous.error && previous.context?.teamId === result.context?.teamId
+                && previous.context?.name === result.context?.name && previous.context?.archived === result.context?.archived
+                && previous.context?.externalSharingReason === result.context?.externalSharingReason
+                ? previous : { scopeKey, primaryTeamId, context: result.context });
+            return { result, reason: null };
+        } catch (error) {
+            if (!isScopeCurrent() || signal?.aborted) return null;
+            // An older Home has no inspection operation. Do not infer permission from directory policy.
+            const reason = error instanceof SessionAccessApiError && error.status === 403
+                ? presentSessionAccessFailure(error) : {
+                    code: 'session_access_context_policy_unavailable', message: t('session.access.contextPolicyUnavailable'),
+                };
+            setCandidatePolicy((previous) => previous?.scopeKey === scopeKey && previous.primaryTeamId === primaryTeamId
+                && previous.error?.code === reason.code && previous.error.message === reason.message
+                ? previous : { scopeKey, primaryTeamId, context: null, error: reason });
+            return { result: null, reason };
+        }
+    }, [availability, input.scope.serverId, input.scope.accountId, input.sessionId, isScopeCurrent, scopeKey]);
+    React.useEffect(() => {
+        if (projection.accessMode !== 'editable' || !current.snapshot?.primaryTeamId) return;
+        const abort = new AbortController();
+        void inspectCandidatePolicy([], abort.signal);
+        return () => abort.abort();
+    }, [current.snapshot, directoryRevision, inspectCandidatePolicy, projection.accessMode]);
+    const admittedCandidateContext = candidatePolicy?.scopeKey === scopeKey
+        && candidatePolicy.primaryTeamId === current.snapshot?.primaryTeamId ? candidatePolicy : null;
+    const contextPolicyReason: SessionAccessUiReason | undefined = !current.snapshot?.primaryTeamId ? undefined
+        : admittedCandidateContext?.error ?? (admittedCandidateContext?.context?.archived ? {
+            code: 'session_access_external_sharing_disabled',
+            message: t('session.access.contextTeamArchived', { team: admittedCandidateContext.context.name }),
+        } : admittedCandidateContext?.context?.externalSharingReason
+            ? presentSessionAccessReason(admittedCandidateContext.context.externalSharingReason)
+            : admittedCandidateContext ? undefined : unavailablePolicyReason);
+    const resolveCandidateAvailability = React.useCallback(async (
+        rows: readonly SessionAccessCandidateRowModel[], signal?: AbortSignal,
+    ): Promise<readonly SessionAccessCandidateRowModel[]> => {
+        if (rows.length === 0 || !stateRef.current.snapshot?.primaryTeamId) return rows;
+        const inspected = await inspectCandidatePolicy(rows.map((row) => row.principal.ref), signal);
+        const result = inspected?.result;
+        const decisions = new Map(result?.candidates.map((candidate) => [sessionAccessSubjectKey(candidate.subject), candidate]));
+        return rows.map((row) => {
+            const decision = decisions.get(row.principal.key);
+            const reason = !decision ? inspected?.reason ?? {
+                code: 'session_access_context_policy_unavailable', message: t('session.access.contextPolicyUnavailable'),
+            } : decision.reason === null ? undefined
+                : result?.context?.archived ? {
+                    code: decision.reason, message: t('session.access.contextTeamArchived', { team: result.context.name }),
+                } : presentSessionAccessReason(decision.reason);
+            return reason ? { ...row, addition: { kind: 'blocked' as const, reason } } : row;
+        });
+    }, [inspectCandidatePolicy]);
+    const candidateSections = React.useMemo(() => directory.sections.map((section) => ({
+        ...section,
+        // Known rows have not yet been inspected in this resolver. Its returned page carries each verdict.
+        candidates: current.snapshot?.primaryTeamId ? section.candidates.map((row) => ({ ...row,
+            addition: { kind: 'blocked' as const, reason: unavailablePolicyReason },
+        })) : section.candidates,
+        resolverKey: `${section.resolverKey ?? section.kind}:${current.snapshot?.primaryTeamId ?? 'private'}:${contextPolicyReason?.code ?? 'ready'}`,
+        resolveCandidates: async (query: string, signal: AbortSignal) => resolveCandidateAvailability(
+            section.resolveCandidates ? await section.resolveCandidates(query, signal) : section.candidates, signal),
+    })), [contextPolicyReason?.code, contextPolicyReason?.message, current.snapshot?.primaryTeamId, directory.sections, resolveCandidateAvailability]);
     const directoryTeamsRef = React.useRef(directory.teamContexts);
     directoryTeamsRef.current = directory.teamContexts;
     const currentContextPolicyRef = React.useRef<Readonly<{
@@ -479,7 +561,24 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         retryDirectory:(kind)=>{directory.retry(kind);setDirectoryRevision(value=>value+1);},
         loadMore:(kind)=>directory.loadMore(kind),
         retryMutation,
-        addPrincipal:(subject)=>{void mutate(subject,sessionAccessGrantMutation(subject,{accessLevel:'view',canApprovePermissions:false}),true);},
+        addPrincipal:(subject)=>{void (async () => {
+            if (!isScopeCurrent()) return;
+            if (stateRef.current.snapshot?.primaryTeamId) {
+                const inspected = await inspectCandidatePolicy([subject]);
+                const result = inspected?.result;
+                if (!isScopeCurrent()) return;
+                const decision = result?.candidates.find((candidate) => sessionAccessSubjectKey(candidate.subject) === sessionAccessSubjectKey(subject));
+                if (!decision || decision.reason) {
+                    const reason = decision?.reason ? presentSessionAccessReason(decision.reason) : inspected?.reason ?? {
+                        code: 'session_access_context_policy_unavailable', message: t('session.access.contextPolicyUnavailable'),
+                    };
+                    dispatch({ type: 'operation', scopeKey, key: sessionAccessSubjectKey(subject),
+                        operation: { kind: 'error', error: { ...reason, retryable: false } } });
+                    return;
+                }
+            }
+            await mutate(subject,sessionAccessGrantMutation(subject,{accessLevel:'view',canApprovePermissions:false}),true);
+        })();},
         setAccessLevel:(subject,level)=>{
             const row=stateRef.current.snapshot?.grants.find(row=>sessionAccessSubjectKey(row.grant.subject)===sessionAccessSubjectKey(subject));
             if(!row?.allowedTransitions.accessLevels.includes(level))return;
@@ -508,7 +607,7 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         loadMoreRecipients,
         openPendingApproval,
         updateHistoricalLayout,
-    }),[confirmContext,directory,loadMoreRecipients,mutate,openPendingApproval,prepareEncryptedAccess,refresh,retryMutation,scopeKey,setContext,toggleAllRecipients,updateHistoricalLayout]);
+    }),[confirmContext,directory,inspectCandidatePolicy,isScopeCurrent,loadMoreRecipients,mutate,openPendingApproval,prepareEncryptedAccess,refresh,retryMutation,scopeKey,setContext,toggleAllRecipients,updateHistoricalLayout]);
     // Lane 04's existing projection names every grant principal; the encryption
     // resource deliberately carries no names, roles or avatars.
     const grantedDisplayNameForAccount=React.useCallback((accountId:string)=>{
@@ -541,7 +640,8 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
     const encryption=projectSessionAccessEncryptionSection({
         preparation:current.preparation,recipients:current.recipients,displayNameForAccount,
     });
-    const currentContextPolicyTeam = current.snapshot?.primaryTeamId
+    const contextArchived = admittedCandidateContext?.context?.archived === true;
+    const currentContextPolicyTeam = current.snapshot?.primaryTeamId && !contextArchived
         ? directory.activeTeamContexts.find((team) => team.teamId === current.snapshot?.primaryTeamId) ?? null
         : null;
     // The active-Team directory is authoritative only after its final page.
@@ -549,9 +649,9 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
     // must not unlock a required context. A complete absence means the Team is
     // no longer an active eligible context, so the editor exposes recovery.
     const currentContextRecoveryAllowed = Boolean(current.snapshot?.primaryTeamId
-        && directory.teamDirectoryStatus === 'ready'
+        && (contextArchived || (directory.teamDirectoryStatus === 'ready'
         && directory.teamDirectoryComplete
-        && !currentContextPolicyTeam);
+        && !currentContextPolicyTeam)));
     const currentContextPolicyUnavailable = Boolean(current.snapshot?.primaryTeamId
         && !currentContextPolicyTeam
         && !currentContextRecoveryAllowed);
@@ -571,13 +671,24 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
             ...((contextLockedByTeamPolicy && team.teamId !== current.snapshot?.primaryTeamId)
                 ? { blockedReason: { code: 'session_access_team_policy_required', message: t('session.access.required') } }
                 : !projected.sessionCreationPolicy || !projected.externalSharingPolicy || currentContextPolicyUnavailable ? { blockedReason: {
-                code: 'session_access_context_policy_unavailable', message: t('errors.operationFailed'),
+                code: 'session_access_context_policy_unavailable', message: t('session.access.contextPolicyUnavailable'),
             } } : {}),
         };
     });
+    const currentContextName = admittedCandidateContext?.context?.name
+        ?? contextTeams.find((team) => team.teamId === current.snapshot?.primaryTeamId)?.name
+        ?? projection.grants.find((row) => row.grant.kind === 'group' && row.grant.teamId === current.snapshot?.primaryTeamId)?.principal.secondaryLabel
+        ?? t('session.access.team');
+    const unavailableContextReason = contextPolicyReason ?? {
+        code: 'session_access_context_policy_unavailable',
+        message: currentContextRecoveryAllowed ? t('session.access.contextTeamUnavailable', { team: currentContextName })
+            : t('session.access.contextPolicyUnavailable'),
+    };
+    const namedContextTeams = contextTeamsForModel.map((team) => team.teamId === current.snapshot?.primaryTeamId && !currentContextPolicyTeam
+        ? { ...team, label: currentContextName, blockedReason: unavailableContextReason } : team);
     const currentContextTeam = current.snapshot?.primaryTeamId && !contextTeamsForModel.some((team) => team.teamId === current.snapshot?.primaryTeamId)
-        ? [{ teamId: current.snapshot.primaryTeamId, label: t('session.access.team'), blockedReason: {
-            code: 'session_access_context_policy_unavailable', message: t('errors.operationFailed'),
+        ? [{ teamId: current.snapshot.primaryTeamId, label: currentContextName, blockedReason: {
+            ...unavailableContextReason,
         } }]
         : [];
     const pendingContextTeam = pendingContextTeamId === null ? null
@@ -593,7 +704,8 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
     return {actions,model:{...projection,revision:directoryRevision,
         ...(current.snapshot && availability === 'available' ? { context: { primaryTeamId: current.snapshot.primaryTeamId, options: [{ teamId: null, label: t('session.access.private'),
             ...(contextLockedByTeamPolicy ? { blockedReason: { code: 'session_access_team_policy_required', message: t('session.access.required') } }
-                : currentContextPolicyUnavailable ? { blockedReason: { code: 'session_access_context_policy_unavailable', message: t('errors.operationFailed') } } : {}) }, ...contextTeamsForModel, ...currentContextTeam], operation: contextOperation,
+                : currentContextPolicyUnavailable ? { blockedReason: { code: 'session_access_context_policy_unavailable', message: t('session.access.contextPolicyUnavailable') } } : {}) }, ...namedContextTeams, ...currentContextTeam], operation: contextOperation,
+            ...(contextPolicyReason ? { unavailableReason: contextPolicyReason } : {}),
             ...(contextError ? { error: contextError } : {}),
             ...(pendingContextTeamId !== undefined ? { confirmation: {
                 teamId: pendingContextTeamId,
@@ -601,7 +713,8 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
                 consequences: pendingConsequences,
             } } : {}) } } : {}),
         content:{phase:current.refreshing?(current.snapshot?'refreshing':'initial'):current.issue?'error':current.snapshot?'ready':'initial',hasLastAcknowledgedSnapshot:current.snapshot!==null,...(current.issue?{issue:current.issue}:{})},
-        directory:{query,sections:directory.sections},
+        directory:{query,sections:candidateSections},
+        ...(contextPolicyReason ? { notice: { message: contextPolicyReason.message, reason: contextPolicyReason } } : {}),
         ...(encryption?{encryption}:{}),
         ...(currentPendingApproval?{pendingApproval:currentPendingApproval}:{}),
         ...(historicalLayoutPending?{historicalLayout:{

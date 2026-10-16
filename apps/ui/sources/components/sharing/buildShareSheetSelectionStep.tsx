@@ -76,6 +76,11 @@ export type ShareSheetStepInput<TRow extends ShareGrantRowModel> = Readonly<{
     directoryKind?: ShareDirectoryKind;
     /** Prefix for every rendered testID; empty for the default host. */
     idPrefix: string;
+    /**
+     * Whether the root lists directory suggestions. They appear once someone starts adding (the search
+     * field focused or a query typed); until then the root is the roster and the Browse entries.
+     */
+    revealSuggestions?: boolean;
     copyLink?: Readonly<{ copied: boolean; onCopy(): void }>;
 }>;
 
@@ -130,20 +135,24 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             if (seen.has(row.principal.key)) return [];
             seen.add(row.principal.key);
             const reason = row.addition.kind === 'blocked' ? row.addition.reason : undefined;
+            // A candidate the Home refuses reads as unavailable: a short state instead of Add, and pressing the row
+            // explains it in full. The reason itself is not repeated on every row; a refusal shared by the whole
+            // sheet (an archived context Team) is said once by the adapter, and a row's own reason is one press away.
             return [{ id: row.principal.key, testID: `${idPrefix}${ns}-candidate-${row.principal.key}`,
                 label: row.principal.displayName,
-                subtitle: subtitle(row.principal, undefined, [reason?.message, row.operation.kind === 'error' ? row.operation.error.message : undefined]),
-                accessibilityLabel: row.principal.accessibilityLabel,
+                subtitle: subtitle(row.principal, undefined, [reason ? t('shareSheet.cantAdd') : undefined,
+                    row.operation.kind === 'error' ? row.operation.error.message : undefined]),
+                accessibilityLabel: reason ? `${row.principal.accessibilityLabel}, ${reason.message}` : row.principal.accessibilityLabel,
                 icon: visual(row.principal),
                 loading: row.operation.kind === 'saving',
                 disabled: row.operation.kind === 'saving',
                 onSelect: () => reason ? actions.explain(reason) : actions.addPrincipal(row.principal.ref),
-                rightAccessoryOutsidePressable: true,
-                rightAccessory: () => <ShareRowAction label={t('common.add')}
-                    testID={`${idPrefix}${ns}-add:${row.principal.key}`}
-                    disabled={row.operation.kind === 'saving'}
-                    onPress={() => reason ? actions.explain(reason) : actions.addPrincipal(row.principal.ref)}
-                    trailing={<ShareAddIcon />} />,
+                ...(reason ? {} : { rightAccessoryOutsidePressable: true,
+                    rightAccessory: () => <ShareRowAction label={t('common.add')}
+                        testID={`${idPrefix}${ns}-add:${row.principal.key}`}
+                        disabled={row.operation.kind === 'saving'}
+                        onPress={() => actions.addPrincipal(row.principal.ref)}
+                        trailing={<ShareAddIcon />} /> }),
             }];
         });
     };
@@ -180,24 +189,32 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             ...(publicLink.renderContent ? { expandedContentInset: 'row', expandedContent: () => publicLink.renderContent!(context) } : {}),
         }] });
     }
+    // Collapsed, the Browse entries share one group instead of trailing three empty headings.
+    const suggestionsShown = input.directoryKind !== undefined || input.revealSuggestions !== false;
+    const collapsedControls: SelectionListOption[] = [];
     if (model.editable) for (const kind of SHARE_DIRECTORY_KINDS) {
         if (input.directoryKind && input.directoryKind !== kind) continue;
         const source = model.directory.sections.find((section) => section.kind === kind);
         if (!source) continue;
         if (!input.directoryKind && kind !== 'account' && source.status === 'idle' && source.candidates.length === 0 && !source.hasMore) continue;
-        sections.push(sourceSection(source));
+        if (suggestionsShown) sections.push(sourceSection(source));
         const controls: SelectionListOption[] = [];
         if (source.status === 'error' && source.error) controls.push({ id: `retry:${kind}`, label: source.error.message,
             rightAccessoryOutsidePressable: true, rightAccessory: () => <ShareRowAction label={t('common.retry')}
                 testID={`${idPrefix}${ns}-directory-retry:${kind}`} onPress={() => actions.retryDirectory(kind)} /> });
-        if (!input.directoryKind && (kind === 'account' ? source.hasMore : source.candidates.length > 0 || source.hasMore)) controls.push({ id: `browse:${kind}`,
+        // With suggestions listed, people beyond them are one Browse away; collapsed, every kind that has anyone is.
+        const browsable = kind === 'account' && suggestionsShown ? source.hasMore
+            : source.candidates.length > 0 || source.hasMore || (!suggestionsShown && source.resolveCandidates !== undefined);
+        if (!input.directoryKind && browsable) controls.push({ id: `browse:${kind}`,
             label: t(kind === 'account' ? 'shareSheet.browsePeople' : kind === 'team' ? 'shareSheet.browseTeams' : 'shareSheet.browseGroups'),
             icon: () => <ShareDirectoryIcon />,
             ...(source.status === 'loading' || source.status === 'refreshing' ? { subtitle: t('common.loading') } : {}),
             testID: `${idPrefix}${ns}-browse:${kind}`,
             openStep: buildShareSheetSelectionStep({ ...input, directoryKind: kind }) });
-        if (controls.length) sections.push({ kind: 'static', id: `directory-controls:${kind}`, options: controls });
+        if (!suggestionsShown) collapsedControls.push(...controls);
+        else if (controls.length) sections.push({ kind: 'static', id: `directory-controls:${kind}`, options: controls });
     }
+    if (collapsedControls.length) sections.push({ kind: 'static', id: 'directory-controls', options: collapsedControls });
     if (input.directoryKind) {
         return { id: shareSheetStepId(ns, input.directoryKind), inputPlaceholder: t('shareSheet.addPlaceholder'),
             disableInputFilter: true, emptyStateLabel: t('common.noMatches'), sections };

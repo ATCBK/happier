@@ -29,7 +29,7 @@ type ModalCardFrameProps = Readonly<{
     subtitle?: React.ReactNode;
     actions?: React.ReactNode;
     footer?: React.ReactNode;
-    scrollHost?: 'overlay' | 'body';
+    scrollHost?: 'overlay' | 'body' | 'bounded';
     bodyScroll?: 'none' | 'auto';
     onClose?: () => void;
     size?: ModalCardSizePreset;
@@ -105,6 +105,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: 0,
         overflow: 'hidden',
     },
+    boundedSurface: {
+        flexShrink: 1,
+        minHeight: 0,
+    },
     bodyUnscrolled: {
         flexGrow: 0,
         flexShrink: 0,
@@ -120,6 +124,9 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
     const sheet = framed && props.presentation === 'sheet';
     const fullscreen = framed && props.presentation === 'fullscreen';
     const bodyScroll = framed ? props.bodyScroll ?? 'none' : 'none';
+    // `bounded` sizes to its content up to the viewport bound; `body` and fullscreen take the bound as their height.
+    const bounded = framed && scrollHost === 'bounded' && !fullscreen;
+    const fixedHeight = framed && (scrollHost === 'body' || fullscreen);
     const reducedMotion = useReducedMotionPreference();
     const dimensions = useModalCardDimensions({
         ...props.dimensions,
@@ -161,11 +168,11 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                             transitionTimingFunction: motionTokens.easingCss.standard,
                         } as unknown as ViewStyle : null),
                     } : null,
-                framed && (scrollHost === 'body' || fullscreen)
+                fixedHeight
                     ? {
                         height: dimensions.maxHeight,
                     }
-                    : null,
+                    : bounded ? { maxHeight: dimensions.maxHeight } : null,
                 props.style,
             ]}
         >
@@ -173,7 +180,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 finishRole={framed ? undefined : null}
                 solidColor={!framed ? 'transparent' : fullscreen ? theme.colors.surface.base : undefined} style={[
                 framed ? (fullscreen ? styles.fullscreenSurface : styles.clipSurface) : null,
-                scrollHost === 'body' || fullscreen ? { flex: 1 } : null,
+                scrollHost === 'body' || fullscreen ? { flex: 1 } : bounded ? styles.boundedSurface : null,
                 fullscreen ? {
                     paddingTop: props.safeAreaInsets?.top ?? 0,
                     paddingRight: props.safeAreaInsets?.right ?? 0,
@@ -205,9 +212,9 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                         style={bodyScroll === 'auto' ? styles.bodyScrollView
                             // A fixed-height card whose content owns its scrolling (a catalog list beside its
                             // details): the body takes the card's height and never grows past it.
-                            : framed && (scrollHost === 'body' || fullscreen) ? styles.bodyBounded : styles.bodyUnscrolled}
+                            : fixedHeight || bounded ? styles.bodyBounded : styles.bodyUnscrolled}
                         contentContainerStyle={bodyScroll === 'auto' ? styles.bodyScrollContent
-                            : framed && (scrollHost === 'body' || fullscreen) ? styles.bodyBounded : undefined}
+                            : fixedHeight || bounded ? styles.bodyBounded : undefined}
                         scrollEnabled={bodyScroll === 'auto'}
                         keyboardShouldPersistTaps="handled"
                         nestedScrollEnabled={bodyScroll === 'auto'}

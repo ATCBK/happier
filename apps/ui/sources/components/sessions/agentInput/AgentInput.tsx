@@ -459,6 +459,8 @@ interface AgentInputProps {
      * discussion's composer, where those prompts are not what is being written). Default `auto`.
      */
     messageHistory?: 'auto' | 'none';
+    /** Controls prompt-library contents independently of recalled message history. Default `auto`. */
+    promptLibrary?: 'auto' | 'none';
     /** Changes to a non-empty key open the model/agent picker for an explicit external action. */
     openModelPickerRequestKey?: string | null;
     /**
@@ -1799,13 +1801,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         });
     }, [composerDropMeasurable, composerDropRuntime]);
     const mountedComposerId = React.useId();
+    const promptLibraryAvailable = props.promptLibrary !== 'none';
     const promptPickerSessionAddress = props.sessionAddress ?? typingAddress;
     const promptPicker = usePromptPickerController({
         composerKey: JSON.stringify([
             promptPickerSessionAddress ? sessionAddressKey(promptPickerSessionAddress) : null,
             composerRef ? composerRefV1Key(composerRef) : mountedComposerId,
         ]),
-        editable: dictationEditable && !controlsOnly && props.surfacePresented !== false,
+        editable: promptLibraryAvailable && dictationEditable && !controlsOnly && props.surfacePresented !== false,
         canSend: submitEnabled && !sendActionDisabled,
         inputRef,
         stateRef: inputStateRef,
@@ -1892,7 +1895,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 onFocus={() => { void dictation.onFocus(); }}
             />
             : null);
-    const showPromptLibraryButton = composerPromptLibraryButtonEnabled !== false
+    const showPromptLibraryButton = promptLibraryAvailable && composerPromptLibraryButtonEnabled !== false
         && dictationEditable && !controlsOnly;
     const fieldAccessoryGeometry = resolveAgentInputFieldAccessoryGeometry({
         library: showPromptLibraryButton && !accessoriesInActionRow,
@@ -2212,7 +2215,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         moveUp,
         moveDown,
         handleSuggestionSelect,
-        onOpenPromptPicker: dictationEditable && !controlsOnly ? openPromptPickerFromSlash : undefined,
+        onOpenPromptPicker: promptLibraryAvailable && dictationEditable && !controlsOnly ? openPromptPickerFromSlash : undefined,
     });
     const commandMenuComboboxAccessibility = React.useMemo(
         () => resolveCommandMenuComboboxAccessibility({
@@ -3013,11 +3016,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (canStopFromComposer) {
             handlers['composer.abortConfirm'] = handleComposerAbortShortcut;
         }
-        if (isInputFocused && dictationEditable && !controlsOnly && props.surfacePresented !== false) {
+        if (promptLibraryAvailable && isInputFocused && dictationEditable && !controlsOnly && props.surfacePresented !== false) {
             handlers['composer.prompts.open'] = openPromptPicker;
         }
         return handlers;
-    }, [canStopFromComposer, handleComposerAbortShortcut, handleComposerFocusShortcut, isInputFocused, dictationEditable, controlsOnly, props.surfacePresented, openPromptPicker]);
+    }, [canStopFromComposer, handleComposerAbortShortcut, handleComposerFocusShortcut, isInputFocused, dictationEditable, controlsOnly, props.surfacePresented, openPromptPicker, promptLibraryAvailable]);
     useKeyboardShortcutHandlers(keyboardShortcutHandlers);
 
     const {

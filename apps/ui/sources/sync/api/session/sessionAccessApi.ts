@@ -24,6 +24,31 @@ import { captureEncryptionGenerationCurrentness } from '@/sync/encryption/encryp
 import { searchUsersPageByUsername } from '@/sync/api/social/apiFriends';
 import { readSessionAccessHttpFailureCode } from './sessionAccessHttpFailure';
 import type { SessionPublicVisualNetworkConsequence } from './sessionPublicVisualNetworkConsequence';
+import { SessionAccessCandidatesInspectRequestV1Schema, SessionAccessCandidatesInspectResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
+
+/** Batch preview from the same Home policy owner that admits a grant. Older Homes fail closed. */
+export async function inspectSessionAccessCandidates(options: SessionAccessRequestOptions & Readonly<{
+    sessionId: string;
+    subjects: readonly PrincipalRefV1[];
+}>) {
+    const check = () => {
+        if (options.signal?.aborted || options.isCurrent?.() === false) throw new SessionAccessApiError('session_access_stale_scope');
+    };
+    return await runWithServerRequestAuthorityForServerAccountScope({ scope: options.scope,
+        activeRequest: async () => { throw new SessionAccessApiError('session_access_stale_scope'); },
+    }, async (authority) => {
+        check();
+        const body = SessionAccessCandidatesInspectRequestV1Schema.parse({ v: 1, sessionId: options.sessionId, subjects: options.subjects });
+        const response = await authority.request('/v2/sessions/access-candidates/inspect', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: options.signal,
+        });
+        check();
+        const payload: unknown = await response.json().catch(() => null);
+        check();
+        if (!response.ok) throw createSessionAccessApiErrorFromResponse(payload, response.status);
+        return SessionAccessCandidatesInspectResponseV1Schema.parse(payload);
+    });
+}
 
 export class SessionAccessApiError extends Error {
     constructor(readonly code: string, readonly status?: number) {

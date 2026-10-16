@@ -32,7 +32,7 @@ export function showProjectSourceShareSheet(params: Readonly<{ controller: Proje
             phonePresentation: 'sheet',
             testID: 'project-source-share-modal',
             title: t('shareSheet.documents.shareTitle', { name: params.name }),
-            scrollHost: 'overlay',
+            scrollHost: 'bounded',
             bodyScroll: 'none',
             dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
         },

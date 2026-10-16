@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import {
     DISCUSSION_COMPOSER_SUGGESTION_KINDS,
@@ -48,6 +49,12 @@ type LatestComposerDocument = Readonly<{
  * an empty draft that stays editable — and serializes the document to the discussion's own wire
  * shape. Nothing an agent composer carries is offered: no engine, voice, chips or prompt history.
  */
+// The composer brings its own side gutter and half of it below; a pane foot adds the other half, so the
+// card sits as far from the pane's bottom edge as from its sides.
+const styles = StyleSheet.create((theme) => ({
+    root: { paddingBottom: theme.space.s8 },
+}));
+
 export function SessionDiscussionComposer(props: Readonly<{
     scope: ServerAccountScope;
     address: SessionAddress;
@@ -156,7 +163,7 @@ export function SessionDiscussionComposer(props: Readonly<{
 
     const placeholder = t('session.collaboration.discussion.messagePlaceholder');
     return (
-        <View testID="session-discussion-composer-root">
+        <View testID="session-discussion-composer-root" style={styles.root}>
             <AgentInput
                 value={props.value.text}
                 placeholder={placeholder}
@@ -173,6 +180,7 @@ export function SessionDiscussionComposer(props: Readonly<{
                 engineControls="none"
                 voiceAffordance="none"
                 messageHistory="none"
+                promptLibrary="none"
             />
         </View>
     );

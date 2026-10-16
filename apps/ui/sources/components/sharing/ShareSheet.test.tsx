@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS } from '@/components/ui/selectionList/_constants';
@@ -32,6 +33,11 @@ const adapter = createDocumentShareAdapter({ artifactId: 'wf-1', kind: 'workflow
 
 afterEach(() => vi.useRealTimers());
 
+async function startAdding(screen: Awaited<ReturnType<typeof renderScreen>>, inputTestID = 'document-share-search') {
+    const input = screen.find(node => node.props?.testID === inputTestID && typeof node.props.onFocus === 'function');
+    await act(async () => { input.props.onFocus(); });
+}
+
 describe('ShareSheet full presentation', () => {
     it('offers adding suggestions separately from granted access, without implying a selected grant', async () => {
         vi.useFakeTimers();
@@ -43,6 +49,7 @@ describe('ShareSheet full presentation', () => {
         }] } };
         const screen = await renderScreen(<ShareSheet model={candidates} actions={{ ...actions, addPrincipal: add }}
             adapter={adapter} presentation="full" testID="document-share-editor" />);
+        await startAdding(screen);
         await flushHookEffects({ advanceTimersMs: SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS });
         await screen.pressByTestIdAsync('document-share-add:account:maya');
         expect(add).toHaveBeenCalledWith({ kind: 'account', accountId: 'maya' });
@@ -114,6 +121,7 @@ describe('ShareSheet full presentation', () => {
         }] } };
         const screen = await renderScreen(<ShareSheet model={loading} actions={actions}
             adapter={adapter} presentation="inline" testID="document-share-editor" />);
+        await startAdding(screen);
         await flushHookEffects({ advanceTimersMs: 1 });
         expect(screen.getTextContent()).not.toContain(heading);
         await screen.update(<ShareSheet model={{ ...loading, revision: 1, directory: { query: '', sections: [{
@@ -123,6 +131,69 @@ describe('ShareSheet full presentation', () => {
         }] } }} actions={actions} adapter={adapter} presentation="inline" testID="document-share-editor" />);
         await flushHookEffects({ advanceTimersMs: SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS });
         expect(screen.getTextContent()).toContain(heading);
+    });
+
+    it('lists directory suggestions only once someone starts adding, keeping every directory one Browse away before that', async () => {
+        vi.useFakeTimers();
+        const person = (id: string) => ({ principal: { ref: { kind: 'account' as const, accountId: id }, key: `account:${id}`,
+            displayName: id, accessibilityLabel: id }, addition: { kind: 'allowed' as const }, operation: { kind: 'idle' as const } });
+        const team = { principal: { ref: { kind: 'team' as const, teamId: 'design' }, key: 'team:design',
+            displayName: 'Design', accessibilityLabel: 'Design' }, addition: { kind: 'allowed' as const }, operation: { kind: 'idle' as const } };
+        const directory = (query: string): ShareSheetModel => ({ ...model, directory: { query, sections: [
+            { kind: 'account', title: 'People', status: 'idle', cursor: null, hasMore: false, loadingMore: false, candidates: [person('grace'), person('nora')] },
+            { kind: 'team', title: 'Teams', status: 'idle', cursor: null, hasMore: false, loadingMore: false, candidates: [team] },
+        ] } });
+        const screen = await renderScreen(<ShareSheet model={directory('')} actions={actions}
+            adapter={adapter} presentation="inline" testID="document-share-editor" />);
+        await flushHookEffects({ advanceTimersMs: SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS });
+        // At rest the sheet is the roster: no suggestion rows, but each directory stays browsable.
+        expect(screen.findByTestId('document-share-candidate-account:grace')).toBeNull();
+        expect(screen.findByTestId('document-share-candidate-team:design')).toBeNull();
+        expect(screen.getTextContent()).not.toContain(t('shareSheet.suggestions', { kind: 'People' }));
+        expect(screen.findByTestId('document-share-browse:account')).not.toBeNull();
+        expect(screen.findByTestId('document-share-browse:team')).not.toBeNull();
+
+        await startAdding(screen);
+        await flushHookEffects({ advanceTimersMs: SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS });
+        expect(screen.findByTestId('document-share-candidate-account:grace')).not.toBeNull();
+        expect(screen.findByTestId('document-share-candidate-team:design')).not.toBeNull();
+        // Every person is already listed, so People needs no Browse entry while suggestions show.
+        expect(screen.findByTestId('document-share-browse:account')).toBeNull();
+        expect(screen.findByTestId('document-share-browse:team')).not.toBeNull();
+    });
+
+    it('names why a candidate cannot be added instead of offering Add, and explains it on press', async () => {
+        vi.useFakeTimers();
+        const explain = vi.fn();
+        const add = vi.fn();
+        const reason = { code: 'team_external_sharing_disabled', message: 'Grace is outside Product Reliability, which doesn’t share outside the Team.' };
+        const refused: ShareSheetModel = { ...model, directory: { query: 'gr', sections: [{
+            kind: 'account', title: 'People', status: 'idle', cursor: null, hasMore: false, loadingMore: false,
+            candidates: [{ principal: { ref: { kind: 'account', accountId: 'grace' }, key: 'account:grace',
+                displayName: 'Grace', accessibilityLabel: 'Grace' }, addition: { kind: 'blocked', reason }, operation: { kind: 'idle' } }],
+        }] } };
+        const screen = await renderScreen(<ShareSheet model={refused} actions={{ ...actions, explain, addPrincipal: add }}
+            adapter={adapter} presentation="inline" testID="document-share-editor" />);
+        await flushHookEffects({ advanceTimersMs: SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS });
+        expect(screen.findByTestId('document-share-candidate-account:grace')).not.toBeNull();
+        expect(screen.findByTestId('document-share-add:account:grace')).toBeNull();
+        expect(screen.getTextContent()).toContain(t('shareSheet.cantAdd'));
+        await screen.pressByTestIdAsync('document-share-candidate-account:grace');
+        expect(explain).toHaveBeenCalledWith(reason);
+        expect(add).not.toHaveBeenCalled();
+    });
+
+    it('lists matching suggestions for a typed query without a focus event (a restored search)', async () => {
+        vi.useFakeTimers();
+        const typed: ShareSheetModel = { ...model, directory: { query: 'gr', sections: [{
+            kind: 'account', title: 'People', status: 'idle', cursor: null, hasMore: false, loadingMore: false,
+            candidates: [{ principal: { ref: { kind: 'account', accountId: 'grace' }, key: 'account:grace',
+                displayName: 'Grace', accessibilityLabel: 'Grace' }, addition: { kind: 'allowed' }, operation: { kind: 'idle' } }],
+        }] } };
+        const screen = await renderScreen(<ShareSheet model={typed} actions={actions}
+            adapter={adapter} presentation="inline" testID="document-share-editor" />);
+        await flushHookEffects({ advanceTimersMs: SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS });
+        expect(screen.findByTestId('document-share-candidate-account:grace')).not.toBeNull();
     });
 
     it('hides empty Team and Team-group browse actions and keeps a directory with another page reachable', async () => {

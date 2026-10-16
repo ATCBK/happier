@@ -41,7 +41,7 @@ export function MachineShareTrustDisclosure(
             style={styles.detail}
           >
             <Text style={styles.legendLabel}>{line.label}</Text>
-            {` ${line.text}`}
+            {` — ${line.text}`}
           </Text>
         ))}
         {props.notes.map((note, index) => (

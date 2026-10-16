@@ -125,7 +125,7 @@ describe('SessionDiscussionComposer (the one composer with the discussion adapte
     });
 
     it('is the one composer offering Account mentions only, with no agent chip or agent history', async () => {
-        await render(<Harness />);
+        const screen = await render(<Harness />);
 
         expect(composer().autocompleteKinds).toEqual(['accountMention']);
         expect(composer().engineControls).toBe('none');
@@ -138,6 +138,12 @@ describe('SessionDiscussionComposer (the one composer with the discussion adapte
         expect(composer().inputAccessibilityLabel).toBeTruthy();
         expect(composer().inputAccessibilityLabel).toBe(composer().placeholder);
         expect(typeof composer().onSend).toBe('function');
+        expect(screen.findByTestId('agent-input-prompt-library')).toBeNull();
+    });
+
+    it('keeps the prompt library for agent follow-up inputs that disable message history', async () => {
+        const screen = await render(<AgentInput value="" onChangeText={() => {}} onSend={() => {}} messageHistory="none" autocompleteKinds={[]} autocompleteSuggestions={async () => []} placeholder="Follow up" />);
+        expect(screen.findByTestId('agent-input-prompt-library')).not.toBeNull();
     });
 
     it.each([undefined, 'discussion-1'])('names the real human submit action for discussion %s', async (discussionId) => {

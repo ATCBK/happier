@@ -10,7 +10,7 @@ export const machineSharing = createMachineSharingTranslations({
     recipientTrustDetail: "登入 {machine} 的人可以看到其檔案和輸出；不要在那裡留下不想讓他們讀到的機密。",
     trustedOsLead: '擁有 {machine} 終端機或代理存取權的人會以你的作業系統使用者身分執行。',
     trustedOsDetail: '他們可以取得本機憑證以及帳戶加密金鑰（如有）。Happier API 不會讀取或匯出擁有者的憑證或金鑰，但共享終端機的輸出可能包含這些內容。建議共享團隊專用機器。',
-    manageHelp: '可以管理 {machine} 的人也能將相同存取權共享給其他人。',
+    manageHelp: '將 {machine} 共享給其他人，並授予相同存取權。',
     loading: '正在載入 {machine} 的存取權。', readError: '無法載入 {machine} 的存取權。', offline: '{machine} 已離線。存取權變更會儲存在這裡。', offlineRecipient: "{machine} 已離線。", approvalPending: '此存取權變更正在等待你的核准。',
     denied: '只有可以管理 {machine} 的人才能變更共享設定。', use: '可以使用', manage: '可以管理', allMembers: '所有目前成員，包括之後加入的成員',
     pending: '正在等候有權限的金鑰持有者為 {machine} 準備存取權。', incompatible: '{machine} 已啟用端對端加密，但 {person} 的帳戶尚未啟用，因此 {person} 無法開啟它。',

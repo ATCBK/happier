@@ -3,6 +3,24 @@ import type { SessionDiscussionOpenedMessageV1 } from '@happier-dev/protocol/ses
 
 import type { AgentActivityEntry } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
+import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { t } from '@/text';
+
+/** Display-only: an unacknowledged own row borrows only the exact viewer's profile. */
+export function resolveSessionDiscussionMessageAuthorLabel(
+    message: Pick<SessionDiscussionOpenedMessageV1, 'authorAccountId' | 'accountActor' | 'createdAt'>,
+    viewer?: Readonly<{ accountId: string; profile: Readonly<{ name?: string | null; username?: string | null }> | null }>,
+): string {
+    const actor = message.accountActor;
+    if (actor === null || actor.accountId !== message.authorAccountId) {
+        if (actor === null && message.createdAt === 0 && viewer && message.authorAccountId === viewer.accountId) {
+            return resolveViewerAccountDisplayName(viewer.profile ? formatAccountDisplayName(viewer.profile) : null);
+        }
+        return t('session.collaboration.discussion.collaborator');
+    }
+    if (actor.profile === null) return t('message.accountActorFormerMember');
+    return formatAccountDisplayName(actor.profile) ?? t('message.accountActorUnnamedMember');
+}
 
 export type SessionDiscussionTimelineMessage = Pick<SessionDiscussionOpenedMessageV1, 'id' | 'seq'>;
 

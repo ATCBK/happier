@@ -427,6 +427,38 @@ describe('SessionCollaborationSurface', () => {
         expect(screen.findByTestId('session-collaboration-access-body')?.props.style).toMatchObject({ flex: 1, minHeight: 0 });
     });
 
+    it('names the Home in the Share panel by the name the Home publishes, not by its address', async () => {
+        // A profile saved under its address has no device-local name; the Home's own published
+        // name is how every other surface names it, so the Share panel says it too.
+        const active = await upsertServerProfile({ name: 'collaboration-home-name.example.test', serverUrl: 'https://collaboration-home-name.example.test' });
+        credentials.serverId = active.id;
+        homeFor(active.id).features.homePresentation = { v: 1, displayName: 'Northwind Studio' };
+        await publishFeatures(active.id, ['sharing.session', 'sharing.public'], ['sessions.conversations']);
+        storage.setState((state) => ({
+            profileScope: { serverId: active.id, accountId: credentials.accountId },
+            sessions: {
+                ...state.sessions,
+                'same-id': {
+                    id: 'same-id', metadata: null, currentStorageState: 'hosted', transcriptShareable: true,
+                    access: { capabilities: { managePublicLink: true } },
+                } as unknown as Session,
+            },
+        }));
+        serveSession(active.id);
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionCollaborationSurface target={{ serverId: active.id, sessionId: 'same-id' }} />
+            </AppPaneProvider>,
+        );
+        await vi.waitFor(() => expect(screen.findByTestId('session-collaboration-access-card')).not.toBeNull());
+        await screen.pressByTestIdAsync('session-collaboration-access-card');
+        await vi.waitFor(() => expect(screen.findByTestId('session-access-editor:collaboration')).not.toBeNull());
+        const text = screen.getTextContent();
+        expect(text).toContain(t('session.collaboration.pane.shareBody', { home: 'Northwind Studio' }));
+        expect(text).not.toContain(t('session.collaboration.pane.shareBody', { home: t('common.home') }));
+    });
+
     it('opens conversations-first: the present line, one Responsible row, the conversations, and the access card at the foot', async () => {
         const active = await upsertServerProfile({ name: 'Conversations first Home', serverUrl: 'https://collaboration-conversations-first.example.test' });
         credentials.serverId = active.id;

@@ -74,7 +74,7 @@ export function showMachineShareSheet(params: Readonly<{
             testID: 'machine-share-modal',
             title: t('shareSheet.documents.shareTitle', { name: params.machineName }),
             ...(subtitle ? { subtitle } : {}),
-            scrollHost: 'overlay',
+            scrollHost: 'bounded',
             bodyScroll: 'none',
             dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
         },

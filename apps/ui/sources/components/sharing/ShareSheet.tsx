@@ -47,6 +47,11 @@ export function ShareSheet<TRow extends ShareGrantRowModel>(props: ShareSheetPro
     }, [props.openRowRequest]);
     const [directoryKind, setDirectoryKind] = React.useState<ShareDirectoryKind | undefined>();
     const [copiedPath, setCopiedPath] = React.useState<string | null>(null);
+    // Suggestions appear once someone starts adding and stay for the sheet's life: hiding them again on
+    // blur would pull a row out from under the click that blurred the field. A compact popover is the
+    // add flow itself, so it always lists them.
+    const [addingStarted, setAddingStarted] = React.useState(false);
+    const revealSuggestions = presentation === 'compact' || addingStarted || model.directory.query.trim().length > 0;
     // Private candidate rows and action closures must not enter the primitive's process-wide default cache.
     const [dynamicSectionCache] = React.useState(createDefaultDynamicSectionCache);
     // An acknowledged removal deletes the row the selection anchor points at. Selection moves to the
@@ -83,7 +88,7 @@ export function ShareSheet<TRow extends ShareGrantRowModel>(props: ShareSheetPro
         },
     } : undefined;
     const idPrefix = testID === `${adapter.namespace}-editor` ? '' : `${testID}:`;
-    const input = { model, actions, adapter, presentation, onExpand: setExpanded, idPrefix, ...(copyLink ? { copyLink } : {}) };
+    const input = { model, actions, adapter, presentation, onExpand: setExpanded, idPrefix, revealSuggestions, ...(copyLink ? { copyLink } : {}) };
     const rootStep = buildShareSheetSelectionStep(input);
     const source = directoryKind && model.directory.sections.find((section) => section.kind === directoryKind);
     const activeStep = directoryKind ? buildShareSheetSelectionStep({ ...input, directoryKind }) : null;
@@ -100,6 +105,7 @@ export function ShareSheet<TRow extends ShareGrantRowModel>(props: ShareSheetPro
                 setDirectoryKind(model.directory.sections.find((section) => step.id === shareSheetStepId(adapter.namespace, section.kind))?.kind);
             }}
             inputValue={model.directory.query} onChangeInputValue={actions.setQuery}
+            onInputFocus={() => setAddingStarted(true)}
             selectedOptionId={expanded} onSelect={noop} onRequestClose={onRequestClose ?? noop}
             optionsHostInlineControls dynamicSectionCache={dynamicSectionCache}
             selectionMark="none"

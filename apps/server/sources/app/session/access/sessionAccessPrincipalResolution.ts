@@ -10,6 +10,42 @@ import {
 import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
 import type { Tx } from "@/storage/inTx";
 import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
+import type { SessionAccessCandidatesInspectResponseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
+import { assertSessionAccessManageAccessInTx } from './sessionAccessGrantService';
+import { classifySubjectsExternalToTeamInTx, enforceTeamExternalSharingPolicyInTx } from './sessionAccessExternalSharingPolicy';
+
+/** Preview the same external-audience refusal the grant writer enforces at commit. */
+export async function inspectSessionAccessCandidatesInTx(input: Readonly<{
+    tx: Tx;
+    actorAccountId: string;
+    sessionId: string;
+    subjects: readonly PrincipalRefV1[];
+    authentication: SessionAccessAuthentication;
+}>) {
+    const error = await assertSessionAccessManageAccessInTx(input.tx, input);
+    if (error) return { ok: false as const, error };
+    const session = await input.tx.session.findUniqueOrThrow({
+        where: { id: input.sessionId }, select: { primaryTeamId: true, primaryTeam: { select: { id: true, name: true, archivedAt: true } } },
+    });
+    const primaryTeamId = session.primaryTeamId;
+    const externalSharingReason = primaryTeamId === null ? null : await enforceTeamExternalSharingPolicyInTx(input.tx, {
+        actorAccountId: input.actorAccountId, primaryTeamId, authentication: input.authentication,
+    });
+    const subjects = [...new Map(input.subjects.map((subject) => [principalKey(subject), subject])).values()];
+    const external = externalSharingReason !== null && primaryTeamId !== null
+        ? await classifySubjectsExternalToTeamInTx(input.tx, { primaryTeamId, subjects }) : [];
+    const candidates = subjects.map((subject, index) => ({
+        subject,
+        reason: external[index] ? externalSharingReason : null,
+    }));
+    const value: SessionAccessCandidatesInspectResponseV1 = {
+        v: 1,
+        context: session.primaryTeam ? { teamId: session.primaryTeam.id, name: session.primaryTeam.name,
+            archived: session.primaryTeam.archivedAt !== null, externalSharingReason } : null,
+        candidates,
+    };
+    return { ok: true as const, value };
+}
 
 /** Resolve only the explicitly requested, currently discoverable principals. */
 export async function resolveSessionAccessPrincipalsInTx(input: Readonly<{

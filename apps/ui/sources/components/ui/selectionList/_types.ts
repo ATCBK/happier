@@ -829,6 +829,8 @@ export type SelectionListProps = Readonly<{
     bodyFooter?: React.ReactNode;
     /** Optional element rendered to the left of the input (e.g. folder icon). */
     inputPrefix?: React.ReactNode;
+    /** Notified when the search field gains focus (a host revealing rows only once someone starts adding). */
+    onInputFocus?: () => void;
     /**
      * Optional element rendered inside the input field on the right side. Use
      * this for functional actions (e.g. "Open tree browser" button) — they

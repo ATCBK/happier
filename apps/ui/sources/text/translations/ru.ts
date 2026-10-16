@@ -16717,6 +16717,7 @@ settingsSession: {
     },
     sources: {
         canUse: "Может использовать",
+        canUseHelp: "видеть его и открывать своей учётной записью Git",
         audienceCount: ({ count }: { count: number }) => (count === 1 ? `1 человек или команда` : `Людей и команд: ${count}`),
         shareAfterSave: "Сначала сохраните источник, затем поделитесь им.",
         checkSources: "Проверить источники",

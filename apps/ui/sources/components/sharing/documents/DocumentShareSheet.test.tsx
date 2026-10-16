@@ -376,6 +376,13 @@ async function startGenericArtifactDecision(artifactId: string) {
     return { hook, screen, decision: decision! };
 }
 
+/** Suggestions list once someone starts adding: focus the sheet's search field, then let the list resolve. */
+async function startAdding(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    const input = screen.find(node => node.props?.testID === 'document-share-search' && typeof node.props.onFocus === 'function');
+    await act(async () => { input.props.onFocus(); });
+    await settle();
+}
+
 describe('DocumentShareSheet', () => {
     beforeEach(async () => {
         host.requests = [];
@@ -688,6 +695,7 @@ describe('DocumentShareSheet', () => {
         expect(host.requests.at(-1)).toEqual({ method: 'PUT',
             body: { artifactId: 'wf-1', principal: { kind: 'account', accountId: 'ana' }, accessLevel: 'admin' } });
 
+        await startAdding(screen);
         await screen.pressByTestIdAsync('document-share-candidate-team:payments');
         await settle();
         expect(host.requests.at(-1)).toEqual({ method: 'PUT',
@@ -710,6 +718,7 @@ describe('DocumentShareSheet', () => {
         const screen = await renderScreen(<DocumentShareSheet artifactId="wf-1" kind="workflow-definition.v1" />);
         await settle();
 
+        await startAdding(screen);
         expect(screen.findByTestId('document-share-candidate-team:payments')).not.toBeNull();
         expect(screen.findByTestId('document-share-public-link')).toBeNull();
         expect(host.publicRequests).toEqual([]);

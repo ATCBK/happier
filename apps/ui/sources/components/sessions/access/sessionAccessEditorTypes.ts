@@ -61,6 +61,8 @@ export type SessionAccessContextOption = Readonly<{
 export type SessionAccessContextModel = Readonly<{
     primaryTeamId: string | null;
     options: readonly SessionAccessContextOption[];
+    /** The Home's current sharing-policy refusal, or an explanation while it cannot be checked. */
+    unavailableReason?: SessionAccessUiReason;
     operation?: 'idle' | 'saving' | 'error';
     error?: SessionAccessUiError;
     confirmation?: Readonly<{

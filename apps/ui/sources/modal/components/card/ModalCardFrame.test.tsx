@@ -448,6 +448,37 @@ describe('ModalCardFrame', () => {
         expect(screen.findAllByType('ScrollView').every(node => node.props.scrollEnabled === false)).toBe(true);
     });
 
+    it('sizes the card to its content up to the viewport bound when the body owns overflow', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { ModalCardFrame } = await import('./ModalCardFrame');
+
+        windowState.width = 920;
+        windowState.height = 620;
+
+        const screen = await renderScreen(
+            React.createElement(
+                ModalCardFrame,
+                {
+                    children: React.createElement('Child'),
+                    title: 'Modal title',
+                    testID: 'modal-card-frame',
+                    scrollHost: 'bounded',
+                    dimensions: { size: 'lg' },
+                },
+            ),
+        );
+
+        const container = screen.findByTestId('modal-card-frame');
+        if (container == null) {
+            throw new Error('expected modal card frame to exist');
+        }
+        const styles = (container.props.style as ReadonlyArray<Record<string, unknown> | null | false>).filter(Boolean) as Record<string, unknown>[];
+        // The bound caps the card; a fixed height would leave sparse content in a mostly empty card.
+        expect(styles).toEqual(expect.arrayContaining([expect.objectContaining({ maxHeight: 524 })]));
+        expect(styles.some(style => 'height' in style)).toBe(false);
+        expect(screen.findAllByType('ScrollView').every(node => node.props.scrollEnabled === false)).toBe(true);
+    });
+
     it('marks the card container as a modal card boundary on web (so backdrop clicks can dismiss without swallowing inner clicks)', async () => {
         const { renderScreen } = await import('@/dev/testkit');
         const { ModalCardFrame } = await import('./ModalCardFrame');

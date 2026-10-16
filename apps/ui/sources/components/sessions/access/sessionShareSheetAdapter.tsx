@@ -25,6 +25,16 @@ function SessionContextMark(): React.ReactElement {
     return <Icon name="house" size={ICON_SIZE.lg} color={theme.colors.text.secondary} />;
 }
 
+function SessionContextOptionMark(props: Readonly<{ personal: boolean }>): React.ReactElement {
+    const { theme } = useUnistyles();
+    return <Icon name={props.personal ? 'lock' : 'users'} size={ICON_SIZE.lg} color={theme.colors.text.secondary} />;
+}
+
+function SessionContextReasonMark(): React.ReactElement {
+    const { theme } = useUnistyles();
+    return <Icon name="info" size={ICON_SIZE.lg} color={theme.colors.text.secondary} />;
+}
+
 function SessionEncryptionMark(props: Readonly<{ people?: boolean }>): React.ReactElement {
     const { theme } = useUnistyles();
     return <Icon name={props.people ? 'users' : 'lock'} size={ICON_SIZE.lg} color={theme.colors.text.secondary} />;
@@ -201,6 +211,7 @@ export function createSessionShareSheetAdapter(input: Readonly<{
             }] : [];
             const afterAccess: SelectionListSectionDescriptor[] = [];
             const context = model.context;
+            const contextReason = context?.unavailableReason;
             if (context) {
                 const current = context.options.find((option) => option.teamId === context.primaryTeamId);
                 afterAccess.push({ kind: 'static', id: 'context', options: [{
@@ -211,6 +222,8 @@ export function createSessionShareSheetAdapter(input: Readonly<{
                     expandedContent: () => <View>{context.options.map((option) => <Item
                         key={option.teamId ?? 'personal'}
                         testID={`${idPrefix}session-access-context-${option.teamId ?? 'personal'}`}
+                        // Each choice carries its mark so its title lines up with every other row's title.
+                        icon={<SessionContextOptionMark personal={option.teamId === null} />}
                         title={option.label} subtitle={option.blockedReason?.message}
                         selected={option.teamId === context.primaryTeamId}
                         loading={context.operation === 'saving' && option.teamId === (context.confirmation?.teamId ?? context.primaryTeamId)}
@@ -219,7 +232,12 @@ export function createSessionShareSheetAdapter(input: Readonly<{
                         showChevron={false}
                         rightElement={option.teamId === context.primaryTeamId ? <Icon name="check" /> : undefined}
                     />)}</View>,
-                }] });
+                }, ...(contextReason ? [{
+                    // The one place the Home's refusal is said: under the context that causes it.
+                    id: 'session-context-reason', testID: `${idPrefix}session-access-context-reason`,
+                    label: contextReason.message, icon: () => <SessionContextReasonMark />,
+                    onSelect: () => actions.explain(contextReason),
+                }] : [])] });
                 const confirmation = context.confirmation;
                 if (confirmation) afterAccess.push({ kind: 'static', id: 'context-confirmation', title: confirmation.label, options: [
                     ...confirmation.consequences.map((consequence, index) => ({ id: `context-consequence:${index}`, label: consequence, disabled: true })),
@@ -258,7 +276,9 @@ export function createSessionShareSheetAdapter(input: Readonly<{
             const readOnlyReason = model.readOnlyReason;
             if (readOnlyReason) notices.push({ id: 'read-only', label: readOnlyReason.message, onSelect: () => actions.explain(readOnlyReason) });
             const notice = model.notice;
-            if (notice) notices.push({ id: 'notice', label: notice.message,
+            // The context row already states this cause; say it once.
+            const noticeShownAtContext = notice?.reason !== undefined && contextReason !== undefined && notice.reason.code === contextReason.code;
+            if (notice && !noticeShownAtContext) notices.push({ id: 'notice', label: notice.message,
                 onSelect: notice.action === 'clear_access' ? actions.clearAccess : () => { if (notice.reason) actions.explain(notice.reason); },
                 rightAccessoryOutsidePressable: notice.action === 'clear_access',
                 rightAccessory: notice.action === 'clear_access' ? () => <ShareRowAction label={t('session.access.private')}

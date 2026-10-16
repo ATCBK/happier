@@ -383,6 +383,8 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(screen.findByTestId('machine-share-trusted-os')).not.toBeNull();
             expect(screen.getTextContent()).toContain(t('machines.sharing.trustedOsLead', { machine: 'Devbox' }));
             expect(screen.findByTestId('machine-share-manage-consequence')).not.toBeNull();
+            // The level label and what it adds are two parts, never one run-on sentence.
+            expect(screen.getTextContent()).toContain(`${t('machines.sharing.manage')} — ${t('machines.sharing.manageHelp', { machine: 'Devbox' })}`);
             expect(screen.findByTestId('machine-share-remove-confirm:account:bob')).toBeNull();
             expect(screen.findByTestId('machine-share-remove:account:bob')).not.toBeNull();
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-browse:team')).not.toBeNull());

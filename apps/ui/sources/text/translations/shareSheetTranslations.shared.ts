@@ -27,6 +27,7 @@ export type ShareSheetTranslations = Readonly<{
     linkCopied: string;
     copyLinkFailed: string;
     sendCopy: string;
+    cantAdd: string;
     secrets: Readonly<{
         levels: Readonly<{ canUse: string }>;
         help: Readonly<{ use: string }>;
@@ -87,9 +88,10 @@ export const shareSheetTranslationsEnglish = { en: {
         linkCopied: 'Link copied',
         copyLinkFailed: 'Couldn’t copy the link.',
         sendCopy: 'Send a copy instead',
+        cantAdd: 'Can’t be added',
         secrets: {
             levels: { canUse: 'Can use' },
-            help: { use: 'it in runs; its value is never shown' },
+            help: { use: 'select it for runs; its value is never shown' },
             oneLevel: 'A Saved Secret is only used by runs, and its value never leaves, so it has one level.',
         },
         documents: {
@@ -98,12 +100,12 @@ export const shareSheetTranslationsEnglish = { en: {
             levels: { canUse: 'Can use', canRead: 'Can read', canEdit: 'Can edit', admin: 'Admin' },
             help: {
                 workflowUse: 'see and run it',
-                roleUse: "in their sessions; personal changes stay in their Settings",
+                roleUse: "apply it in their sessions; personal changes stay in their Settings",
                 profileUse: 'start sessions with it',
                 documentUse: 'open and copy it on any of their devices',
-                promptUse: "it in their sessions",
+                promptUse: "insert it in their sessions",
                 boardUse: 'see the board; each card opens only what they can already open',
-                dashboardUse: 'See this dashboard; each widget shows only what you can already open.',
+                dashboardUse: 'see this dashboard; each widget shows only what you can already open.',
                 editForEveryone: 'change it for everyone it’s shared with',
                 adminOwnerShares: 'change it and manage sharing',
             },

@@ -231,7 +231,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, visible, zIn
             webPortalTarget={config.webPortalTarget ?? null}
             webPlacement={config.webPlacement}
             placement={phoneFullscreen ? 'fullscreen' : phoneSheet ? 'bottom' : 'center'}
-            scrollHost={chrome?.scrollHost ?? 'overlay'}
+            scrollHost={chrome?.scrollHost === 'bounded' ? 'body' : chrome?.scrollHost ?? 'overlay'}
         >
             <ModalCardFrame
                 framed={chrome !== null}

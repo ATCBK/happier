@@ -10,7 +10,7 @@ export const machineSharing = createMachineSharingTranslations({
     recipientTrustDetail: "登录 {machine} 的人可以看到其文件和输出；不要在那里留下不想让他们读到的机密。",
     trustedOsLead: '拥有 {machine} 终端或代理访问权限的人以你的操作系统用户身份运行。',
     trustedOsDetail: '他们可以获取本地凭据以及账户加密密钥（如有）。Happier API 不会读取或导出所有者的凭据或密钥，但共享终端的输出可能包含这些内容。我们建议共享团队专用机器。',
-    manageHelp: '可以管理 {machine} 的人也能将相同权限共享给其他人。',
+    manageHelp: '将 {machine} 共享给其他人，并授予相同权限。',
     loading: '正在加载 {machine} 的访问权限。', readError: '无法加载 {machine} 的访问权限。', offline: '{machine} 已离线。访问权限更改会保存在这里。', offlineRecipient: "{machine} 已离线。", approvalPending: '此访问权限更改正在等待你的批准。',
     denied: '只有可以管理 {machine} 的人才能更改共享设置。', use: '可以使用', manage: '可以管理', allMembers: '所有当前成员，包括以后加入的成员',
     pending: '正在等待有权限的密钥持有者为 {machine} 准备访问权限。', incompatible: '{machine} 已启用端到端加密，但 {person} 的账户没有启用，因此 {person} 无法打开它。',

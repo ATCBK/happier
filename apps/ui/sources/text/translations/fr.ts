@@ -16656,6 +16656,7 @@ settingsSession: {
     },
     sources: {
         canUse: "Peut utiliser",
+        canUseHelp: "la voir et l’ouvrir avec son propre compte Git",
         audienceCount: ({ count }: { count: number }) => (count === 1 ? `1 personne ou équipe` : `${count} personnes et équipes`),
         shareAfterSave: "Enregistre d’abord la source, puis partage-la.",
         checkSources: "Vérifier les sources",

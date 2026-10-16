@@ -8,7 +8,7 @@ export function createProjectSourceShareAdapter(): ShareSheetAdapter {
         title: t('projects.sources.audience'),
         levels: {
             // A Source grant lets people open the repository with their own Git account: "Can use", not a document's "Can read".
-            view: { label: t('projects.sources.canUse'), help: t('projects.sources.ownCredential') },
+            view: { label: t('projects.sources.canUse'), help: t('projects.sources.canUseHelp') },
             edit: { label: t('shareSheet.documents.levels.canEdit') },
             admin: { label: t('shareSheet.documents.levels.admin') },
         },

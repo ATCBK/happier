@@ -19,6 +19,9 @@ import { useSessionViewShellSession } from '@/components/sessions/shell/sessionV
 import { isSessionWriteKnownDenied } from '@/utils/sessions/deriveTranscriptInteraction';
 import { publishInteractiveExecutionRunDraftNavigationIntent } from '@/components/sessions/runs/launcher/interactiveExecutionRunDraftNavigationIntent';
 import { SelectMessageButton } from '@/components/sessions/transcript/messageSelection/SelectMessageButton';
+import { readCoarsePrimaryPointer, useRowActionHoverHost } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
+import { shouldShowTranscriptRowActions } from '@/components/sessions/transcript/transcriptRowActionVisibility';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { TranscriptMessageSelectionBoundary } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 import { TranscriptSelectionToolbar, type TranscriptSelectionToolbarMessage } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbar';
 import { createWebDomScrollObservation } from '@/components/sessions/transcript/viewport/driver/webDomObservation';
@@ -70,7 +73,8 @@ import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { SessionDiscussionAgentActivityReference } from './SessionDiscussionAgentActivityReference';
 import { resolveSessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
 import { useOpenSessionAgentConversation } from './useOpenSessionAgentConversation';
-import { buildSessionDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, type SessionDiscussionTimelineItem } from './sessionDiscussionTimelineProjection';
+import { buildSessionDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveSessionDiscussionMessageAuthorLabel, type SessionDiscussionTimelineItem } from './sessionDiscussionTimelineProjection';
+import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
 import { isSelectableDiscussionMessage, prepareDiscussionSelectionHandoff } from './prepareDiscussionSelectionHandoff';
 import { sendDiscussionSelectionToSession } from './sendDiscussionSelectionToSession';
 import { SessionDiscussionComposer } from './SessionDiscussionComposer';
@@ -188,15 +192,6 @@ function renderDiscussionMessageContent(
             testID={`session-discussion-mention-${message.id}-${index}`}
             style={styles.mention}
         >{`@${resolveAccountLabel(part.accountId) ?? t('session.collaboration.discussion.collaborator')}`}</Text>);
-}
-
-function discussionMessageActorLabel(message: SessionDiscussionOpenedMessageV1): string {
-    const actor = message.accountActor;
-    if (actor === null || actor.accountId !== message.authorAccountId) {
-        return t('session.collaboration.discussion.collaborator');
-    }
-    if (actor.profile === null) return t('message.accountActorFormerMember');
-    return formatAccountDisplayName(actor.profile) ?? t('message.accountActorUnnamedMember');
 }
 
 function discussionMessageProducerClass(message: SessionDiscussionOpenedMessageV1): string {
@@ -422,10 +417,13 @@ function Discussion(props: Readonly<{ target: Extract<SessionDiscussionDetailsTa
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [discussion?.id, openedTitle]);
     const messages = thread?.messages ?? [];
+    // The viewer's own unacknowledged message is authored with their scoped profile, not "Collaborator".
+    const viewerProfile = useShareViewerProfile(props.scope);
+    const viewer = React.useMemo(() => ({ accountId: props.scope.accountId, profile: viewerProfile }), [props.scope.accountId, viewerProfile]);
     const historicalActorLabels = React.useMemo(() => new Map(messages.flatMap((message) => {
         const actor = message.accountActor;
         if (actor === null || actor.accountId !== message.authorAccountId) return [];
-        return [[actor.accountId, discussionMessageActorLabel(message)] as const];
+        return [[actor.accountId, resolveSessionDiscussionMessageAuthorLabel(message)] as const];
     })), [messages]);
     const resolveAccountLabel = React.useCallback((accountId: string): string | null => {
         const historicalLabel = historicalActorLabels.get(accountId);
@@ -780,6 +778,7 @@ function Discussion(props: Readonly<{ target: Extract<SessionDiscussionDetailsTa
                         const pendingMutation = item.message.localId === mutation?.localId ? mutation : null;
                         return <DiscussionMessageRow
                             message={item.message}
+                            authorLabel={resolveSessionDiscussionMessageAuthorLabel(item.message, viewer)}
                             startsGroup={messageGroupStarts.has(item.message.id)}
                             selectable={isSelectableDiscussionMessage(item.message) && item.message.id !== mutation?.localId}
                             resolveAccountLabel={resolveAccountLabel}
@@ -838,15 +837,27 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
     startsGroup: boolean;
     selectable: boolean;
     resolveAccountLabel: (accountId: string) => string | null;
+    authorLabel: string;
     footer: React.ReactNode;
 }>) => {
     const { message } = props;
     const selection = useOptionalTranscriptSelectionRow(message.id);
+    // The transcript's one row-action policy: on a fine pointer the select mark waits for hover, focus
+    // or selection mode, so the conversation reads as messages rather than a column of checkboxes.
+    const hover = useRowActionHoverHost();
+    const selectRevealed = shouldShowTranscriptRowActions({
+        platformOS: Platform.OS,
+        isRowHovered: hover.isHovered,
+        isActionHovered: false,
+        coarsePrimaryPointer: readCoarsePrimaryPointer(),
+        selectionModeActive: selection.isSelectionMode,
+    });
     const actor = message.accountActor;
     const faceAccountId = actor !== null && actor.accountId === message.authorAccountId ? actor.accountId : message.authorAccountId;
     return <View
         testID={`session-discussion-message-group-${props.startsGroup ? 'start' : 'continuation'}-${message.id}`}
         style={[styles.message, !props.startsGroup ? styles.messageGroupContinuation : null, selection.isSelected ? styles.messageSelected : null]}
+        {...(props.selectable ? hover.hoverProps : null)}
     >
         <View style={styles.messageFaceColumn}>
             {props.startsGroup && faceAccountId
@@ -855,16 +866,16 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
         </View>
         <View style={styles.messageBody}>
             {props.startsGroup ? <View style={styles.messageAttribution}>
-                <Text testID={`session-discussion-message-actor-${message.id}`} style={styles.messageAuthor}>{discussionMessageActorLabel(message)}</Text>
+                <Text testID={`session-discussion-message-actor-${message.id}`} style={styles.messageAuthor}>{props.authorLabel}</Text>
                 {message.producerV1 ? <Text testID={`session-discussion-message-producer-${message.id}`} style={styles.meta}>{t('session.collaboration.discussion.viaAgent')}</Text> : null}
                 {message.createdAt > 0 ? <Text testID={`session-discussion-message-timestamp-${message.id}`} accessibilityRole="text" accessibilityLabel={new Date(message.createdAt).toLocaleString()} style={styles.timestamp}>{formatShortRelativeTime(message.createdAt)}</Text> : null}
             </View> : null}
             <Text testID={`session-discussion-message-content-${message.id}`} style={styles.messageText}>{renderDiscussionMessageContent(message, props.resolveAccountLabel)}</Text>
             {props.footer}
         </View>
-        {props.selectable ? <View style={styles.selectAffordance}>
+        {props.selectable ? <RowActionRevealSlot revealed={selectRevealed} style={styles.selectAffordance} testID={`session-discussion-select-slot-${message.id}`}>
             <SelectMessageButton messageId={message.id} enabled visible role="user" previewText={textOf(message.content, props.resolveAccountLabel)} testID={`session-discussion-select-${message.id}`} />
-        </View> : null}
+        </RowActionRevealSlot> : null}
     </View>;
 });
 

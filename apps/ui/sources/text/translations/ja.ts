@@ -16690,6 +16690,7 @@ settingsSession: {
     },
     sources: {
         canUse: "使用可",
+        canUseHelp: "表示し、自分の Git アカウントで開けます",
         audienceCount: ({ count }: { count: number }) => (count === 1 ? `1 人またはチーム` : `${count} 人とチーム`),
         shareAfterSave: "先にソースを保存してから共有してください。",
         checkSources: "ソースを確認",

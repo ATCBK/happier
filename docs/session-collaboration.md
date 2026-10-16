@@ -98,6 +98,14 @@ set only by the Team session-policy composition and is never accepted from a cli
 `SessionGroupGrant` stores no redundant `teamId`: the Group reaches its Team through its own
 relation.
 
+In 0.3 development, the live access editor previews context-policy refusals through the
+manager-only `/v2/sessions/access-candidates/inspect` read. It batches the directory subjects
+and delegates externality and the context Team's verdict to the same server policy owner
+as the grant writer. The reply also names the current context and reports its archive state;
+absence from an active-Team directory alone does not prove archiving. A Home without this
+read leaves context-scoped additions unavailable with a retry explanation. The grant writer
+still rechecks current policy when a change is submitted.
+
 ## Key delivery is a separate fact
 
 The envelope collection preserves restricted Team authentication recovery for the

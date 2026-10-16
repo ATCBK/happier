@@ -37,6 +37,22 @@ export const SessionAccessErrorCodeV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type SessionAccessErrorCodeV1 = z.infer<typeof SessionAccessErrorCodeV1Schema>;
 
+/** Manager-only preview of the current context policy; the grant writer rechecks at commit. */
+export const SessionAccessCandidatesInspectRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  sessionId: z.string().check(z.minLength(1)),
+  subjects: z.array(PrincipalRefV1Schema),
+}));
+export const SessionAccessCandidatesInspectResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  context: z.nullable(z.strictObject({
+    teamId: z.string().check(z.minLength(1)), name: z.string(), archived: z.boolean(),
+    externalSharingReason: z.nullable(SessionAccessErrorCodeV1Schema),
+  })),
+  candidates: z.array(z.strictObject({ subject: PrincipalRefV1Schema, reason: z.nullable(SessionAccessErrorCodeV1Schema) })),
+}));
+export type SessionAccessCandidatesInspectResponseV1 = z.infer<typeof SessionAccessCandidatesInspectResponseV1Schema>;
+
 export const SessionAccessPrincipalSummaryV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   SessionAccessAccountSummaryV1Schema,
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TeamPrincipalRefV1Schema, { name: z.string() })),

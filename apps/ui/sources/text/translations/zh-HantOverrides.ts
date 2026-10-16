@@ -12930,6 +12930,7 @@ settingsSession: {
         },
         sources: {
             canUse: "可使用",
+            canUseHelp: "檢視此來源，並使用自己的 Git 帳號開啟",
             audienceCount: ({ count }: { count: number }) => (count === 1 ? `1 個人或團隊` : `${count} 個人和團隊`),
             shareAfterSave: "請先儲存來源，然後再分享。",
             checkSources: "檢查來源",

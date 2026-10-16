@@ -20444,6 +20444,7 @@ const enProjects = {
   },
   sources: {
     canUse: "Can use",
+    canUseHelp: "see it and open it with their own Git account",
     audienceCount: ({ count }: { count: number }) => (count === 1 ? `1 person or team` : `${count} people and teams`),
     shareAfterSave: "Save the source first, then share it.",
     checkSources: "Check sources",

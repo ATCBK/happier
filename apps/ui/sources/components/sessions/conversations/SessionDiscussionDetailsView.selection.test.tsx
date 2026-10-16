@@ -5,6 +5,7 @@ import type { SessionMessageAccountActorV1 } from '@happier-dev/protocol';
 import type { SessionDiscussionRepositoryMutationOutcome } from '@/sync/ops/sessionDiscussions/sessionDiscussionRepository';
 
 import { renderScreen } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 const pane = vi.hoisted(() => ({ openDetailsTab: vi.fn(), closeDetails: vi.fn(), closeDetailsTab: vi.fn() }));
 const clipboard = vi.hoisted(() => vi.fn<(value: string) => Promise<boolean>>(async () => true));
@@ -113,7 +114,15 @@ vi.mock('react-native', async () => {
         useWindowDimensions: () => ({ width: deviceType.current === 'phone' ? 390 : 1440, height: 900, scale: 1, fontScale: 1 }),
     });
 });
-vi.mock('@/sync/domains/state/storage', () => ({ useSetting: (key: string) => key === 'transcriptBulkCopyFormat' ? 'markdown_labeled' : '{{MESSAGES}}' }));
+vi.mock('@/sync/domains/state/storage', async () => {
+    // Settings are read from the canonical defaults; only the bulk-copy choices are pinned for these assertions.
+    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+    const settings: Record<string, unknown> = { ...settingsDefaults, transcriptBulkCopyFormat: 'markdown_labeled' };
+    return {
+        useSetting: (key: string) => key === 'transcriptBulkCopyFormat' ? 'markdown_labeled' : '{{MESSAGES}}',
+        useSettingsSelector: <T,>(selector: (value: Record<string, unknown>) => T) => selector(settings),
+    };
+});
 vi.mock('@/utils/ui/clipboard', () => ({ setClipboardStringSafe: clipboard }));
 vi.mock('@/components/sessions/presentation/sessionComposerPresentationTargets', () => ({ requestRegisteredSessionComposerFocus: focusComposer }));
 vi.mock('@/sync/sync', () => ({ sync: { patchSessionMetadataWithRetry: metadataWrites } }));
@@ -460,6 +469,28 @@ describe('SessionDiscussionDetailsView selection', () => {
         }), { intent: 'preview' });
     });
 
+    it('keeps the select mark out of the reading until a fine pointer hovers the row or selection mode starts', async () => {
+        const screen = await renderScreen(<SessionDiscussionDetailsView target={{ kind: 'discussion', address: { serverId: 'server-a', sessionId: 'session-a' }, discussionId: 'discussion-a' }} active />);
+        const slotRevealed = (messageId: string) => {
+            const slot = screen.findByTestId(`session-discussion-select-slot-${messageId}`);
+            const style = [slot?.props.style].flat(Infinity).reduce<Record<string, unknown>>((all, part) => ({ ...all, ...(part ?? {}) }), {});
+            return style.pointerEvents !== 'none';
+        };
+        expect(slotRevealed('message-a')).toBe(false);
+        expect(slotRevealed('message-agent')).toBe(false);
+
+        const row = screen.findByTestId('session-discussion-message-group-start-message-a');
+        await act(async () => { row?.props.onPointerEnter(); });
+        expect(slotRevealed('message-a')).toBe(true);
+        expect(slotRevealed('message-agent')).toBe(false);
+        await act(async () => { row?.props.onPointerLeave(); });
+        expect(slotRevealed('message-a')).toBe(false);
+
+        // Once selecting, every eligible row carries its mark.
+        await press(screen, 'session-discussion-select-message-a');
+        expect(slotRevealed('message-agent')).toBe(true);
+    });
+
     it('mounts row selection, copies canonical labeled text, and opens the interactive Agent draft', async () => {
         const screen = await renderScreen(<SessionDiscussionDetailsView target={{ kind: 'discussion', address: { serverId: 'server-a', sessionId: 'session-a' }, discussionId: 'discussion-a' }} active />);
 
@@ -613,6 +644,24 @@ describe('SessionDiscussionDetailsView selection', () => {
         expect(routerReplace).toHaveBeenCalledWith('/session/session%2Fa?serverId=https%3A%2F%2Fhome.example.test%3A8443');
         expect(pane.closeDetails).not.toHaveBeenCalled();
         expect(focusComposer).toHaveBeenCalledWith({ serverId: 'https://home.example.test:8443', sessionId: 'session/a' });
+    });
+
+    it('authors the viewer\'s own unacknowledged message with their name, not as a generic collaborator', async () => {
+        // The viewer's own signed-in profile, scoped to the exact Home the conversation lives on.
+        const current = getStorage().getState().profile;
+        getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'viewer' },
+            profile: { ...current!, name: 'Maya Chen', firstName: 'Maya', lastName: 'Chen', username: 'maya' } });
+        (snapshot.mutations as Record<string, unknown>)['post-local-unknown'] = {
+            kind: 'post', localId: 'post-local-unknown', discussionId: 'discussion-a', status: 'outcome_unknown', errorCode: 'outcome_unknown',
+            content: { v: 1, parts: [{ t: 'text', text: 'Checklist reviewed' }] }, mentionedAccountIds: [],
+            draftSubmission: {
+                scope: { serverId: 'server-a', accountId: 'viewer' },
+                address: { kind: 'discussion', sessionId: 'session-a', discussionId: 'discussion-a' },
+                currentness: { v: 1, fields: {} },
+            },
+        };
+        const screen = await renderScreen(<SessionDiscussionDetailsView target={{ kind: 'discussion', address: { serverId: 'server-a', sessionId: 'session-a' }, discussionId: 'discussion-a' }} active />);
+        expect(screen.findByTestId('session-discussion-message-actor-post-local-unknown')?.props.children).toBe('Maya Chen');
     });
 
     it('presents a settled unknown outcome distinctly and retries the retained identity only on request', async () => {

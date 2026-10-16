@@ -33,7 +33,10 @@ export function ShareLevelControl<TRow extends ShareGrantRowModel>(props: Readon
     const label = props.adapter.levels[row.level.value]?.label ?? t('shareSheet.accessLevel');
     return <HappierShareLevelControl host={host} label={label} testID={props.testID}
         // A quiet mark at the row's trailing-glyph step, in the one icon family, beside the level it locks.
-        lock={props.adapter.showsLevelLock?.(row) ? <Icon name="lock" size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> : undefined}
+        // In a sheet the viewer manages, a level they cannot change here is marked too, so it reads as a held
+        // level rather than as fixed role text like Owner; pressing it says why.
+        lock={props.adapter.showsLevelLock?.(row) || (props.editable && row.level.kind === 'locked')
+            ? <Icon name="lock" size={ICON_SIZE.sm} color={theme.colors.text.secondary} testID={`${props.testID}:lock`} /> : undefined}
         accessibilityLabel={t('shareSheet.accessibleControl', { name: row.principal.accessibilityLabel, control: t('shareSheet.accessLevel'), value: label })}
         disabled={isBusy(row)}
         // The same caret, at the same size, as every other select trigger (the dropdown trigger's own glyph).

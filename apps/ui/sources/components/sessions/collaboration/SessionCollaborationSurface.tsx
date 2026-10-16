@@ -21,7 +21,8 @@ import { Typography } from '@/constants/Typography';
 import { useSessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { getServerProfileById, readServerProfileHomeName } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { useHomeDisplayName } from '@/components/settings/server/homeDisplayName';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { t } from '@/text';
 import { SessionPresenceSection } from './SessionPresenceSection';
@@ -263,7 +264,8 @@ function SessionCollaborationAccountContent(props: Readonly<{ scope: ServerAccou
         authorityCurrent: snapshot.kind === 'ready',
     });
     const homeProfile = getServerProfileById(props.scope.serverId);
-    const homeName = (homeProfile ? readServerProfileHomeName(homeProfile) : null) ?? t('common.home');
+    // The name the Home publishes, as every other surface names it; a device-local label is only its fallback.
+    const homeName = useHomeDisplayName(homeProfile) ?? t('common.home');
     const pane = {
         scope: props.scope,
         sessionId: props.sessionId,

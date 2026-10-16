@@ -38,7 +38,8 @@ import {
 import { useSessionListSelectionState } from '@/hooks/session/useSessionListSelectionState';
 import { useVisibleSessionListPaneState } from '@/hooks/session/useVisibleSessionListPaneState';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { getServerProfileById, readServerProfileHomeName } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { useSessionListQueryHomeSupportByServerId, useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import { buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import { storage, useLocalSettingMutable, useSessionListRowRenderablesForItems } from '@/sync/domains/state/storage';
@@ -257,7 +258,7 @@ export function BotsPopoverContent(
     () => {
       if (!offlineHome) return null;
       const profile = getServerProfileById(offlineHome);
-      return (profile ? readServerProfileHomeName(profile) : null) ?? t('settingsAccount.thisHomeTitle');
+      return resolveHomeDisplayLabel(profile, offlineHome);
     },
     [offlineHome],
   );

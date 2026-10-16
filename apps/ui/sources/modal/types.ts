@@ -93,8 +93,10 @@ export type CustomModalChromeCardConfig = Readonly<{
      * - `overlay`: the outer BaseModal overlay scrolls (default)
      * - `body`: the modal card is constrained to the viewport and the modal body is expected
      *   to provide its own internal scroll region when needed
+     * - `bounded`: the card is as tall as its content up to the viewport bound, then the modal body
+     *   scrolls inside it (header and footer stay in view); use it when the content's size varies
      */
-    scrollHost?: 'overlay' | 'body';
+    scrollHost?: 'overlay' | 'body' | 'bounded';
     bodyScroll?: 'none' | 'auto';
     testID?: string;
     titleTestID?: string;

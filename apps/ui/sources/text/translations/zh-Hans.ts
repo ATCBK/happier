@@ -16377,6 +16377,7 @@ settingsSession: {
     },
     sources: {
         canUse: "可使用",
+        canUseHelp: "查看此源，并使用自己的 Git 账户打开",
         audienceCount: ({ count }: { count: number }) => (count === 1 ? `1 个人或团队` : `${count} 个人和团队`),
         shareAfterSave: "请先保存源，然后再共享。",
         checkSources: "检查源",

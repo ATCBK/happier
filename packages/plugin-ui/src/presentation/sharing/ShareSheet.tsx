@@ -74,9 +74,10 @@ export function HappierShareHelp(props: HappierShareHelpProps) {
   // Nothing to explain draws nothing: an empty padded block would leave dead space under the list.
   if (!props.levels.length && !props.note) return null;
   return <View testID={props.testID} style={styles.help}>
-    {/* One unit per level: a level wraps as a whole, never mid-phrase into the next one. */}
+    {/* One level per line: a level and what it allows never run into the next one's label. */}
     {props.levels.length ? <View style={styles.levels}>{props.levels.map((line) => <View key={line.label} style={styles.level}>
-      <Text tone="secondary"><Text tone="strong">{line.label}</Text>{` ${line.text}`}</Text>
+      {/* The dash keeps the level and what it allows as two readable parts ("Can view — read the session"). */}
+      <Text tone="secondary"><Text tone="strong">{line.label}</Text>{` — ${line.text}`}</Text>
     </View>)}</View> : null}
     {props.note ? <View testID={props.testID ? `${props.testID}:note:0` : undefined} style={[styles.note, { backgroundColor: host.noteColor }]}>
       {props.noteIcon}<View style={{ flex: 1, minWidth: 0 }}><Text tone="secondary">{props.note}</Text></View>
@@ -97,7 +98,7 @@ const styles = StyleSheet.create({
   phoneAction: { flexShrink: 1, minWidth: 0 }, phoneDone: { alignSelf: 'stretch' },
   help: { paddingHorizontal: HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx, paddingVertical: HAPPIER_PAGE_METRICS.groupSeparatorGapPx,
     gap: HAPPIER_PAGE_METRICS.groupHeadingGapPx },
-  levels: { flexDirection: 'row', flexWrap: 'wrap', columnGap: HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx },
+  levels: { flexDirection: 'column' },
   level: { maxWidth: '100%', flexShrink: 1 },
   note: { flexDirection: 'row', alignItems: 'flex-start', gap: HAPPIER_PAGE_METRICS.groupHeadingGapPx,
     padding: HAPPIER_PAGE_METRICS.groupSeparatorGapPx, borderRadius: HAPPIER_PAGE_METRICS.sheetRadiusPx },

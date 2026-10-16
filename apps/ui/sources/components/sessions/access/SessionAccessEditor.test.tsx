@@ -271,6 +271,21 @@ describe('SessionAccessEditor', () => {
         await screen.pressByTestIdAsync('session-access-context-design');
         expect(intent.setContext).toHaveBeenCalledWith('design');
     });
+    it('says once, under the session context it belongs to, why this session cannot be shared further', async () => {
+        const intent = actions();
+        const archived = { code: 'session_access_context_team_archived', message: 'Product Reliability is archived.' };
+        const screen = await renderScreen(<SessionAccessEditor model={model({
+            context: { primaryTeamId: 'reliability', unavailableReason: archived, options: [
+                { teamId: null, label: 'Private' },
+                { teamId: 'reliability', label: 'Product Reliability', blockedReason: archived },
+            ] },
+            notice: { message: archived.message, reason: archived },
+        })} actions={intent} presentation="full" />);
+        expect(screen.findByTestId('session-access-context')?.props.accessibilityLabel ?? screen.getTextContent()).toContain('Product Reliability');
+        expect(screen.getTextContent().split('Product Reliability is archived.').length - 1).toBe(1);
+        await screen.pressByTestIdAsync('session-access-context-reason');
+        expect(intent.explain).toHaveBeenCalledWith(archived);
+    });
     it('renders context consequences and requires an explicit confirmation', async () => {
         const intent = actions();
         const screen = await renderScreen(<SessionAccessEditor model={model({ context: {

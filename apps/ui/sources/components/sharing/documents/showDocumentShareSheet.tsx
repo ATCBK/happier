@@ -52,7 +52,7 @@ export function showDocumentShareSheet(params: Omit<DocumentShareSheetProps, 'on
             title: t('shareSheet.documents.shareTitle', { name }),
             subtitle: identity,
             // Content-sized card chrome; the sheet's SelectionList owns its rows, not a body ScrollView.
-            scrollHost: 'overlay',
+            scrollHost: 'bounded',
             bodyScroll: 'none',
             dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
         },

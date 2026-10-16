@@ -10,7 +10,7 @@ export const machineSharing = createMachineSharingTranslations({
     recipientTrustDetail: "Quienes inician sesión en {machine} pueden ver sus archivos y su salida; no dejes ahí secretos que no quieras que lean.",
     trustedOsLead: 'Las personas con acceso al terminal o a los agentes de {machine} ejecutan comandos como tu usuario del sistema operativo.',
     trustedOsDetail: 'Pueden obtener tus credenciales locales y la clave de cifrado de la cuenta, si existe. Ninguna API de Happier lee ni exporta credenciales o claves del propietario; la salida del terminal compartido puede contenerlas. Recomendamos compartir una máquina dedicada al equipo.',
-    manageHelp: 'Quienes pueden administrar {machine} también pueden compartirla con otras personas y darles el mismo acceso.',
+    manageHelp: 'compartir {machine} con otras personas y darles el mismo acceso.',
     loading: 'Cargando el acceso a {machine}.', readError: 'No se pudo cargar el acceso a {machine}.', offline: '{machine} está sin conexión. Los cambios de acceso se guardan aquí.', offlineRecipient: "{machine} está sin conexión.", approvalPending: 'Este cambio de acceso espera tu aprobación.',
     denied: 'Solo quienes pueden administrar {machine} pueden cambiar el acceso compartido.', use: 'Puede usar', manage: 'Puede administrar', allMembers: 'Todos los miembros actuales, incluidos quienes se incorporen después',
     pending: 'Esperando a que una persona autorizada con la clave prepare el acceso a {machine}.', incompatible: '{machine} tiene cifrado de extremo a extremo y la cuenta de {person} no, por lo que {person} no puede abrirla.',

@@ -10,7 +10,8 @@ import { validateRequiredTeamVisibilityInTx } from "@/app/teams/credentials/sess
 import { SessionTeamCredentialBindingRejectionV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
-import { resolveSessionAccessPrincipalsInTx } from "@/app/session/access/sessionAccessPrincipalResolution";
+import { inspectSessionAccessCandidatesInTx, resolveSessionAccessPrincipalsInTx } from "@/app/session/access/sessionAccessPrincipalResolution";
+import { SessionAccessCandidatesInspectRequestV1Schema, SessionAccessCandidatesInspectResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 
 const ErrorSchema = z.object({ error: z.string(), reason: z.optional(SessionTeamCredentialBindingRejectionV1Schema) });
 const errors = { 400: ErrorSchema, 403: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema, 503: ErrorSchema };
@@ -30,6 +31,18 @@ function errorStatus(error: SessionAccessGrantErrorCode): 400 | 403 | 404 | 409 
 /** Current desired-state transport; the grant service owns admission, persistence and access effects. */
 export function registerSessionAccessGrantRoutes(app: Fastify) {
     const collaborationApp = createServerFeatureGatedRouteApp(app, "sharing.session");
+    collaborationApp.post('/v2/sessions/access-candidates/inspect', {
+        preHandler: app.authenticate,
+        schema: { body: SessionAccessCandidatesInspectRequestV1Schema,
+            response: { 200: SessionAccessCandidatesInspectResponseV1Schema, ...errors } },
+    }, async (request, reply) => {
+        const result = await inTx((tx) => inspectSessionAccessCandidatesInTx({
+            tx, actorAccountId: request.userId, ...request.body,
+            authentication: readSessionAccessAuthenticationFromRequest(request),
+        }), { isolationLevel: 'Serializable', readOnly: true });
+        if (!result.ok) return reply.code(errorStatus(result.error)).send({ error: result.error });
+        return reply.send(result.value);
+    });
     collaborationApp.post("/v1/session-access/principals/resolve", {
         preHandler: app.authenticate,
         schema: {

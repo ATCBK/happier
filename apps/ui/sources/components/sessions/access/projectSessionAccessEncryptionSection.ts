@@ -193,8 +193,11 @@ export function projectSessionAccessEncryptionSection(input: Readonly<{
                 return {
                     statusKey: 'ready',
                     announcement: t('session.access.preparationAnnouncedComplete'),
-                    summaryLabel: t('session.access.prepared'),
-                    accessibilityLabel: t('session.access.prepared'),
+                    // One state line under the "Encrypted access" title; the title already names the fact.
+                    summaryLabel: t('session.access.preparedForEveryone'),
+                    accessibilityLabel: t('session.access.accessibleSummary', {
+                        title: t('session.access.encryptedAccess'), label: t('session.access.preparedForEveryone'),
+                    }),
                     showAllLabel,
                     ...expansion,
                 };

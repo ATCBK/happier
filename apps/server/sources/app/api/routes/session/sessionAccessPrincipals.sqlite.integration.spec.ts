@@ -6,6 +6,7 @@ import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { admitTeamMemberInTx } from "@/app/teams/memberships/membershipService";
 import { registerSessionAccessGrantRoutes } from "./registerSessionAccessGrantRoutes";
+import { SessionAccessCandidatesInspectResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 
 describe("Selected Session access principals (SQLite HTTP integration)", () => {
     let harness: LightSqliteHarness;
@@ -140,5 +141,39 @@ describe("Selected Session access principals (SQLite HTTP integration)", () => {
             const response = await app.inject({ method: "POST", url: "/v1/session-access/principals/resolve", headers: { "x-test-user-id": actor.id }, payload });
             expect(response.statusCode).toBe(400);
         }
+    });
+
+    it("projects the writer's context-policy verdict for each candidate, including an archived context", async () => {
+        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
+        const inside = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
+        const outside = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
+        const stranger = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
+        const team = await db.team.create({ data: { name: 'Product Reliability', externalSharingPolicy: 'disabled' } });
+        for (const accountId of [owner.id, inside.id]) await inTx((tx) => admitTeamMemberInTx(tx, {
+            teamId: team.id, accountId, role: accountId === owner.id ? 'owner' : 'member', historyAccess: 'all_existing',
+        }));
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', agentState: '{}', primaryTeamId: team.id,
+        } });
+        const subjects = [{ kind: 'account', accountId: inside.id }, { kind: 'account', accountId: outside.id }];
+        const inspect = (actorAccountId = owner.id) => app.inject({
+            method: 'POST', url: '/v2/sessions/access-candidates/inspect',
+            headers: { 'x-test-user-id': actorAccountId }, payload: { v: 1, sessionId: session.id, subjects },
+        });
+        const active = await inspect();
+        expect(active.statusCode).toBe(200);
+        expect(SessionAccessCandidatesInspectResponseV1Schema.parse(active.json())).toEqual({ v: 1, context: {
+            teamId: team.id, name: team.name, archived: false, externalSharingReason: 'session_access_external_sharing_disabled',
+        }, candidates: [
+            { subject: subjects[0], reason: null },
+            { subject: subjects[1], reason: 'session_access_external_sharing_disabled' },
+        ] });
+        expect((await inspect(stranger.id)).statusCode).toBe(403);
+        await db.team.update({ where: { id: team.id }, data: { archivedAt: new Date() } });
+        const archived = await inspect();
+        expect(archived.statusCode).toBe(200);
+        expect(archived.json().context).toMatchObject({ name: team.name, archived: true });
+        expect(archived.json().candidates.map((candidate: { reason: string | null }) => candidate.reason))
+            .toEqual(['session_access_external_sharing_disabled', 'session_access_external_sharing_disabled']);
     });
 });

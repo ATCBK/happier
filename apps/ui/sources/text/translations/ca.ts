@@ -14733,6 +14733,7 @@ settingsSession: {
         },
         sources: {
             canUse: "Pot utilitzar",
+            canUseHelp: "veure-la i obrir-la amb el seu propi compte de Git",
             audienceCount: ({ count }: { count: number }) => (count === 1 ? `1 persona o equip` : `${count} persones i equips`),
             shareAfterSave: "Desa primer la font i després comparteix-la.",
             checkSources: "Comprova les fonts",

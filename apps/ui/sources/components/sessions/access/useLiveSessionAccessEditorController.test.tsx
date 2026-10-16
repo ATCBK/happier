@@ -36,8 +36,12 @@ import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccou
 import { isDataKeyAuthCredentials, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 
+import { t } from '@/text';
 import { useLiveSessionAccessEditorController } from './useLiveSessionAccessEditorController';
 import type { SessionAccessEditorController } from './sessionAccessEditorTypes';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 /** The manager's real content key pair; persisted credentials carry its secret as `machineKey`. */
 const MANAGER = vi.hoisted(() => ({ serverId: '', accountId: 'manager', keys: null as null | { publicKey: Uint8Array; secretKey: Uint8Array } }));
@@ -119,17 +123,8 @@ function createRecipientEnvelopeItem() {
     };
 }
 
-/**
- * These Actions carry `safety: 'danger'`, so the shared Actions front door requires
- * a confirmation on the `ui` surface unless the Account waived it. This suite owns
- * the recipient-key ordering contract, not that policy, so it states the waiver
- * through the canonical settings owner instead of leaving the outcome to whichever
- * approval host happens to be reachable.
- *
- * Whether the editor's own add/remove should carry that confirmation at all is an
- * open question for the shared Actions owner; see the handoff notes.
- */
-function waiveSharedActionConfirmation(scope: Readonly<{ serverId: string; accountId: string }>) {
+/** Ordinary present-user writes exercise the real direct policy without a fixture waiver. */
+function initializeActionSettings(scope: Readonly<{ serverId: string; accountId: string }>) {
     const settingsScope = createAccountSettingsScope(scope.serverId, scope.accountId);
     if (!settingsScope) throw new Error('The settings scope owner rejected this Home/Account pair');
     storage.getState().applySettingsForScope(
@@ -139,11 +134,6 @@ function waiveSharedActionConfirmation(scope: Readonly<{ serverId: string; accou
             actionsSettingsV1: {
                 v: 1,
                 actions: {},
-                approvalWaivedSurfaces: {
-                    'session.access.grant.set': ['ui'],
-                    'session.access.grant.remove': ['ui'],
-                    'session.access.context.set': ['ui'],
-                },
             },
         },
         1,
@@ -163,7 +153,7 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
         throw new Error('The Session sharing feature bit could not be written by its own writer');
     }
     primeServerFeaturesSnapshot({ serverId: profile.id, snapshot: { status: 'ready', features } });
-    waiveSharedActionConfirmation({ serverId: profile.id, accountId: MANAGER.accountId });
+    initializeActionSettings({ serverId: profile.id, accountId: MANAGER.accountId });
 
     // Only Session-scoped requests are recorded. Direct Account sealing precedes
     // the atomic grant request; the broader audience pass follows acknowledgement.
@@ -178,7 +168,10 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
         grantMode: 'normal' as 'normal' | 'malformed_after_commit' | 'malformed_without_commit',
         primaryTeamId: null as string | null,
         includeRequiredTeamGrant: false,
+        includeContextGroupGrant: false,
         contextMode: 'normal' as 'normal' | 'denied' | 'malformed_after_commit' | 'malformed_without_commit',
+        contextArchived: false,
+        candidatePolicyUnavailable: false,
         envelopePages: sessionEncrypted ? [{ summary: { prepared: 0, pending: 0, invalid: 0, recipientKeyUnavailable: 0 }, items: [] }] as EnvelopePage[] : [],
         envelopeStatus: 200,
         uploaded: null as null | { recipientAccountId: string; encryptedDataKey: string },
@@ -244,6 +237,19 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
                 nextCursor: null,
             });
         }
+        if (path === '/v2/sessions/access-candidates/inspect') {
+            if (state.candidatePolicyUnavailable) return Response.json({ error: 'not_found' }, { status: 404 });
+            const body = JSON.parse(String(init?.body)) as { subjects: Array<{ kind: string; teamId?: string }> };
+            const team = TEAM_DIRECTORY.items.find((item) => item.id === state.primaryTeamId);
+            const reason = state.contextArchived || team?.policy.externalSharingPolicy === 'disabled'
+                ? 'session_access_external_sharing_disabled' : null;
+            return Response.json({ v: 1, context: state.primaryTeamId ? {
+                teamId: state.primaryTeamId, name: team?.name ?? 'Acme', archived: state.contextArchived,
+                externalSharingReason: reason,
+            } : null, candidates: body.subjects.map((subject) => ({ subject,
+                reason: subject.kind === 'team' && subject.teamId === state.primaryTeamId && !state.contextArchived ? null : reason,
+            })) });
+        }
         if (path.startsWith('/v2/sessions/')) paths.push(`${init?.method === 'PATCH' ? 'PATCH ' : ''}${path}`);
         // The shared Action front door reads the Account's own settings before it
         // dispatches; this Home has never stored any.
@@ -289,7 +295,11 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
         if (path === '/v2/sessions/access-grants/list') {
             return new Response(JSON.stringify({
                 visibility: 'complete', owner: OWNER, primaryTeamId: state.primaryTeamId,
-                grants: [...(state.granted ? [{...GRANT_ROW,grant:{...GRANT_ROW.grant,accessLevel:state.grantAccessLevel}}] : []), ...(state.includeRequiredTeamGrant ? [TEAM_GRANT_ROW] : [])],
+                grants: [...(state.granted ? [{...GRANT_ROW,grant:{...GRANT_ROW.grant,accessLevel:state.grantAccessLevel}}] : []), ...(state.includeRequiredTeamGrant ? [TEAM_GRANT_ROW] : []), ...(state.includeContextGroupGrant ? [{
+                    grant: { subject: { kind: 'group', teamId: 'team-acme', groupId: 'reviewers' }, accessLevel: 'view', canApprovePermissions: false },
+                    principal: { kind: 'group', teamId: 'team-acme', groupId: 'reviewers', name: 'Reviewers', teamName: 'Product Reliability' },
+                    allowedTransitions: { accessLevels: ['view'], canChangePermissionDelegation: false, canRemove: true },
+                }] : [])],
                 effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: CAPABILITIES },
             }));
         }
@@ -386,8 +396,8 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
     if (!credentials) throw new Error('Expected the manager Account credentials');
     await restoreConnectionToActiveServer(credentials);
     // Cold restore loads this Account's persisted baseline; the test's deliberate
-    // waiver belongs to that actual scope after restoration.
-    waiveSharedActionConfirmation({ serverId: profile.id, accountId: MANAGER.accountId });
+    // settings belong to that actual scope after restoration.
+    initializeActionSettings({ serverId: profile.id, accountId: MANAGER.accountId });
     return { profile, paths, teamPaths, envelopeStates, state, sessionDataKey, artifacts };
 }
 
@@ -502,8 +512,8 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         expect(controller().model.grants).toHaveLength(0);
         await act(async () => { controller().actions.setContext('team-acme'); });
         expect(controller().model.context?.confirmation?.consequences).toEqual(expect.arrayContaining([
-            expect.stringContaining('Required'),
-            expect.stringContaining('External'),
+            t('session.access.required'),
+            expect.stringContaining(t('teams.policy.externalSharingDisabled')),
         ]));
         expect(home.paths).not.toContain('/v2/sessions/access-context/set');
         await act(async () => { controller().actions.confirmContext(); });
@@ -531,7 +541,7 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
             .toBe('session_access_external_sharing_disabled'));
 
         expect(controller().model.context?.primaryTeamId).toBeNull();
-        expect(controller().model.context?.error?.message).toMatch(/external sharing/i);
+        expect(controller().model.context?.error?.message).toContain(t('teams.policy.externalSharingDisabled'));
     });
 
     it('reconciles an unknown context response from the authoritative inspection', async () => {
@@ -617,12 +627,70 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         const home = await setupHome({ sharing: true, encrypted: true });
         home.state.primaryTeamId = 'team-acme';
         home.state.includeRequiredTeamGrant = true;
+        home.state.contextArchived = true;
         const controller = await mountController(home.profile.id);
 
         await vi.waitFor(() => expect(controller().model.context?.options.find((option) => option.teamId === null)?.blockedReason)
             .toBeUndefined());
         act(() => { controller().actions.setContext(null); });
         await vi.waitFor(() => expect(controller().model.context?.primaryTeamId).toBeNull());
+    });
+
+    it('makes refused context-policy candidates unavailable and explains the archived Team by name', async () => {
+        const home = await setupHome({ sharing: true, encrypted: false });
+        home.state.primaryTeamId = 'team-acme';
+        home.state.includeRequiredTeamGrant = true;
+        home.state.contextArchived = true;
+        TEAM_DIRECTORY.items = [{ id: 'team-design', name: 'Design', policy: {
+            sessionCreationPolicy: 'team_default', externalSharingPolicy: 'allowed',
+        } }];
+        const controller = await mountController(home.profile.id);
+        const candidates = await controller().model.directory.sections.find((section) => section.kind === 'team')!
+            .resolveCandidates!('', new AbortController().signal);
+        expect(candidates.find((row) => row.principal.key === 'team:team-design')?.addition).toMatchObject({
+            kind: 'blocked', reason: { code: 'session_access_external_sharing_disabled', message: 'Acme is archived.' },
+        });
+        await vi.waitFor(() => expect(controller().model.context?.options.find((option) => option.teamId === 'team-acme'))
+            .toMatchObject({ label: 'Acme', blockedReason: { message: 'Acme is archived.' } }));
+        expect(controller().model.notice?.message).toBe('Acme is archived.');
+        await act(async () => { controller().actions.addPrincipal({ kind: 'team', teamId: 'team-design' }); });
+        expect(home.paths).not.toContain('/v2/sessions/access-grants/set');
+    });
+
+    it('uses the server candidate verdict rather than blocking every member under disabled outside sharing', async () => {
+        const home = await setupHome({ sharing: true, encrypted: false });
+        home.state.primaryTeamId = 'team-acme';
+        TEAM_DIRECTORY.items = [
+            { id: 'team-acme', name: 'Acme', policy: { sessionCreationPolicy: 'team_default', externalSharingPolicy: 'disabled' } },
+            { id: 'team-design', name: 'Design', policy: { sessionCreationPolicy: 'team_default', externalSharingPolicy: 'allowed' } },
+        ];
+        const controller = await mountController(home.profile.id);
+        const candidates = await controller().model.directory.sections.find((section) => section.kind === 'team')!
+            .resolveCandidates!('', new AbortController().signal);
+        expect(candidates.find((row) => row.principal.key === 'team:team-acme')?.addition).toEqual({ kind: 'allowed' });
+        expect(candidates.find((row) => row.principal.key === 'team:team-design')?.addition.kind).toBe('blocked');
+    });
+
+    it('does not offer additions when an older Home cannot inspect the context policy', async () => {
+        const home = await setupHome({ sharing: true, encrypted: false });
+        home.state.primaryTeamId = 'team-acme';
+        home.state.candidatePolicyUnavailable = true;
+        TEAM_DIRECTORY.items = [{ id: 'team-design', name: 'Design', policy: { sessionCreationPolicy: 'team_default', externalSharingPolicy: 'allowed' } }];
+        const controller = await mountController(home.profile.id);
+        const candidates = await controller().model.directory.sections.find((section) => section.kind === 'team')!
+            .resolveCandidates!('', new AbortController().signal);
+        expect(candidates[0]?.addition).toMatchObject({ kind: 'blocked', reason: { code: 'session_access_context_policy_unavailable' } });
+        expect(controller().model.notice?.message).toBeTruthy();
+    });
+
+    it('retains a missing context Team name from its Group grant while policy inspection is unavailable', async () => {
+        const home = await setupHome({ sharing: true, encrypted: false });
+        home.state.primaryTeamId = 'team-acme';
+        home.state.includeContextGroupGrant = true;
+        home.state.candidatePolicyUnavailable = true;
+        const controller = await mountController(home.profile.id);
+        await vi.waitFor(() => expect(controller().model.context?.options.find((option) => option.teamId === 'team-acme'))
+            .toMatchObject({ label: 'Product Reliability', blockedReason: { code: 'session_access_context_policy_unavailable' } }));
     });
 
     it('fails closed while the exact current Team policy is transiently unknown', async () => {
@@ -678,7 +746,7 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         expect(controller().model.encryption?.summaryLabel).toBe('1 prepared · 2 pending');
         expect(controller().model.encryption?.actionLabel).toBe('Prepare now');
         // The diagnostic is reachable from the mounted editor, not only from a defect.
-        expect(controller().model.encryption?.showAllLabel).toBe('Show all people');
+        expect(controller().model.encryption?.showAllLabel).toBe('Show encryption per person');
         expect(controller().model.grants).toHaveLength(1);
         expect(controller().model.grants[0]?.operation).toEqual({ kind: 'idle' });
     });
@@ -803,7 +871,7 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         expect(home.paths.filter((path) => path === `/v2/sessions/${SESSION_ID}`)).toHaveLength(0);
         // A healthy audience stays quiet: one ready line and no preparation action.
         expect(controller().model.encryption?.actionLabel).toBeUndefined();
-        expect(controller().model.encryption?.summaryLabel).toBe('Encrypted access prepared');
+        expect(controller().model.encryption?.summaryLabel).toBe('Ready for everyone with access');
     });
 
     it('refreshes an open editor when the exact Session is invalidated elsewhere, and ignores unrelated wakes', async () => {
@@ -853,7 +921,7 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         await vi.waitFor(() => expect(controller().model.encryption?.recipients?.rows).toHaveLength(1));
         expect(home.envelopeStates).toEqual(['action_required', 'all']);
         expect(controller().model.encryption?.recipients?.hasMore).toBe(true);
-        expect(controller().model.encryption?.showAllLabel).toBe('Hide people');
+        expect(controller().model.encryption?.showAllLabel).toBe('Hide encryption per person');
 
         await act(async () => { controller().actions.loadMoreRecipients(); });
         await vi.waitFor(() => expect(controller().model.encryption?.recipients?.rows).toHaveLength(2));
@@ -887,7 +955,7 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         await act(async () => { controller().actions.toggleAllRecipients(); });
         await vi.waitFor(() => expect(controller().model.encryption?.recipients).toBeUndefined());
         expect(home.envelopeStates.at(-1)).toBe('action_required');
-        expect(controller().model.encryption?.showAllLabel).toBe('Show all people');
+        expect(controller().model.encryption?.showAllLabel).toBe('Show encryption per person');
     });
 
     it('names a recipient reachable only through the Team grant, and asks once per visible Account', async () => {
@@ -932,7 +1000,7 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
             recipientAccountId: RECIPIENT_ID, state: 'pending', label: 'Alice',
         });
         expect(controller().model.encryption?.recipients?.hasMore).toBe(false);
-        expect(controller().model.encryption?.showAllLabel).toBe('Show all people');
+        expect(controller().model.encryption?.showAllLabel).toBe('Show encryption per person');
 
         // The pass seals the pending recipient; the rows beneath the aggregate must
         // then say what the Home says now, not what discovery said before the pass.
@@ -943,7 +1011,7 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         );
         await act(async () => { controller().actions.prepareAccess(); });
         await vi.waitFor(() => expect(home.state.uploaded?.recipientAccountId).toBe(RECIPIENT_ID));
-        await vi.waitFor(() => expect(controller().model.encryption?.summaryLabel).toBe('Encrypted access prepared'));
+        await vi.waitFor(() => expect(controller().model.encryption?.summaryLabel).toBe('Ready for everyone with access'));
         await vi.waitFor(() => expect(controller().model.encryption?.recipients).toBeUndefined());
         expect(home.envelopeStates.at(-1)).toBe('action_required');
     });

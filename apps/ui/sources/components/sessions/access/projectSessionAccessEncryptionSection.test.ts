@@ -51,10 +51,11 @@ describe('projectSessionAccessEncryptionSection', () => {
 
     it('stays quiet for a healthy audience but keeps the diagnostic reachable', () => {
         const healthy = project(settled('complete', { prepared: 12 }));
-        expect(healthy?.summaryLabel).toBe('Encrypted access prepared');
+        expect(healthy?.summaryLabel).toBe('Ready for everyone with access');
+        expect(healthy?.accessibilityLabel).toBe('Encrypted access: Ready for everyone with access');
         // Nothing to act on, so no action — but inspection must not require a defect.
         expect(healthy?.actionLabel).toBeUndefined();
-        expect(healthy?.showAllLabel).toBe('Show all people');
+        expect(healthy?.showAllLabel).toBe('Show encryption per person');
         expect(healthy?.recipients).toBeUndefined();
     });
 
@@ -155,7 +156,7 @@ describe('projectSessionAccessEncryptionSection', () => {
         });
 
         expect(section?.recipientsView).toBe('exceptions');
-        expect(section?.showAllLabel).toBe('Show all people');
+        expect(section?.showAllLabel).toBe('Show encryption per person');
         expect(section?.recipients?.rows.map((row) => [row.label, row.state])).toEqual([['account-pending', 'pending']]);
         // A healthy audience lists nobody: the quiet ready line is the whole section.
         expect(project(settled('complete'), COLLAPSED)?.recipients).toBeUndefined();
@@ -192,7 +193,7 @@ describe('projectSessionAccessEncryptionSection', () => {
             error: null,
         }, (accountId) => accountId === 'account-ready' ? 'Ada Lovelace' : undefined);
 
-        expect(expanded?.showAllLabel).toBe('Hide people');
+        expect(expanded?.showAllLabel).toBe('Hide encryption per person');
         expect(expanded?.recipients?.hasMore).toBe(true);
         expect(expanded?.recipients?.rows.map((row) => [row.label, row.state, row.stateLabel])).toEqual([
             ['Ada Lovelace', 'prepared', 'Encrypted access prepared'],

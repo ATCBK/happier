@@ -6,7 +6,30 @@ import {
 } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
-import { buildSessionDiscussionTimelineItems } from './sessionDiscussionTimelineProjection';
+import { buildSessionDiscussionTimelineItems, resolveSessionDiscussionMessageAuthorLabel } from './sessionDiscussionTimelineProjection';
+import { t } from '@/text';
+
+describe('resolveSessionDiscussionMessageAuthorLabel', () => {
+    it.each([
+        [{ name: 'Maya Chen', username: 'maya' }, 'Maya Chen'],
+        [{ name: '  ', username: 'maya' }, 'maya'],
+        [null, t('accountDisplay.yours')],
+    ] as const)('names the optimistic own message from the scoped viewer profile: %j', (profile, expected) => {
+        expect(resolveSessionDiscussionMessageAuthorLabel({ authorAccountId: 'viewer', accountActor: null, createdAt: 0 }, {
+            accountId: 'viewer', profile,
+        })).toBe(expected);
+    });
+
+    it('keeps historical and other Accounts distinct from the viewer', () => {
+        const viewer = { accountId: 'viewer', profile: { name: 'Maya Chen' } };
+        expect(resolveSessionDiscussionMessageAuthorLabel({ authorAccountId: 'other', accountActor: null, createdAt: 0 }, viewer))
+            .toBe(t('session.collaboration.discussion.collaborator'));
+        expect(resolveSessionDiscussionMessageAuthorLabel({ authorAccountId: 'viewer', accountActor: { v: 1, accountId: 'viewer', profile: null }, createdAt: 1 }, viewer))
+            .toBe(t('message.accountActorFormerMember'));
+        expect(resolveSessionDiscussionMessageAuthorLabel({ authorAccountId: 'viewer', accountActor: null, createdAt: 1 }, viewer))
+            .toBe(t('session.collaboration.discussion.collaborator'));
+    });
+});
 
 function message(id: string, seq: number) {
     return { id, seq };

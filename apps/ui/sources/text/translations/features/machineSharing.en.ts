@@ -10,7 +10,7 @@ export const machineSharing = createMachineSharingTranslations({
     recipientTrustDetail: "People signed in to {machine} can see its files and output, so keep secrets you don't want them to read off this machine.",
     trustedOsLead: 'People with terminal or agent access to {machine} run as your operating-system user.',
     trustedOsDetail: 'They can obtain your local credentials and Account encryption key, if present. No Happier API reads or exports owner credentials or keys; anything a shared shell prints can contain them. We recommend sharing a dedicated team machine.',
-    manageHelp: 'People who can manage {machine} can also share it with others, giving them the same access.',
+    manageHelp: 'share {machine} with others, giving them the same access.',
     loading: 'Loading access to {machine}.', readError: 'Could not load access to {machine}.',
     offline: '{machine} is offline. Access changes are saved here.', offlineRecipient: "{machine} is offline.", approvalPending: 'This access change is waiting for your approval.', denied: 'Only people who can manage {machine} can change sharing.',
     use: 'Can use', manage: 'Can manage', allMembers: 'All current members, including people who join later',

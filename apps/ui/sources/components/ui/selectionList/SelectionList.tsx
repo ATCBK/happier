@@ -1226,6 +1226,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
                 ghostSuffix={autocomplete.ghostSuffix}
                 inputValueEllipsizeMode={props.inputValueEllipsizeMode}
                 inputPrefix={props.inputPrefix}
+                onInputFocus={props.onInputFocus}
                 inputSuffix={hasFilters && !filtersNarrow ? (
                     <View
                         style={styles.inputSuffixWithFilters}

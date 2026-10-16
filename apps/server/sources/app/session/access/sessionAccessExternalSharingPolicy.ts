@@ -67,29 +67,34 @@ export async function isSubjectExternalToTeamInTx(
     tx: Tx,
     input: Readonly<{ primaryTeamId: string; subject: SessionAccessGrantSubject }>,
 ): Promise<boolean> {
-    if (input.subject.kind === "team") return input.subject.teamId !== input.primaryTeamId;
-    if (input.subject.kind === "group") return input.subject.teamId !== input.primaryTeamId;
-    const membership = await tx.teamMembership.findUnique({
+    return (await classifySubjectsExternalToTeamInTx(tx, { primaryTeamId: input.primaryTeamId, subjects: [input.subject] }))[0]!;
+}
+
+/** The same externality decision, batched for a directory page rather than one read per Account. */
+export async function classifySubjectsExternalToTeamInTx(
+    tx: Tx,
+    input: Readonly<{ primaryTeamId: string; subjects: readonly SessionAccessGrantSubject[] }>,
+): Promise<readonly boolean[]> {
+    const accountIds = input.subjects.flatMap((subject) => subject.kind === 'account' ? [subject.accountId] : []);
+    const memberships = accountIds.length === 0 ? [] : await tx.teamMembership.findMany({
         where: {
-            teamId_accountId: {
-                teamId: input.primaryTeamId,
-                accountId: input.subject.accountId,
-            },
+            teamId: input.primaryTeamId,
+            accountId: { in: accountIds },
         },
         select: {
+            accountId: true,
             status: true,
             role: true,
             account: { select: { status: true } },
             team: { select: { archivedAt: true } },
         },
     });
-    return !membership
-        || membership.role === TeamRole.guest
-        || !isEffectiveTeamMembership({
-            accountStatus: membership.account.status,
-            membershipStatus: membership.status,
-            teamArchivedAt: membership.team.archivedAt,
-        });
+    const internalAccountIds = new Set(memberships.filter((membership) => membership.role !== TeamRole.guest
+        && isEffectiveTeamMembership({ accountStatus: membership.account.status,
+            membershipStatus: membership.status, teamArchivedAt: membership.team.archivedAt }))
+        .map((membership) => membership.accountId));
+    return input.subjects.map((subject) => subject.kind === 'account'
+        ? !internalAccountIds.has(subject.accountId) : subject.teamId !== input.primaryTeamId);
 }
 
 /**
