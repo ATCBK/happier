@@ -11,7 +11,6 @@
  */
 
 import {
-  countPromptNewlines,
   pastedTextLineCountMatchesPrompt,
   parseExactClaudePastedTextMarkerLineCount,
 } from './pastedTextMarker.js';
@@ -49,7 +48,7 @@ type OwnInjectedTextLogEntry = Readonly<{
   text: string;
   collapsedText: string;
   clearableCandidates: ReadonlySet<string>;
-  collapsedPasteLineCount?: number | undefined;
+  injectedText: string;
   recordedAtMs: number;
   shortPrefixResidueUntilMs?: number | undefined;
   minShortPrefixResidueChars: number;
@@ -86,9 +85,8 @@ function isCollapsedPasteMarkerMatch(params: Readonly<{
 }>): boolean {
   if (
     params.collapsedPasteLineCount === null
-    || params.entry.collapsedPasteLineCount === undefined
     || !pastedTextLineCountMatchesPrompt({
-      promptText: params.entry.text,
+      promptText: params.entry.injectedText,
       pastedLineCount: params.collapsedPasteLineCount,
     })
   ) {
@@ -119,18 +117,20 @@ export function createClaudeUnifiedOwnInjectedTextLog(
 
   const createEntry = (
     trimmed: string,
+    injectedText: string,
     recordedAtMs: number,
     shortPrefixResidueUntilMs?: number | undefined,
     minShortPrefixResidueChars = MIN_CONTEXTUAL_PREFIX_RESIDUE_CHARS,
   ): OwnInjectedTextLogEntry => {
     const collapsedText = normalizeClaudeUnifiedComposerRenderingText(trimmed);
     const clearableCandidates = new Set<string>([trimmed, collapsedText]);
-    const newlineCount = countPromptNewlines(trimmed);
     return {
       text: trimmed,
       collapsedText,
       clearableCandidates,
-      ...(newlineCount > 0 ? { collapsedPasteLineCount: newlineCount } : {}),
+      // Claude counts the pasted bytes, including wrapper and outer blank lines that semantic
+      // identity deliberately removes. Keep the original input as the single counting source.
+      injectedText,
       recordedAtMs,
       shortPrefixResidueUntilMs,
       minShortPrefixResidueChars,
@@ -147,7 +147,7 @@ export function createClaudeUnifiedOwnInjectedTextLog(
     record(text) {
       const trimmed = normalizeClaudeUnifiedPromptIdentityText(text);
       if (!trimmed) return;
-      entries.push(createEntry(trimmed, nowMs()));
+      entries.push(createEntry(trimmed, text, nowMs()));
       trimToLimit();
     },
     recordPossiblePartialResidue(text, recordOpts) {
@@ -159,7 +159,7 @@ export function createClaudeUnifiedOwnInjectedTextLog(
         1,
         Math.trunc(recordOpts?.minPrefixChars ?? MIN_CONTEXTUAL_PREFIX_RESIDUE_CHARS),
       );
-      const existingIndex = entries.findIndex((entry) => entry.text === trimmed);
+      const existingIndex = entries.findIndex((entry) => entry.injectedText === text);
       if (existingIndex >= 0) {
         const existing = entries[existingIndex];
         if (existing) {
@@ -171,7 +171,7 @@ export function createClaudeUnifiedOwnInjectedTextLog(
         }
         return;
       }
-      entries.push(createEntry(trimmed, now, shortPrefixResidueUntilMs, minShortPrefixResidueChars));
+      entries.push(createEntry(trimmed, text, now, shortPrefixResidueUntilMs, minShortPrefixResidueChars));
       trimToLimit();
     },
     matches(candidate) {
@@ -205,7 +205,7 @@ export function createClaudeUnifiedOwnInjectedTextLog(
       ));
     },
     snapshot() {
-      return entries.map((entry) => entry.text);
+      return entries.map((entry) => entry.injectedText);
     },
   };
 }

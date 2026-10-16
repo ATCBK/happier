@@ -127,6 +127,23 @@ describe('createClaudeUnifiedOwnInjectedTextLog', () => {
     expect(log.matches('[Pasted text #1 +3662 lines]')).toBe(false);
   });
 
+  it.each(['record', 'recordPossiblePartialResidue'] as const)('preserves pasted newlines before semantic normalization through %s', (recordMethod) => {
+    const body = Array.from({ length: 14 }, (_, index) => `line ${index}`).join('\n');
+    for (const prompt of [
+      `\n\n${body}\n\n\n`,
+      `\n\n<pasted_content id="probe">\n${body}\n</pasted_content id="probe">\n`.replace(/\n/g, '\r\n'),
+    ]) {
+      const log = createClaudeUnifiedOwnInjectedTextLog();
+      log.record(body);
+      log[recordMethod](prompt);
+
+      expect(log.matches('[Pasted text #1 +18 lines]')).toBe(true);
+      expect(log.matches(body)).toBe(true);
+      expect(log.matches('[Pasted text #1 +22 lines]')).toBe(false);
+      expect(log.matches('my draft [Pasted text #1 +18 lines]')).toBe(false);
+    }
+  });
+
   it('matches a soft-wrapped rendering of a recorded text (whitespace-collapse; ported S-2)', () => {
     // C11 live: the TUI soft-wraps a long draft across composer lines; the continuation capture
     // re-joins them with newlines, so equality must ignore WHERE whitespace breaks fall while
@@ -156,6 +173,14 @@ describe('createClaudeUnifiedOwnInjectedTextLog', () => {
     log.record('   ');
 
     expect(log.matches('   ')).toBe(false);
+  });
+
+  it('does not infer ownership of collapsed markers from a single-line injection', () => {
+    const log = createClaudeUnifiedOwnInjectedTextLog();
+    log.record('please continue with the refactor');
+    expect(log.matches('[Pasted text #1 +0 lines]')).toBe(false);
+    expect(log.matches('[Pasted text #1 +1 lines]')).toBe(false);
+    expect(log.matches('[Pasted text #1]')).toBe(false);
   });
 });
 
@@ -187,6 +212,21 @@ describe('createPersistedClaudeUnifiedOwnInjectedTextLog (ported S-1)', () => {
 
     expect(second.matches('injected before the runner respawned')).toBe(true);
     expect(second.matches('a genuine user draft')).toBe(false);
+  });
+
+  it('preserves the actual pasted line count across a runner respawn', async () => {
+    const { scope } = memoryStorage();
+    const body = Array.from({ length: 14 }, (_, index) => `line ${index}`).join('\n');
+    const first = createPersistedClaudeUnifiedOwnInjectedTextLog({ storage: scope });
+    await first.hydrated;
+    first.record(`\n\n${body}\n\n\n`);
+    await first.flush();
+
+    const second = createPersistedClaudeUnifiedOwnInjectedTextLog({ storage: scope });
+    await second.hydrated;
+    expect(second.matches('[Pasted text #1 +18 lines]')).toBe(true);
+    expect(second.matches(body)).toBe(true);
+    expect(second.matches('[Pasted text #1 +22 lines]')).toBe(false);
   });
 
   it('persists a BOUNDED set and tolerates malformed stored values (fail-open to empty)', async () => {
