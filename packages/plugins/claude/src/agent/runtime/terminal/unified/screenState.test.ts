@@ -847,6 +847,43 @@ describe('parseClaudeScreenState — unrecognized confirmation dialogs (P-B fail
     expect(resolveClaudeScreenInFlightSteerVeto(cursorUnavailable)).toBe('unrecognized_confirmation_dialog');
   });
 
+  it('distinguishes a focused chooser artifact from the separate cursor-proven bordered composer', () => {
+    const screen = [
+      'Allow external CLAUDE.md file imports?',
+      '',
+      '❯ No, disable external imports',
+      '  Yes, allow external imports',
+      '',
+      'Enter to confirm · Esc to cancel',
+      '',
+      '──────────────────────────────',
+      '❯ ',
+      '──────────────────────────────',
+    ].join('\n');
+
+    const composerOwned = parseClaudeScreenState(screen, { cursor: { x: 2, y: 8 } });
+    expect(composerOwned.composerContent).toBe('');
+    expect(composerOwned.composerCursorRelation).toBe('at_content_start');
+    expect(composerOwned.unrecognizedConfirmationDialogVisible).toBe(false);
+    expect(composerOwned.unrecognizedConfirmationDialog).toBeNull();
+    expect(isClaudeScreenReadyForInput(composerOwned)).toBe(true);
+    expect(isSafeWindowForSlashControl(composerOwned)).toBe(true);
+    expect(resolveClaudeScreenInFlightSteerVeto(composerOwned)).toBeNull();
+
+    for (const state of [
+      parseClaudeScreenState(screen, { cursor: { x: 2, y: 2 } }),
+      parseClaudeScreenState(screen),
+    ]) {
+      expect(state.unrecognizedConfirmationDialogVisible).toBe(true);
+      expect(state.unrecognizedConfirmationDialog?.options).toEqual([
+        { choice: 'option_1', label: 'No, disable external imports' },
+        { choice: 'option_2', label: 'Yes, allow external imports' },
+      ]);
+      expect(isClaudeScreenReadyForInput(state)).toBe(false);
+      expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('unrecognized_confirmation_dialog');
+    }
+  });
+
   it('does not let stale incomplete selection-shaped output override a cursor-proven idle DIM suggestion', () => {
     // Semantic port of Remote runner pid 57509 evidence. Dev keeps its plugin-native screen owner:
     // a prior incomplete selection-shaped row cannot turn the exact active composer into a dialog.
