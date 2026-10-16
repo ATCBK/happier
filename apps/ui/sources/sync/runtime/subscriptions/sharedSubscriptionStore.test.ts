@@ -15,6 +15,30 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it('rearms a retired watch when a retained entry gains demand again', async () => {
+        let reads = 0;
+        const watches: Array<AbortSignal | undefined> = [];
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            defaultSnapshotClient: async () => ++reads, defaultWatchClient: {}, watchAfterRefresh: true, retainState: true,
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, snapshot: number) => snapshot,
+            watch: async ({ signal }) => {
+                watches.push(signal);
+                return watches.length === 1 ? { status: 'unavailable' as const }
+                    : new Promise<SharedSubscriptionWatchOutcome<number>>(() => {});
+            },
+        });
+        const release = store.subscribe('machine', () => {});
+        await vi.waitFor(() => expect(watches).toHaveLength(1));
+        release();
+        const resumed = store.subscribe('machine', () => {});
+        try {
+            await vi.waitFor(() => expect(store.getState('machine')).toBe(2));
+            expect(watches).toHaveLength(2);
+            expect(watches[1]?.aborted).toBe(false);
+        } finally { resumed(); store.reset(); }
+    });
+
     it('reads again when invalidation lands during a read, retaining the last snapshot until the follow-up settles', async () => {
         const reads: Array<(value: number) => void> = [];
         const store = createSharedSubscriptionStore({

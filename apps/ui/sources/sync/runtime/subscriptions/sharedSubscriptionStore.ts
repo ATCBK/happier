@@ -308,6 +308,8 @@ export function createSharedSubscriptionStore<
             entry.listeners.add(listener);
             entry.refCount += 1;
             if (entry.refCount === 1) {
+                // New demand refreshes the snapshot and renews a previously retired watch.
+                entry.watchRetired = false;
                 const previousWasAborted = entry.abortController?.signal.aborted;
                 const refresh = runRefresh(entry);
                 if (config.watchAfterRefresh) {
