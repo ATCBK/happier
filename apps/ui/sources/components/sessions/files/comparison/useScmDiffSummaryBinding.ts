@@ -5,16 +5,14 @@ import type { SessionScmReviewComparison } from '@/components/sessions/panes/det
 import { getStorage, useSetting } from '@/sync/domains/state/storage';
 import { useScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 import { resolveScmDiffSummaryModelSelection, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
-import { scmComparisonSourceOf, scmReviewComparisonMatchesSource } from '@/sync/domains/scm/diffSummary/selection';
+import { scmComparisonSourceOf } from '@/sync/domains/scm/diffSummary/selection';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import {
     applySavedScmDiffSummaryResult,
     generateScmDiffSummaryFromUserAction,
-    loadSavedScmDiffSummaryResult,
     refreshScmDiffSummaryRun,
 } from '@/sync/ops/scmDiffSummary/generate';
 import { createScmDiffSummaryResultOperations, type ScmDiffSummaryHost } from '@/sync/ops/scmDiffSummary/results';
-import { createScmDiffSummarySavedResultOperations } from '@/sync/ops/scmDiffSummary/savedResultOperations';
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { t } from '@/text';
 import { SCM_DIFF_SUMMARY_DISABLED_FAILURE } from '@/sync/domains/scm/diffSummary/state';
@@ -78,46 +76,6 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     const operations = React.useMemo(() => scope ? createScmDiffSummaryResultOperations({ ...host,
         serverId: scope.serverId, accountId: scope.accountId, shouldContinue: isCurrent, onRunAdmitted }) : null,
         [isCurrent, onRunAdmitted, sessionId, host.machineId, scope?.serverId, scope?.accountId]);
-
-    // Machine persistence, not the request cache, restores an edited result after reopening.
-    React.useEffect(() => {
-        if (!binding || !scope || !machine || !machineReachable || !operations || !comparison || viewModel) return;
-        const abort = new AbortController();
-        const current = () => isCurrent() && !abort.signal.aborted;
-        const inventory = createScmDiffSummarySavedResultOperations({ machineId: machine.machineId, serverId: scope.serverId,
-            ...(sessionId ? { sessionId } : {}),
-            accountId: scope.accountId, signal: abort.signal, shouldContinue: current });
-        let pending = false;
-        let invalidated = false;
-        const restore = async () => {
-            if (!current()) return;
-            if (pending) { invalidated = true; return; }
-            pending = true;
-            try {
-                const listed = await inventory.list();
-                if (!listed.success || !current()) return;
-                const candidate = listed.results.find((item) => item.cwd === machine.basePath && (sessionId ? item.sessionId === sessionId : !item.sessionId)
-                    && (!comparison.comparisonId || item.comparisonId === comparison.comparisonId)
-                    && scmReviewComparisonMatchesSource(comparison, item.source));
-                if (!candidate) return;
-                const response = await operations.read({ cwd: candidate.cwd, resultId: candidate.resultId });
-                const captured = response.success ? response.result.output.comparison : null;
-                if (response.success && current() && captured?.repository.rootPath === machine.basePath
-                    && captured.id === candidate.comparisonId
-                    && scmReviewComparisonMatchesSource(comparison, captured.source, captured)) {
-                    loadSavedScmDiffSummaryResult({ ...host, scope, result: response.result });
-                }
-            } finally {
-                pending = false;
-                if (invalidated && current()) { invalidated = false; void restore(); }
-            }
-        };
-        void restore();
-        // A result another producer saves later (a review's narration) arrives with that Session's Run
-        // activity, the existing invalidation owner; once a result is bound this listener retires.
-        const unsubscribe = sessionId ? subscribeExecutionRunActivity({ sessionId, serverId: scope.serverId }, () => { if (current()) void restore(); }) : () => {};
-        return () => { abort.abort(); unsubscribe(); };
-    }, [binding, isCurrent, scope?.serverId, scope?.accountId, machine?.machineId, machine?.basePath, machineReachable, operations, sessionId, host.machineId, comparisonKey, Boolean(viewModel)]);
 
     const onStart = React.useCallback(async (outputs: readonly ScmDiffSummaryOutputKind[] = [output]) => {
         if (!isCurrent() || !scope || !cwd || !comparison || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return;

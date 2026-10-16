@@ -613,7 +613,9 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
         generateFromUserAction,
         prefetch,
         refreshRun,
-        loadSavedResult: (params: ScmDiffSummaryHost & Readonly<{ scope: ServerAccountScope; result: ScmDiffSummaryResult }>): string | null => {
+        loadSavedResult: (params: ScmDiffSummaryHost & Readonly<{ scope: ServerAccountScope; result: ScmDiffSummaryResult;
+            /** Inventory recency, so independent output readers cannot reorder saved results by load time. */
+            savedAtMs?: number }>): string | null => {
             const output = params.result.output;
             if (!output.success || !output.comparison) return null;
             const scopeKey = serverAccountScopeKeySuffix(params.scope);
@@ -624,7 +626,7 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             if (!existing) next = applyScmDiffSummaryEvent(next, { type: 'request_started', key, scopeKey,
                 sessionId: params.sessionId ?? null, ...(params.machineId ? { machineId: params.machineId } : {}), actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID,
                 input: { cwd: output.comparison.repository.rootPath, source: output.comparison.source, outputs: output.requestedOutputs ?? ['walkthrough'] },
-                runId: output.runId ?? null, structuredOutput: output, requestedAtMs: nowMs(), intent: 'generate' });
+                runId: output.runId ?? null, structuredOutput: output, requestedAtMs: params.savedAtMs ?? nowMs(), intent: 'generate' });
             setState(applyScmDiffSummaryEvent(next, { type: 'saved_result', key, result: params.result, observedAtMs: nowMs() }));
             return key;
         },

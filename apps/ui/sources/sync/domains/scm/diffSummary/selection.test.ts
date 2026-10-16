@@ -8,6 +8,27 @@ import { applyScmDiffSummaryEvent, createInitialScmDiffSummaryState, SCM_DIFF_SU
 const scope = { serverId: 'selection-home', accountId: 'selection-account' };
 afterEach(() => retireScmDiffSummaryScope(scope));
 describe('captured comparison result selection', () => {
+    it('selects each saved output by inventory recency rather than the order its consumers restored it', () => {
+        const save = (resultId: string, savedAtMs: number, failedReading: boolean) => {
+            const input = { sessionId: 's', scope, savedAtMs,
+                result: ScmDiffSummaryResultSchema.parse({ resultId, revision: 1, canUndo: false,
+                    output: { success: true, resultId, revision: 1, sourceKey: 'captured',
+                        metadata: { sourceKey: 'captured', source: { kind: 'workingTree' } },
+                        comparison: { id: 'captured', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' }, endpoints: {},
+                            inventory: { state: 'complete', files: [], reasons: [] } }, requestedOutputs: ['walkthrough', 'commitPlan'],
+                        outputs: { walkthrough: failedReading ? { state: 'failed', reason: 'Stopped' }
+                            : { state: 'complete', value: { title: 'Published reading', intro: '', stops: [], otherChangeRefs: [] } },
+                            commitPlan: { state: 'complete', value: { groups: [], leftOutChangeRefs: [] } } },
+                        analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } }) };
+            return loadSavedScmDiffSummaryResult(input);
+        };
+        const newest = save('newest-plan', 2, true);
+        const older = save('older-reading', 1, false);
+        const state = getScmDiffSummaryState();
+        const scopeKey = serverAccountScopeKeySuffix(scope);
+        expect(selectSessionScmWalkthroughKey(state, 's', { kind: 'workingTree' }, 'commitPlan', scopeKey)).toBe(newest);
+        expect(selectSessionScmWalkthroughKey(state, 's', { kind: 'workingTree' }, 'walkthrough', scopeKey)).toBe(older);
+    });
     it('selects admission and failure for the exact requested comparison before a capture receipt returns', () => {
         const input = { cwd: '/repo', source: { kind: 'workingTree' as const }, comparisonId: 'captured', outputs: ['commitPlan' as const] };
         const starting = applyScmDiffSummaryEvent(createInitialScmDiffSummaryState(), { type: 'request_started', key: 'admission',

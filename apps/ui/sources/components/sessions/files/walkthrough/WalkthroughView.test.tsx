@@ -10,6 +10,8 @@ import {
     SPECIMEN_WALKTHROUGH,
 } from '@/components/dev/changes/walkthroughSpecimenFixture';
 
+import { SCM_DIFF_SUMMARY_GENERIC_FAILURE } from '@/sync/domains/scm/diffSummary/state';
+
 import { buildWalkthroughReading, EMPTY_WALKTHROUGH_READING, type WalkthroughReadingInput } from './walkthroughReading';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -233,5 +235,17 @@ describe('WalkthroughView (lab WT1-A)', () => {
             expect(band?.props.accessibilityRole).not.toBe('alert');
             expect(band?.props.accessibilityLiveRegion).toBe('polite');
         }
+    });
+
+    it('says one thing when a refinement failed beside a conversation that has ended', async () => {
+        const ended = { onStartNew: vi.fn(), onAskSession: vi.fn() };
+        // The reading is complete and unchanged: the ended conversation's band is the message, with the way forward.
+        const generic = await renderScreen(view(COMPLETE, { endedConversation: ended, failure: SCM_DIFF_SUMMARY_GENERIC_FAILURE, onRetry: vi.fn() }));
+        expect(generic.findByTestId('walkthrough-notice-ended')).toBeTruthy();
+        expect(generic.findByTestId('walkthrough-notice-failed')).toBeNull();
+        // A typed reason the reader can act on is never hidden behind it.
+        const typed = await renderScreen(view(COMPLETE, { endedConversation: ended, onChooseModel: vi.fn(),
+            failure: { reason: 'modelUnavailable', messageKey: 'walkthrough.generationFailure.modelUnavailable', nextAction: 'chooseModel', nextActionKey: 'walkthrough.notice.chooseModel' } }));
+        expect(typed.findByTestId('walkthrough-notice-failed')).toBeTruthy();
     });
 });

@@ -237,7 +237,11 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
     }
     // One failure presenter for every non-empty state: the store's typed failure (a refused regeneration of a kept
     // reading, an admitted failed output), or the generic one for a reading that failed with nothing recorded.
-    const failure = props.failure ?? (reading.phase === 'failed' ? SCM_DIFF_SUMMARY_GENERIC_FAILURE : null);
+    const storedFailure = props.failure ?? (reading.phase === 'failed' ? SCM_DIFF_SUMMARY_GENERIC_FAILURE : null);
+    // A complete reading whose conversation has ended already says so, with the way forward; an unclassified failure
+    // beside it ("Writing stopped") would contradict a reading that is whole. A typed reason the reader can act on stays.
+    const failure = storedFailure?.reason === 'generationFailed' && reading.phase === 'complete' && props.endedConversation && !props.offline
+        ? null : storedFailure;
     if (failure) {
         notices.push(<ScmDiffSummaryFailureNotice key="failed" testID="walkthrough" failure={failure} phone={phone}
             onChooseModel={props.offline ? undefined : props.onChooseModel} onEnableExplain={props.offline ? undefined : props.onEnableExplain}
