@@ -8,6 +8,9 @@ import { actionOperationStore } from '@/sync/domains/actionOperations/actionOper
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createActionExecutor } from '@happier-dev/protocol';
+import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { ManagedMachineActionInputSchemasV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ActionOperationActionInputSchemasV1 } from '@happier-dev/protocol/actions/specs/actionOperations';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -54,7 +57,8 @@ describe('Project Scripts Setup controls', () => {
         const execute = createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({
             isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context, getActionSpec(id).safety),
             projectAction: async request => {
-                const name = request.input.selection?.kind === 'named' ? request.input.selection.name : '';
+                const input = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse(request.input);
+                const name = input.selection.kind === 'named' ? input.selection.name : '';
                 admissions.push(name);
                 if (name === 'first') await firstGate.promise;
                 return { operation: { version: 1, operationId: `finite-${name}`, revision: 1, actionId: 'projects.script.run', state: 'accepted',
@@ -107,21 +111,26 @@ describe('Project Scripts Setup controls', () => {
             isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context, getActionSpec(id).safety),
             managedMachineAction: async request => {
                 if (request.actionId === 'machines.managed.list') return { machines };
-                if (request.actionId === 'machines.managed.get') return machines.find(machine => machine.id === request.input.managedId);
+                if (request.actionId === 'machines.managed.get') {
+                    const input = ManagedMachineActionInputSchemasV1['machines.managed.get'].parse(request.input);
+                    return machines.find(machine => machine.id === input.managedId);
+                }
                 if (request.actionId === 'machines.managed.acquire') {
-                    const id = request.input.selection.kind === 'one-off' ? request.input.selection.launch.name : '';
+                    const input = ManagedMachineActionInputSchemasV1['machines.managed.acquire'].parse(request.input);
+                    const id = input.selection.kind === 'one-off' ? input.selection.launch.name : '';
                     purchases.push(id);
                     return { managedId: id, operation: { operationId: `install-${id}` } };
                 }
                 throw new Error('unexpected_managed_transport');
             },
             actionOperationAction: async request => ({ kind: 'found', operation: {
-                version: 1, operationId: request.input.operationId, revision: 2, actionId: 'machines.managed.acquire', state: 'succeeded',
+                version: 1, operationId: ActionOperationActionInputSchemasV1['action.operations.get'].parse(request.input).operationId, revision: 2, actionId: 'machines.managed.acquire', state: 'succeeded',
                 scope: { accountId: 'alice', machineId: 'controller' }, title: 'Install', createdAt: 1, startedAt: 1, settledAt: 2, cancellation: 'supported',
             } }),
             projectAction: async request => {
                 admissions.push(request.input);
-                const name = request.input.selection?.kind === 'named' ? request.input.selection.name : '';
+                const input = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse(request.input);
+                const name = input.selection.kind === 'named' ? input.selection.name : '';
                 return { operation: { version: 1, operationId: `finite-${name}`, revision: 1, actionId: 'projects.script.run', state: 'accepted',
                     scope: { accountId: 'alice', machineId: `guest-${name}` }, title: name, createdAt: 2, cancellation: 'supported' } };
             },

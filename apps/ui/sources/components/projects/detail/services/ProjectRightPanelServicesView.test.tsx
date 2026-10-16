@@ -5,7 +5,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
 import { ExternalActionMachineBootstrapV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
-    ExternalActionExecutionAuthorizationV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+    ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
@@ -276,7 +276,7 @@ describe('ProjectRightPanelServicesView', () => {
         // Native Start includes preparation/review; the caller's lifetime owns it, as for Scripts.
         expect(startRequest).toMatchObject({ operationTimeoutMs: null, signal: expect.any(AbortSignal) });
         expect(home.requestsFor('/v1/actions/projects.prepare').map(request =>
-            ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope.input))
+            ExternalActionRequestEnvelopeV1Schema.parse(ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope).input))
             .toEqual([{ workspace: { ...workspace, serverId: serverIdentityId }, phase: 'setup' }]);
         await screen.unmount();
     });

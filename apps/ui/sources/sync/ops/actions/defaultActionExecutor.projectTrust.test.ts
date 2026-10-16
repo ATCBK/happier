@@ -69,6 +69,7 @@ describe('Project Trust through the canonical UI Action policy', () => {
                 expect(homes.requestsFor(mutatePath)).toEqual([]);
             } else {
                 expect(result).toEqual({ ok: true, result: { project, status: 'removed' } });
+                if (!spec.outputSchema) throw new Error('Project Trust must declare an output schema');
                 if (result.ok) expect(spec.outputSchema.parse(result.result)).toEqual(result.result);
                 expect(homes.requestsFor(mutatePath)).toHaveLength(1);
             }
