@@ -192,9 +192,14 @@ export function UsagePoolQueue(props: PoolOrderProps) {
   const text = usePlanText();
   if (props.pools.length === 0) return null;
   const sharedCause = readSharedUnreadCause(props.pools, props.selections);
+  const named = props.pools.filter((pool) => pool.name);
+  // A pool with no order to show (unread, or the selector lists no member) is a name and at most a cause; those share
+  // one quiet "Used first" label instead of each repeating it as a heading with nothing under it.
+  const stateOf = (pool: UsagePlanPool) => props.selections.get(pool.key) ?? 'loading';
+  const bare = named.filter((pool) => readOrderedQueue(stateOf(pool)) === null);
   return (
     <View testID={props.testID} style={styles.pools}>
-      {props.pools.map((pool) => (
+      {named.filter((pool) => !bare.includes(pool)).map((pool) => (
         <PoolQueue
           key={pool.key}
           {...props}
@@ -203,6 +208,23 @@ export function UsagePoolQueue(props: PoolOrderProps) {
           testID={`${props.testID}.${pool.groupId}`}
         />
       ))}
+      {bare.length > 0 ? (
+        <View style={styles.bareQueue}>
+          <Text accessibilityRole="header" style={[styles.quiet, text.detail]}>
+            {t('usage.board.plans.queueTitle')}
+          </Text>
+          {bare.map((pool) => {
+            const state = stateOf(pool);
+            const cause = sharedCause ? null : bareQueueCause(state);
+            return (
+              <View key={pool.key} testID={`${props.testID}.${pool.groupId}`} style={styles.bareRow}>
+                <Text style={[styles.body, text.detail]}>{pool.name}</Text>
+                {cause ? <Text style={[styles.quiet, text.detail]}>{cause}</Text> : null}
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
       {sharedCause ? (
         <Text testID={`${props.testID}.cause`} style={[styles.quiet, text.detail]}>
           {sharedCause}
@@ -212,36 +234,28 @@ export function UsagePoolQueue(props: PoolOrderProps) {
   );
 }
 
+/** The read of a pool that has an order to show; one whose order is unread, or lists no member, is just a name. */
+function readOrderedQueue(state: UsagePoolSelectionState) {
+  return typeof state === 'string' || 'status' in state || state.memberStatus === 'none_known' ? null : state;
+}
+
+function bareQueueCause(state: UsagePoolSelectionState): string | null {
+  if (typeof state === 'string' || 'status' in state) return unreadText(state);
+  return state.refreshError ? unreadText(state.refreshError) : null;
+}
+
 function PoolQueue(
   props: PoolOrderProps & Readonly<{ pool: UsagePlanPool; causeBelow: boolean }>,
 ) {
   const text = usePlanText();
   const label = props.pool.name ?? null;
-  const state = props.selections.get(props.pool.key) ?? 'loading';
-  if (!label) return null;
+  const state = readOrderedQueue(props.selections.get(props.pool.key) ?? 'loading');
+  if (!label || !state) return null;
   const title = `${t('usage.board.plans.queueTitle')} · ${label}`;
-  if (typeof state === 'string' || 'status' in state) {
-    return (
-      <View testID={props.testID} style={styles.pool}>
-        <UsagePlanSectionHead
-          title={title}
-          meta={props.causeBelow ? null : unreadText(state)}
-        />
-      </View>
-    );
-  }
   const selection = state.selection;
   const trace = selection.decisionTrace;
   const strategy = getPoolStrategyPresentation(trace.strategy);
   const members = readUsagePoolMembers(props.pool, props.accounts, selection);
-  // A pool the selector lists no member for has no order, strategy or reason to show: one quiet line.
-  if (state.memberStatus === 'none_known') {
-    return (
-      <View testID={props.testID} style={styles.pool}>
-        <UsagePlanSectionHead title={title} meta={!props.causeBelow && state.refreshError ? unreadText(state.refreshError) : null} />
-      </View>
-    );
-  }
   return (
     <View testID={props.testID} style={styles.pool}>
       <UsagePlanSectionHead
@@ -793,6 +807,8 @@ function WhyRow(
 const styles = StyleSheet.create((theme) => ({
   pools: { gap: 18 },
   pool: { gap: theme.space.s6 },
+  bareQueue: { gap: theme.space.s4 },
+  bareRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: theme.space.s8 },
   quiet: {
     ...Typography.default(),
     color: theme.colors.text.tertiary,

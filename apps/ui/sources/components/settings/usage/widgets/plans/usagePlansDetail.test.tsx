@@ -696,6 +696,9 @@ it('states one unreadable-order cause once under every pool that shares it (H30)
   expect(screen.findHostByTestId('cap.usedFirst.cause')).toBeTruthy();
   expect(screen.findHostByTestId('cap.usedFirst.first')).toBeTruthy();
   expect(screen.findHostByTestId('cap.usedFirst.second')).toBeTruthy();
+  // Pools with no order to show share one quiet "Used first" label over their names, not a heading each.
+  expect(screen.getTextContent().split(t('usage.board.plans.queueTitle')).length - 1).toBe(1);
+  expect(screen.getTextContent()).not.toContain(`${t('usage.board.plans.queueTitle')} ·`);
 });
 
 /** One earlier week of the same record and meter in accepted history: two readings, one and three days in. */
