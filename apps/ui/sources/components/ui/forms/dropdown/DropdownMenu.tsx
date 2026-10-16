@@ -54,6 +54,11 @@ export type DropdownMenuSubmenu = Readonly<{
     maxWidthCap?: number;
     /** Draw this submenu's category titles (a chooser titled by what it acts on), whatever its parent does. */
     showCategoryTitles?: boolean;
+    /**
+     * The submenu's own name when it differs from the row that opens it ("Move “Client work” to" under "Move to
+     * folder…"): its accessible name, and its title where a phone presents it as a sheet.
+     */
+    title?: string;
 }>;
 
 export type DropdownMenuCreateItemDisplay = Readonly<{
@@ -242,6 +247,15 @@ type DropdownTriggerAccessibilityProps = Readonly<{
     accessibilityState?: AccessibilityState;
     'aria-expanded'?: boolean;
 }>;
+
+/** A sheet titled by `title` drops the category heading that only repeats it; the category's rows stay. */
+export function untitleSheetCategories<Category extends Readonly<{ title: string }>>(
+    categories: readonly Category[],
+    title: string | undefined,
+): readonly Category[] {
+    if (!title) return categories;
+    return categories.map((category) => (category.title === title ? { ...category, title: '' } : category));
+}
 
 function withExpandedTriggerState(trigger: React.ReactNode, open: boolean): React.ReactNode {
     if (!React.isValidElement<DropdownTriggerAccessibilityProps>(trigger)) return trigger;
@@ -643,7 +657,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
                     accessibilityLabel={props.popoverAccessibilityLabel}
                     onRequestClose={onRequestClose}
                 >
-                    {({ maxHeight, maxWidth, placement }) => (<>
+                    {({ maxHeight, maxWidth, placement, presentation }) => (<>
                         <FloatingOverlay
                             header={props.header}
                             footer={props.footer}
@@ -708,7 +722,10 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                 <SelectableMenuResults
                                     ref={resultsRef}
                                     wrapItem={props.wrapItem}
-                                    categories={filteredCategories}
+                                    // A sheet is titled already: a category that repeats its title is not drawn twice.
+                                    categories={presentation === 'sheet'
+                                        ? untitleSheetCategories(filteredCategories, props.popoverAccessibilityLabel)
+                                        : filteredCategories}
                                     selectedIndex={selectedIndex}
                                     onSelectionChange={setSelectedIndex}
                                     onPressItem={(item) => {
@@ -753,7 +770,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                 allowEmptySelection={props.allowEmptySelection}
                                 // A menu that is a sheet on a phone opens its submenus as sheets too.
                                 popoverPhonePresentation={props.popoverPhonePresentation}
-                                popoverAccessibilityLabel={activeSubmenuItem.title}
+                                popoverAccessibilityLabel={activeSubmenuItem.submenu.title ?? activeSubmenuItem.title}
                             />
                         ) : null}
                     </>)}
