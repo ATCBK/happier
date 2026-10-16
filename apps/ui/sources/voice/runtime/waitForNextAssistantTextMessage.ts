@@ -1,5 +1,6 @@
 import { storage } from '@/sync/domains/state/storage';
 import { readStoredSessionMessages, type Message } from "@happier-dev/session-core/messages";
+import { readStreamSegmentMetaV1 } from '@happier-dev/session-core/reducer';
 import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 
 export type AssistantTextMessageBaseline = Readonly<{
@@ -50,6 +51,11 @@ export function collectAssistantTextMessageEntriesSinceBaseline(
   for (let idx = startIndex; idx < messages.length; idx += 1) {
     const message = messages[idx];
     if (message?.kind !== 'agent-text') continue;
+    if (message.isThinking === true) continue;
+    const segment = readStreamSegmentMetaV1(message.meta);
+    if (segment?.segmentKind === 'thinking'
+      || segment?.segmentState === 'streaming'
+      || segment?.segmentState === 'interrupted') continue;
     if (typeof message?.text !== 'string') continue;
     if (typeof message?.id === 'string' && baselineIds.has(message.id)) continue;
     const text = message.text.trim();

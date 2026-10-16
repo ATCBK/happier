@@ -57,6 +57,36 @@ describe('waitForNextAssistantTextMessage', () => {
     expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).not.toContain('s1');
   });
 
+  it.each(['streaming', 'interrupted', 'thinking', 'thinking-flag'] as const)('retains demand past %s text until a complete assistant segment arrives', async segment => {
+    const controller = new AbortController();
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    let settled = false;
+    const waiting = waitForNextAssistantTextMessage('s1', baseline.baselineIds, baseline.baselineCount, controller.signal)
+      .then(value => { settled = true; return value; });
+    const draft = { id: 'reply', kind: 'agent-text', text: segment === 'thinking' ? 'Private reasoning' : "I'm",
+      localId: 'reply-local', createdAt: 1, isThinking: segment === 'thinking-flag',
+      meta: { happierStreamSegmentV1: { v: 1, segmentKind: segment === 'thinking' ? 'thinking' : 'assistant',
+        segmentLocalId: 'reply-local', segmentState: segment === 'thinking' || segment === 'thinking-flag' ? 'complete' : segment,
+        startedAtMs: 1, updatedAtMs: 2 } },
+    } satisfies Message;
+    try {
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [draft.id], messagesById: { [draft.id]: draft },
+      }) } });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      const reply = { ...draft, isThinking: false, text: "I'm ready to help.",
+        meta: { happierStreamSegmentV1: { ...draft.meta.happierStreamSegmentV1,
+          segmentKind: 'assistant' as const, segmentState: 'complete' as const, updatedAtMs: 3 } },
+      } satisfies Message;
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [reply.id], messagesById: { [reply.id]: reply },
+      }) } });
+      await expect(waiting).resolves.toBe(reply.text);
+    } finally { controller.abort(); await waiting; }
+  });
+
   it.each([
     ['cancelled', null], ['cancelled', undefined], ['failed', null], ['completed', null],
   ] as const)('releases demand for the submitted turn with terminal %s and no reply (final sequence %s)', async (status, finalSeq) => {
