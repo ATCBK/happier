@@ -71,6 +71,8 @@ import { kvRoutes } from '@/app/api/routes/kv/kvRoutes';
 import { SCM_REVIEWED_MARKS_KV_PREFIX, buildScmReviewedMarksKey } from '@happier-dev/protocol/scm/reviewedMarks';
 import { registerQualifiedConnectedAccountCredentialRoutesV4 } from '@/app/api/routes/connect/qualifiedConnectedAccounts/registerQualifiedConnectedAccountCredentialRoutesV4';
 import { mutateQualifiedConnectedServiceCredential } from '@/app/api/routes/connect/qualifiedConnectedAccounts/credentialRepository';
+import { registerConnectedAccountConfigurationRowsRoutes } from '@/app/account/connectedAccounts/registerConfigurationRowsRoutes';
+import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { writeQualifiedProviderAccountUsageRecord } from '@/app/api/routes/connect/qualifiedConnectedAccounts/usageRepository';
 import { createUsageSnapshot } from '@/app/api/routes/connect/providerAccountUsageTestkit';
 import { homeGovernanceRoutes } from "@/app/api/routes/home/homeGovernanceRoutes";
@@ -1002,6 +1004,66 @@ describe("external Action execution authorization", () => {
             expect(await resolveMachineAdmission({ actorAccountId: fixture.account.id, machineId: fixture.machine.id, actionId }))
                 .toMatchObject({ kind: 'denied' });
         }
+    });
+
+    it('admits only the Summary model catalog metadata reads under an authenticated Account root', async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const retainedSettings = { preferredLanguage: 'fr', secrets: [{ id: 'unrelated-secret', name: 'Unrelated credential', kind: 'apiKey',
+            encryptedValue: { _isSecretValue: true, encryptedValue: 'synthetic-retained-secret-carrier' }, createdAt: 1, updatedAt: 1 }] };
+        await db.account.update({ where: { id: fixture.account.id }, data: {
+            settings: JSON.stringify({ t: 'plain', v: retainedSettings }), settingsVersion: 1,
+        } });
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, false, registerConnectedAccountConfigurationRowsRoutes);
+        const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const actionId = 'agents.models.list';
+        const envelope = { ...fixture.envelope, input: { purpose: 'scm_diff_summary', machineId: fixture.machine.id } };
+        try {
+            const issued = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId: fixture.machine.id, envelope } });
+            expect(issued.statusCode, issued.body).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
+            authorizationRequests.set(authorization.token, { target: authorization.binding.target,
+                installationId: fixture.machine.installationId!, requestId: authorization.binding.requestId });
+            const verify = async (method: string, path: string, body?: unknown, effectActionId = actionId) =>
+                verifyExternalActionDomainExecutionRequest({ authorizationToken: authorization.token, effectActionId,
+                    encodedTarget: encodeExternalActionResolvedTargetV1(authorization.binding.target), method, path, body,
+                    machineSignature: signExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId,
+                        target: authorization.binding.target, installationId: fixture.machine.installationId!,
+                        requestId: authorization.binding.requestId, method, path, body, privateKey: fixture.keyPair.secretKey }) });
+            const catalogPath = `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`;
+            for (const path of ['/v1/account/encryption/currentness', catalogPath]) {
+                expect(await verify('GET', path), path).toMatchObject({ effectActionId: actionId, binding: { accountId: fixture.account.id } });
+                const response = await app.inject({ method: 'GET', url: path, headers: machineHeaders({
+                    authorizationToken: authorization.token, effectActionId: actionId,
+                    method: 'GET', path, body: undefined, privateKey: fixture.keyPair.secretKey,
+                }) });
+                expect(response.statusCode, `${path}: ${response.body}`).toBe(200);
+                expect(response.body).not.toContain('synthetic-retained-secret-carrier');
+            }
+            const ownSettings = await app.inject({ method: 'GET', url: '/v2/account/settings', headers: { authorization: `Bearer ${token}` } });
+            expect(ownSettings.statusCode, ownSettings.body).toBe(200);
+            expect(ownSettings.json()).toMatchObject({ content: { t: 'plain', v: retainedSettings } });
+            for (const path of ['/v2/account/settings', '/v1/account/encryption']) {
+                const response = await app.inject({ method: 'GET', url: path, headers: machineHeaders({
+                    authorizationToken: authorization.token, effectActionId: actionId,
+                    method: 'GET', path, body: undefined, privateKey: fixture.keyPair.secretKey,
+                }) });
+                expect(response.statusCode, `${path}: ${response.body}`).toBe(401);
+                expect(response.body).not.toContain('synthetic-retained-secret-carrier');
+                expect(await verify('GET', path), path).toBeNull();
+            }
+            for (const [method, path, body] of [
+                ['POST', catalogPath, {}],
+                ['GET', `${catalogPath}?accountId=other`, undefined],
+                ['GET', `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`, undefined],
+                ['GET', '/v1/account/encryption/currentness?accountId=other', undefined],
+                ['GET', '/v1/account/profile', undefined],
+                ['GET', '/v2/account/settings', {}],
+            ] as const) expect(await verify(method, path, body), path).toBeNull();
+            expect(await verify('GET', catalogPath, undefined, 'agents.backends.list')).toBeNull();
+            await db.account.update({ where: { id: fixture.account.id }, data: { tokenEpoch: { increment: 1 } } });
+            expect(await verify('GET', catalogPath)).toBeNull();
+        } finally { await app.close(); }
     });
 
     it('admits only the native quota read purposes under the captured U3 root', async () => {

@@ -18,6 +18,7 @@ import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { ProviderAccountUsageRecordIdSchema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
+import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, SessionPendingEnqueueByMachineRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 import { SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2, SessionPendingExecutionRunEnqueueByMachineRequestV2Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
 import { resolveMachineRpcExternalActionEffectV1 } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
@@ -1037,6 +1038,14 @@ export async function verifyExternalActionDomainExecutionRequest(
         if (!await isSessionAgentTransitionHttpPurpose(verified, proof)) return null;
     } else if (nativePurpose === 'quota_read') {
         if (verified.effectActionId !== verified.binding.actionId || !isQuotaReadHttpPurpose(proof)) return null;
+    } else if (verified.binding.actionId === 'agents.models.list') {
+        // Automatic Summary models consume the requester's current default-auth
+        // purposes row. Admit only that row and Account-mode currentness under
+        // this same root; retained Settings and source maintenance are private.
+        if (verified.effectActionId !== verified.binding.actionId
+            || proof.method.toUpperCase() !== 'GET' || proof.body !== undefined
+            || !['/v1/account/encryption/currentness',
+                `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`].includes(proof.path)) return null;
     } else if (verified.binding.actionId === 'scm.diffSummary.reviewed.mark'
         || verified.binding.actionId === 'scm.diffSummary.reviewed.unmark'
         || verified.binding.actionId === 'scm.diffSummary.result.delete'
