@@ -1,6 +1,3 @@
-import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
-import { isActionAccountScopeChangedError } from '@/sync/domains/scope/actionAccountScopeError';
-
 type FireAndForgetOptions = Readonly<{
     tag?: string;
     logError?: boolean;
@@ -13,15 +10,13 @@ export function fireAndForget(promise: Promise<unknown> | null | undefined, opti
     void promise.catch((error: unknown) => {
         try {
             if (options?.tag) {
-                // Recoverable connectivity and retired work are diagnostics, not developer error overlays.
-                const expected = isTransientConnectivityError(error)
-                    || isActionAccountScopeChangedError(error)
-                    || (error instanceof Error && (error.name === 'AbortError' || error.name === 'StaleServerGenerationError'));
-                const report = expected ? console.info : console.error;
+                // Background tags and exception details are developer diagnostics. Expo turns
+                // console.error into a raw on-screen toast; user failures belong to onError,
+                // where the owning surface can present its typed, localized recovery state.
                 if (options.logError === false) {
-                    report(`[fireAndForget] ${options.tag}`);
+                    console.info(`[fireAndForget] ${options.tag}`);
                 } else {
-                    report(`[fireAndForget] ${options.tag}`, error);
+                    console.info(`[fireAndForget] ${options.tag}`, error);
                 }
             }
             options?.onError?.(error);
