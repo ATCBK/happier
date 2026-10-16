@@ -596,7 +596,7 @@ async function enqueuePendingMessageWithAdmission(
     params: EnqueuePendingMessageInput,
     admission: PendingMessageAdmissionContext,
 ): Promise<EnqueuePendingMessageResult> {
-    const actorUserId = typeof params.actorUserId === "string" ? params.actorUserId : "";
+    const requestAccountId = typeof params.actorUserId === "string" ? params.actorUserId : "";
     const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
     const localId = readPendingLocalId(params.localId) ?? "";
     const target = parsePendingExecutionTarget(params.targetExecutionRunId);
@@ -617,7 +617,7 @@ async function enqueuePendingMessageWithAdmission(
         "content" in params ? params.content : ciphertext ? ({ t: "encrypted", c: ciphertext } satisfies PrismaJson.SessionPendingMessageContent) : null;
 
     if (
-        !actorUserId
+        !requestAccountId
         || !sessionId
         || !localId
         || !content
@@ -666,14 +666,6 @@ async function enqueuePendingMessageWithAdmission(
 
     try {
         return await inPendingQueuePositionTx(sessionId, async (tx) => {
-            const access = admission.kind === "account"
-                ? await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: admission.authentication })
-                : await assertSessionOwnerInTx({ tx, accountId: actorUserId, sessionId });
-            if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
-            let inputAdmissionReceipt = admission.kind === "account"
-                ? buildSessionInputAdmissionReceipt({ issuer: "authenticatedAccount", access: access.access,
-                    callerInputConstraints: admission.authentication.callerInputConstraints ?? admission.authentication.apiTokenGrant })
-                : admission.inputAdmissionReceipt;
             const session = await tx.session.findUnique({
                 where: { id: sessionId },
                 select: {
@@ -688,6 +680,20 @@ async function enqueuePendingMessageWithAdmission(
                 },
             });
             if (!session) return { ok: false, error: "session-not-found" } as const;
+            // A Machine hosting a requester Session authenticates as its
+            // custodian, not the Session owner. Only the exact hosting Machine
+            // may use that owner's tuple; current AccessKey/C41 admission below
+            // still decides whether that tuple can receive input.
+            const actorUserId = admission.kind === "machine" && admission.sourceMachineId === admission.targetMachineId
+                ? session.accountId : requestAccountId;
+            const access = admission.kind === "account"
+                ? await assertSessionCapabilityInTx({ tx, accountId: actorUserId, sessionId, capability: "submitAgentInput", authentication: admission.authentication })
+                : await assertSessionOwnerInTx({ tx, accountId: actorUserId, sessionId });
+            if (!access.ok) return { ok: false, error: projectPendingSessionAccessError(access.reason) } as const;
+            let inputAdmissionReceipt = admission.kind === "account"
+                ? buildSessionInputAdmissionReceipt({ issuer: "authenticatedAccount", access: access.access,
+                    callerInputConstraints: admission.authentication.callerInputConstraints ?? admission.authentication.apiTokenGrant })
+                : admission.inputAdmissionReceipt;
             if (session.archivedAt !== null) {
                 return {
                     ok: false,
@@ -717,7 +723,7 @@ async function enqueuePendingMessageWithAdmission(
                 } as const;
                 const [sourceMachine, targetAccess] = await Promise.all([
                     admission.kind === "machine" ? tx.machine.findFirst({
-                        where: { accountId: actorUserId, id: admission.sourceMachineId },
+                        where: { accountId: requestAccountId, id: admission.sourceMachineId },
                         select: { revokedAt: true, replacedByMachineId: true },
                     }) : null,
                     tx.accessKey.findUnique({
