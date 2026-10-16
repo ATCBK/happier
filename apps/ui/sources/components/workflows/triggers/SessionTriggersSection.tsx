@@ -65,6 +65,8 @@ export type SessionTriggersSectionViewProps = Readonly<{
     history?: React.ReactNode;
     /** The header "+", which also anchors a popover the host opens itself (a bound turn). */
     addAnchorRef?: React.RefObject<View | null>;
+    /** The "+" anchors an open picker: its tooltip steps aside while the picker is up. */
+    addOpen?: boolean;
     /** A retired Automation link reveals this set's first row, as in the Account column. */
     deepLinkAutomationId?: string;
 }>;
@@ -101,6 +103,7 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
                         variant="plain"
                         accessibilityLabel={t('workflows.triggers.section.add')}
                         tooltip={t('workflows.triggers.section.add')}
+                        expanded={props.addOpen === true}
                         onPress={() => props.onAdd(addAnchorRef)}
                     />
                 </View>
@@ -413,6 +416,7 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
                 historyRowKey={historyRowKey}
                 history={history}
                 addAnchorRef={addAnchorRef}
+                addOpen={examplesAnchor !== null || (popover !== null && row === null)}
                 {...(typeof params.trigger === 'string' ? { deepLinkAutomationId: params.trigger } : {})}
             />
             {examplesAnchor !== null && exampleSession !== undefined ? (

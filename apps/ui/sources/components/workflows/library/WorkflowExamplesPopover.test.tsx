@@ -29,5 +29,14 @@ describe('WorkflowExamplesPopover', () => {
         expect(popover?.props.maxHeightCap).toBe(900);
         expect(popover?.props.placementMinSpace).toBeLessThan(900);
         expect(popover?.props.placementMinSpace).toBeGreaterThan(0);
+        // The card picker takes the room it is given; a content-sized width belongs to the Session's list.
+        expect(popover?.props.portal.sizeToContent).toBeUndefined();
+    });
+
+    it('sizes a Session\'s example list to its content, so a description takes two lines, not five', async () => {
+        const { WorkflowExamplesPopover } = await import('./WorkflowExamplesPopover');
+        const screen = await renderScreen(<WorkflowExamplesPopover anchorRef={{ current: null }} onRequestClose={() => {}}
+            session={{ sessionId: 's1', machineId: 'm1' }} />);
+        expect(screen.findHostByTestId('workflow-examples-popover-boundary')?.props.portal.sizeToContent).toBe(true);
     });
 });
