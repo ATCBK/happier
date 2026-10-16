@@ -167,8 +167,9 @@ function iconFor(item: WorkItem): SessionAgentActivityPresentation['iconName'] {
  * draw through their roster row, whose presenter already leads with their kind.
  */
 function readFacts(item: WorkItem): readonly string[] {
+    // An untitled run is named by its kind already: the subtitle never repeats its title.
     return item.kind === 'session' || item.kind === 'workflow_run'
-        ? [describeWorkKind(item.kind), ...item.facts] : item.facts;
+        ? [describeWorkKind(item.kind), ...item.facts].filter((fact) => fact !== item.title) : item.facts;
 }
 
 export function presentWorkItem(item: WorkItem): SessionAgentActivityPresentation {

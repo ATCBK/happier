@@ -166,6 +166,22 @@ describe('WorkItemRow', () => {
         expect(presentWorkItem(session).facts).toEqual(['sessionWork.kinds.session', 'Claude']);
         expect(presentWorkItem(run).facts).toEqual(['sessionWork.kinds.workflowRun', '7 of 12']);
     });
+
+    it('never says the same words as its title and its kind: an untitled run reads its time, not "Workflow run / Workflow run"', async () => {
+        const { presentWorkItem } = await import('./WorkItemRow');
+        const { describeWorkKind } = await import('./workerKindGlyphs');
+        const untitled: WorkItem = {
+            ...needsYouSession(),
+            key: 'run:untitled',
+            kind: 'workflow_run',
+            title: describeWorkKind('workflow_run'),
+            agentId: null,
+            facts: ['10:42'],
+            open: { kind: 'workflow_run', runId: 'untitled' },
+        };
+        expect(presentWorkItem(untitled).facts).toEqual(['10:42']);
+        expect(presentWorkItem({ ...untitled, title: 'Memory upkeep' }).facts).toEqual([describeWorkKind('workflow_run'), '10:42']);
+    });
 });
 
 function workingRun(runId: string): WorkItem {
