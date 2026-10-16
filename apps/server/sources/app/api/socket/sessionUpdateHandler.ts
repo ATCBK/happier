@@ -494,30 +494,30 @@ export function sessionUpdateHandler(
     registerSessionEvent(SESSION_DISCUSSION_AGENT_POST_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(SessionDiscussionAgentPostResponseV1Schema.parse(response));
         const request = SessionDiscussionAgentPostRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.conversations")) {
-            respond({ ok: false, v: 1, error: "session_discussions_unavailable" });
-            return;
-        }
-        if (!request.success) {
-            respond({ ok: false, v: 1, error: "session_discussion_invalid_content" });
-            return;
-        }
-        // The trusted publisher carrier accepts exactly the same stored
-        // Discussion request budget as the canonical HTTP route. Provenance
-        // stamping is a transport distinction, not a larger body allowance.
-        if (!isSessionDiscussionRequestWithinTransportBudgetV1(request.data.request)) {
-            respond({ ok: false, v: 1, error: "session_discussion_invalid_content" });
-            return;
-        }
-        if (
-            !trustedSessionPublisher
-            || trustedSessionPublisher.binding.sessionId !== request.data.sessionId
-            || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })
-        ) {
-            respond({ ok: false, v: 1, error: "session_discussion_post_denied" });
-            return;
-        }
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.conversations")) {
+                respond({ ok: false, v: 1, error: "session_discussions_unavailable" });
+                return;
+            }
+            if (!request.success) {
+                respond({ ok: false, v: 1, error: "session_discussion_invalid_content" });
+                return;
+            }
+            // The trusted publisher carrier accepts exactly the same stored
+            // Discussion request budget as the canonical HTTP route. Provenance
+            // stamping is a transport distinction, not a larger body allowance.
+            if (!isSessionDiscussionRequestWithinTransportBudgetV1(request.data.request)) {
+                respond({ ok: false, v: 1, error: "session_discussion_invalid_content" });
+                return;
+            }
+            if (
+                !trustedSessionPublisher
+                || trustedSessionPublisher.binding.sessionId !== request.data.sessionId
+                || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })
+            ) {
+                respond({ ok: false, v: 1, error: "session_discussion_post_denied" });
+                return;
+            }
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket,
                 deadlineAtMs: Date.now() + 5_000,
@@ -565,15 +565,15 @@ export function sessionUpdateHandler(
     registerSessionEvent(SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(SessionFollowObservePendingResponseV1Schema.parse(response));
         const request = SessionFollowObservePendingRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.following")) {
-            respond({ ok: false, v: 1, error: "unsupported" });
-            return;
-        }
-        if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.sessionId || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })) {
-            respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
-            return;
-        }
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.following")) {
+                respond({ ok: false, v: 1, error: "unsupported" });
+                return;
+            }
+            if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.sessionId || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })) {
+                respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
+                return;
+            }
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
                 isolationLevel: "Serializable", // Follow sources, access and frontiers must describe one observation.
@@ -614,16 +614,16 @@ export function sessionUpdateHandler(
     registerSessionEvent(SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(SessionFollowAcknowledgeResponseV1Schema.parse(response));
         const request = SessionFollowAcknowledgeRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.following")) {
-            respond({ ok: false, v: 1, error: "unsupported" });
-            return;
-        }
-        if (!request.success) { respond({ ok: false, v: 1, error: "invalid_request" }); return; }
-        const destinationSessionId = request.data.destinationSessionId;
-        if (!trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== destinationSessionId || !canTargetSessionFromSocket({ socket, connection, sessionId: destinationSessionId })) {
-            respond({ ok: false, v: 1, error: "forbidden" }); return;
-        }
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.following")) {
+                respond({ ok: false, v: 1, error: "unsupported" });
+                return;
+            }
+            if (!request.success) { respond({ ok: false, v: 1, error: "invalid_request" }); return; }
+            const destinationSessionId = request.data.destinationSessionId;
+            if (!trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== destinationSessionId || !canTargetSessionFromSocket({ socket, connection, sessionId: destinationSessionId })) {
+                respond({ ok: false, v: 1, error: "forbidden" }); return;
+            }
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
                 isolationLevel: "Serializable", // Frontier acceptance composes current edge, source and destination authority.
@@ -668,16 +668,16 @@ export function sessionUpdateHandler(
             return;
         }
         const request = AccountVoiceFollowObservePendingRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.following")) {
-            respond({ ok: false, v: 1, error: "unsupported" });
-            return;
-        }
-        if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.voiceSessionId
-            || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.voiceSessionId })) {
-            respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
-            return;
-        }
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.following")) {
+                respond({ ok: false, v: 1, error: "unsupported" });
+                return;
+            }
+            if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.voiceSessionId
+                || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.voiceSessionId })) {
+                respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
+                return;
+            }
             const currentRun = await dependencies?.resolveExecutionRunCurrentness({
                 executionRunId: request.data.executionRunId,
                 requestingAccountId: userId,
@@ -743,16 +743,16 @@ export function sessionUpdateHandler(
             return;
         }
         const request = AccountVoiceFollowAcknowledgeRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.following")) {
-            respond({ ok: false, v: 1, error: "unsupported" });
-            return;
-        }
-        if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.voiceSessionId
-            || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.voiceSessionId })) {
-            respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
-            return;
-        }
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.following")) {
+                respond({ ok: false, v: 1, error: "unsupported" });
+                return;
+            }
+            if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.voiceSessionId
+                || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.voiceSessionId })) {
+                respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
+                return;
+            }
             const currentRun = await dependencies?.resolveExecutionRunCurrentness({
                 executionRunId: request.data.executionRunId,
                 requestingAccountId: userId,
