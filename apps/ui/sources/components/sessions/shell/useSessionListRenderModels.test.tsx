@@ -16,6 +16,7 @@ import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionLis
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 import { useSessionListRenderModels } from './useSessionListRenderModels';
+import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
 
 type SessionListRenderModels = ReturnType<typeof useSessionListRenderModels>;
 type RowSubscriptionProps = Readonly<{ rowSubscriptionKeys: ReadonlySet<string> | null }>;
@@ -465,6 +466,7 @@ describe('useSessionListRenderModels', () => {
     });
 
     it('does not rerender parent render models when a subscribed row renderable changes without reachability changes', async () => {
+        vi.useFakeTimers();
         const previousState = storage.getState();
         let hook: RenderHookResult<SessionListRenderModels, void> | null = null;
         try {
@@ -545,6 +547,15 @@ describe('useSessionListRenderModels', () => {
 
             expect(renderCount).toBe(stableRenderCount);
             expect(hook.getCurrent()).toBe(initial);
+
+            // Deferred parents do not read row status or age. A real row can
+            // advance the shared clock without invalidating this projection.
+            const rowClock = {};
+            sessionListRuntimeClock.requestWake(rowClock, Date.now() + 60_000);
+            await flushHookEffects({ advanceTimersMs: 60_000, cycles: 1, turns: 2 });
+            expect(renderCount).toBe(stableRenderCount);
+            expect(hook.getCurrent()).toBe(initial);
+            sessionListRuntimeClock.clearWake(rowClock);
         } finally {
             await hook?.unmount();
             storage.setState(previousState);
