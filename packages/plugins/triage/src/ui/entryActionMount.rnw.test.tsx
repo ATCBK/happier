@@ -39,6 +39,9 @@ import {
     type TriageAdmittedSourceV1,
 } from '../actions/listEntries.js';
 import { TriageListEntriesInputV1Schema } from '../actions/listEntriesProtocol.js';
+import { reobserveTriageEntry } from '../actions/reobserveEntry.js';
+import { TRIAGE_REOBSERVE_ENTRY_ACTION_LOCAL_ID_V1, TriageReobserveEntryInputV1Schema } from '../actions/reobserveEntryProtocol.js';
+import { toTriageWireObservation } from '../projection/listWindowWire.js';
 import { listTriagePinnedEntries } from '../actions/userMarks.js';
 import {
     TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1,
@@ -228,6 +231,7 @@ type Harness = Readonly<{
 
 function createHarness(options: Readonly<{
     formalReviewReady?: boolean;
+    reviewRevisionOnlyOnGet?: boolean;
     includeSecondEntry?: boolean;
     issue?: boolean;
     involvement?: readonly ('author' | 'assignee' | 'reviewRequested')[];
@@ -277,7 +281,7 @@ function createHarness(options: Readonly<{
                 locator: testkitLocator(),
                 snapshot: testkitSnapshot({
                     title: ENTRY_TITLE,
-                    ...(formalReviewReady ? {
+                    ...(formalReviewReady && !options.reviewRevisionOnlyOnGet ? {
                         reviewRevision: {
                             baseSha: 'a'.repeat(40),
                             headSha: 'b'.repeat(40),
@@ -304,6 +308,26 @@ function createHarness(options: Readonly<{
 
     async function executeAction(request: Readonly<{ action: unknown; input: unknown }>): Promise<unknown> {
         const action = String(request.action);
+        if (action === TRIAGE_REOBSERVE_ENTRY_ACTION_LOCAL_ID_V1) {
+            const result = await reobserveTriageEntry(TriageReobserveEntryInputV1Schema.parse(request.input), {
+                readConfiguredInstance: async () => configuredInstance(),
+                readAdmittedSources: async () => admitted,
+                // The external source's authoritative get can carry revision facts absent from its scan.
+                executeGet: async (_operation, input) => ({
+                    kind: 'present', localRef: input.localRef, locator: testkitLocator(),
+                    snapshot: testkitSnapshot({ title: input.localRef.entryId === '18' ? SECOND_ENTRY_TITLE : ENTRY_TITLE,
+                        ...(formalReviewReady ? {
+                            reviewRevision: { baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), nativeRevision: 'revision-1' },
+                        } : {}) }),
+                    viewer: testkitViewer(options.involvement === undefined ? {} : { involvement: [...options.involvement] }),
+                    repository: REPOSITORY,
+                }),
+                nowMs: () => Date.now() + 1,
+            });
+            if (result.kind !== 'observed') return result;
+            const { entryRef, ...observation } = result.observation;
+            return { kind: 'observed', entryRef, observation: toTriageWireObservation(observation) };
+        }
         if (action === TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1) {
             return await listTriagePinnedEntries(
                 TriageListPinnedEntriesInputV1Schema.parse(request.input),
@@ -530,6 +554,15 @@ afterEach(async () => {
 const PREPARATION_UNSUPPORTED_COPY = 'This source cannot prepare a review workspace, so actions that need one cannot start here.';
 
 describe('the entry action controls on the mounted detail header', () => {
+    it('makes formal review available after reading the selected source, even when its scan omitted revision facts', async () => {
+        const harness = createHarness({ formalReviewReady: true, reviewRevisionOnlyOnGet: true });
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        const review = await shell.getByRole('button', { name: 'Review' });
+        expect(review.state?.disabled).not.toBe(true);
+        await expect(shell.queryByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeUndefined();
+    });
     it('gives a newly selected entry its own action controller while the prior entry is still starting', async () => {
         const harness = createHarness({ includeSecondEntry: true });
         harness.setActions([{
