@@ -19,13 +19,13 @@ import { createDaemonizingProcessFixture } from '@/testkit/process/daemonizingPr
 import { waitForProcessExit } from '@/testkit/process/spawn';
 
 describe('spawnSupervisedPluginProcess', () => {
-    it.each([undefined, 'preserve-on-success'] as const)('settles a daemonizing launcher with descendant disposition %s', async (descendantDisposition) => {
+    it.for([undefined, 'preserve-on-success'] as const)('settles a daemonizing launcher with descendant disposition %s', async (descendantDisposition, { task }) => {
         await withTempDir('happier-native-descendants-', async directory => {
             const fixture = createDaemonizingProcessFixture(directory);
             const supervised = spawnSupervisedPluginProcess({ command: process.execPath, args: fixture.args,
                 env: {}, spawnOptions: { detached: true, windowsHide: true }, descendantDisposition });
             try {
-                const pid = await fixture.ready();
+                const pid = await fixture.ready({ timeoutMs: task.timeout });
                 await fixture.release();
                 expect((await supervised.handle.wait()).termination).toEqual({ observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } });
                 await supervised.dispose();
@@ -39,7 +39,7 @@ describe('spawnSupervisedPluginProcess', () => {
         });
     });
 
-    it.each(['abort', 'dispose', 'timeout', 'failed-exit'] as const)('does not hand off descendants after %s', async kind => {
+    it.for(['abort', 'dispose', 'timeout', 'failed-exit'] as const)('does not hand off descendants after %s', async (kind, { task }) => {
         await withTempDir('happier-native-cancel-', async directory => {
             const fixture = createDaemonizingProcessFixture(directory);
             const controller = new AbortController();
@@ -47,7 +47,7 @@ describe('spawnSupervisedPluginProcess', () => {
                 env: {}, signals: [controller.signal], spawnOptions: { detached: true, windowsHide: true },
                 descendantDisposition: 'preserve-on-success' });
             try {
-                const pid = await fixture.ready();
+                const pid = await fixture.ready({ timeoutMs: task.timeout });
                 if (kind === 'abort') controller.abort();
                 else if (kind === 'failed-exit') await fixture.release(1);
                 else await supervised.requestTermination(kind === 'timeout' ? { kind: 'timeout' } : { kind: 'dispose', reason: 'caller' });

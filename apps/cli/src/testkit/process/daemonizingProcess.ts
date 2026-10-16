@@ -24,14 +24,23 @@ export function createDaemonizingProcessFixture(directory: string) {
     `];
     return {
         args,
-        async ready() {
+        async ready(options: Readonly<{ launch?: Promise<unknown>; timeoutMs: number }>) {
             let rootPid = 0;
-            await vi.waitFor(async () => {
-                const value = JSON.parse(await readFile(readyPath, 'utf8')) as { rootPid: number; descendantPid: number };
-                rootPid = value.rootPid;
-                descendantPid = value.descendantPid;
-                expect(descendantPid).toBeGreaterThan(0);
-            });
+            let launchFailure: { error: unknown } | undefined;
+            void options.launch?.catch(error => { launchFailure = { error }; });
+            await vi.waitUntil(async () => {
+                if (launchFailure) throw launchFailure.error;
+                try {
+                    const value = JSON.parse(await readFile(readyPath, 'utf8')) as { rootPid: number; descendantPid: number };
+                    rootPid = value.rootPid;
+                    descendantPid = value.descendantPid;
+                    return true;
+                } catch (error) {
+                    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false;
+                    throw error;
+                }
+            }, { timeout: options.timeoutMs });
+            expect(descendantPid).toBeGreaterThan(0);
             // Keep the launcher alive through a real native capture. The supervisor
             // also captures at its first-output boundary, before this release.
             const captured = await captureProcessTree({ pid: rootPid });
