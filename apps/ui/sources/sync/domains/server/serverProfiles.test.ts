@@ -3221,6 +3221,38 @@ describe('serverProfiles', () => {
         expect(profiles.getServerProfileLegacyServerIds('srv_identity_123')).toContain(created.id);
     });
 
+    it('projects identifier scopes once per profile set and refreshes them after a profile mutation', async () => {
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
+        const profiles = await importFresh();
+        const created = await profiles.upsertServerProfile({ serverUrl: 'https://scope.example.test', name: 'Scope' });
+        await profiles.setServerProfileIdentityForUrl(created.serverUrl, 'srv_scope_one');
+        expect(profiles.resolveServerProfileScopeIdForIdentifier('srv_scope_one')).toBe('srv_scope_one');
+
+        // Count real profile-set enumeration; no domain decision is substituted.
+        const values = vi.spyOn(Object, 'values');
+        const entries = vi.spyOn(Object, 'entries');
+        let enumerations: number;
+        try {
+            for (let index = 0; index < 20; index += 1) {
+                expect(profiles.resolveServerProfileScopeIdForIdentifier('srv_scope_one')).toBe('srv_scope_one');
+                expect(profiles.resolveServerProfileScopeIdForIdentifier(created.id)).toBe('srv_scope_one');
+                expect(profiles.areServerProfileIdentifiersEquivalent(created.id, 'srv_scope_one')).toBe(true);
+            }
+            enumerations = [...values.mock.calls, ...entries.mock.calls].filter(([input]) => (
+                Object.prototype.hasOwnProperty.call(input, created.id)
+            )).length;
+        } finally { values.mockRestore(); entries.mockRestore(); }
+        expect(enumerations).toBe(0);
+
+        const second = await profiles.upsertServerProfile({ serverUrl: 'https://second-scope.example.test', name: 'Second' });
+        expect(profiles.resolveServerProfileScopeIdForIdentifier(second.id)).toBe(second.id);
+        await profiles.setServerProfileIdentityForUrl(second.serverUrl, 'srv_scope_two');
+        expect(profiles.resolveServerProfileScopeIdForIdentifier(second.id)).toBe('srv_scope_two');
+        expect(profiles.resolveServerProfileScopeIdForIdentifier(created.id)).toBe('srv_scope_one');
+        expect(profiles.resolveServerProfileScopeIdForIdentifier('srv_scope_two')).toBe('srv_scope_two');
+        expect(profiles.resolveServerProfileScopeIdForIdentifier('unknown-home')).toBe('unknown-home');
+    });
+
     it('resolves a portable server identity to its current device-local routing profile', async () => {
         const scope = randomScope();
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
