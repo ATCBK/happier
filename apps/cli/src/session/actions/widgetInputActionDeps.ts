@@ -2,7 +2,8 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { VoiceTrackedSessionAddressV1Schema } from '@happier-dev/protocol/sessions/follow/voiceTrackedTargetsCompatibilityV1';
-import type { ActionExecutorDeps, ActionExecutorContext, AccountProfile, ConnectedAccountUiProjectionEntryV1, PluginContributionIdentityV1, PluginProjectedResourceV2, QualifiedConnectedAccountPurposeBindingsV1, JsonValue, PublicActionResultById } from '@happier-dev/protocol';
+import type { ActionExecutorDeps, ActionExecutorContext, AccountProfile, ConnectedAccountUiProjectionEntryV1, PluginContributionIdentityV1, PluginProjectedResourceV2, PluginProjectionV2, QualifiedConnectedAccountPurposeBindingsV1, JsonValue, PublicActionResultById } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { QualifiedConnectedAccountRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { readBuiltinWidgetDescriptorV1, isSameWidgetDefinitionV1, widgetCandidateDefinitionV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 import { readWidgetDefinitionResourcesV1 } from '@happier-dev/protocol/widgets/widgetDefinitionV1';
@@ -12,6 +13,7 @@ import { isWidgetConnectedAccountSelectionEligibleV1, resolveWidgetViewerPurpose
 import { findWidgetLayoutParentV1, readWidgetActionSurfacePortV1, WidgetSurfaceReadV1Schema, type WidgetInputBindingsV1, type WidgetCandidateIdentityV1, type WidgetActionInputResolverV1, type WidgetInputDescriptorV1 } from '@happier-dev/protocol/widgets';
 import { readInputPath } from '@happier-dev/protocol/inputs/inputPredicates';
 import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
+import { createDaemonPluginActionExecutor } from './createDaemonPluginActionExecutor';
 
 type Request = Parameters<WidgetActionInputResolverV1['resolve']>[0];
 type Descriptor = WidgetInputDescriptorV1 & Readonly<{ resources?: readonly PluginContributionIdentityV1[]; resourceDeclarations?: readonly PluginProjectedResourceV2[];
@@ -26,6 +28,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
     readCandidates(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>): Promise<readonly Candidate[]>;
     readResources?(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>): Promise<Readonly<{
         resources: readonly PluginProjectedResourceV2[]; connectedAccountDescriptors: readonly ConnectedAccountUiProjectionEntryV1[] }>>;
+    readInputTypes?(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>): Promise<PluginProjectionV2['familiesById']['inputTypes'] | undefined>;
     readViewerPurposeContext?(signal: AbortSignal | undefined, context: ActionExecutorContext): Promise<Readonly<{ profile: AccountProfile; purposeBindings: QualifiedConnectedAccountPurposeBindingsV1 }> | null>;
     validateSession(session: Readonly<{ serverId: string; sessionId: string }>, signal?: AbortSignal): Promise<boolean>;
 }>): Pick<ActionExecutorDeps, 'widgetInputs' | 'widgetConnectedAccountOptions'> {
@@ -185,9 +188,24 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
         },
         readContext: async request => readContext(request),
         readViewerValues: async request => (await readViewerPurpose(request)) ?? { values: {} },
-        readInputType: async (field, request) => field.inputType && !('hostType' in field.inputType)
-            ? await input.getDeps().resolveInputType?.(field.inputType, { ...request.context,
-                ...(request.signal ? { signal: request.signal } : {}) }) ?? null : null,
+        readInputType: async (field, request) => {
+            if (!field.inputType || 'hostType' in field.inputType) return null;
+            const descriptor = descriptors.get(request);
+            if (!descriptor) return null;
+            const targetDeclaration = readWidgetInputTargetV1(descriptor);
+            if (targetDeclaration.kind === 'invalid') return null;
+            const bound = resolveConfiguredWidgetTargetInputV1({ instance: request.instance, descriptor,
+                providedContext: await readProvidedContext(request), viewerValues: (await readViewerPurpose(request))?.values ?? {} });
+            const selected = targetDeclaration.kind === 'session' && bound.status === 'ready'
+                ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(bound.input, targetDeclaration.path)) : null;
+            // The widget's selected daemon projection is the type catalog for
+            // standalone callers, runtime hosts and saved definitions alike.
+            const types = await input.readInputTypes?.(request.signal, selected?.success ? selected.data : undefined);
+            request.signal?.throwIfAborted();
+            const entry = types?.entriesById[buildQualifiedPluginContributionKey(field.inputType)];
+            return entry?.occurrenceId && entry.pluginId === field.inputType.pluginId && entry.definition.id === field.inputType.localId
+                ? { identity: field.inputType, occurrenceId: entry.occurrenceId, definition: entry.definition } : null;
+        },
         validateValue: async (field, value, request) => {
             const binding = request.instance.bindings[field.path];
             if (binding?.kind === 'viewer') {
@@ -227,7 +245,14 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             const descriptor = descriptors.get(request);
             const target = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             const selected = target?.kind === 'session' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(value, target.path)) : null;
-            const result = await createActionExecutor(input.getDeps()).execute('action.options.resolve', {
+            const deps = input.getDeps();
+            const local = createActionExecutor(deps);
+            // Standalone Actions use the same incumbent daemon options owner
+            // as top-level discovery. A runtime host already has its committed
+            // input-type dependencies and stays within that owner in process.
+            const executor = field.inputType && 'pluginId' in field.inputType && !deps.resolveInputType
+                ? createDaemonPluginActionExecutor({ base: local }) : local;
+            const result = await executor.execute('action.options.resolve', {
                 consumer: { kind: 'widget', surface: request.ref.surface, definition: request.instance.definition,
                     ...(selected?.success ? { selectedSession: selected.data } : {}) },
                 fieldPath: field.path, draftInput: value,

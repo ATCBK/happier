@@ -861,7 +861,9 @@ export function createCliActionDeps(params: Readonly<{
     authorization: import('@happier-dev/protocol').WorkflowAcceptedAuthorizationV1;
     signal?: AbortSignal;
   }>) => boolean | Promise<boolean>;
-}> & SessionStoredContentCryptoContext & ExternalActionHomeBinding & CliActionExactHomeTarget): ActionExecutorDeps {
+}> & SessionStoredContentCryptoContext & ExternalActionHomeBinding & CliActionExactHomeTarget,
+  readEffectiveDeps?: () => ActionExecutorDeps,
+): ActionExecutorDeps {
   const roleAccountScopeKey = params.serverHttpBaseUrl
     ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => resolveAccountSettingsScopeKeyForToken(params.token))
     : resolveAccountSettingsScopeKeyForToken(params.token);
@@ -3414,11 +3416,12 @@ export function createCliActionDeps(params: Readonly<{
     }) : {}),
     ...(roleArtifactStore && homeAccountId ? createCliWidgetDefinitionActionDepsV1({
       transport: roleArtifactStore, accountId: homeAccountId, serverHttpBaseUrl: params.serverHttpBaseUrl,
-      getDeps: () => actionDeps, readCandidates: readWidgetCandidates,
+      getDeps: () => readEffectiveDeps?.() ?? actionDeps, readCandidates: readWidgetCandidates,
     }) : {}),
     ...createCliWidgetInputActionDepsV1({
       serverId: widgetHomeId, accountId: homeAccountId,
-      getDeps: () => actionDeps, readCandidates: readWidgetCandidates,
+      getDeps: () => readEffectiveDeps?.() ?? actionDeps, readCandidates: readWidgetCandidates,
+      readInputTypes: async (signal, session) => (await readWidgetProjection(signal, session))?.familiesById.inputTypes,
       readResources: async (signal, session) => {
         const projection = await readWidgetProjection(signal, session);
         return { resources: Object.values(projection?.resourcesById ?? {}),

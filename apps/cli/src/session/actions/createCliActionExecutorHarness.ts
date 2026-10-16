@@ -49,7 +49,9 @@ export function createCliActionExecutorHarness(
   observeRecordedApprovalExecution(args: RecordedApprovalExecutionObservationArgs): Promise<ActionExecuteResult>;
 }> {
   const coordinator = getSharedBlockingApprovalCoordinator();
-  const baseDeps = createCliActionDeps(params);
+  // Nested widget admission must see this host's final registry/transport
+  // bindings, including the committed input-type dependencies installed below.
+  const baseDeps = createCliActionDeps(params, () => rawDeps);
   const baseDepsForRuntime = (() => {
     if (!params.actionsSettingsProvider || params.actionsSettingsProvider.getAccountSettings) {
       return baseDeps;

@@ -7,6 +7,12 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, decod
 import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { buildWidgetSurfaceArtifactIdV1 } from '@happier-dev/protocol/widgets';
 import { createCliActionDeps } from './createCliActionDeps';
+import { createCliActionExecutor } from './createCliActionExecutor';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import * as daemonControl from '@/daemon/controlClient';
+import { createRegistryInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
@@ -84,13 +90,45 @@ describe('CLI Board Actions through the Artifact owner', () => {
             return { status: 200, data: { success: true, headerVersion: updated.headerVersion, bodyVersion: updated.bodyVersion } };
         });
         vi.spyOn(axios, 'delete').mockImplementation(async url => {
-            const row = rows.get('new-board')!;
-            expect(new URL(url).pathname).toBe(`/v1/artifacts/new-board/revision/${row.headerVersion}/${row.bodyVersion}`);
-            rows.delete('new-board'); return { status: 200, data: { success: true } };
+            const artifactId = decodeURIComponent(new URL(url).pathname.split('/')[3]!);
+            const row = rows.get(artifactId)!;
+            expect(new URL(url).pathname).toBe(`/v1/artifacts/${artifactId}/revision/${row.headerVersion}/${row.bodyVersion}`);
+            rows.delete(artifactId); return { status: 200, data: { success: true } };
         });
         // Session storage mode is independent of the Account's Artifact mode; no Session key is fabricated.
-        const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
-            serverId: 'board-home', serverHttpBaseUrl: 'https://board-home.test' }));
+        const inputType = { pluginId: 'external.directory-widgets', localId: 'count-kind' };
+        const occurrenceId = createPluginRuntimeOccurrenceId(inputType.pluginId);
+        const countOptions = [{ value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders', disabled: true }];
+        // The standalone executor's actual daemon control transport is the
+        // boundary; widget/field/options admission below it remains real.
+        vi.spyOn(daemonControl, 'requestDaemonPluginActionExecution').mockImplementation(async () => {
+            if (initiallyUnavailable) throw new Error('The current-process registry must not loop through daemon control');
+            return { matched: true, result: { ok: true, result: { actionId: 'widgets.catalog.list', fieldPath: 'filter',
+                optionsSourceId: 'plugin-input:external.directory-widgets/count-kind', options: countOptions } } };
+        });
+        let projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {
+            inputTypes: { family: 'inputTypes', entriesById: { 'external.directory-widgets/count-kind': {
+                id: 'external.directory-widgets/count-kind', pluginId: inputType.pluginId, pluginVersion: '1.0.0',
+                occurrenceId, definition: { id: inputType.localId, title: 'Count kind',
+                    semantic: 'directory-count-kind', valueSchema: { type: 'string', enum: ['files', 'folders'] },
+                    options: { resource: 'count-kinds' } },
+            } } },
+        } });
+        const type = projection.familiesById.inputTypes!.entriesById['external.directory-widgets/count-kind']!;
+        const registry = createResolvedContributionRegistry({ occurrenceIdsByPluginId: { [inputType.pluginId]: occurrenceId },
+            inputTypes: [{ provenance: 'external', source: { kind: 'path' }, pluginId: inputType.pluginId,
+                identity: inputType, manifestPath: '/plugins/directory/plugin.json', definition: type.definition }],
+            resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId: inputType.pluginId,
+                definition: { id: 'count-kinds', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' } }],
+        });
+        const executor = createCliActionExecutor({ token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
+            serverId: 'board-home', serverHttpBaseUrl: 'https://board-home.test',
+            ...(initiallyUnavailable ? { pluginActionExecutionOwner: 'current_process' as const,
+                inputTypeDeps: createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => ({
+                    resource: { pluginId: inputType.pluginId, localId: 'count-kinds' }, kind: 'config',
+                    contentType: 'application/json', digest: `sha256:${'a'.repeat(64)}`, bytes: new TextEncoder().encode(JSON.stringify(countOptions)),
+                }) }) } : {}),
+            machineActionDirectTargetTransport: { machineId: 'widget-machine', invoke: async () => ({ protocolVersion: 1, projection }) } });
         const context = { surface: 'cli', bypassApprovals: true } as const;
         const created = await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'new-board', name: 'Board title' } } }, context);
         expect(created, JSON.stringify(created))
@@ -101,7 +139,35 @@ describe('CLI Board Actions through the Artifact owner', () => {
             .toMatchObject({ ok: true, result: { board: { pinnedInSessions: true, mode: 'by_status' } } });
         expect(await executor.execute('boards.list', {}, context)).toMatchObject({ ok: true, result: { boards: [{ id: 'new-board', name: 'Board title', pinnedInSessions: true }] } });
         const surface = { serverId: 'board-home', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'new-board' } } as const;
-        const authoredInputs = { fields: [{ path: 'repo', title: 'Repository', widget: 'text' }] } as const;
+        const typedDefinition = { name: 'Directory count',
+            sizeDeclaration: { sizes: ['small'], defaultSize: 'small' },
+            body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Count' } } },
+            inputs: { fields: [{ path: 'filter', title: 'Count', widget: 'select', required: true, inputType }] },
+            inputSchema: { type: 'object', properties: { filter: { type: 'string' } }, required: ['filter'], additionalProperties: false },
+        } as const;
+        expect(await executor.execute('widgets.definition.create', { account: { serverId: 'board-home', accountId: 'owner' },
+            artifactId: 'count-definition', definition: typedDefinition }, context)).toMatchObject({ ok: true });
+        const typedInstance = { v: 1, id: 'typed-counter', definition: { kind: 'artifact', artifactId: 'count-definition' },
+            bindings: { filter: { kind: 'value', value: 'files' } } } as const;
+        const typedRef = { surface, instanceId: typedInstance.id };
+        const typedAdd = await executor.execute('widgets.item.add', { surface, instance: typedInstance }, context);
+        expect(typedAdd, JSON.stringify(typedAdd)).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: typedRef, bindings: typedInstance.bindings }, context))
+            .toMatchObject({ ok: true, result: { status: 'ready', input: { filter: 'files' } } });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: typedRef, bindings: { filter: { kind: 'value', value: 'other' } } }, context))
+            .toMatchObject({ ok: true, result: { status: 'invalid', fields: [{ path: 'filter', reasonCode: 'input_type_value_invalid' }] } });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: typedRef, bindings: { filter: { kind: 'value', value: 'folders' } } }, context))
+            .toMatchObject({ ok: true, result: { status: 'invalid', fields: [{ path: 'filter', reasonCode: 'widget_input_option_unavailable' }] } });
+        const availableProjection = projection;
+        projection = PluginProjectionV2Schema.parse({ v: 2, generation: 2 });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: typedRef, bindings: typedInstance.bindings }, context))
+            .toMatchObject({ ok: true, result: { status: 'unavailable', fields: [{ path: 'filter', reasonCode: 'input_type_unavailable' }] } });
+        projection = availableProjection;
+        expect(await executor.execute('widgets.item.remove', { ref: typedRef }, context)).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.definition.delete', { account: { serverId: 'board-home', accountId: 'owner' },
+            artifactId: 'count-definition' }, context)).toMatchObject({ ok: true });
+        const authoredInputs = { fields: [{ path: 'repo', title: 'Repository', widget: 'text' },
+            { path: 'filter', title: 'Count', widget: 'select', inputType }] } as const;
         for (const [artifactId, body] of [
             ['checks-definition', { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Checks' } } }],
             ['html-definition', { kind: 'html', source: { v: 1, entrypoint: 'index.html', files: {
@@ -110,7 +176,8 @@ describe('CLI Board Actions through the Artifact owner', () => {
             ['removed-definition', { kind: 'installed', surface: { pluginId: 'com.acme.removed', localId: 'checks' } }],
         ] as const) {
             expect(await executor.execute('widgets.definition.create', { account: { serverId: 'board-home', accountId: 'owner' }, artifactId,
-                definition: { name: artifactId, sizeDeclaration: { sizes: ['medium', 'full'], defaultSize: 'medium' }, inputs: authoredInputs, inputSchema: { type: 'object', properties: { repo: { type: 'string' } } }, body } }, context))
+                definition: { name: artifactId, sizeDeclaration: { sizes: ['medium', 'full'], defaultSize: 'medium' }, inputs: authoredInputs,
+                    inputSchema: { type: 'object', properties: { repo: { type: 'string' }, filter: { type: 'string' } } }, body } }, context))
                 .toMatchObject({ ok: true });
         }
         const beforeCatalog = get.mock.calls.length;
@@ -134,7 +201,9 @@ describe('CLI Board Actions through the Artifact owner', () => {
             .toMatchObject({ ok: true, result: { instances: [{ instance, size: 'full' }] } });
         const home = { ...surface, owner: { kind: 'home' } } as const;
         const homeInstance = { v: 1, id: 'home-copy', displayName: 'Named Home copy',
-            definition: { kind: 'artifact', artifactId: 'checks-definition' }, bindings: { repo: { kind: 'value', value: 'my/repo' } } } as const;
+            definition: { kind: 'artifact', artifactId: 'checks-definition' }, bindings: {
+                repo: { kind: 'value', value: 'my/repo' }, filter: { kind: 'value', value: 'files' },
+            } } as const;
         const homeRef = { surface: home, instanceId: homeInstance.id };
         if (initiallyUnavailable) {
             const unreadableHome = await executor.execute('widgets.item.add', { surface: home, instance: homeInstance }, context);
@@ -150,6 +219,8 @@ describe('CLI Board Actions through the Artifact owner', () => {
         expect(await executor.execute('widgets.item.list', { surface: home }, context)).toMatchObject({ ok: true, result: {
             instances: expect.arrayContaining([expect.objectContaining({ instance: homeInstance })]),
         } });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: homeRef, bindings: homeInstance.bindings }, context))
+            .toMatchObject({ ok: true, result: { status: 'ready', input: { repo: 'my/repo', filter: 'files' } } });
         expect(homeCreates).toBe(1);
         expect(await executor.execute('widgets.item.size.set', { ref: homeRef, size: 'full' }, context)).toMatchObject({ ok: true });
         expect(await executor.execute('widgets.item.frame.set', { ref: homeRef, frameStyle: 'plain' }, context)).toMatchObject({ ok: true });
@@ -163,19 +234,25 @@ describe('CLI Board Actions through the Artifact owner', () => {
             expect.objectContaining({ definition: homeInstance.definition, instanceCount: 2 }),
             expect.objectContaining({ definition: { kind: 'artifact', artifactId: 'removed-definition' }, instanceCount: 0 }),
         ]) } });
-        const areaInstance = { ...homeInstance, id: 'area-copy' };
+        const areaInstance = { ...homeInstance, id: 'area-copy', bindings: { ...homeInstance.bindings,
+            filter: { kind: 'context', slot: 'filter' },
+        } } as const;
+        const areaContext = { ...context, widgetAreaContext: { surface: area, values: { filter: ['files'] } } };
         if (initiallyUnavailable) {
-            const unreadableArea = await executor.execute('widgets.item.add', { surface: area, instance: areaInstance }, context);
+            const unreadableArea = await executor.execute('widgets.item.add', { surface: area, instance: areaInstance }, areaContext);
             expect(unreadableArea, JSON.stringify(unreadableArea)).toMatchObject({ ok: false, errorCode: 'widget_add_unknown',
                 details: { reasonCode: 'artifact_content_unavailable' } });
             expect(rows.has(areaArtifactId)).toBe(true);
         }
-        const addedArea = await executor.execute('widgets.item.add', { surface: area, instance: areaInstance }, context);
+        const addedArea = await executor.execute('widgets.item.add', { surface: area, instance: areaInstance }, areaContext);
         expect(addedArea, JSON.stringify(addedArea)).toMatchObject({ ok: true });
         expect(areaCreates).toBe(1);
         expect(await executor.execute('widgets.item.list', { surface: area }, context)).toMatchObject({ ok: true, result: {
             instances: [{ instance: areaInstance, size: 'medium' }],
         } });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: { surface: area, instanceId: areaInstance.id },
+            bindings: areaInstance.bindings }, areaContext))
+            .toMatchObject({ ok: true, result: { status: 'ready', input: { repo: 'my/repo', filter: 'files' } } });
         const homeState = await executor.execute('widgets.item.list', { surface: home }, context);
         expect(homeState).toMatchObject({ ok: true, result: { instances: expect.not.arrayContaining([expect.objectContaining({ instance: homeInstance })]) } });
         expect(await executor.execute('widgets.item.remove', { ref: { surface, instanceId: homeInstance.id } }, context)).toMatchObject({ ok: true });

@@ -146,7 +146,11 @@ describe('Widget Action input transport authority', () => {
             title: 'Repository', semantic: 'repository', valueSchema: { type: 'object' as const,
                 properties: { repositoryId: { type: 'string' as const } }, required: ['repositoryId'], additionalProperties: false } } };
         const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'viewer',
-            getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }), resolveInputType: async () => type }),
+            getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) }),
+            readInputTypes: async () => ({ family: 'inputTypes', entriesById: { [`${inputType.pluginId}/${inputType.localId}`]: {
+                id: `${inputType.pluginId}/${inputType.localId}`, pluginId: inputType.pluginId, pluginVersion: '1.0.0',
+                occurrenceId: type.occurrenceId, definition: type.definition,
+            } } }),
             validateSession: async () => { throw new Error('Repository input grants no Session access'); },
             readCandidates: async () => [{ surface, availability: 'available', inputs: { fields: [
                 { path: 'repository', title: 'Repository', widget: 'select', inputType },
@@ -178,15 +182,22 @@ describe('Widget Action input transport authority', () => {
     });
     it('admits bound Session input against current B rather than physical A declaration', async () => {
         const definition = { pluginId: 'com.acme.widgets', localId: 'checks' };
+        const inputType = { pluginId: definition.pluginId, localId: 'count' };
         const reads: (string | undefined)[] = [];
         const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'viewer',
             getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) }),
             validateSession: async () => true,
+            readInputTypes: async (_signal, session) => session?.sessionId === 'B' ? {
+                family: 'inputTypes', entriesById: { 'com.acme.widgets/count': {
+                    id: 'com.acme.widgets/count', pluginId: inputType.pluginId, pluginVersion: '1.0.0', occurrenceId: 'current-B',
+                    definition: { id: inputType.localId, title: 'Count', semantic: 'count', valueSchema: { type: 'number' } },
+                } },
+            } : undefined,
             readCandidates: async (_signal, session) => {
                 reads.push(session?.sessionId);
                 return [{ surface: definition, availability: 'available', sessionInputPath: 'session',
                     inputs: { fields: [{ path: 'session', title: 'Session', widget: 'json', required: true },
-                        { path: 'count', title: 'Count', widget: 'number', required: true }] },
+                        { path: 'count', title: 'Count', widget: 'number', required: true, inputType }] },
                     inputSchema: { type: 'object', properties: { session: { type: 'object', properties: {
                         serverId: { type: 'string' }, sessionId: { type: 'string' },
                     }, required: ['serverId', 'sessionId'], additionalProperties: false },
@@ -194,13 +205,17 @@ describe('Widget Action input transport authority', () => {
                     required: ['session', 'count'], additionalProperties: false } }];
             },
         });
-        const result = await deps.widgetInputs!.resolve({
+        const request = {
             ref: { surface: { serverId: 'home', accountId: 'viewer', owner: { kind: 'sessionBoard', sessionId: 'A' } }, instanceId: 'copy' },
             instance: { v: 1, id: 'copy', definition: { kind: 'installed', surface: definition }, bindings: {
                 session: { kind: 'value', value: { serverId: 'home', sessionId: 'B' } }, count: { kind: 'value', value: 2 },
             } }, context: { surface: 'cli', authority: 'present_user' },
-        });
+        } satisfies Parameters<NonNullable<typeof deps.widgetInputs>['resolve']>[0];
+        const result = await deps.widgetInputs!.resolve(request);
         expect(result.status).toBe('invalid');
         expect(reads).toEqual(['A', 'B']);
+        expect(await deps.widgetInputs!.resolve({ ...request, instance: { ...request.instance,
+            bindings: { ...request.instance.bindings, count: { kind: 'value', value: 3 } } } }))
+            .toEqual({ status: 'ready', input: { session: { serverId: 'home', sessionId: 'B' }, count: 3 } });
     });
 });
