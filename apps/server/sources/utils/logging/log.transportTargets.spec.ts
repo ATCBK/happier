@@ -30,6 +30,20 @@ describe('createLoggingTransportTargets', () => {
     expect(targets.some(t => t?.target === 'pino-pretty')).toBe(false);
   });
 
+  it('omits the pino-pretty transport when the json log format is selected', async () => {
+    setBunRuntime(false);
+    const mod = await import('./log');
+    const targets = mod.createLoggingTransportTargets({ HAPPIER_SERVER_LOG_FORMAT: 'json' } as NodeJS.ProcessEnv);
+    expect(targets.some(t => t?.target === 'pino-pretty')).toBe(false);
+  });
+
+  it('keeps the pino-pretty transport for unrecognized log formats', async () => {
+    setBunRuntime(false);
+    const mod = await import('./log');
+    const targets = mod.createLoggingTransportTargets({ HAPPIER_SERVER_LOG_FORMAT: 'yaml' } as NodeJS.ProcessEnv);
+    expect(targets.some(t => t?.target === 'pino-pretty')).toBe(true);
+  });
+
   it('defaults the server log level to info', async () => {
     const mod = await import('./log');
 

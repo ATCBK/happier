@@ -50,11 +50,19 @@ export function resolveServerLogLevelFromEnv(env: NodeJS.ProcessEnv): pino.Level
     return allowed.has(raw as pino.LevelWithSilent) ? (raw as pino.LevelWithSilent) : "info";
 }
 
-export function createLoggingTransportTargets(): any[] {
-    const transports: any[] = [];
+type ServerLogFormat = 'pretty' | 'json';
+
+function resolveServerLogFormatFromEnv(env: NodeJS.ProcessEnv): ServerLogFormat {
+    const raw = (env.HAPPIER_SERVER_LOG_FORMAT ?? '').trim().toLowerCase();
+    return raw === 'json' ? 'json' : 'pretty';
+}
+
+export function createLoggingTransportTargets(env: NodeJS.ProcessEnv = process.env): pino.TransportTargetOptions[] {
+    const transports: pino.TransportTargetOptions[] = [];
 
     // Bun-compiled binaries can't reliably resolve pino transport targets.
-    if (!isBunRuntime()) {
+    // The json format writes pino's line-delimited JSON straight to stdout for log collectors.
+    if (!isBunRuntime() && resolveServerLogFormatFromEnv(env) === 'pretty') {
         transports.push({
             target: 'pino-pretty',
             options: {
@@ -67,7 +75,7 @@ export function createLoggingTransportTargets(): any[] {
         });
     }
 
-    if (process.env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING && consolidatedLogFile) {
+    if (env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING && consolidatedLogFile) {
         transports.push({
             target: 'pino/file',
             options: {
