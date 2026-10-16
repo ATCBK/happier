@@ -41,6 +41,37 @@ Prefer stable error codes over parsing text. See
 [Diagnostics](/plugins/testing/diagnostics) for the public guard and the
 diagnostic workflow.
 
+Secret-bearing Action inputs must declare each confidential path in
+`inputHints.fields` with `widget: 'secret'` and a readable `title`, including
+inputs exposed only to CLI, MCP or Agents. A top-level `secrets` declaration
+names stored secrets; it does not mark an Action input confidential.
+
+Plugins are [trusted code](/plugins/security/trust-model). In current development
+source, the host keeps declared-secret raw values out of approval Artifacts,
+Workflow progress and journals, replay input and approval presentation. Host-run
+diagnostic projections withhold values at or below confidential paths from both
+raw and normalized Action input, including issue-path suffixes of any JSON type.
+This covers parser issues, `PluginError` details, failure data and structured log
+fields. Plugin-authored free text receives best-effort string-secret scrubbing.
+As an author, you are responsible for deliberate re-encoding of secrets in your
+own prose or as unrelated non-string values; keep diagnostics at their declared
+paths and never publish secrets in results.
+
+In current development source, approvals for declared-secret inputs or
+SecretString carriers keep the raw input only in the waiting invocation.
+The approval Artifact contains a redacted projection, confidential field labels
+and the exact public operands. Approval can continue that live invocation;
+after it retires, replay returns `approval_stale` and the caller must submit a
+new invocation. Inputs without confidential values return
+`approval_request_created` with an Artifact id immediately to CLI, MCP, Agent and
+API callers. Read the request with `approval.request.get {artifactId}` and decide
+it through `approval.request.decide`; replay revalidates the original input,
+policy and execution origin. While a confidential invocation waits, another
+invocation can find it with `approval.request.list {status: 'open'}` and read the
+same redacted request. Reading an approval does not grant permission to decide it.
+Do not infer confidentiality from a field's name or copy secrets into labels,
+summaries, progress or results.
+
 ## Keep a long daemon Action visible in Activity
 
 > **Development status:** Tracked plugin Actions are part of the current

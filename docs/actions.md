@@ -18,6 +18,19 @@ This includes refresh, retry and paging through that same read owner. It does
 not permit a raw write or effect through the read transport. Public pre-auth
 reads and signed-out draft bootstrap retain their existing authority boundaries.
 
+In 0.3 development, `approval.request.list` exposes the Inbox queue's metadata
+read to UI, Agent, MCP and CLI callers. Use `happier actions invoke
+approval.request.list --input-json '{"status":"open"}' --json`, or MCP's
+`action_execute` with that Action id and input. The read validates each approval's
+Artifact header and body before returning metadata for built-in and plugin
+approvals; it does not hydrate transcripts or return approval bodies.
+`approval.request.get {artifactId}` is available wherever `approval.request.decide`
+is available and returns the request with declared confidential plugin inputs
+redacted. Older plugin requests without disclosure metadata withhold their input.
+Both reads are discoverable through Action search. Their
+approval-control admission remains separate from deciding or executing an
+approval; listing pending work grants no decision authority.
+
 Ordinary public sign-in link Copy, Share, QR and Open, route-only navigation,
 and local draft/result disclosure are client presentation. The public member
 sign-in URL is already readable through `teams.identity.connections.list`;
@@ -289,6 +302,44 @@ UI, Agent, MCP, CLI and API by default; Plugin/background defaults remain unchan
 These display facts do not grant execution authority. Qualified Action ids retain
 their encoded dynamic route segment through workspace navigation so their Settings
 controls remain reachable.
+
+The development daemon projection ingress routes CLI, Agent and MCP callers
+that need current intent through the existing target-Action approval Artifact
+and decision observer. UI and Voice continue to carry the confirmation already
+settled in their host. The connected machine binds the requester to its existing
+installed Account runtime and Home; missing or changed custody fails closed.
+Approval still rechecks the current Action policy,
+input and source custody before the plugin handler can run; explicit Action
+policy waivers retain their existing effect.
+
+In current 0.3 development, the canonical plugin invocation owner normalizes
+Action input before it is disclosed or fingerprinted. Dispatch uses that same
+admitted value; deferred replay validates the saved normalized value without
+running its transforming parser again. Currentness and policy are still checked
+after the decision. The approval subject carries the manifest's declared secret
+input paths and their declared labels. Declared-secret values and SecretString
+carriers use the same `approvalInputCustody: 'live_only'` rule as built-in
+Actions: the admitted invocation remains the sole blocking waiter and retains
+the raw input; the Artifact holds only its redacted projection. The shared
+presenter identifies confidential values with their declared labels and keeps
+every public operand as an exact JSON literal, including quoted strings.
+The existing exact-daemon decision path wakes that invocation; replay without
+it returns `approval_stale` and never dispatches redacted input. Non-secret
+plugin inputs return `approval_request_created` with their Artifact id immediately
+on CLI, Agent, MCP and API. The existing exact-daemon replay retains the original
+invocation surface and authority. A caller waiting with live-only input can find
+its open approval through `approval.request.list` and inspect it through
+`approval.request.get` from another invocation. Confidentiality comes from input
+declarations or SecretString carriers, never diagnostic key spelling.
+The presenter still withholds older
+development requests without secret-path disclosure metadata; those requests
+remain readable and rejectable and must be requested again to proceed.
+The existing policy fingerprint binds the executable plugin version and input
+declaration as well as policy. A saved approval cannot authorize a different
+version or declaration at the same development root after a daemon restart;
+replay returns `plugin_action_current_intent_mismatch`. Older development approval
+fingerprints likewise require a new request. Managed and bundled source custody
+and live occurrence checks remain part of admission.
 
 In development source, built-in Settings approvals read the setting's human
 title and description from the same declaration used by discovery and its page.
@@ -3971,7 +4022,7 @@ covers the manifest default and the Account's invoking-surface approval setting)
 the app-shell confirmation, and only then executes. A client-target Action runs through the shared
 present-user gate in the UI. A daemon-target Action is sent with `presentUserIntent: 'confirmed'`
 on `daemon.plugins.structuredMessages.actions.execute`. The daemon's gate admits that carried
-intent and creates no `plugin_target_action` approval artifact. A request without it fails closed
+intent and creates no `plugin_target_action` approval artifact. A UI or Voice request without it fails closed
 with `plugin_action_current_intent_unavailable`, so a settings skew between UI and daemon refuses
 rather than executes when approval is required. An explicit waiver is carried as `false`, not
 absence: it overrides the non-safe/declared-confirmation default without changing the Action's

@@ -474,6 +474,7 @@ const plugin = definePlugin({
       surfaces: ['cli', 'plugin'],
       execution: { target: 'daemon' },
       dangerLevel: 'writesRemote',
+      inputHints: { fields: [{ path: 'value', title: 'Secret value', widget: 'secret' }] },
       confirmation: {
         title: 'Update this shared Saved Secret?',
         body: 'This replaces the selected shared Saved Secret for its current recipients.',
@@ -531,6 +532,7 @@ const plugin = definePlugin({
       description: 'Stores or revokes the plugin-owned webhook credential without returning its value.',
       surfaces: ['cli', 'mcp', 'agent', 'plugin'],
       execution: { target: 'daemon' },
+      inputHints: { fields: [{ path: 'token', title: 'Webhook token', widget: 'secret' }] },
       inputSchema: {
         type: 'object',
         properties: { token: { type: 'string', minLength: 1 } },
