@@ -362,6 +362,7 @@ function declaresTerminalSurface(agent: EngineResolutionAgent): boolean {
 }
 
 export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
+    executionRunId?: string;
     runtimeRegistry: ResolvedExecutablePluginRuntimeRegistry | null;
     runtimeAuthority?: PluginRuntimeAuthoritySnapshotV1;
     identity: Readonly<{
@@ -449,6 +450,7 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
         && authority.capabilities.has('terminalHost')
         ? createDefaultPluginTerminalHostService({
             happyHomeDir: storePaths.happyHomeDir,
+            ...(params.executionRunId ? { executionRunId: params.executionRunId } : {}),
             hasCapability,
             readSessionId: () => params.sessionId,
             readSessionMetadata: () => params.hostSession.session.getMetadataSnapshot(),

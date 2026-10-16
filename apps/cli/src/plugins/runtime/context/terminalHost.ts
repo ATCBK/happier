@@ -91,6 +91,8 @@ export function installAgentChildLaunchEnvironmentTransformerForTerminalHost(
 }
 
 export type CreatePluginTerminalHostServiceParams = Readonly<{
+    /** Host-owned child invocation identity; never a Happier Session identity. */
+    executionRunId?: string;
     hasCapability: (capability: string) => boolean;
     resolveTerminalHost: (preference: TerminalHostPreference) => TerminalHostResolution | Promise<TerminalHostResolution>;
     resolveAgentCliLaunch: (launch: AgentTerminalHostLaunchInput) => Pick<AgentCliLaunchSpec, 'command' | 'args' | 'providerExitOwnership'> & Readonly<{
@@ -120,6 +122,7 @@ export type CreatePluginTerminalHostServiceParams = Readonly<{
 
 export type CreateDefaultPluginTerminalHostServiceParams = Readonly<{
     happyHomeDir: string;
+    executionRunId?: string;
     hasCapability: (capability: string) => boolean;
     readSessionId?: () => string | null;
     readSessionMetadata?: () => Readonly<Pick<Metadata, 'terminal' | 'startedBy'>> | null;
@@ -333,8 +336,9 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
                 spawnArgv: request.spawnArgv, workingDirectory: request.workingDirectory, spawnEnv: request.spawnEnv,
             }) : undefined;
         const createdHandle = currentHandle ?? await resolution.adapter.createOrAttachHost({
-            sessionName: request.sessionName,
-            ...(request.label !== undefined ? { label: request.label } : {}),
+            sessionName: params.executionRunId && resolution.adapter.kind !== 'herdr'
+                ? `${params.executionRunId}-${request.sessionName}` : request.sessionName,
+            ...(request.label !== undefined ? { label: params.executionRunId ? `${params.executionRunId}-${request.label}` : request.label } : {}),
             workingDirectory: request.workingDirectory, spawnArgv: request.spawnArgv, spawnEnv: request.spawnEnv,
             ...(request.unsetEnvKeys ? { unsetEnvKeys: request.unsetEnvKeys } : {}),
             isolatedEnv: request.isolatedEnv,
@@ -556,7 +560,7 @@ async function resolveDefaultTerminalHost(
 ): Promise<TerminalHostResolution> {
     const platform = params.platform ?? process.platform;
     const promptSubmitVerification = await params.resolvePromptSubmitVerification?.() ?? null;
-    const sessionId = params.readSessionId?.()?.trim() ?? '';
+    const sessionId = params.executionRunId ? '' : params.readSessionId?.()?.trim() ?? '';
     const herdrContext = preference === 'herdr'
         ? await resolveHerdrTerminalContext({ happyHomeDir: params.happyHomeDir, existingSessionId: sessionId,
             sessionName: params.herdrRuntime?.herdrSessionName ?? 'default', socketPath: params.herdrRuntime?.herdrSocketPath })
@@ -608,12 +612,14 @@ export function createDefaultPreparedTerminalHostOwner(
 
 function createDefaultTerminalHostOwner(params: CreateDefaultPluginTerminalHostServiceParams) {
     return createPluginTerminalHostOwner({
+        ...(params.executionRunId ? { executionRunId: params.executionRunId } : {}),
         hasCapability: params.hasCapability,
         resolveTerminalHost: (preference) => resolveDefaultTerminalHost(params, preference),
         resolveAgentCliLaunch: (launch) => requireAgentCliLaunchSpec(launch.agentId as CatalogAgentLookupId, {
             processEnv: buildProviderCliProcessEnv(launch),
         }),
         resolveCurrentHost: async () => {
+            if (params.executionRunId) return null;
             const metadata = params.currentTerminalMetadata;
             const handle = metadata?.terminal
                 ? buildActiveTerminalHostHandleFromMetadata(metadata.terminal)
@@ -629,6 +635,7 @@ function createDefaultTerminalHostOwner(params: CreateDefaultPluginTerminalHostS
             };
         },
         resolveExistingHostForAdoption: async () => {
+            if (params.executionRunId) return null;
             // A foreground launch in a user's current terminal takes the existing
             // borrowing path, never historical owned-host adoption.
             if (params.currentTerminalMetadata?.terminal
@@ -669,6 +676,7 @@ function createDefaultTerminalHostOwner(params: CreateDefaultPluginTerminalHostS
             return { handle: attachment.handle, adapter: resolution.adapter, lifecycle: 'owned' };
         },
         onHostCreated: async (handle, lifecycle) => {
+            if (params.executionRunId) return;
             const sessionId = params.readSessionId?.()?.trim() ?? '';
             if (!sessionId) return;
             const attachmentInfo = await writeTerminalHostAttachmentInfo({
@@ -680,6 +688,11 @@ function createDefaultTerminalHostOwner(params: CreateDefaultPluginTerminalHostS
             return attachmentInfo.handle;
         },
         disposeHost: async ({ handle, adapter, intent, lifecycle }) => {
+            if (params.executionRunId) {
+                // Invocation hosts have no retained Session attachment to recover.
+                await adapter.dispose(handle);
+                return;
+            }
             const sessionId = params.readSessionId?.()?.trim() ?? '';
             const attachmentId = handle.attachmentId;
             const mustDestroyExactHost = intent.kind === 'destroy_owned_host';

@@ -662,6 +662,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                     const runTranscriptSession = runScope?.projectRunTranscriptSession() ?? null;
                                     let runToolBinding: NativeAgentSessionRunToolBinding | null = null;
                                     const sessionOwners = createNativeAgentSessionHostServiceOwners({
+                                        executionRunId: runId,
                                         runtimeRegistry,
                                         identity: nativeIdentity,
                                         backend: params.backend,
