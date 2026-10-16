@@ -909,6 +909,12 @@ function resolveProjectInstanceTitle(ref: DestinationRef, workspaceRefs: readonl
 
 /** One fallback rule for live chrome and synchronous history/drag snapshots. */
 function resolvePublishedOrStaticInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef, options?: DestinationInstanceTitleOptions, storedTitle?: string | null): string | null {
+    const href = hrefForDestinationRef(catalog, ref);
+    const pathname = href?.split(/[?#]/, 1)[0];
+    // Home's greeting and the Boards index's selected board are content, not
+    // the identity of these areas. Their nested readers cannot rename the tab.
+    if (ref.kind === SESSIONS_DESTINATION_ID && pathname === '/') return t('common.home');
+    if (ref.kind === 'boards' && pathname === '/boards') return resolveStaticInstanceTitle(catalog, ref);
     if (options?.publishedTitle?.ref === ref) return options.publishedTitle.title;
     return resolveStaticInstanceTitle(catalog, ref) ?? storedTitle ?? resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle);
 }

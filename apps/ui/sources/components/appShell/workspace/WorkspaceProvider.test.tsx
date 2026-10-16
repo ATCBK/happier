@@ -2,10 +2,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { WORKSPACE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
-import { hrefForDestinationRef, resolveCompactAppDestinations, useDestinationInstanceTitles } from '../destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef, resolveCompactAppDestinations, useDestinationInstanceTitles, type CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
+import { useHydrateSessionForRoute, useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { ConnectedAccountActionApprovalNotice } from '@/components/settings/connectedServices/ConnectedAccountActionApprovalNotice';
 import { t } from '@/text';
@@ -136,6 +137,16 @@ function DestinationTitlesProbe(props: Readonly<{ navigation: WorkspaceNavigatio
     const entries = React.useMemo(() => Object.values(props.navigation.state.tabs).map(tab => ({ key: tab.id, ref: tab.target })), [props.navigation.state.tabs]);
     return React.createElement('DestinationTitles', { titles: useDestinationInstanceTitles(props.catalog, entries) });
 }
+function MissingSessionDataReader() {
+    // Widgets without a Session input still call the shared hydration hook with an empty address.
+    useHydrateSession('', 'destination-data-reader');
+    return null;
+}
+
+function MissingSessionRouteTitle() {
+    useHydrateSessionForRoute('', 'missing-session-route');
+    return null;
+}
 function ResizeEditor() {
     const [draft, setDraft] = React.useState('');
     const params = useDestinationParams();
@@ -166,6 +177,51 @@ function installBrowserBoundary(input: Record<string, unknown> & { history: obje
 }
 
 describe('consumed workspace navigation owner', () => {
+    it.each([
+        ['/', 'Home', 'Welcome back'],
+        ['/boards', 'Boards', 'Launch week'],
+        ['/boards/launch', 'Launch week', 'Launch week'],
+        ['/session/named?serverId=home-a', 'Release captain', null],
+        ['/plugins/acme.notes/notes', 'Notes', 'Notes'],
+    ] as const)('isolates %s from missing Session data readers and a retained missing Session route', async (href, expected, pageTitle) => {
+        boundary.platform = 'web';
+        boundary.pathname = href.split('?')[0]!;
+        boundary.params = {};
+        const location = { pathname: boundary.pathname, search: href.includes('?') ? `?${href.split('?')[1]}` : '', hash: '' };
+        const history = { state: null as unknown, pushState(data: unknown) { this.state = data; }, replaceState(data: unknown) { this.state = data; } };
+        installBrowserBoundary({ location, history, sessionStorage: { getItem: () => 'main' } });
+        const session = createSessionFixture({ id: 'named', serverId: 'home-a' });
+        storage.getState().applySessions([{ ...session, metadata: { ...session.metadata!, summary: { text: 'Release captain', updatedAt: 1 } } }]);
+        const catalog: readonly CompactAppDestination[] = [...resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false,
+        } }), { kind: 'plugin', container: 'appPage', id: 'plugin:acme.notes:notes',
+            destination: { pluginId: 'acme.notes', localId: 'notes' }, title: 'Notes', icon: 'note', order: 40,
+            placement: { kind: 'rail', region: 'app' }, activation: 'navigate', availability: 'available',
+            routePath: '/plugins/acme.notes/notes' }];
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{navigation => <>
+            {React.createElement('WorkspaceOwner', { navigation })}
+            <DestinationTitlesProbe navigation={navigation} catalog={catalog} />
+            {Object.values(navigation.state.tabs).map(tab => <DestinationInstanceHost key={tab.id} tabId={tab.id}
+                ref={tab.target} pathname={hrefForDestinationRef(catalog, tab.target)?.split('?')[0] ?? ''}
+                focused={tab.id === navigation.state.groups[navigation.state.focusedGroupId].activeTabId}
+                visible={tab.id === navigation.state.groups[navigation.state.focusedGroupId].activeTabId}>
+                {tab.target.params.id === 'gone' ? <MissingSessionRouteTitle /> : <>
+                    {pageTitle ? <PageHeader title={pageTitle} alwaysShowTitle /> : null}
+                    <MissingSessionDataReader />
+                </>}
+            </DestinationInstanceHost>)}
+        </>}</WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const activeId = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
+        await act(async () => { navigation().openHref('/session/gone?serverId=home-a', { mode: 'newTab' }); });
+        const missingId = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
+        await act(async () => { navigation().activateTab(navigation().state.focusedGroupId, activeId); });
+        const titles = screen.root.findByType('DestinationTitles').props.titles as ReadonlyMap<string, string>;
+        expect(titles.get(missingId)).toBe(t('errors.sessionDeleted'));
+        expect(navigation().destinationTitles?.[activeId]?.title).not.toBe(t('errors.sessionDeleted'));
+        expect(titles.get(activeId)).toBe(expected === 'Home' ? t('common.home') : expected === 'Boards' ? t('boards.title') : expected);
+        expect(document.title).toBe(titles.get(activeId));
+    });
     it('settles a deleted Session in the actual strip and window title without removing the closable tab', async () => {
         boundary.platform = 'web';
         boundary.pathname = '/session/gone';

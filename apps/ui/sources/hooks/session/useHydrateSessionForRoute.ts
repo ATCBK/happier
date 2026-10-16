@@ -129,7 +129,7 @@ function resolveHydratedServerIdForRouteResult(
  * On failure, this hook retries with exponential backoff to handle transient errors
  * (server switch in flight, temporary RPC failure, stale encryption state, etc.).
  */
-export function useHydrateSessionForRoute(
+export function useHydrateSession(
     sessionId: string,
     tag: string,
     options?: Readonly<{ serverId?: string; forceRefresh?: boolean; hydrateMessages?: boolean }>,
@@ -269,7 +269,16 @@ export function useHydrateSessionForRoute(
         return createAvailableState(normalizedSessionId, hydratedAvailableServerId);
     }, [hydratedAvailableServerId, normalizedSessionId]);
 
-    const result = hydratedAvailableState ?? routeState;
+    return hydratedAvailableState ?? routeState;
+}
+
+/** Route identity is published only by route consumers, never embedded or background Session reads. */
+export function useHydrateSessionForRoute(
+    sessionId: string,
+    tag: string,
+    options?: Parameters<typeof useHydrateSession>[2],
+): SessionRouteHydrationState {
+    const result = useHydrateSession(sessionId, tag, options);
     // The route read owns absence; a loaded list/cache alone cannot establish it.
     useDestinationPageTitle(result.kind === 'missing' ? t('errors.sessionDeleted') : undefined);
     return result;

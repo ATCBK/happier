@@ -6,7 +6,7 @@ import { requestRegisteredSessionComposerFocus } from '@/components/sessions/pre
 import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
 import { useSessionDisplayNameSource } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
@@ -132,7 +132,7 @@ function EmbeddedSessionForId(props: Readonly<{
     children?: React.ReactNode;
 }>) {
     const serverId = props.serverId?.trim() || undefined;
-    const routeHydrationState = useHydrateSessionForRoute(
+    const routeHydrationState = useHydrateSession(
         props.sessionId,
         'EmbeddedSessionProvider.ensureSessionVisible',
         serverId ? { serverId } : undefined,

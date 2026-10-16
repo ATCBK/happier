@@ -15,7 +15,7 @@ import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAc
 import { normalizeSessionAccessProjection } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import { resolveConfiguredWidgetTarget, withWidgetInputRepairOutcome, WidgetSessionAddressReadSchema, WidgetConnectedAccountSelectionReadSchema, type ConfiguredWidgetTargetResolution } from './widgetBinding';
 import { admitWidgetViewerSelectionMetadataV1 } from './widgetViewerSelectionAdmission';
-import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
 import { isSessionRouteHydrationPending } from '@/sync/domains/session/sessionRouteHydrationState';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -107,7 +107,7 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
     // A render-cache miss is not absence. Reuse the exact Session's route owner
     // without waking its transcript; denied cached targets are not hydrated.
     const hydrationAddress = requested && (!selectedSession || selectedCanRead) ? requested : null;
-    const selectedHydration = useHydrateSessionForRoute(hydrationAddress?.sessionId ?? '', 'widgets.target.hydrate', {
+    const selectedHydration = useHydrateSession(hydrationAddress?.sessionId ?? '', 'widgets.target.hydrate', {
         serverId: hydrationAddress?.serverId ?? input.scope.serverId,
         hydrateMessages: false,
     });

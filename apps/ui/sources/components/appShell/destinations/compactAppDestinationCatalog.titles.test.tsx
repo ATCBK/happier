@@ -182,7 +182,7 @@ describe('Project destination instance titles', () => {
         for (const href of ['/session/example/info', '/session/example/files', '/artifacts/example', '/settings/prompts/docs/example']) {
             expect(readDestinationInstanceTitle(catalog, destination(href)), href).toBeNull();
         }
-        expect(readDestinationInstanceTitle(catalog, destination('/'))).toBe(t('tabs.sessions'));
+        expect(readDestinationInstanceTitle(catalog, destination('/'))).toBe(t('common.home'));
         expect(readDestinationInstanceTitle(catalog, destination('/settings/appearance'))).toBe(t('settings.appearance'));
     });
     it('names qualified Projects and their pages while only the hub keeps the catalog title', () => {

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import { useActivityOverview } from '@/activity/source/useActivityOverview';
@@ -460,7 +460,7 @@ function InboxModelContextProvider(props: Readonly<{ children: React.ReactNode }
 
 /** Summary rows use the dock's existing exact-Home hydration and retry lifecycle. */
 function InboxPendingRequestHydration({ address }: Readonly<{ address: SessionAddress }>): null {
-    useHydrateSessionForRoute(address.sessionId, 'inbox-pending-request', {
+    useHydrateSession(address.sessionId, 'inbox-pending-request', {
         serverId: address.serverId, forceRefresh: true, hydrateMessages: true,
     });
     return null;
