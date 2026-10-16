@@ -96,6 +96,12 @@ export function resolveCatalogTargetActionPolicy(params: Readonly<{
   }).action;
 }
 
+/** Host-private, content-free diagnosis; never approval operands or exception text. */
+export type TargetActionCurrentIntentUnavailableReason =
+  | 'installed_account_unavailable' | 'installed_account_retired' | 'approval_factory_unavailable'
+  | 'approval_not_required' | 'approval_input_unrepresentable' | 'approval_subject_invalid'
+  | 'approval_presentation_unavailable' | 'approval_artifact_create_failed' | 'approval_artifact_id_unavailable';
+
 export type TargetActionCurrentIntentRequest = Readonly<{
   action: ResolvedTargetAction;
   fingerprint: string;
@@ -108,6 +114,7 @@ export type TargetActionCurrentIntentRequest = Readonly<{
   /** Immutable outer Action authority captured before a deferred decision. */
   executionOriginV1?: ApprovalExecutionOriginV1;
   signal?: AbortSignal;
+  reportUnavailable?: (reason: TargetActionCurrentIntentUnavailableReason) => void;
 }>;
 
 export type TargetActionCurrentIntentResult = Readonly<

@@ -6,6 +6,21 @@ import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/acti
 const developmentCustody = { kind: 'development', registeredRootId: 'root-7' } as const;
 
 describe('target action current-intent adapter', () => {
+  it('reports a content-free typed reason when the approval subject is invalid', async () => {
+    const reasons: string[] = [];
+    const adapter = createTargetActionCurrentIntentAdapter({
+      create: async () => { throw new Error('An invalid subject must not be written'); },
+      read: async () => null,
+    });
+    await expect(adapter({
+      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7',
+        sourceCustody: developmentCustody, dangerLevel: 'writesLocal', scopes: ['global'], surfaces: ['cli'],
+        hostAccess: [], input: { privateOperand: 'must-not-enter-diagnostics' }, policyFingerprint: 'b'.repeat(64),
+        confirmation: { title: 'Apply change' } },
+      fingerprint: 'invalid', surface: 'cli', reportUnavailable: reason => { reasons.push(reason); },
+    })).resolves.toEqual({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+    expect(reasons).toEqual(['approval_subject_invalid']);
+  });
   it.each([
     { _isSecretValue: true, value: 'private' },
     { entries: [{ credential: { _isSecretValue: true, value: 'private' }, public: 'visible' }] },

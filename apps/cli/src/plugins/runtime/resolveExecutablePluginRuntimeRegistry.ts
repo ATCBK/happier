@@ -2667,7 +2667,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
             })
         ) return null;
         const placement = TargetActionApprovalReplayPlacementV1Schema.safeParse({
-            serverId: context.serverIdentityId,
+            // Replay addresses the configured Home profile, not its cryptographic identity.
+            serverId: configuration.activeServerId,
             machineId: context.machineId,
         });
         return placement.success ? Object.freeze({ ...placement.data }) : null;

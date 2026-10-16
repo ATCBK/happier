@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders } from 'axios';
 import { API_TOKEN_FULL_GRANT_V1, freezeActionCompletionContractV1, getActionSpec,
   sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1,
@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import nacl from 'tweetnacl';
 import { AccountSettingsSchema, HomeConnectionDescriptorV1Schema, FeaturesResponseSchema, ManagedMachineV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
   computeExternalActionRequestEnvelopeDigestV1, StrictJsonValueSchema, zodSchemaToJsonSchemaObject } from '@happier-dev/protocol';
-import { updateSettings } from '@/persistence';
+import { updateSettings, writeStoredCredentialsForServerId } from '@/persistence';
 import { createDaemonManagedMachineActionAdapter } from '@/daemon/startup/managedMachineActionAdapter';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
@@ -35,6 +35,18 @@ import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolv
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { publishSessionControlsMetadataBestEffort } from '@/agent/runtime/controls/publishSessionControlsMetadataBestEffort';
 import type { Metadata } from '@/api/types';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
+import { createRequesterSessionControlRuntimeFixture } from '@/daemon/testkit/requesterSessionControlRuntimeFixture';
+import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+import { join } from 'node:path';
+import { logger } from '@/ui/logger';
+
+// Physical daemon HTTP binding is an OS boundary; the startup/ingress composition stays real.
+vi.mock('@/daemon/controlServer', () => ({ startDaemonControlServer: async () => ({ port: 44322, stop: async () => {} }) }));
 
 const mocks = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
@@ -70,6 +82,10 @@ import {
   cancelDispatchedWorkflowOriginSessionInput,
   createProductionDaemonWorkflowRuntime,
 } from './daemonRuntime';
+
+// The daemon's singleton controller has one process lifetime, shared by the
+// production-composition cases in this file; shutdown is terminal.
+afterAll(async () => { await pluginReloadController.shutdown(); });
 
 describe('production daemon retained operation target', () => {
   let releaseHome = () => {};
@@ -172,6 +188,9 @@ describe('production daemon retained operation target', () => {
     if (nativeStop) {
       let settled = false;
       const pending = recover('startup').then(() => { settled = true; });
+      // Recovery prepares its original Machine transport asynchronously. Start
+      // measuring the retained Stop only after the boundary registered its timer.
+      await vi.waitFor(() => expect(requests).toContain(`${machineId}:execution.run.stop`));
       try {
         await vi.advanceTimersByTimeAsync(20_000);
         expect(requests).toContain(`${machineId}:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}`);
@@ -194,7 +213,7 @@ describe('production daemon retained operation target', () => {
 });
 
 describe('production FIN managed Action composition', () => {
-  afterEach(async () => { await pluginReloadController.shutdown(); vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+  afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
   it('executes an accepted controller-bound Stop through the installed managed Action and operation owners', async () => {
     const accountId = 'fin-owner';
     const machineId = 'controller';
@@ -317,6 +336,160 @@ describe('production FIN managed Action composition', () => {
     const settled = await operations.handlers.getV2({ operationId: 'fin-native', waitForTerminal: true });
     expect(settled, JSON.stringify(settled)).toMatchObject({ kind: 'found', operation: { state: 'succeeded' } });
     expect(effects).toContain('power');
+  });
+});
+
+describe('production daemon Workflow plugin approval composition', () => {
+  afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+
+  it('defers an Agent-only plugin leaf, then settles its approved effect exactly once across coordinator reconstruction', async () => {
+    const accountId = 'workflow-plugin-owner';
+    const machineId = 'workflow-plugin-machine';
+    const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+    const pluginId = 'acme.workflow-approval';
+    const localId = 'update';
+    const actionId = `${pluginId}/actions/${localId}`;
+    const home = configuration.apiServerUrl;
+    const serverId = configuration.activeServerId;
+    const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 0,
+      provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
+    const inputSchema = { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'], additionalProperties: false };
+    const outputSchema = { type: 'object', properties: { changed: { type: 'boolean' } }, required: ['changed'], additionalProperties: false };
+    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+        serverUrl: home, resolveCurrentMachineId: () => machineId }) }, plugins: [{
+      manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: { actions: [{ id: localId, title: 'Update',
+        dangerLevel: 'writesRemote', scopes: ['global'], surfaces: ['agent'], execution: { target: 'daemon' }, inputSchema, resultSchema: outputSchema,
+        confirmation: { title: 'Apply update' } }] } }),
+      files: { 'daemon.mjs': 'let calls = 0; export function readCalls() { return calls; } export function activate(api) { api.actions.register("update", async () => { calls++; return { changed: true }; }); }' },
+    }] });
+    try {
+      const readCalls = fixture.modulesByPluginId.get(pluginId)?.readCalls;
+      if (typeof readCalls !== 'function') throw new Error('Missing physical plugin effect observation');
+      const settings = AccountSettingsSchema.parse({});
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(FeaturesResponseSchema.parse({ features: {},
+        capabilities: { serverIdentity: { serverIdentityId: 'srv_workflow_plugin' } } })), { status: 200 }));
+      const artifacts = new Map<string, Record<string, unknown>>();
+      const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
+        { kind: 'action', id: 'update', actionId, input: { enabled: { kind: 'literal', value: false } } },
+      ] };
+      const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: { startedBy: 'user', definition,
+          authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {}, inputs: {}, machineId,
+          materializedLeaves: [{ sourceKey: '$root', blockId: 'update', kind: 'action', actionId, selection: {},
+            executionTarget: { kind: 'session' }, authoredWorkspace: { kind: 'inherit' }, actionInput: {}, actionContract: { inputSchema, outputSchema } }],
+          source: { kind: 'inline' }, executionTarget: { kind: 'session' },
+          workspaceTarget: { project: { machineId, directory: tmpdir(), checkoutRootPath: tmpdir() } },
+          origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' } } }));
+      const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+      // Only HTTP/Socket.IO persistence and transport are replaced. Production
+      // Workflow composition, plugin loading, policy, approvals and codecs run.
+      vi.spyOn(axios, 'get').mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/profile') return { status: 200, data: { id: accountId } };
+        if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+          mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        } };
+        if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: settings }, version: 1 } };
+        if (path === '/v1/artifacts') return { status: 200, data: [...artifacts.values()] };
+        if (path.startsWith('/v1/artifacts/')) return { status: 200, data: artifacts.get(path.split('/').at(-1)!) };
+        if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [{ key: 'role-overrides', revision: 1,
+          content: { t: 'plain', v: { key: 'role-overrides', value: { v: 1, overrides: {} } } } }] } };
+        throw new Error(`Unexpected Workflow HTTP read ${path}`);
+      });
+      vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v3/automations/runs/workflow-storage') return { status: 200, data: await storage.execute(body as WorkflowRunStorageTestkitOperation) };
+        if (!body || typeof body !== 'object') throw new Error('Invalid Artifact request');
+        if (path === '/v1/artifacts' && 'id' in body && typeof body.id === 'string') {
+          artifacts.set(body.id, { ...body, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+          return { status: 200, data: { id: body.id, headerVersion: 1, bodyVersion: 1 } };
+        }
+        if (path.startsWith('/v1/artifacts/')) {
+          const id = path.split('/').at(-1)!;
+          const existing = artifacts.get(id);
+          if (!existing) throw new Error('Missing Artifact');
+          const request = body as Record<string, unknown>;
+          if (request.expectedHeaderVersion !== undefined && request.expectedHeaderVersion !== existing.headerVersion
+            || request.expectedBodyVersion !== undefined && request.expectedBodyVersion !== existing.bodyVersion) {
+            return { status: 200, data: { success: false, error: 'version-mismatch' } };
+          }
+          const headerVersion = Number(existing.headerVersion) + (request.header === undefined ? 0 : 1);
+          const bodyVersion = Number(existing.bodyVersion) + (request.body === undefined ? 0 : 1);
+          artifacts.set(id, { ...existing, ...(request.header === undefined ? {} : { header: request.header }),
+            ...(request.body === undefined ? {} : { body: request.body }), headerVersion, bodyVersion });
+          return { status: 200, data: { success: true, headerVersion, bodyVersion } };
+        }
+        throw new Error(`Unexpected Workflow HTTP mutation ${path}`);
+      });
+      vi.spyOn(axios, 'request').mockImplementation(async request => {
+        const path = new URL(String(request.url)).pathname;
+        if (request.method === 'POST' && path === ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1) {
+          return { status: 200, data: { tokens: [] } };
+        }
+        throw new Error(`Unexpected Workflow HTTP request ${path}`);
+      });
+      mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+      bindApiSessionSocketMock(mocks.io, createApiSessionSocketStub());
+      const snapshot = await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', honorAccountSettingsModeEnv: false });
+      if (!snapshot.scopeKey) throw new Error('Missing Workflow Account scope');
+      const catalog = await loadPromptLibraryCatalogV1({ mode: 'plain', material: null, readRows: async () =>
+        PromptLibraryRowsListResponseV1Schema.parse((await axios.get(`${home}${PROMPT_LIBRARY_ROWS_ROUTE_V1}`)).data) });
+      expect(commitActivePromptLibraryCatalog({ scopeKey: snapshot.scopeKey,
+        lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog })).toBe(true);
+      const unavailable = async (): Promise<never> => { throw new Error('Unexpected machine transport'); };
+      const runtime = createProductionDaemonWorkflowRuntime({ credentials, accountId, serverId });
+      const coordinate = () => runtime.createCoordinatorForMachine({
+        machineId, machineAdmissionTransport: unavailable, machineActionDirectTargetTransport: { machineId, invoke: unavailable } });
+      const claim = () => ({ runId, attempt: 0, expectedRevision: storage.run().revision, acceptedEnvelope,
+        accountCurrentness: { mode: 'plain' as const, version: 1, contentKeyFingerprint: null } });
+      const held = await coordinate()(claim());
+      expect(held, JSON.stringify({ held, run: storage.run(), invocations: storage.rows().map(row => row.index) }))
+        .toMatchObject({ state: 'paused', reason: 'approval_required' });
+      expect(readCalls()).toBe(0);
+      expect(artifacts.size).toBe(1);
+      const artifactId = [...artifacts.keys()][0]!;
+      const store = createCliApprovalsArtifactStore({ credentials });
+      expect(await store.targetActionApprovalsGet({ artifactId })).toMatchObject({ requestedSurface: 'agent', qualifiedActionId: actionId, status: 'open',
+        replayPlacement: { serverId, machineId }, executionOriginV1: { serverId, serverIdentityId: 'srv_workflow_plugin', machineId,
+          caller: { kind: 'workflowRun', runId } } });
+      expect(await coordinate()(claim())).toMatchObject({ state: 'paused' });
+      expect(artifacts.size).toBe(1);
+      expect(readCalls()).toBe(0);
+      const startupHome = await createTempDir('workflow-approval-startup-');
+      const replayDiagnostics = vi.spyOn(logger, 'debug');
+      const daemon = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: startupHome,
+        activeServerDir: join(startupHome, 'servers', serverId), serverId, serverHttpBaseUrl: home,
+        machineId, custodianAccountId: accountId, credentials,
+        connectedServicesMaterializationBaseDir: join(startupHome, 'connected-services'), registry: new ConnectedServiceRuntimeRegistry(),
+        trackedSessions: new Map(), getRequester: () => null, resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+        beforeStartup: async () => { await writeStoredCredentialsForServerId(serverId, credentials); },
+        startup: { resolveCurrentMachineExecutionOriginContext: async () => ({ machineId, serverIdentityId: 'srv_workflow_plugin' }),
+          workflowAcceptedAuthorizationCurrentness: runtime.isAcceptedAuthorizationCurrent } });
+      try {
+        const ingress = daemon.runtime.externalActionIngressOwner;
+        if (!ingress) throw new Error('Missing production daemon approval ingress');
+        // The authenticated Machine RPC receiver stamps this authority; UI
+        // surface text alone must not elevate the daemon's terminal credential.
+        const replay = (input: { artifactId: string; decision: 'approve' }) => ingress.executor.execute('approval.request.decide',
+          { ...input, serverIdentityId: 'srv_workflow_plugin', originServerId: serverId },
+          { surface: 'rpc', authority: 'present_user', serverId, actionCaller: { kind: 'host' } });
+        const decided = await replay({ artifactId, decision: 'approve' });
+        expect(decided, JSON.stringify({ decided, effects: readCalls(),
+          stale: replayDiagnostics.mock.calls.find(([message]) => message === '[RPC] Contributed approval origin is stale')?.[1] }))
+          .toMatchObject({ ok: true, result: { status: 'executed' } });
+        expect(readCalls()).toBe(1);
+        expect(await replay({ artifactId, decision: 'approve' })).toMatchObject({ ok: true, result: { status: 'executed' } });
+        await storage.execute({ operation: 'resume', runId, expectedRevision: storage.run().revision });
+        expect(storage.run().state).toBe('running');
+        expect(await coordinate()(claim())).toMatchObject({ state: 'succeeded' });
+        expect(readCalls()).toBe(1);
+        expect(artifacts.size).toBe(1);
+        expect(storage.rows().filter(row => row.index.parentRecordId !== null)).toMatchObject([{ index: { lifecycle: 'completed', attempt: '0' } }]);
+      } finally { await daemon.dispose(); await removeTempDir(startupHome); }
+    } finally { await fixture.dispose(); }
   });
 });
 

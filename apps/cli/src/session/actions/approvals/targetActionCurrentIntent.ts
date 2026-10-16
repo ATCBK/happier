@@ -24,9 +24,15 @@ function createTargetActionApprovalRequestCandidate(
   } = currentIntent;
   const requestedSurface = invocationSurface ?? surface;
   const approvalRequiredByActionSettings = action.approvalRequiredByActionSettings === true;
-  if (!action.confirmation && !approvalRequiredByActionSettings) return null;
+  if (!action.confirmation && !approvalRequiredByActionSettings) {
+    currentIntent.reportUnavailable?.('approval_not_required');
+    return null;
+  }
   const projected = projectTargetActionApprovalInput(action.input, action.secretInputPaths ?? []);
-  if (!projected) return null;
+  if (!projected) {
+    currentIntent.reportUnavailable?.('approval_input_unrepresentable');
+    return null;
+  }
   const candidate = {
     v: 1,
     kind: 'plugin_target_action',
@@ -61,7 +67,15 @@ function createTargetActionApprovalRequestCandidate(
       : {}),
   } as const;
   const parsed = TargetActionApprovalRequestV1Schema.safeParse(candidate);
-  return parsed.success && resolveApprovalRequestApproveAdmission(parsed.data).status === 'available' ? parsed.data : null;
+  if (!parsed.success) {
+    currentIntent.reportUnavailable?.('approval_subject_invalid');
+    return null;
+  }
+  if (resolveApprovalRequestApproveAdmission(parsed.data).status !== 'available') {
+    currentIntent.reportUnavailable?.('approval_presentation_unavailable');
+    return null;
+  }
+  return parsed.data;
 }
 
 /**
@@ -105,9 +119,15 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
     if (request === null) {
       return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
     }
-    const created = await deps.create(request);
+    let created: Awaited<ReturnType<typeof deps.create>>;
+    try { created = await deps.create(request); }
+    catch (error) {
+      currentIntent.reportUnavailable?.('approval_artifact_create_failed');
+      throw error;
+    }
     const artifactId = created.artifactId.trim();
     if (!artifactId) {
+      currentIntent.reportUnavailable?.('approval_artifact_id_unavailable');
       return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
     }
     if (request.approvalInputCustody !== 'live_only') {

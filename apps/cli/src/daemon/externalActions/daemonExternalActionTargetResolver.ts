@@ -34,6 +34,25 @@ type CurrentMachineExecutionOrigin = Readonly<{
   machineId: string;
 }>;
 
+/** Closed diagnostic codes only; never log origin, policy, or credential content. */
+export type DaemonApprovalExecutionOriginStaleReason =
+  | 'origin_not_current'
+  | 'requester_account_unavailable'
+  | 'workflow_authorization_unavailable'
+  | 'workflow_authorization_changed'
+  | 'spawn_policy_unavailable'
+  | 'spawn_policy_changed'
+  | 'currentness_read_failed';
+
+export type DaemonApprovalExecutionOriginCurrentness = (args: Readonly<{
+  origin: ApprovalExecutionOriginV1;
+  request?: Parameters<NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']>>[0]['request'];
+  /** Actual signed continuation input; no synthetic consent record is needed. */
+  actionInput?: unknown;
+  signal?: AbortSignal;
+  reportStale?: (reason: DaemonApprovalExecutionOriginStaleReason) => void;
+}>) => Promise<boolean>;
+
 async function readCurrentPluginSourceCustody(pluginId: string): Promise<PluginSourceCustodyV1 | null> {
   return readAuthoritativePluginSlotOccurrence(pluginId)?.sourceCustody ?? null;
 }
@@ -95,15 +114,13 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
     signal?: AbortSignal,
   ) => Promise<SessionAgentSpawnPolicyV1 | null>;
   now?: () => number;
-}>): ((args: Readonly<{
-  origin: ApprovalExecutionOriginV1;
-  request?: Parameters<NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']>>[0]['request'];
-  /** Actual signed continuation input; no synthetic consent record is needed. */
-  actionInput?: unknown;
-  signal?: AbortSignal;
-}>) => Promise<boolean>) {
+}>): DaemonApprovalExecutionOriginCurrentness {
   const now = input.now ?? Date.now;
-  return async ({ origin, request, actionInput, signal }) => {
+  return async ({ origin, request, actionInput, signal, reportStale }) => {
+    const stale = (reason: DaemonApprovalExecutionOriginStaleReason) => {
+      reportStale?.(reason);
+      return false;
+    };
     try {
       // Descriptive PAT ids from legacy API approvals are never sufficient to
       // begin replay currentness checks. They lack the signed exact invocation.
@@ -243,11 +260,11 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
       // cannot be rechecked at all, which fails closed exactly like the
       // Automation arm beside it.
       if (origin.caller.kind === 'workflowRun') {
-        if (!input.isWorkflowRunAuthorizationCurrent) return false;
+        if (!input.isWorkflowRunAuthorizationCurrent) return stale('workflow_authorization_unavailable');
         if (!await input.isWorkflowRunAuthorizationCurrent({
           authorization: origin.caller.authorization,
           ...(signal ? { signal } : {}),
-        })) return false;
+        })) return stale('workflow_authorization_changed');
       }
 
       if (origin.callerPermissionMode !== undefined || origin.causalPermissionAuthority !== undefined) {
@@ -291,12 +308,13 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
         && origin.sessionAgentSpawnPolicyV1 === undefined
       ) return false;
       if (origin.sessionAgentSpawnPolicyV1 !== undefined) {
-        if (!input.resolveCurrentSessionAgentSpawnPolicyV1) return false;
+        if (!input.resolveCurrentSessionAgentSpawnPolicyV1) return stale('spawn_policy_unavailable');
         const currentPolicy = await input.resolveCurrentSessionAgentSpawnPolicyV1(origin, signal);
-        if (!currentPolicy || !doesCurrentSpawnPolicyAdmitApprovedPolicy({
+        if (!currentPolicy) return stale('spawn_policy_unavailable');
+        if (!doesCurrentSpawnPolicyAdmitApprovedPolicy({
           approved: origin.sessionAgentSpawnPolicyV1,
           current: currentPolicy,
-        })) return false;
+        })) return stale('spawn_policy_changed');
       }
 
       // This authenticated Account-owned read is also the current Account
@@ -314,7 +332,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
       if (token.expiresAt !== null && Date.parse(token.expiresAt) <= now()) return false;
       return true;
     } catch {
-      return false;
+      return stale('currentness_read_failed');
     }
   };
 }
@@ -357,6 +375,9 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
   machineId: string;
   serverId: string;
   serverApiUrl: string;
+  resolveCurrentMachineExecutionOriginContext?: Parameters<typeof createDaemonApprovalExecutionOriginCurrentness>[0]['resolveCurrentMachineExecutionOriginContext'];
+  currentMachineHost?: string | null;
+  currentMachineHomeDir?: string | null;
   isAutomationRunCurrent?: Parameters<typeof createDaemonApprovalExecutionOriginCurrentness>[0]['isAutomationRunCurrent'];
   isSessionCallerCurrent?: Parameters<typeof createDaemonApprovalExecutionOriginCurrentness>[0]['isSessionCallerCurrent'];
   isWorkflowRunAuthorizationCurrent?: Parameters<typeof createDaemonApprovalExecutionOriginCurrentness>[0]['isWorkflowRunAuthorizationCurrent'];
@@ -398,13 +419,15 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
     accountId,
     machineId: input.machineId,
     serverId: input.serverId,
-    resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+    resolveCurrentMachineExecutionOriginContext: input.resolveCurrentMachineExecutionOriginContext ?? createCurrentMachineExecutionOriginContextResolver({
       serverUrl: input.serverApiUrl,
       resolveCurrentMachineId: () => input.machineId,
     }),
     resolveTarget: createDaemonExternalActionTargetResolver({
       credentials: input.credentials,
       serverApiUrl: input.serverApiUrl,
+      currentMachineHost: input.currentMachineHost,
+      currentMachineHomeDir: input.currentMachineHomeDir,
       ...(input.resolveServerFeaturesSnapshot
         ? { resolveServerFeaturesSnapshot: input.resolveServerFeaturesSnapshot }
         : {}),

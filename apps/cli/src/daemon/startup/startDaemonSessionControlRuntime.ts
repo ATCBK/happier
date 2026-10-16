@@ -252,7 +252,6 @@ import {
   createDaemonExternalActionContributedInvoker,
 } from '../externalActions/createDaemonExternalActionContributedInvoker';
 import {
-  createDaemonApprovalExecutionOriginCurrentness,
   createDaemonApprovalExecutionOriginCurrentnessFromCredentials,
   createDaemonExternalActionTargetResolver,
 } from '../externalActions/daemonExternalActionTargetResolver';
@@ -14456,29 +14455,9 @@ export async function startDaemonSessionControlRuntime(
           : {}),
       })
     : null;
-  const externalActionAccountServerDeps = externalActionAccountId
-    ? createAccountServerActionDeps({
-        token: params.credentials.token,
-        credentials: params.credentials,
-        serverId: params.serverId,
-        serverHttpBaseUrl: params.serverBaseUrl,
-        ...(params.resolveServerFeaturesSnapshot
-          ? {
-              resolveServerFeaturesSnapshot:
-                params.resolveServerFeaturesSnapshot,
-            }
-          : {}),
-        ...(externalActionInstallationIdentity
-          ? {
-              externalActionMachineRequestPrivateKey:
-                externalActionInstallationIdentity.privateKey,
-            }
-          : {}),
-      })
-    : null;
   const isSessionCallerCurrent: NonNullable<
     Parameters<
-      typeof createDaemonApprovalExecutionOriginCurrentness
+      typeof createDaemonApprovalExecutionOriginCurrentnessFromCredentials
     >[0]['isSessionCallerCurrent']
   > = async ({ caller, signal }) => {
     if (signal?.aborted) return false;
@@ -14498,93 +14477,27 @@ export async function startDaemonSessionControlRuntime(
     }
     return foregroundAgentRuntimeAdmission.isSessionCurrent(caller.sessionId);
   };
-  const sessionApprovalExecutionOriginCurrentness =
+  const externalActionApprovalExecutionOriginCurrentness =
     createDaemonApprovalExecutionOriginCurrentnessFromCredentials({
       credentials: params.credentials,
       machineId: params.machineId,
       serverId: params.serverId,
       serverApiUrl: params.serverBaseUrl,
+      ...(params.resolveCurrentMachineExecutionOriginContext
+        ? { resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext }
+        : {}),
+      currentMachineHost: params.currentMachineHost,
+      currentMachineHomeDir: params.currentMachineHomeDir,
       isSessionCallerCurrent,
+      ...(params.workflowAcceptedAuthorizationCurrentness
+        ? { isWorkflowRunAuthorizationCurrent: params.workflowAcceptedAuthorizationCurrentness }
+        : {}),
       ...(params.resolveServerFeaturesSnapshot
         ? {
             resolveServerFeaturesSnapshot: params.resolveServerFeaturesSnapshot,
           }
         : {}),
     });
-  const nonSessionApprovalExecutionOriginCurrentness =
-    externalActionAccountId &&
-    externalActionTargetResolver &&
-    externalActionAccountServerDeps?.accountApiTokensListAction
-      ? createDaemonApprovalExecutionOriginCurrentness({
-          accountId: externalActionAccountId,
-          machineId: params.machineId,
-          serverId: params.serverId,
-          resolveCurrentMachineExecutionOriginContext: async (signal) =>
-            (await params.resolveCurrentMachineExecutionOriginContext?.(
-              signal,
-            )) ?? null,
-          resolveTarget: externalActionTargetResolver,
-          // This explicit checker wins over the executor's own fallback, so it
-          // carries the same Workflow accepted-authorization owner the live
-          // Workflow admission uses; without it a Workflow origin fails closed.
-          ...(params.workflowAcceptedAuthorizationCurrentness
-            ? {
-                isWorkflowRunAuthorizationCurrent:
-                  params.workflowAcceptedAuthorizationCurrentness,
-              }
-            : {}),
-          listAccountApiTokens: async (signal) => {
-            const result =
-              await externalActionAccountServerDeps.accountApiTokensListAction!(
-                {
-                  input: {},
-                  context: {
-                    surface: 'rpc',
-                    authority: 'account_automation',
-                    serverId: params.serverId,
-                  },
-                  ...(signal ? { signal } : {}),
-                },
-              );
-            if ('ok' in result) {
-              throw new Error(result.errorCode);
-            }
-            return result;
-          },
-          ...(externalActionInstallationIdentity
-            ? {
-                externalActionMachinePublicKey:
-                  externalActionInstallationIdentity.publicKey,
-                verifyExternalExecutionAuthorization: async ({
-                  authorization,
-                  effectActionId,
-                  target,
-                  signal,
-                }) =>
-                  await verifyExternalActionExecutionAuthorizationCurrent({
-                    authorization,
-                    effectActionId,
-                    target,
-                    privateKey: externalActionInstallationIdentity.privateKey,
-                    installationId:
-                      externalActionInstallationIdentity.installationId,
-                    serverHttpBaseUrl: params.serverBaseUrl,
-                    ...(signal ? { signal } : {}),
-                  }),
-              }
-            : {}),
-        })
-      : null;
-  // Session replay needs the credentialed owner's current permission and
-  // Account spawn-policy reads. Other callers retain their existing custom
-  // Machine/Workflow authority composition.
-  const externalActionApprovalExecutionOriginCurrentness: typeof nonSessionApprovalExecutionOriginCurrentness =
-    nonSessionApprovalExecutionOriginCurrentness
-      ? async (args) =>
-          args.origin.caller.kind === 'session'
-            ? (await sessionApprovalExecutionOriginCurrentness?.(args)) === true
-            : await nonSessionApprovalExecutionOriginCurrentness(args)
-      : null;
   const externalActionContributedApprovalReplay =
     externalActionAccountId && externalActionApprovalExecutionOriginCurrentness
       ? createDaemonExternalActionContributedApprovalReplay({
@@ -14912,8 +14825,13 @@ export async function startDaemonSessionControlRuntime(
         : externalActionApprovalExecutionOriginCurrentness;
       const invocationContributedApprovalReplay = requesterAccountContext
         ? createDaemonExternalActionContributedApprovalReplay({ credentials,
-            isApprovalExecutionOriginCurrent: async args => await requesterAccountContext.isCurrent()
-              && (await invocationApprovalCurrentness?.(args)) === true })
+            isApprovalExecutionOriginCurrent: async args => {
+              if (!await requesterAccountContext.isCurrent()) {
+                args.reportStale?.('requester_account_unavailable');
+                return false;
+              }
+              return (await invocationApprovalCurrentness?.(args)) === true;
+            } })
         : externalActionContributedApprovalReplay;
       const executor: ReturnType<
         typeof createCliActionExecutorFromCredentials

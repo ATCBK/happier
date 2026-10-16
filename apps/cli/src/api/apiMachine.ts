@@ -1136,14 +1136,24 @@ export class ApiMachineClient {
             },
             daemonContributionRegistryProjection: {
                 requestCurrentIntent: async request => {
-                    const unavailable = { status: 'unavailable' as const, code: 'plugin_action_current_intent_unavailable' };
+                    const reportUnavailable: NonNullable<typeof request.reportUnavailable> = reason => {
+                        logger.debug('[RPC] Target Action current intent unavailable', {
+                            code: 'plugin_action_current_intent_unavailable', reason,
+                        });
+                    };
+                    const unavailable = (reason: Parameters<typeof reportUnavailable>[0]) => {
+                        reportUnavailable(reason);
+                        return { status: 'unavailable' as const, code: 'plugin_action_current_intent_unavailable' };
+                    };
                     const runtime = await this.resolveInstalledAccountRuntime(request.signal ?? new AbortController().signal);
-                    if (!runtime) return unavailable;
-                    const { createCredentialedTargetActionCurrentIntent } = await import('@/session/actions/approvals/credentialedTargetActionCurrentIntent');
-                    if (!await runtime.isCurrent()) return unavailable;
+                    if (!runtime) return unavailable('installed_account_unavailable');
+                    let factory: typeof import('@/session/actions/approvals/credentialedTargetActionCurrentIntent');
+                    try { factory = await import('@/session/actions/approvals/credentialedTargetActionCurrentIntent'); }
+                    catch { return unavailable('approval_factory_unavailable'); }
+                    if (!await runtime.isCurrent()) return unavailable('installed_account_retired');
                     const result = await runWithServerHttpBaseUrl(runtime.serverHttpBaseUrl,
-                        () => createCredentialedTargetActionCurrentIntent(runtime.credentials)(request));
-                    return await runtime.isCurrent() ? result : unavailable;
+                        () => factory.createCredentialedTargetActionCurrentIntent(runtime.credentials)({ ...request, reportUnavailable }));
+                    return await runtime.isCurrent() ? result : unavailable('installed_account_retired');
                 },
                 resolveCaptureRegistry: () => this.lifecycleDependencies.liveStreamCaptureRegistry ?? null,
                 observePluginExecution: this.actionOperationRuntime.observePluginExecution,

@@ -339,7 +339,8 @@ describe('createDaemonExternalActionTargetResolver', () => {
       resolveCurrentPermissionMode: async () => permission,
       resolveCurrentSessionAgentSpawnPolicyV1: async () => currentPolicy,
     });
-    const check = () => isCurrent({ origin, actionInput: spawnInput });
+    const staleReasons: string[] = [];
+    const check = () => isCurrent({ origin, actionInput: spawnInput, reportStale: (reason: string) => { staleReasons.push(reason); } });
     await expect(check()).resolves.toBe(true);
     homeCurrent = false;
     await expect(check()).resolves.toBe(false);
@@ -349,6 +350,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
     permission = 'yolo';
     currentPolicy = { ...spawnPolicy, allowCrossMachine: false };
     await expect(check()).resolves.toBe(false);
+    expect(staleReasons.at(-1)).toBe('spawn_policy_changed');
     currentPolicy = spawnPolicy;
     // A signed Session invocation without the managed-child tuple still needs
     // its incumbent local source owner; Home signature alone is not a waiver.

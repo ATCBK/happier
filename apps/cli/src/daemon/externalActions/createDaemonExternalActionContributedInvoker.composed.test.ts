@@ -899,11 +899,12 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     } finally { await runtime.dispose(); }
   });
 
-  it.each(['host', 'host_ask', 'session', 'retired'] as const)('preserves the accepted workflow caller and canonical approval gate (%s)', async origin => {
+  it.each(['host', 'host_waived', 'session', 'retired'] as const)('preserves the accepted workflow caller and canonical approval gate (%s)', async origin => {
     const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
-    if (origin === 'host_ask') process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({ v: 1, actions: {
-      'acme.external/actions/inspect': { approvalRequiredSurfaces: ['plugin'] },
-    } });
+    if (origin === 'host_waived') process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify(setActionApprovalOverride({
+      settings: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }),
+      actionId: 'acme.external/actions/inspect', surface: 'agent', approvalRequired: false,
+    }));
     const seeds: PluginActionsServiceSeed[] = [];
     const runtime = createExternalActionRuntime('global', 'acme.external', undefined, undefined, undefined,
       seed => { seeds.push(seed); }, undefined, 'writesRemote', undefined, { surfaces: ['agent', 'plugin'] });
@@ -938,9 +939,14 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         expect(seeds).toHaveLength(1);
         expect(seeds[0]?.initiatingActionCaller).toEqual(context.actionCaller);
       }
-      expect(approve).toHaveBeenCalledTimes(origin === 'session' || origin === 'host_ask' ? 1 : 0);
-      if (origin === 'session') expect(approve).toHaveBeenCalledWith(expect.objectContaining({ invocationSurface: 'agent' }));
-      if (origin === 'host_ask') expect(approve).toHaveBeenCalledWith(expect.objectContaining({ invocationSurface: 'background' }));
+      if (origin === 'host_waived' || origin === 'retired') {
+        expect(approve).not.toHaveBeenCalled();
+      } else {
+        expect(approve).toHaveBeenCalledWith(expect.objectContaining({
+          invocationSurface: 'agent',
+          executionOriginV1: expect.objectContaining({ surface: 'agent', caller: context.actionCaller }),
+        }));
+      }
     } finally {
       await runtime.dispose();
       if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
@@ -1493,8 +1499,9 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     });
   });
 
-  it('reports unavailable Account currentness before resolving an external Action Session target', async () => {
+  it('refuses unavailable Account currentness before dispatching an external Action Session target', async () => {
     const executor = createExternalActionIngressExecutor('session');
+    const execute = vi.spyOn(executor, 'execute');
     const resolveTarget = createCanonicalSessionTargetResolver();
     vi.mocked(axios.get).mockRejectedValue(new Error('Account currentness transport unavailable'));
 
@@ -1516,7 +1523,9 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       kind: 'response',
       response: { execution: { ok: false, errorCode: 'target_unavailable' } },
     });
-    expect(externalActionTargetResolverMocks.fetchSessionById).not.toHaveBeenCalled();
+    // Session lookup may overlap the fresh Account witness, but an unavailable
+    // witness must never publish a target to the Action executor.
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('does not let nested plugin input select a Session without a verified envelope target', async () => {

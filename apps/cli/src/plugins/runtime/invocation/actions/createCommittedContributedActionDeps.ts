@@ -119,10 +119,6 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
     if (!await isWorkflowCurrent()) return {
       ok: false, errorCode: 'workflow_authorization_not_current', error: 'workflow_authorization_not_current',
     };
-    // The accepted owner-authored effect has a background origin. Agent
-    // authored Runs retain their agent confirmation and capability surface.
-    const invocationSurface = surface === 'agent'
-      && workflowCaller?.authorization.principal.kind === 'host' ? 'background' : surface;
     const externalActionContext = projectExternalActionContext(
       context,
       approvalExecutionOrigin !== undefined,
@@ -146,7 +142,7 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
         ...(input.requestCurrentIntent ? { requestCurrentIntent: input.requestCurrentIntent } : {}),
         context: {
           surface,
-          invocationSurface,
+          invocationSurface: surface,
           initiatingActionCaller: context.actionCaller ?? { kind: 'host' },
           ...(workflowCaller ? { beforeHandlerInvocation: async () => {
             if (!await isWorkflowCurrent()) throw new PluginError({

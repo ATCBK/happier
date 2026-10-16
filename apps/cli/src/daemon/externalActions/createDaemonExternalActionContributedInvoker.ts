@@ -10,6 +10,7 @@ import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/acti
 import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
 import { logger } from '@/ui/logger';
+import type { DaemonApprovalExecutionOriginCurrentness, DaemonApprovalExecutionOriginStaleReason } from './daemonExternalActionTargetResolver';
 import {
   executeContributedAction,
 } from '@/plugins/runtime/invocation/actions/executeContributedAction';
@@ -87,7 +88,7 @@ export function createDaemonExternalActionContributedInvoker(input: Readonly<{
  */
 export function createDaemonExternalActionContributedApprovalReplay(input: Readonly<{
   credentials: StoredCredentials;
-  isApprovalExecutionOriginCurrent?: NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']>;
+  isApprovalExecutionOriginCurrent?: DaemonApprovalExecutionOriginCurrentness;
   acquireRuntimeRegistryLease?: typeof acquireAuthoritativePluginRuntimeRegistryLease;
   targetActionApprovals?: TargetActionApprovalStore;
   readInstallationIdentity?: typeof readInstallationIdentityIfExistsSync;
@@ -287,13 +288,18 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
       ...(approved.detail ? { preview: { detail: approved.detail } } : {}),
       ...(approved.decision ? { decision: approved.decision } : {}),
     };
+    let staleReason: DaemonApprovalExecutionOriginStaleReason = 'origin_not_current';
     const originCurrent = input.isApprovalExecutionOriginCurrent
       ? await input.isApprovalExecutionOriginCurrent({
-      origin,
-      request: approvalRequest,
-      ...(signal ? { signal } : {}),
-        }).catch(() => false)
+          origin,
+          request: approvalRequest,
+          reportStale: reason => { staleReason = reason; },
+          ...(signal ? { signal } : {}),
+        }).catch(() => { staleReason = 'currentness_read_failed'; return false; })
       : false;
+    if (!originCurrent) {
+      logger.debug('[RPC] Contributed approval origin is stale', { code: 'approval_stale', reason: staleReason });
+    }
     let executionResult: ActionExecuteResult | undefined = originCurrent
       ? undefined
       : targetActionReplayFailure('approval_stale');
