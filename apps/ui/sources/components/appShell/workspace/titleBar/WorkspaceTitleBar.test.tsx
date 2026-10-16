@@ -247,7 +247,7 @@ describe('WorkspaceTitleBar', () => {
         expect(titles()).not.toContain('Fix settings modal remount');
     });
 
-    it('collapses the tabs that do not fit behind +N, keeps the open one, and closes the others from a tab\'s menu', async () => {
+    it('keeps every tab in the scrolling strip and offers all tabs, recently closed, Close others and Close all from one trailing menu', async () => {
         const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
         let state = createWorkspaceState(tab('a', { pinned: true }));
         for (const id of ids.slice(1)) state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: tab(id) });
@@ -256,32 +256,29 @@ describe('WorkspaceTitleBar', () => {
             createNodeMock: windowMeasurement({ 'workspace-title-bar': { x: 0, width: 1440 }, 'workspace-group-group_1': { x: 300, width: 600 } }),
         });
         const visibleTabs = () => ids.filter((id) => screen.findAllByTestId(`workspace-tab-${id}`).length > 0);
+        // A narrow pane never truncates the strip to a fit count: every tab stays reachable by scrolling.
+        await act(async () => { screen.findByTestId('workspace-tabs-group_1')?.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 30 } } }); });
         expect(visibleTabs()).toEqual(ids);
+        const menu = screen.findByTestId('workspace-overflow-group_1');
+        expect(menu?.props.accessibilityLabel).toBe('workspaceBar.allTabs');
 
-        await act(async () => { screen.findByTestId('workspace-tabs-group_1')?.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 600, height: 30 } } }); });
-        const shown = visibleTabs();
-        expect(shown.length).toBeLessThan(ids.length);
-        expect(shown).toEqual(expect.arrayContaining(['a', 'b']));
-        const overflow = screen.findByTestId('workspace-overflow-group_1');
-        expect(overflow?.props.accessibilityLabel).toBe('workspaceBar.moreTabs');
-
-        // +N lists every tab of the pane; choosing a hidden one opens it in the bar.
+        // The one menu lists every tab of the pane; choosing one opens it.
         await screen.pressByTestIdAsync('workspace-overflow-group_1');
-        // A menu opens on the frame after the press that asked for it.
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+        expect(screen.findByTestId('workspace-overflow-close-left')).toBeNull();
+        expect(screen.findByTestId('workspace-overflow-close-right')).toBeNull();
+        expect(screen.findByTestId('workspace-overflow-close-all')).not.toBeNull();
         await screen.pressByTestIdAsync('workspace-overflow-tab-h');
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
         expect(stateOf(screen).groups['group:1'].activeTabId).toBe('h');
-        expect(visibleTabs()).toContain('h');
 
-        // "Close other tabs" keeps the tab and the pinned tab.
-        const h = screen.findAllByTestId('workspace-tab-h').find((node) => typeof node.props.onLongPress === 'function');
-        await act(async () => { h?.props.onLongPress({}); });
-        await screen.pressByTestIdAsync('workspace-tab-menu-close-others');
+        // Close others, at the foot of the same menu, keeps the open tab and the pinned one.
+        await screen.pressByTestIdAsync('workspace-overflow-group_1');
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+        await screen.pressByTestIdAsync('workspace-overflow-close-others');
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
         expect(stateOf(screen).groups['group:1'].tabIds).toEqual(['a', 'h']);
-        // Open-tab overflow is gone, but every explicit close remains reachable for undo.
-        expect(screen.findByTestId('workspace-overflow-group_1')?.props.accessibilityLabel).toBe('workspaceTabs.recentlyClosed');
         expect(stateOf(screen).recentlyClosed.map(entry => entry.tab.id)).toEqual(ids.slice(1, -1).reverse());
+        expect(screen.findByTestId('workspace-overflow-group_1')).not.toBeNull();
     });
 });
