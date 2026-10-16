@@ -176,6 +176,7 @@ export function createStopSession(params: Readonly<{
     sessionId: string;
     trackedPids: readonly number[];
   }>) => Promise<boolean>;
+  /** Physical liveness only; the exit wait owns lifecycle and inventory settlement. */
   areTrackedRunnersExited?: (input: Readonly<{
     sessionId: string;
     trackedPids: readonly number[];
@@ -223,6 +224,18 @@ export function createStopSession(params: Readonly<{
   ): Promise<StopSessionResult> => {
     const stopStartedAtMs = Date.now();
     logger.debug(`[DAEMON RUN] Attempting to stop session ${sessionId}`);
+    const observeStopPhase = async <T>(phase: string, operation: () => Promise<T>): Promise<T> => {
+      const startedAtMs = Date.now();
+      logger.infoFile('[DAEMON STOP] Physical Stop phase started', { sessionId, phase });
+      try {
+        return await operation();
+      } finally {
+        logger.infoFile('[DAEMON STOP] Physical Stop phase settled', {
+          sessionId, phase, elapsedMs: Date.now() - startedAtMs,
+          totalElapsedMs: Date.now() - stopStartedAtMs,
+        });
+      }
+    };
 
     const normalizedSessionId = String(sessionId ?? '').trim();
     if (!normalizedSessionId) return incompleteStopSession('invalid_session_id');
@@ -253,6 +266,12 @@ export function createStopSession(params: Readonly<{
         expectedTrackedSessionsByPid.set(pid, session);
       }
     }
+    const isCapturedTrackedRunnerCurrent = (pid: number): boolean => {
+      const expected = expectedTrackedSessionsByPid.get(pid);
+      return expected !== undefined
+        && pidToTrackedSession.get(pid) === expected
+        && isExactTrackedRunner(pid, expected, options?.expectedTrackedRunner);
+    };
 
     const readHostAttachmentInfo = params.readHostAttachmentInfo ?? readTerminalHostAttachmentInfo;
     const readHostAttachmentState = params.readHostAttachmentState
@@ -337,8 +356,7 @@ export function createStopSession(params: Readonly<{
           const pid = pidsToStop[index]!;
           const expected = expectedTrackedSessionsByPid.get(pid);
           const ownsCurrentRunner = expected?.startedBy === 'daemon'
-            && pidToTrackedSession.get(pid) === expected
-            && isExactTrackedRunner(pid, expected, options?.expectedTrackedRunner)
+            && isCapturedTrackedRunnerCurrent(pid)
             && await isPidSafeHappySessionProcess({
               pid,
               expectedProcessCommandHash: expected.processCommandHash,
@@ -349,8 +367,7 @@ export function createStopSession(params: Readonly<{
             ? await resolveTrackedSessionTerminalPresentation(expected,
                 mode === 'windows_terminal' ? 'windows_console' : mode)
             : null;
-          if (ownsCurrentRunner && expected && pidToTrackedSession.get(pid) === expected
-            && isExactTrackedRunner(pid, expected, options?.expectedTrackedRunner)
+          if (ownsCurrentRunner && expected && isCapturedTrackedRunnerCurrent(pid)
             && presentation?.kind === 'provider_attach') continue;
           logWarning(`[DAEMON RUN] Refusing to destroy terminal host without committed attachment identity for session ${normalizedSessionId}`);
           return incompleteStopSession('missing_attachment_identity');
@@ -521,34 +538,26 @@ export function createStopSession(params: Readonly<{
         return false;
       }
     };
-    const runnersAlreadyExited = await haveTrackedRunnersExited(pidsToStop);
+    const runnersAlreadyExited = await observeStopPhase('runner_exit_probe', () => haveTrackedRunnersExited(pidsToStop));
     const signalEligiblePids: number[] = [];
     for (const pid of runnersAlreadyExited ? [] : pidsToStop) {
-      if (!isExactTrackedRunner(
-        pid,
-        pidToTrackedSession.get(pid),
-        options?.expectedTrackedRunner,
-      )) continue;
+      if (!isCapturedTrackedRunnerCurrent(pid)) continue;
       if (
         params.retireUpstreamAuthorityBeforeProcessStop
-        && !await params
-          .retireUpstreamAuthorityBeforeProcessStop(pid)
+        && !await observeStopPhase('upstream_authority_retirement', () =>
+          params.retireUpstreamAuthorityBeforeProcessStop!(pid))
       ) {
         logWarning(
           `[DAEMON RUN] Refusing to signal session ${normalizedSessionId} because upstream authority retirement was incomplete`,
         );
         return incompleteStopSession('runner_signal_incomplete');
       }
-      if (!isExactTrackedRunner(
-        pid,
-        pidToTrackedSession.get(pid),
-        options?.expectedTrackedRunner,
-      )) continue;
+      if (!isCapturedTrackedRunnerCurrent(pid)) continue;
       signalEligiblePids.push(pid);
     }
     const remainderOwner = { kind: 'session', sessionId: normalizedSessionId } as const;
     const capturedRemainder = params.ownerRemainder && pidsToStop.length > 0
-      ? await params.ownerRemainder.capture(remainderOwner)
+      ? await observeStopPhase('remainder_capture', () => params.ownerRemainder!.capture(remainderOwner))
       : undefined;
     if (capturedRemainder) {
       for (const session of expectedTrackedSessionsByPid.values()) session.ownerRemainderCapture = capturedRemainder;
@@ -558,35 +567,21 @@ export function createStopSession(params: Readonly<{
     const confirmedExitedPids: number[] = runnersAlreadyExited ? [...pidsToStop] : [];
     for (const pid of runnersAlreadyExited ? [] : signalEligiblePids) {
       const session = pidToTrackedSession.get(pid);
-      if (!isExactTrackedRunner(
-        pid,
-        session,
-        options?.expectedTrackedRunner,
-      )) continue;
-      const isSignalAuthorityCurrent = (): boolean => isExactTrackedRunner(
-        pid, pidToTrackedSession.get(pid), options?.expectedTrackedRunner,
-      );
+      if (!session || !isCapturedTrackedRunnerCurrent(pid)) continue;
+      const isSignalAuthorityCurrent = (): boolean => isCapturedTrackedRunnerCurrent(pid);
       const claimSignalAuthority = async (): Promise<boolean> => {
         const current = pidToTrackedSession.get(pid);
-        if (!isExactTrackedRunner(
-          pid,
-          current,
-          options?.expectedTrackedRunner,
-        )) return false;
+        if (!current || !isCapturedTrackedRunnerCurrent(pid)) return false;
         if (await options?.beforeSignalExactTrackedRunner?.(current) === false) return false;
-        return isExactTrackedRunner(
-          pid,
-          pidToTrackedSession.get(pid),
-          options?.expectedTrackedRunner,
-        );
+        return isCapturedTrackedRunnerCurrent(pid);
       };
 
       try {
-        if (!await claimSignalAuthority()) continue;
-        const safe = await isPidSafeHappySessionProcess({
+        if (!await observeStopPhase('signal_authority', claimSignalAuthority)) continue;
+        const safe = await observeStopPhase('runner_identity', () => isPidSafeHappySessionProcess({
           pid, expectedProcessCommandHash: session.processCommandHash,
           expectedProcessStartTimeMs: session.processStartTimeMs,
-        });
+        }));
         if (!safe) {
           logPidReuseRefusal(`[DAEMON RUN] Refusing to signal PID ${pid} for session ${normalizedSessionId} (PID reuse safety)`);
           continue;
@@ -595,10 +590,10 @@ export function createStopSession(params: Readonly<{
           || (session.startedBy === 'daemon' && session.childProcess && !isTrackedChildStillLiveForPid(session, pid))) continue;
         session.stopRequestedAtMs ??= Date.now();
         // The runner lifecycle owns its established exit wait; one terminator owns every signal.
-        const result = await terminateTargets({
+        const result = await observeStopPhase('signal_request', () => terminateTargets({
           targets: [{ pid, ...(session.processStartTimeMs === undefined ? {} : { start: { startTimeMs: session.processStartTimeMs } }) }],
           tree: false, waitForExit: false,
-        });
+        }));
         if (result.outcomes.some(outcome => outcome.outcome === 'refused')) continue;
         stoppedAny = true;
         signaledPids.push(pid);
@@ -607,7 +602,8 @@ export function createStopSession(params: Readonly<{
       }
     }
 
-    const unsignaledPids = pidsToStop.filter((pid) => !signaledPids.includes(pid));
+    const unsignaledPids = pidsToStop.filter((pid) =>
+      !signaledPids.includes(pid) && !confirmedExitedPids.includes(pid));
     if (
       unsignaledPids.length > 0
       && await haveTrackedRunnersExited(unsignaledPids)
@@ -627,11 +623,22 @@ export function createStopSession(params: Readonly<{
       logWarning(`[DAEMON RUN] Stop cannot prove runner exit for session ${normalizedSessionId}`);
       return incompleteStopSession('runner_exit_observer_unavailable');
     }
-    let runnersExited = confirmedExitedPids.length === pidsToStop.length
-      || await params.waitForTrackedRunnersExit({
-        sessionId: normalizedSessionId,
-        trackedPids: pidsToStop,
-      });
+    // A dead runner still owns exit settlement and inventory custody. Record
+    // explicit Stop before the lifecycle observes it, including runners that
+    // needed no signal, so their exit cannot become automatic crash recovery.
+    for (const pid of confirmedExitedPids) {
+      if (isCapturedTrackedRunnerCurrent(pid)) {
+        expectedTrackedSessionsByPid.get(pid)!.stopRequestedAtMs ??= Date.now();
+      }
+    }
+    let runnersExited = await params.waitForTrackedRunnersExit({
+      sessionId: normalizedSessionId,
+      trackedPids: pidsToStop,
+    });
+    if (!runnersExited && confirmedExitedPids.length === pidsToStop.length) {
+      logWarning(`[DAEMON RUN] Dead runner exit settlement was incomplete for session ${normalizedSessionId}`);
+      return incompleteStopSession('runner_exit_timeout');
+    }
     if (!runnersExited) {
       logWarning(
         `[DAEMON RUN] Timed out waiting for tracked runner exit; escalating to forced termination for session ${normalizedSessionId}`,
@@ -649,34 +656,22 @@ export function createStopSession(params: Readonly<{
         if (!expectedSession) continue;
         const claimForceSignalAuthority = async (): Promise<boolean> => {
           const current = pidToTrackedSession.get(pid);
-          if (current !== expectedSession || !isExactTrackedRunner(
-            pid,
-            current,
-            options?.expectedTrackedRunner,
-          )) return false;
+          if (!current || !isCapturedTrackedRunnerCurrent(pid)) return false;
           if (await options?.beforeSignalExactTrackedRunner?.(current) === false) return false;
-          const afterClaim = pidToTrackedSession.get(pid);
-          return afterClaim === expectedSession && isExactTrackedRunner(
-            pid,
-            afterClaim,
-            options?.expectedTrackedRunner,
-          );
+          return isCapturedTrackedRunnerCurrent(pid);
         };
         forceSignaledAny = await forceKillTrackedRunner({
           pid,
           expectedSession,
           normalizedSessionId,
           claimSignalAuthority: claimForceSignalAuthority,
-          isSignalAuthorityCurrent: () => pidToTrackedSession.get(pid) === expectedSession
-            && isExactTrackedRunner(pid, expectedSession, options?.expectedTrackedRunner),
+          isSignalAuthorityCurrent: () => isCapturedTrackedRunnerCurrent(pid),
           logPidReuseRefusal,
           terminateTargets,
         }) || forceSignaledAny;
       }
 
-      if (exitedBeforeForcePids.size === pidsToStop.length) {
-        runnersExited = true;
-      } else if (forceSignaledAny) {
+      if (exitedBeforeForcePids.size === pidsToStop.length || forceSignaledAny) {
         runnersExited = await params.waitForTrackedRunnersExit({
           sessionId: normalizedSessionId,
           trackedPids: pidsToStop,
@@ -684,7 +679,11 @@ export function createStopSession(params: Readonly<{
       } else if (params.areTrackedRunnersExited) {
         // Identity inspection may await OS discovery while the runner exits.
         // Refusing to signal is not liveness evidence; retain the canonical positive-death proof.
-        runnersExited = await haveTrackedRunnersExited(pidsToStop);
+        runnersExited = await haveTrackedRunnersExited(pidsToStop)
+          && await params.waitForTrackedRunnersExit({
+            sessionId: normalizedSessionId,
+            trackedPids: pidsToStop,
+          });
       }
       if (!runnersExited) {
         logWarning(
@@ -700,7 +699,10 @@ export function createStopSession(params: Readonly<{
       trackedRunnerCount: pidsToStop.length,
     });
     if (params.ownerRemainder && pidsToStop.length > 0) {
-      const remainder = await params.ownerRemainder.end(remainderOwner, capturedRemainder);
+      const remainder = [...expectedTrackedSessionsByPid.values()]
+        .map((session) => session.ownerRemainderResult)
+        .find((result) => result !== undefined)
+        ?? await params.ownerRemainder.end(remainderOwner, capturedRemainder);
       if (remainder.status !== 'complete') {
         logWarning(`[DAEMON RUN] Session remainder cleanup was incomplete for ${normalizedSessionId}`, remainder);
         return incompleteStopSession('runner_signal_incomplete');

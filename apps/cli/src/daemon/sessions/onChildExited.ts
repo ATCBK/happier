@@ -19,7 +19,6 @@ import { readProcessRunState } from '../processRunState';
 import { readProcessIdentityByPid } from '../processIdentity';
 import { resolveTrackedSessionExitSettlementEvidence } from './resolveTrackedSessionExitSettlementEvidence';
 import { stageObservedExit } from './stageObservedExit';
-import { resolveTrackedSessionActiveTurn } from './trackedSessionActiveTurn';
 import type { SkillStore } from '@/prompts/skills/store/skillStore';
 import { readRetainedPlainRunnerExitMarker } from './retireTerminalControlServiceability';
 
@@ -76,14 +75,18 @@ function isServerBackedSessionId(sessionId: string): boolean {
   return !/^PID-\d+$/.test(sessionId);
 }
 
-async function settleNoTurnFinalExit(params: Readonly<{
+async function settleFinalExitPublisher(params: Readonly<{
   apiMachine: Pick<ApiMachineClient, 'captureMachineSessionTerminal' | 'finalizeMachineSessionTerminal'>;
   sessionId: string;
 }>): Promise<boolean> {
   try {
+    const captureStartedAtMs = Date.now();
     const captured = await params.apiMachine.captureMachineSessionTerminal(params.sessionId);
+    logger.infoFile('[DAEMON STOP] Final-exit terminal capture completed', {
+      sessionId: params.sessionId, status: captured.status, elapsedMs: Date.now() - captureStartedAtMs,
+    });
     if (captured.status === 'rejected') {
-      logger.warn('[DAEMON RUN] Failed to capture no-turn Session terminal authority; retaining marker evidence', {
+      logger.warn('[DAEMON RUN] Failed to capture final-exit Session terminal authority; retaining marker evidence', {
         sessionId: params.sessionId,
         reason: captured.reason,
       });
@@ -91,19 +94,23 @@ async function settleNoTurnFinalExit(params: Readonly<{
     }
     if (captured.status === 'already_inactive') return true;
 
+    const finalizeStartedAtMs = Date.now();
     const finalized = await params.apiMachine.finalizeMachineSessionTerminal({
       sessionId: captured.sessionId,
       authority: captured.authority,
     });
+    logger.infoFile('[DAEMON STOP] Final-exit terminal finalization completed', {
+      sessionId: params.sessionId, status: finalized.status, elapsedMs: Date.now() - finalizeStartedAtMs,
+    });
     if (finalized.status !== 'rejected') return true;
 
-    logger.warn('[DAEMON RUN] Failed to finalize no-turn Session terminal authority; retaining marker evidence', {
+    logger.warn('[DAEMON RUN] Failed to finalize final-exit Session terminal authority; retaining marker evidence', {
       sessionId: params.sessionId,
       reason: finalized.reason,
     });
     return false;
   } catch (error) {
-    logger.warn('[DAEMON RUN] Failed to settle no-turn Session terminal authority; retaining marker evidence', {
+    logger.warn('[DAEMON RUN] Failed to settle final-exit Session terminal authority; retaining marker evidence', {
       sessionId: params.sessionId,
       error,
     });
@@ -311,8 +318,21 @@ export function createOnChildExited(params: Readonly<{
       const finalSessionId = normalizeSessionId(tracked.happySessionId);
       if (shouldReportSessionEnd && finalSessionId && params.skillStore) {
         try {
+          const skillsStartedAtMs = Date.now();
           await params.skillStore.releaseSkillSessionDirs(finalSessionId);
-          await params.skillStore.collectSkillCache();
+          if (typeof tracked.stopRequestedAtMs === 'number') {
+            logger.infoFile('[DAEMON STOP] Runner skill directory release completed', {
+              sessionId: finalSessionId, elapsedMs: Date.now() - skillsStartedAtMs,
+            });
+          }
+          // Account-wide cache inventory is maintenance, not runner retirement.
+          // Explicit Stop still owes Home control-serviceability retirement, so
+          // it leaves collection to startup reconciliation or a natural exit.
+          if (typeof tracked.stopRequestedAtMs !== 'number') {
+            void params.skillStore.collectSkillCache().catch((error) => {
+              logger.warn('[DAEMON RUN] Skill cache collection unavailable', { sessionId: finalSessionId, error });
+            });
+          }
         } catch (error) {
           // Startup reconciliation retries owner-local cleanup after an unavailable filesystem/library read.
           logger.warn('[DAEMON RUN] Skill session directory cleanup unavailable', { sessionId: finalSessionId, error });
@@ -320,7 +340,14 @@ export function createOnChildExited(params: Readonly<{
         if (!isCurrentPidOwner()) return;
       }
       if (shouldReportSessionEnd && finalSessionId && params.ownerRemainder) {
+        const remainderStartedAtMs = Date.now();
         const remainder = await params.ownerRemainder.end({ kind: 'session', sessionId: finalSessionId }, tracked.ownerRemainderCapture);
+        tracked.ownerRemainderResult = remainder;
+        if (typeof tracked.stopRequestedAtMs === 'number') {
+          logger.infoFile('[DAEMON STOP] Runner remainder cleanup completed', {
+            sessionId: finalSessionId, status: remainder.status, elapsedMs: Date.now() - remainderStartedAtMs,
+          });
+        }
         if (!isCurrentPidOwner()) return;
         if (remainder.status !== 'complete') {
           logger.warn('[DAEMON RUN] Runner remainder cleanup incomplete; survivors retained for left-behind observation', {
@@ -343,7 +370,6 @@ export function createOnChildExited(params: Readonly<{
       const apiMachineForSessions = getApiMachineForSessions();
       const observedAt = Date.now();
       const trackedExitSettlementEvidence = resolveTrackedSessionExitSettlementEvidence(tracked);
-      const exactTurn = resolveTrackedSessionActiveTurn(trackedExitSettlementEvidence);
       if (
         actionableUnexpectedExit
         && typeof tracked.happySessionId === 'string'
@@ -363,11 +389,12 @@ export function createOnChildExited(params: Readonly<{
       if (
         shouldReportSessionEnd
         && !isUnexpected
-        && exactTurn === null
         && finalSessionId
         && isServerBackedSessionId(finalSessionId)
       ) {
-        if (!apiMachineForSessions || !await settleNoTurnFinalExit({
+        // Exact turn settlement updates turn state only. Runner presence has its
+        // own captured publisher authority even when that turn is already terminal.
+        if (!apiMachineForSessions || !await settleFinalExitPublisher({
           apiMachine: apiMachineForSessions,
           sessionId: finalSessionId,
         })) {

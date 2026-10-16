@@ -1,23 +1,28 @@
 import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { createSkillStore } from '@/prompts/skills/store/skillStore';
 import type { TrackedSession } from '../types';
 import { createOnChildExited } from './onChildExited';
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
-async function fixture(replacement: boolean) {
+async function fixture(
+    replacement: boolean,
+    readLibraryDigests: () => Promise<readonly string[] | null> = async () => [],
+    stopRequestedAtMs?: number,
+) {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-impl-p3b-store-exit-')); roots.push(happyHomeDir);
     const sessionId = 'PID-424242'; const pid = 424242;
     const pluginRoot = join(happyHomeDir, 'skills', 'sessions', sessionId);
     await mkdir(pluginRoot, { recursive: true });
     await writeFile(join(pluginRoot, 'session.json'), JSON.stringify({ items: [] }));
-    const tracked: TrackedSession = { pid, happySessionId: sessionId, startedBy: 'terminal' };
+    const tracked: TrackedSession = { pid, happySessionId: sessionId, startedBy: 'terminal',
+        ...(stopRequestedAtMs === undefined ? {} : { stopRequestedAtMs }) };
     const sessions = new Map([[pid, tracked]]);
     if (replacement) sessions.set(process.pid, { pid: process.pid, happySessionId: sessionId, startedBy: 'terminal' });
-    const store = createSkillStore({ happyHomeDir, readLibraryDigests: async () => [] });
+    const store = createSkillStore({ happyHomeDir, readLibraryDigests });
     const exited = createOnChildExited({ pidToTrackedSession: sessions, spawnResourceCleanupByPid: new Map(),
         sessionAttachCleanupByPid: new Map(), getApiMachineForSessions: () => null,
         // Persistence is an OS boundary; this fixture never writes a real Session marker.
@@ -33,4 +38,35 @@ it('retains the skill folder for a live replacement runner of the same Session',
     const f = await fixture(true);
     expect(await lstat(f.pluginRoot)).toBeDefined();
     expect(f.sessions.has(process.pid)).toBe(true);
+});
+
+it('retires the exited runner without waiting for remote skill cache inventory', async () => {
+    let releaseInventory!: (value: readonly string[]) => void;
+    let inventoryStarted!: () => void;
+    const inventory = new Promise<readonly string[]>(resolve => { releaseInventory = resolve; });
+    const started = new Promise<void>(resolve => { inventoryStarted = resolve; });
+    let retired = false;
+    // The real SkillStore and exit owner run beneath the remote inventory boundary.
+    const exit = fixture(false, async () => {
+        inventoryStarted();
+        return await inventory;
+    }).then(result => { retired = true; return result; });
+    try {
+        await started;
+        await vi.waitFor(() => expect(retired).toBe(true));
+        const result = await exit;
+        expect(result.sessions.has(424242)).toBe(false);
+        await expect(lstat(result.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+        releaseInventory([]);
+        await exit;
+    }
+});
+
+it('leaves cache collection to non-Stop maintenance after an explicit Stop', async () => {
+    const readLibraryDigests = vi.fn(async () => []);
+    const result = await fixture(false, readLibraryDigests, Date.now());
+    expect(readLibraryDigests).not.toHaveBeenCalled();
+    expect(result.sessions.has(424242)).toBe(false);
+    await expect(lstat(result.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });
 });

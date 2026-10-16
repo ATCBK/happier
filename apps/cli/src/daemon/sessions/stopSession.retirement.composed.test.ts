@@ -13,12 +13,15 @@ import { MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1, MACHINE_SESSION_TERMINAL_FIN
     MachineSessionTerminalCaptureResponseV1Schema, MachineSessionTerminalFinalizeResponseV1Schema,
     type MachineSessionTerminalAuthorityV1 } from '@happier-dev/protocol/sessions/control/machineSessionTerminalV1';
 import { createSessionTerminalMetadataSchema } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionMetadataTuplePatchV1Schema, createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1,
     projectSessionSharedMetadataV1 } from '@happier-dev/protocol';
 import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../server/sources/testkit/lightSqliteHarness';
 import { db } from '../../../../server/sources/storage/db';
 import { auth } from '../../../../server/sources/app/auth/auth';
+import { applySessionTurnMutation } from '../../../../server/sources/app/session/sessionWriteService';
+import { createPresentUserSessionAccessAuthentication } from '../../../../server/sources/app/session/access/sessionAccessAuthentication.testkit';
+import { ExactSessionTurnEndMutationV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 import { enableAuthentication } from '../../../../server/sources/app/api/utils/enableAuthentication';
 import { enableSchemaValidation } from '../../../../server/sources/app/api/utils/enableSchemaValidation';
 import { enableErrorHandlers } from '../../../../server/sources/app/api/utils/enableErrorHandlers';
@@ -50,7 +53,7 @@ describe.skipIf(process.platform !== 'linux')('plain runner Stop retirement thro
     }, 0);
     afterAll(async () => { if (database) await database.close(); });
 
-    it.each(['bound', 'missing-retirement-binding', 'replacement-runner'] as const)(
+    it.each(['bound', 'bound-active-turn', 'bound-terminal-turn', 'missing-retirement-binding', 'replacement-runner'] as const)(
         'makes a stopped managed Session deletable only with %s', async wiring => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         const credentials = { token: await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' }), encryption: null };
@@ -100,7 +103,18 @@ describe.skipIf(process.platform !== 'linux')('plain runner Stop retirement thro
                 binding: { accountId: account.id, machineId, sessionId: session.id },
                 completeActivitySnapshot: { state: 'active', activeCount: 1 } });
             if (registered.status !== 'registered') throw new Error(`Fixture publisher admission failed: ${JSON.stringify(registered)}`);
+            const authentication = createPresentUserSessionAccessAuthentication();
+            const exactTurnId = wiring === 'bound-active-turn' || wiring === 'bound-terminal-turn' ? randomUUID() : undefined;
+            if (exactTurnId) {
+                for (const [action, observedAt] of [['begin', Date.now()], ['cancel', Date.now() + 1]] as const) {
+                    if (action === 'cancel' && wiring !== 'bound-terminal-turn') continue;
+                    expect(await applySessionTurnMutation({ actorUserId: account.id, authentication,
+                        mutation: { v: 1, sessionId: session.id, mutationId: randomUUID(), action,
+                            turnId: exactTurnId, observedAt } })).toMatchObject({ ok: true, didApply: true });
+                }
+            }
             const tracked: TrackedSession = { pid, childProcess: child, startedBy: 'daemon', happySessionId: session.id,
+                ...(exactTurnId ? { activeTurnId: exactTurnId } : {}),
                 processStartTimeMs: identity.processStartTimeMs, stopRequestedAtMs: Date.now(),
                 spawnOptions: { directory: database.baseDir } };
             const sessions = new Map([[pid, tracked]]);
@@ -120,7 +134,13 @@ describe.skipIf(process.platform !== 'linux')('plain runner Stop retirement thro
                     await triggerSocketHandler(machineSocket, MACHINE_SESSION_TERMINAL_FINALIZE_EVENT_V1, { v: 1, ...target }, ack);
                     return MachineSessionTerminalFinalizeResponseV1Schema.parse(ack.mock.calls[0]?.[0]);
                 },
-            } satisfies Pick<ApiMachineClient, 'captureMachineSessionTerminal' | 'finalizeMachineSessionTerminal'>;
+                enqueueDaemonTerminalExactTurnEnd: async (mutation) => {
+                    const result = await applySessionTurnMutation({ actorUserId: account.id, authentication,
+                        mutation: ExactSessionTurnEndMutationV1Schema.parse(mutation) });
+                    expect(result).toMatchObject({ ok: true,
+                        receipt: { decision: wiring === 'bound-terminal-turn' ? 'duplicate-terminal' : 'applied' } });
+                },
+            } satisfies Pick<ApiMachineClient, 'captureMachineSessionTerminal' | 'finalizeMachineSessionTerminal' | 'enqueueDaemonTerminalExactTurnEnd'>;
             const onExit = createOnChildExited({ pidToTrackedSession: sessions, spawnResourceCleanupByPid: new Map(),
                 sessionAttachCleanupByPid: new Map(), getApiMachineForSessions: () => machine as ApiMachineClient,
                 removeSessionMarkerFn: async () => undefined });
@@ -130,6 +150,12 @@ describe.skipIf(process.platform !== 'linux')('plain runner Stop retirement thro
                 waitForTrackedRunnersExit: async () => {
                     const [code, signal] = await exited;
                     await onExit(pid, { reason: 'process-exited', code, signal });
+                    // Daemon-control callers do not pass through the caller RPC's
+                    // explicit-stop close. Observed exit must settle Home itself.
+                    if (exactTurnId) {
+                        expect(await db.session.findUniqueOrThrow({ where: { id: session.id }, select: { active: true } }))
+                            .toEqual({ active: false });
+                    }
                     if (wiring === 'replacement-runner') {
                         await db.session.update({ where: { id: session.id }, data: projectMetadata(pid + 1, identity.processStartTimeMs! + 1) });
                     }
@@ -163,15 +189,16 @@ describe.skipIf(process.platform !== 'linux')('plain runner Stop retirement thro
             const actionTarget = createSessionActionTarget({ session: createSessionFixture({ id: session.id, active: raw.active,
                 metadataLayoutVersion: raw.metadataLayoutVersion, ownerMetadataView: owner }), serverId: 'fixture-home', isConnected: false });
             expect(sessions.size).toBe(0);
-            if (wiring === 'bound') {
+            const isBound = wiring === 'bound' || wiring === 'bound-active-turn' || wiring === 'bound-terminal-turn';
+            if (isBound) {
                 expect(patchValidation).toBeNull();
                 expect(routeValidation).toBeNull();
                 expect(patchRejection).toBeNull();
                 expect(retirementFailure).toBeNull();
                 expect(callback.mock.calls).toEqual([[{ ok: true, result: { status: 'stopped' } }]]);
             }
-            expect(actionTarget.canDelete).toBe(wiring === 'bound');
-            if (wiring === 'bound') {
+            expect(actionTarget.canDelete).toBe(isBound);
+            if (isBound) {
                 expect(raw.active).toBe(false);
                 expect(createSessionTerminalMetadataSchema(z, 'owner').parse(owner?.terminal).controlServiceabilityV1?.retired).toBe(true);
             } else if (wiring === 'replacement-runner') {
