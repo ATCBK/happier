@@ -85,7 +85,8 @@ export type GenerateScmDiffSummaryParams = ScmDiffSummaryHost & Readonly<{
     scope?: ServerAccountScope;
     signal?: AbortSignal;
     shouldContinue?: () => boolean;
-    backendTarget: BackendTargetRefV2;
+    /** Omitted lets host admission resolve the applied Session or executable default model. */
+    backendTarget?: BackendTargetRefV2;
     input: ScmDiffSummaryGenerateInput;
     turnChangeSet?: TurnChangeSet;
     intent?: Exclude<ScmDiffSummaryOperationIntent, 'copy'>;
@@ -162,7 +163,7 @@ function resolveSelectorCatalogId(params: GenerateScmDiffSummaryParams): string 
     const explicit = readNonEmptyString(params.resolvedSelector?.catalogId);
     if (explicit) return explicit;
 
-    return buildBackendTargetKeyV2(params.backendTarget);
+    return params.backendTarget ? buildBackendTargetKeyV2(params.backendTarget) : 'default';
 }
 
 function buildResolvedSelector(params: GenerateScmDiffSummaryParams): Readonly<{ catalogId: string }> {
@@ -243,7 +244,7 @@ function buildGenerateRequest(params: GenerateScmDiffSummaryParams): ScmDiffSumm
         // An unset preference belongs to the host's executable default owner.
         // A static picker target must not narrow its native sign-in evidence.
         ...(!followsAccountDefault ? { modelSelector: {
-            backendTargetKey: buildBackendTargetKeyV2(params.backendTarget),
+            ...(params.backendTarget ? { backendTargetKey: buildBackendTargetKeyV2(params.backendTarget) } : {}),
             ...requestedSelector,
             ...(settings.modelOverride?.modelSelector ?? (override?.startsWith('profile:') ? { profileId: override.slice('profile:'.length) } : override ? { backendTargetKey: override } : {})),
         } } : {}),

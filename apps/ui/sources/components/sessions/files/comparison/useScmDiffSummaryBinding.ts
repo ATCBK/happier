@@ -60,9 +60,11 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     const [model, setModel] = React.useState(typeof storedModel === 'string' ? storedModel : '');
     const modelChoices = useScmDiffSummaryModelChoices({ value: model, machineId: machine?.machineId,
         serverId, observeSelection: Boolean(scope && machineReachable && comparison) });
-    const modelAvailable = modelChoices.selectionAvailable;
     React.useEffect(() => { setModel(typeof storedModel === 'string' ? storedModel : ''); }, [binding, storedModel]);
     const selected = resolveScmDiffSummaryModelSelection({ storedValue: model, catalogProfiles: modelChoices.catalogProfiles });
+    // An unset choice is resolved by host admission, including the Session's applied model.
+    // The Account catalog can validate an explicit choice, but cannot decide inheritance.
+    const modelAvailable = model.trim() === '' || (selected.success && modelChoices.selectionAvailable);
     const [starting, setStarting] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
     const [inputObservation, setInputObservation] = React.useState<Readonly<{ hostKey: string; runId: string; inputId: string; resultId: string }> | null>(null);
@@ -118,15 +120,15 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     }, [binding, isCurrent, scope?.serverId, scope?.accountId, machine?.machineId, machine?.basePath, machineReachable, operations, sessionId, host.machineId, comparisonKey, Boolean(viewModel)]);
 
     const onStart = React.useCallback(async (outputs: readonly ScmDiffSummaryOutputKind[] = [output]) => {
-        if (!isCurrent() || !scope || !cwd || !comparison || !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return;
+        if (!isCurrent() || !scope || !cwd || !comparison || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return;
         setStarting(true); setError(null);
         try {
             if (!sessionId && (comparison.kind === 'session' || comparison.kind === 'turnCheckpoint')) return;
             const source = scmComparisonSourceOf(comparison, sessionId ?? '');
             await generateScmDiffSummaryFromUserAction({ ...host, serverId: scope.serverId, scope,
-                shouldContinue: isCurrent, backendTarget: selected.backendTarget,
+                shouldContinue: isCurrent, ...(model.trim() && selected.success ? { backendTarget: selected.backendTarget } : {}),
                 input: { cwd, source, ...(comparison.comparisonId ? { comparisonId: comparison.comparisonId } : {}),
-                    outputs: [...outputs], ...(model ? { modelSelector: selected.modelSelector } : {}) },
+                    outputs: [...outputs], ...(model.trim() && selected.success ? { modelSelector: selected.modelSelector } : {}) },
                 settings: { ...getStorage().getState().settings, [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: model },
                 intent: viewModel ? 'regenerate' : 'generate' });
             // A refused generation is retained by the diff-summary store; its typed presentation is `generationFailure`.

@@ -64,7 +64,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     // The comparison's saved result, restore/reread and START: the one binding Walkthrough and Commits share.
     const bound = props.bound;
     const { scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
-        error, setError, model, setModel, modelChoices, modelAvailable, selected, starting } = bound;
+        error, setError, model, setModel, modelChoices, modelAvailable, starting } = bound;
     const modelChoice = useSummaryModelChoice(modelChoices);
     const displayHomeId = scope?.serverId ?? props.serverId;
     // Subscribe to attribution, not heartbeat objects. Exact Home lookup and
@@ -240,13 +240,13 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 update={saved?.updateNotice ? { message: t('walkthrough.saved.updated'), onUndo } : null}
                 stale={capturedComparison?.freshness === 'stale' ? { ...(canSend && launch.canLaunchExecutionRuns ? { onRefresh: () => {
                     if (!bound.isCurrent()) return;
-                    if (!selected.success || !modelAvailable) modelChoice.choose();
+                    if (!modelAvailable) modelChoice.choose();
                     else void onStart();
                 } } : {}) } : null}
                 start={{ options: <ScmDiffSummaryStartOptions {...scmDiffSummaryStartOptionsOf(bound, { testID: 'walkthrough-start-options', modelTestID: 'walkthrough-model-choice',
-                        prerequisite: !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns ? t('walkthroughStart.unavailable') : null,
+                        prerequisite: !modelAvailable || !canSend || !launch.canLaunchExecutionRuns ? t('walkthroughStart.unavailable') : null,
                         onEnableExplain: openExplainSetting })} />,
-                    onStart, busy: starting, disabled: Boolean(bound.startBlocker) || !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns }}
+                    onStart, busy: starting, disabled: Boolean(bound.startBlocker) || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns }}
                 failure={bound.generationFailure}
                 onEnableExplain={openExplainSetting}
                 onRetry={onStart}

@@ -44,7 +44,7 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
                 options: <ScmDiffSummaryStartOptions {...scmDiffSummaryStartOptionsOf(bound, { testID: 'commit-proposal-start-options',
                     prerequisite: !bound.canControl ? t('walkthroughStart.unavailable') : null, onEnableExplain: openExplainSetting })} /> };
         }
-        const ready = canStart && !bound.startBlocker && bound.selected.success && bound.modelAvailable;
+        const ready = canStart && !bound.startBlocker && bound.modelAvailable;
         return {
             onStart: () => { if (ready) void bound.onStart(['commitPlan']); },
             busy: bound.starting,

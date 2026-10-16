@@ -12,7 +12,8 @@ const boundary = vi.hoisted(() => ({
     calls: [] as Array<{ machineId: string; method: string; payload: unknown; serverId?: string | null; accountId?: string | null;
         authorization?: import('@happier-dev/protocol/rpc').SocketRpcAuthorizationContext }>,
     capabilities: async (): Promise<unknown> => ({ protocolVersion: 1, results: {} }),
-    models: null as (() => unknown) | null,
+    /** The executing Machine's Summary model catalog, served as its exact-Machine Action over Home HTTP. */
+    catalog: null as ((url: URL, init?: RequestInit) => Promise<Response | null>) | null,
     savedResult: null as import('@happier-dev/protocol/scm').ScmDiffSummaryResult | null,
     savedSessionId: '',
     listBarrier: null as (() => Promise<void>) | null,
@@ -45,7 +46,6 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
         // constant must not be acknowledged as a fictitious workspace Run read.
         if (typeof request.method !== 'string' || !request.method) throw new Error('Socket RPC method is required');
         if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return boundary.capabilities();
-        if (request.method === RPC_METHODS.CAPABILITIES_INVOKE && boundary.models) return boundary.models();
         if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && boundary.runResponse) {
             await boundary.nativeRunBarrier?.();
             return boundary.runResponse;
@@ -146,6 +146,7 @@ const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMe
 const { ScmDiffSummaryModelPicker } = await import('@/components/settings/sourceControl/ScmDiffSummaryModelPicker');
 const { notifyExecutionRunActivity } = await import('@/sync/runtime/executionRuns/executionRunActivityBus');
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+const { createScmDiffSummaryModelCatalogHttpBoundary } = await import('@/dev/testkit/harness/scmDiffSummaryModelCatalogBoundary');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
@@ -181,21 +182,36 @@ afterEach(async () => {
     boundary.sessionCalls = [];
     boundary.accountRoute = null;
     boundary.generate = null;
-    boundary.models = null;
+    boundary.catalog = null;
     boundary.router?.spies.push.mockClear();
     await servedHome?.dispose();
     servedHome = null;
 });
 
-async function createHome(serverUrl: string, settings?: Readonly<Record<string, unknown>>) {
+async function createHome(serverUrl: string, settings?: Readonly<Record<string, unknown>>, catalogMachineId?: string,
+    automaticTarget?: Parameters<typeof createScmDiffSummaryModelCatalogHttpBoundary>[0]['automaticTarget']) {
+    const serverIdentityId = `srv_${new URL(serverUrl).hostname.split('.')[0]!.replaceAll('-', '_')}`;
+    if (catalogMachineId) {
+        // Offered Summary models come only from the executing Machine's catalog; the first Agent is its automatic default.
+        const { getAgentCore, getAgentStaticModels } = await import('@happier-dev/agents');
+        boundary.catalog = (await createScmDiffSummaryModelCatalogHttpBoundary({ serverUrl, serverIdentityId,
+            accountId: 'walkthrough-account', machineId: catalogMachineId, automaticTarget,
+            targets: (['codex', 'claude'] as const).map(agentId => ({ backendTarget: { kind: 'backend' as const, backendId: agentId },
+                // The Machine's catalog owns cost tiers; its first model is the low-cost automatic default.
+                models: getAgentStaticModels(agentId).map((model, index) => index === 0 ? { ...model, costTier: 'low' as const } : model),
+                catalogModels: getAgentStaticModels(agentId, { catalogOnly: true }),
+                agentFormats: getAgentCore(agentId)?.structuredOutput?.formats })) })).handle;
+    }
     servedHome = await serveActionHomes({
-        homes: [{ key: 'home', serverUrl, accountId: 'walkthrough-account', currentAccount: true, settings }],
+        homes: [{ key: 'home', serverUrl, serverIdentityId, accountId: 'walkthrough-account', currentAccount: true, settings }],
         async route(request) {
             if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
                 features: { execution: { runs: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
                 capabilities: {},
             }));
-            return await boundary.accountRoute?.(request);
+            const catalog = await boundary.catalog?.(request.url, { method: request.method,
+                ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) });
+            return catalog ?? await boundary.accountRoute?.(request);
         },
     });
     const home = servedHome.homes.home!;
@@ -205,10 +221,11 @@ async function createHome(serverUrl: string, settings?: Readonly<Record<string, 
     return home;
 }
 
-async function mount(comparison: SessionScmReviewComparison, sessionId: string, storedModel = '', renderBar: (actions: React.ReactNode) => React.ReactNode = (actions) => actions, authenticated = true) {
+async function mount(comparison: SessionScmReviewComparison, sessionId: string, storedModel = '', renderBar: (actions: React.ReactNode) => React.ReactNode = (actions) => actions, authenticated = true,
+    automaticTarget?: Parameters<typeof createScmDiffSummaryModelCatalogHttpBoundary>[0]['automaticTarget']) {
     const settings = { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
         'scm.diffSummary.modelProfileOverride': storedModel };
-    const home = await createHome(`https://${sessionId}.example.test`, settings);
+    const home = await createHome(`https://${sessionId}.example.test`, settings, `machine:${sessionId}`, automaticTarget);
     const machine = createMachineFixture({ id: `machine:${sessionId}`, activeAt: Date.now(), storageMode: 'plain' });
     const session = createSessionFixture({ id: sessionId, serverId: home.id, active: true,
         metadata: { path: '/repo/exact', host: 'tester.local', machineId: machine.id, flavor: 'codex' } });
@@ -292,12 +309,12 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         } });
         const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: { kind: 'backend', backendId: 'claude' },
             models: getAgentStaticModels('claude'), agentFormats: getAgentCore('claude')?.structuredOutput?.formats });
-        const home = await createHome('https://native-generation.example.test');
+        const settings = { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
+            'scm.diffSummary.modelProfileOverride': profiles.find(profile => profile.structuredOutput === 'supported')!.catalogId };
+        const home = await createHome('https://native-generation.example.test', settings, 'native-machine');
         const machine = createMachineFixture({ id: 'native-machine', activeAt: Date.now(), storageMode: 'plain' });
         getStorage().setState({ sessions: {}, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
-            profileScope: { serverId: home.id, accountId: 'walkthrough-account' },
-            settings: { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
-                'scm.diffSummary.modelProfileOverride': profiles.find(profile => profile.structuredOutput === 'supported')!.catalogId } });
+            profileScope: { serverId: home.id, accountId: 'walkthrough-account' }, settings });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const observed = createDeferred<void>();
         boundary.nativeRunBarrier = () => observed.promise;
@@ -566,17 +583,16 @@ describe('SessionWalkthroughView START through real generation and model owners'
         expect(entry).toMatchObject({ sessionId, input: { source, modelSelector: selector }, latestOutput: { success: true, metadata: { source } } });
     }, 120_000);
 
-    it('leaves an unset model to the host default owner when Start is pressed without choosing a model', async () => {
-        const { AgentModelsProbeObservationSchema } = await import('@happier-dev/protocol/capabilities');
-        boundary.models = () => ({ ok: true, result: AgentModelsProbeObservationSchema.parse({
-            source: 'static', availableModels: getAgentStaticModels('claude', { catalogOnly: true }), supportsFreeform: false,
-        }) });
+    it.each([true, false])('leaves an unset model to the host default owner with an automatic Account model=%s', async (automatic) => {
         boundary.capabilities = async () => ({ protocolVersion: 1, results: {
             'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { backends: {
                 codex: { available: true, intents: ['scm_diff_summary'] },
             } } },
         } });
-        const { screen } = await mount({ kind: 'workingTree' }, 'automatic-model');
+        // A Session may have an applied connected model while its Account has no automatic route.
+        // The UI cannot decide that inherited selection from the Account catalog.
+        const { screen } = await mount({ kind: 'workingTree' }, `automatic-model-${automatic}`, '', undefined, true,
+            automatic ? undefined : null);
         await vi.waitFor(() => expect(screen.findByTestId('walkthrough-start')?.props.disabled).toBe(false));
         await screen.pressByTestIdAsync('walkthrough-start');
         await vi.waitFor(() => expect(generationCalls()).toHaveLength(1));
