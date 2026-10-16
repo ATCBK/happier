@@ -12,8 +12,14 @@ export function installFileFindAccountBoundaryMocks(serverId = 'home-a', account
         getAppliedActiveServerSnapshot: () => ({ serverId: fileFindAccountBoundary.serverId, serverUrl: 'https://home.test', generation: 0 }),
         isAppliedActiveServerRuntimeAvailable: () => true,
     }));
-    vi.mock('@/sync/domains/state/storageStateReaderBridge', async (importOriginal) => ({
-        ...await importOriginal<typeof import('@/sync/domains/state/storageStateReaderBridge')>(),
-        readRegisteredStorageState: () => ({ profileScope: { ...fileFindAccountBoundary } }),
-    }));
+    vi.mock('@/sync/domains/state/storageStateReaderBridge', async (importOriginal) => {
+        const real = await importOriginal<typeof import('@/sync/domains/state/storageStateReaderBridge')>();
+        return {
+            ...real,
+            readRegisteredStorageState: () => ({
+                ...(real.readRegisteredStorageState() ?? {}),
+                profileScope: { ...fileFindAccountBoundary },
+            }),
+        };
+    });
 }

@@ -1,15 +1,34 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installFileFindAccountBoundaryMocks } from '@/components/appShell/panes/fileFindSeedTestHelpers';
 import { installUiListsCommonModuleMocks } from '@/components/ui/lists/uiListsTestHelpers';
 import { t } from '@/text';
 import { formatResetAtTime } from '@/utils/time/formatResetAtTime';
+import type { SessionDraftRecordV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 
 installFileFindAccountBoundaryMocks('home', 'account');
 installUiListsCommonModuleMocks();
+
+const projectOpenAccountActionBoundary = vi.hoisted(() => ({
+    capture: false,
+    calls: [] as unknown[],
+}));
+let projectOpenDraftServerRow: SessionDraftRecordV2 | null = null;
+
+// Home Action HTTP is the finite-placement process boundary. Keep the real draft, controller and default Action executor.
+vi.mock('@/sync/api/externalActionAccountTransport', async (importOriginal) => {
+    const real = await importOriginal<typeof import('@/sync/api/externalActionAccountTransport')>();
+    return { ...real, executeOriginalAccountMachineAction: async (params: unknown) => {
+        if (!projectOpenAccountActionBoundary.capture) return real.executeOriginalAccountMachineAction(params as never);
+        projectOpenAccountActionBoundary.calls.push(params);
+        return { ok: true, result: { kind: 'refused', code: 'invalid_directory' } };
+    } };
+});
 
 // Device persistence is a system boundary; retain the real draft repository.
 vi.mock('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage', () => {
@@ -30,27 +49,46 @@ vi.mock('expo-router', async () => {
 const { ProjectOpenScreen } = await import('./ProjectOpenScreen');
 const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
 
-beforeEach(() => vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 }))));
+beforeEach(() => {
+    installFileFindAccountBoundaryMocks('home', 'account');
+    projectOpenDraftServerRow = null;
+    projectOpenAccountActionBoundary.capture = false;
+    projectOpenAccountActionBoundary.calls = [];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })));
+});
 afterEach(() => { standardCleanup(); vi.unstubAllGlobals(); });
 
 /** A signed-in Home with one online Machine and a retained Open draft for one Source. */
-async function seedOpenDraft(draftId: string) {
+async function seedOpenDraft(draftId: string, scope = { serverId: 'home', accountId: 'account' }) {
     const { storage } = await import('@/sync/domains/state/storage');
     const { configureSessionDraftRepository, resetSessionDraftRepositoryForTests, writeProjectOpenDraft, getSessionDraftSnapshot } =
         await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
     resetSessionDraftRepositoryForTests();
-    const scope = { serverId: 'home', accountId: 'account' };
     const { createSessionDraftCipher } = await import('@/sync/encryption/sessionDraftEncryption');
-    configureSessionDraftRepository({ scope, syncEnabled: false,
+    configureSessionDraftRepository({ scope, syncEnabled: true,
         cipher: createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
-            getSessionContext: () => { throw new Error('Open has no Session'); }, randomBytes: size => new Uint8Array(size) }) });
+            getSessionContext: () => { throw new Error('Open has no Session'); }, randomBytes: size => new Uint8Array(size) }),
+        transport: {
+            read: async () => projectOpenDraftServerRow
+                ? { status: projectOpenDraftServerRow.content ? 'present' : 'deleted', record: projectOpenDraftServerRow }
+                : { status: 'absent' },
+            list: async () => ({ items: projectOpenDraftServerRow ? [projectOpenDraftServerRow] : [] }),
+            mutate: async request => {
+                if (request.expectedRevision !== (projectOpenDraftServerRow?.revision ?? 'absent')) {
+                    return { status: 'conflict', current: projectOpenDraftServerRow ?? { status: 'absent' } };
+                }
+                projectOpenDraftServerRow = { address: request.address, revision: (projectOpenDraftServerRow?.revision ?? -1) + 1,
+                    content: request.content, createdAt: 1, updatedAt: 2 };
+                return { status: 'updated', record: projectOpenDraftServerRow };
+            },
+        } });
     const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
-    storage.setState({ profileScope: scope, machines: { [machine.id]: machine }, machineListByServerId: { home: [machine] },
-        machineListStatusByServerId: { home: 'idle' } });
+    storage.setState({ profileScope: scope, machines: { [machine.id]: machine }, machineListByServerId: { [scope.serverId]: [machine] },
+        machineListStatusByServerId: { [scope.serverId]: 'idle' } });
     storage.getState().activateProjectAccountRowsScope(scope);
     storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'complete',
         workspaceRefs: [], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
-    writeProjectOpenDraft({ scope, draftId, patch: { selection: { serverId: 'home', source: { kind: 'source', id: 'source', revision: 1,
+    writeProjectOpenDraft({ scope, draftId, patch: { selection: { serverId: scope.serverId, source: { kind: 'source', id: 'source', revision: 1,
         defaultRef: 'main',
         selector: { provider: { id: 'forge', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
             repository: { nameWithOwner: 'octocat/Hello-World', cloneUrl: 'https://github.com/octocat/Hello-World' }, protocol: 'https' } } } } });
@@ -232,11 +270,52 @@ describe('Project Open rendered choices', () => {
         expect(seeded.read()).toMatchObject({ selection: { value: { machineId: 'machine', materialization: {
             kind: 'clone', destinationParentPath: '/Users/tester/src', destinationDirectoryName: 'Hello-World' } } } });
         const clone = screen.findAllByType(Item).find(node => node.props.testID === 'projects.open.use.clone')!;
+        expect(clone.props.subtitle).toBe(t('projects.open.cloneDetail', { path: '~/src/Hello-World' }));
         expect(clone.props.accessibilityRole).toBeUndefined();
         // The destination is said once, in the option; the standalone Folder field is gone until Change.
         expect(screen.findByTestId('projects.open.destination')).toBeFalsy();
         await act(async () => { screen.pressByTestId('projects.open.destination.change'); });
         expect(screen.findByTestId('projects.open.destination')).toBeTruthy();
+    });
+
+    it('submits the clone destination shown in the row through the real draft and projects.open Action path', async () => {
+        const draftId = '00000000-0000-4000-8000-000000000081';
+        const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } =
+            await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const projectOpenHome = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(projectOpenHome);
+        onTestFinished(() => projectOpenHome.reset());
+        const serverId = await projectOpenHome.addHome({ name: 'Project Open', serverUrl: 'https://home.test',
+            serverIdentityId: 'srv_project_open', accountId: 'account', currentAccount: true });
+        installFileFindAccountBoundaryMocks(serverId, 'account');
+        const scope = { serverId, accountId: 'account' };
+        const seeded = await seedOpenDraft(draftId, scope);
+        const { writeProjectOpenDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const source = seeded.read().selection.value!.source!;
+        if (source.kind !== 'source') throw new Error('Expected Source');
+        writeProjectOpenDraft({ scope, draftId, patch: { selection: {
+            serverId, source: { kind: 'repository', selector: source.selector },
+        } } });
+        const { Item } = await import('@/components/ui/lists/Item');
+        const screen = await renderScreen(<ProjectOpenScreen />);
+        const where = () => screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'projects.open.where');
+        await vi.waitFor(() => expect(where()).toBeDefined());
+        await act(async () => { where()!.props.onSelect(seeded.machine.id); });
+        expect(screen.findAllByType(Item).find(node => node.props.testID === 'projects.open.use.clone')!.props.subtitle)
+            .toBe(t('projects.open.cloneDetail', { path: '~/src/Hello-World' }));
+        expect(screen.findByTestId('projects.open.submit')!.props.disabled).toBe(false);
+
+        projectOpenAccountActionBoundary.capture = true;
+        await screen.pressByTestIdAsync('projects.open.submit');
+        await vi.waitFor(() => expect(projectOpenAccountActionBoundary.calls).toHaveLength(1));
+        expect(projectOpenAccountActionBoundary.calls[0]).toMatchObject({
+            actionId: 'projects.open',
+            machineId: 'machine',
+            input: {
+                machineId: 'machine',
+                materialization: { kind: 'clone', destinationParentPath: '/Users/tester/src', destinationDirectoryName: 'Hello-World' },
+            },
+        });
     });
 
     it('starts a clone with no repository chosen at a repository address field that asks the Machine to read it', async () => {
