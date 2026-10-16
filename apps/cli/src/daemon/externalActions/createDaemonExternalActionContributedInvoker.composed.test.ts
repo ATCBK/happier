@@ -32,13 +32,19 @@ import {
   StrictJsonValueSchema,
   TargetActionApprovalRequestV1Schema,
   WorkflowRunSummaryV1Schema,
+  WorkflowProgressEnvelopeV1Schema,
   WorkflowRunStartRequestV1Schema,
+  WorkflowRunRecipientCensusResponseV1Schema,
+  sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
+  sealWorkflowProgressStoredEnvelopeV1,
+  serializeWorkflowStoredContentEnvelopeV1,
   openWorkflowAcceptedSnapshotStoredEnvelopeV1,
   parseWorkflowStoredContentEnvelopeV1,
   type ApprovalExecutionOriginV1,
   type PluginMachineExecutionOriginV1,
   type TargetActionApprovalReplayPlacementV1,
   type TargetActionApprovalRequestV1,
+  type WorkflowDefinitionV1,
 } from '@happier-dev/protocol';
 import {
   createActionExecutor,
@@ -66,7 +72,7 @@ import {
 import type { ResolvedActionContribution } from '@/plugins/projection/registry/types';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
-import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
+import { createPluginRuntimeOccurrenceId, type PluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import {
   createTargetActionHostBindingResolver,
   createTargetActionHostPolicyResolver,
@@ -95,11 +101,21 @@ import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/creat
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
 import { executeContributedAction } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import { setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
+import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
+import { resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { createCommittedContributedActionInvoker, createCommittedContributedActionSchemaReader } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
 import { buildWorkflowActionContext, createWorkflowAcceptedAuthorizationCurrentness } from '@/daemon/workflows/daemonRuntime';
 import { projectOccurrenceBoundExecutablePluginToolCatalog } from '@/plugins/runtime/toolCatalog';
 import { registerActionSpecRpcHandlers } from '@/rpc/handlers/registerActionSpecRpcHandlers';
+import { createDaemonControlApp } from '@/daemon/controlServer';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { createWorkflowCoordinator } from '@/daemon/workflows/coordinator';
+import { createInMemoryWorkflowCoordinatorStore } from '@/daemon/workflows/workflowCoordinator.testkit';
+import { createWorkflowInvocationRecoveryObserver, observeWorkflowInvocationRecoveryEvidence } from '@/daemon/workflows/invocationRecoveryObserver';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { normalizePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
 
 import {
   createDaemonExternalActionContributedApprovalReplay,
@@ -144,7 +160,12 @@ function createExternalActionRuntime(
   serviceOwners?: Pick<ReturnType<typeof createProductionPluginInvocationServiceOwners>, 'createServices' | 'resolveHostBinding'>,
   dangerLevel: 'safe' | 'writesRemote' = 'safe',
   activationOnly?: () => void,
-  actionOptions: Readonly<{ localId?: string; surfaces?: readonly ('cli' | 'mcp' | 'agent' | 'plugin')[]; overlappingTool?: true; unavailable?: true }> = {},
+  actionOptions: Readonly<{
+    localId?: string; surfaces?: readonly ('cli' | 'mcp' | 'agent' | 'plugin')[]; overlappingTool?: true; unavailable?: true;
+    pluginVersion?: string; inputSchema?: object; resultSchema?: object; occurrenceId?: PluginRuntimeOccurrenceId;
+    inputHints?: { fields: readonly { path: string; title: string; widget: 'secret' }[] };
+    onInput?: (input: JsonValue) => void;
+  }> = {},
 ): ResolvedExecutablePluginRuntimeRegistry {
   const localId = actionOptions.localId ?? 'inspect';
   const plugin = {
@@ -162,7 +183,7 @@ function createExternalActionRuntime(
     manifest: normalizePluginManifestV2({
       schemaVersion: 2,
       id: pluginId,
-      version: '1.0.0',
+      version: actionOptions.pluginVersion ?? '1.0.0',
       displayName: 'External Action Fixture',
       engines: { happier: '^1.0.0' },
       runtime: { apiVersion: 1 },
@@ -176,6 +197,9 @@ function createExternalActionRuntime(
           surfaces: actionOptions.surfaces ?? ['cli'],
           execution: { target: 'daemon' },
           dangerLevel,
+          ...(actionOptions.inputSchema === undefined ? {} : { inputSchema: actionOptions.inputSchema }),
+          ...(actionOptions.resultSchema === undefined ? {} : { resultSchema: actionOptions.resultSchema }),
+          ...(actionOptions.inputHints === undefined ? {} : { inputHints: actionOptions.inputHints }),
           ...(actionOptions.unavailable ? { availability: { when: { fact: 'plugin.enabled', operator: 'equals', value: false } } } : {}),
           ...(dangerLevel === 'safe' ? {} : { confirmation: { title: 'Write', body: 'Write provider state?', confirmLabel: 'Write' } }),
         })),
@@ -223,7 +247,7 @@ function createExternalActionRuntime(
     : pluginId === 'acme.managed'
       ? { kind: 'managed', immutableGenerationId: 'fixture-immutable-generation', installSource: 'localPath' } as const
     : { kind: 'development', registeredRootId: `fixture-root:${pluginId}` } as const;
-  const fixtureOccurrenceId = createPluginRuntimeOccurrenceId(pluginId);
+  const fixtureOccurrenceId = actionOptions.occurrenceId ?? createPluginRuntimeOccurrenceId(pluginId);
   const targetActionInvocations = buildTargetActionInvocationRegistry({
     contributes,
     targetRegistrations: activationOnly ? [] : resolvedActions.map((entry) => ({
@@ -233,6 +257,7 @@ function createExternalActionRuntime(
         family: 'actions' as const,
         localId: entry.definition.id,
         value: async (_input: JsonValue, context: PluginInvocationContext) => {
+          actionOptions.onInput?.(_input);
           await onActionInvocation?.(context);
           return {
             surface: context.surface,
@@ -251,7 +276,7 @@ function createExternalActionRuntime(
     ),
     readTargetActivationFacts: () => activationOnly ? [] : [{
       pluginId,
-      pluginVersion: '1.0.0',
+      pluginVersion: plugin.manifest.version,
       source: 'localPath',
       occurrenceId: fixtureOccurrenceId,
       host: 'daemon',
@@ -414,7 +439,448 @@ function createExternalActionIngressExecutor(scope: 'global' | 'session' = 'sess
 describe('createDaemonExternalActionContributedInvoker', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('preserves API caller provenance accepted by the Triage caller owner through real dispatch', async () => {
+  it.each([{ viaMeta: false, fails: false }, { viaMeta: true, fails: false },
+    { viaMeta: false, fails: true }, { viaMeta: true, fails: true }])(
+    'withholds confidential operands from every Workflow progress fact (meta=$viaMeta, fails=$fails)', async ({ viaMeta, fails }) => {
+    const secret = 'synthetic-workflow-confidential-operand';
+    const workspace = { machineId: 'machine-local', directory: '/repo', checkoutRootPath: '/repo' };
+    const inputSchema = { type: 'object', properties: { releaseTag: { type: 'string' }, public: { type: 'string' } }, required: ['releaseTag'] };
+    const outputSchema = { type: 'object', required: ['surface'], properties: { surface: { const: 'agent' } } };
+    const authorization = { admittedPermissionCeiling: 'default' as const, principal: { kind: 'session' as const, sessionId: 'origin' } };
+    const qualifiedId = 'acme.external/actions/inspect';
+    const actionInput = { releaseTag: secret, public: 'public-endpoint' };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({
+      definition: { version: 1, inputs: [], defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } },
+        blocks: [{ kind: 'action', id: 'inspect', actionId: viaMeta ? 'action.invoke' : qualifiedId,
+          input: viaMeta ? { action: { kind: 'literal', value: { pluginId: 'acme.external', localId: 'inspect' } },
+            input: { kind: 'literal', value: actionInput } } : { releaseTag: { kind: 'literal', value: secret }, public: { kind: 'literal', value: 'public-endpoint' } } }] },
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: workspace.machineId, executionTarget: { kind: 'session' },
+        workspaceTarget: { project: workspace }, origin: { kind: 'direct' }, authorization }, admission: { kind: 'user' },
+      effects: { resolveTargetAvailability: async () => true, readActionContract: async id => {
+        if (id === qualifiedId) return { inputSchema, outputSchema };
+        const spec = getActionSpec('action.invoke');
+        return { inputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
+          outputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.outputSchema!, { target: 'draft-7' })) };
+      } },
+    });
+    if (!accepted.ok) throw new Error(accepted.error.code);
+    let stored: TargetActionApprovalRequestV1 | undefined;
+    let effects = 0;
+    const runtime = createExternalActionRuntime('global', 'acme.external', () => { effects++; if (fails) throw new Error('synthetic failure'); }, undefined,
+      () => ({ serverId: 'server-external', machineId: 'machine-local' }), undefined, undefined, 'writesRemote', undefined,
+      { surfaces: ['agent', 'plugin'], inputSchema, resultSchema: outputSchema,
+        inputHints: { fields: [{ path: 'releaseTag', title: 'Release credential', widget: 'secret' }] },
+        onInput: input => { expect(input).toEqual(actionInput); } });
+    const lease = { registry: runtime, source: 'ephemeral' as const, durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+    const invoker = createCommittedContributedActionInvoker({ acquireRuntimeRegistryLease: async () => lease, isWorkflowRunAuthorizationCurrent: async () => true,
+      requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+        create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))); return { artifactId: 'secret-workflow' }; },
+        read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null,
+      }),
+    });
+    const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), invokeContributedAction: invoker,
+      listContributedActionDefinitions: listDefinitions, readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions) });
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const facts: unknown[] = [];
+    const coordinator = createWorkflowCoordinator({ store: { ...store, commitFact: async fact => {
+      facts.push(JSON.parse(JSON.stringify(fact))); return await store.commitFact(fact);
+    } }, executeStep: async () => { throw new Error('No step'); }, resolveWorkspace: async () => ({ ok: true, workspace }),
+      isAcceptedAuthorizationCurrent: async () => true, action: { executor, buildContext: async params => ({ ...buildWorkflowActionContext(params),
+        serverId: 'server-external', runtimeAccountId: 'account-1', executionRunTargetMachineId: 'machine-local' }), observeRun: async () => { throw new Error('No Run'); } } });
+    try {
+      const runId = '88888888-8888-4888-8888-888888888888';
+      const outcome = await coordinator.run({ ...accepted.snapshot, runId });
+      expect(outcome).toMatchObject({ state: fails ? 'failed' : 'succeeded' });
+      expect(effects).toBe(1);
+      expect(stored?.approvalInputCustody).toBe('live_only');
+      expect(JSON.stringify(stored)).not.toContain(secret);
+      expect(JSON.stringify(facts)).not.toContain(secret);
+      const row = store.list().find(row => row.blockId === 'inspect')!;
+      const saved = (await store.readInvocationBindingRow!(row.recordId))!;
+      const progress = WorkflowProgressEnvelopeV1Schema.parse(saved.progress);
+      expect(JSON.stringify(progress)).not.toContain(secret);
+      expect(progress.execution?.kind === 'action' ? progress.execution.input : undefined).toEqual(viaMeta
+        ? { action: { pluginId: 'acme.external', localId: 'inspect' }, input: stored!.input } : stored!.input);
+      const run = WorkflowRunSummaryV1Schema.parse({ id: runId, sourceArtifactId: null,
+        ownerAccountId: 'account-1', visibleTeamId: null, origin: { kind: 'direct' }, state: outcome.state, revision: 1,
+        machineId: workspace.machineId, workflowCustodyState: 'settled', originDeliveryAckRevision: null,
+        availability: { pause: false, resumeBoundary: false, restoreWorkspace: false, cancel: false, inspectExecution: true, disabledReasons: [] },
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
+      const keyCensus = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId, visibleTeamId: null,
+        ownerAccountId: 'account-1', encryptionMode: 'plain', access: 'owner', dataEncryptionKey: null,
+        callerDataEncryptionKey: null, recipients: [], ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+      const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId, recordId: saved.index.id,
+          sequence: saved.index.sequence, parentRecordId: saved.index.parentRecordId, memberOrdinal: saved.index.memberOrdinal, attempt: saved.index.attempt }, progress }));
+      const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId }, acceptedSnapshot: accepted.snapshot }));
+      const reads = createWorkflowAccountRunActionOwner({ resolveAccountId: async () => 'account-1',
+        definitions: { get: async () => { throw new Error('No definition read'); } },
+        resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+        storage: { execute: async operation => {
+          if (operation.operation === 'get') return { run, keyCensus, acceptedEnvelope, checkpointEnvelope: null, resultEnvelope: null };
+          if (operation.operation === 'invocations.get') return { invocation: { index: saved.index, contentEnvelope, parentRevision: 1 } };
+          if (operation.operation === 'invocations.list') return { invocations: [saved.index], parentRevision: 1, keyCensus,
+            progressEnvelopesByInvocationId: { [saved.index.id]: contentEnvelope } };
+          throw new Error(`Unexpected storage read ${String(operation.operation)}`);
+        } },
+      });
+      const detail = await reads.execute({ actionId: 'workflow.run.invocations.get', input: { runId, invocationId: saved.index.id }, context: {} });
+      const list = await reads.execute({ actionId: 'workflow.run.invocations.list', input: { runId, includeContent: true }, context: {} });
+      expect(JSON.stringify([detail, list])).not.toContain(secret);
+      expect(detail).toMatchObject({ invocation: { progress: { execution: { input: progress.execution?.kind === 'action' ? progress.execution.input : {} } } } });
+      expect(list).toMatchObject({ invocationDetails: [{ progress: { execution: { input: progress.execution?.kind === 'action' ? progress.execution.input : {} } } }] });
+    } finally { await runtime.dispose(); }
+  });
+
+  it.each([
+    { decision: 'approve', viaMeta: false }, { decision: 'reject', viaMeta: false },
+    { decision: 'approve', viaMeta: true }, { decision: 'reject', viaMeta: true },
+  ] as const)('retains and resumes a Workflow deferred approval ($decision, meta=$viaMeta)', async ({ decision, viaMeta }) => {
+    const qualifiedId = 'acme.external/actions/inspect';
+    const artifactId = `workflow-approval-${decision}`;
+    const workspace = { machineId: 'machine-local', directory: '/repo', checkoutRootPath: '/repo' };
+    const authorization = { admittedPermissionCeiling: 'default' as const,
+      principal: { kind: 'session' as const, sessionId: 'origin' } };
+    const definition: WorkflowDefinitionV1 = { version: 1 as const, inputs: [], defaults: {
+      agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+    }, blocks: [{ kind: 'action' as const, id: 'inspect', actionId: viaMeta ? 'action.invoke' : qualifiedId,
+      input: viaMeta ? {
+        action: { kind: 'literal', value: { pluginId: 'acme.external', localId: 'inspect' } },
+        input: { kind: 'literal', value: {} },
+      } : {} }] };
+    const outputSchema = { type: 'object', required: ['surface'], properties: { surface: { const: 'agent' } } };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: workspace.machineId, executionTarget: { kind: 'session' },
+        workspaceTarget: { project: workspace }, origin: { kind: 'direct' }, authorization }, admission: { kind: 'user' },
+      effects: { resolveTargetAvailability: async () => true,
+        readActionContract: async id => {
+          if (id === qualifiedId) return { inputSchema: { type: 'object' }, outputSchema };
+          const spec = getActionSpec('action.invoke');
+          return { inputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
+            outputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.outputSchema!, { target: 'draft-7' })) };
+        } },
+    });
+    if (!accepted.ok) throw new Error(accepted.error.code);
+    let effects = 0;
+    let approvalsCreated = 0;
+    let stored: TargetActionApprovalRequestV1 | undefined;
+    const runtime = createExternalActionRuntime('global', 'acme.external', () => { effects++; }, undefined,
+      () => ({ serverId: 'server-external', machineId: 'machine-local' }), undefined, undefined, 'writesRemote', undefined,
+      { surfaces: ['agent', 'plugin'], resultSchema: outputSchema });
+    expect(runtime.contributes.actions[0]?.definition.outputSchema).toEqual(outputSchema);
+    const acquire = async () => ({ registry: runtime, source: 'ephemeral' as const,
+      durableRevision: runtime.durableRevision ?? -1, release: async () => {} });
+    const invoker = createCommittedContributedActionInvoker({ acquireRuntimeRegistryLease: acquire,
+      isWorkflowRunAuthorizationCurrent: async () => true,
+      requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+        create: async request => { approvalsCreated++; stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId }; },
+        read: async () => stored ?? null,
+      }),
+    });
+    const replay = createDaemonExternalActionContributedApprovalReplay({
+      credentials: { token: 'daemon-token', encryption: { type: 'legacy', secret: EXTERNAL_ACTION_ENCRYPTION_KEY } }, acquireRuntimeRegistryLease: acquire,
+      isApprovalExecutionOriginCurrent: async () => true,
+      targetActionApprovals: {
+        targetActionApprovalsGet: async () => stored ?? null,
+        targetActionApprovalsUpdate: async ({ request }) => {
+          stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+          return { ok: true };
+        },
+      },
+    });
+    const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => ({
+      registry: runtime, source: 'ephemeral', durableRevision: runtime.durableRevision ?? -1, release: async () => {},
+    }) });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), invokeContributedAction: invoker,
+      listContributedActionDefinitions: listDefinitions, readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions),
+      approvalsGet: async () => stored ?? null, targetActionApprovalReplay: replay });
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const createCoordinator = () => createWorkflowCoordinator({ store,
+      executeStep: async () => { throw new Error('No step expected'); },
+      resolveWorkspace: async () => ({ ok: true, workspace }), isAcceptedAuthorizationCurrent: async () => true,
+      action: { executor, buildContext: async params => ({ ...buildWorkflowActionContext(params),
+        serverId: 'server-external', runtimeAccountId: 'account-1', executionRunTargetMachineId: 'machine-local' }),
+        observeRun: async () => { throw new Error('No Run expected'); } },
+    });
+    const input = { ...accepted.snapshot, runId: '99999999-9999-4999-8999-999999999999' };
+    const row = () => store.list().find(item => item.blockId === 'inspect');
+    try {
+      const held = await createCoordinator().run(input);
+      expect(held).toMatchObject({ state: 'paused', reason: 'approval_required' });
+      expect(stored?.status).toBe('open');
+      expect(effects).toBe(0);
+      expect(row()).toMatchObject({ lifecycle: 'waiting_for_approval', execution: {
+        output: { kind: 'approval_request_created', artifactId, actionId: 'action.invoke' },
+      } });
+      const recovery = createWorkflowInvocationRecoveryObserver({
+        credentials: { token: 'daemon-token', encryption: { type: 'legacy', secret: EXTERNAL_ACTION_ENCRYPTION_KEY } },
+        machineId: workspace.machineId, actionExecutor: executor,
+      });
+      expect(await recovery({ progress: WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1',
+        invocationPath: { blockId: 'inspect', scope: [] }, blockKind: 'action', attempt: '0',
+        logicalInvocationRecordId: row()!.logicalInvocationRecordId ?? row()!.recordId,
+        execution: JSON.parse(JSON.stringify(row()!.execution)) }), terminalParent: false, cancellationRequested: false }))
+        .toMatchObject({ kind: 'unresolved', code: 'approval_required' });
+      // Reclaim while still open must preserve the exact request, not dispatch again.
+      expect(await createCoordinator().run(input)).toMatchObject({ state: 'paused', reason: 'approval_required' });
+      expect(approvalsCreated).toBe(1);
+      const decided = await executor.execute('approval.request.decide', { artifactId, decision }, {
+        surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' },
+      });
+      expect(decided, JSON.stringify(decided)).toMatchObject({ ok: true });
+      const afterRestart = await recovery({ progress: WorkflowProgressEnvelopeV1Schema.parse({
+        kind: 'happier.workflow-progress.v1', invocationPath: { blockId: 'inspect', scope: [] },
+        blockKind: 'action', attempt: '0', logicalInvocationRecordId: row()!.logicalInvocationRecordId ?? row()!.recordId,
+        execution: JSON.parse(JSON.stringify(row()!.execution)),
+      }), terminalParent: false, cancellationRequested: false });
+      expect(afterRestart).toMatchObject(decision === 'approve'
+        ? { kind: 'completed', result: { surface: 'agent' } } : { kind: 'failed', code: 'approval_rejected' });
+      const savedProgress = WorkflowProgressEnvelopeV1Schema.parse((await store.readInvocationBindingRow!(row()!.recordId))!.progress);
+      expect(await observeWorkflowInvocationRecoveryEvidence({
+        credentials: { token: 'daemon-token', encryption: null }, machineId: workspace.machineId, progress: savedProgress,
+        getRun: async () => { throw new Error('Approval has no native Run'); },
+        getApproval: async artifactId => {
+          const read = await executor.execute('approval.request.get', { artifactId }, { surface: 'agent' });
+          return read.ok ? read.result : null;
+        },
+      })).toMatchObject({ activity: 'not_active', canReattach: true, canContinueConversation: false });
+      expect(await recovery({ progress: savedProgress, terminalParent: false, cancellationRequested: false, observationOnly: true }))
+        .toMatchObject(afterRestart);
+      // The public boundary control must admit the retained Run after restart.
+      // The storage boundary enforces the server's paused-only resume contract;
+      // no test invokes a coordinator until the public control accepts it.
+      let state: string = held.state;
+      const run = () => WorkflowRunSummaryV1Schema.parse({ id: input.runId, sourceArtifactId: null,
+        ownerAccountId: 'account-1', visibleTeamId: null, origin: { kind: 'direct' }, state, revision: 1,
+        machineId: workspace.machineId, workflowCustodyState: 'pending', originDeliveryAckRevision: null,
+        availability: { pause: false, resumeBoundary: state === 'paused', restoreWorkspace: false, cancel: true, inspectExecution: true, disabledReasons: [] },
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
+      const controls = createWorkflowAccountRunActionOwner({ resolveAccountId: async () => 'account-1',
+        definitions: { get: async () => { throw new Error('No definition read'); } },
+        resolveEncryption: async () => { throw new Error('Boundary resume is key-free'); },
+        storage: { execute: async operation => {
+          if (operation.operation !== 'resume' || state !== 'paused') throw new Error('ineligible_state');
+          state = 'queued'; // The server queues the retained frontier for the next daemon claim.
+          return { intent: 'resumed', run: run() };
+        } },
+      });
+      expect(await controls.execute({ actionId: 'workflow.run.resume',
+        input: { mode: 'boundary', runId: input.runId, expectedRevision: 1 }, context: {} })).toMatchObject({ intent: 'resumed' });
+      expect(await createCoordinator().run(input)).toMatchObject(decision === 'approve'
+        ? { state: 'succeeded' } : { state: 'failed', reason: 'approval_rejected' });
+      expect(effects).toBe(decision === 'approve' ? 1 : 0);
+      if (decision === 'approve') {
+        expect(row()?.result).toMatchObject({ surface: 'agent' });
+        expect(await createCoordinator().run(input)).toMatchObject({ state: 'succeeded' });
+        expect(effects).toBe(1);
+      }
+      expect(row()?.execution).toMatchObject({ output: { kind: 'approval_request_created', artifactId } });
+      expect(approvalsCreated).toBe(1);
+    } finally { await runtime.dispose(); }
+  });
+
+  it.each([
+    { surface: 'agent', decision: 'approve' }, { surface: 'mcp', decision: 'approve' },
+    { surface: 'cli', decision: 'approve' }, { surface: 'api', decision: 'approve' },
+    { surface: 'api', decision: 'reject' }, { surface: 'cli', decision: 'retire' },
+  ] as const)('approves confidential $surface input only through live custody ($decision)', async ({ surface, decision }) => {
+    const artifactId = `live-secret-${surface}-${decision}`;
+    const secret = 'synthetic-live-release-tag';
+    let stored: TargetActionApprovalRequestV1 | undefined;
+    let received: JsonValue | undefined;
+    let invalidate: (() => void) | undefined;
+    const runtime = createExternalActionRuntime('global', 'acme.external', undefined, undefined,
+      () => ({ serverId: 'server-external', machineId: 'machine-local' }), undefined, undefined,
+      'writesRemote', undefined, {
+        surfaces: ['agent', 'mcp', 'cli'],
+        inputSchema: { type: 'object', properties: { releaseTag: { type: 'string' }, public: { type: 'string' } },
+          required: ['releaseTag', 'public'], additionalProperties: false },
+        inputHints: { fields: [{ path: 'releaseTag', title: 'Release credential', widget: 'secret' }] },
+        onInput: input => { received = input; },
+      });
+    const lease = { registry: runtime, source: 'ephemeral' as const,
+      durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+    const acquire = vi.fn(async () => lease);
+    const invoker = createDaemonExternalActionContributedInvoker({
+      acquireRuntimeRegistryLease: acquire,
+      requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+        create: async request => {
+          stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+          return { artifactId };
+        },
+        read: async () => stored ?? null,
+        subscribeChanges: (_artifactId, onChange) => {
+          invalidate = onChange;
+          return { dispose: () => { invalidate = undefined; } };
+        },
+      }),
+    });
+    const replay = createDaemonExternalActionContributedApprovalReplay({
+      credentials: { token: 'daemon-token', encryption: null } as never,
+      acquireRuntimeRegistryLease: acquire,
+      targetActionApprovals: {
+        targetActionApprovalsGet: async () => stored ?? null,
+        targetActionApprovalsUpdate: async ({ request }) => {
+          stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+          // Account change delivery can precede the decision write's HTTP
+          // response. Exercise that real transport ordering at the boundary.
+          invalidate?.();
+          await Promise.resolve();
+          return { ok: true };
+        },
+      },
+    });
+    const controller = new AbortController();
+    const pending = invoker({ action: { pluginId: 'acme.external', localId: 'inspect' },
+      input: { releaseTag: secret, public: ' endpoint ' },
+      ...(surface === 'api' ? { approvalExecutionOrigin: createApiActionApprovalOrigin() } : {}),
+      context: { surface, authority: 'account_automation', actionCaller: { kind: 'host' },
+        ...(surface === 'cli' ? { defaultSessionId: 'session-live' } : {}) }, signal: controller.signal });
+    try {
+      await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId)).toBe(1));
+      expect(stored).toMatchObject({ approvalInputCustody: 'live_only', input: { public: ' endpoint ' },
+        replayPlacement: { serverId: 'server-external', machineId: 'machine-local' } });
+      expect(JSON.stringify(stored)).not.toContain(secret);
+      const admission = resolveApprovalRequestApproveAdmission(stored!);
+      expect(admission).toMatchObject({ status: 'available', presentation: { rows: expect.arrayContaining([
+        { kind: 'value', path: 'input.releaseTag', title: 'Release credential', value: '', valueFormat: 'confidential' },
+        { kind: 'value', path: 'input.public', title: 'Public', value: '" endpoint "' },
+      ]) } });
+      expect(JSON.stringify(admission)).not.toContain(secret);
+      const reads = createActionExecutor({
+        approvalsGet: async () => stored ?? null,
+        approvalsList: async () => ({ items: [{ artifactId, status: stored!.status,
+          actionId: stored!.qualifiedActionId, summary: stored!.summary, updatedAtMs: stored!.updatedAtMs }] }),
+      } as unknown as ActionExecutorDeps);
+      const cliContext = { surface: 'cli' as const, authority: 'account_automation' as const, actionCaller: { kind: 'host' as const } };
+      const disclosed = await reads.execute('approval.request.get', { artifactId }, cliContext);
+      expect(disclosed).toMatchObject({ ok: true, result: { artifactId, request: {
+        status: 'open', approvalInputCustody: 'live_only', input: { public: ' endpoint ' },
+      } } });
+      expect(JSON.stringify(disclosed)).not.toContain(secret);
+      expect(await reads.execute('approval.request.list', { status: 'open' }, cliContext))
+        .toMatchObject({ ok: true, result: { items: [{ artifactId, status: 'open' }] } });
+      if (decision === 'retire') {
+        runtime.targetActionInvocations?.dispose();
+        await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId)).toBe(0));
+        await expect(pending).resolves.toMatchObject({ ok: false });
+        await expect(replay({ artifactId, decision: 'approve' })).resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });
+        expect(received).toBeUndefined();
+        return;
+      }
+      if (decision === 'reject') {
+        await expect(replay({ artifactId, decision: 'reject' })).resolves.toMatchObject({ ok: true, result: { status: 'rejected' } });
+        await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'plugin_action_current_intent_rejected' });
+        expect(received).toBeUndefined();
+        return;
+      }
+      await expect(replay({ artifactId, decision: 'approve', ...(surface === 'cli' ? {
+        callerGrant: { ...API_TOKEN_FULL_GRANT_V1, approve: true, targets: { sessions: ['session-live'], machines: [] } },
+      } : {}) })).resolves.toMatchObject({ ok: true, result: { status: 'approved' } });
+      await expect(pending).resolves.toMatchObject({ ok: true });
+      expect(received).toEqual({ releaseTag: secret, public: ' endpoint ' });
+      expect(acquire).toHaveBeenCalledTimes(1);
+      // No second invocation can reconstruct this input from approval history.
+      await expect(replay({ artifactId, decision: 'approve' })).resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });
+      expect(acquire).toHaveBeenCalledTimes(1);
+    } finally {
+      controller.abort();
+      await pending;
+      await runtime.dispose();
+    }
+  });
+
+  it.each(['cli', 'mcp', 'agent'] as const)('preserves %s approval custody and user waivers through public action.invoke', async surface => {
+    const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    const actionId = 'acme.external/actions/inspect';
+    process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({ v: 1, actions: {} });
+    let invocationCount = 0;
+    let stored: TargetActionApprovalRequestV1 | undefined;
+    const runtime = createExternalActionRuntime('global', 'acme.external', () => { invocationCount += 1; },
+      undefined, undefined, undefined, undefined, 'writesRemote', undefined,
+      { surfaces: ['cli', 'mcp', 'agent'] });
+    // Artifact persistence is the boundary. The manifest, invocation routing,
+    // policy, approval producer and strict consumer remain real.
+    const create = vi.fn(async (request: TargetActionApprovalRequestV1) => {
+      stored = TargetActionApprovalRequestV1Schema.parse(request);
+      return { artifactId: `approval-${surface}` };
+    });
+    const lease = { registry: runtime, source: 'ephemeral' as const,
+      durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+    const invoker = createDaemonExternalActionContributedInvoker({
+      acquireRuntimeRegistryLease: async () => lease,
+      requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+        create,
+        read: async () => stored ? TargetActionApprovalRequestV1Schema.parse({
+          ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs },
+        }) : null,
+      }),
+    });
+    const replay = createDaemonExternalActionContributedApprovalReplay({
+      credentials: { token: 'fixture-token', encryption: null },
+      acquireRuntimeRegistryLease: async () => lease,
+      // Home origin/currentness and Artifact persistence are external boundaries.
+      isApprovalExecutionOriginCurrent: async () => true,
+      targetActionApprovals: {
+        targetActionApprovalsGet: async () => stored ?? null,
+        targetActionApprovalsUpdate: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
+      },
+    });
+    const executor = createActionExecutor({
+      invokeContributedAction: invoker,
+      targetActionApprovalReplay: replay,
+    } as unknown as ActionExecutorDeps);
+    const context = { surface, authority: 'account_automation' as const, actionCaller: { kind: 'host' as const },
+      serverId: 'server-external', actionRequestId: `request-${surface}`, runtimeAccountId: 'account-1',
+      executionRunTargetMachineId: 'machine-local' };
+    const app = await createDaemonControlApp({
+      getChildren: () => [], machineId: 'machine-local',
+      stopSession: async () => ({ status: 'not_found' }),
+      spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
+      requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'fixture-control',
+      externalActionApi: { currentServerId: 'server-external', currentAccountId: 'account-1',
+        verifyPat: async () => { throw new Error('Unexpected PAT'); }, executor,
+        resolveTarget: async () => ({ kind: 'machine', machineId: 'machine-local' }),
+      },
+    });
+    const actionInput = {
+      action: { pluginId: 'acme.external', localId: 'inspect' }, input: {},
+    };
+    const execute = async () => surface === 'agent' ? executor.execute('action.invoke', actionInput, context)
+      : (await app.inject({ method: 'POST', url: '/actions/root/execute',
+        headers: { 'x-happier-daemon-token': 'fixture-control' },
+        payload: { actionId: 'action.invoke', input: actionInput, surface, actionRequestId: `request-${surface}` },
+      })).json();
+    try {
+      const deferred = await execute();
+      expect(deferred, JSON.stringify(deferred)).toMatchObject({ ok: true, result: {
+        kind: 'approval_request_created', artifactId: `approval-${surface}`, actionId: 'action.invoke',
+      } });
+      expect(stored).toMatchObject({ requestedSurface: surface, createdBy: { surface }, qualifiedActionId: actionId });
+      expect(stored).toMatchObject({ replayPlacement: { serverId: 'server-external', machineId: 'machine-local' },
+        executionOriginV1: { surface, actionId: 'action.invoke' } });
+      expect(invocationCount).toBe(0);
+      expect(await replay({ artifactId: `approval-${surface}`, decision: 'approve' }))
+        .toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+      expect(invocationCount).toBe(1);
+
+      process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify(setActionApprovalOverride({
+        settings: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }), actionId, surface, approvalRequired: false,
+      }));
+      await expect(execute()).resolves.toMatchObject({ ok: true, result: { surface, caller: null } });
+      expect(create).toHaveBeenCalledOnce();
+      expect(invocationCount).toBe(2);
+    } finally {
+      await app.close();
+      await runtime.dispose();
+      if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+      else process.env.HAPPIER_ACTIONS_SETTINGS_V1 = previousSettings;
+    }
+  });
+
+  it.each(['api', 'rpc'] as const)('preserves %s caller provenance accepted by the Triage caller owner through real dispatch', async surface => {
     let hostCallerAccepted: boolean | undefined;
     const runtime = createExternalActionRuntime('global', 'happier.triage', (context) => {
       expect(context.surface).toBe('api');
@@ -427,7 +893,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     });
     try {
       expect(await invoker({ action: { pluginId: 'happier.triage', localId: 'inspect' }, input: {},
-        context: { surface: 'cli', actionCaller: { kind: 'host' } } }))
+        context: { surface, actionCaller: { kind: 'host' } } }))
         .toMatchObject({ ok: true, result: { surface: 'api', caller: null } });
       expect(hostCallerAccepted).toBe(true);
     } finally { await runtime.dispose(); }
@@ -618,8 +1084,9 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     }
   });
 
-  it('executes a discovered qualified Action through the real credentialed CLI caller and daemon adapter', async () => {
-    const runtime = createExternalActionRuntime('global');
+  it.each(['safe', 'writesRemote'] as const)('executes a discovered %s qualified Action through the real credentialed CLI caller and daemon adapter', async dangerLevel => {
+    const runtime = createExternalActionRuntime('global', 'acme.external', undefined, undefined, undefined, undefined, undefined, dangerLevel);
+    let stored: TargetActionApprovalRequestV1 | undefined;
     const lease = { registry: runtime, source: 'ephemeral', durableRevision: -1, release: async () => {} } satisfies PluginRuntimeRegistryLease;
     const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
     const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {} });
@@ -630,7 +1097,12 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     vi.spyOn(daemonControlClient, 'requestDaemonPluginActionExecution').mockImplementation(async (request) => request.actionId === 'action.spec.get'
       ? { matched: true, result: await daemonExecutor.execute('action.spec.get', request.input, { surface: request.surface }) }
       : executeContributedAction({ runtimeRegistry: runtime, actionId: request.actionId, input: request.input,
-        context: { surface: request.surface }, actionsSettings: settings }));
+        context: { surface: request.surface }, actionsSettings: settings,
+        requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+          create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'qualified-approval' }; },
+          read: async () => stored ?? null,
+        }),
+      }));
     const executor = createCliActionExecutorFromCredentials({
       credentials: { token: 'fixture-cli-token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) } },
       serverId: 'fixture-home', serverApiUrl: 'https://fixture-home.example.test', serverIdentityId: 'server-external', machineId: 'machine-local',
@@ -641,8 +1113,12 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     await expect(dispatchBuiltInHappierTool({ toolName: 'action_execute', args: { actionId: 'acme.external/actions/inspect', input: {} },
       sessionId: 'session-1', surface: 'cli', pluginToolCatalog: [],
       deps: { changeTitle: async () => { throw new Error('Unexpected title change'); }, executeActionByToolName: bridge.executeActionByToolName } })).resolves.toMatchObject({
-      ok: true, result: { surface: 'cli', caller: null },
+      ok: true, result: dangerLevel === 'safe' ? { surface: 'cli', caller: null }
+        : { kind: 'approval_request_created', artifactId: 'qualified-approval', actionId: 'action.invoke' },
     });
+    if (dangerLevel !== 'safe') expect(stored).toMatchObject({ requestedSurface: 'cli',
+      replayPlacement: { serverId: 'server-external', machineId: 'machine-local' },
+      executionOriginV1: { actionId: 'action.invoke', surface: 'cli' } });
   });
 
   it('allows a source read but rejects writes under the same current read-only invocation lease', async () => {
@@ -807,7 +1283,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       result: {
         actionSpec: expect.objectContaining({
           id: 'acme.external/actions/inspect',
-          inputSchema: declaredAction.definition.inputSchema,
+          inputSchema: declaredAction.definition.inputSchema ?? {},
           ...(declaredAction.definition.outputSchema === undefined
             ? {}
             : { outputSchema: declaredAction.definition.outputSchema }),
@@ -1695,6 +2171,16 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         now: () => 2,
       });
 
+      if (!persisted) throw new Error('Expected the deferred approval');
+      const currentApproval: TargetActionApprovalRequestV1 = persisted;
+      const { secretInputPaths: _disclosure, ...legacyApproval } = currentApproval;
+      persisted = legacyApproval;
+      await expect(replay({ artifactId: 'approval-api-exact-1', decision: 'approve' }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'approval_context_unavailable' });
+      expect(persisted.status).toBe('open');
+      expect(actionInvocations).toBe(0);
+      persisted = currentApproval;
+
       await expect(replay({
         artifactId: 'approval-api-exact-1',
         decision: 'approve',
@@ -2137,7 +2623,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     }
   });
 
-  it('fails a replay when the current Action policy no longer matches its durable approval', async () => {
+  it.each(['policy', 'version', 'input declaration'] as const)('fails a replay when the current Action %s no longer matches its durable approval', async change => {
     const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
     process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
       v: 1,
@@ -2149,10 +2635,13 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     });
     try {
       let actionInvocations = 0;
-      const runtime = createExternalActionRuntime('global', 'acme.external', () => {
+      const onInvocation = () => {
         actionInvocations += 1;
-      });
-      const lease: PluginRuntimeRegistryLease = {
+      };
+      const occurrenceId = 'acme.external:1' as PluginRuntimeOccurrenceId;
+      const runtime = createExternalActionRuntime('global', 'acme.external', onInvocation,
+        undefined, undefined, undefined, undefined, 'safe', undefined, { occurrenceId });
+      let lease: PluginRuntimeRegistryLease = {
         registry: runtime,
         source: 'ephemeral',
         durableRevision: runtime.durableRevision ?? -1,
@@ -2174,7 +2663,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         requestCurrentIntent: createTargetActionCurrentIntentAdapter({
           now: () => 1,
           create: async (request) => {
-            persisted = request;
+            persisted = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
             return { artifactId: 'approval-api-stale-1' };
           },
           read: async () => persisted,
@@ -2198,9 +2687,21 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         },
       });
 
-      // The persisted Ask-first subject must not become silently executable
-      // when the current policy flips to Allowed before the user decides.
-      process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({ v: 1, actions: {} });
+      if (change === 'policy') {
+        // A stored Ask-first subject cannot become executable merely by flipping to Allowed.
+        process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({ v: 1, actions: {} });
+      } else {
+        runtime.targetActionInvocations?.dispose();
+        // A new daemon epoch can allocate the same occurrence spelling and root.
+        const successor = createExternalActionRuntime('global', 'acme.external', onInvocation,
+          undefined, undefined, undefined, undefined, 'safe', undefined, {
+            occurrenceId,
+            ...(change === 'version' ? { pluginVersion: '2.0.0' } : {
+              inputSchema: { type: 'object', properties: { target: { type: 'string' } }, additionalProperties: false },
+            }),
+          });
+        lease = { ...lease, registry: successor };
+      }
       const replay = createDaemonExternalActionContributedApprovalReplay({
         credentials: { token: 'daemon-token', encryption: null } as never,
         isApprovalExecutionOriginCurrent: async () => true,

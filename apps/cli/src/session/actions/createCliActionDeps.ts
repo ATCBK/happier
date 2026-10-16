@@ -1904,6 +1904,8 @@ export function createCliActionDeps(params: Readonly<{
           resolveEncryption: (signal) => resolveWorkflowRunEncryption(args, signal),
           observeRecovery: async ({ run, progress, signal }) => await observeWorkflowInvocationRecoveryEvidence({
             credentials: params.credentials!, machineId: run.machineId, progress,
+            getApproval: async artifactId => ({ artifactId,
+              request: await approvalsStore?.approvalsGet({ artifactId, serverId: null }) }),
             getOperation: async (operation) => await callMachineAction({ serverId: operation.serverId,
               machineId: operation.machineId, method: ACTION_OPERATION_RPC_METHODS_V2.get,
               request: { operationId: operation.operationId }, exactMachine: true, ...(signal ? { signal } : {}) }),
@@ -1949,7 +1951,10 @@ export function createCliActionDeps(params: Readonly<{
               actionExecutor: { execute: async (actionId, request, context) => {
                 // This port is intentionally read-only: observation reattach
                 // cannot reach the stop/send/start/resume effects.
-                if (actionId !== 'execution.run.get') return { ok: false, errorCode: 'workflow_observation_only' };
+                if (actionId === 'approval.request.get' && 'artifactId' in request) return { ok: true,
+                  result: { artifactId: request.artifactId,
+                    request: await approvalsStore?.approvalsGet({ artifactId: request.artifactId, serverId: null }) } };
+                if (actionId !== 'execution.run.get' || !('runId' in request)) return { ok: false, errorCode: 'workflow_observation_only' };
                 const native = await callDetachedExecutionRunRpc(null, SESSION_RPC_METHODS.EXECUTION_RUN_GET,
                   { runId: request.runId, includeStructured: false }, {
                     exactMachineId: run.machineId, ...(context.signal ? { signal: context.signal } : {}),

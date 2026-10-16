@@ -20,13 +20,14 @@ import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encrypti
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import type { WorkflowInvocationRecoveryObservation } from './recovery';
 import { classifyWorkflowSessionInputResult, observeWorkflowDetachedExecutionRunInput, observeWorkflowSessionInputResult, resolveWorkflowDetachedExecutionRunInputTurn, stopWorkflowPendingExecutionRunInput } from './stepExecution';
+import { readWorkflowActionApprovalSettlement } from './actionApproval';
 
 type WorkflowInvocationRecoveryEvidence = Awaited<ReturnType<NonNullable<WorkflowAccountRunActionDeps['observeRecovery']>>>;
 
 type RecoveryActionExecutor = Readonly<{
   execute: (
-    actionId: 'execution.run.get' | 'execution.run.stop',
-    input: Readonly<{ sessionId: null; runId: string; includeStructured?: false }>,
+    actionId: 'execution.run.get' | 'execution.run.stop' | 'approval.request.get',
+    input: Readonly<{ sessionId: null; runId: string; includeStructured?: false }> | Readonly<{ artifactId: string }>,
     context: Readonly<{ surface: 'agent'; authority: 'account_automation'; executionRunTargetMachineId: string; signal?: AbortSignal }>,
   ) => Promise<Readonly<{ ok: true; result: unknown }> | Readonly<{ ok: false; errorCode: string }>>;
 }>;
@@ -68,6 +69,7 @@ export async function observeWorkflowInvocationRecoveryEvidence(params: Readonly
   progress: WorkflowProgressEnvelopeV1;
   getRun: (request: Readonly<{ runId: string; includeStructured: false }>) => Promise<unknown>;
   getOperation?: (operation: ActionCompletionOperation) => Promise<unknown>;
+  getApproval?: (artifactId: string) => Promise<unknown>;
   signal?: AbortSignal;
 }>): Promise<WorkflowInvocationRecoveryEvidence> {
   const unavailable: WorkflowInvocationRecoveryEvidence = {
@@ -78,6 +80,10 @@ export async function observeWorkflowInvocationRecoveryEvidence(params: Readonly
   if (execution.kind === 'session_ready') return { activity: 'not_active', canReattach: true, canContinueConversation: false };
   try {
     if (execution.kind === 'action') {
+      const approval = await readWorkflowActionApprovalSettlement({ execution,
+        read: async artifactId => await params.getApproval?.(artifactId) });
+      if (approval) return { activity: approval.kind === 'unresolved' ? 'unknown' : 'not_active',
+        canReattach: approval.kind !== 'unresolved' || approval.code === 'approval_required', canContinueConversation: false };
       if (execution.awaitedOperations?.length && params.getOperation) {
         const snapshots = await Promise.all(execution.awaitedOperations.map(async (target) => {
           const parsed = ActionOperationGetV1ResponseSchema.safeParse(await params.getOperation!(target));
@@ -191,6 +197,14 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
     if (!execution) return { kind: 'unresolved', code: 'workflow_execution_correspondence_missing' };
     if (execution.kind === 'session_ready') return { kind: 'completed', result: '' };
     if (execution.kind === 'action') {
+      const approval = await readWorkflowActionApprovalSettlement({ execution, read: async artifactId => {
+        const observed = await params.actionExecutor.execute('approval.request.get', { artifactId }, {
+          surface: 'agent', authority: 'account_automation', executionRunTargetMachineId: params.machineId,
+          ...(input.signal ? { signal: input.signal } : {}),
+        });
+        return observed.ok ? observed.result : null;
+      } });
+      if (approval) return approval;
       const id = ActionIdSchema.safeParse(execution.actionId);
       if (execution.awaitedOperations?.length) {
         if (!id.success || execution.output === undefined || !input.frozenActionContract?.completion) {

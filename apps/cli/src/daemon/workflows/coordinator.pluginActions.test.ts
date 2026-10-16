@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorContext } from '@happier-dev/protocol/actions';
+import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { createCommittedContributedActionSchemaReader } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
 import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows';
 import { createTargetActionInvocationRegistry } from '@/plugins/runtime/invocation/targetActionRegistry';
@@ -65,7 +67,12 @@ describe('workflow contributed Action leaves', () => {
         resourceSelections: [], scopedGrants: [], operatingSystemAuthorization: [] }),
       createServices: createUnavailablePluginServicesFactory(), resolveHostBinding: createTargetActionHostBindingResolver(),
     });
-    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), invokeContributedAction: async request => {
+    const listDefinitions = () => [ActionDefinitionV1Schema.parse({ kindVersion: 1, id: actionId, title: 'Send brief', description: null,
+      safety: 'danger', placements: [], slash: null, bindings: null, examples: null, surfaces: { agent: true },
+      inputHints: null, inputSchema, outputSchema })];
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      listContributedActionDefinitions: listDefinitions, readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions),
+      invokeContributedAction: async request => {
       contexts.push(request.context);
       const result = await registry.invoke({ ...request.action, input: request.input, surface: 'agent',
         initiatingActionCaller: request.context.actionCaller, signal: request.signal,

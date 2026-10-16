@@ -8,10 +8,15 @@ import { workflowBlockOrdinalV1 } from '@happier-dev/protocol/workflows/workflow
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { prepareActionCompletionV1, resumeActionCompletionV1 } from '@happier-dev/protocol/actions/actionCompletion';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import type { createActionExecutor, ActionExecutorContext, ActionCompletionRun, ActionCompletionOperation, ActionCompletionStateV1, ExecutionRunTerminalObservation } from '@happier-dev/protocol/actions';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
+import { readWorkflowActionApprovalSettlement } from './actionApproval';
 import { readWorkflowProjectSetupConsentHold } from './stepExecution';
 import { validateExecutionRunProfileResult } from '@happier-dev/protocol/execution/runs/resultContract';
 import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
@@ -293,7 +298,7 @@ type Frame = WorkflowScopeFrame & {
 };
 
 export class WorkflowControlBoundary extends Error {
-  constructor(readonly state: 'paused' | 'cancelled' | 'waiting_for_review') {
+  constructor(readonly state: 'paused' | 'cancelled' | 'waiting_for_review', readonly code?: string) {
     super(state);
   }
 }
@@ -935,6 +940,7 @@ export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies)
         };
       } catch (error) {
         if (error instanceof WorkflowControlBoundary) return { state: error.state,
+          ...(error.code ? { reason: error.code } : {}),
           ...(error.state === 'waiting_for_review' ? { parkRevision: holds.parkRevision } : {}) };
         if (error instanceof WorkflowLeafFailure) return { state: error.state, reason: error.code };
         if (error instanceof WorkflowInputResolutionError) return { state: 'failed', reason: error.code };
@@ -1692,6 +1698,11 @@ async function executeActionBlock(
     && row.execution?.kind === 'action' && row.execution.actionId === leaf.actionId
     ? readWorkflowProjectSetupConsentHold(row.execution.actionId, row.execution.output) : null;
   const setupConsentHold = heldConsent !== null && row?.reason === heldConsent.code;
+  const pendingApproval = row?.execution?.kind === 'action'
+    ? ActionApprovalRequestCreatedResultSchema.safeParse(row.execution.output) : null;
+  const approvalHold = pendingApproval?.success === true
+    && row?.execution?.kind === 'action' && pendingApproval.data.actionId === 'action.invoke'
+    && (row.execution.actionId === 'action.invoke' || parseQualifiedPluginActionId(row.execution.actionId) !== null);
   if (row && !setupConsentHold) { const failure = persistedFailure(row); if (failure) throw failure; }
   const frozen = context.materializedLeaves.find((candidate) => candidate.sourceKey === context.sourceKey
     && candidate.blockId === leaf.id && candidate.kind === 'action');
@@ -1717,7 +1728,7 @@ async function executeActionBlock(
     && (row.execution.awaitedRuns || row.execution.awaitedOperations) && row.execution.output !== undefined
     ? { output: row.execution.output, ...(row.execution.awaitedRuns ? { awaitedRuns: row.execution.awaitedRuns } : {}),
       ...(row.execution.awaitedOperations ? { awaitedOperations: row.execution.awaitedOperations } : {}) } : undefined;
-  if (row.lifecycle !== 'pending' && !setupConsentHold && !completionState) return await fail('outcome_uncertain', 'outcome_uncertain');
+  if (row.lifecycle !== 'pending' && !setupConsentHold && !completionState && !approvalHold) return await fail('outcome_uncertain', 'outcome_uncertain');
   let workspace = row.workspace?.descriptor;
   let completed: Awaited<ReturnType<typeof resumeActionCompletionV1>> | undefined;
   let noRunsLaunched = false;
@@ -1760,7 +1771,27 @@ async function executeActionBlock(
     await context.deps.waitForNewWorkAdmission?.(context.signal);
     await assertAdmissionOpen(context);
     await assertAcceptedAuthorizationCurrent(context);
-    const execution = { kind: 'action' as const, actionId, actionRequestId, localInputId, input };
+    // Read the same declaration used by public approval presentation. The live
+    // prepared invocation retains its admitted operand; correspondence is display
+    // data and must never become a secret-bearing replay input.
+    let presentedInput = input;
+    const wrappedTarget = actionId === 'action.invoke' ? PluginContributionIdentityV1Schema.safeParse(input.action) : null;
+    const target = contributedAction ?? (wrappedTarget?.success ? wrappedTarget.data : undefined);
+    if (target) {
+      const preparedDescription = await context.holds.track(() => context.deps.action!.executor.prepare('action.spec.get',
+        { id: formatQualifiedPluginActionId(target) }, actionContext));
+      const described = preparedDescription.kind === 'ready'
+        ? await context.holds.track(() => preparedDescription.invocation.run()) : preparedDescription.result;
+      const definition = ActionDefinitionV1Schema.safeParse(described.ok && isWorkflowJsonObject(described.result)
+        ? described.result.actionSpec : null);
+      if (!definition.success) return await fail('target_unavailable', 'failed', true);
+      const projection = projectTargetActionApprovalInput(contributedAction ? input : input.input,
+        (definition.data.inputHints?.fields ?? []).filter(field => field.widget === 'secret').map(field => field.path));
+      if (!projection || contributedAction && !isWorkflowJsonObject(projection.input)) return await fail('invalid_input', 'failed', true);
+      presentedInput = contributedAction && isWorkflowJsonObject(projection.input)
+        ? projection.input : { ...input, input: projection.input };
+    }
+    const execution = { kind: 'action' as const, actionId, actionRequestId, localInputId, input: presentedInput };
     // This CAS is the last asynchronous boundary before the one-shot effect.
     // Failure/lost acknowledgement never authorizes dispatch or replay.
     try { row = await context.deps.store.commitFact({ key: row.key, lifecycle: 'admitting', execution }); }
@@ -1786,6 +1817,15 @@ async function executeActionBlock(
         execution: { ...execution, output: consent } });
       throw new WorkflowLeafFailure('interrupted', consent.code);
     }
+    const approval = invoked.ok ? ActionApprovalRequestCreatedResultSchema.safeParse(invoked.result) : null;
+    if ((contributedAction || actionId === 'action.invoke') && approval?.success && approval.data.actionId === 'action.invoke') {
+      // The approval owner owns execution. Retain its exact correspondence before
+      // surfacing the hold; reclaim observes settlement and never re-invokes.
+      await context.deps.store.commitFact({ key: row.key, lifecycle: 'waiting_for_approval', reason: 'approval_required',
+        execution: { ...execution, output: approval.data } });
+      assertWorkflowAbortSignal(context);
+      throw new WorkflowControlBoundary('paused', 'approval_required');
+    }
     const declaration = frozen.actionContract.completion && builtinActionId.success ? getActionSpec(builtinActionId.data).completion : undefined;
     if (frozen.actionContract.completion && !declaration) return await fail('outcome_uncertain', 'outcome_uncertain');
     const phase = prepareActionCompletionV1(declaration, invoked, { serverId: actionContext.serverId });
@@ -1796,6 +1836,25 @@ async function executeActionBlock(
       completed = phase;
       noRunsLaunched = phase.kind === 'failed' && 'noRunsLaunched' in phase && phase.noRunsLaunched === true;
     }
+  }
+  if (approvalHold && pendingApproval?.success && row.execution?.kind === 'action') {
+    if (!workspace) return await fail('outcome_uncertain', 'outcome_uncertain');
+    const approvalWorkspace = workspace;
+    const actionContext = { ...await context.holds.track(() => context.deps.action!.buildContext({
+      runId: context.runId, authorization: context.authorization, workDepth: context.workDepth, workspace: approvalWorkspace,
+      ...(context.originSessionId ? { originSessionId: context.originSessionId } : {}),
+      ...(frozen.role ? { role: frozen.role } : {}), ...(context.signal ? { signal: context.signal } : {}),
+    })), actionRequestId: row.execution.actionRequestId };
+    const approvalExecution = row.execution;
+    const settlement = await context.holds.track(() => readWorkflowActionApprovalSettlement({ execution: approvalExecution,
+      read: async artifactId => {
+        const prepared = await context.deps.action!.executor.prepare('approval.request.get', { artifactId }, actionContext);
+        const observed = prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
+        return observed.ok ? observed.result : null;
+      } }));
+    if (!settlement || settlement.kind === 'unresolved') throw new WorkflowControlBoundary('paused', settlement?.code ?? 'approval_unavailable');
+    if (settlement.kind !== 'completed') return await fail(settlement.code ?? 'action_failed', 'failed', true);
+    completed = { kind: 'completed', value: settlement.result };
   }
   // The one-shot call may have returned exact launch ids after this claim was
   // interrupted. Preserve that correspondence before stopping observation.
