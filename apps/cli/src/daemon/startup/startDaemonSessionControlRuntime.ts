@@ -191,7 +191,7 @@ import {
 import { sameProviderRuntimeBindingBasis } from '@/providers/sessions/providerAuthorizationApplyPolicy';
 import { isRetainedManagedProviderSettingsGrantCurrent } from '@/providers/sessions/retainedManagedProviderPolicy';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
-import { createCredentialedTargetActionCurrentIntent } from '@/session/actions/createCliActionExecutor';
+import { createCredentialedTargetActionCurrentIntent } from '@/session/actions/approvals/credentialedTargetActionCurrentIntent';
 import { resolveCatalogAgentId } from '@/agent/catalog/resolution';
 import {
   findCatalogEntry,

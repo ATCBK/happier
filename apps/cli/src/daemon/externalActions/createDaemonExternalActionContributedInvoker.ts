@@ -4,6 +4,8 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import type { ActionExecuteResult, ActionExecutorDeps } from '@happier-dev/protocol/actions';
+import { resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 
 import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
@@ -70,8 +72,7 @@ export function createDaemonExternalActionContributedInvoker(input: Readonly<{
     ?? acquireAuthoritativePluginRuntimeRegistryLease;
 
   return createCommittedContributedActionInvoker({
-    fixedInvocationSurface: 'api',
-    captureApprovalReplayPlacement: true,
+    defaultInvocationSurface: 'api',
     acquireRuntimeRegistryLease: () => acquireRuntimeRegistryLease({
       happyHomeDir: configuration.happyHomeDir,
     }),
@@ -80,10 +81,9 @@ export function createDaemonExternalActionContributedInvoker(input: Readonly<{
 }
 
 /**
- * Claims only strict API target-action approval artifacts at the daemon that
- * stamped their durable placement. The generic `approval.request.decide`
- * Action remains the public decision owner; this bridge only rehydrates its
- * target artifact and re-enters the canonical contributed-Action dispatcher.
+ * Settles target-action approvals at their admitting daemon. Live-only input
+ * resumes the incumbent waiter; durable public input re-enters the canonical
+ * contributed-Action dispatcher. `approval.request.decide` owns both decisions.
  */
 export function createDaemonExternalActionContributedApprovalReplay(input: Readonly<{
   credentials: StoredCredentials;
@@ -120,14 +120,20 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
     // This callback deliberately leaves ordinary ApprovalRequestV1 artifacts
     // on the generic Action owner rather than trying to interpret them here.
     if (!existing) return null;
-    if (existing.requestedSurface !== 'api' || existing.replayPlacement === undefined) {
+    if ((!['api', 'cli', 'agent', 'mcp'].includes(existing.requestedSurface) && existing.approvalInputCustody !== 'live_only')
+      || (existing.approvalInputCustody !== 'live_only' && existing.replayPlacement === undefined)) {
       return targetActionReplayFailure('approval_invalid');
     }
     const decisionOrigin = existing.executionOriginV1;
     const target = decisionOrigin?.target
       ?? (decisionOrigin?.sessionId ? { kind: 'session' as const, sessionId: decisionOrigin.sessionId } : null)
       ?? (decisionOrigin?.machineId ? { kind: 'machine' as const, machineId: decisionOrigin.machineId } : null);
-    if (callerGrant && !isApiTokenGrantTargetMemberV1(callerGrant, target, decisionOrigin?.machineId)) {
+    const decisionTarget = target ?? (existing.replayPlacement?.defaultSessionId
+      ? { kind: 'session' as const, sessionId: existing.replayPlacement.defaultSessionId }
+      : existing.replayPlacement
+      ? { kind: 'machine' as const, machineId: existing.replayPlacement.machineId } : null);
+    if (callerGrant && !isApiTokenGrantTargetMemberV1(callerGrant, decisionTarget,
+      decisionOrigin?.machineId ?? existing.replayPlacement?.machineId)) {
       return targetActionReplayFailure('credential_scope_denied');
     }
 
@@ -159,6 +165,7 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
         decision: { kind: 'reject', decidedAtMs: nextTimestamp(existing) },
       };
       const persistenceFailure = await persist(rejected);
+      if (!persistenceFailure) getSharedBlockingApprovalCoordinator().notifyApprovalUpdated({ artifactId, request: rejected });
       return persistenceFailure ?? buildTargetActionApprovalDecisionResult(rejected);
     }
 
@@ -172,6 +179,13 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
     if (existing.status !== 'open'
       && (existing.status !== 'approved' || existing.decision?.kind !== 'approve')) {
       return targetActionReplayFailure('approval_not_open');
+    }
+    if (resolveApprovalRequestApproveAdmission(existing).status !== 'available') {
+      return targetActionReplayFailure('approval_context_unavailable');
+    }
+    if (existing.approvalInputCustody === 'live_only'
+      && getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId) === 0) {
+      return targetActionReplayFailure('approval_stale');
     }
 
     let approved = existing;
@@ -205,7 +219,19 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
       }
       approved = persisted;
     }
-    if (approved.requestedSurface !== 'api' || approved.replayPlacement === undefined) {
+    if (approved.approvalInputCustody === 'live_only') {
+      // The existing admitted invocation owns the raw input and rechecks its
+      // current policy after this decision. Never redispatch its projection.
+      const coordinator = getSharedBlockingApprovalCoordinator();
+      // Its Account subscription may already have consumed this durable
+      // decision before the write returned. Liveness was admitted above;
+      // an already-woken waiter is not a stale replay.
+      coordinator.notifyApprovalUpdated({ artifactId, request: approved });
+      return buildTargetActionApprovalDecisionResult(approved);
+    }
+    const requestedSurface = approved.requestedSurface;
+    if ((requestedSurface !== 'api' && requestedSurface !== 'cli' && requestedSurface !== 'agent' && requestedSurface !== 'mcp')
+      || approved.replayPlacement === undefined) {
       return targetActionReplayFailure('approval_invalid');
     }
     // The durable placement is stamped once at admission; later status writes
@@ -247,7 +273,7 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
       createdAtMs: approved.createdAtMs,
       updatedAtMs: approved.updatedAtMs,
       createdBy: approved.createdBy,
-      requestedSurface: 'api',
+      requestedSurface,
       executionOriginV1: origin,
       actionId: 'action.invoke',
       actionArgs: {
@@ -344,8 +370,8 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
                 : { status: 'unavailable', code: 'plugin_action_current_intent_mismatch' }
             ),
             context: {
-              surface: 'api',
-              invocationSurface: 'api',
+              surface: requestedSurface,
+              invocationSurface: requestedSurface,
               initiatingActionCaller: origin.caller,
               ...(externalActionContext ? { externalActionContext } : {}),
               ...(replayPlacement.defaultSessionId === undefined

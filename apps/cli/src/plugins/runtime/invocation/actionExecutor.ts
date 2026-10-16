@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { createPluginActionPresentUserGate, projectPluginActionFailureCode } from '@happier-dev/protocol/plugins/actions/invocation';
+import { createPluginActionPresentUserGate, projectPluginActionFailureCode, type PluginActionInputParserIssue } from '@happier-dev/protocol/plugins/actions/invocation';
 import type { ApprovalExecutionOriginV1, PluginSourceCustodyV1, TargetActionApprovalReplayPlacementV1, PluginActionPresentUserGatePolicy } from '@happier-dev/protocol';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import type { PluginActionHandlerInvocation } from '@happier-dev/plugin-sdk/actions';
@@ -15,6 +15,7 @@ import type {
 } from '../hostAccess/resolve';
 import { projectPluginFailureText } from '../lifecycle/utils';
 import type { PluginInvocationServiceBinding } from './services/types';
+import { projectTargetActionDiagnosticIssue, readTargetActionDiagnosticConfidentiality } from './diagnostics';
 
 export type TargetActionExecutionResult = Readonly<
   | { status: 'executed'; value: JsonValue | null }
@@ -23,6 +24,7 @@ export type TargetActionExecutionResult = Readonly<
     status: 'unavailable' | 'invalid' | 'failed';
     code: string;
     message: string;
+    issues?: readonly PluginActionInputParserIssue[];
     /** Failures only, and only for a proven canonical PluginError. */
     retryable?: boolean;
     /** Failures only: the target's own published PluginError contract payload. */
@@ -36,6 +38,11 @@ export type ResolvedTargetAction = NormalizedTargetActionPolicy & Readonly<{
   pluginId: string;
   localId: string;
   input: unknown;
+  secretInputPaths?: readonly string[];
+  secretInputLabels?: Readonly<Record<string, string>>;
+  /** Executable declaration captured by the invocation owner, absent on catalog-only facts. */
+  pluginVersion?: string;
+  inputSchema?: object;
   accountId?: string;
   resourceId?: string;
   /** Durable source authority for replay; live admission remains occurrence-fenced. */
@@ -96,9 +103,9 @@ export type TargetActionCurrentIntentRequest = Readonly<{
   surface: string;
   /** Actual host invocation surface that the approval binds. */
   invocationSurface?: string;
-  /** Immutable host-stamped target for a deferred API approval replay. */
+  /** Immutable admitting daemon for deferred replay or a live-only decision. */
   replayPlacement?: TargetActionApprovalReplayPlacementV1;
-  /** Immutable outer Action authority captured before a deferred API decision. */
+  /** Immutable outer Action authority captured before a deferred decision. */
   executionOriginV1?: ApprovalExecutionOriginV1;
   signal?: AbortSignal;
 }>;
@@ -122,7 +129,12 @@ function stable(value: unknown): string {
   return JSON.stringify(value) ?? 'undefined';
 }
 
-export function fingerprintTargetActionPolicy(action: NormalizedTargetActionPolicy): string {
+export function fingerprintTargetActionPolicy(action: NormalizedTargetActionPolicy & Readonly<{
+  secretInputPaths?: readonly string[];
+  secretInputLabels?: Readonly<Record<string, string>>;
+  pluginVersion?: string;
+  inputSchema?: object;
+}>): string {
   return createHash('sha256').update(stable({
     qualifiedId: action.qualifiedId,
     dangerLevel: action.dangerLevel,
@@ -132,6 +144,12 @@ export function fingerprintTargetActionPolicy(action: NormalizedTargetActionPoli
     availability: action.availability,
     confirmation: action.confirmation,
     approvalRequiredByActionSettings: action.approvalRequiredByActionSettings,
+    secretInputPaths: action.secretInputPaths ?? [],
+    ...(action.secretInputLabels === undefined ? {} : { secretInputLabels: action.secretInputLabels }),
+    // Occurrences can repeat after restart. Bind the executable declaration in
+    // the existing durable subject as well as its current policy and source.
+    pluginVersion: action.pluginVersion,
+    inputSchema: action.inputSchema,
   })).digest('hex');
 }
 
@@ -161,7 +179,7 @@ function failed(
  * A target's published failure payload crosses to its caller, so it must not
  * become the one unredacted route out of an invocation whose credential
  * redaction already owns the failure code and message. The same scoped
- * redactor is applied to every string leaf and key; a redactor failure is
+ * redactor is applied to strings and keys; a redactor failure is
  * caught by the caller, which then withholds the payload entirely.
  *
  * The payload already passed shared Action JSON admission. That carrier has no
@@ -171,6 +189,7 @@ function failed(
 function redactTargetActionFailureData(
   value: JsonValue,
   redact: (value: string) => string,
+  confidentiality?: ReturnType<typeof readTargetActionDiagnosticConfidentiality>,
 ): JsonValue {
   if (typeof value === 'string') return redact(value);
   if (value === null || typeof value !== 'object') return value;
@@ -180,20 +199,29 @@ function redactTargetActionFailureData(
       kind: 'array';
       source: readonly JsonValue[];
       destination: JsonValue[];
+      path: readonly string[];
     }>
     | Readonly<{
       kind: 'record';
       source: Readonly<Record<string, JsonValue>>;
       destination: Record<string, JsonValue>;
+      path: readonly string[];
     }>;
   const isJsonArray = (candidate: JsonValue): candidate is readonly JsonValue[] => (
     Array.isArray(candidate)
   );
   const root: PendingRedaction = isJsonArray(value)
-    ? { kind: 'array', source: value, destination: [] }
-    : { kind: 'record', source: value, destination: {} };
+    ? { kind: 'array', source: value, destination: [], path: [] }
+    : { kind: 'record', source: value, destination: {}, path: [] };
   const pending: PendingRedaction[] = [root];
-  const project = (candidate: JsonValue): JsonValue => {
+  const confidentialPaths = new Set(confidentiality?.paths);
+  const project = (candidate: JsonValue, path: readonly string[]): JsonValue => {
+    // PluginError owns the outer envelope. Only details carry plugin operands;
+    // its original paths are checked before keys or text are redacted.
+    if (path[0] === 'details' && confidentialPaths.has(path.slice(1).join('.'))) return '[REDACTED]';
+    const issue = path[0] === 'details' && confidentiality
+      ? projectTargetActionDiagnosticIssue(candidate, confidentiality) : null;
+    if (issue) candidate = { path: [...issue.path], code: issue.code, message: issue.message };
     if (typeof candidate === 'string') return redact(candidate);
     if (candidate === null || typeof candidate !== 'object') return candidate;
     if (isJsonArray(candidate)) {
@@ -201,6 +229,7 @@ function redactTargetActionFailureData(
         kind: 'array',
         source: candidate,
         destination: [],
+        path,
       };
       pending.push(next);
       return next.destination;
@@ -209,6 +238,7 @@ function redactTargetActionFailureData(
       kind: 'record',
       source: candidate,
       destination: {},
+      path,
     };
     pending.push(next);
     return next.destination;
@@ -219,16 +249,87 @@ function redactTargetActionFailureData(
     if (!current) continue;
     if (current.kind === 'array') {
       for (let index = 0; index < current.source.length; index += 1) {
-        current.destination[index] = project(current.source[index]!);
+        current.destination[index] = project(current.source[index]!, confidentialPaths.size > 0 ? [...current.path, String(index)] : current.path);
       }
       continue;
     }
     for (const [key, candidate] of Object.entries(current.source)) {
-      current.destination[redact(key)] = project(candidate);
+      current.destination[redact(key)] = project(candidate, confidentialPaths.size > 0 ? [...current.path, key] : current.path);
     }
   }
 
   return root.destination;
+}
+
+/** One diagnostic projection for parser admission and execution failures. */
+export function projectTargetActionFailure(
+  result: TargetActionExecutionResult,
+  redact?: (value: string) => string,
+  confidentialInput?: Readonly<{
+    input: unknown;
+    secretInputPaths: readonly string[];
+    rawConfidentiality?: ReturnType<typeof readTargetActionDiagnosticConfidentiality>;
+  }>,
+): TargetActionExecutionResult {
+  if (result.status === 'executed' || result.status === 'deferred') return result;
+  let code = projectPluginActionFailureCode(result.code);
+  let message = result.message;
+  let data = result.data;
+  let issues = result.issues;
+  let confidentiality: ReturnType<typeof readTargetActionDiagnosticConfidentiality> | undefined;
+  if (confidentialInput) {
+    try {
+      const classified = readTargetActionDiagnosticConfidentiality(
+        confidentialInput.input, confidentialInput.secretInputPaths, confidentialInput.rawConfidentiality,
+      );
+      confidentiality = classified;
+      const { nonStringPaths } = classified;
+      issues = issues?.map(issue => projectTargetActionDiagnosticIssue(issue, classified) ?? issue);
+      const firstIssue = issues?.[0];
+      if (firstIssue && firstIssue !== result.issues?.[0]) message = firstIssue.message;
+      if (nonStringPaths.length > 0 && result.code === 'plugin_action_result_schema_invalid' && !result.issues) {
+        // The Protocol result parser retains only prose, losing issue provenance.
+        // Use its content-free schema failure rather than guessing operand text.
+        message = 'Plugin action result does not match its executable result schema';
+      }
+    } catch {
+      code = 'plugin_action_execution_failed';
+      message = code;
+      data = undefined;
+      issues = undefined;
+    }
+  }
+  if (redact || confidentiality) {
+    const redactText = redact ?? ((value: string) => value);
+    const projected = { code, message, data, issues };
+    code = 'plugin_action_execution_failed';
+    message = code;
+    data = undefined;
+    issues = undefined;
+    try {
+      const redactedCode = redactText(projected.code);
+      code = redactedCode === projected.code ? projectPluginActionFailureCode(projected.code) : code;
+      message = redactText(projected.message);
+      data = projected.data === undefined ? undefined : redactTargetActionFailureData(projected.data, redactText, confidentiality);
+      issues = projected.issues?.map(issue => Object.freeze({
+        path: Object.freeze(issue.path.map(segment => typeof segment === 'string' ? redactText(segment) : segment)),
+        code: redactText(issue.code), message: redactText(issue.message),
+      }));
+    } catch {
+      // A failed scoped redactor cannot disclose a partially projected diagnostic.
+      code = 'plugin_action_execution_failed';
+      message = code;
+      data = undefined;
+      issues = undefined;
+    }
+  }
+  return Object.freeze({
+    status: result.status, code, message: projectPluginFailureText(new Error(message)),
+    ...(result.retryable === undefined ? {} : { retryable: result.retryable }),
+    ...(data === undefined ? {} : { data }),
+    ...(issues === undefined ? {} : { issues }),
+    ...(result.actionHandlerInvocation === undefined ? {} : { actionHandlerInvocation: result.actionHandlerInvocation }),
+  });
 }
 
 function isCurrentServiceBinding(
@@ -296,6 +397,8 @@ export function createTargetActionExecutor(deps: Readonly<{
   requestCurrentIntent?: (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult>;
   invoke: (action: ResolvedTargetAction, args: Readonly<{ surface: string; sessionId?: string; signal?: AbortSignal }>, serviceBinding: PluginInvocationServiceBinding) => Promise<TargetActionExecutionResult>;
   redactFailureText?: (action: ResolvedTargetAction, value: string) => string;
+  /** Captured before executable normalization can consume confidential operands. */
+  rawDiagnosticConfidentiality?: ReturnType<typeof readTargetActionDiagnosticConfidentiality>;
   diagnostic?: (fact: Readonly<{ qualifiedId: string; occurrenceId: string; surface: string; status: string; code?: string }>) => void | Promise<void>;
 }>) {
   type ExecuteArgs = Readonly<{
@@ -320,45 +423,15 @@ export function createTargetActionExecutor(deps: Readonly<{
       let action: ResolvedTargetAction | null = null;
       const invocationSurface = args.invocationSurface ?? args.surface;
       const finish = async (result: TargetActionExecutionResult): Promise<TargetActionExecutionResult> => {
-        let publicResult = result;
-        if (result.status === 'failed') {
-          let code = projectPluginActionFailureCode(result.code);
-          let message = result.message;
-          let data = result.data;
-          const redactedAction = action;
-          if (redactedAction && deps.redactFailureText) {
-            const redactFailureText = deps.redactFailureText;
-            code = 'plugin_action_execution_failed';
-            message = code;
-            data = undefined;
-            try {
-              const redactedCode = redactFailureText(redactedAction, result.code);
-              code = redactedCode === result.code
-                ? projectPluginActionFailureCode(result.code)
-                : 'plugin_action_execution_failed';
-              message = redactFailureText(redactedAction, result.message);
-              data = result.data === undefined
-                ? undefined
-                : redactTargetActionFailureData(
-                  result.data,
-                  (value) => redactFailureText(redactedAction, value),
-                );
-            } catch {
-              // Error projection is a privacy boundary. If the scoped redactor is
-              // unavailable, retain only the host-owned stable failure taxonomy.
-            }
-          }
-          publicResult = Object.freeze({
-            status: 'failed',
-            code,
-            message: projectPluginFailureText(new Error(message)),
-            ...(result.retryable === undefined ? {} : { retryable: result.retryable }),
-            ...(data === undefined ? {} : { data }),
-            ...(result.actionHandlerInvocation === undefined
-              ? {}
-              : { actionHandlerInvocation: result.actionHandlerInvocation }),
-          });
-        }
+        const redactedAction = action;
+        const redactFailureText = deps.redactFailureText;
+        const publicResult = projectTargetActionFailure(result, redactedAction && redactFailureText
+          ? value => redactFailureText(redactedAction, value) : undefined,
+          redactedAction ? {
+            input: redactedAction.input,
+            secretInputPaths: redactedAction.secretInputPaths ?? [],
+            rawConfidentiality: deps.rawDiagnosticConfidentiality,
+          } : undefined);
         try {
           await deps.diagnostic?.({
             qualifiedId: action?.qualifiedId ?? `${args.pluginId}/actions/${args.localId}`,

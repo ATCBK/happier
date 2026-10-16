@@ -510,11 +510,12 @@ describe('production invocation service owners', () => {
         expect(bind).toHaveBeenCalledWith(seed, policy.serviceBinding, services.interactions, undefined);
     });
 
-    it('shares invocation-local sequence ordering between plugin and host diagnostics', () => {
+    it.each([false, true])('shares invocation-local sequence ordering between plugin and host diagnostics (caller resolver %s)', withCallerResolver => {
         const records: PluginInvocationLogRecord[] = [];
         const owners = createProductionPluginInvocationServiceOwners({
             loggerSink: { write: (record) => { records.push(record); } },
             now: () => 123,
+            ...(withCallerResolver ? { resolveCurrentPluginMaterializationRef: () => null } : {}),
         });
         const seed = Object.freeze({
             plugin: Object.freeze({ id: 'acme.voice', version: '1.0.0' }),

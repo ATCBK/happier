@@ -39,7 +39,7 @@ import {
     resolveTargetActionAvailability,
     type TargetActionAuthorizationFacts,
 } from '../policy/evaluate';
-import type { CreatePluginInvocationServices } from './services/types';
+import type { BeginPluginInvocationDiagnosticScope, CreatePluginInvocationServices } from './services/types';
 import type { HostCurrentSessionUiServices } from '@/agent/runtime/state/currentSessionUiTypes';
 import {
     revalidateRegistryConnectedAccountActionFormInput,
@@ -141,6 +141,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
     resolveHostBinding: ResolveTargetActionHostBinding;
     resolveHostPolicy: ResolveTargetActionHostPolicy;
     createServices: CreatePluginInvocationServices;
+    beginDiagnosticScope?: BeginPluginInvocationDiagnosticScope;
     redactDiagnosticText?: (
         scope: Readonly<{ pluginId: string; occurrenceId: string; correlationId: string }>,
         value: string,
@@ -228,6 +229,9 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
             const resultParser = readPluginActionResultParser(capturedHandler);
             const occurrenceId = params.readCurrentPluginOccurrenceId?.(entry.pluginId);
             const sourceCustody = params.readCurrentPluginSourceCustody?.(entry.pluginId);
+            const secretInputLabels = Object.fromEntries((actionDefinition.inputHints?.fields ?? [])
+                .filter(field => field.widget === 'secret')
+                .map(field => [field.path, typeof field.title === 'string' ? field.title : field.title.fallback]));
             if (occurrenceId == null || occurrenceId !== entry.occurrenceId || sourceCustody == null) {
                 throw new Error(`Target action '${entry.pluginId}/actions/${entry.registration.localId}' lacks host-stamped occurrence or source custody`);
             }
@@ -241,6 +245,9 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
                 localId: entry.registration.localId,
                 definition: {
                     ...readTargetDefinition(resolvedAction.definition),
+                    secretInputPaths: (actionDefinition.inputHints?.fields ?? [])
+                        .filter(field => field.widget === 'secret').map(field => field.path),
+                    ...(Object.keys(secretInputLabels).length ? { secretInputLabels } : {}),
                     hostAccessRequests: resolveManifestHostAccessRequests({
                         manifest,
                         pluginId: entry.pluginId,
@@ -351,6 +358,9 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
         resolveAuthorizationFacts: params.resolveAuthorizationFacts,
         resolveHostBinding: params.resolveHostBinding,
         createServices: params.createServices,
+        ...(params.beginDiagnosticScope
+            ? { beginDiagnosticScope: params.beginDiagnosticScope }
+            : {}),
         ...(params.redactDiagnosticText
             ? { redactDiagnosticText: params.redactDiagnosticText }
             : {}),

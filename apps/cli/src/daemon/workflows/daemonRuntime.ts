@@ -41,7 +41,7 @@ import { createCommittedContributedActionDefinitionLister, createCommittedContri
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
-import { createCredentialedTargetActionCurrentIntent } from '@/session/actions/createCliActionExecutor';
+import { createCredentialedTargetActionCurrentIntent } from '@/session/actions/approvals/credentialedTargetActionCurrentIntent';
 import { createCredentialedWorkflowMaterializationHostV1 } from '@/session/actions/workflowMaterializationHost';
 import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';

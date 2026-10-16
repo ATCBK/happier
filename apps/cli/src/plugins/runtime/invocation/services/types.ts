@@ -7,6 +7,7 @@ import type {
     PluginInvocationCaller,
     PluginServiceId,
     PluginServices,
+    JsonValue,
 } from '@happier-dev/plugin-sdk';
 import type {
     PluginInvocationSurface } from '@happier-dev/plugin-sdk/interactions';
@@ -27,6 +28,15 @@ import type {
 } from '@/agent/runtime/state/currentSessionUiTypes';
 import type { PluginSessionAccessScope } from '@/session/services/pluginSessionsInventory';
 import type { ProcessOwnerRef } from '@/processes/ownerTag';
+
+/** Host-private enrollment in the production invocation's existing redactor. */
+export type BeginPluginInvocationDiagnosticScope = (
+    scope: Readonly<{ pluginId: string; occurrenceId: string; correlationId: string }>,
+    signal: AbortSignal,
+    input: JsonValue,
+    secretInputPaths: readonly string[],
+) => void;
+
 export type AgentInvocationTurnAdmissionWitness = Readonly<{
     inputId: string;
     turnId: string;

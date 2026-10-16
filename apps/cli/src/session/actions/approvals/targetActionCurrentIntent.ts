@@ -4,6 +4,7 @@ import type { PluginLocalizedStringV2, TargetActionApprovalRequestV1 } from '@ha
 import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult } from '@/plugins/runtime/invocation/actionExecutor';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 import { targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
+import { projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 
 function resolveLocalizedConfirmationText(value: PluginLocalizedStringV2): string {
   return typeof value === 'string' ? value : value.fallback;
@@ -24,6 +25,8 @@ function createTargetActionApprovalRequestCandidate(
   const requestedSurface = invocationSurface ?? surface;
   const approvalRequiredByActionSettings = action.approvalRequiredByActionSettings === true;
   if (!action.confirmation && !approvalRequiredByActionSettings) return null;
+  const projected = projectTargetActionApprovalInput(action.input, action.secretInputPaths ?? []);
+  if (!projected) return null;
   const candidate = {
     v: 1,
     kind: 'plugin_target_action',
@@ -39,7 +42,10 @@ function createTargetActionApprovalRequestCandidate(
     },
     requestedSurface,
     qualifiedActionId: action.qualifiedId,
-    input: action.input,
+    input: projected.input,
+    secretInputPaths: action.secretInputPaths ?? [],
+    ...(action.secretInputLabels === undefined ? {} : { secretInputLabels: action.secretInputLabels }),
+    ...(projected.confidentialPaths.length ? { approvalInputCustody: 'live_only' } : {}),
     ...(action.accountId ? { accountId: action.accountId } : {}),
     ...(action.resourceId ? { resourceId: action.resourceId } : {}),
     sourceCustody: action.sourceCustody,
@@ -55,7 +61,7 @@ function createTargetActionApprovalRequestCandidate(
       : {}),
   } as const;
   const parsed = TargetActionApprovalRequestV1Schema.safeParse(candidate);
-  return parsed.success ? parsed.data : null;
+  return parsed.success && resolveApprovalRequestApproveAdmission(parsed.data).status === 'available' ? parsed.data : null;
 }
 
 /**
@@ -90,8 +96,7 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
   const coordinator = getSharedBlockingApprovalCoordinator();
   const subscribeChanges = deps.subscribeChanges;
   return async (currentIntent) => {
-    const { fingerprint, surface, invocationSurface, signal } = currentIntent;
-    const requestedSurface = invocationSurface ?? surface;
+    const { fingerprint, signal } = currentIntent;
     const now = (deps.now ?? Date.now)();
     const request = createTargetActionApprovalRequestCandidate(currentIntent, {
       createdAtMs: now,
@@ -105,7 +110,7 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
     if (!artifactId) {
       return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
     }
-    if (requestedSurface === 'api') {
+    if (request.approvalInputCustody !== 'live_only') {
       return { status: 'deferred', artifactId };
     }
     const result = await coordinator.waitForDecision({

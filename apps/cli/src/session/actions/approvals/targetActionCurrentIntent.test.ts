@@ -6,6 +6,26 @@ import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/acti
 const developmentCustody = { kind: 'development', registeredRootId: 'root-7' } as const;
 
 describe('target action current-intent adapter', () => {
+  it.each([
+    { _isSecretValue: true, value: 'private' },
+    { entries: [{ credential: { _isSecretValue: true, value: 'private' }, public: 'visible' }] },
+  ])('keeps SecretString input exclusively with the live invocation: %j', async input => {
+    let stored: TargetActionApprovalRequestV1 | undefined;
+    const adapter = createTargetActionCurrentIntentAdapter({
+      create: async request => { stored = request; return { artifactId: 'secret-carrier' }; },
+      read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: 2 } } : null,
+    });
+    await expect(adapter({
+      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7',
+        sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'],
+        hostAccess: [], input, policyFingerprint: 'b'.repeat(64),
+        confirmation: { title: 'Run action' } },
+      fingerprint: 'a'.repeat(64), surface: 'cli',
+    })).resolves.toMatchObject({ status: 'approved' });
+    expect(stored).toMatchObject({ approvalInputCustody: 'live_only' });
+    expect(JSON.stringify(stored)).not.toContain('private');
+  });
+
   it('observes a decision from another device through its artifact invalidation subscription', async () => {
     const stored: { request: TargetActionApprovalRequestV1 | null } = { request: null };
     let onChange = () => {};
@@ -22,7 +42,7 @@ describe('target action current-intent adapter', () => {
       },
     });
     const pending = adapter({
-      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1 }, policyFingerprint: 'b'.repeat(64), confirmation: { title: 'Run action' } },
+      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1 }, secretInputPaths: ['x'], policyFingerprint: 'b'.repeat(64), confirmation: { title: 'Run action' } },
       fingerprint: 'a'.repeat(64), surface: 'cli',
     });
     await Promise.resolve();
@@ -42,7 +62,7 @@ describe('target action current-intent adapter', () => {
       read: async () => ({ ...stored, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } }),
     });
     await expect(adapter({
-      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1 }, policyFingerprint: 'b'.repeat(64), confirmation: { title: 'Run action' } },
+      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1 }, secretInputPaths: ['x'], policyFingerprint: 'b'.repeat(64), confirmation: { title: 'Run action' } },
       fingerprint: 'a'.repeat(64), surface: 'cli',
     })).resolves.toEqual({ status: 'approved', fingerprint: 'a'.repeat(64), artifactId: 'approval-1' });
     expect(stored).toMatchObject({ kind: 'plugin_target_action', qualifiedActionId: 'acme.alpha/actions/run', sourceCustody: developmentCustody, policyFingerprint: 'b'.repeat(64) });
@@ -75,7 +95,8 @@ describe('target action current-intent adapter', () => {
       action: {
         qualifiedId: 'acme.github/actions/automations/reset-history-gap', pluginId: 'acme.github',
         localId: 'automations/reset-history-gap', occurrenceId: '7', sourceCustody: developmentCustody, dangerLevel: 'writesLocal',
-        scopes: ['global'], surfaces: ['ui'], hostAccess: [], input: { automationId: 'automation-1', secret: 'must-not-render' },
+        scopes: ['global'], surfaces: ['ui'], hostAccess: [], input: { automationId: 'automation-1' },
+        secretInputPaths: ['automationId'],
         policyFingerprint: 'b'.repeat(64),
         confirmation: {
           title: { key: 'automation.historyGapReset.title', fallback: 'Start a new baseline' },
@@ -95,22 +116,12 @@ describe('target action current-intent adapter', () => {
     expect(stored.detail).not.toContain('must-not-render');
   });
 
-  it('uses the existing durable approval path for Action-settings approval without inventing plugin confirmation', async () => {
+  it('defers Action-settings approval with an absent optional secret without inventing plugin confirmation', async () => {
     let stored: TargetActionApprovalRequestV1 | undefined;
     const adapter = createTargetActionCurrentIntentAdapter({
       now: () => 1,
       create: async (request) => {
-        const approved: TargetActionApprovalRequestV1 = {
-          ...request,
-          status: 'approved',
-          updatedAtMs: 2,
-          decision: { kind: 'approve', decidedAtMs: 2 },
-        };
-        stored = approved;
-        queueMicrotask(() => getSharedBlockingApprovalCoordinator().notifyApprovalUpdated({
-          artifactId: 'approval-settings-required-1',
-          request: approved,
-        }));
+        stored = request;
         return { artifactId: 'approval-settings-required-1' };
       },
       read: async () => stored ?? null,
@@ -121,9 +132,10 @@ describe('target action current-intent adapter', () => {
         qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody,
         dangerLevel: 'safe', scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1 },
         policyFingerprint: 'b'.repeat(64), approvalRequiredByActionSettings: true,
+        secretInputPaths: ['credential'],
       },
       fingerprint: 'a'.repeat(64), surface: 'cli',
-    })).resolves.toEqual({ status: 'approved', fingerprint: 'a'.repeat(64), artifactId: 'approval-settings-required-1' });
+    })).resolves.toEqual({ status: 'deferred', artifactId: 'approval-settings-required-1' });
 
     expect(stored).toMatchObject({
       qualifiedActionId: 'acme.alpha/actions/run',
@@ -175,6 +187,7 @@ describe('target action current-intent adapter', () => {
       artifactId: 'approval-api-required-1',
     });
     expect(read).not.toHaveBeenCalled();
+    expect(stored).not.toHaveProperty('approvalInputCustody');
     expect(stored).toMatchObject({
       replayPlacement: {
         serverId: 'server-1',
@@ -188,18 +201,23 @@ describe('target action current-intent adapter', () => {
     });
   });
 
-  it('rejects a durable decision whose subject fields changed under the same fingerprint', async () => {
+  it.each([
+    { sourceCustody: { kind: 'development', registeredRootId: 'root-8' } },
+    { secretInputPaths: ['x'] },
+    { secretInputLabels: { x: 'Different operand' } },
+    { approvalInputCustody: undefined },
+  ])('rejects a durable decision whose subject fields changed under the same fingerprint: %j', async change => {
     let stored: any;
     const adapter = createTargetActionCurrentIntentAdapter({
       now: () => 1,
       create: async (request) => { stored = request; return { artifactId: 'approval-2' }; },
       read: async () => ({
-        ...stored, sourceCustody: { kind: 'development', registeredRootId: 'root-8' }, status: 'approved', updatedAtMs: 2,
+        ...stored, ...change, status: 'approved', updatedAtMs: 2,
         decision: { kind: 'approve', decidedAtMs: 2 },
       }),
     });
     await expect(adapter({
-      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1 }, policyFingerprint: 'b'.repeat(64), confirmation: { title: 'Run action' } },
+      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1, private: 'held' }, secretInputPaths: ['private'], policyFingerprint: 'b'.repeat(64), confirmation: { title: 'Run action' } },
       fingerprint: 'a'.repeat(64), surface: 'cli',
     })).resolves.toEqual({ status: 'unavailable', code: 'plugin_action_current_intent_mismatch' });
   });
@@ -209,6 +227,7 @@ describe('target action current-intent adapter', () => {
     const action = {
       qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody,
       dangerLevel: 'destructive' as const, scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1 },
+      secretInputPaths: ['x'],
       policyFingerprint: 'b'.repeat(64), confirmation: { title: 'Delete the workspace', body: 'This cannot be undone.' },
     };
     const changed = createTargetActionCurrentIntentAdapter({

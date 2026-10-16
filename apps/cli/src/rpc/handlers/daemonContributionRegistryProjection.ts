@@ -105,6 +105,8 @@ import {
 } from './daemonPluginCollectionCandidatePreparation';
 
 export type DaemonContributionRegistryProjectionRegistrationOptions = Readonly<{
+    /** The connected machine binds approval requests to its current Account custody. */
+    requestCurrentIntent?: (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult>;
     resolveCaptureRegistry?: () => MachineLiveStreamCaptureRegistry | null;
     resolveRegistry?: () => Promise<ResolvedContributionRegistry>;
     resolveRuntimeRegistry?: () => Promise<ResolvedExecutablePluginRuntimeRegistry>;
@@ -211,16 +213,26 @@ export function invalidateDaemonContributionRegistryProjectionCache(): void {
 }
 
 /**
- * Admits the present user's settled UI confirmation. The shared gate asks for
- * it only when the Action requires a live decision; without a carried intent
- * the request fails closed, and nothing is left pending.
+ * UI/Voice carry the person's settled confirmation. Automated origins ask
+ * through the same durable approval owner as other contributed Actions.
  */
 function createPresentUserCurrentIntent(
     presentUserIntent: 'confirmed' | undefined,
+    requestCurrentIntent: DaemonContributionRegistryProjectionRegistrationOptions['requestCurrentIntent'],
 ): (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult> {
-    return async (request) => presentUserIntent === 'confirmed'
-        ? { status: 'approved', fingerprint: request.fingerprint }
-        : { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
+    return async request => {
+        const surface = request.invocationSurface ?? request.surface;
+        if (surface === 'cli' || surface === 'agent' || surface === 'mcp') {
+            request.signal?.throwIfAborted();
+            if (!requestCurrentIntent) {
+                return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
+            }
+            return await requestCurrentIntent(request);
+        }
+        return presentUserIntent === 'confirmed'
+            ? { status: 'approved', fingerprint: request.fingerprint }
+            : { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
+    };
 }
 
 async function defaultResolveRegistry(): Promise<ResolvedContributionRegistry> {
@@ -2671,11 +2683,13 @@ export function registerDaemonContributionRegistryProjectionHandler(
                 actionId: request.data.qualifiedActionId,
                 ...(request.data.input === undefined ? {} : { input: request.data.input }),
                 expectedContributorOccurrenceId: request.data.expectedContributorOccurrenceId,
-                // Every caller of this RPC is a present UI or Voice user. The
-                // person already answered any confirmation in that UI, so the
-                // daemon admits the carried intent and never creates a durable
-                // approval artifact here (PPS §9 ruling d).
-                requestCurrentIntent: createPresentUserCurrentIntent(request.data.presentUserIntent),
+                approvalContext: {
+                    ...context?.localActionContext,
+                    authority: context?.callerAuthority ?? context?.localActionContext?.authority ?? 'account_automation',
+                    ...(context?.localActionContext?.actionRequestId ?? context?.transportRequestId
+                        ? { actionRequestId: context?.localActionContext?.actionRequestId ?? context?.transportRequestId } : {}),
+                },
+                requestCurrentIntent: createPresentUserCurrentIntent(request.data.presentUserIntent, opts?.requestCurrentIntent),
                 context: {
                     // The canonical contributed-Action owner derives the target
                     // plugin surface from authenticated caller identity. This
@@ -2715,6 +2729,9 @@ export function registerDaemonContributionRegistryProjectionHandler(
                     ok: false,
                     code: 'plugin_action_unavailable',
                 });
+            }
+            if (attempt.result.ok && attempt.result.deferredApprovalArtifactId !== undefined) {
+                return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: true, result: attempt.result.result });
             }
             if (trackedOperation && opts?.observePluginExecution) {
                 if (!attempt.result.ok || !preparedTrackedInvocation || !resolvedAction) {

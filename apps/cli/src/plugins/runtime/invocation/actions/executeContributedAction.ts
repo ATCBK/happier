@@ -2,9 +2,12 @@ import { ACTION_IDS } from '@happier-dev/protocol/actions/actionIds';
 import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { MACHINE_PROVISIONER_EFFECT_ROLES_V1, readMachineProvisionerActionRolesV1, isMachineProvisionerBootstrapCredentialRoleV1, type MachineProvisionerRoleV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
-import type { ActionId, QualifiedPluginActionId } from '@happier-dev/protocol/actions';
+import type { ActionExecutorContext, ActionId, QualifiedPluginActionId } from '@happier-dev/protocol/actions';
+import { buildApprovalExecutionOriginV1 } from '@happier-dev/protocol/actions/actionExecutor';
+import { randomUUID } from 'node:crypto';
 import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
-import type { ActionsSettingsV1, JsonValue, MessageActionAvailableSnapshotV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
+import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import type { ActionsSettingsV1, ApprovalExecutionOriginV1, JsonValue, MessageActionAvailableSnapshotV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { PluginUiSelectedActionInputCarrierV1 } from '@happier-dev/protocol/plugins/ui';
@@ -36,7 +39,7 @@ export type PluginActionExecutorResult = Readonly<
   | {
     ok: true;
     result: JsonValue | null;
-    /** Host-private handoff from API current-intent admission to Action ingress. */
+    /** Host-private handoff from current-intent admission to Action ingress. */
     deferredApprovalArtifactId?: string;
     /** Present only for the contributed-Action execution-origin request. */
     executionOrigin?: PluginMachineExecutionOriginV1;
@@ -423,15 +426,13 @@ export async function executeContributedAction(params: Readonly<{
   actionsSettings?: ActionsSettingsV1;
   /** Host-private request from ActionsService.executeWithExecutionOrigin only. */
   captureExecutionOrigin?: true;
-  /**
-   * Host-private placement capture for a deferred API approval. Unlike the
-   * public execution-origin result, it never turns a completed direct Action
-   * into an origin-change failure after the target handler has run.
-   */
-  captureApprovalReplayPlacement?: true;
+  /** Original root authority, captured before normalization or secret projection. */
+  approvalExecutionOrigin?: ApprovalExecutionOriginV1;
+  /** Private admitted host context; never supplied through Action input. */
+  approvalContext?: ActionExecutorContext;
   /** Equality-only precondition from ActionsService.executeWithExecutionOrigin only. */
   expectedExecutionOrigin?: PluginMachineExecutionOriginV1;
-  /** Exact daemon placement re-read from a durable API approval subject. */
+  /** Exact daemon placement re-read from a durable target-Action approval subject. */
   expectedApprovalReplayPlacement?: TargetActionApprovalReplayPlacementV1;
   /**
    * Host-stamped targeted-contribution admission fence. It is never Action
@@ -523,7 +524,7 @@ export async function executeContributedAction(params: Readonly<{
     || params.context.caller !== undefined
     || params.context.externalActionContext !== undefined
     || params.captureExecutionOrigin !== undefined
-    || params.captureApprovalReplayPlacement !== undefined
+    || params.approvalExecutionOrigin !== undefined
     || params.expectedExecutionOrigin !== undefined
     || params.expectedApprovalReplayPlacement !== undefined
     || params.admittedTargetedOperation !== undefined
@@ -825,12 +826,16 @@ export async function executeContributedAction(params: Readonly<{
         })
       : params.context.caller;
     const replayPlacement = params.expectedApprovalReplayPlacement;
-    const requestCurrentIntent = params.requestCurrentIntent && params.captureApprovalReplayPlacement === true
+    const requestCurrentIntent = params.requestCurrentIntent
       ? async (request: TargetActionCurrentIntentRequest): Promise<TargetActionCurrentIntentResult> => {
           const requestedSurface = request.invocationSurface ?? request.surface;
-          const createsDurableApiApproval = requestedSurface === 'api'
+          const deferredSurface = requestedSurface === 'api' || requestedSurface === 'cli'
+            || requestedSurface === 'agent' || requestedSurface === 'mcp' ? requestedSurface : null;
+          const createsConfidentialApproval = requestedSurface !== 'ui' && requestedSurface !== 'voice'
+            && (projectTargetActionApprovalInput(request.action.input, request.action.secretInputPaths ?? [])?.confidentialPaths.length ?? 0) > 0;
+          const needsApprovalPlacement = (deferredSurface !== null || createsConfidentialApproval)
             && pluginActionRequiresPresentUserIntent(request.action, requestedSurface);
-          if (!createsDurableApiApproval) return await params.requestCurrentIntent!(request);
+          if (!needsApprovalPlacement) return await params.requestCurrentIntent!(request);
           const currentPlacement = await resolveCurrentTargetApprovalReplayPlacement(
             runtimeRegistry,
             pluginId,
@@ -844,15 +849,30 @@ export async function executeContributedAction(params: Readonly<{
                 : 'plugin_action_execution_origin_unavailable',
             };
           }
+          const placement = Object.freeze({
+            serverId: currentPlacement.placement.serverId,
+            machineId: currentPlacement.placement.machineId,
+            ...(params.context.defaultSessionId === undefined
+              ? {}
+              : { defaultSessionId: params.context.defaultSessionId }),
+          });
+          const executionOriginV1 = params.approvalExecutionOrigin ?? (deferredSurface === null ? null : buildApprovalExecutionOriginV1({
+            actionId: 'action.invoke',
+            input: { action: { pluginId: request.action.pluginId, localId: request.action.localId }, input: request.action.input },
+            context: {
+              ...params.approvalContext,
+              surface: deferredSurface,
+              actionCaller: params.approvalContext?.actionCaller ?? params.context.initiatingActionCaller ?? { kind: 'host' },
+              serverId: placement.serverId,
+              executionRunTargetMachineId: placement.machineId,
+              actionRequestId: params.approvalContext?.actionRequestId ?? randomUUID(),
+            },
+            targetSessionId: placement.defaultSessionId ?? null,
+          }));
           return await params.requestCurrentIntent!({
             ...request,
-            replayPlacement: Object.freeze({
-              serverId: currentPlacement.placement.serverId,
-              machineId: currentPlacement.placement.machineId,
-              ...(params.context.defaultSessionId === undefined
-                ? {}
-                : { defaultSessionId: params.context.defaultSessionId }),
-            }),
+            replayPlacement: placement,
+            ...(executionOriginV1 ? { executionOriginV1 } : {}),
           });
         }
       : params.requestCurrentIntent;
@@ -952,7 +972,7 @@ export async function executeContributedAction(params: Readonly<{
       if (targetResult.status === 'deferred') {
         return {
           ok: true,
-          result: null,
+          result: { kind: 'approval_request_created', artifactId: targetResult.artifactId, actionId: 'action.invoke' },
           deferredApprovalArtifactId: targetResult.artifactId,
         };
       }

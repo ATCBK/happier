@@ -15,7 +15,7 @@ vi.mock('@/plugins/projection/registry/createResolvedContributionRegistry', () =
   resolveMergedContributionRegistry: contributionRegistry.resolve,
 }));
 vi.mock('@/persistence', () => ({ readCredentials: vi.fn(async () => null) }));
-vi.mock('@/session/actions/createCliActionExecutor', () => ({ createCredentialedTargetActionCurrentIntent: vi.fn() }));
+vi.mock('@/session/actions/approvals/credentialedTargetActionCurrentIntent', () => ({ createCredentialedTargetActionCurrentIntent: vi.fn() }));
 
 import { dispatchCli } from './dispatch';
 import { synchronizePluginCommandContributions } from './commandRegistry';

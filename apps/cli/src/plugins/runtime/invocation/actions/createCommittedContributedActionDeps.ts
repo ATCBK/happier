@@ -94,8 +94,8 @@ function projectExternalActionContext(
 export function createCommittedContributedActionInvoker(input: Readonly<{
   acquireRuntimeRegistryLease?: typeof acquireAuthoritativePluginRuntimeRegistryLease;
   requestCurrentIntent?: (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult>;
-  fixedInvocationSurface?: PluginActionSurface;
-  captureApprovalReplayPlacement?: true;
+  /** Transport-only callers may supply a default without replacing a bound host surface. */
+  defaultInvocationSurface?: PluginActionSurface;
   /** Bound only by the accepted Workflow host; author input cannot supply this proof. */
   isWorkflowRunAuthorizationCurrent?: (params: Readonly<{
     authorization: WorkflowAcceptedAuthorizationV1;
@@ -106,7 +106,7 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
   return async ({ action, input: actionInput, context, approvalExecutionOrigin, requiredDangerLevel, signal }) => {
     const invocationSignal = signal ?? context.signal ?? new AbortController().signal;
     invocationSignal.throwIfAborted();
-    const surface = input.fixedInvocationSurface ?? readSurface(context.surface);
+    const surface = readSurface(context.surface) ?? input.defaultInvocationSurface;
     if (!surface) return { ok: false, errorCode: 'contributed_action_unavailable', error: 'contributed_action_unavailable' };
     const workflowCaller = context.actionCaller?.kind === 'workflowRun' && input.isWorkflowRunAuthorizationCurrent
       ? context.actionCaller : null;
@@ -121,7 +121,7 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
     };
     // The accepted owner-authored effect has a background origin. Agent
     // authored Runs retain their agent confirmation and capability surface.
-    const invocationSurface = input.fixedInvocationSurface === undefined && surface === 'agent'
+    const invocationSurface = surface === 'agent'
       && workflowCaller?.authorization.principal.kind === 'host' ? 'background' : surface;
     const externalActionContext = projectExternalActionContext(
       context,
@@ -141,15 +141,9 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
         actionId: buildQualifiedPluginContributionKey(action),
         input: actionInput,
         ...(requiredDangerLevel ? { requiredDangerLevel } : {}),
-        ...(input.captureApprovalReplayPlacement ? { captureApprovalReplayPlacement: true } : {}),
-        ...(input.requestCurrentIntent
-          ? {
-              requestCurrentIntent: (request: TargetActionCurrentIntentRequest) => input.requestCurrentIntent!({
-                ...request,
-                ...(approvalExecutionOrigin ? { executionOriginV1: approvalExecutionOrigin } : {}),
-              }),
-            }
-          : {}),
+        approvalContext: context,
+        ...(approvalExecutionOrigin ? { approvalExecutionOrigin } : {}),
+        ...(input.requestCurrentIntent ? { requestCurrentIntent: input.requestCurrentIntent } : {}),
         context: {
           surface,
           invocationSurface,
@@ -165,11 +159,8 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
         },
       });
       if (!attempt.matched) return { ok: false, errorCode: 'contributed_action_unavailable', error: 'contributed_action_unavailable' };
-      if (attempt.result.ok && attempt.result.deferredApprovalArtifactId !== undefined) {
-        return { ok: true, result: { kind: 'approval_request_created', artifactId: attempt.result.deferredApprovalArtifactId, actionId: 'action.invoke' } };
-      }
       if (attempt.result.ok) {
-        const { executionOrigin: _executionOrigin, ...result } = attempt.result;
+        const { executionOrigin: _executionOrigin, deferredApprovalArtifactId: _deferredApprovalArtifactId, ...result } = attempt.result;
         return result;
       }
       return attempt.result;

@@ -1135,6 +1135,16 @@ export class ApiMachineClient {
                 resolveCurrentTarget: async ({ signal }) => await resolveCurrentMachineExecutionOriginContext(signal),
             },
             daemonContributionRegistryProjection: {
+                requestCurrentIntent: async request => {
+                    const unavailable = { status: 'unavailable' as const, code: 'plugin_action_current_intent_unavailable' };
+                    const runtime = await this.resolveInstalledAccountRuntime(request.signal ?? new AbortController().signal);
+                    if (!runtime) return unavailable;
+                    const { createCredentialedTargetActionCurrentIntent } = await import('@/session/actions/approvals/credentialedTargetActionCurrentIntent');
+                    if (!await runtime.isCurrent()) return unavailable;
+                    const result = await runWithServerHttpBaseUrl(runtime.serverHttpBaseUrl,
+                        () => createCredentialedTargetActionCurrentIntent(runtime.credentials)(request));
+                    return await runtime.isCurrent() ? result : unavailable;
+                },
                 resolveCaptureRegistry: () => this.lifecycleDependencies.liveStreamCaptureRegistry ?? null,
                 observePluginExecution: this.actionOperationRuntime.observePluginExecution,
                 resolveServerFeaturesSnapshot: async () => (

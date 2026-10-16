@@ -5075,6 +5075,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         resolveHostBinding: invocationServiceOwners.resolveHostBinding,
         resolveHostPolicy: invocationServiceOwners.resolveHostPolicy,
         createServices: invocationServiceOwners.createServices,
+        beginDiagnosticScope: invocationServiceOwners.beginDiagnosticScope,
         redactDiagnosticText: invocationServiceOwners.redactDiagnosticText,
         completeDiagnosticScope: invocationServiceOwners.completeDiagnosticScope,
         resolveCurrentSessionUi: resolveCurrentSessionUiBinding,

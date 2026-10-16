@@ -23,6 +23,7 @@ import {
 } from './logger';
 import { createFilePluginInvocationLogSink } from './sink';
 import type {
+    BeginPluginInvocationDiagnosticScope,
     CreatePluginInvocationServiceBinding,
     PluginFileSystemRoots,
     PluginInvocationServiceBinding,
@@ -42,6 +43,8 @@ import type {
     PluginServices,
 } from '@happier-dev/plugin-sdk';
 import type { PluginDiagnosticData } from '@happier-dev/plugin-sdk';
+import type { JsonValue } from '@happier-dev/plugin-sdk';
+import { readTargetActionDiagnosticConfidentiality } from '../diagnostics';
 import type { ExecSystemToolServiceV1 } from '../../exec/privateContract';
 import {
     bindDeclaredEventSubscriptions,
@@ -255,23 +258,49 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         pluginId: string,
     ): PluginMachineMaterializationRefV1 | null;
 }>) {
-    const attachCurrentPluginMaterializationResolver = (
+    const attachCurrentPluginCallerResolvers = (
         seed: PluginInvocationServicesSeed,
     ): PluginInvocationServicesSeed => {
-        if (
-            seed.resolveCurrentPluginMaterializationRef
-            || !params?.resolveCurrentPluginMaterializationRef
-        ) return seed;
         const pluginId = seed.plugin.id;
-        return Object.freeze({
+        const resolvedSeed = Object.freeze({
             ...seed,
-            resolveCurrentPluginMaterializationRef: () => (
-                params.resolveCurrentPluginMaterializationRef!(pluginId)
-            ),
+            ...(!seed.resolveCurrentPluginMaterializationRef && params?.resolveCurrentPluginMaterializationRef
+                ? { resolveCurrentPluginMaterializationRef: () => params.resolveCurrentPluginMaterializationRef!(pluginId) } : {}),
         });
+        // Caller enrichment preserves this invocation's logger and sequence.
+        invocationLoggers.set(resolvedSeed, resolveInvocationLogger(seed));
+        return resolvedSeed;
     };
     const loggerSink = params?.loggerSink ?? createFilePluginInvocationLogSink();
     const secretRedactor = createPluginInvocationSecretRedactor();
+    const beginDiagnosticScope: BeginPluginInvocationDiagnosticScope = (scope, signal, input, secretInputPaths) => {
+        secretRedactor.beginInvocation(scope, signal);
+        // The approval projection is the declaration/SecretString classifier.
+        // Enroll its actual confidential subtrees in the incumbent redactor;
+        // diagnostic key spelling must not classify plugin operands.
+        const projection = readTargetActionDiagnosticConfidentiality(input, secretInputPaths);
+        const confidentialPaths = new Set(projection.paths);
+        if (confidentialPaths.size === 0) return;
+        secretRedactor.registerConfidentialPaths(scope, projection.paths, projection.nonStringPaths);
+        const pending: Array<Readonly<{ value: JsonValue; path: string; confidential: boolean }>> = [
+            { value: input, path: '', confidential: confidentialPaths.has('') },
+        ];
+        while (pending.length) {
+            const { value, path, confidential } = pending.pop()!;
+            if (typeof value === 'string') {
+                if (confidential) {
+                    secretRedactor.registerRaw(scope, value);
+                    secretRedactor.registerRaw(scope, JSON.stringify(value));
+                }
+            } else if (value !== null && typeof value === 'object') {
+                for (const [key, child] of Object.entries(value)) {
+                    const childPath = path ? `${path}.${key}` : key;
+                    pending.push({ value: child, path: childPath,
+                        confidential: confidential || confidentialPaths.has(childPath) });
+                }
+            }
+        }
+    };
     const listenerDiagnosticLoggers = new WeakMap<object, ReturnType<typeof createPluginInvocationLogger>>();
     const invocationLoggers = new WeakMap<object, ReturnType<typeof createPluginInvocationLogger>>();
     const listenerDiagnosticSignal = new AbortController().signal;
@@ -902,7 +931,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         seed: Parameters<typeof createServicesFactory>[0],
         operation: PluginOperationServicesInput,
     ): ReturnType<typeof createServicesFactory> => {
-        const currentSeed = attachCurrentPluginMaterializationResolver(seed);
+        const currentSeed = attachCurrentPluginCallerResolvers(seed);
         const baseBinding = createPluginInvocationHostPolicyResolver({
             ...(params?.resolveOptionalAccess ? { resolveOptionalAccess: params.resolveOptionalAccess } : {}),
             createServiceBinding: createTargetServiceBindingForRoots(operation.filesystemRoots),
@@ -1024,6 +1053,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         },
         resolveHostPolicy,
         resolveInvocationHostPolicy,
+        beginDiagnosticScope,
         recordHostDiagnostic(
             seed: PluginInvocationServicesSeed,
             diagnostic: PluginDiagnosticData,
@@ -1092,7 +1122,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
             ...args: Parameters<typeof createServicesFactory>
         ): ReturnType<typeof createServicesFactory> {
             const [inputSeed] = args;
-            const seed = attachCurrentPluginMaterializationResolver(inputSeed);
+            const seed = attachCurrentPluginCallerResolvers(inputSeed);
             retainResourceGeneration(
                 params?.resources,
                 seed.occurrenceId,

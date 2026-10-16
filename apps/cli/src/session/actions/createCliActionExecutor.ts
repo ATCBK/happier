@@ -1,7 +1,6 @@
 import { createSessionFollowActionDeps } from '@/api/sessionFollowActionDeps';
 import { createSessionReadStateActionDeps } from '@/api/sessionReadStateActionDeps';
 import { createCliActionExecutorHarness } from './createCliActionExecutorHarness';
-import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult } from '@/plugins/runtime/invocation/actionExecutor';
 import {
   DEFAULT_SESSION_TRANSCRIPT_FOLLOW_LEASE_IDLE_TTL_MS,
   createSessionTranscriptFollowLeaseRegistry,
@@ -11,8 +10,6 @@ import {
   type CliTranscriptActionExecutorOptions,
 } from './executeCliTranscriptAction';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
-import { createCliApprovalsArtifactStore } from './approvals/artifactStore';
-import { createTargetActionCurrentIntentAdapter } from './approvals/targetActionCurrentIntent';
 import {
   hasStoredSessionCredentialProvenance,
   type StoredCredentials,
@@ -37,7 +34,6 @@ import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime
 import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import { isFilesystemActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { resolveEffectiveTerminalPresentUserPolicy } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
-import { observeAccountChanges } from '@/api/observeAccountChanges';
 import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -85,24 +81,6 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     sessionReadStateActionDeps?: Pick<ActionExecutorDeps, 'sessionReadStateAction'>;
     pluginActionExecutionOwner?: 'daemon_control' | 'current_process';
   }>;
-
-export function createCredentialedTargetActionCurrentIntent(
-  credentials: StoredCredentials,
-): (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult> {
-  const store = createCliApprovalsArtifactStore({ credentials });
-  return async (currentIntent) => {
-    const serverUrl = resolveServerHttpBaseUrl();
-    return await runWithServerHttpBaseUrl(serverUrl, () => createTargetActionCurrentIntentAdapter({
-      create: (request) => store.targetActionApprovalsCreate({ request }),
-      read: (artifactId) => store.targetActionApprovalsGet({ artifactId }),
-      subscribeChanges: (artifactId, onChange, onError) => observeAccountChanges({
-        token: credentials.token,
-        serverUrl,
-        entityId: artifactId,
-      }, { onChange, onError }),
-    })(currentIntent));
-  };
-}
 
 export function createCliActionExecutor(
   params: CliActionExecutorParams,

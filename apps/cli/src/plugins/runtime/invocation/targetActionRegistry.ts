@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { logger } from '@/ui/logger';
+import { readTargetActionDiagnosticConfidentiality } from './diagnostics';
 
 import { ActionOperationProgressV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { createPluginActionInvocation, pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
 import { PluginHostAccessRequestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
 import type { PluginActionPresentUserGatePolicy, PluginActionInputParser } from '@happier-dev/protocol';
@@ -35,6 +37,8 @@ import type { PluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import {
     createTargetActionExecutor,
     fingerprintTargetActionPolicy,
+    projectTargetActionFailure,
+    type TargetActionExecutionResult,
     type ResolvedTargetAction,
     type TargetActionCurrentIntentRequest,
     type TargetActionCurrentIntentResult,
@@ -46,6 +50,7 @@ import type {
 } from '../hostAccess/resolve';
 import { fingerprintPluginHostAccessRequest } from '../hostAccess/scope';
 import type {
+    BeginPluginInvocationDiagnosticScope,
     CreatePluginInvocationServices,
     PluginExternalActionContext,
     PluginInvocationServiceBinding,
@@ -73,6 +78,8 @@ export type TargetActionDefinition = Readonly<{
     scopes: readonly string[];
     surfaces: readonly string[];
     inputSchema?: object;
+    secretInputPaths?: readonly string[];
+    secretInputLabels?: Readonly<Record<string, string>>;
     resultSchema?: object;
     hostAccessRequests?: readonly TargetActionHostAccessRequest[];
     availability?: PluginActionAvailabilityV2 | null;
@@ -104,21 +111,7 @@ export type TargetActionInvocationRegistration = Readonly<{
     handler: ActionHandler<JsonValue, JsonValue | void>;
 }>;
 
-export type TargetActionInvocationResult = Readonly<
-    | { status: 'executed'; value: JsonValue | null }
-    | { status: 'deferred'; artifactId: string }
-    | {
-        status: 'unavailable' | 'invalid' | 'failed';
-        code: string;
-        message: string;
-        /** Failures only, and only for a proven canonical PluginError. */
-        retryable?: boolean;
-        /** Failures only: the target's own published PluginError contract payload. */
-        data?: JsonValue;
-        /** Present only when the target handler did not begin. */
-        actionHandlerInvocation?: PluginActionHandlerInvocation;
-    }
->;
+export type TargetActionInvocationResult = TargetActionExecutionResult;
 
 type TargetActionPreDispatchResult = Readonly<{
     status: 'unavailable' | 'invalid';
@@ -279,6 +272,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
     ) => PluginActionPresentUserGatePolicy | null;
     resolveHostBinding: ResolveTargetActionHostBinding;
     createServices: CreatePluginInvocationServices;
+    beginDiagnosticScope?: BeginPluginInvocationDiagnosticScope;
     redactDiagnosticText?: (
         scope: Readonly<{ pluginId: string; occurrenceId: string; correlationId: string }>,
         value: string,
@@ -396,6 +390,10 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                         }))),
                     }),
                 ...(registration.definition.inputSchema === undefined ? {} : { inputSchema: registration.definition.inputSchema }),
+                secretInputPaths: Object.freeze([...(registration.definition.secretInputPaths ?? [])]),
+                ...(registration.definition.secretInputLabels === undefined ? {} : {
+                    secretInputLabels: Object.freeze({ ...registration.definition.secretInputLabels }),
+                }),
                 ...(registration.definition.resultSchema === undefined ? {} : { resultSchema: registration.definition.resultSchema }),
                 ...(registration.definition.availability === undefined ? {} : { availability: registration.definition.availability }),
                 ...(registration.definition.operation === undefined
@@ -457,6 +455,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
 
     async function invokeHandler(
         indexed: IndexedAction,
+        preparedInput: Extract<ReturnType<IndexedAction['invocation']['prepare']>, { kind: 'ready' }>,
         invocation: InvokeTargetActionParams,
         serviceBinding: PluginInvocationServiceBinding,
         correlationId: string,
@@ -468,7 +467,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
             ? invocation.operationProgress
             : undefined;
         let operationSettled = false;
-        const result = await indexed.invocation.invoke(invocation.input, {
+        const result = await preparedInput.invoke({
             ...(invocation.signal ? { signal: invocation.signal } : {}),
             ...(invocation.retainHandlerResultAfterCancellation
                 ? { retainHandlerResultAfterCancellation: () => actionHandlerInvocation === undefined }
@@ -714,12 +713,52 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
             });
             let operationProgress = invocation.operationProgress;
             let correlationId: string = randomUUID();
-            const lifetime = createPluginInvocationLifetime(invocation.signal);
+            const lifetime = createPluginInvocationLifetime(AbortSignal.any([
+                registryController.signal,
+                ...(invocation.signal ? [invocation.signal] : []),
+            ]));
             let diagnosticScope = Object.freeze({
                 pluginId: indexed.registration.pluginId,
                 occurrenceId: indexed.registration.occurrenceId,
                 correlationId,
             });
+            const beginDiagnosticScope = (input: JsonValue) => params.beginDiagnosticScope?.(
+                diagnosticScope, lifetime.redactionLifetimeSignal, input,
+                indexed.registration.definition.secretInputPaths ?? [],
+            );
+            const complete = async (): Promise<void> => {
+                try {
+                    params.completeDiagnosticScope?.(diagnosticScope);
+                } catch {
+                    // Diagnostic lease cleanup cannot replace the action result.
+                } finally {
+                    await lifetime.complete();
+                }
+            };
+            // Declaration-owned confidential operands must be enrolled before an
+            // executable parser can quote rejected raw input in its diagnostics.
+            const rawInput = AgentRuntimeJsonValueV1Schema.safeParse(invocation.input);
+            // Retain path evidence even when normalization consumes the operand.
+            // It belongs to this invocation, independent of approval correlation.
+            const rawDiagnosticConfidentiality = rawInput.success
+                ? readTargetActionDiagnosticConfidentiality(rawInput.data, indexed.registration.definition.secretInputPaths ?? [])
+                : undefined;
+            if (rawInput.success) beginDiagnosticScope(rawInput.data);
+            // The same normalized value is disclosed, fingerprinted and dispatched.
+            // Durable replay must not run a transforming executable parser again.
+            const preparedInput = indexed.invocation.prepare(invocation.input, {
+                ...(invocation.signal ? { signal: invocation.signal } : {}),
+                ...(invocation.requireCurrentIntent === true ? { inputAlreadyNormalized: true as const } : {}),
+            });
+            if (preparedInput.kind === 'settled') {
+                try {
+                    return Object.freeze({ kind: 'settled' as const,
+                        result: projectTargetActionFailure(preparedInput.result, params.redactDiagnosticText
+                            ? value => params.redactDiagnosticText!(diagnosticScope, value) : undefined,
+                            rawInput.success ? { input: rawInput.data, secretInputPaths: indexed.registration.definition.secretInputPaths ?? [] } : undefined) });
+                } finally { await complete(); }
+            }
+            beginDiagnosticScope(preparedInput.input);
             const resolveCurrentAction = (): ResolvedTargetAction | null => {
                 const current = actionsByKey.get(key);
                 if (!current) return null;
@@ -763,11 +802,18 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                         requestFingerprint: fingerprintPluginHostAccessRequest(request),
                     })),
                     ...(availability ? { availability } : {}),
-                    input: invocation.input,
+                    input: preparedInput.input,
+                    secretInputPaths: registration.definition.secretInputPaths ?? [],
+                    ...(registration.definition.secretInputLabels === undefined ? {} : {
+                        secretInputLabels: registration.definition.secretInputLabels,
+                    }),
+                    pluginVersion: registration.pluginVersion,
+                    ...(registration.definition.inputSchema === undefined ? {} : { inputSchema: registration.definition.inputSchema }),
                 };
                 return Object.freeze({ ...action, policyFingerprint: fingerprintTargetActionPolicy(action) });
             };
             const executor = createTargetActionExecutor({
+                rawDiagnosticConfidentiality,
                 resolve: resolveCurrentAction,
                 resolveAuthorizationFacts: params.resolveAuthorizationFacts,
                 resolveHostBinding: async (action) => await params.resolveHostBinding(action, {
@@ -778,7 +824,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                 }),
                 invoke: async (action, _args, serviceBinding) => {
                     const current = actionsByKey.get(key);
-                    if (!current || !indexed.isCurrent()) {
+                    if (!current || !indexed.isCurrent() || current.invocation !== indexed.invocation) {
                         return unavailable('plugin_action_generation_retired', 'Plugin action occurrence is no longer current');
                     }
                     try {
@@ -824,6 +870,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                     }
                     return await invokeHandler(
                         current,
+                        preparedInput,
                         Object.freeze({
                             ...invocation,
                             ...(operationProgress ? { operationProgress } : {}),
@@ -842,21 +889,12 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                     }
                     : {}),
             });
-            const complete = async (): Promise<void> => {
-                try {
-                    params.completeDiagnosticScope?.(diagnosticScope);
-                } catch {
-                    // Diagnostic lease cleanup cannot replace the action result.
-                } finally {
-                    await lifetime.complete();
-                }
-            };
             const prepared = await executor.prepare({
-                    pluginId: invocation.pluginId, localId: invocation.localId, input: invocation.input,
+                    pluginId: invocation.pluginId, localId: invocation.localId, input: preparedInput.input,
                     surface: invocation.surface,
                     ...(invocation.invocationSurface ? { invocationSurface: invocation.invocationSurface } : {}),
                     ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}),
-                    ...(invocation.signal ? { signal: invocation.signal } : {}),
+                    signal: lifetime.signal,
                     ...(invocation.replayPlacement ? { replayPlacement: invocation.replayPlacement } : {}),
                     ...(invocation.requireCurrentIntent === true ? { requireCurrentIntent: true as const } : {}),
                     ...(invocation.requestCurrentIntent ? {
@@ -865,8 +903,14 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                             if (result.status === 'approved' && result.fingerprint === request.fingerprint
                                 && result.artifactId !== undefined) {
                                 // Approval custody, not this preparation attempt, owns replay identity.
+                                const previousDiagnosticScope = diagnosticScope;
                                 correlationId = result.artifactId;
                                 diagnosticScope = Object.freeze({ ...diagnosticScope, correlationId });
+                                if (correlationId !== previousDiagnosticScope.correlationId) {
+                                    if (rawInput.success) beginDiagnosticScope(rawInput.data);
+                                    beginDiagnosticScope(preparedInput.input);
+                                    params.completeDiagnosticScope?.(previousDiagnosticScope);
+                                }
                             }
                             return result;
                         },

@@ -1,0 +1,25 @@
+import type { StoredCredentials } from '@/persistence';
+import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult } from '@/plugins/runtime/invocation/actionExecutor';
+import { observeAccountChanges } from '@/api/observeAccountChanges';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createCliApprovalsArtifactStore } from './artifactStore';
+import { createTargetActionCurrentIntentAdapter } from './targetActionCurrentIntent';
+
+/** Bind the incumbent target-Action approval owner to this Home's Account material. */
+export function createCredentialedTargetActionCurrentIntent(
+  credentials: StoredCredentials,
+): (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult> {
+  const store = createCliApprovalsArtifactStore({ credentials });
+  return async currentIntent => {
+    const serverUrl = resolveServerHttpBaseUrl();
+    return await runWithServerHttpBaseUrl(serverUrl, () => createTargetActionCurrentIntentAdapter({
+      create: request => store.targetActionApprovalsCreate({ request }),
+      read: artifactId => store.targetActionApprovalsGet({ artifactId }),
+      subscribeChanges: (artifactId, onChange, onError) => observeAccountChanges({
+        token: credentials.token,
+        serverUrl,
+        entityId: artifactId,
+      }, { onChange, onError }),
+    })(currentIntent));
+  };
+}

@@ -10,6 +10,7 @@ import {
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type { PluginManifest } from '@happier-dev/plugin-sdk/manifest';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import * as actionContractProducer from '../../../../../../packages/plugin-sdk/examples/action-contract-producer/src/index';
 import type { MessageActionAvailableSnapshotV1, PluginHostAccessRequestV2 } from '@happier-dev/protocol';
 import type {
     HostCurrentSessionInteractionsService,
@@ -20,7 +21,12 @@ import {
 import type { HostCurrentSessionPresentationService } from '@/agent/runtime/state/currentSessionUiTypes';
 
 import { createTargetActionInvocationRegistry } from './targetActionRegistry';
+import { createTargetActionCurrentIntentAdapter, targetActionApprovalMatchesCurrentIntent } from '@/session/actions/approvals/targetActionCurrentIntent';
+import { StoredTargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import type { TargetActionCurrentIntentRequest } from './actionExecutor';
+import { TriageStartEntrySessionInputV1Schema, TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1 } from '../../../../../../packages/plugins/triage/src/actions/entrySessionProtocol';
+import { createTriageSelectedPrStartApprovalInput } from '../../../../../../packages/plugins/triage/src/sessions/testkit/entrySessionTestkit.test-support';
+import { resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { createTargetActionHostBindingResolver } from '../hostAccess/resolve';
 import {
     createUnavailablePluginServicesFactory,
@@ -95,6 +101,588 @@ function createRegistry(
 }
 
 describe('target action invocation registry', () => {
+    it.each((['agent', 'mcp', 'cli'] as const).flatMap(surface =>
+        (['handler', 'result'] as const).map(phase => ({ surface, phase })),
+    ))('keeps raw confidential operands classified after normalization for $phase on $surface', async ({ surface, phase }) => {
+        const records: PluginInvocationLogRecord[] = [];
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: record => records.push(record) } });
+        const raw = { bundle: phase === 'result' ? 738291642 : { pin: 738291642, enabled: true, optional: null }, public: 31 };
+        let parsedOperand: unknown;
+        const registry = createRegistry({ ...owners, actions: [{
+            ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['bundle'], surfaces: ['agent', 'mcp', 'cli'],
+                dangerLevel: 'writesRemote', confirmation: { title: 'Publish' } }),
+            inputParser: candidate => {
+                parsedOperand = isJsonRecord(candidate) ? candidate.bundle : undefined;
+                return { success: true as const, data: { public: 31 } };
+            },
+            ...(phase === 'result' ? { resultParser: () => ({ success: false as const,
+                issues: [{ path: ['bundle'], code: 'invalid_value', message: `Rejected raw ${JSON.stringify(parsedOperand)}` }] }) } : {}),
+            handler: async (input, context) => {
+                expect(input).toEqual({ public: 31 });
+                if (phase === 'result') return input;
+                const details = { bundle: parsedOperand, public: 31 };
+                context.services.logger.info('Validation failed', details);
+                throw new PluginError({ code: 'validation_failed', message: 'Validation failed', details });
+            },
+        }] });
+        try {
+            const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input: raw, surface,
+                // The approval decision is external; the real gate still binds
+                // normalized input and rebinds the diagnostic correlation.
+                requestCurrentIntent: async request => {
+                    expect(request.action.input).toEqual({ public: 31 });
+                    return { status: 'approved', fingerprint: request.fingerprint, artifactId: `raw-normalized-${surface}-${phase}` };
+                } });
+            expect(result).toMatchObject(phase === 'handler'
+                ? { status: 'failed', data: { details: { bundle: '[REDACTED]', public: 31 } } }
+                : { status: 'invalid', code: 'plugin_action_result_schema_invalid' });
+            expect(JSON.stringify(result)).not.toContain('738291642');
+            if (phase === 'handler') expect(records.find(record => record.fields)?.fields).toEqual({ bundle: '[REDACTED]', public: 31 });
+        } finally { registry.dispose(); }
+    });
+
+    it.each(['agent', 'mcp', 'cli'] as const)('withholds string-secret numeric issue-path suffixes on %s', async surface => {
+        const secret = '738291642';
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} } });
+        const publicIssue = { path: ['items', 31], code: 'invalid_value', message: 'Public item 31' };
+        const registry = createRegistry({ ...owners, actions: [{
+            ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['value'], surfaces: ['agent', 'mcp', 'cli'] }),
+            inputParser: () => ({ success: false as const,
+                issues: [{ path: ['value', Number(secret)], code: 'invalid_value', message: 'Invalid confidential value' }, publicIssue] }),
+            handler: async () => { throw new Error('Must not run'); },
+        }] });
+        try {
+            const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { value: secret }, surface });
+            expect(result).toMatchObject({ status: 'invalid', code: 'plugin_action_input_schema_invalid' });
+            if (result.status !== 'invalid') throw new Error('Expected invalid input');
+            expect(result.issues?.[0]?.path).toEqual(['value']);
+            expect(result.issues?.[1]).toEqual(publicIssue);
+            expect(JSON.stringify(result)).not.toContain(secret);
+        } finally { registry.dispose(); }
+    });
+
+    it.each([true, false, null, 1, 738291642])('preserves unrelated public diagnostic scalars when confidential input is %s', async value => {
+        const records: PluginInvocationLogRecord[] = [];
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: record => records.push(record) } });
+        const publicFields = { enabled: true, disabled: false, optional: null, count: 1, total: 31, largeCount: 738291642,
+            nested: [true, null, 1], note: 'true false null 1; public diagnostic at item 31 with count 738291642',
+            encoded: 'dHJ1ZQ== ZmFsc2U= bnVsbA== MQ== 74727565 31' };
+        const registry = createRegistry({ ...owners, actions: [{
+            ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['value'], surfaces: ['agent'] }),
+            handler: async (_input, context) => {
+                context.services.logger.info('Public diagnostic', publicFields);
+                throw new PluginError({ code: 'public_failure', message: 'Public diagnostic', details: { public: publicFields } });
+            },
+        }] });
+        try {
+            const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { value }, surface: 'agent' });
+            expect(result).toMatchObject({ status: 'failed', code: 'public_failure', data: { details: { public: publicFields } } });
+            expect(records.at(-1)?.fields).toEqual(publicFields);
+        } finally { registry.dispose(); }
+    });
+
+    it('preserves successful public results when confidential input is true', async () => {
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} } });
+        const registry = createRegistry({ ...owners, actions: [{
+            ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['value'], surfaces: ['agent'] }),
+            handler: async () => ({ enabled: true, count: 1, optional: null }),
+        }] });
+        try {
+            expect(await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { value: true }, surface: 'agent' }))
+                .toMatchObject({ status: 'executed', value: { enabled: true, count: 1, optional: null } });
+        } finally { registry.dispose(); }
+    });
+
+    it('keeps bounded log sanitization before confidential path projection', async () => {
+        const records: PluginInvocationLogRecord[] = [];
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: record => records.push(record) } });
+        const registry = createRegistry({ ...owners, actions: [{
+            ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['value'], surfaces: ['agent'] }),
+            handler: async (_input, context) => {
+                const fields: Record<string, JsonValue> = { value: 1, count: 31 };
+                fields.circular = fields;
+                context.services.logger.info('Public diagnostic', fields);
+                return null;
+            },
+        }] });
+        try {
+            await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { value: 1 }, surface: 'agent' });
+            expect(records.at(-1)?.fields).toEqual({ value: '[REDACTED]', count: 31, circular: '[Circular]' });
+        } finally { registry.dispose(); }
+    });
+
+    it.each([738291642, '738291642'])('projects path-bearing issues in plugin failure and log details while preserving public issues for %s', async value => {
+        const records: PluginInvocationLogRecord[] = [];
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: record => records.push(record) } });
+        const privateIssues = [738291642, true, false, null, { pin: 738291642 }, [738291642]].map(suffix => ({
+            path: ['value', suffix], code: 'invalid_value', message: 'Rejected 738291642',
+        }));
+        const publicIssue = { path: ['items', 31], code: 'public_v1', message: 'Public count 31 with true false null 1' };
+        const registry = createRegistry({ ...owners, actions: [{
+            ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['value'], surfaces: ['agent'] }),
+            handler: async (_input, context) => {
+                const details = { issues: [...privateIssues, publicIssue], count: 31 };
+                context.services.logger.info('Validation failed', details);
+                context.services.logger.diagnostic({ code: 'validation_failed', severity: 'error', details });
+                throw new PluginError({ code: 'validation_failed', message: 'Validation failed', details });
+            },
+        }] });
+        try {
+            const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { value }, surface: 'agent' });
+            const expected = { issues: [...privateIssues.map(() => ({ path: ['value'], code: 'invalid_value',
+                message: typeof value === 'string' ? 'Rejected [REDACTED]' : 'Confidential input is invalid' })), publicIssue], count: 31 };
+            expect.soft(result).toMatchObject({ status: 'failed', data: { details: expected } });
+            expect.soft(records.find(record => record.fields)?.fields).toEqual(expected);
+            expect.soft(records.at(-1)?.diagnostic?.details).toEqual(expected);
+        } finally { registry.dispose(); }
+    });
+
+    it.each(['agent', 'mcp', 'cli'] as const)('redacts declared JSON operands from parser diagnostics and structured failures on %s', async surface => {
+        const values: readonly JsonValue[] = [1, 738291642, true, false, null,
+            { nested: [928374651, 'synthetic-json-secret'] }, ['synthetic-array-secret', 837264519]];
+        for (const value of values) {
+            const records: PluginInvocationLogRecord[] = [];
+            const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: record => records.push(record) } });
+            for (const phase of ['parser', 'handler'] as const) {
+                let started = false;
+                const registry = createRegistry({ ...owners, actions: [{
+                    ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['value'], surfaces: ['agent', 'mcp', 'cli'] }),
+                    ...(phase === 'parser' ? { inputParser: () => ({ success: false as const,
+                        issues: [{ path: typeof value === 'number' ? ['value', value] : ['value'], code: 'invalid_value', message: `Rejected operand ${JSON.stringify(value)}` },
+                            { path: ['items', 31], code: 'invalid_value', message: 'Public diagnostic: true false null 1 at item 31' }] }) } : {}),
+                    handler: async (_input, context) => {
+                        started = true;
+                        context.services.logger.info('Failed at public-endpoint', { value, count: 31 });
+                        context.services.logger.diagnostic({ code: 'publish_failed', severity: 'error', details: { value, count: 31 } });
+                        throw new PluginError({ code: 'publish_failed', message: 'Failed at public-endpoint', details: { value, count: 31 } });
+                    },
+                }] });
+                try {
+                    const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { value }, surface });
+                    expect(started).toBe(phase === 'handler');
+                    expect(result).toMatchObject(phase === 'parser'
+                        ? { status: 'invalid', code: 'plugin_action_input_schema_invalid' } : { status: 'failed', code: 'publish_failed' });
+                    if (result.status !== 'invalid' && result.status !== 'failed') throw new Error('Expected a diagnostic result');
+                    if (typeof value === 'number' && value !== 1) expect(JSON.stringify(result)).not.toContain(String(value));
+                    if (phase === 'parser') {
+                        expect(result.issues?.[0]?.path).toEqual(['value']);
+                        expect(result.issues?.[0]?.message).not.toContain(JSON.stringify(value));
+                        expect(result.issues?.[1]).toEqual({ path: ['items', 31], code: 'invalid_value', message: 'Public diagnostic: true false null 1 at item 31' });
+                    }
+                    if (phase === 'handler') {
+                        expect(result.message).toContain('public-endpoint');
+                        expect(result).toMatchObject({ data: { details: { value: '[REDACTED]', count: 31 } } });
+                        expect(records.find(record => record.fields)?.fields).toEqual({ value: '[REDACTED]', count: 31 });
+                        expect(records.at(-1)?.diagnostic?.details).toEqual({ value: '[REDACTED]', count: 31 });
+                    }
+                } finally { registry.dispose(); }
+            }
+        }
+    });
+
+    it.each(['agent', 'mcp', 'cli'] as const)('withholds opaque numeric result-parser diagnostics on %s', async surface => {
+        const secret = 738291642;
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} } });
+        const registry = createRegistry({ ...owners, actions: [{
+            ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['value'], surfaces: ['agent', 'mcp', 'cli'] }),
+            resultParser: () => ({ success: false as const, issues: [{ path: ['value'], code: 'invalid_value', message: `Rejected ${secret}` }] }),
+            handler: async () => ({ value: secret }),
+        }] });
+        try {
+            const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input: { value: secret }, surface });
+            expect(result).toMatchObject({ status: 'invalid', code: 'plugin_action_result_schema_invalid' });
+            expect(JSON.stringify(result)).not.toContain(String(secret));
+        } finally { registry.dispose(); }
+    });
+
+    it.each([
+        { surface: 'agent', phase: 'input' }, { surface: 'mcp', phase: 'input' }, { surface: 'cli', phase: 'input' },
+        { surface: 'agent', phase: 'result' }, { surface: 'mcp', phase: 'result' }, { surface: 'cli', phase: 'result' },
+    ] as const)('redacts declared-secret $phase parser diagnostics on $surface', async ({ surface, phase }) => {
+            const secret = 'synthetic-confidential-parser-operand';
+            const publicValue = 'public-endpoint';
+            let handlerStarted = false;
+            const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} } });
+            const scopes: Parameters<typeof owners.beginDiagnosticScope>[0][] = [];
+            let stored: TargetActionApprovalRequestV1 | undefined;
+            const adapter = createTargetActionCurrentIntentAdapter({
+                create: async request => {
+                    stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+                    return { artifactId: `parser-${surface}` };
+                },
+                read: async () => stored ? { ...stored, status: 'approved',
+                    decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null,
+            });
+            const reject = () => {
+                if (phase === 'result') expect(owners.redactDiagnosticText(scopes.at(-1)!, secret)).toBe('[REDACTED]');
+                return { success: false as const, issues: [{ path: ['value', secret], code: 'invalid_value',
+                    message: `Rejected ${secret} at ${publicValue}` }] };
+            };
+            const registry = createRegistry({ ...owners,
+                beginDiagnosticScope: (...args) => { scopes.push(args[0]); owners.beginDiagnosticScope(...args); },
+                actions: [{ ...action({ secretInputPaths: ['value'], resultSchema: {},
+                    surfaces: ['agent', 'mcp', 'cli'], dangerLevel: 'writesRemote', confirmation: { title: 'Publish' } }),
+                    ...(phase === 'input' ? { inputParser: reject } : { resultParser: reject }),
+                    handler: async () => { handlerStarted = true; return { response: 'invalid response' }; },
+                }],
+            });
+            try {
+                const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run',
+                    input: { value: secret }, surface, requestCurrentIntent: adapter });
+                expect(handlerStarted).toBe(phase === 'result');
+                expect(result).toMatchObject({ status: 'invalid', code: `plugin_action_${phase}_schema_invalid` });
+                expect(JSON.stringify(result)).not.toContain(secret);
+                expect(JSON.stringify(result)).toContain(publicValue);
+                if (phase === 'result') expect(stored?.approvalInputCustody).toBe('live_only');
+                if (stored) expect(JSON.stringify(stored)).not.toContain(secret);
+                for (const scope of scopes) expect(owners.redactDiagnosticText(scope, secret)).toBe(secret);
+            } finally { registry.dispose(); }
+    });
+
+    it.each(['agent', 'mcp', 'cli'] as const)(
+        'redacts confidential normalized input from production logs and handler failures on %s', async surface => {
+            const secrets = ['synthetic-declared-release', 'synthetic-nested-release', 'synthetic-carrier-release', 'synthetic-raw-release'] as const;
+            const normalized = {
+                releases: [{ value: secrets[0] }],
+                bundle: { nested: [secrets[1]] },
+                carriers: [{ _isSecretValue: true, value: secrets[2] }],
+                endpoint: 'public-release-endpoint',
+            };
+            const records: PluginInvocationLogRecord[] = [];
+            const owners = createProductionPluginInvocationServiceOwners({
+                loggerSink: { write: record => records.push(record) },
+            });
+            const scopes: Parameters<typeof owners.beginDiagnosticScope>[0][] = [];
+            let stored: TargetActionApprovalRequestV1 | undefined;
+            const adapter = createTargetActionCurrentIntentAdapter({
+                create: async request => {
+                    for (const secret of secrets) {
+                        expect(owners.redactDiagnosticText(scopes.at(-1)!, secret)).toBe('[REDACTED]');
+                    }
+                    stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+                    return { artifactId: `confidential-egress-${surface}` };
+                },
+                read: async () => stored ? {
+                    ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs },
+                } : null,
+            });
+            for (const failure of ['error', 'pluginError'] as const) {
+                let context: PluginInvocationContext | undefined;
+                const registry = createRegistry({
+                    ...owners,
+                    beginDiagnosticScope: (...args) => { scopes.push(args[0]); owners.beginDiagnosticScope(...args); },
+                    actions: [{
+                        ...action({ dangerLevel: 'writesRemote', confirmation: { title: 'Publish' },
+                            surfaces: ['agent', 'mcp', 'cli'], inputSchema: {},
+                            secretInputPaths: ['releases.[].value', 'bundle'], resultSchema: { type: 'null' } }),
+                        inputParser: () => ({ success: true, data: normalized }),
+                        handler: async (input, invocationContext) => {
+                            context = invocationContext;
+                            expect(input).toEqual(normalized);
+                            const message = `Publishing ${secrets.join(' ')} to ${normalized.endpoint}`;
+                            context.services.logger.info(message, { ordinary: secrets, endpoint: normalized.endpoint });
+                            context.services.logger.diagnostic({ code: 'publish_failed', severity: 'error', message, details: { ordinary: secrets } });
+                            if (failure === 'error') throw new Error(message);
+                            throw new PluginError({ code: 'publish_failed', message, details: { ordinary: secrets } });
+                        },
+                    }],
+                });
+                try {
+                    const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run',
+                        input: { value: 'before-normalization', bundle: secrets[3] }, surface, requestCurrentIntent: adapter });
+                    expect(result).toMatchObject({ status: 'failed' });
+                    expect(context?.invocationId).toBe(`confidential-egress-${surface}`);
+                    expect(stored?.approvalInputCustody).toBe('live_only');
+                    expect(records.length).toBeGreaterThan(0);
+                    for (const secret of secrets) {
+                        expect.soft(JSON.stringify(stored)).not.toContain(secret);
+                        expect.soft(JSON.stringify(result)).not.toContain(secret);
+                        expect.soft(JSON.stringify(records)).not.toContain(secret);
+                    }
+                    expect(JSON.stringify(result)).toContain(normalized.endpoint);
+                    expect(JSON.stringify(records)).toContain(normalized.endpoint);
+                    if (!context) throw new Error('Handler did not start');
+                    // The incumbent scope ends after failure projection, rather than
+                    // retaining raw invocation material after the result settles.
+                    expect(owners.redactDiagnosticText({ pluginId: context.plugin.id, occurrenceId: '7',
+                        correlationId: context.invocationId }, secrets[0]!)).toBe(secrets[0]);
+                    for (const scope of scopes) expect(owners.redactDiagnosticText(scope, secrets[0]!)).toBe(secrets[0]);
+                } finally { registry.dispose(); }
+            }
+        },
+    );
+
+    it.each(['reject', 'retire', 'abort', 'approvalError'] as const)(
+        'enrolls root SecretString input before approval and releases it on %s', async outcome => {
+            const secret = 'synthetic-root-carrier-release';
+            const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: () => {} } });
+            const scopes: Parameters<typeof owners.beginDiagnosticScope>[0][] = [];
+            const controller = new AbortController();
+            let enteredHandler = false;
+            const registry = createRegistry({
+                ...owners,
+                beginDiagnosticScope: (...args) => { scopes.push(args[0]); owners.beginDiagnosticScope(...args); },
+                actions: [{ ...action({ inputSchema: {}, resultSchema: { type: 'null' },
+                    dangerLevel: 'writesRemote', confirmation: { title: 'Publish' } }),
+                    handler: async () => { enteredHandler = true; return null; } }],
+            });
+            try {
+                const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', surface: 'cli',
+                    input: { _isSecretValue: true, value: secret }, signal: controller.signal,
+                    requestCurrentIntent: async () => {
+                        expect(owners.redactDiagnosticText(scopes[0]!, secret)).toBe('[REDACTED]');
+                        if (outcome === 'retire') registry.dispose();
+                        if (outcome === 'abort') controller.abort();
+                        if (outcome === 'approvalError') throw new Error(`Approval failed for ${secret}`);
+                        return { status: 'rejected', code: 'approval_rejected' };
+                    },
+                });
+                expect(enteredHandler).toBe(false);
+                expect(result.status).not.toBe('executed');
+                expect(JSON.stringify(result)).not.toContain(secret);
+                expect(new Set(scopes.map(scope => scope.correlationId)).size).toBe(1);
+                expect(owners.redactDiagnosticText(scopes[0]!, secret)).toBe(secret);
+            } finally { registry.dispose(); }
+        },
+    );
+
+    it.each(['agent', 'mcp', 'cli'] as const)('keeps the real rotation token out of an approvable Artifact on %s', async surface => {
+        const localId = 'rotate-document-review-webhook-token';
+        const declaration = actionContractProducer.manifest.contributes?.actions?.find(entry => entry.id === localId);
+        if (!declaration) throw new Error('Rotation example declaration missing');
+        // This maintained producer must declare its credential operand; unrelated
+        // undeclared strings remain literal under the declaration-only rule.
+        const token = 'synthetic-r16b-fix4-rotation-value';
+        const material = new Map<string, string>();
+        const plugin = await createPluginTestkit({
+            manifest: actionContractProducer.manifest,
+            module: actionContractProducer,
+            // The plugin Secrets service is a persistent host boundary; its handler stays real.
+            services: { secrets: {
+                async status(id) { return { state: material.has(id) ? 'configured' : 'missing', revision: 'r0' }; },
+                async set(id, value) { material.set(id, value); return { revision: 'r1' }; },
+                async get(id) { const value = material.get(id); if (value === undefined) throw new Error('Secret missing'); return value; },
+                async delete(id) { material.delete(id); return { revision: 'r2' }; },
+            } },
+        });
+        const requests: TargetActionApprovalRequestV1[] = [];
+        const adapter = createTargetActionCurrentIntentAdapter({
+            now: () => 1,
+            create: async request => {
+                requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))));
+                return { artifactId: `confidential-rotation-${surface}` };
+            },
+            read: async () => {
+                const request = requests.at(-1);
+                return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;
+            },
+        });
+        const registry = createRegistry({ actions: [{
+            pluginId: actionContractProducer.manifest.id,
+            pluginVersion: actionContractProducer.manifest.version,
+            occurrenceId: '7' as PluginRuntimeOccurrenceId,
+            sourceCustody: createManagedPluginSourceCustody('rotation-example-generation'),
+            localId,
+            definition: {
+                id: localId,
+                dangerLevel: declaration.dangerLevel,
+                scopes: declaration.scopes,
+                surfaces: declaration.surfaces,
+                inputSchema: declaration.inputSchema,
+                resultSchema: declaration.outputSchema,
+                secretInputPaths: (declaration.inputHints?.fields ?? []).filter(field => field.widget === 'secret').map(field => field.path),
+            },
+            handler: input => plugin.invokeAction(localId, input, { surface }),
+        }] });
+        try {
+            await expect(registry.invoke({ pluginId: actionContractProducer.manifest.id, localId,
+                input: { token }, surface, isApprovalRequiredByActionSettings: () => true,
+                requestCurrentIntent: adapter })).resolves.toEqual({ status: 'executed', value: { state: 'configured', revision: 'r1' } });
+            expect(material.get('document-review-webhook-token')).toBe(token);
+            expect(requests).toHaveLength(1);
+            expect.soft(JSON.stringify(requests)).not.toContain(token);
+            expect.soft(resolveApprovalRequestApproveAdmission(requests[0]!)).toMatchObject({ status: 'available' });
+            expect.soft(JSON.stringify(resolveApprovalRequestApproveAdmission(requests[0]!).presentation)).not.toContain(token);
+        } finally { registry.dispose(); await plugin.dispose(); }
+    });
+
+    it.each(['agent', 'mcp', 'cli'] as const)('requires a confidential approval for a declared hidden releaseTag on %s', async surface => {
+        const requests: TargetActionApprovalRequestV1[] = [];
+        let executedInput: JsonValue | undefined;
+        const adapter = createTargetActionCurrentIntentAdapter({
+            now: () => 1,
+            create: async request => {
+                requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))));
+                return { artifactId: `confidential-release-${surface}` };
+            },
+            read: async () => {
+                const request = requests.at(-1);
+                return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;
+            },
+        });
+        const input = { releaseTag: 'synthetic-confidential-release', benign: 'public-endpoint' };
+        const registry = createRegistry({ actions: [{
+            ...action({ dangerLevel: 'writesRemote', confirmation: { title: 'Publish' }, surfaces: ['agent', 'mcp', 'cli'],
+                inputSchema: { type: 'object', properties: { releaseTag: { type: 'string' }, benign: { type: 'string' } },
+                    required: ['releaseTag', 'benign'], additionalProperties: false },
+                secretInputPaths: ['releaseTag'], resultSchema: { type: 'null' } }),
+            handler: async value => { executedInput = value; return null; },
+        }] });
+        try {
+            const result = await registry.invoke({ pluginId: 'acme.alpha', localId: 'run', input, surface, requestCurrentIntent: adapter });
+            expect.soft(result).toEqual({ status: 'executed', value: null });
+            expect.soft(executedInput).toEqual(input);
+            expect.soft(requests).toHaveLength(1);
+            if (requests.length) {
+                expect(JSON.stringify(requests)).not.toContain(input.releaseTag);
+                const admission = resolveApprovalRequestApproveAdmission(requests[0]!);
+                expect(admission).toMatchObject({ status: 'available' });
+                expect(JSON.stringify(admission.presentation)).toContain(input.benign);
+            }
+        } finally { registry.dispose(); }
+    });
+
+    it.each(['agent', 'mcp', 'cli', 'ui'] as const)('preserves the public Triage credential binding through approval on %s', async surface => {
+        const requests: TargetActionApprovalRequestV1[] = [];
+        let applied: JsonValue | undefined;
+        const adapter = createTargetActionCurrentIntentAdapter({
+            now: () => 1,
+            create: async request => { requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)))); return { artifactId: `triage-${surface}` }; },
+            read: async () => {
+                const request = requests.at(-1);
+                return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;
+            },
+        });
+        const declaration = action({ dangerLevel: 'writesLocal', confirmation: { title: 'Start session' },
+            surfaces: ['ui', 'agent', 'mcp', 'cli'], inputSchema: TriageStartEntrySessionInputV1Schema.jsonSchema,
+            resultSchema: { type: 'null' } });
+        const registry = createRegistry({ actions: [{ ...declaration, pluginId: 'happier.triage', localId: TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1,
+            definition: { ...declaration.definition, id: TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1 },
+            handler: async input => { applied = input; return null; } },
+        ] });
+        try {
+            const input = createTriageSelectedPrStartApprovalInput();
+            const result = await registry.invoke({ pluginId: 'happier.triage', localId: TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1,
+                input, surface, requestCurrentIntent: adapter });
+            if (surface === 'ui') {
+                // UI admission requires its carried present-user confirmation;
+                // a durable Artifact by itself cannot authorize the handler.
+                expect(result).toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable', actionHandlerInvocation: 'notStarted' });
+            } else {
+                expect(result).toEqual({ status: 'deferred', artifactId: `triage-${surface}` });
+            }
+            expect(applied).toBeUndefined();
+            expect(requests).toHaveLength(1);
+            expect(requests[0]!.input).toEqual(input);
+            expect(requests[0]!.approvalInputCustody).toBeUndefined();
+            expect(resolveApprovalRequestApproveAdmission(requests[0]!)).toMatchObject({ status: 'available' });
+            expect(JSON.stringify(resolveApprovalRequestApproveAdmission(requests[0]!).presentation)).toContain('account-1');
+            const approved = requests[0]!;
+            await expect(registry.invoke({
+                pluginId: 'happier.triage', localId: TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1,
+                input: approved.input, surface, requireCurrentIntent: true,
+                requestCurrentIntent: async request => targetActionApprovalMatchesCurrentIntent(approved, request)
+                    ? { status: 'approved', fingerprint: request.fingerprint, artifactId: `triage-${surface}` }
+                    : { status: 'unavailable', code: 'plugin_action_current_intent_mismatch' },
+            })).resolves.toEqual({ status: 'executed', value: null });
+            expect(applied).toEqual(input);
+        } finally { registry.dispose(); }
+    });
+
+    it.each(['version', 'input declaration', 'unchanged'] as const)(
+        'binds deferred development approval across restarted occurrences: %s', async change => {
+            let stored: TargetActionApprovalRequestV1 | undefined;
+            let appliedVersion: string | undefined;
+            const declaration = action({ dangerLevel: 'writesRemote', confirmation: { title: 'Publish' } });
+            const sourceCustody = { kind: 'development', registeredRootId: 'alpha-root' } as const;
+            const occurrenceId = 'acme.alpha:1' as PluginRuntimeOccurrenceId;
+            const replayPlacement = { serverId: 'server-1', machineId: 'machine-1' };
+            const executionOriginV1 = {
+                v: 1, authority: 'account_automation', surface: 'api', caller: { kind: 'host' },
+                serverId: 'server-1', machineId: 'machine-1', accountId: 'account-1',
+                principalId: 'principal-1', credentialId: 'credential-1',
+                actionId: 'action.invoke', requestId: 'request-development-replay',
+            } as const;
+            const adapter = createTargetActionCurrentIntentAdapter({
+                now: () => 1,
+                create: async request => {
+                    stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+                    return { artifactId: 'approval-development-replay' };
+                },
+                read: async () => stored ?? null,
+            });
+            const first = createRegistry({ actions: [{
+                ...declaration, pluginVersion: '1.0.0', sourceCustody, occurrenceId,
+                handler: async () => { throw new Error('Deferred handler must not start'); },
+            }] });
+            try {
+                await expect(first.invoke({
+                    pluginId: 'acme.alpha', localId: 'run', input: { value: 'approved' },
+                    surface: 'cli', invocationSurface: 'api', replayPlacement,
+                    requestCurrentIntent: request => adapter({ ...request, executionOriginV1 }),
+                })).resolves.toEqual({ status: 'deferred', artifactId: 'approval-development-replay' });
+            } finally { first.dispose(); }
+            if (!stored) throw new Error('Approval was not saved');
+            const saved = stored;
+            const version = change === 'version' ? '2.0.0' : '1.0.0';
+            const successor = createRegistry({ actions: [{
+                ...declaration, pluginVersion: version, sourceCustody, occurrenceId,
+                definition: {
+                    ...declaration.definition,
+                    // Both declarations accept the saved JSON; validation alone cannot bind intent.
+                    inputSchema: change === 'input declaration'
+                        ? { ...declaration.definition.inputSchema, properties: { value: { type: 'string', enum: ['approved'] } } }
+                        : declaration.definition.inputSchema,
+                },
+                inputParser: () => { throw new Error('Replay must not reparse normalized input'); },
+                handler: async () => { appliedVersion = version; return { echoed: version }; },
+            }] });
+            try {
+                const result = await successor.invoke({
+                    pluginId: 'acme.alpha', localId: 'run', input: saved.input,
+                    surface: 'cli', invocationSurface: 'api', replayPlacement, requireCurrentIntent: true,
+                    requestCurrentIntent: async request => targetActionApprovalMatchesCurrentIntent(saved, { ...request, executionOriginV1 })
+                        ? { status: 'approved', fingerprint: request.fingerprint, artifactId: 'approval-development-replay' }
+                        : { status: 'unavailable', code: 'plugin_action_current_intent_mismatch' },
+                });
+                if (change === 'unchanged') {
+                    expect(result).toEqual({ status: 'executed', value: { echoed: '1.0.0' } });
+                    expect(appliedVersion).toBe('1.0.0');
+                } else {
+                    expect(result).toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_mismatch', actionHandlerInvocation: 'notStarted' });
+                    expect(appliedVersion).toBeUndefined();
+                }
+            } finally { successor.dispose(); }
+        },
+    );
+
+    it('replays the normalized API approval input without transforming it again', async () => {
+        let saved: TargetActionCurrentIntentRequest | undefined;
+        let applied: unknown;
+        const registry = createRegistry({ actions: [{
+            ...action({ dangerLevel: 'writesRemote', confirmation: { title: 'Publish' } }),
+            inputParser: input => ({ success: true, data: { value: `${Reflect.get(input as object, 'value')}-normalized` } }),
+            handler: async input => { applied = input; return { echoed: String(Reflect.get(input as object, 'value')) }; },
+        }] });
+        try {
+            await expect(registry.invoke({
+                pluginId: 'acme.alpha', localId: 'run', input: { value: 'approved' }, surface: 'cli', invocationSurface: 'api',
+                requestCurrentIntent: async request => { saved = request; return { status: 'deferred', artifactId: 'approval-api-normalized' }; },
+            })).resolves.toEqual({ status: 'deferred', artifactId: 'approval-api-normalized' });
+            expect(saved?.action.input).toEqual({ value: 'approved-normalized' });
+            expect(applied).toBeUndefined();
+            const approved = saved!;
+            await expect(registry.invoke({
+                pluginId: 'acme.alpha', localId: 'run', input: approved.action.input, surface: 'cli', invocationSurface: 'api',
+                requireCurrentIntent: true,
+                requestCurrentIntent: async request => request.fingerprint === approved.fingerprint
+                    ? { status: 'approved', fingerprint: request.fingerprint, artifactId: 'approval-api-normalized' }
+                    : { status: 'unavailable', code: 'plugin_action_current_intent_mismatch' },
+            })).resolves.toEqual({ status: 'executed', value: { echoed: 'approved-normalized' } });
+            expect(applied).toEqual(approved.action.input);
+        } finally { registry.dispose(); }
+    });
+
     it('exposes the existing host correlation identity and distinguishes independent Actions', async () => {
         const contexts: PluginInvocationContext[] = [];
         const correlations: string[] = [];
@@ -1362,11 +1950,12 @@ describe('target action invocation registry', () => {
             required: ['value'],
             additionalProperties: false,
         }, {
-            ownKeys(target) {
-                // The schema compiler walks the schema's own property descriptors exactly once
-                // per compilation, so this counts real compilations of this Action's schema.
+            getPrototypeOf(target) {
+                // Schema preparation checks strict-JSON prototypes before compilation.
+                // Fingerprinting also enumerates the declaration, so ownKeys cannot
+                // distinguish legitimate approval binding from repeated preparation.
                 schemaReads += 1;
-                return Reflect.ownKeys(target);
+                return Reflect.getPrototypeOf(target);
             },
         });
         const base = action();

@@ -64,6 +64,12 @@ import { createUnavailablePluginServices } from './services/unavailable';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { PLUGIN_MANIFEST as TRIAGE_MANIFEST } from '../../../../../../packages/plugins/triage/src/manifest.js';
 import { withPluginInvocationAccountStorageAvailability } from './services/unavailable';
+import { createTargetActionCurrentIntentAdapter, targetActionApprovalMatchesCurrentIntent } from '@/session/actions/approvals/targetActionCurrentIntent';
+import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
+import { resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { defineProtocolLiteral, defineProtocolObject, defineProtocolString, defineProtocolUnion } from '@happier-dev/plugin-sdk/protocol';
+import { createProductionPluginInvocationServiceOwners } from './services/production';
+import type { PluginInvocationLogRecord } from './services/logger';
 
 type BuildRegistryParams = Omit<
     Parameters<typeof buildTargetActionInvocationRegistry>[0],
@@ -1478,6 +1484,107 @@ describe('buildTargetActionInvocationRegistry', () => {
             status: 'unavailable', code: 'plugin_action_generation_retired',
         });
         expect(uncommittedHandler).not.toHaveBeenCalled();
+    });
+
+    it('discloses the exact external CLI Action operands through its persisted approval', async () => {
+        let stored: TargetActionApprovalRequestV1 | undefined;
+        let applied: JsonValue | undefined;
+        const input = { rowId: 'release-guide', completed: true };
+        const inputSchema = defineProtocolObject({
+            rowId: defineProtocolString({ minLength: 1 }),
+            completed: defineProtocolUnion([defineProtocolLiteral(true), defineProtocolLiteral(false)]),
+        }, { policy: 'closed' });
+        const target = buildRegistry({
+            contributes: registry({ pluginManifest: manifest({
+                dangerLevel: 'writesLocal',
+                inputSchema: inputSchema.jsonSchema,
+            }) }),
+            targetRegistrations: [{ pluginId: 'acme.alpha', occurrenceId: '7',
+                registration: { family: 'actions', localId: 'run', value: async (value: JsonValue) => { applied = value; return { done: true }; } } }],
+            targetActivationFacts: [fact()],
+        });
+        const requestCurrentIntent = createTargetActionCurrentIntentAdapter({
+            create: async request => {
+                stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+                return { artifactId: 'approval-external-cli-operands' };
+            },
+            read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: Date.now() } } : null,
+        });
+        try {
+            await expect(target.invoke({ pluginId: 'acme.alpha', localId: 'run', input, surface: 'cli', requestCurrentIntent }))
+                .resolves.toEqual({ status: 'deferred', artifactId: 'approval-external-cli-operands' });
+            expect(applied).toBeUndefined();
+            expect(stored?.secretInputPaths).toEqual([]);
+            if (!stored) throw new Error('Expected the contributed Action approval');
+            expect(resolveApprovalRequestApproveAdmission(stored)).toMatchObject({ status: 'available', presentation: {
+                unrepresentable: null,
+                rows: expect.arrayContaining([
+                    expect.objectContaining({ path: 'input.rowId', value: JSON.stringify(input.rowId) }),
+                    expect.objectContaining({ path: 'input.completed', value: 'true' }),
+                ]),
+            } });
+            // A pre-disclosure development Artifact cannot establish that its
+            // admitted values were checked against the secret declarations.
+            const { secretInputPaths: _secretInputPaths, ...legacy } = stored;
+            expect(resolveApprovalRequestApproveAdmission(legacy))
+                .toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+            const approved = stored;
+            await expect(target.invoke({
+                pluginId: 'acme.alpha', localId: 'run', input: approved.input, surface: 'cli', requireCurrentIntent: true,
+                requestCurrentIntent: async request => targetActionApprovalMatchesCurrentIntent(approved, request)
+                    ? { status: 'approved', fingerprint: request.fingerprint, artifactId: 'approval-external-cli-operands' }
+                    : { status: 'unavailable', code: 'plugin_action_current_intent_mismatch' },
+            })).resolves.toMatchObject({ status: 'executed' });
+            expect(applied).toEqual(input);
+        } finally { target.dispose(); }
+    });
+
+    it('carries the declared secret title into live-only approval while preserving public operands', async () => {
+        let stored: TargetActionApprovalRequestV1 | undefined;
+        let applied: unknown;
+        const records: PluginInvocationLogRecord[] = [];
+        const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: record => records.push(record) } });
+        const target = buildRegistry({
+            ...owners,
+            contributes: registry({ pluginManifest: manifest({
+                dangerLevel: 'writesRemote',
+                surfaces: ['agent', 'mcp', 'cli'],
+                inputSchema: { type: 'object', properties: { releaseTag: { type: 'string' }, value: { type: 'string' } },
+                    required: ['releaseTag', 'value'], additionalProperties: false },
+                inputHints: { fields: [{ path: 'releaseTag', title: 'Release', widget: 'secret' }] },
+            }) }),
+            targetRegistrations: [{ pluginId: 'acme.alpha', occurrenceId: '7',
+                registration: { family: 'actions', localId: 'run', value: async (input: JsonValue, context: PluginInvocationContext) => {
+                    applied = input;
+                    context.services.logger.info(`Publishing ${JSON.stringify(input)}`);
+                    return { done: true };
+                } } }],
+            targetActivationFacts: [fact()],
+        });
+        const requestCurrentIntent = createTargetActionCurrentIntentAdapter({
+            create: async request => {
+                stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+                return { artifactId: 'approval-external-declared-secret' };
+            },
+            read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: Date.now() } } : null,
+        });
+        try {
+            await expect(target.invoke({ pluginId: 'acme.alpha', localId: 'run',
+                input: { releaseTag: 'private-release-effect', value: 'unrelated-readable' }, surface: 'cli', requestCurrentIntent,
+            })).resolves.toMatchObject({ status: 'executed' });
+            expect(applied).toEqual({ releaseTag: 'private-release-effect', value: 'unrelated-readable' });
+            expect(stored).toMatchObject({ approvalInputCustody: 'live_only', secretInputLabels: { releaseTag: 'Release' } });
+            expect(JSON.stringify(stored)).not.toContain('private-release-effect');
+            expect(records).toHaveLength(1);
+            expect(JSON.stringify(records)).not.toContain('private-release-effect');
+            expect(JSON.stringify(records)).toContain('unrelated-readable');
+            expect(resolveApprovalRequestApproveAdmission(stored!)).toMatchObject({ status: 'available', presentation: {
+                rows: expect.arrayContaining([
+                    { kind: 'value', path: 'input.releaseTag', title: 'Release', value: '', valueFormat: 'confidential' },
+                    { kind: 'value', path: 'input.value', title: 'Value', value: '"unrelated-readable"' },
+                ]),
+            } });
+        } finally { target.dispose(); }
     });
 
     it.each([

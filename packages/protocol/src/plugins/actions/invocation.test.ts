@@ -205,7 +205,7 @@ describe('createPluginActionInvocation', () => {
     expect(present).toHaveBeenCalledOnce();
   });
 
-  it('returns an API Ask-first artifact without waiting for a target decision', async () => {
+  it.each(['api', 'cli', 'agent', 'mcp'] as const)('returns a %s Ask-first artifact without waiting for a target decision', async surface => {
     const present = vi.fn(async () => ({
       status: 'deferred',
       artifactId: 'approval-api-required-1',
@@ -218,7 +218,7 @@ describe('createPluginActionInvocation', () => {
         occurrenceId: 'acme-action-occurrence-7',
         dangerLevel: 'safe' as const,
         scopes: Object.freeze(['global']),
-        surfaces: Object.freeze(['api']),
+        surfaces: Object.freeze([surface]),
         approvalRequiredByActionSettings: true as const,
         authorization: currentIntentAuthorizationFacts(),
       }),
@@ -227,8 +227,8 @@ describe('createPluginActionInvocation', () => {
 
     await expect(gate.admit({
       input: { title: 'ship it' },
-      surface: 'api',
-      invocationSurface: 'api',
+      surface,
+      invocationSurface: surface,
     })).resolves.toEqual({
       status: 'deferred',
       artifactId: 'approval-api-required-1',
@@ -238,7 +238,7 @@ describe('createPluginActionInvocation', () => {
     expect(resolve).toHaveBeenCalledOnce();
   });
 
-  it('fails closed when a non-API caller tries to defer an Ask-first target Action', async () => {
+  it('fails closed when a background plugin caller tries to defer an Ask-first target Action', async () => {
     const gate = createPluginActionPresentUserGate({
       resolve: () => ({
         status: 'resolved' as const,

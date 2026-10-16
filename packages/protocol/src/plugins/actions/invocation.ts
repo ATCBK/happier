@@ -761,7 +761,7 @@ export function createPluginActionPresentUserGate<TAction>(deps: Readonly<{
       }
       if (intent.status === 'deferred') {
         const artifactId = intent.artifactId.trim();
-        return args.invocationSurface === 'api' && artifactId.length > 0
+        return ['api', 'cli', 'agent', 'mcp'].includes(args.invocationSurface ?? args.surface) && artifactId.length > 0
           ? presentUserDeferred(artifactId)
           : presentUserUnavailable('plugin_action_current_intent_unavailable');
       }
@@ -794,6 +794,34 @@ export function createPluginActionPresentUserGate<TAction>(deps: Readonly<{
   });
 }
 
+type PluginActionInvocationOptions = Readonly<{
+  signal?: AbortSignal;
+  /** Host-private check that a managed acquire was actually issued; never new effect authority. */
+  retainHandlerResultAfterCancellation?: () => boolean;
+  /** Host-only admission that runs after input validation, before handler effects. */
+  preDispatch?(input: PluginActionInvocationHandlerInput): (
+    | PluginActionInvocationPreDispatchResult
+    | null
+    | Promise<PluginActionInvocationPreDispatchResult | null>
+  );
+  handler(input: PluginActionInvocationHandlerInput): unknown | Promise<unknown>;
+}>;
+
+type PluginActionInvocationInputOptions = Readonly<{
+  signal?: AbortSignal;
+  /** Host-only durable replay: the approval already holds this owner's normalized input. */
+  inputAlreadyNormalized?: true;
+}>;
+
+type PluginActionInvocationPreparation = Readonly<
+  | { kind: 'settled'; result: PluginActionInvocationResult }
+  | {
+    kind: 'ready';
+    input: StrictJsonValue;
+    invoke(options: PluginActionInvocationOptions): Promise<PluginActionInvocationResult>;
+  }
+>;
+
 export function createPluginActionInvocation(params: Readonly<{
   pluginId: string;
   localId: string;
@@ -805,18 +833,8 @@ export function createPluginActionInvocation(params: Readonly<{
   isCurrent(): boolean;
 }>): Readonly<{
   qualifiedId: string;
-  invoke(input: unknown, options: Readonly<{
-    signal?: AbortSignal;
-    /** Host-private check that a managed acquire was actually issued; never new effect authority. */
-    retainHandlerResultAfterCancellation?: () => boolean;
-    /** Host-only admission that runs after input validation, before handler effects. */
-    preDispatch?(input: PluginActionInvocationHandlerInput): (
-      | PluginActionInvocationPreDispatchResult
-      | null
-      | Promise<PluginActionInvocationPreDispatchResult | null>
-    );
-    handler(input: PluginActionInvocationHandlerInput): unknown | Promise<unknown>;
-  }>): Promise<PluginActionInvocationResult>;
+  prepare(input: unknown, options?: PluginActionInvocationInputOptions): PluginActionInvocationPreparation;
+  invoke(input: unknown, options: PluginActionInvocationOptions): Promise<PluginActionInvocationResult>;
 }> {
   const qualifiedId = formatQualifiedPluginActionId({
     pluginId: params.pluginId,
@@ -846,16 +864,15 @@ export function createPluginActionInvocation(params: Readonly<{
     });
   };
 
-  return Object.freeze({
-    qualifiedId,
-    async invoke(input, options) {
+  const prepare = (input: unknown, options: PluginActionInvocationInputOptions = {}): PluginActionInvocationPreparation => {
+      const settled = (result: PluginActionInvocationResult): PluginActionInvocationPreparation => ({ kind: 'settled', result });
       if (!params.isCurrent() || params.occurrenceSignal.aborted) {
-        return unavailableBeforeHandler('plugin_action_generation_retired', 'Plugin action occurrenceId is no longer current');
+        return settled(unavailableBeforeHandler('plugin_action_generation_retired', 'Plugin action occurrenceId is no longer current'));
       }
       if (options.signal?.aborted) {
-        return unavailableBeforeHandler('plugin_action_aborted', 'Plugin action invocation was aborted');
+        return settled(unavailableBeforeHandler('plugin_action_aborted', 'Plugin action invocation was aborted'));
       }
-      const { inputValidator, resultValidator, inputParser, resultParser } = prepareSchemas();
+      const { inputValidator, inputParser } = prepareSchemas();
       // The public Action call accepts an omitted input for Actions that declare
       // no input contract. Handlers still receive only canonical JSON, so the
       // no-input value is `null`; a declared schema/parser continues to own and
@@ -864,26 +881,38 @@ export function createPluginActionInvocation(params: Readonly<{
         ? null
         : input;
       const parsedInput = AgentRuntimeJsonValueV1Schema.safeParse(canonicalInput);
-      if (!parsedInput.success) return invalidInput;
+      if (!parsedInput.success) return settled(invalidInput);
       let normalizedInput = parsedInput.data;
-      if (inputParser) {
+      if (inputParser && !options.inputAlreadyNormalized) {
         let semanticResult: PluginActionInputParserResult;
         try {
           semanticResult = inputParser(parsedInput.data);
         } catch {
-          return inputSchemaProjectionMismatch;
+          return settled(inputSchemaProjectionMismatch);
         }
         if (!semanticResult.success) {
-          return invalidInputFromParserIssues(semanticResult.issues);
+          return settled(invalidInputFromParserIssues(semanticResult.issues));
         }
         const parsedNormalizedInput = AgentRuntimeJsonValueV1Schema.safeParse(semanticResult.data);
-        if (!parsedNormalizedInput.success) return inputSchemaProjectionMismatch;
+        if (!parsedNormalizedInput.success) return settled(inputSchemaProjectionMismatch);
         normalizedInput = parsedNormalizedInput.data;
       }
       if (!validates(inputValidator, normalizedInput)) {
-        return inputParser ? inputSchemaProjectionMismatch : invalidInput;
+        return settled(inputParser ? inputSchemaProjectionMismatch : invalidInput);
       }
-
+      return Object.freeze({
+        kind: 'ready', input: normalizedInput,
+        invoke: (invokeOptions: PluginActionInvocationOptions) => invokePrepared(normalizedInput, invokeOptions),
+      });
+  };
+  const invokePrepared = async (normalizedInput: StrictJsonValue, options: PluginActionInvocationOptions): Promise<PluginActionInvocationResult> => {
+      if (!params.isCurrent() || params.occurrenceSignal.aborted) {
+        return unavailableBeforeHandler('plugin_action_generation_retired', 'Plugin action occurrenceId is no longer current');
+      }
+      if (options.signal?.aborted) {
+        return unavailableBeforeHandler('plugin_action_aborted', 'Plugin action invocation was aborted');
+      }
+      const { resultValidator, resultParser } = prepareSchemas();
       const linked = linkAbortSignals(params.occurrenceSignal, options.signal);
       try {
         const handlerInput = Object.freeze({
@@ -1004,6 +1033,13 @@ export function createPluginActionInvocation(params: Readonly<{
       } finally {
         linked.dispose();
       }
+  };
+  return Object.freeze({
+    qualifiedId,
+    prepare,
+    async invoke(input, options) {
+      const preparedInput = prepare(input, options);
+      return preparedInput.kind === 'settled' ? preparedInput.result : await preparedInput.invoke(options);
     },
   });
 }
