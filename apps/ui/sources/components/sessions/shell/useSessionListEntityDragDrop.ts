@@ -438,5 +438,8 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
         };
     }, [prepareSource, runtime, targetId]);
 
-    return { runtime, scope, targetId, beginCarry, prepareSource };
+    // Row callbacks depend on this binding. Unchanged list refreshes must not
+    // invalidate every mounted row merely by allocating a new binding object.
+    return React.useMemo(() => ({ runtime, scope, targetId, beginCarry, prepareSource }),
+        [runtime, scope, targetId, beginCarry, prepareSource]);
 }
