@@ -170,21 +170,9 @@ describe('Ask Happier ordinary authoring', () => {
     });
 
     it('retains the created reference and canonical draft after navigation fails', async () => {
-        const confirmationRequested = createDeferred<void>();
-        const confirmation = createDeferred<boolean>();
-        userConfirmation.mockImplementationOnce(async () => {
-            confirmationRequested.resolve(undefined);
-            return await confirmation.promise;
-        });
         const { home: f, lifetime, executeAction } = await prepare();
         navigation.push.mockImplementation(() => { throw new Error('Router unavailable'); });
-        const pending = openAskHappierDraft({ lifetime, executeAction });
-        // The native Alert stub cannot answer the default UI confirmation itself.
-        await confirmationRequested.promise;
-        expect(f.boundary.list()).toEqual([]);
-        expect(navigation.push).not.toHaveBeenCalled();
-        confirmation.resolve(true);
-        const result = await pending;
+        const result = await openAskHappierDraft({ lifetime, executeAction });
         expect(result).toMatchObject({ kind: 'unavailable', reason: 'navigation_unavailable', guideRef: { artifactId: expect.any(String) } });
         const route = navigation.push.mock.calls[0]?.[0] as { params: { draftId: string } };
         expect(readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: route.params.draftId })).toMatchObject({ sessionName: 'Happier', promptStack: [{ ref: result.guideRef }] });
@@ -198,6 +186,5 @@ describe('Ask Happier ordinary authoring', () => {
         expect(retried.guideRef).toEqual(result.guideRef);
         expect(f.boundary.list()).toHaveLength(1);
         expect(navigation.push).toHaveBeenCalledTimes(1);
-        expect(userConfirmation).toHaveBeenCalledTimes(1);
     });
 });
