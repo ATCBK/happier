@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import {
     changeTextTestInstance,
+    createDeferred,
     findTestInstanceByTypeContainingText,
     findTestInstanceByTypeWithProps,
     pressTestInstanceAsync,
@@ -108,8 +109,9 @@ async function renderSecretsList(params?: {
     sharedEntries?: readonly SavedSecretCatalogEntryV1[];
     sharedCatalogStale?: boolean;
     onRetrySharedCatalog?: () => void;
+    onCreatePersonal?: () => Promise<string | null>;
 }) {
-    const onCreatePersonal = vi.fn(async () => 'uuid-1');
+    const onCreatePersonal = vi.fn(params?.onCreatePersonal ?? (async () => 'uuid-1'));
     const onRenamePersonal = vi.fn(async () => true);
     const onRotatePersonal = vi.fn(async () => true);
     const onDeletePersonal = vi.fn(async () => true);
@@ -221,6 +223,30 @@ describe('SecretsList', () => {
             value: '  sk-test\n',
         });
         expect(onAfterAddSelectId).toHaveBeenCalledWith('uuid-1');
+    });
+
+    it.each(['closes', 'cancels adding'] as const)('does not select a late-created secret after its picker %s', async (retirement) => {
+        // Creation crosses the Home boundary; the picker may close while that write settles.
+        const creation = createDeferred<string | null>();
+        const { screen, onAfterAddSelectId } = await renderSecretsList({ onCreatePersonal: () => creation.promise });
+        await pressTestInstanceAsync(findTestInstanceByTypeContainingText(screen, 'Pressable', 'common.add'), 'add');
+        act(() => {
+            changeTextTestInstance(findTestInstanceByTypeWithProps(screen, 'TextInput', {
+                placeholder: 'secrets.placeholders.nameExample',
+            }), 'Workspace token', 'name');
+            changeTextTestInstance(findTestInstanceByTypeWithProps(screen, 'TextInput', {
+                placeholder: 'secrets.placeholders.valueExample',
+            }), 'dummy-workspace-token', 'value');
+        });
+        const save = findTestInstanceByTypeWithProps(screen, 'Pressable', { accessibilityLabel: 'common.save' });
+        let saving: Promise<void> | undefined;
+        act(() => { saving = save?.props.onPress(); });
+        if (retirement === 'closes') await act(async () => { screen.unmount(); });
+        else await pressTestInstanceAsync(findTestInstanceByTypeWithProps(screen, 'Pressable', {
+            accessibilityLabel: 'common.cancel',
+        }), 'cancel add');
+        await act(async () => { creation.resolve('created-secret'); await saving; });
+        expect(onAfterAddSelectId).not.toHaveBeenCalled();
     });
 
     it('keeps save disabled until both name and value are provided', async () => {

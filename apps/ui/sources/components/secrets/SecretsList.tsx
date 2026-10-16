@@ -8,10 +8,12 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
-import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { Text, TextInput } from '@/components/ui/text/Text';
+import type { TextInput } from '@/components/ui/text/Text';
+import { FieldItem } from '@/components/ui/forms/FieldItem';
+import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Icon } from '@/components/ui/icons/Icon';
+import { useMountedRef } from '@/hooks/ui/useMountedRef';
 import type { SavedSecretCatalogEntryV1 } from '@happier-dev/protocol';
 import type { SavedSecretReferenceResolution } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { sharedSecretProvenanceSegments, sharedSecretStatusLabel } from './savedSecretRowCopy';
@@ -51,6 +53,7 @@ export interface SecretsListProps {
 
 export function SecretsList(props: SecretsListProps) {
     const { theme } = useUnistyles();
+    const mountedRef = useMountedRef();
     const styles = stylesheet;
     const {
         secrets,
@@ -77,12 +80,18 @@ export function SecretsList(props: SecretsListProps) {
     const [isAddExpanded, setIsAddExpanded] = React.useState(false);
     const [draftName, setDraftName] = React.useState('');
     const [draftValue, setDraftValue] = React.useState('');
+    const addIntentRef = React.useRef<object | null>(null);
     const nameInputRef = React.useRef<React.ElementRef<typeof TextInput> | null>(null);
 
     const resetAddDraft = React.useCallback(() => {
+        addIntentRef.current = null;
         setDraftName('');
         setDraftValue('');
         setIsAddExpanded(false);
+    }, []);
+    const changeAddExpanded = React.useCallback((open: boolean) => {
+        if (!open) addIntentRef.current = null;
+        setIsAddExpanded(open);
     }, []);
 
     const submitAddSecret = React.useCallback(async () => {
@@ -90,11 +99,14 @@ export function SecretsList(props: SecretsListProps) {
         const value = draftValue;
         if (!name) return;
         if (value.length === 0) return;
+        const intent = {};
+        addIntentRef.current = intent;
         const createdId = await onCreatePersonal?.({ name, value });
-        if (!createdId) return;
+        // Creation still persists if its picker closes or its add draft is canceled.
+        if (!createdId || !mountedRef.current || addIntentRef.current !== intent) return;
         onAfterAddSelectId?.(createdId);
         resetAddDraft();
-    }, [draftName, draftValue, onAfterAddSelectId, onCreatePersonal, resetAddDraft]);
+    }, [draftName, draftValue, mountedRef, onAfterAddSelectId, onCreatePersonal, resetAddDraft]);
 
     const deleteSecret = React.useCallback(async (secret: SavedSecret) => {
         if (!await onDeletePersonal?.(secret)) return;
@@ -290,7 +302,7 @@ export function SecretsList(props: SecretsListProps) {
                     <InlineAddExpander
                         triggerTestID="saved-secret-add"
                         isOpen={isAddExpanded}
-                        onOpenChange={setIsAddExpanded}
+                        onOpenChange={changeAddExpanded}
                         title={t('common.add')}
                         subtitle={t('secrets.addSubtitle')}
                         onCancel={resetAddDraft}
@@ -300,34 +312,30 @@ export function SecretsList(props: SecretsListProps) {
                         saveLabel={t('common.save')}
                         autoFocusRef={nameInputRef}
                     >
-                        <Text style={styles.fieldLabel}>{t('secrets.fields.name')}</Text>
-                        <TextInput
-                            ref={nameInputRef}
-                            testID="saved-secret-add-name"
-                            style={styles.textInput}
-                            placeholder={t('secrets.placeholders.nameExample')}
-                            placeholderTextColor={theme.colors.input.placeholder}
-                            value={draftName}
-                            onChangeText={setDraftName}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                        />
-
-                        <View style={{ height: 12 }} />
-
-                        <Text style={styles.fieldLabel}>{t('secrets.fields.value')}</Text>
-                        <TextInput
-                            testID="saved-secret-add-value"
-                            style={styles.textInput}
-                            placeholder={t('secrets.placeholders.valueExample')}
-                            placeholderTextColor={theme.colors.input.placeholder}
-                            value={draftValue}
-                            onChangeText={setDraftValue}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            secureTextEntry
-                            textContentType={Platform.OS === 'ios' ? 'password' : undefined}
-                        />
+                        <View style={styles.fields}>
+                            <FieldItem label={t('secrets.fields.name')}>
+                                <FieldTextInput
+                                    ref={nameInputRef}
+                                    testID="saved-secret-add-name"
+                                    accessibilityLabel={t('secrets.fields.name')}
+                                    placeholder={t('secrets.placeholders.nameExample')}
+                                    value={draftName}
+                                    onChangeText={setDraftName}
+                                />
+                            </FieldItem>
+                            <FieldItem label={t('secrets.fields.value')}>
+                                <FieldTextInput
+                                    testID="saved-secret-add-value"
+                                    accessibilityLabel={t('secrets.fields.value')}
+                                    placeholder={t('secrets.placeholders.valueExample')}
+                                    value={draftValue}
+                                    onChangeText={setDraftValue}
+                                    secureTextEntry
+                                    monospace
+                                    textContentType={Platform.OS === 'ios' ? 'password' : undefined}
+                                />
+                            </FieldItem>
+                        </View>
                     </InlineAddExpander>
                 ) : null}
             </ItemGroup>
@@ -346,20 +354,8 @@ export function SecretsList(props: SecretsListProps) {
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-    fieldLabel: {
-        ...Typography.variant('body', 'semiBold'),
-        color: theme.colors.text.secondary,
-        marginBottom: theme.space.s8,
-    },
-    textInput: {
-        ...Typography.default('regular'),
-        backgroundColor: theme.colors.input.background,
-        borderRadius: 10,
-        paddingHorizontal: theme.space.s12,
-        paddingVertical: Platform.select({ ios: 8, default: 10 }),
-        fontSize: Platform.select({ ios: 16, default: 16 }),
-        lineHeight: Platform.select({ ios: 20, default: 22 }),
-        letterSpacing: Platform.select({ ios: -0.24, default: 0.1 }),
-        color: theme.colors.input.text,
+    // The add form's fields, spaced as the saved-secret create editor's.
+    fields: {
+        gap: theme.space.s12,
     },
 }));
