@@ -59,13 +59,20 @@ describe('runManagedMachineEnrollment', () => {
       // The executable is the OS boundary; it records invocation and returns no auth material.
       const executable = '#!/bin/sh\nprintf "%s\\n" "$@" > "$HOME/invoked-args"\n';
       await writeFile(join(payloadRoot, 'happier'), executable);
+      const moduleContent = 'export const sourcePayload = "retained source module";\n'.repeat(10_000);
+      await writeFile(join(payloadRoot, 'bundle.js'), moduleContent);
       vi.stubEnv('HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT', ` ${payloadRoot} `);
+      let archiveHeader: Uint8Array | undefined;
       const native: ManagedNativeBootstrapIO = {
         exec: async ({ command }) => {
           const result = await execFileAsync('/bin/sh', ['-c', command], { env: { ...process.env, HOME: guestHome } });
           return { status: 0, stdout: result.stdout, stderr: result.stderr };
         },
-        putFile: async ({ path, bytes }) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); },
+        putFile: async ({ path, bytes }) => {
+          archiveHeader = bytes.slice(0, 2);
+          await mkdir(dirname(path), { recursive: true });
+          await writeFile(path, bytes);
+        },
       };
       // Installation must reach the real recipe's auth consumer; empty output is deliberately invalid.
       await withReleaseMirror(async (releases) => {
@@ -74,7 +81,10 @@ describe('runManagedMachineEnrollment', () => {
         })).rejects.toMatchObject({ code: 'invalid_cli_response' });
         expect(releases).toEqual([]);
       });
+      // Native transport serializes this archive; require the compressed producer's bytes.
+      expect(archiveHeader).toEqual(Buffer.from([0x1f, 0x8b]));
       expect(await readFile(join(guestHome, '.happier/cli/current/happier'), 'utf8')).toBe(executable);
+      expect(await readFile(join(guestHome, '.happier/cli/current/bundle.js'), 'utf8')).toBe(moduleContent);
       expect((await readFile(join(guestHome, 'invoked-args'), 'utf8')).split('\n')).toEqual(expect.arrayContaining([
         'auth', 'request', '--remote-enrollment', '--home-target-stdin', '--managed-enrollment-stdin',
       ]));

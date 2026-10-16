@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -63,6 +63,9 @@ describe('installRemoteFirstPartyComponent', () => {
           return { status: 0, stdout: result.stdout, stderr: result.stderr };
         },
         copyLocalDirectoryToRemote: async ({ localPath, remotePath }) => {
+          const [archiveName] = await readdir(localPath);
+          const archive = await readFile(join(localPath, archiveName!));
+          expect(archive.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
           await cp(localPath, join(home, remotePath, basename(localPath)), { recursive: true });
         },
         // A network boundary must not be used for an explicit local payload.
@@ -323,7 +326,7 @@ describe('installRemoteFirstPartyComponent', () => {
             capturedLocalPaths.push(localPath);
             const stageEntries = await lstat(localPath);
             expect(stageEntries.isDirectory()).toBe(true);
-            const archivePath = join(localPath, 'payload-root.tar');
+            const archivePath = join(localPath, 'payload-root.tar.gz');
             const extracted = await extractTarFixture({ archivePath });
             try {
               const copiedSymlinkPath = join(extracted.extractRoot, 'payload-root', 'node_modules', '.bin', 'tool');
@@ -381,7 +384,7 @@ describe('installRemoteFirstPartyComponent', () => {
           runRemoteText: async () => ({ status: 0, stdout: '', stderr: '' }),
           copyLocalDirectoryToRemote: async ({ localPath }) => {
             capturedLocalPaths.push(localPath);
-            const extracted = await extractTarFixture({ archivePath: join(localPath, 'payload-root.tar') });
+            const extracted = await extractTarFixture({ archivePath: join(localPath, 'payload-root.tar.gz') });
             try {
               await expect(lstat(join(extracted.extractRoot, 'payload-root', 'node_modules', '.bin', 'tool'))).rejects.toThrow();
             } finally {
