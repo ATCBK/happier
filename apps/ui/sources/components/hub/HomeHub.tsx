@@ -66,7 +66,6 @@ import { useAtmospherePictureShown, useAtmosphereSending } from '@/components/at
 import { HomePlanet, homePlanetFootFade, useHomePlanetOptions } from '@/components/atmosphere/HomePlanet';
 import { homePlanetDrawnHeight, homePlanetGeometry, type HomePane } from '@/components/atmosphere/homePlanetPlacement';
 import { useHomeLoadingMoment } from '@/components/atmosphere/moments/homeLoadingMoment';
-import type { PlanetMomentTarget } from '@/components/atmosphere/moments/planetMomentTimeline';
 import { WelcomePlanet } from '@/components/atmosphere/moments/WelcomePlanet';
 import { useHomeWelcome } from '@/components/atmosphere/moments/useHomeWelcome';
 import { useActiveHomeUnavailable } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
@@ -76,7 +75,12 @@ import { HomeIdleResettle } from '@/components/atmosphere/HomeIdleResettle';
 import { HomeHero, useHomeHeroFrame } from './HomeHero';
 import { LookChip, type LookTarget } from '@/components/atmosphere/look/LookChip';
 import { subscribeHomeCustomizeRequest } from './header/homeCustomizeRequest';
+import { AddNameSetupBlock } from '@/components/account/useAddNameSetupItem';
+import { resolveHomeMomentTarget } from './homeMomentTarget';
 import { useHomeHubGuidanceKind } from './useHomeHubGuidanceKind';
+
+/** What Home adds beneath the getting-started guidance when that guidance is Home (one stable element). */
+const HOME_GUIDANCE_ACCESSORY = <AddNameSetupBlock />;
 
 // The Home on the status line: its name, and where it lives while nothing is running (J1).
 const renderHomeLine = (detail: 'full' | 'name') => <HomeWhereLine detail={detail} separated />;
@@ -456,9 +460,10 @@ export const HomeHub = React.memo(function HomeHub() {
     const planetOptions = useHomePlanetOptions(planetLook);
     const planetFade = homePlanetFootFade(planetLook);
     const homeLoading = guidance.kind === 'loading';
-    const momentTarget = React.useMemo<PlanetMomentTarget | null>(() => homeLoading ? null
-        : heroActive && planetSource ? planetOptions ? { kind: 'planet', options: planetOptions, fade: planetFade } : null
-            : { kind: 'none' }, [heroActive, homeLoading, planetFade, planetOptions, planetSource]);
+    const guidanceIsHome = guidance.kind === 'connect_machine' || guidance.kind === 'start_daemon';
+    const momentTarget = React.useMemo(() => resolveHomeMomentTarget({
+        guidanceKind: guidance.kind, heroActive, planetSource, options: planetOptions, fade: planetFade,
+    }), [guidance.kind, heroActive, planetFade, planetOptions, planetSource]);
     const [homePlanetDrawn, setHomePlanetDrawn] = React.useState(false);
     const onHomePlanetDrawn = React.useCallback(() => setHomePlanetDrawn(true), []);
     const momentOrientation = React.useMemo(() => ({
@@ -525,8 +530,9 @@ export const HomeHub = React.memo(function HomeHub() {
             </HomeReachabilityGate>
         );
     }
-    if (guidance.kind === 'connect_machine' || guidance.kind === 'start_daemon') {
-        return framed(<SessionGettingStartedGuidance variant="primaryPane" />);
+    if (guidanceIsHome) {
+        // The guidance is Home here, so Home's own ask for a name sits beneath it.
+        return framed(<SessionGettingStartedGuidance variant="primaryPane" accessory={HOME_GUIDANCE_ACCESSORY} />);
     }
 
     const slotProps = { layout, topLevelIds, onCustomize: openCustomize, placeholder: greeting.subtitle, tracker, widgetDrag,

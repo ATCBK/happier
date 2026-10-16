@@ -30,7 +30,7 @@ import { getSessionGettingStartedSubtitle, getSessionGettingStartedTitle } from 
 import { SessionGettingStartedSummary } from './SessionGettingStartedSummary';
 import { useSessionGettingStartedGuidanceBaseModel } from './useSessionGettingStartedGuidanceBaseModel';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
@@ -59,6 +59,8 @@ export type SessionGettingStartedGuidanceViewModel = Readonly<{
 type SessionGettingStartedGuidanceViewProps = Readonly<{
     variant: SessionGettingStartedGuidanceVariant;
     model: SessionGettingStartedGuidanceViewModel;
+    /** What the host adds beneath the setup card, in the same column (Home's own setup asks). */
+    accessory?: React.ReactNode;
 }>;
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -101,6 +103,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
         ...Typography.default(),
         textAlign: 'center',
+    },
+    // A compact measure under the card: the asks read as quiet notes, not a second card as wide as the page.
+    accessory: {
+        width: '100%',
+        maxWidth: HAPPIER_PAGE_METRICS.dialogWidthPx.default,
+        marginTop: theme.space.s12,
     },
     primaryCard: {
         width: '100%',
@@ -374,6 +382,10 @@ function SessionGettingStartedGuidanceViewImpl(props: SessionGettingStartedGuida
                 )
             )}
 
+            {showSetupPrimaryCard && props.accessory ? (
+                <View style={styles.accessory}>{props.accessory}</View>
+            ) : null}
+
             {showCliFollowUp ? (
                 <View testID="session-getting-started-cli-follow-up" style={styles.stepsContainer}>
                     {showCliFollowUpTitle ? (
@@ -478,6 +490,7 @@ function areSessionGettingStartedGuidanceViewPropsEqual(
     next: SessionGettingStartedGuidanceViewProps,
 ): boolean {
     return previous.variant === next.variant
+        && previous.accessory === next.accessory
         && areSessionGettingStartedGuidanceViewModelsEqual(previous.model, next.model);
 }
 
@@ -557,19 +570,23 @@ function SessionGettingStartedPhoneGuidanceEnabled(): React.ReactElement {
 }
 
 function SessionGettingStartedGuidanceEnabled(
-    props: Readonly<{ variant: Exclude<SessionGettingStartedGuidanceVariant, 'phone'> }>,
+    props: Readonly<{ variant: Exclude<SessionGettingStartedGuidanceVariant, 'phone'>; accessory?: React.ReactNode }>,
 ): React.ReactElement {
     const viewModel = useSessionGettingStartedGuidanceViewModelBase();
 
-    return <SessionGettingStartedGuidanceView variant={props.variant} model={viewModel} />;
+    return <SessionGettingStartedGuidanceView variant={props.variant} model={viewModel} accessory={props.accessory} />;
 }
 
-export function SessionGettingStartedGuidance(props: Readonly<{ variant: SessionGettingStartedGuidanceVariant }>): React.ReactElement | null {
+export function SessionGettingStartedGuidance(props: Readonly<{
+    variant: SessionGettingStartedGuidanceVariant;
+    /** Beneath the setup card, in its column: the host's own asks (Home's "Add your name"). */
+    accessory?: React.ReactNode;
+}>): React.ReactElement | null {
     if (getFeatureBuildPolicyDecision(SESSION_GETTING_STARTED_GUIDANCE_FEATURE_ID) === 'deny') {
         return null;
     }
     if (props.variant === 'phone') {
         return <SessionGettingStartedPhoneGuidanceEnabled />;
     }
-    return <SessionGettingStartedGuidanceEnabled variant={props.variant} />;
+    return <SessionGettingStartedGuidanceEnabled variant={props.variant} accessory={props.accessory} />;
 }

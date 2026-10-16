@@ -7,7 +7,8 @@ import { useAuth } from '@/auth/context/AuthContext';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
-import type { SetupBlockItem } from '@/components/ui/setupBlocks/SetupBlockGrid';
+import { useHomeSetupDismissals } from '@/components/hub/layout/useHomeSetupDismissals';
+import { SetupBlockGrid, type SetupBlockItem } from '@/components/ui/setupBlocks/SetupBlockGrid';
 import { SetupBlockTile } from '@/components/ui/setupBlocks/SetupBlockTile';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -16,6 +17,7 @@ import { setAccountName } from '@/sync/api/account/apiAccountName';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { isAccountMissingOwnName } from '@/sync/domains/account/accountOwnName';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 import { AccountNameField } from './AccountNameField';
 import { useSyncedAccountName } from './useSyncedAccountName';
@@ -37,6 +39,8 @@ export function useAddNameSetupItem(
     onDismiss: (stepId: string) => void;
   }>,
 ): SetupBlockItem | null {
+  // The field takes focus where a keyboard is at hand, never under a phone's on-screen keyboard.
+  const phone = useDeviceType() === 'phone';
   const missing = isAccountMissingOwnName(useSyncedAccountName());
   if (!missing || input.hidden.has(ADD_NAME_SETUP_STEP_ID)) return null;
   const title = t('settingsAccount.addName');
@@ -64,12 +68,24 @@ export function useAddNameSetupItem(
     ),
     renderPanel: ({ close }) => (
       <AddNamePanel
-        autoFocus={input.layout === 'card'}
+        autoFocus={!phone}
         onSaved={close}
         onNotNow={dismiss}
       />
     ),
   };
+}
+
+/**
+ * The same block on its own, for a Home page that has no Get set up row (the getting-started guidance
+ * before the Account has a machine): one row-shaped block that grows in place, with the same
+ * dismissal. Nothing renders once the Account has a name or the step is hidden.
+ */
+export function AddNameSetupBlock(): React.ReactElement | null {
+  const { hidden, dismiss } = useHomeSetupDismissals();
+  const item = useAddNameSetupItem({ layout: 'row', hidden, onDismiss: dismiss });
+  if (!item) return null;
+  return <SetupBlockGrid testID="home-add-name" items={[item]} columns={1} />;
 }
 
 /** The block grown in place: why, the Name field, Save and Not now. */
@@ -153,9 +169,9 @@ const styles = StyleSheet.create((theme) => ({
   text: {
     gap: theme.space.s4,
   },
+  // A section-level heading: the block sits under a page's own title (Home, the setup page).
   title: {
-    ...Typography.default('semiBold'),
-    ...happierPageTextMetrics('pageTitle'),
+    ...Typography.variant('heading'),
     color: theme.colors.text.primary,
   },
   body: {

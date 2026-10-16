@@ -184,7 +184,8 @@ vi.mock('@/components/sessions/guidance/useSessionGettingStartedGuidanceBaseMode
     },
 }));
 vi.mock('@/components/sessions/guidance/SessionGettingStartedGuidance', () => ({
-    SessionGettingStartedGuidance: () => 'guidance',
+    // The guidance's own page is its suite's; Home supplies only what it adds beneath it.
+    SessionGettingStartedGuidance: (props: { accessory?: unknown }) => ['guidance', props.accessory ?? null],
 }));
 
 afterEach(async () => {
@@ -333,6 +334,28 @@ describe('HomeHub', () => {
         expect(firstRun.getTextContent()).toContain('guidance');
     });
 
+    it('asks an Account with no name on the no-computer Home, through the one Add your name block and its dismissal', async () => {
+        settings.guidanceKind = 'connect_machine';
+        const screen = await renderHome();
+        const scope = storage.getState().profileScope!;
+        const setName = async (name: string | null) => {
+            await act(async () => { storage.setState({ profile: { ...storage.getState().profile, id: scope.accountId, name } }); });
+            await flushHookEffects({ cycles: 3 });
+        };
+        await setName(null);
+        expect(screen.getTextContent()).toContain('guidance');
+        expect(screen.findByTestId('hub-setup.addName')).toBeTruthy();
+        // A name set anywhere (another device, Settings, an Action) removes it.
+        await setName('Maya Chen');
+        expect(screen.findByTestId('hub-setup.addName')).toBeNull();
+        await setName(null);
+        expect(screen.findByTestId('hub-setup.addName')).toBeTruthy();
+        // Hiding it is the Home setup step every surface shares, kept on the Account layout.
+        await act(async () => { screen.pressByTestId('hub-setup.addName.dismiss'); });
+        await flushHookEffects({ cycles: 5 });
+        expect(screen.findByTestId('hub-setup.addName')).toBeNull();
+        expect(artifact.layout().hidden).toContain('setup:addName');
+    });
     it('shows the Account\'s sections in its order, never hiding "Start a session" or "Needs your attention"', async () => {
         settings.layout = { order: ['automations', 'start'], hidden: ['setup', 'start', 'attention'] };
         const screen = await renderHome();

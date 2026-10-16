@@ -35,6 +35,9 @@ const state = vi.hoisted(() => ({
     machineListSettled: true,
     dismissed: false,
     show: null as null | ((options: unknown) => void),
+    /** The person's answer to a confirmation dialog, and the titles they were asked. */
+    confirmAnswer: false,
+    confirmed: [] as string[],
     window: { width: 1600, height: 900 },
     phone: false,
     push: null as null | ((href: unknown) => void),
@@ -81,7 +84,11 @@ vi.mock('@/modal', async () => {
         state.show?.(options);
         return 'modal-id';
     }) as never;
-    return createModalModuleMock({ spies: { show } }).module;
+    const confirm = (async (title: string) => {
+        state.confirmed.push(title);
+        return state.confirmAnswer;
+    }) as never;
+    return createModalModuleMock({ spies: { show, confirm } }).module;
 });
 // Device storage for the recovery-key flag, and the server's feature answer (HTTP).
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
@@ -128,6 +135,8 @@ afterEach(async () => {
     discardMachineAddFlowDraft();
     state.authenticated = true;
     state.profileName = 'Alex Morgan';
+    state.confirmAnswer = false;
+    state.confirmed = [];
     state.machines = [];
     state.machineListSettled = true;
     state.dismissed = false;
@@ -235,9 +244,12 @@ describe('HubSetupSection on Home (tiles)', () => {
     it('saves the name in place through the Account writer, and the block leaves once the name is set', async () => {
         state.dismissed = true;
         state.profileName = null;
+        // The Home's Action policy may ask the person to confirm their own name; they confirm.
+        state.confirmAnswer = true;
         const saved: unknown[] = [];
         state.request.mockImplementation(async (path, init) => {
             if (path !== '/v1/account/profile') throw new Error(`Unexpected request: ${path}`);
+            if (init?.method !== 'POST') return Response.json({ ...storage.getState().profile });
             const body = JSON.parse(String(init?.body)) as { name: string };
             saved.push(body);
             return Response.json({ name: body.name, firstName: body.name, lastName: null, timestamp: Date.now() });
