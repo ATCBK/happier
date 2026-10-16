@@ -51,6 +51,23 @@ import {
 } from './voiceInference.js';
 
 describe('daemonVoiceInference schemas', () => {
+    it('retains optional sanitized append diagnostics without requiring them on older errors', () => {
+        const failure = { ok: false, errorCode: 'internal_error', error: 'voice_inference_internal_error' };
+        const diagnostic = {
+            operation: 'appendPcm16', streamId: 'native-stream-1', exceptionClass: 'TypeError', code: 'ERR_NATIVE_FAILURE',
+        };
+        expect(DaemonVoiceInferenceErrorSchema.parse(failure)).toEqual(failure);
+        expect(DaemonVoiceInferenceSttStreamChunkResponseSchema.parse({ ...failure, diagnostic }))
+            .toEqual({ ...failure, diagnostic });
+        for (const unsafe of [
+            { ...diagnostic, code: 'private /model.wav token=secret' },
+            { ...diagnostic, exceptionClass: 'private text' },
+            { ...diagnostic, message: 'private text' },
+        ]) {
+            expect(DaemonVoiceInferenceErrorSchema.safeParse({ ...failure, diagnostic: unsafe }).success).toBe(false);
+        }
+    });
+
     it('preserves classic JSON Schema projection, defaults and fluent request composition', () => {
         const audio = z.strictObject({ codec: z.literal('wav'), mimeType: z.literal('audio/wav') });
         const cancel = z.strictObject({
