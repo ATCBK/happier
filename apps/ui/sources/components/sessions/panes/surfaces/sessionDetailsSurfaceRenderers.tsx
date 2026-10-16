@@ -71,6 +71,16 @@ import {
 
 type SessionDetailsOpenFile = (path: string, intent?: 'default' | 'pinned') => void;
 
+function SessionScmReviewSurface(props: Omit<React.ComponentProps<typeof SessionScmReviewDetailsViewForPanel>, 'target'> & Readonly<{
+    resource: DetailsTab['resource'];
+}>) {
+    const { resource, ...viewProps } = props;
+    // Parsing creates comparison objects that own the navigation callbacks used by every hunk.
+    // Unrelated surface updates must retain them while the tab's resource is unchanged.
+    const target = React.useMemo(() => readSessionScmReviewTarget(resource), [resource]);
+    return <SessionScmReviewDetailsViewForPanel {...viewProps} target={target} />;
+}
+
 type SessionDetailsSurfaceRendererOptions = Readonly<{
     sessionId: string;
     session?: Session;
@@ -462,12 +472,12 @@ export function createSessionDetailsSurfaceRenderers(
             order: 30,
             canRender: (input) => readResourceKind(input) === 'scmReview',
             render: (input) => (
-                <SessionScmReviewDetailsViewForPanel
+                <SessionScmReviewSurface
                     sessionId={options.sessionId}
                     serverId={options.serverId}
                     scopeId={options.scopeId}
                     active={input.active}
-                    target={readSessionScmReviewTarget(input.tab.resource)}
+                    resource={input.tab.resource}
                     onRequestClose={options.requestClose}
                 />
             ),
