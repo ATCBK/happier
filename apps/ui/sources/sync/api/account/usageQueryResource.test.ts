@@ -1001,6 +1001,64 @@ describe('usage query captured Resource adapter', () => {
     } finally { held.resolve(Response.json(value)); release(); }
   });
 
+  it('retains comparison facts when an exact query moves to another Resource batch', async () => {
+    const held = createDeferred<Response>();
+    let rereading = false;
+    const captured = await context(request => request.path === '/v2/usage/query'
+      ? rereading ? held.promise.then(response => response.clone()) : Response.json(value) : undefined);
+    const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 }, includeSessionEvidence: false, includeWorkEvidence: false });
+    const other = normalizeUsageQuery({ ...query, agents: ['codex'] });
+    const store = getUsageQueryResourceStore(captured);
+    const entryFor = (queries: typeof query[]) => store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries }) });
+    const first = entryFor([query]);
+    await first.refresh();
+    expect(decodeUsageQueryResource(first.getSnapshot().value!).results[0]?.comparison?.accounting).toMatchObject(value);
+    rereading = true;
+    const returning = entryFor([query, other]);
+    const release = returning.subscribe(() => {}, false);
+    try {
+      await expect.poll(() => returning.getSnapshot().value !== undefined).toBe(true);
+      const slice = decodeUsageQueryResource(returning.getSnapshot().value!).results.find(slice => slice.key === getUsageQueryKey(query))!;
+      expect.soft(slice.accounting).toMatchObject(value);
+      expect.soft(slice.comparison).toMatchObject({ accounting: value, source: { status: 'pending' } });
+      held.resolve(Response.json({ ...value, totals: { ...value.totals, eventCount: 2 } }));
+      await expect.poll(() => returning.getSnapshot().pending).toBe('idle');
+      expect(decodeUsageQueryResource(returning.getSnapshot().value!).results[0]?.comparison?.accounting?.totals.eventCount).toBe(2);
+    } finally { held.resolve(Response.json(value)); release(); }
+  });
+
+  it('keeps the witnessed rolling comparison outstanding while the next accounting window rereads', async () => {
+    let now = Date.UTC(2026, 9, 16, 12);
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const held = createDeferred<void>();
+    let rereading = false;
+    const captured = await context(async request => {
+      if (request.path !== '/v2/usage/query') return undefined;
+      const query = UsageAnalyticsQueryRequestSchema.parse(request.body);
+      if (rereading) await held.promise;
+      return Response.json({ ...value, coverage: { status: 'complete', reasons: [], missingDimensions: [], ranked: [], sources: [],
+        range: { ...query.dateRange, complete: true } } });
+    });
+    const query = normalizeUsageQuery({ period: { relative: '7days' }, includeSessionEvidence: false, includeWorkEvidence: false });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    await entry.refresh();
+    const previous = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+    expect(previous.comparison?.accounting).toBeDefined();
+    now += 30_000;
+    rereading = true;
+    const refreshing = entry.refresh();
+    try {
+      await expect.poll(() => entry.getSnapshot().value && decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources
+        .find(source => source.source === 'accounting')?.status).toBe('pending');
+      const slice = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      expect.soft(slice.comparison).toMatchObject({ query: previous.comparison!.query,
+        accounting: previous.comparison!.accounting, source: { status: 'pending' } });
+    } finally { held.resolve(); await refreshing; }
+    const replaced = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+    expect(replaced.comparison?.query).not.toEqual(previous.comparison?.query);
+    expect(replaced.comparison?.source.status).toBe('available');
+  });
+
   it.each([true, false])('rejects late private evidence on Account retirement for explicit Session selection %s', async explicit => {
     let response: UsageAnalyticsQueryResponse = { ...value, contributions: [workContribution] };
     let held = false;

@@ -364,6 +364,10 @@ export function readUsageCoverageGaps(
   const quotaRequested = sources.includes('quota');
   const gaps = slice.sources.filter(source => (dependent.has(source.source)
     || quotaRequested && source.source.startsWith('quota:')) && source.status !== 'available');
+  // Comparison owns its source state beside its exact preceding query, rather
+  // than in the slice's general source list. Consumers must see that same state.
+  if (dependent.has('comparison') && slice.comparison && slice.comparison.source.status !== 'available')
+    gaps.push(slice.comparison.source);
   // Transport settlement does not establish history completeness. Keep the
   // settled allowance's qualification visible between refreshes as well.
   if (quotaRequested && slice.quota?.some(read => read.history?.nextCursor != null

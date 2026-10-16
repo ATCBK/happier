@@ -17,12 +17,31 @@ import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
-import { describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
+import { describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, isUsageReadOutstanding, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
 describe('shared Usage identity and dependent coverage', () => {
+    it('projects the declared comparison source through pending, answered and failed reads', () => {
+        const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 } });
+        const comparison = normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: 1000 } });
+        const accounting = { v: 1 as const, totals: usageQaAccountingFixture().totals };
+        const sliceFor = (status: 'pending' | 'available' | 'error') => resolveUsagePageAggregation({ queries: [query], accounting: [
+            { query, status: 'available', value: accounting },
+            { query: comparison, status, ...(status === 'available' ? { value: accounting } : {}),
+                ...(status === 'error' ? { errorCode: 'usage_query_failed' } : {}) },
+        ] }).results[0]!;
+        const pending = sliceFor('pending');
+        expect.soft(isUsageReadOutstanding(pending, ['comparison'])).toBe(true);
+        expect.soft(readUsageCoverageGaps(pending, ['comparison'])).toEqual([{ source: 'comparison', status: 'pending' }]);
+        expect(isUsageReadOutstanding(sliceFor('available'), ['comparison'])).toBe(false);
+        expect.soft(readUsageCoverageGaps(sliceFor('error'), ['comparison'])).toEqual([
+            { source: 'comparison', status: 'error', errorCode: 'usage_query_failed' },
+        ]);
+        const unbounded = resolveUsagePageAggregation({ queries: [normalizeUsageQuery({ period: {} })] }).results[0]!;
+        expect(isUsageReadOutstanding(unbounded, ['comparison'])).toBe(false);
+    });
     it('retains the full numeric version in a newer model absent from the static Agent catalog', () => {
         expect(usageDimensionLabel('model', 'claude-haiku-6-1')).toBe('Claude Haiku 6.1');
     });

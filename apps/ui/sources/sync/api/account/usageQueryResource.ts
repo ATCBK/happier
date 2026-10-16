@@ -617,7 +617,17 @@ export async function readUiUsageQueryBatch(
             const displayLocation = readMachineName(machine);
             return displayLocation ? [{ machineId: machine.id, displayLocation }] : [];
         });
-        const batch = resolveUsagePageAggregation({ queries, accounting: [...accounting.values()], previous: admittedPrevious,
+        // A rolling reread requests a new absolute window. Until current
+        // accounting answers, the displayed window still owns its exact old
+        // comparison; it is being replaced, not definitively absent.
+        const witnessedComparison = previous?.results.flatMap(slice => {
+            const comparison = slice.comparison;
+            if (!comparison?.accounting || accounting.has(getUsageQueryKey(comparison.query))) return [];
+            return [{ query: comparison.query, value: comparison.accounting,
+                status: accounting.get(slice.key)?.status === 'pending' ? 'pending' as const : 'stale' as const,
+                ...(comparison.source.asOfMs === undefined ? {} : { asOfMs: comparison.source.asOfMs }) }];
+        }) ?? [];
+        const batch = resolveUsagePageAggregation({ queries, accounting: [...accounting.values(), ...witnessedComparison], previous: admittedPrevious,
             sourceLocations,
             pricingOverrides: accountSettings.usageModelPriceOverridesV1, coachPreferences: accountSettings.usageCoachPreferencesV1,
             nightHours: accountSettings.usageNightHoursV1,
@@ -771,7 +781,7 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
     // Queries move between route batches as visible widgets register. These
     // are the same Account Resource's accounting facts, independent of batch membership.
     const accountingByQuery = new Map<string, Pick<UsageQueryBatchResult['results'][number],
-        'key' | 'requestedQuery' | 'shownQuery' | 'accounting' | 'sources' | 'pending'>>();
+        'key' | 'requestedQuery' | 'shownQuery' | 'accounting' | 'comparison' | 'sources' | 'pending'>>();
     const sessionInputs = new Map<string, { seq: number | undefined; basis: string; needsAdmission: boolean;
         value?: SessionInputEvidence; read: Promise<SessionInputEvidence | null> }>();
     const readSessionState = (id: string) => {
@@ -902,7 +912,8 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                     for (const slice of batch.results) if (slice.accounting
                         && slice.sources.some(source => source.source === 'accounting' && source.status !== 'pending' && source.status !== 'not_loaded')) {
                         accountingByQuery.set(slice.key, { key: slice.key, requestedQuery: slice.requestedQuery, shownQuery: slice.shownQuery,
-                            accounting: slice.accounting, sources: slice.sources.filter(source => source.source === 'accounting'), pending: false });
+                            accounting: slice.accounting, comparison: slice.comparison,
+                            sources: slice.sources.filter(source => source.source === 'accounting'), pending: false });
                     }
                     const current = entry.getSnapshot().value;
                     // Reconcile each revision against the same entry's admitted
