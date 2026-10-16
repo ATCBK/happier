@@ -64,6 +64,7 @@ Notes:
 - `id` becomes the provider id used in policy (`AUTH_SIGNUP_PROVIDERS=okta`) and in the callback URL (`/v1/oauth/:provider/callback`).
 - `issuer` must point at the provider’s OIDC issuer URL (discovery uses `/.well-known/openid-configuration`).
 - Make sure your OIDC app is configured to allow the exact `redirectUrl`.
+- `clientSecret` can be replaced by `clientSecretEnv`, the name of an environment variable that holds the secret. See [Client secret from an environment variable](#client-secret-from-an-environment-variable).
 - `scopes` defaults to `openid profile email` and **must include `openid`**.
 - `httpTimeoutSeconds` (default `30`, clamp 1–120): timeout (seconds) for OIDC discovery and subsequent HTTP requests made by the OIDC client configuration.
 - `claims` lets you map where to read the provider login/email/groups from (defaults shown above).
@@ -75,6 +76,32 @@ Notes:
 - `fetchUserInfo` (default `false`): if enabled, the server fetches `/userinfo` and merges it into the identity profile.
 - `storeRefreshToken` (default `false`): if enabled, the server stores an **encrypted refresh token** and uses refresh flows for periodic eligibility re-checks (offboarding) without requiring users to reconnect.
 - `ui` provides optional UI hints only (no security impact).
+
+## Client secret from an environment variable
+
+Set `clientSecretEnv` instead of `clientSecret` when the provider config lives in non-secret deployment values (Helm values, a compose file, a ConfigMap) and the secret comes from a secret manager:
+
+```json
+[
+  {
+    "id": "okta",
+    "type": "oidc",
+    "displayName": "Acme Okta",
+    "issuer": "https://acme.okta.com/oauth2/default",
+    "clientId": "…",
+    "clientSecretEnv": "OKTA_CLIENT_SECRET",
+    "redirectUrl": "https://YOUR_SERVER/v1/oauth/okta/callback"
+  }
+]
+```
+
+```bash
+OKTA_CLIENT_SECRET=…   # injected from your secret store
+```
+
+- The server reads the variable from its own environment when it loads the provider config.
+- A literal `clientSecret` wins when both fields are set.
+- If the named variable is unset or empty, the config is invalid: the server registers none of the configured OIDC providers and reports `auth_providers_config_invalid` under `capabilities.auth.misconfig` in `GET /v1/features`, naming the variable. It never starts a provider with an empty secret.
 
 ## Group overage / external claims
 
@@ -139,7 +166,7 @@ AUTH_ANONYMOUS_SIGNUP_ENABLED=0
    - Enable **PKCE**
    - Add redirect URI: `https://YOUR_SERVER/v1/oauth/<providerId>/callback`
 3. Put the provider config in `AUTH_PROVIDERS_CONFIG_PATH` (preferred) or `AUTH_PROVIDERS_CONFIG_JSON`:
-   - Set `issuer`, `clientId`, `clientSecret`, and `redirectUrl` exactly (must match step 2).
+   - Set `issuer`, `clientId`, `clientSecret` (or `clientSecretEnv`), and `redirectUrl` exactly (must match step 2).
 4. Enable it in policy:
    - Allow signup via this provider: `AUTH_SIGNUP_PROVIDERS=<providerId>`
    - Make it mandatory for ongoing access: `AUTH_REQUIRED_LOGIN_PROVIDERS=<providerId>`
