@@ -146,6 +146,7 @@ export function normalizeSessionMetadataForRead<T extends { terminal?: unknown }
 export function readSessionTerminalControlServiceabilityStateV1(
   value: unknown,
 ): 'servable' | 'recoverable_unservable' | 'unknown' | null {
+  if (value === null || value === undefined) return null;
   const parsed = SessionTerminalControlServiceabilityV1Schema.safeParse(value);
   return parsed.success ? parsed.data.state : null;
 }
