@@ -51,12 +51,18 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-vi.mock('node:fs', () => ({
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  chmodSync,
-}));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  // Only the simulated SSH trust store is external here; payload/temp files stay real.
+  const isTrustPath = (path: unknown) => String(path).includes('known_hosts') || String(path).startsWith('/mock-home');
+  return {
+    ...actual,
+    mkdirSync: (...args: Parameters<typeof actual.mkdirSync>) => isTrustPath(args[0]) ? mkdirSync(...args) : actual.mkdirSync(...args),
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => isTrustPath(args[0]) ? readFileSync(...args) : actual.readFileSync(...args),
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => isTrustPath(args[0]) ? writeFileSync(...args) : actual.writeFileSync(...args),
+    chmodSync: (...args: Parameters<typeof actual.chmodSync>) => isTrustPath(args[0]) ? chmodSync(...args) : actual.chmodSync(...args),
+  };
+});
 
 vi.mock('@happier-dev/cli-common/ssh', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@happier-dev/cli-common/ssh')>();
@@ -669,8 +675,7 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
   it('uses a local payload root for remote CLI install when HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT is set', async () => {
     const previous = process.env.HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT;
     const localPayloadRoot = await mkdtemp(join(tmpdir(), 'happier-local-cli-payload-'));
-    await mkdir(join(localPayloadRoot, 'bin'), { recursive: true });
-    await writeFile(join(localPayloadRoot, 'bin', 'happier'), '#!/usr/bin/env bash\nexit 0\n', 'utf8');
+    await writeFile(join(localPayloadRoot, 'happier'), '#!/usr/bin/env bash\nexit 0\n', 'utf8');
     process.env.HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT = localPayloadRoot;
     try {
       const kind = createLiveRemoteSshBootstrapTaskKind();

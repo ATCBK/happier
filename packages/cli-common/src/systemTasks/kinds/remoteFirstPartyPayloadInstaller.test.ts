@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { installRemoteFirstPartyComponent, installRemoteFirstPartyComponentPayload } from './remoteFirstPartyPayloadInstaller.js';
 
@@ -46,6 +46,36 @@ async function extractTarFixture(params: Readonly<{ archivePath: string }>): Pro
 }
 
 describe('installRemoteFirstPartyComponent', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('uses the CLI operator payload even when remote self-download was requested', async () => {
+    if (process.platform === 'win32') return;
+    const home = await mkdtemp(join(tmpdir(), 'happier-source-payload-home-'));
+    const fixture = await createPayloadRootFixture();
+    try {
+      vi.stubEnv('HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT', fixture.payloadRoot);
+      const installed = await installRemoteFirstPartyComponent({
+        componentId: 'happier-cli', strategy: 'remote-self-download', ssh: { target: 'guest.test', auth: 'agent' },
+      }, {
+        resolveRemoteReleaseTarget: async () => ({ os: 'linux', arch: 'x64' }),
+        runRemoteText: async ({ remoteCommand }) => {
+          const result = await execFileAsync('/bin/sh', ['-c', remoteCommand], { env: { ...process.env, HOME: home } });
+          return { status: 0, stdout: result.stdout, stderr: result.stderr };
+        },
+        copyLocalDirectoryToRemote: async ({ localPath, remotePath }) => {
+          await cp(localPath, join(home, remotePath, basename(localPath)), { recursive: true });
+        },
+        // A network boundary must not be used for an explicit local payload.
+        resolveSelfDownloadInstallPlan: async () => { throw new Error('Release lookup must not run'); },
+      });
+      expect(installed.source).toBe(`local-payload:${fixture.payloadRoot}`);
+      expect(await readFile(join(home, '.happier/cli/current/happier'), 'utf8')).toBe(await readFile(join(fixture.payloadRoot, 'happier'), 'utf8'));
+    } finally {
+      await fixture.cleanup();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('installs the same binary payload through native file and exec IO without an SSH identity', async () => {
     if (process.platform === 'win32') return;
     const home = await mkdtemp(join(tmpdir(), 'happier-native-home with spaces-'));

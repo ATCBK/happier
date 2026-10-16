@@ -1,4 +1,6 @@
-import { basename } from 'node:path';
+import { access, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { basename, join } from 'node:path';
 import { quoteRemotePathWithHomeExpansion } from '../../ssh/shellQuote.js';
 
 import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
@@ -8,8 +10,10 @@ import type {
   PreparedFirstPartyComponentPayload,
 } from '../../firstPartyRuntime/index.js';
 import {
+  getFirstPartyComponentCatalogEntry,
   prepareFirstPartyComponentPayloadFromGitHubRelease,
 } from '../../firstPartyRuntime/index.js';
+import { SystemTaskExecutionError } from '../runSystemTask.js';
 
 import { createScpReadyPayloadArchive } from './createScpReadyPayloadArchive.js';
 import type { SystemTaskSshConnectionConfig } from './relayRuntimeKinds.js';
@@ -129,12 +133,15 @@ export async function installRemoteFirstPartyComponentPayload(
     ...deps,
   } satisfies Required<RemoteFirstPartyPayloadInstallDeps>;
   const channel = normalizeBootstrapReleaseChannel(params.channel);
+  const localCliPayloadRoot = params.componentId === 'happier-cli'
+    ? String(process.env.HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT ?? '').trim()
+    : '';
   const remoteHomeDir = normalizeRemoteFirstPartyHomeDir(params.remoteHomeDir);
   params.signal?.throwIfAborted();
   const target = await resolvedDeps.resolveRemoteReleaseTarget({
     ...(params.signal ? { signal: params.signal } : {}),
   });
-  if (params.strategy === 'remote-self-download') {
+  if (params.strategy === 'remote-self-download' && !localCliPayloadRoot) {
     const plan = await resolvedDeps.resolveSelfDownloadInstallPlan({
       componentId: params.componentId,
       channel,
@@ -157,17 +164,36 @@ export async function installRemoteFirstPartyComponentPayload(
   }
 
   params.signal?.throwIfAborted();
-  const prepared = await resolvedDeps.preparePayload({
-    componentId: params.componentId,
-    channel,
-    os: target.os,
-    arch: target.arch,
-    userAgent: 'happier-bootstrap',
-  });
+  let prepared: PreparedFirstPartyComponentPayload;
+  if (localCliPayloadRoot) {
+    const binaryPath = join(localCliPayloadRoot, getFirstPartyComponentCatalogEntry(params.componentId).binaryRelativePath);
+    try {
+      if (!(await stat(binaryPath)).isFile()) throw new Error('CLI payload entrypoint is not a file');
+      await access(binaryPath, constants.R_OK);
+    } catch {
+      throw new SystemTaskExecutionError('invalid_payload', 'The local CLI payload must contain a readable CLI executable.');
+    }
+    prepared = {
+      componentId: params.componentId, channel, versionId: `local-${channel}-${resolvedDeps.now()}`,
+      payloadRoot: localCliPayloadRoot, source: `local-payload:${localCliPayloadRoot}`, cleanup: async () => undefined,
+    };
+  } else {
+    prepared = await resolvedDeps.preparePayload({
+      componentId: params.componentId,
+      channel,
+      os: target.os,
+      arch: target.arch,
+      userAgent: 'happier-bootstrap',
+    });
+  }
 
   try {
     params.signal?.throwIfAborted();
-    const scpReadyPayload = await createScpReadyPayloadArchive(prepared.payloadRoot);
+    const scpReadyPayload = await createScpReadyPayloadArchive(prepared.payloadRoot).catch((error: unknown) => {
+      params.signal?.throwIfAborted();
+      if (localCliPayloadRoot) throw new SystemTaskExecutionError('invalid_payload', 'The local CLI payload could not be prepared for delivery.');
+      throw error;
+    });
     try {
       const stageParent = `${remoteHomeDir}/bootstrap-staging/${sanitizeRemoteFirstPartyPathSegment(params.componentId)}-${sanitizeRemoteFirstPartyPathSegment(prepared.versionId)}-${resolvedDeps.now()}`;
       const stageParentForScp = normalizeScpRemotePath(stageParent);
