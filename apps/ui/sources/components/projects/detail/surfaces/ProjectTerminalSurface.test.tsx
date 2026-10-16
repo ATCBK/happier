@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { applyProjectAccountRowsFixture, createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { storage } from '@/sync/domains/state/storage';
 import { readSessionTerminalWorkspaceForScope, registerSessionTerminalSplitMeasurements, setSessionTerminalPendingActionApproval } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
@@ -14,7 +14,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { createEmptyTerminalSurfaceState, readTerminalSurfaceState, replaceTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
 import { buildProjectTerminalKey } from '../projectTerminalScope';
-import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { buildProjectAccountRowPhysicalKeyV1, PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { WorkspaceEmbeddedTerminalPane } from '@/components/projects/panes/details/views/WorkspaceEmbeddedTerminalPane';
 import { EmbeddedTerminalPane } from '@/components/terminal/embedded/EmbeddedTerminalPane';
 
@@ -66,15 +66,18 @@ describe('Project terminal through the incumbent pane workspace', () => {
     });
 
     it('opens an admitted shell without a Session, then preserves labels, split identity and borrowed-view close', async () => {
-        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-terminal-pane.test', accountId: 'bob', settings: {
+        const serverIdentityId = 'srv_project_terminal_pane';
+        const ref = { id: 'accepted', serverId: serverIdentityId, machineId: 'machine', rootPath: '/accepted', projectKey: 'project', createdAtMs: 1 };
+        const checkout = { ...ref, id: 'selected-checkout', rootPath: '/accepted-worktree' };
+        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-terminal-pane.test', accountId: 'bob', serverIdentityId, settings: {
             actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'session.terminals.open': ['ui'] } },
-        } }], route: () => undefined });
+        } }], route: request => request.path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`
+            ? Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs: [ref, checkout] })) : undefined });
         let retireMeasurements: (() => void) | undefined;
         try {
             publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             const serverId = home.homes.project!.id;
-            const ref = { id: 'accepted', serverId, machineId: 'machine', rootPath: '/accepted', projectKey: 'project', createdAtMs: 1 };
-            const checkout = { ...ref, id: 'selected-checkout', rootPath: '/accepted-worktree' };
+            expect(serverId).toBe(serverIdentityId);
             const workspace = { serverId, workspaceId: checkout.id, machineId: checkout.machineId, rootPath: checkout.rootPath };
             applyProjectAccountRowsFixture(storage, { workspaceRefs: [ref, checkout] });
             const scopeId = buildProjectPaneScopeId(ref.id, serverId);
@@ -87,7 +90,11 @@ describe('Project terminal through the incumbent pane workspace', () => {
             await screen.update(<AppPaneProvider><ProjectTerminalSurface scopeId={scopeId}
                 workspaceRefId={ref.id} machineId={ref.machineId} rootPath={ref.rootPath} serverId={serverId}
                 workspace={workspace} /></AppPaneProvider>);
-            expect(screen.findByTestId('project-terminal-workspace-root')).not.toBeNull();
+            expect(screen.findByTestId('project-terminal-workspace-root'), JSON.stringify({
+                content: screen.getTextContent(), profileScope: storage.getState().profileScope,
+                rows: storage.getState().projectAccountRows,
+                testIds: screen.tree.findAll(node => typeof node.type === 'string' && typeof node.props.testID === 'string').map(node => node.props.testID),
+            })).not.toBeNull();
             await screen.pressByTestIdAsync('project-terminal-workspace-strip-new');
             await vi.waitFor(() => expect(readSessionTerminalWorkspaceForScope(scopeId)?.tabs).toHaveLength(1));
             // The genuine UI intent remains lazy until the renderer is ready;
