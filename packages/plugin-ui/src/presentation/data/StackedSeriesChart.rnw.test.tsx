@@ -539,4 +539,16 @@ describe('few-bucket bar columns', () => {
       expect(getComputedStyle(column).maxWidth).toBe(`${HAPPIER_DATA_METRICS.barMaxWidthPx}px`);
     } finally { mount.unmount(); }
   });
+  it('sets an indexed axis tick under its own bar, not at a third of the width', () => {
+    const input = [{ id: 'hours', label: 'Hours', points: Array.from({ length: 24 }, (_, hour) => ({ id: `h${hour}`, x: hour, y: hour })) }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="By hour" series={input}
+      width={240} viewportHeight={60} variant="bar" size="tile" testID="hours" axisTicks={[{ label: '6A', bucket: 6 }, { label: '12P', bucket: 12 }]} />);
+    try {
+      const axis = (index: number) => find(mount.container, `hours-axis-${index}`);
+      expect(axis(6).textContent).toBe('6A');
+      expect(axis(12).textContent).toBe('12P');
+      expect(axis(7).textContent).toBe('');
+      expect(axis(6).parentElement!.children).toHaveLength(24);
+    } finally { mount.unmount(); }
+  });
 });

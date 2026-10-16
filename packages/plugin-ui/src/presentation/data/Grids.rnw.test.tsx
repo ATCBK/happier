@@ -51,4 +51,17 @@ describe('neutral public grids', () => {
       } finally { mount.unmount(); }
     });
   }
+
+  it('DotGrid sets each hour label in its own column so a tick names the column it sits over', () => {
+    const columns = Array.from({ length: 24 }, (_, hour) => ({ id: `h${hour}`, label: hour % 6 === 0 ? `${hour}h` : '' }));
+    const mount = mountThroughReactNativeWeb(createElement(Presentation.DotGrid, { ...props, rows: [{ id: 'mon', label: 'Mon' }], columns,
+      cells: columns.map((column, hour) => ({ id: column.id, row: 'mon', column: column.id, label: column.id, value: hour })) }));
+    try {
+      const axis = (hour: number) => mount.container.querySelector<HTMLElement>(`[data-testid="samples-axis-h${hour}"]`)!;
+      expect(axis(6).textContent).toBe('6h');
+      expect(axis(18).textContent).toBe('18h');
+      expect(axis(8).textContent).toBe('');
+      expect(axis(6).parentElement!.children).toHaveLength(24);
+    } finally { mount.unmount(); }
+  });
 });

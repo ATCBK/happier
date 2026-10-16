@@ -15931,6 +15931,7 @@ settingsSession: {
             rhythmEmptyReason: "Le sessioni che esegui su qualsiasi macchina appaiono qui.",
             activeDays: "Giorni attivi",
             weekdayHour: "Giorno × ora",
+            byHour: "Per ora",
             unnamedRun: "Sessione senza titolo",
             unknownMachine: "Macchina sconosciuta",
             peakAtOnce: ({ count }: { count: string | number }) => `Picco di ${count} insieme`,

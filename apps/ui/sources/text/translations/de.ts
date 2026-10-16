@@ -15694,6 +15694,7 @@ settingsSession: {
             rhythmEmptyReason: "Sitzungen auf jedem Gerät erscheinen hier.",
             activeDays: "Aktive Tage",
             weekdayHour: "Wochentag × Stunde",
+            byHour: "Nach Stunde",
             unnamedRun: "Sitzung ohne Titel",
             unknownMachine: "Unbekanntes Gerät",
             peakAtOnce: ({ count }: { count: string | number }) => `Höchstens ${count} gleichzeitig`,

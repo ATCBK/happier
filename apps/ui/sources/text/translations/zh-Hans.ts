@@ -15181,6 +15181,7 @@ settingsSession: {
             rhythmEmptyReason: "你在任意机器上运行的会话都会显示在这里。",
             activeDays: "活跃天数",
             weekdayHour: "星期 × 小时",
+            byHour: "按小时",
             unnamedRun: "未命名会话",
             unknownMachine: "未知机器",
             peakAtOnce: ({ count }: { count: string | number }) => `最多同时 ${count} 个`,

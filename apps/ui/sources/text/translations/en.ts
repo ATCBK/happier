@@ -19180,6 +19180,7 @@ const enUsage = {
       rhythmEmptyReason: "Sessions you run on any machine appear here.",
       activeDays: "Active days",
       weekdayHour: "Weekday × hour",
+      byHour: "By hour",
       unnamedRun: "Untitled session",
       unknownMachine: "Unknown machine",
       peakAtOnce: ({ count }: { count: string | number }) => `Peak ${count} at once`,

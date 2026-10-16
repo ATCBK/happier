@@ -127,7 +127,9 @@ export function UsageRhythmWidget(props: UsageBodyProps) {
         {hasRhythm ? (
           <View style={[styles.block, sideBySide ? styles.half : null]}>
             <Text style={styles.label}>
-              {t('usage.board.howYouWork.weekdayHour')}
+              {matrix
+                ? t('usage.board.howYouWork.weekdayHour')
+                : t('usage.board.howYouWork.byHour')}
             </Text>
             {matrix ? (
               <DotGrid
@@ -159,7 +161,12 @@ export function UsageRhythmWidget(props: UsageBodyProps) {
                 viewportHeight={52}
                 barGap={2}
                 barMinHeight={2}
-                axisTicks={['12A', '6A', '12P', '6P']}
+                axisTicks={[
+                  { label: '12A', bucket: 0 },
+                  { label: '6A', bucket: 6 },
+                  { label: '12P', bucket: 12 },
+                  { label: '6P', bucket: 18 },
+                ]}
                 showGrid={false}
                 showAnnotations
                 showReadout={false}

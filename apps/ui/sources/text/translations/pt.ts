@@ -15674,6 +15674,7 @@ settingsSession: {
             rhythmEmptyReason: "As sessões que você executar em qualquer máquina aparecem aqui.",
             activeDays: "Dias ativos",
             weekdayHour: "Dia × hora",
+            byHour: "Por hora",
             unnamedRun: "Sessão sem título",
             unknownMachine: "Máquina desconhecida",
             peakAtOnce: ({ count }: { count: string | number }) => `Pico de ${count} ao mesmo tempo`,

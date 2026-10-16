@@ -119,7 +119,11 @@ export function HappierDataGrid(props: HeatmapProps & { variant: 'heatmap' | 'do
     </View>) : <View style={{ flexDirection: 'row', gap }}>{props.columns.map((column) => <View key={column.id} style={{ gap }}>{props.rows.map((row) => renderCell(row, column))}</View>)}</View>}
     {(dots || strip) && props.columns.some((column) => column.label) ? <View style={{ flexDirection: 'row', gap: dots ? 8 : 0 }}>
       {dots ? <View style={{ width: rowLabelWidth }} /> : null}
-      <View style={{ flex: 1, flexDirection: 'row', gap, justifyContent: dots ? 'space-between' : undefined }}>{(dots ? props.columns.filter(column => column.label) : props.columns).map((column) => <View key={column.id} style={dots ? undefined : { flex: 1, minWidth: 0 }}><HappierText style={{ ...text.caption, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{column.label}</HappierText></View>)}</View>
+      {dots ? <View style={{ flex: nativeTargets ? undefined : 1, flexDirection: 'row', gap }}>{props.columns.map((column) => <View key={column.id} testID={props.testID ? `${props.testID}-axis-${column.id}` : undefined}
+        style={{ ...(nativeTargets ? { width: slotSize } : { flex: 1, minWidth: 0 }), height: 14 }}>
+        {column.label ? <HappierText style={{ ...text.caption, position: 'absolute', left: -20, right: -20, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{column.label}</HappierText> : null}
+      </View>)}</View>
+      : <View style={{ flex: 1, flexDirection: 'row', gap }}>{props.columns.map((column) => <View key={column.id} style={{ flex: 1, minWidth: 0 }}><HappierText style={{ ...text.caption, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{column.label}</HappierText></View>)}</View>}
     </View> : null}
   </View>;
   return <View testID={props.testID} accessibilityLabel={props.decorative ? undefined : props.label} aria-hidden={props.decorative} importantForAccessibility={props.decorative ? 'no-hide-descendants' : 'auto'}>

@@ -76,7 +76,9 @@ export type StackedSeriesChartProps = Readonly<{
   barEmphasis?: 'last' | 'maximum' | 'none';
   showPointLabels?: boolean;
   showPeakValue?: boolean;
-  axisTicks?: readonly string[];
+  /** Plain labels spread from edge to edge. A `{ label, bucket }` tick sits under that bar's centre
+   * (bar charts: "6 AM" belongs under the 6 AM bar, not at a third of the width). */
+  axisTicks?: readonly (string | Readonly<{ label: string; bucket: number }>)[];
   /** One labelled reference level (a typical day): a quiet dotted rule, never a series of its own. */
   reference?: Readonly<{ value: number; label: string }>;
   /** Quiet background for caller-selected semantic bar slots (for example, weekends). */
@@ -501,8 +503,18 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
   </View>;
   const chartBody = <View>
     {plot}
-    {showAxis && geometry.buckets.length ? <View style={{ flexDirection: 'row', justifyContent: props.barSlotWidth && props.showPointLabels ? 'flex-start' : 'space-between', gap: props.showPointLabels ? barGap : undefined, paddingHorizontal: props.showPointLabels ? props.barLeadingInset : undefined, paddingRight: props.showPointLabels ? undefined : props.scaleGutter, marginTop: props.showPeakValue && props.showPointLabels ? 16 : HAPPIER_DATA_METRICS.axisGapPx }}>
-      {(props.axisTicks ?? (props.showPointLabels ? geometry.buckets.map((bucket) => bucket.label) : [geometry.buckets[0]!.label, ...(geometry.buckets.length > 1 ? [geometry.buckets[geometry.buckets.length - 1]!.label] : [])])).map((label, index) => <HappierText key={index} style={{ ...text.caption, ...(props.showPointLabels ? { ...(props.barSlotWidth ? { width: props.barSlotWidth } : { flex: 1 }), textAlign: 'center' } : {}) }}>{label}</HappierText>)}
+    {showAxis && geometry.buckets.length && props.variant === 'bar' && props.axisTicks?.some((tick) => typeof tick !== 'string') ? <View testID={props.testID ? `${props.testID}-axis` : undefined}
+      style={{ flexDirection: 'row', gap: barGap, paddingHorizontal: props.barLeadingInset, marginTop: HAPPIER_DATA_METRICS.axisGapPx }}>
+      {geometry.buckets.map((bucket, index) => {
+        const tick = props.axisTicks!.find((entry) => typeof entry !== 'string' && entry.bucket === index);
+        return <View key={bucket.id} testID={props.testID ? `${props.testID}-axis-${index}` : undefined} style={{ ...(props.barSlotWidth ? { width: props.barSlotWidth } : { flex: 1, minWidth: 0 }), height: text.caption.lineHeight }}>
+          {tick && typeof tick !== 'string' ? <HappierText style={{ ...text.caption, position: 'absolute',
+            // An edge bar's tick reads inward from the plot's edge, which would otherwise cut half of it off.
+            ...(index === 0 ? { left: 0, right: -40, textAlign: 'left' } : index === geometry.buckets.length - 1 ? { left: -40, right: 0, textAlign: 'right' } : { left: -20, right: -20, textAlign: 'center' }) }}>{tick.label}</HappierText> : null}
+        </View>;
+      })}
+    </View> : showAxis && geometry.buckets.length ? <View style={{ flexDirection: 'row', justifyContent: props.barSlotWidth && props.showPointLabels ? 'flex-start' : 'space-between', gap: props.showPointLabels ? barGap : undefined, paddingHorizontal: props.showPointLabels ? props.barLeadingInset : undefined, paddingRight: props.showPointLabels ? undefined : props.scaleGutter, marginTop: props.showPeakValue && props.showPointLabels ? 16 : HAPPIER_DATA_METRICS.axisGapPx }}>
+      {(props.axisTicks?.map((tick) => typeof tick === 'string' ? tick : tick.label) ?? (props.showPointLabels ? geometry.buckets.map((bucket) => bucket.label) : [geometry.buckets[0]!.label, ...(geometry.buckets.length > 1 ? [geometry.buckets[geometry.buckets.length - 1]!.label] : [])])).map((label, index) => <HappierText key={index} style={{ ...text.caption, ...(props.showPointLabels ? { ...(props.barSlotWidth ? { width: props.barSlotWidth } : { flex: 1 }), textAlign: 'center' } : {}) }}>{label}</HappierText>)}
     </View> : null}
   </View>;
   return <View testID={props.testID} accessible={nativeInline ? true : undefined}

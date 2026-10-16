@@ -15833,6 +15833,7 @@ settingsSession: {
             rhythmEmptyReason: "どのマシンで実行したセッションもここに表示されます。",
             activeDays: "アクティブな日",
             weekdayHour: "曜日 × 時間",
+            byHour: "時間帯別",
             unnamedRun: "無題のセッション",
             unknownMachine: "不明なマシン",
             peakAtOnce: ({ count }: { count: string | number }) => `同時に最大 ${count}`,

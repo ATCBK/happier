@@ -15490,6 +15490,7 @@ settingsSession: {
             rhythmEmptyReason: "Сеансы на любой машине появятся здесь.",
             activeDays: "Активные дни",
             weekdayHour: "День недели × час",
+            byHour: "По часам",
             unnamedRun: "Сеанс без названия",
             unknownMachine: "Неизвестная машина",
             peakAtOnce: ({ count }: { count: string | number }) => `Пик: ${count} одновременно`,
