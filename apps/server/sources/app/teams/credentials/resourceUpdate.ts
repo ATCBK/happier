@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { z } from 'zod/mini';
 import { TeamCredentialDisclosureCeilingV1Schema, TeamCredentialSessionUsePolicyV1Schema, TeamCredentialRequestPolicyV1Schema, TeamCredentialBrokerPlacementV1Schema, TeamCredentialResourceReplacementV1Schema, TeamCredentialResourceUpdateInputV1Schema, TeamCredentialDeliveryModeV1Schema, narrowTeamCredentialDeliveryModeToBrokeredOnlyV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1, type TeamCredentialSessionUsePolicyV1, type TeamCredentialRequestPolicyV1, type TeamCredentialBrokerPlacementV1, type TeamCredentialResourceReplacementV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 import type { Tx } from "@/storage/inTx";
@@ -87,7 +88,7 @@ async function applyResourceReplacementInTx(
     const storedPolicy = parseJson(resource.requestPolicyJson);
     const storedCeiling = TeamCredentialDisclosureCeilingV1Schema.safeParse(resource.disclosureCeiling);
     const storedSessionPolicy = TeamCredentialSessionUsePolicyV1Schema.safeParse(resource.sessionUsePolicy);
-    const storedRequestPolicy = TeamCredentialRequestPolicyV1Schema.nullable().safeParse(storedPolicy);
+    const storedRequestPolicy = z.nullable(TeamCredentialRequestPolicyV1Schema).safeParse(storedPolicy);
     const storedPlacement = readTeamCredentialBrokerPlacement(resource);
     if (!storedSource.success || !storedCeiling.success || !storedSessionPolicy.success
         || !storedRequestPolicy.success || !storedPlacement.ok) {
@@ -422,7 +423,7 @@ export async function updateTeamCredentialResourceInTx(
         || (patch.displayName !== undefined && (!patch.displayName.trim() || patch.displayName.trim().length > 120))
         || (patch.disclosureCeiling !== undefined && !TeamCredentialDisclosureCeilingV1Schema.safeParse(patch.disclosureCeiling).success)
         || (patch.sessionUsePolicy !== undefined && !TeamCredentialSessionUsePolicyV1Schema.safeParse(patch.sessionUsePolicy).success)
-        || (patch.requestPolicy !== undefined && !TeamCredentialRequestPolicyV1Schema.nullable().safeParse(patch.requestPolicy).success)) {
+        || (patch.requestPolicy !== undefined && !z.nullable(TeamCredentialRequestPolicyV1Schema).safeParse(patch.requestPolicy).success)) {
         return { ok: false, error: "invalid_resource_input" };
     }
     const resource = await tx.teamCredentialResource.findUnique({ where: { id: patch.resourceId } });
@@ -478,7 +479,7 @@ export async function updateTeamCredentialResourceInTx(
         if (resource.requestPolicyJson === null) return null;
         try { return JSON.parse(resource.requestPolicyJson) as unknown; } catch { return undefined; }
     })();
-    const requestPolicy = TeamCredentialRequestPolicyV1Schema.nullable().safeParse(
+    const requestPolicy = z.nullable(TeamCredentialRequestPolicyV1Schema).safeParse(
         patch.requestPolicy === undefined ? storedRequestPolicy : patch.requestPolicy,
     );
     if (!ceiling.success || !sessionPolicy.success || !requestPolicy.success) return { ok: false, error: "resource_corrupt" };
@@ -542,12 +543,12 @@ export async function updateTeamCredentialResourceInTx(
     }
     const isLoweringDisclosure = resource.disclosureCeiling === "direct_allowed"
         && ceiling.data === "brokered_only";
-    const storedAllMembersDeliveryMode = TeamCredentialDeliveryModeV1Schema.nullable()
+    const storedAllMembersDeliveryMode = z.nullable(TeamCredentialDeliveryModeV1Schema)
         .safeParse(resource.allMembersDeliveryMode);
     if (isLoweringDisclosure && !storedAllMembersDeliveryMode.success) return { ok: false, error: "resource_corrupt" };
     const storedPlacement = readTeamCredentialBrokerPlacement(resource);
     if (!storedPlacement.ok) return { ok: false, error: "resource_corrupt" };
-    const parsedPlacement = TeamCredentialBrokerPlacementV1Schema.nullable().safeParse(
+    const parsedPlacement = z.nullable(TeamCredentialBrokerPlacementV1Schema).safeParse(
         patch.brokerPlacement === undefined ? storedPlacement.placement : patch.brokerPlacement,
     );
     if (!parsedPlacement.success) return { ok: false, error: "resource_corrupt" };

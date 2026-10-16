@@ -1,5 +1,6 @@
 import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, type TeamCredentialBrokerPlacementV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { z } from 'zod/mini';
 import type { Tx } from "@/storage/inTx";
 import { AccountStatus } from "@/storage/enums.generated";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
@@ -227,7 +228,7 @@ export async function setTeamCredentialAudienceInTx(
         if (currentGroups.size !== currentGroupGrants.length || currentMembers.size !== currentMemberGrants.length) {
             return { ok: false, error: "resource_corrupt" };
         }
-        const currentAllMembers = TeamCredentialDeliveryModeV1Schema.nullable().safeParse(resource.allMembersDeliveryMode);
+        const currentAllMembers = z.nullable(TeamCredentialDeliveryModeV1Schema).safeParse(resource.allMembersDeliveryMode);
         if (!currentAllMembers.success) return { ok: false, error: "resource_corrupt" };
         const narrowsAudience = isDeliveryNarrowing(
             currentAllMembers.data,
