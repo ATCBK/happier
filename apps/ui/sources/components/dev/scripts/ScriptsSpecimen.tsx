@@ -253,7 +253,7 @@ function controller(frame: string): ProjectScriptsController {
     client,
     add: noop,
     run: noop,
-    prepare: noop,
+    prepare: async () => null,
     pendingKeys: {},
     managedCreations: {},
     resumeManagedRun: noop,
@@ -266,7 +266,7 @@ function controller(frame: string): ProjectScriptsController {
     approvalId: null,
     consent:
       frame === 'SETUP'
-        ? { code: 'project_setup_consent_required', reviewedEffectDigest: 'd' }
+        ? { code: 'project_setup_consent_required', reviewedEffectDigest: 'd', scopeKey: 'specimen' }
         : null,
     dismissConsent: () => {},
     setupOperation: null,
