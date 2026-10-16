@@ -374,7 +374,9 @@ or phone's filesystem. The example counts immediate regular files or folders,
 without traversing subdirectories or following symbolic links.
 
 The `counter` widget declares those two inputs, its `inputSchema`, and the
-qualified `count` Resource dependency. The native body uses
+qualified `count` Resource dependency. Its `filter` field uses the plugin's
+`count-kind` input type; the global `count-kinds` Resource supplies Files and
+Folders through the shared options resolver. The native body uses
 `useLivePluginResource('count')`, renders the returned number through `Metric`,
 and offers `Action.Refresh` through that hook's `refresh`. Happier supplies the
 widget frame and retains the Resource's ordinary loading, refresh and failure

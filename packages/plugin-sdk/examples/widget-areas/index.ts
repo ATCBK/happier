@@ -6,9 +6,11 @@ import type { PluginResourceContextV1 } from '@happier-dev/plugin-sdk/resources'
 import { PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1 } from '@happier-dev/plugin-sdk/ui/build';
 import type { PluginUiHostApi, PluginUiWidgetAreaOperationV1 } from '@happier-dev/plugin-sdk/ui';
 
+const countKindSchema = { type: 'string', enum: ['files', 'folders'] } satisfies PluginJsonSchema;
+const countKindOptions = [{ value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders' }];
 const directoryInputSchema = {
     type: 'object', additionalProperties: false, required: ['directory', 'filter'],
-    properties: { directory: { type: 'string', minLength: 1 }, filter: { type: 'string', enum: ['files', 'folders'] } },
+    properties: { directory: { type: 'string', minLength: 1 }, filter: countKindSchema },
 } satisfies PluginJsonSchema;
 
 function readDirectoryInputs(context: PluginResourceContextV1) {
@@ -26,7 +28,12 @@ export const widgetAreasPlugin = definePlugin({
     id: 'examples.widget-areas', version: '1.0.0', displayName: 'Widget areas',
     runtime: { apiVersion: Number(PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1.toolchain.runtime) as 1 },
     entrypoints: { daemon: './dist/index.js' },
-    resources: { count: { source: 'dynamic', kind: 'config', scope: 'surface', contentType: 'application/json',
+    inputTypes: { 'count-kind': { title: 'Count kind', semantic: 'directory-count-kind',
+        valueSchema: countKindSchema, options: { resource: 'count-kinds' } } },
+    resources: {
+        'count-kinds': { source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json',
+            runtime: { read: () => JSON.stringify(countKindOptions), observe: () => ({ dispose() {} }) } },
+        count: { source: 'dynamic', kind: 'config', scope: 'surface', contentType: 'application/json',
         runtime: {
             read: async ({ context }) => {
                 const { directory, filter } = readDirectoryInputs(context);
@@ -51,7 +58,7 @@ export const widgetAreasPlugin = definePlugin({
                 inputs: { fields: [
                     { path: 'directory', title: 'Directory on the serving machine', widget: 'text', required: true },
                     { path: 'filter', title: 'Count', widget: 'select', required: true,
-                        options: [{ value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders' }] },
+                        inputType: { pluginId: 'examples.widget-areas', localId: 'count-kind' } },
                 ] },
                 inputSchema: directoryInputSchema },
         ],
