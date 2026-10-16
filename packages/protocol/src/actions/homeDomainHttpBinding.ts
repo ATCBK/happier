@@ -24,11 +24,12 @@ function appendQueryValue(query: URLSearchParams, key: string, value: unknown): 
  *
  * The Action input stays the single public intent contract. Path parameters are
  * consumed by name, GET remainder becomes a query, and mutation remainder stays
- * a body. Existing unparameterized POST rows therefore retain their byte-level
+ * a body unless the existing route requires path fields in that body as well.
+ * Existing unparameterized POST rows therefore retain their byte-level
  * shape while REST-shaped families avoid a second client-owned route table.
  */
 export function bindHomeDomainHttpRequestV1(params: Readonly<{
-  transport: Readonly<{ method: string; path: string }>;
+  transport: Readonly<{ method: string; path: string; preservePathFieldsInBody?: true }>;
   inputSchema: z.ZodMiniType;
   input: unknown;
 }>): HomeDomainHttpRequestV1 {
@@ -58,7 +59,8 @@ export function bindHomeDomainHttpRequestV1(params: Readonly<{
     };
   }
 
-  return { method: params.transport.method, path, body: remaining };
+  return { method: params.transport.method, path,
+    body: params.transport.preservePathFieldsInBody ? parsed : remaining };
 }
 
 /**

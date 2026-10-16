@@ -134,7 +134,7 @@ export function readHomeDomainActionErrorV1(value: unknown): Readonly<{
     : null;
 }
 
-export type HomeDomainActionTransportV1 = Readonly<{ method: string; path: string }>;
+export type HomeDomainActionTransportV1 = Readonly<{ method: string; path: string; preservePathFieldsInBody?: true }>;
 
 /** The exact Home-local transport this intent declared on its Action row. */
 export function homeDomainActionTransportV1(

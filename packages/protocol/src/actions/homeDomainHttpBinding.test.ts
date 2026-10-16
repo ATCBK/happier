@@ -2,8 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod/mini';
 
 import { bindHomeDomainHttpRequestV1 } from './homeDomainHttpBinding.js';
+import { bindHomeDomainActionHttpRequestV1 } from './homeDomainActionFamily.js';
+import { DeleteSessionOrganizationFolderRequestSchema, DeleteSessionOrganizationTagRequestSchema } from '../sessions/organization/mutations.js';
 
 describe('Home-domain HTTP binding', () => {
+  it('keeps organization deletion identities in the body required by the existing HTTP routes', () => {
+    const folder = bindHomeDomainActionHttpRequestV1('session.folders.delete', {
+      folderId: 'folder/a', assignmentBehavior: 'moveAssignmentsToParent',
+    });
+    expect(folder.path).toBe('/v2/session-organization/folders/folder%2Fa');
+    expect(DeleteSessionOrganizationFolderRequestSchema.parse(folder.body)).toEqual({
+      folderId: 'folder/a', assignmentBehavior: 'moveAssignmentsToParent',
+    });
+    const tag = bindHomeDomainActionHttpRequestV1('session.tags.delete', { tagId: 'tag/a' });
+    expect(tag.path).toBe('/v2/session-organization/tags/tag%2Fa');
+    expect(DeleteSessionOrganizationTagRequestSchema.parse(tag.body)).toEqual({
+      tagId: 'tag/a', assignmentBehavior: 'removeAssignments',
+    });
+  });
+
   const schema = z.strictObject({
     v: z.literal(1),
     teamId: z.string(),

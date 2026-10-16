@@ -46,6 +46,7 @@ type HomeDomainActionRowInput<
    * declares its own verb per row.
    */
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  preservePathFieldsInBody?: true;
   path: string;
   /**
    * The generated-SDK method path, when the derived one would nest under a
@@ -116,6 +117,7 @@ export function homeDomainActionRow<
     ...(spec.projectObservationInput ? { projectObservationInput: spec.projectObservationInput } : {}),
     ...(spec.projectObservationOutput ? { projectObservationOutput: spec.projectObservationOutput } : {}),
     ...(spec.approvalResultCustody ? { approvalResultCustody: spec.approvalResultCustody } : {}),
-    serverTransport: { method: spec.method ?? 'POST', path: spec.path },
+    serverTransport: { method: spec.method ?? 'POST', path: spec.path,
+      ...(spec.preservePathFieldsInBody ? { preservePathFieldsInBody: true as const } : {}) },
   };
 }

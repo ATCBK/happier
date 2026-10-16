@@ -935,6 +935,8 @@ function describeSessionVisualApprovalSummary(input: unknown): string | null {
 /** Local declaration only; domain routes retain wire validation and authorization. */
 export const ActionServerTransportSchema = lazyZodSchema(() => z.strictObject({
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+  /** Existing resource routes may validate the addressed identity again in the mutation body. */
+  preservePathFieldsInBody: z.optional(z.literal(true)),
   path: z.string().check(z.startsWith('/'), z.refine((path) => !path.startsWith('//'), {
     message: 'Action transport must be a relative Home path',
   })),

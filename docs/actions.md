@@ -3340,13 +3340,16 @@ client placement, retaining their existing authority, approval, and domain
 contracts. `inbox.mark_all_read` reports client absence as the typed
 `unavailable`/`noClient` failure rather than an acknowledgement list.
 
-**`serverTransport`** — an optional `{ method, path }` pair naming the Home route that carries a
+**`serverTransport`** — an optional `{ method, path, preservePathFieldsInBody? }` declaration naming the Home route that carries a
 server-owned Action. It is a local declaration only: the domain route still owns wire validation
 and authorization, and the field is intentionally excluded from serialization
 (`serializeActionSpec` builds its output field by field and never copies it) because it is not a
 cross-version wire contract. The family transports read it back from the registry —
 `homeDomainActionTransportV1` throws if a registered family row declares none — so the request a
 host builds and the schemas it parses come from one row rather than from a hand-kept client map.
+In 0.3 development, Session folder/tag deletion declares `preservePathFieldsInBody: true`
+because those existing routes validate the identity in both the path and the body. Other
+mutations send the remaining fields; GET encodes the remaining fields as query parameters.
 `POST /v1/actions/:actionId` stays the single generic
 external entry; a per-Action server route is the Home's data operation, never a second way to
 invoke the Action.
