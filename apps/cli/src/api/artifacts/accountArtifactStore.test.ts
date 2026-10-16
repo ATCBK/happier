@@ -306,6 +306,7 @@ describe('createAccountArtifactStore', () => {
       type: 'dataKey', publicKey: x25519.getPublicKey(secret), machineKey: secret,
     } }, getAccountEncryptionMode: async () => mode });
     const rows = new Map<string, Record<string, unknown>>();
+    let unavailableRecipientsFor: string | undefined;
     mockPost.mockImplementation(async (url: string, wire: unknown) => {
       const input = readCarrierMutation(wire);
       const artifactId = typeof input.id === 'string' ? input.id : new URL(url).pathname.split('/')[3]!;
@@ -322,6 +323,7 @@ describe('createAccountArtifactStore', () => {
       const artifactId = path.split('/')[3]!;
       const row = rows.get(artifactId);
       if (!row) return { status: 404, data: { error: 'not_found' } };
+      if (path.endsWith('/recipients') && artifactId === unavailableRecipientsFor) return { status: 500, data: { error: 'Internal Server Error' } };
       if (path.endsWith('/access/grants')) return { status: 200, data: { artifactId, ownerAccountId: 'owner', access: 'owner', grants: [] } };
       return { status: 200, data: path.endsWith('/recipients') ? {
         artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
@@ -354,6 +356,18 @@ describe('createAccountArtifactStore', () => {
     await expect(port.update(id, { name: 'Wrong mode' })).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
     expect(mockPost.mock.calls.length).toBe(before);
     rows.set(id, originalDefinitionRow);
+    if (mode === 'e2ee') {
+      // A committed definition can lose only its readback at the recipient
+      // preparation HTTP boundary. This is custody, never a fresh-create hint.
+      const uncertainId = '22222222-2222-4222-8222-222222222222';
+      unavailableRecipientsFor = uncertainId;
+      expect(await executor.execute('widgets.definition.create', { account, artifactId: uncertainId, definition },
+        { surface: 'ui', serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'widget_definition_ack_unknown', details: { artifactId: uncertainId } });
+      expect(rows.has(uncertainId)).toBe(true);
+      unavailableRecipientsFor = undefined;
+      expect(await executor.execute('widgets.definition.get', { account, artifactId: uncertainId }, { surface: 'ui', serverId: 'home' }))
+        .toMatchObject({ ok: true, result: { definition: { id: uncertainId, name: definition.name } } });
+    }
     const surface = { ...account, owner: { kind: 'pluginArea' as const, pluginId: 'example', pageId: 'overview', area: 'pinned' } };
     const area = createWidgetSurfaceArtifactPortV1(createAcknowledgedAccountArtifactTransport(store), { surface, isCurrent: () => true });
     const instance = { v: 1 as const, id: 'private-copy', definition: { kind: 'builtin' as const, id: 'session_summary' }, bindings: {} };

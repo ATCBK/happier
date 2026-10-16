@@ -15,6 +15,26 @@ function boundary() {
     return { ...b, transport };
 }
 describe('Account widget definition Artifact owner', () => {
+    it('recovers the exact definition after a committed create loses its transport acknowledgement', async () => {
+        const b = boundary();
+        const port = createWidgetDefinitionArtifactPortV1({ ...b.transport, create: async input => {
+            await b.transport.create(input);
+            throw Object.assign(new Error('artifact_access_failed'), { code: 'artifact_access_failed' });
+        } }, { accountId: 'owner' });
+        expect(await port.create(original())).toEqual(original());
+        expect([...b.rows.keys()]).toEqual(['definition']);
+        await expect(port.create(original())).rejects.toMatchObject({ code: 'widget_definition_already_exists' });
+    });
+    it('keeps a committed create uncertain with its original identity when readback is unavailable', async () => {
+        const b = boundary();
+        const port = createWidgetDefinitionArtifactPortV1({ ...b.transport, read: async (id, options) => {
+            if (b.rows.has(id)) throw Object.assign(new Error('artifact_access_failed'), { code: 'artifact_access_failed' });
+            return b.transport.read(id, options);
+        } }, { accountId: 'owner' });
+        await expect(port.create(original())).rejects.toMatchObject({ code: 'widget_definition_ack_unknown', artifactId: 'definition' });
+        expect([...b.rows.keys()]).toEqual(['definition']);
+        expect(await createWidgetDefinitionArtifactPortV1(b.transport, { accountId: 'owner' }).get('definition')).toEqual(original());
+    });
     it('admits explicit useful sizes, requires the default to be declared and retains them in setup metadata', async () => {
         const sizeDeclaration = { sizes: ['medium', 'tall'], defaultSize: 'tall' };
         const definition = { ...original(), sizeDeclaration };

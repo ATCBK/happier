@@ -35,7 +35,7 @@ export type WidgetDefinitionArtifactPortV1 = Readonly<{
     delete(artifactId: string, signal?: AbortSignal): Promise<void>;
 }>;
 export class WidgetDefinitionErrorV1 extends Error {
-    constructor(readonly code: string) { super(code); this.name = 'WidgetDefinitionErrorV1'; }
+    constructor(readonly code: string, readonly artifactId?: string) { super(code); this.name = 'WidgetDefinitionErrorV1'; }
 }
 export function buildWidgetDefinitionArtifactHeaderV1(definition: WidgetDefinitionV1): Readonly<Record<string, unknown>> {
     return { kind: WIDGET_DEFINITION_ARTIFACT_KIND_V1, v: 1, title: definition.name,
@@ -87,9 +87,24 @@ export function createWidgetDefinitionArtifactPortV1(transport: WidgetDefinition
         const definition = WidgetDefinitionV1Schema.parse(raw);
         if (await fetch(definition.id, signal)) throw new WidgetDefinitionErrorV1('widget_definition_already_exists');
         check(signal);
-        await transport.create({ artifactId: definition.id, header: buildWidgetDefinitionArtifactHeaderV1(definition), body: JSON.stringify(definition), signal });
-        const acknowledged = await get(definition.id, signal);
-        if (!acknowledged || !sameStrictJsonValue(acknowledged, definition)) throw new WidgetDefinitionErrorV1('widget_definition_create_conflict');
+        let writeFailure: Readonly<{ error: unknown }> | undefined;
+        try {
+            await transport.create({ artifactId: definition.id, header: buildWidgetDefinitionArtifactHeaderV1(definition), body: JSON.stringify(definition), signal });
+        } catch (error) { writeFailure = { error }; }
+        // Reconcile only the original identity: transport acknowledgement can fail
+        // after commit, and a later read failure must not invite a new definition.
+        let acknowledged: WidgetDefinitionV1 | null;
+        try { acknowledged = await get(definition.id, signal); }
+        catch (error) {
+            check(signal);
+            if (error instanceof WidgetDefinitionErrorV1) throw error;
+            throw new WidgetDefinitionErrorV1('widget_definition_ack_unknown', definition.id);
+        }
+        if (!acknowledged) {
+            if (writeFailure) throw writeFailure.error;
+            throw new WidgetDefinitionErrorV1('widget_definition_ack_unknown', definition.id);
+        }
+        if (!sameStrictJsonValue(acknowledged, definition)) throw new WidgetDefinitionErrorV1('widget_definition_create_conflict');
         return acknowledged;
     };
     return {

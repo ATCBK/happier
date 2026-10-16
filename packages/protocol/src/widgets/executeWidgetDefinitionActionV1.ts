@@ -5,6 +5,7 @@ import { WidgetDefinitionActionInputSchemasV1, WidgetDefinitionActionOutputSchem
 import { WidgetDefinitionV1Schema, type WidgetDefinitionAuthorV1 } from './widgetDefinitionV1.js';
 import { projectWidgetDefinitionPromotionBindingsV1 } from './widgetDefinitionPromotionV1.js';
 import { admitWidgetActionSurfaceV1 } from './widgetActionScopeV1.js';
+import { WidgetDefinitionErrorV1 } from './widgetDefinitionArtifactV1.js';
 
 const failure = (errorCode: string): ActionExecuteResult => ({ ok: false, errorCode, error: errorCode });
 
@@ -80,6 +81,9 @@ export async function executeWidgetDefinitionActionV1(deps: WidgetDefinitionActi
         }
     } catch (error) {
         if (context.signal?.aborted) return failure('cancelled');
+        if (error instanceof WidgetDefinitionErrorV1 && error.code === 'widget_definition_ack_unknown' && error.artifactId) {
+            return { ok: false, errorCode: error.code, error: error.code, details: { artifactId: error.artifactId } };
+        }
         const code = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'widget_definition_failed';
         return failure(code);
     }
