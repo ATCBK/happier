@@ -1,14 +1,19 @@
 import {
+    HAPPIER_WORK_PANE_METRICS,
     HappierWorkFlatSheet,
     HappierWorkSection,
     HappierWorkSectionEmptyLine,
+    happierPageTextMetrics,
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { useWorkTheme, WORK_HOST } from '@/components/work/map/WorkMapView';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 
@@ -114,6 +119,25 @@ export function WorkSectionEmptyLine(props: Readonly<{
     const theme = useWorkTheme();
     return <HappierWorkSectionEmptyLine {...props} theme={theme} host={WORK_HOST} />;
 }
+
+/**
+ * What a configuration section is for or applies to, right under its heading and on the rows' text
+ * edge (Context, Voice): one quiet line of text, not a row, so every section's first line sits at the
+ * same distance from its heading.
+ */
+export function WorkSectionDescription(props: Readonly<{ testID?: string; children: React.ReactNode }>) {
+    return <Text testID={props.testID} style={stylesheet.description}>{props.children}</Text>;
+}
+
+const stylesheet = StyleSheet.create((theme) => ({
+    description: {
+        ...Typography.default(),
+        ...happierPageTextMetrics('sectionDescription'),
+        color: theme.colors.text.secondary,
+        paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
+        paddingBottom: theme.space.s6,
+    },
+}));
 
 function readCountText(props: WorkSectionProps): string | null {
     if (props.countMode === 'none') return null;

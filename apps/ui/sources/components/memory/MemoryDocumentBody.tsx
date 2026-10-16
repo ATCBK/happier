@@ -823,7 +823,7 @@ const memoryFactHost: HappierMemoryFactRowHost = {
   Row: function MemoryFactItem(props) {
     return <Item testID={props.testID} mode="info" title={props.text}
       titleLines={props.archived ? undefined : 2}
-      titleStyle={props.retired ? stylesheet.retired : undefined}
+      titleStyle={props.retired ? [stylesheet.factText, stylesheet.retired] : stylesheet.factText}
       subtitle={props.subtitle} subtitleLines={1} showChevron={false} rightElement={props.actions} />;
   },
   Metadata: function MemoryFactMetadata(props) {
@@ -864,6 +864,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     ...Typography.default(),
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.tertiary,
+  },
+  // A fact is content, not a row label: it reads in the regular face, as the lab's fact rows do.
+  factText: {
+    ...Typography.default(),
   },
   retired: {
     color: theme.colors.text.tertiary,
