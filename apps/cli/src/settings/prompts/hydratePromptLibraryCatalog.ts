@@ -139,14 +139,18 @@ function refresh(input: RefreshInput, captured?: CapturedPromptAccount, afterCha
     return Promise.resolve({ status: 'unavailable', reason: 'scope-retired' });
   }
   const existing = pending.get(key);
-  if (existing) {
-    // A withdrawn catalog cannot be re-admitted by an earlier readable phase
-    // whose source/history maintenance is still completing.
-    if (afterChange || (existing.rowsObserved && getActiveAccountSettingsSnapshot()?.promptLibraryCatalog?.status === 'loading')) {
+  if (existing && !existing.rowsObserved) {
+    // A durable write needs rows issued after that write, even if an earlier
+    // destination read has not returned yet.
+    if (afterChange) {
       beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken }); refreshAfterInFlight.add(key);
     }
     return existing.completion;
   }
+  // Once destination rows have been observed, only optional maintenance is
+  // pending. A later demand owns a new row read immediately; the older loader
+  // may finish its cleanup but must no longer publish catalog authority.
+  if (existing) { pending.delete(key); refreshAfterInFlight.delete(key); }
   beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken });
   let work!: Promise<PromptLibraryCatalogSnapshotV1>;
   work = (async (): Promise<PromptLibraryCatalogSnapshotV1> => {
@@ -157,16 +161,17 @@ function refresh(input: RefreshInput, captured?: CapturedPromptAccount, afterCha
       if (request) request.rowsObserved = false;
       let catalog: PromptLibraryCatalogSnapshotV1;
       try { catalog = await createCliPromptLibraryStore(requestInput).readPromptLibraryCatalog(readable => {
-        if (!current() || refreshAfterInFlight.has(key)) return;
+        if (!current() || pending.get(key)?.completion !== work || refreshAfterInFlight.has(key)) return;
         const request = pending.get(key);
         if (request) request.rowsObserved = true;
         commitActivePromptLibraryCatalog({ scopeKey, lifetimeToken, catalog: readable });
-        for (const reader of pending.get(key)?.readers ?? []) reader();
+        for (const reader of request?.readers ?? []) reader();
       }); }
       catch (error) {
         catalog = catalogReadFailure(error, requestInput.signal?.aborted === true, current());
       }
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
+      if (pending.get(key)?.completion !== work) return catalog;
       if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials }; continue; }
       // A synchronous wake cannot join a request which already chose to finish.
       if (pending.get(key)?.completion === work) pending.delete(key);
