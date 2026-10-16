@@ -1,4 +1,4 @@
-import type { TeamGroupV1, TeamMembershipV1, TeamRoleV1 } from '@happier-dev/protocol/teams';
+import type { TeamGroupV1, TeamMembershipV1, TeamRoleV1, TeamSummaryV1 } from '@happier-dev/protocol/teams';
 
 import { t } from '@/text';
 
@@ -21,6 +21,24 @@ export function teamRoleLabel(role: TeamRoleV1): string {
         case 'guest':
             return t('teams.role.guest');
     }
+}
+
+/**
+ * Whether the viewer's own membership is suspended, as the Team projection makes it knowable.
+ *
+ * The summary carries no membership status, but the Home withdraws `viewTeam` from exactly one kind
+ * of current member: one whose membership is suspended (an inactive Account projects no capabilities
+ * at all, and a Home administrator who is not a member has no role). Such a viewer keeps only Leave.
+ * This is presentation of that state, never an authority: every control still follows `capabilities`.
+ */
+export function isTeamViewerSuspended(team: Pick<TeamSummaryV1, 'viewerRole' | 'capabilities'>): boolean {
+    return team.viewerRole !== null && !team.capabilities.viewTeam && team.capabilities.leave;
+}
+
+/** The viewer's standing in the Team for a row or header: Suspended, else their role, else nothing. */
+export function teamViewerStandingLabel(team: Pick<TeamSummaryV1, 'viewerRole' | 'capabilities'>): string | null {
+    if (isTeamViewerSuspended(team)) return t('teams.status.suspended');
+    return team.viewerRole ? teamRoleLabel(team.viewerRole) : null;
 }
 
 /**

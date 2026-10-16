@@ -1,5 +1,7 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import type { HomeTargetInput } from '@happier-dev/cli-common/homeTarget';
 import type { TeamInvitationAcceptResultV1 } from '@happier-dev/protocol';
@@ -15,6 +17,12 @@ import {
     waitForHomeGovernance,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import {
+    installDisconnectedServerSocketBoundary,
+    restoreServerAccountForTest,
+} from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { createDeferred } from '@/dev/testkit';
 
 /**
  * A deferred invitation admission, end to end.
@@ -56,6 +64,7 @@ vi.mock('@/assets/images/logotype-light.png', () => ({ default: 'logotype-light.
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+installDisconnectedServerSocketBoundary();
 
 const ACCOUNT_ID = 'account-1';
 const SERVER_IDENTITY_ID = 'srv_team-home';
@@ -107,7 +116,7 @@ const PREPARED_ACCEPT = {
 } as const;
 
 /** One saved Team Home that publishes its portable identity; its Account requires approval to accept. */
-async function addTeamHome(): Promise<string> {
+async function addTeamHome(requireApproval = true): Promise<string> {
     const serverId = await harness.addHome({
         name: 'Acme Home',
         serverUrl: 'https://team-home.example',
@@ -115,7 +124,7 @@ async function addTeamHome(): Promise<string> {
         accountId: ACCOUNT_ID,
         teamsEnabled: true,
     });
-    await harness.requireUiApproval(serverId, 'teams.invitations.accept');
+    if (requireApproval) await harness.requireUiApproval(serverId, 'teams.invitations.accept');
     harness.answer(serverId, ENTRY_PATH, { body: INVITATION_ENTRY });
     harness.answer(serverId, PREVIEW_PATH, { body: { outcome: 'ok', preview: PREVIEW } });
     harness.answer(serverId, ACCEPT_PREPARE_PATH, { body: PREPARED_ACCEPT });
@@ -151,13 +160,152 @@ function approvalIds(serverId: string): string[] {
 
 // Load real screen owners after boundary setup, outside behavior deadlines.
 const { TeamAuthEntrySurface } = await import('./TeamAuthEntrySurface');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { TeamJoinScreen } = await import('@/components/teams/join/TeamJoinScreen');
+
+let restoredAccount: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
 describe('TeamAuthEntrySurface deferred admission approval', () => {
     beforeEach(async () => {
         await harness.reset();
     });
 
-    afterEach(() => standardCleanup());
+    afterEach(async () => {
+        standardCleanup();
+        await restoredAccount?.dispose();
+        restoredAccount = undefined;
+    });
+
+    it.each(['token', 'continuation'] as const)('retains the admitted draft across credential rebinding and refuses a stale save without accepting again (%s)', async authority => {
+        const serverId = await addTeamHome(false);
+        if (authority === 'continuation') {
+            harness.answer(serverId, ENTRY_PATH, { body: { ...INVITATION_ENTRY, preview: PREPARED_ACCEPT.preview } });
+        }
+        restoredAccount = await restoreServerAccountForTest({
+            serverUrl: 'https://team-home.example',
+            serverIdentityId: SERVER_IDENTITY_ID,
+            accountId: ACCOUNT_ID,
+            request: harness.request,
+        });
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+        const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { getCurrentAuth } = await import('@/auth/context/currentAuth');
+        const { parseToken } = await import('@/utils/auth/parseToken');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        storage.setState({ profileScope: { serverId: SERVER_IDENTITY_ID, accountId: ACCOUNT_ID } });
+        storage.getState().applyProfile({ ...profileDefaults, id: ACCOUNT_ID, name: null });
+        const renderEntry = (credentials: AuthCredentials) => (
+            <InjectedAuthProvider credentials={credentials}>
+                {authority === 'continuation'
+                    ? <TeamJoinScreen postAuthContinuation={PREPARED_ACCEPT.continuation} homeTarget={SERVER_IDENTITY_ID} />
+                    : <TeamJoinScreen token={TOKEN} homeTarget={SERVER_IDENTITY_ID} />}
+            </InjectedAuthProvider>
+        );
+        const screen = await renderScreen(renderEntry(restoredAccount.credentials));
+        await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-join')).not.toBeNull());
+        await screen.pressByTestIdAsync('team-auth-entry-join');
+        const fieldId = 'team-auth-entry-admission-complete-name-field';
+        await waitForHomeGovernance(() => expect(screen.findByTestId(fieldId)).not.toBeNull());
+        await act(async () => screen.changeTextByTestId(fieldId, '  Draft must stay  '));
+        const entryReads = harness.requestsFor(ENTRY_PATH).length;
+        // After admission this bearer has been consumed. A fresh entry read can
+        // only retire the success UI; it cannot reconstruct its local draft.
+        harness.answer(serverId, ENTRY_PATH, { body: {
+            v: 1, state: 'unavailable', scope: { kind: 'invitation' }, reason: 'entry_not_available',
+        } });
+        harness.answer(serverId, 'GET /v1/account/profile', { body: { id: 'account-b', name: 'Grace' } });
+        const bindingReadStarted = createDeferred<void>();
+        const releaseBindingRead = createDeferred<void>();
+        const readCredentials = TokenStorage.getCredentialsForServerUrl.bind(TokenStorage);
+        const credentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (...args) => {
+            const credentials = await readCredentials(...args);
+            if (credentials && parseToken(credentials.token) === 'account-b') {
+                bindingReadStarted.resolve(undefined);
+                await releaseBindingRead.promise;
+            }
+            return credentials;
+        });
+        let switching: Promise<void> | undefined;
+        try {
+            await act(async () => {
+                switching = harness.switchAccount(serverId, 'account-b');
+                await bindingReadStarted.promise;
+            });
+            // Secure storage may take a whole rendered frame to resolve. The
+            // caller must not replace the admission owner during that interval.
+            expect(screen.findByTestId(fieldId)?.props.value).toBe('  Draft must stay  ');
+        } finally {
+            await act(async () => {
+                releaseBindingRead.resolve(undefined);
+                await switching;
+                storage.setState({ profileScope: { serverId: SERVER_IDENTITY_ID, accountId: 'account-b' } });
+                storage.getState().applyProfile({ ...profileDefaults, id: 'account-b', name: 'Grace' });
+            });
+            credentialRead.mockRestore();
+        }
+        const replacement = await TokenStorage.getCredentialsForServerUrl('https://team-home.example', { serverId });
+        expect(replacement).not.toBeNull();
+        await screen.update(renderEntry(replacement!));
+
+        expect(getActiveServerAccountScope()).toEqual({ serverId: SERVER_IDENTITY_ID, accountId: 'account-b' });
+        expect(parseToken(getCurrentAuth()!.credentials!.token)).toBe('account-b');
+        expect(screen.findByTestId(fieldId)?.props.value).toBe('  Draft must stay  ');
+        await screen.pressByTestIdAsync('team-auth-entry-admission-complete-action');
+        await waitForHomeGovernance(() => expect(screen.findByTestId(`${fieldId}.error`)).not.toBeNull());
+        expect(screen.findByTestId(fieldId)?.props.value).toBe('  Draft must stay  ');
+        expect(harness.requestsFor('/v1/account/profile').filter(request => request.input !== null)).toHaveLength(0);
+        expect(storage.getState().profile).toMatchObject({ id: 'account-b', name: 'Grace' });
+        expect(harness.requestsFor(ENTRY_PATH)).toHaveLength(entryReads);
+        expect(harness.requestsFor(ACCEPT_PATH)).toHaveLength(1);
+    });
+
+    it.each(['invitation', 'Home'] as const)('retires completed admission when the destination %s changes', async changed => {
+        const serverId = await addTeamHome(false);
+        const screen = await renderJoin(serverId, () => {});
+        await screen.pressByTestIdAsync('team-auth-entry-join');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-admission-complete')).not.toBeNull());
+
+        let nextServerId = serverId;
+        if (changed === 'Home') {
+            await act(async () => {
+                nextServerId = await harness.addHome({
+                    name: 'Second Home',
+                    serverUrl: 'https://second-home.example',
+                    serverIdentityId: 'srv_second-home',
+                    accountId: ACCOUNT_ID,
+                    teamsEnabled: true,
+                    active: false,
+                });
+            });
+        }
+        if (changed === 'Home') {
+            harness.answer(nextServerId, ENTRY_PATH, { body: {
+                ...INVITATION_ENTRY,
+                home: { ...INVITATION_ENTRY.home, serverId: 'srv_second-home' },
+            } });
+            harness.answer(nextServerId, PREVIEW_PATH, { body: { outcome: 'ok', preview: {
+                ...PREVIEW,
+                home: { ...PREVIEW.home, serverId: 'srv_second-home' },
+            } } });
+        }
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        await screen.update(
+            <TeamAuthEntrySurface
+                target={{ kind: 'saved_profile', profileRef: nextServerId }}
+                invitation={{
+                    token: changed === 'invitation' ? 'Q'.repeat(43) : TOKEN,
+                    accountScope: { serverId: resolveServerProfileScopeIdForIdentifier(nextServerId), accountId: ACCOUNT_ID },
+                }}
+                onSelectAction={() => {}}
+                onAdmissionComplete={() => {}}
+            />,
+        );
+
+        await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-join')).not.toBeNull());
+        expect(screen.findByTestId('team-auth-entry-admission-complete')).toBeNull();
+        expect(harness.requestsFor(ACCEPT_PATH)).toHaveLength(1);
+    });
 
     it('registers the deferred admission instead of stranding the invitation', async () => {
         const serverId = await addTeamHome();

@@ -1,6 +1,10 @@
 import * as React from 'react';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { getCurrentAuth } from '@/auth/context/currentAuth';
+import { ExactHomeDestinationNotice } from '@/components/account/auth/ExactHomeDestinationNotice';
+import { useExactHomeDestination } from '@/components/account/auth/useExactHomeDestination';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -23,6 +27,7 @@ import {
 import { describeHomeAuthenticationAction } from '@/components/account/auth/homeAuthenticationActionPresentation';
 import { buildAuthenticatedAccountEntryHref } from '@/components/navigation/accountEntry/authenticatedAccountEntryRoute';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import { asIconName } from '@/components/ui/icons/asIconName';
 import { WelcomeActionCard } from '@/components/onboarding/preAuth/WelcomeActionCard';
 import {
@@ -50,7 +55,7 @@ import { t } from '@/text';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import {
     acceptTeamInvitation,
@@ -117,7 +122,13 @@ type AdmissionState =
      * just happened, and an already-member answer is not a request to leave the
      * page either.
      */
-    | Readonly<{ kind: 'complete'; result: InvitationAdmissionSuccess }>;
+    | Readonly<{
+        kind: 'complete';
+        entryKey: symbol;
+        accountScope: ServerAccountScope;
+        result: InvitationAdmissionSuccess;
+        requiresHomeArrival: boolean;
+    }>;
 
 
 /**
@@ -161,6 +172,8 @@ function isInvitationAdmissionProjection(
 
 type TeamAuthEntrySurfaceProps = Readonly<{
     target: HomeTargetInput;
+    /** Credential resolution may temporarily withdraw scope without retiring this entry. */
+    accountScopeResolving?: boolean;
     onSelectAction: (selection: TeamAuthEntrySelection) => Promise<void> | void;
     onBack?: () => void;
     /**
@@ -203,7 +216,7 @@ type TeamAuthEntrySurfaceProps = Readonly<{
         onContinue?: never;
         invitation:
             | Readonly<{ token: string; accountScope?: ServerAccountScope }>
-            | Readonly<{ continuation: TeamInvitationPostAuthContinuationV1; accountScope: ServerAccountScope }>;
+            | Readonly<{ continuation: TeamInvitationPostAuthContinuationV1; accountScope?: ServerAccountScope }>;
         onAdmissionComplete: (result: InvitationAdmissionSuccess) => Promise<void> | void;
     }>
 );
@@ -246,6 +259,11 @@ function approvalRefusalTitle(code: string): string {
 
 export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(props: TeamAuthEntrySurfaceProps) {
     const router = useRouter();
+    const destination = useExactHomeDestination({
+        refreshAuth: React.useCallback(async () => {
+            await getCurrentAuth()?.refreshFromActiveServer();
+        }, []),
+    });
     const resolvedTarget = React.useMemo(
         () => resolveHomeAuthenticationTarget(props.target),
         [props.target],
@@ -269,16 +287,19 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
             : undefined),
         [scopeServerId, scopeAccountId],
     );
-    const requestKey = React.useMemo(
-        () => Symbol('team-auth-entry-request'),
+    const entryKey = React.useMemo(
+        () => Symbol('team-auth-entry-destination'),
         [
             resolvedTarget?.serverIdentityId,
             resolvedTarget?.endpointUrl,
             teamId,
             invitationToken,
             invitationContinuation?.reference,
-            accountScope,
         ],
+    );
+    const requestKey = React.useMemo(
+        () => Symbol('team-auth-entry-request'),
+        [entryKey, accountScope],
     );
     const [retryRevision, setRetryRevision] = React.useState(0);
     const [loadState, setLoadState] = React.useState<LoadState>({ kind: 'loading', requestKey });
@@ -292,6 +313,9 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
             : null,
     });
     const [admissionState, setAdmissionState] = React.useState<AdmissionState>({ kind: 'idle' });
+    const completedAdmission = admissionState.kind === 'complete' && admissionState.entryKey === entryKey
+        ? admissionState
+        : null;
     const [pendingActionId, setPendingActionId] = React.useState<string | null>(null);
     const activeActionIdRef = React.useRef<string | null>(null);
     const currentRequestKeyRef = React.useRef(requestKey);
@@ -321,7 +345,15 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
     });
 
     React.useEffect(() => {
+        // Admission has already consumed this invitation. Credential rebinding
+        // cannot undo that fact or replace the mounted card and its name draft.
+        // A different invitation or Home still starts its own entry request.
+        if (completedAdmission) return;
         setAdmissionState({ kind: 'idle' });
+        if (props.accountScopeResolving) {
+            setLoadState({ kind: 'loading', requestKey });
+            return;
+        }
         if (
             !resolvedTarget
             || (invitationToken === undefined && teamId === undefined)
@@ -406,8 +438,10 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
         return () => controller.abort();
     }, [
         accountScope,
+        completedAdmission,
         invitationToken,
         invitationContinuation,
+        props.accountScopeResolving,
         requestKey,
         resolvedTarget,
         retryRevision,
@@ -492,7 +526,15 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
                     setAdmissionState({ kind: 'incompatible' });
                     return;
                 }
-                setAdmissionState({ kind: 'complete', result: value });
+                const requiresHomeArrival = value.outcome === 'joined'
+                    && !areServerProfileIdentifiersEquivalent(accountScope.serverId, getActiveServerSnapshot().serverId);
+                setAdmissionState({ kind: 'complete', entryKey, accountScope, result: value, requiresHomeArrival });
+                // The admitted Account's profile belongs to its Home. Retain
+                // this result and shell while reaching that existing owner;
+                // a blocked arrival retries focus alone, never acceptance.
+                if (requiresHomeArrival) {
+                    void destination.continueToHome(accountScope.serverId);
+                }
                 return;
             }
             setAdmissionState({ kind: 'terminal', outcome: value.outcome });
@@ -534,7 +576,7 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
             return;
         }
         settle(result.value);
-    }, [accountScope, approvalPending, invitationContinuation, invitationToken, requestApproval, requestKey]);
+    }, [accountScope, approvalPending, destination.continueToHome, entryKey, invitationContinuation, invitationToken, requestApproval, requestKey]);
 
     /**
      * Where this Home says Accounts sign in.
@@ -614,7 +656,6 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
             ? accountServiceDiscovery?.accountServiceDisplayName
                 ?? accountServiceAddressLabel(projectedSignInService.endpoint)
             : null;
-        const admissionComplete = admissionState.kind === 'complete' ? admissionState.result : null;
         const admissionTerminal = admissionState.kind === 'terminal' ? admissionState : null;
         const admissionTerminalPresentation = admissionTerminal
             ? resolveTeamJoinPresentation({ outcome: admissionTerminal.outcome })
@@ -666,13 +707,15 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
                         </Text>
                     ) : null}
                 </TeamEntryIdentity>
-                {admissionComplete ? (
+                {completedAdmission?.requiresHomeArrival && destination.state.kind !== 'idle' ? (
+                    <ExactHomeDestinationNotice testID="team-auth-entry-destination-home" state={destination.state} />
+                ) : completedAdmission ? (
                     <TeamJoinedCard
                         testID="team-auth-entry-admission-complete"
-                        result={admissionComplete}
+                        result={completedAdmission.result}
                         teamName={teamName}
-                        accountScope={accountScope ?? null}
-                        onOpenTeam={() => props.onAdmissionComplete?.(admissionComplete)}
+                        accountScope={completedAdmission.accountScope}
+                        onOpenTeam={() => props.onAdmissionComplete?.(completedAdmission.result)}
                     />
                 ) : admissionTerminal && admissionTerminalPresentation ? (
                     <SurfaceStateCard
@@ -737,10 +780,7 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
                         reason={t('approvals.status.open')}
                         action={approvalId && accountScope ? {
                             label: t('approvals.details'),
-                            onPress: () => router.push(
-                                `/inbox/approvals/${encodeURIComponent(approvalId)}`
-                                + `?serverId=${encodeURIComponent(accountScope.serverId)}`,
-                            ),
+                            onPress: () => router.push(buildApprovalHref(approvalId, accountScope.serverId)),
                         } : undefined}
                         accessibilitySemantics="status"
                     />

@@ -4,7 +4,7 @@ import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Item } from '@/components/ui/lists/Item';
 import { t } from '@/text';
 
-import { teamRoleLabel } from './teamLabels';
+import { teamViewerStandingLabel } from './teamLabels';
 import type { TeamsDirectoryRow } from './teamsDirectoryViewState';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
@@ -32,7 +32,7 @@ export const TeamRow = React.memo(function TeamRow(props: Readonly<{
 }>) {
     const { row } = props;
     const rail = props.variant === 'rail';
-    const roleLabel = row.team.viewerRole ? teamRoleLabel(row.team.viewerRole) : '';
+    const roleLabel = teamViewerStandingLabel(row.team) ?? '';
     // Active members, when the Home shares the count (a Home administrator gets totals without a
     // roster). The compact rail stays one fact: the viewer's role.
     const counts = row.team.counts;

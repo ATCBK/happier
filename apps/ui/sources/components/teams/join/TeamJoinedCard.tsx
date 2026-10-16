@@ -4,10 +4,16 @@ import type { TeamInvitationAcceptResultV1 } from '@happier-dev/protocol/teams';
 import { getCurrentAuth } from '@/auth/context/currentAuth';
 import { AccountNameField } from '@/components/account/AccountNameField';
 import { useSyncedAccountName } from '@/components/account/useSyncedAccountName';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useIsFocused, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { teamDetailPath } from '@/components/settings/teams/teamsRoutes';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { setAccountName } from '@/sync/api/account/apiAccountName';
-import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
@@ -39,6 +45,16 @@ export function TeamJoinedCard(
     onOpenTeam: () => Promise<void> | void;
   }>,
 ): React.ReactElement {
+  const router = useRouter();
+  const isFocused = useIsFocused();
+  const focused = React.useRef(isFocused);
+  focused.current = isFocused;
+  React.useEffect(() => {
+    focused.current = isFocused;
+    return () => { focused.current = false; };
+  }, [isFocused]);
+  const accountExecution = useMountedActionExecution(props.accountScope);
+  const { approvalId, approvalPending, approvalSummary } = accountExecution.approval;
   const syncedName = useSyncedAccountName(props.accountScope);
   const offer = shouldOfferTeamJoinName({
     outcome: props.result.outcome,
@@ -55,19 +71,31 @@ export function TeamJoinedCard(
   const [nameError, setNameError] = React.useState<string | null>(null);
   const autoFocus = useDeviceType() !== 'phone';
 
+  // How the admitted Account is named, remembered while its profile is the one in sync so a
+  // refusal after an Account change can say which Account to go back to.
+  const admittedLabel = React.useRef<string | null>(null);
+  if (syncedName?.label) admittedLabel.current = syncedName.label;
+
   const [opening, openTeam] = useHappyAction(async () => {
     if (asksName && name.trim()) {
       setNameError(null);
       try {
+        if (!areServerAccountScopesEqual(getActiveServerAccountScope(), props.accountScope)) {
+          setNameError(admittedLabel.current
+            ? t('teams.join.nameAccountSwitched', { account: admittedLabel.current })
+            : t('teams.join.nameAccountSwitchedUnnamed'));
+          return;
+        }
         const credentials = getCurrentAuth()?.credentials;
         if (!credentials) throw new Error('Account is unavailable');
-        await setAccountName(credentials, name);
+        await setAccountName(credentials, name, accountExecution);
       } catch {
         setNameError(t('settingsAccount.nameSaveFailed'));
         return;
       }
     }
-    await props.onOpenTeam();
+    // Review owns completion while this entry is blurred or retired.
+    if (focused.current) await props.onOpenTeam();
   });
 
   return (
@@ -98,6 +126,21 @@ export function TeamJoinedCard(
         onPress: openTeam,
         busy: opening,
       }}
+      actionFooter={approvalPending && approvalId ? (
+        <ActionApprovalPendingNotice
+          testID={`${props.testID}-approval`}
+          presentation="inline"
+          message={t('approvals.status.open')}
+          summary={approvalSummary}
+          onOpenApproval={() => {
+            if (props.accountScope) router.pushRetainingCurrent(buildApprovalHref(
+              approvalId,
+              props.accountScope.serverId,
+              teamDetailPath({ serverId: props.accountScope.serverId, teamId: props.result.teamId }),
+            ));
+          }}
+        />
+      ) : undefined}
       accessibilitySemantics="status"
     />
   );

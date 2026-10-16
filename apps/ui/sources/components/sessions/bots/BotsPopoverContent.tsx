@@ -39,7 +39,8 @@ import { useSessionListSelectionState } from '@/hooks/session/useSessionListSele
 import { useVisibleSessionListPaneState } from '@/hooks/session/useVisibleSessionListPaneState';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
-import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { useHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useSessionListQueryHomeSupportByServerId, useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import { buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import { storage, useLocalSettingMutable, useSessionListRowRenderablesForItems } from '@/sync/domains/state/storage';
@@ -254,14 +255,8 @@ export function BotsPopoverContent(
       ? (presentation.unavailableHomes.find((home) => home.reason === 'offline')
           ?.serverId ?? null)
       : null;
-  const offlineHomeLabel = React.useMemo(
-    () => {
-      if (!offlineHome) return null;
-      const profile = getServerProfileById(offlineHome);
-      return resolveHomeDisplayLabel(profile, offlineHome);
-    },
-    [offlineHome],
-  );
+  useServerProfilesGeneration();
+  const offlineHomeLabel = useHomeDisplayLabel(offlineHome ? getServerProfileById(offlineHome) : null);
   // Still paging (a Home loading or a cursor left): the roster is not settled yet.
   const paging = query?.active === true && Object.values(query.statesByServerId).some((state) => state !== undefined
     && (state.phase === 'idle' || state.phase === 'loading'
@@ -420,7 +415,7 @@ export function BotsPopoverContent(
         </View>
       }
     >
-      {offlineHomeLabel ? (
+      {offlineHome ? (
         <View style={styles.line}>
           <SurfaceFreshnessLine
             testID="bots-roster.offline"

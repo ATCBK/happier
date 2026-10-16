@@ -1,5 +1,5 @@
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -19,6 +19,7 @@ async function home() {
 }
 
 describe('useManagedIdentityProviders AccountChange freshness through the real reader', () => {
+    beforeEach(() => installHomeGovernanceBoundaries(harness));
     afterEach(async () => { standardCleanup(); await harness.reset(); });
 
     it('refreshes a Home-owned query for exact Home governance, Team-consumer and content-free wakes', async () => {

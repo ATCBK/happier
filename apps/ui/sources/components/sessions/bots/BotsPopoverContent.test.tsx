@@ -48,6 +48,7 @@ import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionLis
 import { writeSessionOrganizationGroupOrder } from '@/sync/ops/sessionOrganization/sessionOrganizationMutationOwner';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import type { AppRailBotEntry } from '@/components/navigation/shell/appRail/appRailModel';
+import { t } from '@/text';
 
 // The Account, ordinary list/index, Bot classification, rows and actions stay real. Only
 // native/navigation adapters and the external transports are replaced.
@@ -195,6 +196,28 @@ describe('Bots roster', () => {
     expect(screen.findByTestId('bots-roster.empty')).toBeNull();
     expect(screen.getTextContent()).toContain(addressOnly ? 'This Home' : 'Test Home');
     expect(screen.getTextContent()).not.toContain('bots-roster.example.test');
+
+    // The open roster must observe the published name without changing its Home id.
+    await act(async () => {
+      primeServerFeaturesSnapshot({
+        serverId: connection!.home.id,
+        snapshot: { status: 'ready', features: {
+          ...features, homePresentation: { displayName: 'Research Home' },
+        } },
+      });
+    });
+    expect(screen.getTextContent()).toContain('Research Home');
+    expect(screen.getTextContent()).not.toContain('Test Home');
+    await act(async () => {
+      primeServerFeaturesSnapshot({ serverId: connection!.home.id, snapshot: { status: 'error', reason: 'network' } });
+      await adoptHomeProfile({ source: 'manual', descriptor: {
+        serverUrl: connection!.home.serverUrl,
+        homeServerIdentityId: connection!.home.serverIdentityId ?? undefined,
+        displayName: 'Studio Home',
+      } });
+    });
+    expect(screen.getTextContent()).toContain('Studio Home');
+    expect(screen.getTextContent()).not.toContain('Research Home');
   });
 
   it('lists every Bot, inactive ones too, as ordinary Session rows with New bot and Ask Happier beneath', async () => {

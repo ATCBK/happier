@@ -125,7 +125,7 @@ describe('TeamSection Account binding', () => {
 
         await act(async () => {
             await harness.switchAccount(serverId, 'account-b');
-            screen.tree.update(renderSection('Team B'));
+            await screen.update(renderSection('Team B'));
         });
 
         await waitForHomeGovernance(() => expect(screen.findByTestId('team-section-child-probe')?.props.accountId).toBe('account-b'));
@@ -227,7 +227,7 @@ describe('TeamSection Account binding', () => {
         expect(renderedContexts.at(-1)!.approvalPending).toBe(false);
         expect(renderedContexts.at(-1)!.canMutate).toBe(true);
 
-        await act(async () => screen.tree.update(renderSection()));
+        await screen.update(renderSection());
         expect(onExecuted).toHaveBeenCalledTimes(1);
         expect(harness.requestsFor(TEAM_GET_PATH)).toHaveLength(initialReads + 1);
         expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(1);

@@ -131,7 +131,7 @@ describe('HomeAdministrationSection Account binding', () => {
         });
         await act(async () => {
             await harness.switchAccount(serverId, 'account-b');
-            screen.tree.update(renderSection('Home B'));
+            await screen.update(renderSection('Home B'));
         });
 
         await waitForHomeGovernance(() => expect(screen.findByTestId('home-admin-child-probe')?.props.accountId).toBe('account-b'));
@@ -231,9 +231,7 @@ describe('HomeAdministrationSection Account binding', () => {
         expect(renderedContexts.at(-1)!.approvalPending).toBe(false);
         expect(renderedContexts.at(-1)!.mutationsAvailable).toBe(true);
 
-        await act(async () => {
-            screen.tree.update(renderSection());
-        });
+        await screen.update(renderSection());
         expect(onExecuted).toHaveBeenCalledTimes(1);
         expect(harness.requestsFor(GOVERNANCE_PATH)).toHaveLength(initialReads + 1);
         expect(harness.requestsFor(DISABLE_PATH)).toHaveLength(1);

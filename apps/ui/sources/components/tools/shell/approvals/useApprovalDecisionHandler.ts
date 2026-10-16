@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { ActionId, ApprovalRequest } from '@happier-dev/protocol';
-import { ApprovalExecutionV1Schema, type ApprovalExecutionV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { ApprovalExecutionV1Schema, StoredApprovalRequestSchema, type ApprovalExecutionV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { TeamInvitationCreateResultV1Schema, TeamInvitationReissueResultV1Schema } from '@happier-dev/protocol/teams';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -22,6 +22,7 @@ import { Modal } from '@/modal';
 import { HappyError } from '@/utils/errors/errors';
 import { recordResourceProposalDeclines } from '@/components/approvals/resourceProposal/recordResourceProposalDeclines';
 import { t } from '@/text';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/errors';
 import { presentProviderError } from '@/providers/connection/errorPresentation';
 
@@ -186,10 +187,27 @@ export function useApprovalDecisionHandler(
                     ...(publicLinkConfirmed && publicLinkActionId ? { presentUserConfirmation: { actionId: publicLinkActionId } } : {}),
                     ...(account ? { expectedAccountId: account.accountId } : {}) },
             );
-            if (!result.ok) throw new HappyError(result.error, false, { code: result.errorCode });
+            let outcome: unknown = result.ok ? result.result : null;
+            if (!result.ok && result.errorCode === 'approval_execution_outcome_unknown') {
+                // Another execution or a lost acknowledgement can leave the decision's
+                // immediate answer behind its durable receipt. Read the exact approval
+                // through the existing executor; never replay an uncertain effect.
+                const observed = await executor.execute('approval.request.get', { artifactId: artifact.id }, {
+                    surface: 'ui', ...(serverId ? { serverId } : {}),
+                    ...(approval.v === 2 ? { expectedAccountId: approval.executionOriginV1.accountId } : {}),
+                }).catch(() => null);
+                const receipt = observed?.ok && typeof observed.result === 'object' && observed.result !== null && 'request' in observed.result
+                    ? StoredApprovalRequestSchema.safeParse(observed.result.request) : null;
+                if (receipt?.success && (receipt.data.status === 'executed' || receipt.data.status === 'failed') && receipt.data.execution) {
+                    outcome = { status: receipt.data.status, execution: receipt.data.execution };
+                    // The retained originating form settles through its canonical
+                    // Artifact reader/continuation, including a missing socket echo.
+                    if (serverId) publishHomeAccountChange(serverId, [artifact.id], { changeKinds: ['artifact'] });
+                }
+            }
+            if (!result.ok && outcome === null) throw new HappyError(result.error, false, { code: result.errorCode });
             // A decision can be recorded successfully while its execution was refused.
             // Never let a stale receipt become an optimistic "Approved" answer.
-            const outcome = result.result;
             const execution = typeof outcome === 'object' && outcome !== null && 'execution' in outcome
                 ? ApprovalExecutionV1Schema.safeParse(outcome.execution) : null;
             if (execution?.success && execution.data.ok === false && isApprovalDecisionStale(execution.data)) {
