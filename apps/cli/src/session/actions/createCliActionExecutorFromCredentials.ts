@@ -1352,7 +1352,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           && !context?.externalActionExecutionAuthorization
           && actionId !== 'machines.managed.acquire'
         ) {
-          await ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl());
+          await measureActionStartPhaseV1(context, 'account_settings',
+            () => ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl()));
         }
         const executor = await resolveExecutor(credentials);
         return await executor.prepare(actionId, input, context);
@@ -1411,7 +1412,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           && !context?.externalActionExecutionAuthorization
           && actionId !== 'machines.managed.acquire'
         ) {
-          await ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl());
+          await measureActionStartPhaseV1(context, 'account_settings',
+            () => ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl()));
         }
         const executor = await measureActionStartPhaseV1(originalContext, 'credentialed_factory',
           () => resolveExecutor(credentials, sessionMemoryEnabled));
@@ -1454,6 +1456,11 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       if (!credentials) {
         return { ok: false, code: 'not_authenticated' };
       }
+      // A canonical ID needs no selector or stored-content read. The receiving
+      // Action owns current access and effect authorization, including Stop
+      // when Account encryption material is unavailable.
+      const sessionId = idOrPrefix.trim();
+      if (isFullSessionId(sessionId)) return { ok: true, sessionId };
       if (shouldUsePatPublicActionTransport(credentials, { surface: 'cli' })) {
         return await resolvePatSessionTarget({
           credentials,

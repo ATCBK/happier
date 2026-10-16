@@ -17,6 +17,7 @@ import { deriveMountedPluginInvocationCaller } from '@/plugins/runtime/invocatio
 import { resolvePluginActionCaller } from '@/plugins/runtime/invocation/services/actionCaller';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { isOriginalOwnAccountActionCustody } from '../sessionEncryption/requesterAccountActionProjection';
+import { createExternalActionStartDiagnosticRecorder, refuseExternalActionPhase, runExternalActionPhase, traceExternalActionStage } from './externalActionPhase';
 
 type PublicOutputValidationResult =
   | Readonly<{ success: true; data: unknown }>
@@ -149,6 +150,8 @@ export async function executeExternalAction(input: Readonly<{
   executionAuthorization?: ExternalActionExecutionAuthorizationV1;
   /** Existing installation private key; never serialized into Action context or approval storage. */
   externalActionMachineRequestPrivateKey?: string | Uint8Array;
+  /** Host transport diagnostics only; never authority or Action input. */
+  transportRequestId?: string;
   signal?: AbortSignal;
 }>): Promise<ExecuteExternalActionResult> {
   // Keep both public HTTP origins deterministic: first accept the bounded path
@@ -181,6 +184,9 @@ export async function executeExternalAction(input: Readonly<{
     };
   }
 
+  const trace = (stage: string) => traceExternalActionStage(input.actionId, envelope.data.requestId, stage, input.transportRequestId);
+  trace('daemon.admitted_envelope');
+
   const apiTokenPrincipal = 'credentialId' in input.principal ? input.principal : null;
   const accountPrincipal = 'authentication' in input.principal ? input.principal : null;
   const sessionActionOrigin = accountPrincipal && 'sessionActionOrigin' in accountPrincipal
@@ -210,33 +216,29 @@ export async function executeExternalAction(input: Readonly<{
         && executionAuthorization.data.binding.principalId === apiTokenPrincipal.principalId
         && executionAuthorization.data.binding.credentialId === apiTokenPrincipal.credentialId
   );
-  if (
-    (accountPrincipal && executionAuthorization === undefined)
-    || executionAuthorization !== undefined
-    && (
-      !executionAuthorization.success
-      || !input.externalActionMachineRequestPrivateKey
-      || !authorizationPrincipalMatches
-      || input.currentServerId === undefined
-      || input.currentInstallationId === undefined
-      || !input.verifyExecutionAuthorization
-      || executionAuthorization.data.binding.machineId !== input.currentMachineId
-      || executionAuthorization.data.binding.installationId !== input.currentInstallationId
-      || executionAuthorization.data.binding.actionId !== actionId.data
-      || (executionAuthorization.data.binding.accountEncryptionMode !== undefined
+  const refusedAuthorizationPhase = accountPrincipal && executionAuthorization === undefined ? 'authorization_required'
+    : executionAuthorization === undefined ? null
+    : !executionAuthorization.success ? 'authorization_schema'
+    : !input.externalActionMachineRequestPrivateKey ? 'authorization_signing_key'
+    : !authorizationPrincipalMatches ? 'authorization_principal'
+    : input.currentServerId === undefined ? 'authorization_home'
+    : input.currentInstallationId === undefined ? 'authorization_receiving_installation'
+    : !input.verifyExecutionAuthorization ? 'authorization_verifier'
+    : executionAuthorization.data.binding.machineId !== input.currentMachineId ? 'authorization_machine'
+    : executionAuthorization.data.binding.installationId !== input.currentInstallationId ? 'authorization_installation'
+    : executionAuthorization.data.binding.actionId !== actionId.data ? 'authorization_action'
+    : (executionAuthorization.data.binding.accountEncryptionMode !== undefined
         && !isExternalActionRequestVersionAllowedForAccountModeV1({
           accountEncryptionMode: executionAuthorization.data.binding.accountEncryptionMode, envelopeVersion: envelope.data.v,
-        }))
-      || executionAuthorization.data.binding.requestEnvelopeDigest
-        !== computeExternalActionRequestEnvelopeDigestV1(envelope.data)
-      || (envelope.data.requestId !== undefined
-        && executionAuthorization.data.binding.requestId !== envelope.data.requestId)
-      || !externalActionTargetsEqualV1(
+        })) ? 'authorization_account_mode'
+    : executionAuthorization.data.binding.requestEnvelopeDigest !== computeExternalActionRequestEnvelopeDigestV1(envelope.data) ? 'authorization_envelope_digest'
+    : (envelope.data.requestId !== undefined && executionAuthorization.data.binding.requestId !== envelope.data.requestId) ? 'authorization_request_id'
+    : !externalActionTargetsEqualV1(
         executionAuthorization.data.binding.target,
         envelope.data.target ?? { kind: 'machine', machineId: input.currentMachineId },
-      )
-    )
-  ) {
+      ) ? 'authorization_target' : null;
+  if (refusedAuthorizationPhase) {
+    refuseExternalActionPhase(refusedAuthorizationPhase, input.currentMachineId);
     return {
       kind: 'invalid_request',
       errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
@@ -250,14 +252,21 @@ export async function executeExternalAction(input: Readonly<{
     && isOriginalOwnAccountActionCustody(executionAuthorization.data.binding);
   if (executionAuthorization?.success && (executionAuthorization.data.requesterAccountContext || prepareOwnAccount)) {
     const authorization = executionAuthorization.data;
-    const current = !input.signal?.aborted && await input.verifyExecutionAuthorization!({ authorization,
+    trace('requester_root_currentness.begin');
+    const current = await runExternalActionPhase('requester_root_currentness', input.currentMachineId, async () =>
+      !input.signal?.aborted && await input.verifyExecutionAuthorization!({ authorization,
       effectActionId: actionId.data, target: authorization.binding.target,
-      ...(input.signal ? { signal: input.signal } : {}) }).catch(() => false);
-    if (!current || !input.prepareRequesterAccountContext) return { kind: 'invalid_request',
+      ...(input.signal ? { signal: input.signal } : {}) }));
+    trace('requester_root_currentness.end');
+    if (!current.ok || !input.prepareRequesterAccountContext) return { kind: 'invalid_request',
       errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
       ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
-    requesterContext = await input.prepareRequesterAccountContext({ authorization,
-      ...(input.signal ? { signal: input.signal } : {}) }).catch(() => null);
+    trace('requester_prepare.begin');
+    const preparedRequester = await runExternalActionPhase('requester_prepare', input.currentMachineId, () =>
+      input.prepareRequesterAccountContext!({ authorization,
+        ...(input.signal ? { signal: input.signal } : {}) }));
+    trace('requester_prepare.end');
+    requesterContext = preparedRequester.ok ? preparedRequester.value : null;
     if (!requesterContext) return { kind: 'invalid_request',
       errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
       ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
@@ -274,14 +283,18 @@ export async function executeExternalAction(input: Readonly<{
     if (!resolveEncryption) return {
       kind: 'invalid_request', errorCode: 'encrypted_action_unsupported', requestId: request.requestId,
     };
-    const encryption = await resolveEncryption(
+    trace('encryption_resolution.begin');
+    const encryptionPhase = await runExternalActionPhase('encryption_resolution', input.currentMachineId, () => resolveEncryption(
       input.signal,
       executionAuthorization?.success ? executionAuthorization.data : undefined,
-    ).catch(() => null);
+    ));
+    trace('encryption_resolution.end');
+    const encryption = encryptionPhase.ok ? encryptionPhase.value : null;
     if (!encryption) return {
       kind: 'invalid_request', errorCode: 'encrypted_action_unsupported', requestId: request.requestId,
     };
     if (!apiTokenPrincipal && !accountPrincipal) {
+      refuseExternalActionPhase('encryption_principal', input.currentMachineId);
       return { kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope', requestId: request.requestId };
     }
     const binding: ExternalActionEncryptionBindingV2 = {
@@ -300,9 +313,11 @@ export async function executeExternalAction(input: Readonly<{
       ? request.target.machineId !== input.currentMachineId
       : input.currentSessionId !== undefined && request.target.sessionId !== input.currentSessionId;
     if (foreignTarget) {
+      refuseExternalActionPhase('encryption_receiver', input.currentMachineId);
       return { kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope', requestId: request.requestId };
     }
-    const opened = openExternalActionRequestV2({ envelope: request, binding, material: encryption.material });
+    const opened = openExternalActionRequestV2({ envelope: request, binding, material: encryption.material,
+      onFailure: failure => { refuseExternalActionPhase(failure.phase, input.currentMachineId, failure.error); } });
     if (!opened) {
       return { kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope', requestId: request.requestId };
     }
@@ -333,7 +348,8 @@ export async function executeExternalAction(input: Readonly<{
       || !sameStrictJsonValue(projectApiTokenSessionSpawnAdmissionV1(decodedInput), envelope.data.sessionSpawnAdmission))) {
       throw new TypeError('Session admission input mismatch');
     }
-  } catch {
+  } catch (error) {
+    refuseExternalActionPhase('opened_input_admission', input.currentMachineId, error);
     return { kind: 'invalid_request', errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
       ...(envelope.data.requestId === undefined ? {} : { requestId: envelope.data.requestId }) };
   }
@@ -357,6 +373,7 @@ export async function executeExternalAction(input: Readonly<{
   // so an explicit or input-derived Session is proved current immediately
   // before the canonical Action executor runs.
   let target: ExternalActionTargetV1 | null;
+  trace('target_resolution.begin');
   try {
     target = await (requesterContext?.resolveTarget ?? input.resolveTarget)({
       actionId: actionId.data,
@@ -365,7 +382,9 @@ export async function executeExternalAction(input: Readonly<{
       currentMachineId: input.currentMachineId,
       ...(input.signal ? { signal: input.signal } : {}),
     });
-  } catch {
+  } catch (error) {
+    trace('target_resolution.threw');
+    refuseExternalActionPhase('target_resolution', input.currentMachineId, error);
     return prepare({
       v: 1,
       actionId: actionId.data,
@@ -373,6 +392,7 @@ export async function executeExternalAction(input: Readonly<{
       execution: targetUnavailable(),
     });
   }
+  trace('target_resolution.end');
   if (!target) {
     return prepare({
       v: 1,
@@ -383,13 +403,16 @@ export async function executeExternalAction(input: Readonly<{
   }
 
   if (executionAuthorization?.success) {
-    const current = !input.signal?.aborted && await input.verifyExecutionAuthorization!({
+    trace('effect_root_currentness.begin');
+    const current = await runExternalActionPhase('effect_root_currentness', input.currentMachineId, async () =>
+      !input.signal?.aborted && await input.verifyExecutionAuthorization!({
       authorization: executionAuthorization.data,
       effectActionId: actionId.data,
       target,
       ...(input.signal ? { signal: input.signal } : {}),
-    }).catch(() => false);
-    if (!current || input.signal?.aborted) {
+    }));
+    trace('effect_root_currentness.end');
+    if (!current.ok || input.signal?.aborted) {
       return prepare({
         v: 1,
         actionId: actionId.data,
@@ -404,9 +427,11 @@ export async function executeExternalAction(input: Readonly<{
   const requesterProjection = requesterContext?.authorization.requesterAccountProjection
     ?? input.executionAuthorization?.requesterAccountProjection;
   if (requesterProjection && admittedAuthorization) {
+    trace('requester_account_currentness.begin');
     if (requesterProjection.accountId !== admittedAuthorization.binding.accountId
       || requesterProjection.serverId !== input.currentServerId
-      || input.signal?.aborted || !await requesterProjection.isCurrent().catch(() => false)) {
+      || input.signal?.aborted || !(await runExternalActionPhase('requester_account_currentness', input.currentMachineId,
+        () => requesterProjection.isCurrent())).ok) {
       return prepare({ v: 1, actionId: actionId.data,
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
         execution: { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' } });
@@ -414,24 +439,29 @@ export async function executeExternalAction(input: Readonly<{
     // Strict wire parsing never accepts private ports. Preserve only the
     // already-admitted host facet; it must remain absent from serialization.
     Object.defineProperty(admittedAuthorization, 'requesterAccountProjection', { value: requesterProjection, enumerable: false });
+    trace('requester_account_currentness.end');
   }
   const requesterHttpProjection = requesterContext?.authorization.requesterHttpProjection
     ?? input.executionAuthorization?.requesterHttpProjection;
   if (requesterHttpProjection && admittedAuthorization) {
+    trace('requester_http_currentness.begin');
     if (requesterHttpProjection.accountId !== admittedAuthorization.binding.accountId
       || requesterHttpProjection.serverId !== input.currentServerId
       || requesterHttpProjection.serverIdentityId !== admittedAuthorization.binding.serverIdentityId
       || admittedAuthorization.binding.accountEncryptionMode !== undefined
         && requesterHttpProjection.accountEncryptionMode !== admittedAuthorization.binding.accountEncryptionMode
-      || input.signal?.aborted || !await requesterHttpProjection.isCurrent().catch(() => false)
+      || input.signal?.aborted || !(await runExternalActionPhase('requester_http_currentness', input.currentMachineId,
+        () => requesterHttpProjection.isCurrent())).ok
       || Boolean(input.signal?.aborted)) {
       return prepare({ v: 1, actionId: actionId.data,
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
         execution: { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' } });
     }
     Object.defineProperty(admittedAuthorization, 'requesterHttpProjection', { value: requesterHttpProjection, enumerable: false });
+    trace('requester_http_currentness.end');
   }
   if (admittedAuthorization && input.currentServerHttpBaseUrl) {
+    trace('requester_http_projection.begin');
     const projected = await projectExternalActionRequesterHttpAuthorization({
       authorization: admittedAuthorization,
       serverId: input.currentServerId!,
@@ -448,6 +478,7 @@ export async function executeExternalAction(input: Readonly<{
         }),
       ...(input.signal ? { signal: input.signal } : {}),
     });
+    trace('requester_http_projection.end');
     if (!projected) {
       return prepare({ v: 1, actionId: actionId.data,
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
@@ -463,7 +494,10 @@ export async function executeExternalAction(input: Readonly<{
       if (binding.sourceCustody && input.acquirePluginRuntimeRegistryLease && input.resolvePluginExecutionOriginContext
         && !apiTokenPrincipal && accountPrincipal?.authentication.kind !== 'terminal'
         && !sessionActionOrigin && !input.signal?.aborted) {
+        trace('mounted_runtime_lease.begin');
         pluginRuntimeLease = await input.acquirePluginRuntimeRegistryLease();
+        trace('mounted_runtime_lease.end');
+        trace('mounted_caller.begin');
         mountedCaller = await deriveMountedPluginInvocationCaller({
           request: { machineId: input.currentMachineId, invocationSurface: input.surface ?? 'ui', invocation },
           registry: pluginRuntimeLease.registry,
@@ -474,7 +508,8 @@ export async function executeExternalAction(input: Readonly<{
       if (mountedCaller.status !== 'available' || !await mountedCaller.isMountedCallerCurrent()) {
         mountedCaller = { status: 'unavailable' };
       }
-    } catch { mountedCaller = { status: 'unavailable' }; }
+      trace('mounted_caller.end');
+    } catch (error) { refuseExternalActionPhase('mounted_caller', input.currentMachineId, error); mountedCaller = { status: 'unavailable' }; }
     if (mountedCaller.status !== 'available') return prepare({ v: 1, actionId: actionId.data,
       ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
       execution: { ok: false, errorCode: 'plugin_mounted_caller_unavailable', error: 'plugin_mounted_caller_unavailable' } });
@@ -495,7 +530,9 @@ export async function executeExternalAction(input: Readonly<{
     return prepare({ v: 1, actionId: actionId.data, ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
       execution: { ok: false, errorCode: 'forbidden', error: 'forbidden' } });
   }
+  const recordActionStartDiagnostic = createExternalActionStartDiagnosticRecorder(input.actionId, envelope.data.requestId, input.transportRequestId);
   const context: ActionExecutorContext = {
+    ...(recordActionStartDiagnostic ? { recordActionStartDiagnostic } : {}),
     surface: pluginCaller ? 'plugin' : sessionActionOrigin ? 'agent' : apiTokenPrincipal
       ? 'api'
       : invocation?.surface ?? input.surface ?? (accountPrincipal?.authentication.kind === 'terminal' ? 'cli' : 'ui'),
@@ -560,8 +597,12 @@ export async function executeExternalAction(input: Readonly<{
   };
   let internalExecution: ActionExecuteResult;
   try {
+    trace('action_execution.begin');
     internalExecution = await (requesterContext?.executor ?? input.executor).execute(actionId.data, decodedInput, context);
-  } catch {
+    trace('action_execution.end');
+  } catch (error) {
+    trace('action_execution.threw');
+    refuseExternalActionPhase('action_execution', input.currentMachineId, error);
     return prepare({
       v: 1,
       actionId: actionId.data,
@@ -601,7 +642,9 @@ export async function executeExternalAction(input: Readonly<{
     execution,
   });
   } finally {
+    trace('daemon.cleanup.begin');
     try { await pluginRuntimeLease?.release(); } finally { await requesterContext?.dispose(); }
+    trace('daemon.cleanup.end');
   }
 }
 
