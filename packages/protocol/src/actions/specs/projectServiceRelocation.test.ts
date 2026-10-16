@@ -42,7 +42,7 @@ describe('service relocation Action', () => {
     expect(spec.executionPlacement).toBe('machine');
     expect(spec.operation).toMatchObject({ version: 1, progress: 'reported' });
     expect(spec.bindings?.rpcMethod).toBeUndefined();
-    expect(spec.surfaces).toMatchObject({ cli: true, mcp: false, voice: false, rpc: false });
+    expect(spec.surfaces).toMatchObject({ cli: true, mcp: true, voice: true, rpc: false });
     expect(ActionSpecSchema.safeParse(spec).success).toBe(true);
   });
 
