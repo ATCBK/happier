@@ -64,15 +64,16 @@ export function encodeAccountArtifactListCursor(item: Pick<AccountArtifactHeader
   return Buffer.from(JSON.stringify({ updatedAt: item.updatedAt, id: item.artifactId }), 'utf8').toString('base64url');
 }
 
-type StoredArtifact = Readonly<{
+type StoredArtifactHeader = Readonly<{
   ownerAccountId: string;
   access: ArtifactCallerAccessV1;
   publicAudience: ArtifactPublicAudienceV1;
   encryptionMode: 'plain' | 'e2ee';
-  id: string; header: string; headerVersion: number; body: string; bodyVersion: number;
+  id: string; header: string; headerVersion: number; bodyVersion?: number;
   dataEncryptionKey: string; seq: number; createdAt: number; updatedAt: number;
   provenance?: string | null; provenanceDataEncryptionKey?: string | null;
 }>;
+type StoredArtifact = StoredArtifactHeader & Readonly<{ body: string; bodyVersion: number }>;
 
 type Codec = Readonly<{
   mode: 'plain' | 'e2ee'; dataEncryptionKey: string;
@@ -232,26 +233,36 @@ function requireBodyForArtifactKind(header: Readonly<Record<string, unknown>>, b
   if (artifactKindRequiresTextBodyV1(header.kind) && typeof body !== 'string') throw unavailableBinary();
 }
 
-function parseStoredArtifact(raw: unknown): StoredArtifact | null {
+function parseStoredArtifactHeader(raw: unknown): StoredArtifactHeader | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
-  if (typeof value.id !== 'string' || typeof value.header !== 'string' || typeof value.body !== 'string' || typeof value.dataEncryptionKey !== 'string') return null;
+  if (typeof value.id !== 'string' || typeof value.header !== 'string' || typeof value.dataEncryptionKey !== 'string') return null;
   const headerVersion = readNonnegativeSafeInteger(value.headerVersion);
   const bodyVersion = readNonnegativeSafeInteger(value.bodyVersion);
   const seq = readNonnegativeSafeInteger(value.seq);
   const createdAt = readNonnegativeSafeInteger(value.createdAt);
   const updatedAt = readNonnegativeSafeInteger(value.updatedAt);
-  if (headerVersion === null || bodyVersion === null || seq === null || createdAt === null || updatedAt === null) return null;
+  if (headerVersion === null || (value.bodyVersion !== undefined && bodyVersion === null)
+    || seq === null || createdAt === null || updatedAt === null) return null;
   if ((value.provenance != null && typeof value.provenance !== 'string')
     || (value.provenanceDataEncryptionKey != null && typeof value.provenanceDataEncryptionKey !== 'string')) {
     throw new ArtifactEncryptionMaterialUnavailableError();
   }
-  return { id: value.id, header: value.header, headerVersion, body: value.body,
+  return { id: value.id, header: value.header, headerVersion,
     publicAudience: ArtifactPublicAudienceV1ReadSchema.parse(value.publicAudience),
-    bodyVersion, dataEncryptionKey: value.dataEncryptionKey, seq, createdAt, updatedAt,
+    ...(bodyVersion === null ? {} : { bodyVersion }), dataEncryptionKey: value.dataEncryptionKey, seq, createdAt, updatedAt,
     ...(typeof value.provenance === 'string' ? { provenance: value.provenance } : {}),
     ...(typeof value.provenanceDataEncryptionKey === 'string' ? { provenanceDataEncryptionKey: value.provenanceDataEncryptionKey } : {}),
     ...readStoredAccess(value) };
+}
+
+function parseStoredArtifact(raw: unknown): StoredArtifact | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const body: unknown = Reflect.get(raw, 'body');
+  if (typeof body !== 'string' || readNonnegativeSafeInteger(Reflect.get(raw, 'bodyVersion')) === null) return null;
+  const header = parseStoredArtifactHeader(raw);
+  return header && header.bodyVersion !== undefined
+    ? { ...header, body, bodyVersion: header.bodyVersion } : null;
 }
 
 const artifactAuthorityProjectionSchema = ArtifactAccessRecipientCensusResponseV1Schema.pick({ ownerAccountId: true, access: true, encryptionMode: true });
@@ -296,7 +307,7 @@ export function createAccountArtifactStore(params: Readonly<{
       : response.status === 404 || response.status === 405 ? 'artifact_access_unavailable' : 'artifact_access_failed';
     throw Object.assign(new Error(code), { code });
   };
-  const prepare = async (stored: StoredArtifact, codec: Codec, signal?: AbortSignal) => {
+  const prepare = async (stored: StoredArtifactHeader, codec: Codec, signal?: AbortSignal) => {
     if (codec.mode === 'plain') return;
     const provenanceCodec = stored.provenanceDataEncryptionKey
       ? await openCodec(params.credentials, stored.provenanceDataEncryptionKey, stored.encryptionMode) : null;
@@ -439,13 +450,59 @@ export function createAccountArtifactStore(params: Readonly<{
       throw Object.assign(new Error('artifact_html_content_invalid'), { code: 'artifact_html_content_invalid' });
     }
   };
-  const store = {
-    read,
-    /** Exact selection opens only the header, never unrelated headers or the body. */
-    readHeader: async (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<AccountArtifactHeader | null> => {
+  const fetchHeaderPage = async (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; signal?: AbortSignal }>) => {
+    options?.signal?.throwIfAborted();
+    const url = new URL('/v1/artifacts', resolveServerHttpBaseUrl());
+    if (options?.limit !== undefined) url.searchParams.set('limit', String(options.limit));
+    if (options?.cursor) url.searchParams.set('cursor', options.cursor);
+    if (options?.includeBody) url.searchParams.set('includeBody', 'true');
+    const response = await axios.get(url.toString(), { headers: headers(),
+      ...(options?.signal ? { signal: options.signal } : {}), validateStatus: () => true });
+    options?.signal?.throwIfAborted();
+    if (response.status === 500 && response.data?.error === 'Failed to get artifacts') throw new ArtifactEncryptionMaterialUnavailableError();
+    if (response.status < 200 || response.status >= 300) {
+      throw Object.assign(new Error(response.status === 400 ? 'artifact_list_cursor_invalid' : 'artifact_list_failed'), {
+        code: response.status === 400 ? 'invalid_cursor' : 'list_failed', status: response.status,
+      });
+    }
+    if (!Array.isArray(response.data)) throw Object.assign(new Error('artifact_list_failed'), { code: 'list_failed', status: response.status });
+    const rows: readonly unknown[] = response.data;
+    const last = rows.at(-1);
+    const nextCursor = options?.limit !== undefined && rows.length === options.limit
+      && last && typeof last === 'object' && typeof Reflect.get(last, 'id') === 'string' && typeof Reflect.get(last, 'updatedAt') === 'number'
+      ? encodeAccountArtifactListCursor({ artifactId: Reflect.get(last, 'id'), updatedAt: Reflect.get(last, 'updatedAt') }) : undefined;
+    return { rows, nextCursor };
+  };
+  /** Retain raw, body-free inventory only for the caller's finite preparation. */
+  const createHeaderReader = (options?: Readonly<{ signal?: AbortSignal }>) => {
+    let inventory: Promise<ReadonlyMap<string, unknown>> | undefined;
+    return async (artifactId: string): Promise<AccountArtifactHeader | null> => {
       options?.signal?.throwIfAborted();
-      const stored = await fetchStored(artifactId, options?.signal);
-      if (!stored) return null;
+      inventory ??= (async () => {
+        const rows = new Map<string, unknown>();
+        let cursor: string | undefined;
+        do {
+          // Reuse the existing transport page boundary, without opening unrelated envelopes.
+          const page = await fetchHeaderPage({ limit: 500, cursor, signal: options?.signal });
+          for (const raw of page.rows) {
+            if (raw && typeof raw === 'object' && typeof Reflect.get(raw, 'id') === 'string') rows.set(Reflect.get(raw, 'id'), raw);
+          }
+          cursor = page.nextCursor;
+        } while (cursor);
+        return rows;
+      })().catch((error: unknown) => {
+        if (error && typeof error === 'object' && ['list_failed', 'invalid_cursor'].includes(Reflect.get(error, 'code'))) {
+          const status: unknown = Reflect.get(error, 'status');
+          const code = typeof status === 'number' && status >= 200 && status < 300 ? 'artifact_read_invalid' : 'artifact_read_unavailable';
+          throw Object.assign(new Error(code), { code, status });
+        }
+        throw error;
+      });
+      const raw = (await inventory).get(artifactId);
+      options?.signal?.throwIfAborted();
+      if (raw === undefined) return null;
+      const stored = parseStoredArtifactHeader(raw);
+      if (!stored) throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
       const codec = await openStored(stored);
       const header = decode(codec, stored.header);
       if (!header || typeof header !== 'object' || Array.isArray(header) || Object.keys(header).length === 0) {
@@ -455,9 +512,15 @@ export function createAccountArtifactStore(params: Readonly<{
       options?.signal?.throwIfAborted();
       return { artifactId: stored.id, header: header as Readonly<Record<string, unknown>>,
         ownerAccountId: stored.ownerAccountId, access: stored.access, publicAudience: stored.publicAudience,
-        headerVersion: stored.headerVersion, bodyVersion: stored.bodyVersion,
+        headerVersion: stored.headerVersion, ...(stored.bodyVersion === undefined ? {} : { bodyVersion: stored.bodyVersion }),
         seq: stored.seq, createdAt: stored.createdAt, updatedAt: stored.updatedAt };
-    },
+    };
+  };
+  const store = {
+    read,
+    createHeaderReader,
+    /** Standalone reads are fresh; finite callers share createHeaderReader instead. */
+    readHeader: (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => createHeaderReader(options)(artifactId),
     publicLinks: async (args: Readonly<{ actionId: ArtifactPublicLinkActionIdV1; input: unknown; signal?: AbortSignal }>,
       onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>) => createArtifactPublicLinkActionsV1({
         randomBytes: getRandomBytes, onPublicLinkIssued,
@@ -596,21 +659,9 @@ export function createAccountArtifactStore(params: Readonly<{
       return parsed.data;
     },
     list: async (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; signal?: AbortSignal }>): Promise<Readonly<{ items: readonly AccountArtifactHeader[]; nextCursor?: string; coverage: 'complete' | 'partial' }>> => {
-      options?.signal?.throwIfAborted();
-      const url = new URL('/v1/artifacts', resolveServerHttpBaseUrl());
-      if (options?.limit !== undefined) url.searchParams.set('limit', String(options.limit));
-      if (options?.cursor) url.searchParams.set('cursor', options.cursor);
-      if (options?.includeBody) url.searchParams.set('includeBody', 'true');
-      const response = await axios.get(url.toString(), { headers: headers(),
-        ...(options?.signal ? { signal: options.signal } : {}), validateStatus: () => true });
-      if (response.status === 500 && response.data?.error === 'Failed to get artifacts') throw new ArtifactEncryptionMaterialUnavailableError();
-      if (response.status < 200 || response.status >= 300 || !Array.isArray(response.data)) {
-        throw Object.assign(new Error(response.status === 400 ? 'artifact_list_cursor_invalid' : 'artifact_list_failed'), {
-          code: response.status === 400 ? 'invalid_cursor' : 'list_failed',
-        });
-      }
+      const { rows, nextCursor } = await fetchHeaderPage(options);
       const items: AccountArtifactHeader[] = [];
-      for (const raw of response.data) {
+      for (const raw of rows) {
         if (!raw || typeof raw !== 'object') continue;
         const value = raw as Record<string, unknown>;
         if (typeof value.id !== 'string' || typeof value.header !== 'string' || typeof value.dataEncryptionKey !== 'string') continue;
@@ -667,13 +718,7 @@ export function createAccountArtifactStore(params: Readonly<{
           publicAudience: ArtifactPublicAudienceV1ReadSchema.parse(value.publicAudience),
           headerVersion, seq, createdAt, updatedAt });
       }
-      const last = response.data.at(-1) as Record<string, unknown> | undefined;
-      const requestedLimit = options?.limit;
-      const nextCursor = requestedLimit !== undefined && response.data.length === requestedLimit
-        && typeof last?.id === 'string' && typeof last?.updatedAt === 'number'
-        ? encodeAccountArtifactListCursor({ updatedAt: last.updatedAt, artifactId: last.id })
-        : undefined;
-      return { items, coverage: items.length === response.data.length ? 'complete' : 'partial', ...(nextCursor ? { nextCursor } : {}) };
+      return { items, coverage: items.length === rows.length ? 'complete' : 'partial', ...(nextCursor ? { nextCursor } : {}) };
     },
     create: async (input: Readonly<{ artifactId?: string; usageNoticeAccountId?: string; header: Readonly<Record<string, unknown>>; savedBy?: ArtifactSavedByV1; source?: ArtifactWorkspaceSourceV1; signal?: AbortSignal; beforeWrite?: () => void | Promise<void> }> & ArtifactWriteContent) => {
       input.signal?.throwIfAborted();
