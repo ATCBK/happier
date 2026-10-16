@@ -70,7 +70,7 @@ function defaultDependencies(): SharedServerDependencies {
     spawnProcess: spawn,
     waitForSocket,
     createClient: createCodexAppServerClient,
-    terminateProcess: async (child) => await killProcessTree(child),
+    terminateProcess: async (child) => { await killProcessTree(child); },
     removeRuntimeDirectory: async (directory) => await rm(directory, { recursive: true, force: true }),
   };
 }

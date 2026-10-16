@@ -43,6 +43,7 @@ export type ClaudeUnifiedHookLifecycleBridge = ClaudeUnifiedStartableDisposable 
   observeTranscript(message: RawJSONLines): void;
   observeLiveProviderActivityRow(message: unknown, expectedSessionId: string): void;
   handleProviderActivityObservationLoss(reason: string): void;
+  observeProcessExit(): void;
   settleAttemptLocalCommandCompleted(): Promise<void>;
   settleAttemptLocalCommandAborted(source: string): boolean;
 }>;
@@ -693,6 +694,17 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
     },
     handleProviderActivityObservationLoss(reason) {
       tracker?.handleProviderActivityObservationLoss(reason);
+    },
+    observeProcessExit() {
+      if (tracker) {
+        tracker.observeProcessExit({ providerStopped: true });
+      } else {
+        // Owned process exit may arrive before observer startup or after lifecycle disposal
+        // during teardown. The captured adapter still enforces the session runtime binding.
+        void opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit', { providerStopped: true }).catch((error) => {
+          logger.debug('[unified]: Claude process-exit activity observation failed', error);
+        });
+      }
     },
     settleAttemptLocalCommandCompleted: settleCompletedTurn,
     settleAttemptLocalCommandAborted(source) {

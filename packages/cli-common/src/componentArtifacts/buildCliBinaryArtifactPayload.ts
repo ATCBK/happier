@@ -27,6 +27,7 @@ import { shouldReuseCliDistSnapshot } from './shouldReuseCliDistSnapshot.js';
 const CLI_RUNTIME_SIDECAR_ENTRIES = [
   ['childProcessOptions.cjs'],
   ['claude_launcher_runtime.cjs'],
+  ['native_process_exit.cjs'],
   ['claude_local_launcher.cjs'],
   ['claude_remote_launcher.cjs'],
   ['session_hook_forwarder.cjs'],

@@ -133,13 +133,49 @@ provider launch. Those runners start their provider process only after input arr
 Waiting for their stream observer to publish activity would deadlock delivery
 configured as `after_runtime_idle`.
 
-After a local provider stops or a remote provider relaunches, a lost observer can
-publish prelaunch idle when no unresolved provider tasks remain. Unresolved task
-evidence keeps activity unknown; it is not silently cleared. Prelaunch publication
-does not install the new stream observer. Each owned local process attempt also
-uses this prelaunch publication before activating its installed scanner, including
-retries after process failure. Unified-terminal attachment retains its observation
-startup because the attached provider may already be working.
+A confirmed exit of an owned Claude process retires its tracked provider tasks
+through the shared activity ledger and publishes idle immediately. Local, legacy
+remote, Agent SDK, and unified-terminal runners use that same owner. The retired
+tasks are recorded at the default `info` file-log level. Closing an SDK stream or
+transport alone does not prove process exit: its owned child must actually exit,
+and the remote query finishes that cleanup before a replacement query can reuse
+the ledger. Native launchers report the native child's actual exit over their
+private IPC channel; the owner drains that channel before deciding whether the
+provider stopped. A launcher exit code or signal alone cannot establish that fact.
+The standalone binary payload includes the shared native-exit sidecar. Claude's
+launch-mode classifier follows symlinks to the same real path that the launcher
+imports. The launcher also reports when it imports the provider into its own
+process; its actual exit then proves provider exit, including extensionless links
+to JavaScript. Filesystem classification alone never retires provider tasks.
+Agent SDK process capture qualifies direct provider/runtime invocations separately
+from Windows shell shims. A shim's exit alone retains unknown task inventory;
+successful owned tree cleanup can establish stop when it observed the live root.
+Local Windows shell exits use the same uncertainty rule. An abort or operation
+error from a running child does not settle its physical-exit waiter; cleanup and
+task retirement still wait for actual exit.
+Unverified owned cleanup or an unexpected native launcher exit whose provider
+termination cannot be confirmed ends the runner instead of retrying into the same
+ledger; unresolved task identities remain unknown. Native children may keep stream
+pipes open after launcher death, so unverified exit reporting does not wait for
+those pipes to close.
+
+Positive provider-stop evidence remains authoritative through delayed observation
+loss and task records. The existing prelaunch boundary opens observation for the
+next provider attempt; installing an observer alone does not undo a stop. After
+that boundary, hooks without launch provenance can still make observation unknown.
+
+An external terminal host's pane death or clean exit status does not supply the
+private native-exit proof. Its lost observation retains task identities as unknown;
+an expected prompt-input exit remains a normal session end, while unexpected host
+death takes the fatal runtime path.
+
+Losing only observation, such as the transcript feed, retains task identities and
+demotes their activity to unknown. Fresh native evidence can confirm a task again;
+a confirmed process exit settles the retained inventory. Prelaunch publication
+does not install the new stream observer. Each owned local process attempt uses
+this publication before activating its installed scanner, including retries after
+process failure. Unified-terminal attachment retains its observation startup
+because the attached provider may already be working.
 
 Local fast-start retains a deferred session client across the switch to remote.
 That wrapper must forward provider input outcomes and delivery-state reads to the

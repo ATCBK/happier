@@ -487,6 +487,26 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
 });
 
 describe('createClaudeProviderActivityLedger', () => {
+    it('abandons only active tasks and keeps early terminal evidence', () => {
+        const ledger = createClaudeProviderActivityLedger();
+        ledger.apply({ type: 'started', sessionId: 's1', taskId: 'running-1' });
+        ledger.apply({ type: 'started', sessionId: 's1', taskId: 'running-2' });
+        ledger.apply({ type: 'terminal', terminalStatus: 'completed', sessionId: 's1', taskId: 'finished-early' });
+
+        expect(ledger.abandonActiveProviderTasks()).toEqual([
+            { sessionId: 's1', taskId: 'running-1', sources: ['system-task-started'] },
+            { sessionId: 's1', taskId: 'running-2', sources: ['system-task-started'] },
+        ]);
+        expect(ledger.getActiveProviderTaskCount()).toBe(0);
+        expect(ledger.abandonActiveProviderTasks()).toEqual([]);
+
+        // The early terminal record still keeps a late plain start inert, while fresh evidence for
+        // an abandoned task is admitted again.
+        expect(ledger.apply({ type: 'started', sessionId: 's1', taskId: 'finished-early' })).toBe(false);
+        expect(ledger.apply({ type: 'started', sessionId: 's1', taskId: 'running-1' })).toBe(true);
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+    });
+
     it('never lets a foreign session raise this ledger\'s active provider-task count', () => {
         // PLAN 4.9.1 step 2 (identity). `hasActiveProviderTasks()` holds THIS session's turn open,
         // so another session's typed lifecycle row must be inert here - not merely stored under a
