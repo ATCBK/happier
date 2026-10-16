@@ -210,8 +210,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     try {
       expect(await resolve({ surface: 'coding', memoryEnabled: false, accountEntries: [entry('doc', a.id)] }))
         .toMatchObject({ blocks: ['Admitted route instructions'], admittedEntries: [{ outcome: 'ready' }] });
-      expect(a.requests).toContain('/v1/artifacts');
-      expect(a.requests).toContain('/v1/artifacts/doc');
+      expect(a.requests).not.toContain('/v1/artifacts');
+      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(2);
     } finally { release(); }
   });
   it('ignores the retired settings-root stack while composing explicit canonical entries', async () => {
