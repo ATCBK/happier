@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { PluginUiNewSessionSeedOriginV1Schema, SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -9,6 +9,7 @@ import { act } from 'react-test-renderer';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ProjectWorkerStatusResultV1Schema } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { MachinePoolViewV1Schema } from '@happier-dev/protocol/machines/pools/v1';
@@ -29,7 +30,12 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock({ router: navigation }).module;
 });
 // Real Action admission/DTOs remain above this Machine network boundary.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineTransport }));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: (request: { method: string }) => {
+        if (request.method === 'daemon.projects.inspect.v1') throw new Error('Inspection requires original Account HTTP');
+        return machineTransport(request);
+    },
+}));
 installDisconnectedServerSocketBoundary();
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -63,6 +69,7 @@ const [
     import('./ProjectSetupReturn'),
 ]);
 let serverId: string;
+let homeId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 beforeEach(async () => {
     await homes.reset();
@@ -73,16 +80,31 @@ beforeEach(async () => {
         return ProjectDefinitionInspectOutputSchema.parse({ definition: { basis: { kind: 'absent' }, document: null },
             detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [] });
     });
-    serverId = await homes.addHome({ name: 'Home', serverUrl: 'https://project-authoring.test', accountId: 'account-a', machinePoolsEnabled: true });
-    homes.answer(serverId, 'GET /v1/machines', { body: ['machine-a', 'worker-b'].map(id =>
-        createPlainMachineRowFixture({ id, accountId: 'account-a' })) });
+    homeId = await homes.addHome({ name: 'Home', serverUrl: 'https://project-authoring.test', accountId: 'account-a',
+        serverIdentityId: 'srv_project_authoring', currentAccount: true, machinePoolsEnabled: true });
+    const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+    serverId = resolveServerProfileScopeIdForIdentifier(homeId);
+    const machines = ['machine-a', 'worker-b'].map(id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
+    homes.answer(homeId, 'GET /v1/machines', { body: machines });
+    for (const machine of machines) homes.answer(homeId, `GET /v1/machines/${machine.id}`, { body: { machine } });
+    // FX40's passive read uses the original Account Home even for SOURCE.
+    // Parse both wire envelopes and the actual daemon inspection output.
+    homes.answer(homeId, 'POST /v1/actions/projects.inspect', { select: async body => {
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+        expect(envelope.target).toMatchObject({ kind: 'machine', machineId: 'machine-a' });
+        const result = await machineTransport({ method: 'daemon.projects.inspect.v1', payload: envelope.input,
+            machineId: 'machine-a', accountId: 'account-a', serverId });
+        return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
+            requestId: envelope.requestId, execution: { ok: true, result: ProjectDefinitionInspectOutputSchema.parse(result) } }) };
+    } });
     const ref = WorkspaceRefV1WriteSchema.parse({ id: 'checkout-a', serverId, machineId: 'machine-a', rootPath: '/repo', createdAtMs: 1 });
-    homes.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, {
+    homes.answer(homeId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, {
         body: createPlainProjectAccountRowListFixture({ workspaceRefs: [ref] }),
     });
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://project-authoring.test', accountId: 'account-a' });
-    installHomeGovernanceBoundaries(homes);
-    homes.answer(serverId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, { body: { status: 'absent' } });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://project-authoring.test', accountId: 'account-a',
+        serverIdentityId: 'srv_project_authoring', credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
+        request: homes.request });
+    homes.answer(homeId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, { body: { status: 'absent' } });
     const scope = { serverId, accountId: 'account-a' };
     // Characterize the actual Account-mode/config HTTP path before a case changes its row.
     const preferences = await createDefaultActionExecutor().execute('projects.worker.preferences.get', {
@@ -93,7 +115,7 @@ beforeEach(async () => {
         ok: true, result: { status: 'ready', revision: 'absent', provenance: 'default' },
     });
     expect(homes.requestsFor(`${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`)).toContainEqual(expect.objectContaining({
-        serverId, serverUrl: 'https://project-authoring.test', input: { address: { serverId, refId: 'checkout-a' } },
+        serverId: homeId, serverUrl: 'https://project-authoring.test', input: { address: { serverId, refId: 'checkout-a' } },
     }));
     // Seed accepted Project facts after the real restoration/preflight awaits, not during hydration.
     storage.getState().activateProjectAccountRowsScope(scope);
@@ -109,6 +131,7 @@ beforeEach(async () => {
         requests: homes.requests.map(({ path, input }) => ({ path, input })),
         machineCalls: machineTransport.mock.calls })}`).toMatchObject({ ok: true,
         result: { definition: { basis: { kind: 'absent' }, document: null } } });
+    expect(homes.requestsFor('/v1/actions/projects.inspect')).toHaveLength(1);
 });
 afterEach(async () => {
     if (connection) { await connection.dispose(); connection = null; installHomeGovernanceBoundaries(homes); }
@@ -319,12 +342,12 @@ describe('Project setup through ordinary authoring', () => {
         const scope = { serverId, accountId: 'account-a' };
         const poolId = '7a93eb84-8b44-4c4d-bd7f-1fb2c6716514';
         const destination = { kind: 'pool', poolId, selection: 'ask' } as const;
-        homes.answer(serverId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, { body: {
+        homes.answer(homeId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, { body: {
             status: 'present', revision: 9, content: { t: 'plain', v: {
                 enabled: true, destination, unavailable: 'ask', allowAdHoc: true, scriptOverrides: {}, services: {},
             } },
         } });
-        homes.answer(serverId, machinePoolActionEndpointPathV1('machines.pools.get'), { body: MachinePoolViewV1Schema.parse({
+        homes.answer(homeId, machinePoolActionEndpointPathV1('machines.pools.get'), { body: MachinePoolViewV1Schema.parse({
             pool: { id: poolId, name: 'Workers', description: null, revision: 2, createdAt: 1, updatedAt: 2,
                 members: [{ machineId: 'worker-b', priorityTier: 0, enabled: true, state: 'connected' }] },
             availability: { state: 'known', connectedCount: 1, enabledCount: 1 },
@@ -363,7 +386,7 @@ describe('Project setup through ordinary authoring', () => {
         expect(facts).not.toHaveProperty('acceptedTarget');
         expect(draft).toMatchObject({ selectedMachineId: workspace.machineId, selectedPath: workspace.rootPath });
         expect(storage.getState().sessions).toBe(sessionsBefore);
-        expect(homes.requestsFor(machinePoolActionEndpointPathV1('machines.pools.get'))).toContainEqual(expect.objectContaining({ serverId, input: { poolId } }));
+        expect(homes.requestsFor(machinePoolActionEndpointPathV1('machines.pools.get'))).toContainEqual(expect.objectContaining({ serverId: homeId, input: { poolId } }));
         expect(homes.requests.filter(request => request.path.endsWith('/mutate') || request.path.endsWith('/create'))).toEqual([]);
     });
     it.each(['read_only', 'refused', 'invalid_output'] as const)('delivers current worker facts to the editable draft without admitting a target or approving an ad-hoc command (%s)', async (statusMode) => {
@@ -384,7 +407,7 @@ describe('Project setup through ordinary authoring', () => {
         });
         const preference = { enabled: true, destination: { kind: 'machine', machineId: 'worker-b' },
             unavailable: 'fail', allowAdHoc: false, scriptOverrides: { local: 'workers' } } as const;
-        homes.answer(serverId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, {
+        homes.answer(homeId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, {
             body: { status: 'present', revision: 7, content: { t: 'plain', v: { ...preference, services: {} } } },
         });
         const status = ProjectWorkerStatusResultV1Schema.parse({ eligible: false, candidate: null,
@@ -484,7 +507,7 @@ describe('Project setup through ordinary authoring', () => {
     it('keeps invalid worker preferences unavailable in agent guidance rather than presenting primary/ad-hoc defaults', async () => {
         const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
         const scope = { serverId, accountId: 'account-a' };
-        homes.answer(serverId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, {
+        homes.answer(homeId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, {
             // The genuine HTTP boundary returns malformed content; the real row reader classifies it.
             body: { status: 'present', revision: 3, content: { t: 'plain', v: { enabled: true } } },
         });
@@ -580,7 +603,7 @@ describe('Project setup through ordinary authoring', () => {
         const entered = createDeferred<void>();
         const release = createDeferred<void>();
         // Device credential storage is an actual boundary; all Action admission and seed logic remain real.
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementationOnce(async () => {
+        const credentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementationOnce(async () => {
             entered.resolve();
             await release.promise;
             return connection?.credentials ?? null;
@@ -588,13 +611,14 @@ describe('Project setup through ordinary authoring', () => {
         const entry = await renderHook((input: { workspace: typeof workspace }) => useProjectSetupAuthoring(input), {
             initialProps: { workspace },
         });
-        const opening = entry.getCurrent().onSetUpWithAgent();
-        await entered.promise;
-        await entry.rerender({ workspace: { ...workspace, rootPath: '/different-checkout' } });
-        release.resolve();
-        expect(await opening).toEqual({ ok: true, result: { kind: 'unavailable', reason: 'aborted' } });
-        expect(listNewSessionDraftProjections(scope)).toHaveLength(before);
-        expect(navigation.push).not.toHaveBeenCalled();
-        await entry.unmount();
+        try {
+            const opening = entry.getCurrent().onSetUpWithAgent();
+            await entered.promise;
+            await entry.rerender({ workspace: { ...workspace, rootPath: '/different-checkout' } });
+            release.resolve();
+            expect(await opening).toEqual({ ok: true, result: { kind: 'unavailable', reason: 'aborted' } });
+            expect(listNewSessionDraftProjections(scope)).toHaveLength(before);
+            expect(navigation.push).not.toHaveBeenCalled();
+        } finally { release.resolve(); credentialRead.mockRestore(); await entry.unmount(); }
     });
 });

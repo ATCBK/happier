@@ -84,7 +84,7 @@ describe('Scripts canonical operation subscriptions', () => {
         const serverIdentityId = policy === 'direct' ? 'srv_script_worker_refusal' : 'srv_script_worker_refusal_ask_first';
         const actionSettings = { actionsSettingsV1: { v: 1, actions: {
             'projects.script.run': { approvalRequiredSurfaces: policy === 'ask-first' ? ['ui'] : [] },
-        } } };
+        }, ...(policy === 'direct' ? { approvalWaivedSurfaces: { 'projects.script.run': ['ui'] } } : {}) } };
         const refusalCode = reason === 'worker_copy_missing' ? reason : 'choice_required';
         const targetMachineId = reason === 'worker_copy_missing' ? 'worker-machine' : 'source-machine';
         const connection = await restoreServerAccountForTest({
