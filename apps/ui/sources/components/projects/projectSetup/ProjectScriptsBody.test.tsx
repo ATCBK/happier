@@ -519,6 +519,7 @@ describe('ProjectScriptsBody runs', () => {
       },
     };
     const historical = operation('succeeded', 1);
+    if (historical.domainRef?.kind !== 'projectCommand') throw new Error('Expected the Script fixture to retain its Project command');
     actionOperationStore.mergeSnapshots({
       serverId: workspace.serverId,
       snapshots: [
