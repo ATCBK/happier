@@ -197,6 +197,8 @@ export function UsagePoolQueue(props: PoolOrderProps) {
   // one quiet "Used first" label instead of each repeating it as a heading with nothing under it.
   const stateOf = (pool: UsagePlanPool) => props.selections.get(pool.key) ?? 'loading';
   const bare = named.filter((pool) => readOrderedQueue(stateOf(pool)) === null);
+  // Beside pools that show an order (each titled "Used first · name"), the others are simply "Other pools".
+  const bareTitle = t(bare.length < named.length ? 'usage.board.plans.queueOtherTitle' : 'usage.board.plans.queueTitle');
   return (
     <View testID={props.testID} style={styles.pools}>
       {named.filter((pool) => !bare.includes(pool)).map((pool) => (
@@ -210,15 +212,22 @@ export function UsagePoolQueue(props: PoolOrderProps) {
       ))}
       {bare.length > 0 ? (
         <View style={styles.bareQueue}>
-          <Text accessibilityRole="header" style={[styles.quiet, text.detail]}>
-            {t('usage.board.plans.queueTitle')}
-          </Text>
+          {/* One unordered pool is one quiet line; the label stands over the names only for two or more, so the
+              line's room is the same one the Capacity reading reserves. */}
+          {bare.length > 1 ? (
+            <Text accessibilityRole="header" style={[styles.quiet, text.detail]}>
+              {bareTitle}
+            </Text>
+          ) : null}
           {bare.map((pool) => {
             const state = stateOf(pool);
             const cause = sharedCause ? null : bareQueueCause(state);
             return (
               <View key={pool.key} testID={`${props.testID}.${pool.groupId}`} style={styles.bareRow}>
-                <Text style={[styles.body, text.detail]}>{pool.name}</Text>
+                <Text style={[styles.body, text.detail]}>
+                  {bare.length === 1 ? <Text accessibilityRole="header" style={[styles.quiet, text.detail]}>{`${bareTitle} · `}</Text> : null}
+                  {pool.name}
+                </Text>
                 {cause ? <Text style={[styles.quiet, text.detail]}>{cause}</Text> : null}
               </View>
             );

@@ -18842,6 +18842,7 @@ const enUsage = {
       targetWithin: ({ percent }: { percent: string | number }) => `Every window stays within your ${percent}% target at this pace`,
       usedFirstUnsupported: "This machine doesn't report a switching order yet",
       queueTitle: "Used first",
+      queueOtherTitle: "Other pools",
       queueSkipped: "skipped",
       queueAfterThat: "after that",
       queueDeadline: ({ time }: { time: string | number }) => `long allowance resets or ends ${time}`,

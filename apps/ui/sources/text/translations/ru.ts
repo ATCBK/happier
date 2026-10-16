@@ -15152,6 +15152,7 @@ settingsSession: {
             targetWithin: ({ percent }: { percent: string | number }) => `При таком темпе все окна укладываются в цель ${percent}%`,
             usedFirstUnsupported: "Эта машина пока не сообщает порядок переключения",
             queueTitle: "Используется первым",
+            queueOtherTitle: "Другие пулы",
             queueSkipped: "пропущен",
             queueAfterThat: "затем",
             queueDeadline: ({ time }: { time: string | number }) => `длинный лимит сбросится или закончится ${time}`,

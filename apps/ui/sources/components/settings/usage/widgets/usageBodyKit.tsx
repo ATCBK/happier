@@ -205,7 +205,7 @@ export function UsageBodyReading(props: Readonly<{
             </View>
           ))}
         </View>
-        <SkeletonLine color={color} width="36%" height={12} radius={4} reducedMotion={reducedMotion} slotHeight={20} />
+        <SkeletonLine color={color} width="36%" height={12} radius={4} reducedMotion={reducedMotion} slotHeight={SETTLED_QUIET_LINE_PX} />
         {pageHasDetail ? null : <View style={{ minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx }} />}
       </View>
     );
@@ -278,7 +278,7 @@ const readingStyles = StyleSheet.create(() => ({
   summaryStats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
   summaryStat: { flexGrow: 1, flexBasis: 100, minWidth: 0, gap: 2 },
   summaryStatLead: { flexGrow: 2, flexBasis: 168, minWidth: 0, gap: 2 },
-  // The Capacity body's gap, and the cells row's settled height (measured on Home: figure 70, cells 104, pool line 20).
+  // The Capacity body's gap, and the cells row's settled height (measured on Home: figure 70, cells 104, pool line 18).
   capacity: { gap: 18 },
   capacityHero: { gap: 4 },
   capacityCells: { height: 104, flexDirection: 'row', columnGap: 12 },

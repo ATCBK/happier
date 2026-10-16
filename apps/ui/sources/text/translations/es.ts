@@ -15222,6 +15222,7 @@ settingsSession: {
             targetWithin: ({ percent }: { percent: string | number }) => `A este ritmo, todas las ventanas quedan dentro de tu objetivo del ${percent} %`,
             usedFirstUnsupported: "Este equipo aún no informa del orden de cambio",
             queueTitle: "Se usa primero",
+            queueOtherTitle: "Otros grupos",
             queueSkipped: "omitida",
             queueAfterThat: "después",
             queueDeadline: ({ time }: { time: string | number }) => `la asignación larga se restablece o termina ${time}`,

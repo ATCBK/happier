@@ -15356,6 +15356,7 @@ settingsSession: {
             targetWithin: ({ percent }: { percent: string | number }) => `Bei diesem Tempo bleibt jedes Fenster in deinem Ziel von ${percent} %`,
             usedFirstUnsupported: "Dieser Rechner meldet noch keine Wechselreihenfolge",
             queueTitle: "Zuerst genutzt",
+            queueOtherTitle: "Weitere Pools",
             queueSkipped: "übersprungen",
             queueAfterThat: "danach",
             queueDeadline: ({ time }: { time: string | number }) => `langes Kontingent endet oder wird zurückgesetzt ${time}`,

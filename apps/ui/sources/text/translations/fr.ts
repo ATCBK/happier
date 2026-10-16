@@ -15094,6 +15094,7 @@ settingsSession: {
             targetWithin: ({ percent }: { percent: string | number }) => `À ce rythme, chaque fenêtre reste dans ton objectif de ${percent} %`,
             usedFirstUnsupported: "Cette machine n'indique pas encore l'ordre de bascule",
             queueTitle: "Utilisé en premier",
+            queueOtherTitle: "Autres groupes",
             queueSkipped: "ignoré",
             queueAfterThat: "ensuite",
             queueDeadline: ({ time }: { time: string | number }) => `le quota long se réinitialise ou se termine ${time}`,

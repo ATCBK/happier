@@ -15593,6 +15593,7 @@ settingsSession: {
             targetWithin: ({ percent }: { percent: string | number }) => `A questo ritmo ogni finestra resta entro il tuo obiettivo del ${percent}%`,
             usedFirstUnsupported: "Questa macchina non riporta ancora l'ordine di cambio",
             queueTitle: "Usato per primo",
+            queueOtherTitle: "Altri gruppi",
             queueSkipped: "saltato",
             queueAfterThat: "dopo",
             queueDeadline: ({ time }: { time: string | number }) => `la quota lunga si azzera o termina ${time}`,

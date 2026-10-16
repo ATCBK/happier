@@ -15336,6 +15336,7 @@ settingsSession: {
             targetWithin: ({ percent }: { percent: string | number }) => `Neste ritmo, todas as janelas ficam dentro da sua meta de ${percent}%`,
             usedFirstUnsupported: "Esta máquina ainda não informa a ordem de troca",
             queueTitle: "Usada primeiro",
+            queueOtherTitle: "Outros grupos",
             queueSkipped: "ignorada",
             queueAfterThat: "depois",
             queueDeadline: ({ time }: { time: string | number }) => `a cota longa reinicia ou termina ${time}`,

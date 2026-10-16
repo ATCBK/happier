@@ -15495,6 +15495,7 @@ settingsSession: {
             targetWithin: ({ percent }: { percent: string | number }) => `このペースならすべての枠が目標の${percent}%以内に収まります`,
             usedFirstUnsupported: "このマシンはまだ切り替え順を報告していません",
             queueTitle: "先に使用",
+            queueOtherTitle: "その他のプール",
             queueSkipped: "スキップ",
             queueAfterThat: "その次",
             queueDeadline: ({ time }: { time: string | number }) => `長期枠のリセットまたは終了 ${time}`,

@@ -701,6 +701,36 @@ it('states one unreadable-order cause once under every pool that shares it (H30)
   expect(screen.getTextContent()).not.toContain(`${t('usage.board.plans.queueTitle')} ·`);
 });
 
+it('keeps one unordered pool on one quiet line, and titles the unordered pools "Other pools" beside an ordered one (D2, R4)', async () => {
+  const now = Date.now();
+  const weekly: Meter = { meterId: 'weekly', label: 'Weekly', usedPct: 20, resetAtMs: now + 2 * DAY, windowDurationMs: 7 * DAY };
+  const unread = (groupId: string, memberAccountIds: string[]) => ({
+    group: { service, groupId }, memberAccountIds, activeAccountId: memberAccountIds[0]!,
+    selection: { status: 'unsupported' as const, errorCode: 'no_machine' as const },
+  });
+  const { UsageCapacityWidget } = await import('../UsageCapacityWidget');
+  const text = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.getTextContent();
+  const used = t('usage.board.plans.queueTitle');
+  const other = t('usage.board.plans.queueOtherTitle');
+  // One unordered pool: the label and the name are one line, not a label standing over the name.
+  const single = bodyProps(['a', 'b'].map((id) => quotaRead(id, now, [weekly])), [{ query, value: [unread('first', ['a', 'b'])] }]);
+  const alone = await renderScreen(wrap(<UsageCapacityWidget {...single} serverId="home" id="usage_capacity" testID="cap" />));
+  expect(alone.findAll((node) => typeof node.type === 'string' && typeof node.props.testID === 'string' && node.props.testID.startsWith('cap.usedFirst.first'))).not.toHaveLength(0);
+  expect(text(alone)).toMatch(new RegExp(`${used} · \\S`));
+  // Beside a pool that shows an order, the unordered pools are not a second "Used first".
+  const candidate = (profileId: string, priority: number) => ({ profileId, priority, createdAtMs: 1, enabled: true, leastLimitedScore: 62, preferenceDeadlineMs: now + 2 * DAY });
+  const ordered = { group: { service, groupId: 'ordered' }, memberAccountIds: ['a', 'b'], activeAccountId: 'a',
+    selection: { status: 'available' as const, machineId: 'witnessed-selector', value: { group: { service, groupId: 'ordered' }, observedAtMs: now,
+      selection: { selected: candidate('a', 0), reason: 'selected' as const, excluded: [], decisionTrace: { activeProfileId: 'a', reason: 'selected' as const,
+        strategy: 'expiry_first' as const, selectionBasis: 'active_stickiness' as const, sticky: true,
+        orderedEligibleCandidates: [candidate('a', 0), candidate('b', 1)], candidates: [] } } } } };
+  const mixed = bodyProps(['a', 'b', 'c', 'd'].map((id) => quotaRead(id, now, [weekly])), [{ query, value: [ordered, unread('second', ['c']), unread('third', ['d'])] }]);
+  const both = await renderScreen(wrap(<UsageCapacityWidget {...mixed} serverId="home" id="usage_capacity" testID="cap" />));
+  expect(text(both).split(other).length - 1).toBe(1);
+  expect(text(both).split(`${used} ·`).length - 1).toBe(1);
+  expect(text(both).split(used).length - 1).toBe(1);
+});
+
 /** One earlier week of the same record and meter in accepted history: two readings, one and three days in. */
 function withEarlierWeek(read: ConnectedServiceQuotaGetResultV1, weekly: Meter): ConnectedServiceQuotaGetResultV1 {
   const current = read.current!;

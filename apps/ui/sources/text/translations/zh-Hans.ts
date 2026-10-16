@@ -14843,6 +14843,7 @@ settingsSession: {
             targetWithin: ({ percent }: { percent: string | number }) => `按此节奏所有窗口都在你 ${percent}% 的目标之内`,
             usedFirstUnsupported: "这台机器尚未报告切换顺序",
             queueTitle: "优先使用",
+            queueOtherTitle: "其他账号池",
             queueSkipped: "已跳过",
             queueAfterThat: "之后",
             queueDeadline: ({ time }: { time: string | number }) => `长周期额度将于 ${time} 重置或结束`,
