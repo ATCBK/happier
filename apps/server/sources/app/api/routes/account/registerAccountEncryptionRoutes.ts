@@ -102,19 +102,18 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                 if (!user) {
                     return reply.code(500).send({ error: "internal" });
                 }
-                const currentness =
-                    deriveAccountEncryptionCurrentnessFromRow(user);
-                const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(user, currentness);
-                const recipientEnvelopeReadiness = readiness.status === "available"
-                    ? { status: "available" as const }
-                    : readiness;
-                if (currentness.status === "inconsistent") {
+                const currentness = projectAccountEncryptionCurrentnessFromRow(user);
+                if (currentness === null) {
+                    const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(user);
+                    const recipientEnvelopeReadiness = readiness.status === "available"
+                        ? { status: "available" as const }
+                        : readiness;
                     return reply.code(400).send(AccountEncryptionCurrentnessErrorResponseSchema.parse({
                         error: "migration-required",
                         recipientEnvelopeReadiness,
                     }));
                 }
-                return reply.send(projectAccountEncryptionCurrentnessFromRow(user));
+                return reply.send(currentness);
             } catch (error) {
                 if (error instanceof InactiveAccountError) throw error;
                 return reply.code(500).send({ error: "internal" });
