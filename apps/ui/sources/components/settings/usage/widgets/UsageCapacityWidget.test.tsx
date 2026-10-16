@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -11,11 +11,36 @@ import { ConnectedServiceQuotaGetResultV1Schema } from '@happier-dev/protocol/co
 import { buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { storage } from '@/sync/domains/state/storageStore';
+import { getAppliedActiveServerSnapshot, publishAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+
+let previousSnapshot = getAppliedActiveServerSnapshot();
+let previousAvailable = isAppliedActiveServerRuntimeAvailable();
+let previousProfile = storage.getState().profile;
+let previousScope = storage.getState().profileScope;
+beforeEach(() => {
+  previousSnapshot = getAppliedActiveServerSnapshot();
+  previousAvailable = isAppliedActiveServerRuntimeAvailable();
+  previousProfile = storage.getState().profile;
+  previousScope = storage.getState().profileScope;
+  publishAppliedActiveServerSnapshot({ serverId: 'home', serverUrl: 'https://capacity.test', generation: 0 }, true);
+  storage.setState({ profileScope: { serverId: 'home', accountId: 'capacity-account' },
+    profile: AccountProfileSchema.parse({ id: 'capacity-account', connectedAccountGroupsV4: ['first', 'second', 'duo', 'one'].map(groupId =>
+      QualifiedConnectedAccountGroupV4Schema.parse({ v: 1, ref: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, groupId },
+        displayName: groupId, incarnation: `${groupId}:1`, policy: { strategy: 'priority' }, generation: 1, runtimeStateRevision: 1,
+        state: {}, members: [], activeConnectedAccountId: null, createdAt: 1, updatedAt: 1 })) }) });
+});
+afterEach(() => {
+  standardCleanup();
+  storage.setState({ profile: previousProfile, profileScope: previousScope });
+  publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);
+});
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-afterEach(standardCleanup);
 
 it('renders every overlapping pool membership without duplicating standalone Account facts', async () => {
   const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };

@@ -36,11 +36,15 @@ it('retains the answered pool order during refresh and failed reads, but not aft
   const scope = { serverId: server.id, accountId: 'order-account' };
   storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }) });
   const group = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool' };
-  const answer = (observedAtMs: number) => ConnectedServicePoolSelectionGetResponseV1Schema.parse({ group, observedAtMs,
+  const answer = (observedAtMs: number) => {
+    const response = ConnectedServicePoolSelectionGetResponseV1Schema.parse({ group, observedAtMs,
     selection: { selected: null, reason: 'manual_strategy', excluded: [], decisionTrace: {
       activeProfileId: null, reason: 'manual_strategy', strategy: 'manual', selectionBasis: 'manual_strategy',
       sticky: false, orderedEligibleCandidates: [], candidates: [],
     } } });
+    if ('status' in response) throw new Error('Expected a selector answer');
+    return response;
+  };
   const query = normalizeUsageQuery({});
   const pool = { group, memberAccountIds: ['work'], activeAccountId: null,
     selection: { status: 'available' as const, machineId: 'machine', value: answer(1) } };
@@ -52,8 +56,19 @@ it('retains the answered pool order during refresh and failed reads, but not aft
     await hook.rerender();
   };
   expect(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 1 });
+  expect.soft(hook.getCurrent().get(key)).toMatchObject({ memberStatus: 'none_known' });
+  const excluded = answer(1);
+  excluded.selection.excluded = [{ profileId: 'work', reason: 'disabled' }];
+  await update({ status: 'available', machineId: 'machine', value: excluded });
+  expect.soft(hook.getCurrent().get(key)).toMatchObject({ memberStatus: 'all_excluded' });
+  const manual = answer(1);
+  manual.selection.decisionTrace.candidates = [{ profileId: 'work', decision: 'eligible', quotaEvidence: { status: 'stale_or_missing' } }];
+  await update({ status: 'available', machineId: 'machine', value: manual });
+  expect.soft(hook.getCurrent().get(key)).toMatchObject({ memberStatus: 'known' });
+  await update({ status: 'available', machineId: 'machine', value: answer(1) });
   await update({ status: 'pending', machineId: 'machine' });
   expect.soft(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 1 });
+  expect.soft(hook.getCurrent().get(key)).toMatchObject({ memberStatus: 'none_known' });
   expect.soft(hook.getCurrent().get(key)).not.toHaveProperty('refreshError');
   await update({ status: 'error', machineId: 'machine', errorCode: 'connected_service_request_failed' });
   expect.soft(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 1, refreshError: 'failed' });
@@ -186,6 +201,14 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
       errorReason: null, descriptors: [] }, captureActiveServerAccountScopeLifetime()!));
     await warm.rerender();
     expect(warm.getCurrent().nameOf(warm.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
+    // A retained Resource snapshot can outlive the authoritative group definition.
+    // A same-id group from another service must not keep the deleted pool alive.
+    await act(async () => storage.setState({ profile: { ...profile, connectedAccountGroupsV4: [
+      { ...profile.connectedAccountGroupsV4[0]!, ref: { service: email.service, groupId: poolRef.groupId } },
+    ] } }));
+    expect.soft(warm.getCurrent().projection.pools).toEqual([]);
+    await act(async () => storage.setState({ profile }));
+    expect(warm.getCurrent().projection.pools[0]).toMatchObject({ name: 'Studio pool' });
     await warm.unmount();
     retireActiveServerAccountScopeLifetime();
     slice = { ...slice, sources: slice.sources.map(state => ({ ...state, status: 'pending' })) };

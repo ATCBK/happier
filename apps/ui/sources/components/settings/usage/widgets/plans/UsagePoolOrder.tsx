@@ -25,6 +25,7 @@ import { t } from '@/text';
 import type { UsagePlanAccount, UsagePlanPool } from './usagePlansModel';
 import type {
   UsagePlanAccountName,
+  UsagePoolMemberStatus,
   UsagePoolSelectionState,
 } from './useUsagePlans';
 import {
@@ -234,10 +235,10 @@ function PoolQueue(
   const strategy = getPoolStrategyPresentation(trace.strategy);
   const members = readUsagePoolMembers(props.pool, props.accounts, selection);
   // A pool the selector lists no member for has no order, strategy or reason to show: one quiet line.
-  if (members.length === 0) {
+  if (state.memberStatus === 'none_known') {
     return (
       <View testID={props.testID} style={styles.pool}>
-        <UsagePlanSectionHead title={title} meta={!props.causeBelow && state.refreshError ? unreadText(state.refreshError) : t('usage.board.plans.whyNone')} />
+        <UsagePlanSectionHead title={title} meta={!props.causeBelow && state.refreshError ? unreadText(state.refreshError) : null} />
       </View>
     );
   }
@@ -254,6 +255,7 @@ function PoolQueue(
             label={label}
             members={members}
             selection={selection}
+            memberStatus={state.memberStatus}
             observedAtMs={state.observedAtMs}
             nameOf={props.nameOf}
             nowMs={props.nowMs}
@@ -396,8 +398,8 @@ export function UsagePoolSteps(props: PoolOrderProps) {
           props.accounts,
           state.selection,
         );
-        if (members.length === 0) {
-          return <UsagePlanSectionHead key={pool.key} title={label} meta={!sharedCause && state.refreshError ? unreadText(state.refreshError) : t('usage.board.plans.whyNone')} />;
+        if (state.memberStatus === 'none_known') {
+          return <UsagePlanSectionHead key={pool.key} title={label} meta={!sharedCause && state.refreshError ? unreadText(state.refreshError) : null} />;
         }
         const steps = members
           .filter((member) => member.rank !== null)
@@ -419,7 +421,7 @@ export function UsagePoolSteps(props: PoolOrderProps) {
             <UsagePlanSectionHead
               title={label}
               action={<PoolWhy serverId={props.serverId} accounts={props.accounts} pool={pool} label={label}
-                members={members} selection={state.selection} observedAtMs={state.observedAtMs}
+                members={members} selection={state.selection} memberStatus={state.memberStatus} observedAtMs={state.observedAtMs}
                 nameOf={props.nameOf} nowMs={props.nowMs} testID={`${props.testID}.${pool.groupId}.why`} />}
               meta={
                 [getPoolStrategyPresentation(
@@ -500,6 +502,7 @@ type WhyProps = Readonly<{
   label: string;
   members: readonly UsagePoolMember[];
   selection: Selection;
+  memberStatus: UsagePoolMemberStatus;
   observedAtMs: number;
   nameOf: NameOf;
   nowMs: number;
@@ -589,7 +592,8 @@ function PoolWhyPopover(
               >
                 {selectedName
                   ? t('usage.board.plans.whyAccount', { name: selectedName })
-                  : t('usage.board.plans.whyNone')}
+                  : props.memberStatus === 'all_excluded'
+                    ? t('usage.board.plans.whyNone') : t('usage.board.plans.whyTitle')}
               </Text>
               <Text style={[styles.quiet, text.detail]}>
                 {[

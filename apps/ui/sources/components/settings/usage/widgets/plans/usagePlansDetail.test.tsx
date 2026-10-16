@@ -9,6 +9,8 @@ import { ConnectedServicePoolSelectionGetRequestV1Schema } from '@happier-dev/pr
 import { getPreferredLanguage, preloadTranslationsForSettings, setPreferredLanguageFromSettings, t } from '@/text';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import {
   ConnectedServiceQuotaGetResultV1Schema,
@@ -16,6 +18,7 @@ import {
 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { BurnUpChart } from '@happier-dev/plugin-ui/presentation';
+import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { storage } from '@/sync/domains/state/storageStore';
 import {
@@ -65,11 +68,15 @@ const query = normalizeUsageQuery({});
 let previousSnapshot = getAppliedActiveServerSnapshot();
 let comparisonHome: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 let previousAvailable = isAppliedActiveServerRuntimeAvailable();
+let previousProfile = storage.getState().profile;
+let previousProfileScope = storage.getState().profileScope;
 let restoreFrameBoundary: (() => void) | undefined;
 beforeEach(() => {
   restoreFrameBoundary = withPopoverWebGlobals();
   previousSnapshot = getAppliedActiveServerSnapshot();
   previousAvailable = isAppliedActiveServerRuntimeAvailable();
+  previousProfile = storage.getState().profile;
+  previousProfileScope = storage.getState().profileScope;
 });
 afterEach(async () => {
   standardCleanup();
@@ -81,6 +88,7 @@ afterEach(async () => {
     await import('@/sync/domains/scope/activeServerAccountScope')
   ).retireActiveServerAccountScopeLifetime();
   publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);
+  storage.setState({ profile: previousProfile, profileScope: previousProfileScope });
 });
 
 type Meter = Readonly<{
@@ -167,6 +175,22 @@ function bodyProps(
   pools?: Parameters<typeof resolveUsagePageAggregation>[0]['pools'],
   shownQuery = query,
 ) {
+  if (pools && pools.flatMap(read => read.value ?? []).some(pool => !storage.getState().profile.connectedAccountGroupsV4.some(group =>
+    group.ref.groupId === pool.group.groupId && group.ref.service.pluginId === pool.group.service.pluginId
+      && group.ref.service.localId === pool.group.service.localId))) {
+    // Resource pool snapshots do not establish an Account's current group definitions.
+    const snapshot = getAppliedActiveServerSnapshot();
+    const serverId = snapshot.serverId ?? 'home';
+    const accountId = storage.getState().profileScope?.accountId ?? 'detail-account';
+    publishAppliedActiveServerSnapshot({ ...snapshot, serverId, serverUrl: snapshot.serverUrl || 'https://usage-detail.test' }, true);
+    storage.setState({ profileScope: { serverId, accountId }, profile: AccountProfileSchema.parse({ ...storage.getState().profile, id: accountId,
+      connectedAccountGroupsV4: pools.flatMap(read => read.value ?? []).map(pool => QualifiedConnectedAccountGroupV4Schema.parse({
+        v: 1, ref: pool.group, displayName: pool.group.groupId, incarnation: `${pool.group.groupId}:1`,
+        policy: { strategy: 'priority' }, generation: 1, runtimeStateRevision: 1, state: {}, members: [],
+        activeConnectedAccountId: null, createdAt: 1, updatedAt: 1,
+      })),
+    }) });
+  }
   const slice = resolveUsagePageAggregation({
     queries: [shownQuery],
     nowMs: Date.now(),
@@ -544,11 +568,13 @@ it("lists a pool in the selector's own order and builds the why detail from its 
       ],
     },
   ]);
-  comparisonHome = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-pool-comparison.test', accountId: 'comparison-account' }],
+  const comparisonProfile = AccountProfileSchema.parse({ ...storage.getState().profile, id: 'comparison-account' });
+  comparisonHome = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-pool-comparison.test', accountId: 'comparison-account', profile: comparisonProfile }],
     route: request => request.path === '/v1/account/encryption/currentness'
       ? Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }) : undefined });
   const home = comparisonHome.homes.a!;
   publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: home.serverUrl, generation: 0 });
+  storage.setState({ profileScope: { serverId: home.id, accountId: 'comparison-account' }, profile: comparisonProfile });
   const { TokenStorage } = await import('@/auth/storage/tokenStorage');
   const credentials = (await TokenStorage.getCredentialsForServerUrl(home.serverUrl))!;
   selectionTransport.mockImplementation(async (request: { payload: unknown }) => {
@@ -638,9 +664,20 @@ it('gives a pool the selector lists no member for one quiet line, not a strategy
   const { UsageCapacityWidget } = await import('../UsageCapacityWidget');
   const screen = await renderScreen(wrap(<UsageCapacityWidget {...props} serverId="home" id="usage_capacity" testID="cap" />));
   expect(screen.findHostByTestId('cap.usedFirst.empty')).toBeTruthy();
-  expect(screen.getTextContent()).toContain(t('usage.board.plans.whyNone'));
+  expect(screen.getTextContent()).not.toContain(t('usage.board.plans.whyNone'));
   expect(screen.findByTestId('cap.usedFirst.empty.why')).toBeNull();
   expect(screen.getTextContent()).not.toContain('Expiring first');
+  await screen.update(wrap(<WidgetPresentationProvider value={{ size: 'small', footprint: { columns: 2, columnSpan: 1, rowSpan: 1, width: 'half', height: 'compact' }, geometry: { width: 320, height: 96 } }}>
+    <UsageCapacityWidget {...props} serverId="home" id="usage_capacity" testID="cap" />
+  </WidgetPresentationProvider>));
+  expect(screen.getTextContent()).toContain('empty');
+  expect(screen.getTextContent()).not.toContain(t('usage.board.plans.whyNone'));
+  const excluded = bodyProps(['a', 'b'].map(id => quotaRead(id, now, [weekly])), [{ query, value: [{ group,
+    memberAccountIds: ['a', 'b'], activeAccountId: null, selection: { status: 'available', machineId: 'witnessed-selector',
+      value: { group, observedAtMs: now, selection: { ...selection, excluded: ['a', 'b'].map(profileId => ({ profileId, reason: 'disabled' as const })) } } } }] }]);
+  await screen.update(wrap(<UsageCapacityWidget {...excluded} serverId="home" id="usage_capacity" testID="cap" />));
+  await screen.pressByTestIdAsync('cap.usedFirst.empty.why');
+  expect(screen.getTextContent()).toContain(t('usage.board.plans.whyNone'));
 });
 
 it('states one unreadable-order cause once under every pool that shares it (H30)', async () => {

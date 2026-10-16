@@ -76,7 +76,9 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
   const groups = storage(state => areServerAccountScopesEqual(state.profileScope, scope)
     ? state.profile.connectedAccountGroupsV4 : NO_GROUPS);
   const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
-  const projection = React.useMemo(() => ({ ...baseProjection, pools: baseProjection.pools.map(pool => ({
+  const projection = React.useMemo(() => ({ ...baseProjection, pools: baseProjection.pools.filter(pool => groups.some(group =>
+    group.ref.groupId === pool.groupId && group.ref.service.pluginId === pool.service.pluginId
+      && group.ref.service.localId === pool.service.localId)).map(pool => ({
     ...pool,
     name: presentQualifiedConnectedAccountTarget({ target: { kind: 'group', service: pool.service, groupId: pool.groupId },
       groups, accounts: [], labelsByKey,
@@ -195,8 +197,10 @@ export function useUsageSelectorMachineId(): string | null {
 }
 
 type ResolvedPoolSelection = Extract<ConnectedServicePoolSelectionGetResponseV1, { selection: unknown }>;
+export type UsagePoolMemberStatus = 'none_known' | 'all_excluded' | 'known';
 export type UsagePoolSelectionState =
-  | (ConnectedServicePoolSelectionGetResponseV1 & Readonly<{ refreshError?: 'failed' | 'no_machine' }>)
+  | (ResolvedPoolSelection & Readonly<{ memberStatus: UsagePoolMemberStatus; refreshError?: 'failed' | 'no_machine' }>)
+  | Exclude<ConnectedServicePoolSelectionGetResponseV1, ResolvedPoolSelection>
   | 'loading'
   | 'failed'
   | 'no_machine';
@@ -221,7 +225,7 @@ export function useUsagePoolSelections(
     if (!observations) { observations = new Map(); observedPoolSelections.set(lifetime, observations); }
     return observations;
   }, [lifetime]);
-  const projection = React.useMemo(() => new Map((slice.pools ?? []).map(pool => {
+  const projection = React.useMemo(() => new Map<string, UsagePoolSelectionState>((slice.pools ?? []).map(pool => {
     const key = `${pool.group.service.pluginId}/${pool.group.service.localId}:${pool.group.groupId}`;
     const selection = pool.selection;
     const previous = lifetime?.isCurrent() ? retained.get(key) : undefined;
@@ -232,13 +236,20 @@ export function useUsagePoolSelections(
         && (slice.shownQuery.machines.length === 0 || slice.shownQuery.machines.includes(previous.machineId ?? '')));
     const pending = selection.status === 'pending' || selection.status === 'not_loaded';
     const failed = selection.status === 'error' || selection.errorCode === 'no_machine';
-    const state: UsagePoolSelectionState = selection.value ??
+    const state = selection.value ??
       (!authorityLost && sameSelector && (pending || failed)
         ? { ...previous.value, ...(failed ? { refreshError: selection.errorCode === 'no_machine' ? 'no_machine' as const : 'failed' as const } : {}) }
         : undefined) ??
       (selection.status === 'pending' || selection.status === 'not_loaded' ? 'loading' :
         selection.errorCode === 'no_machine' ? 'no_machine' : 'failed');
-    return [key, state];
+    if (typeof state === 'string' || 'status' in state) return [key, state] as const;
+    const { selected, excluded, decisionTrace } = state.selection;
+    // A machine's empty trace is not evidence that the pool's accounts are unusable.
+    const memberStatus: UsagePoolMemberStatus = !selected && decisionTrace.orderedEligibleCandidates.length === 0
+      ? excluded.length > 0 && decisionTrace.candidates.every(candidate => excluded.some(entry => entry.profileId === candidate.profileId))
+        ? 'all_excluded' : decisionTrace.candidates.length === 0 && excluded.length === 0 ? 'none_known' : 'known'
+      : 'known';
+    return [key, { ...state, memberStatus }] as const;
   })), [slice.pools, slice.shownQuery.machines, lifetime, retained]);
   React.useEffect(() => {
     if (!lifetime?.isCurrent()) return;
