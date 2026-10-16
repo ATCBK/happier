@@ -517,12 +517,17 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     a.fail(200);
     expect((await resolve(args)).blocks).toEqual(['first']);
   });
-  it('suppresses required memory by header only beyond the first page', async () => {
+  it('reads only the selected header and suppresses memory without opening its body', async () => {
     const a = await home('alpha', 'active-token');
     await profiles([a]);
     a.set('memory', 'must not load', 'memory_doc.v1');
     for (let index = 0; index < 500; index++)
       a.set(`z-other-${index}`, 'never load');
+    // A header-only decision must not open the selected body or unrelated headers.
+    const memory = a.rows.get('memory')!;
+    a.rows.set('memory', { ...memory, body: 'unreadable-body-envelope' });
+    const unrelated = a.rows.get('z-other-0')!;
+    a.rows.set('z-other-0', { ...unrelated, header: 'unreadable-header-envelope' });
     const { resolveCliPromptStackSystemAppendBlocks: resolve } =
       await import('./resolveCliPromptStackSystemAppendBlocks');
     expect(
@@ -532,9 +537,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
         memoryEnabled: false,
       }),
     ).toEqual({ blocks: [], admittedEntries: [] });
-    expect(
-      a.requests.filter((path) => path === '/v1/artifacts/memory'),
-    ).toEqual([]);
+    expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
+    expect(a.requests.filter(path => path.startsWith('/v1/artifacts/'))).toEqual(['/v1/artifacts/memory']);
   });
   it('skips disabled inherited selections before Account HTTP', async () => {
     const a = await home('alpha', 'active-token');
@@ -557,6 +561,6 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
     await expect(resolve({ surface: 'coding', accountEntries: [entry('doc')], memoryEnabled: false }))
       .rejects.toMatchObject({ status: 'attachment_unavailable', reason: 'locked' });
-    expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toEqual([]);
+    expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toEqual(['/v1/artifacts/doc']);
   });
 });

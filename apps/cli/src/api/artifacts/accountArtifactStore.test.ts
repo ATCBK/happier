@@ -54,6 +54,41 @@ describe('createAccountArtifactStore', () => {
     expect(await store.read('required-doc')).toBeNull();
   });
 
+  it.each(['plain', 'e2ee'] as const)('opens only an exact %s header while retaining mode, recipient and cancellation checks', async mode => {
+    const secret = randomBytes(32);
+    const dataKey = randomBytes(32);
+    const credentials = { token: 'token', encryption: mode === 'plain' ? null : {
+      type: 'dataKey' as const, publicKey: x25519.getPublicKey(secret), machineKey: secret,
+    } };
+    let accountMode = mode;
+    const store = createAccountArtifactStore({ credentials, getAccountEncryptionMode: async () => accountMode });
+    const header = { v: 1, kind: 'memory_doc.v1', title: 'Selected memory' };
+    const stored = { id: 'selected', ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+      header: mode === 'plain' ? encodePlainArtifactStoredContent(header) : encodeBase64(encryptWithDataKey(header, dataKey)),
+      body: 'unreadable-body-envelope', dataEncryptionKey: mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER
+        : encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey, recipientPublicKey: credentials.encryption!.publicKey, randomBytes })),
+      headerVersion: 2, bodyVersion: 3, seq: 4, createdAt: 1, updatedAt: 2 };
+    mockGet.mockImplementation(async (url: string) => ({ status: 200, data: url.endsWith('/recipients')
+      ? { artifactId: stored.id, ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: mode,
+        dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: stored.dataEncryptionKey, recipients: [] } : stored }));
+    expect(await store.readHeader('selected')).toMatchObject({ artifactId: 'selected', header, headerVersion: 2, bodyVersion: 3 });
+    await expect(store.read('selected')).rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
+    accountMode = mode === 'plain' ? 'e2ee' : 'plain';
+    await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+    // Recipients follow the actual owner's mode, independently of their own Account.
+    stored.access = 'view';
+    expect(await store.readHeader('selected')).toMatchObject({ header, access: 'view' });
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled'));
+    await expect(store.readHeader('selected', { signal: controller.signal })).rejects.toThrow('cancelled');
+    mockGet.mockResolvedValueOnce({ status: 404, data: { error: 'not_found' } });
+    expect(await store.readHeader('selected')).toBeNull();
+    mockGet.mockResolvedValueOnce({ status: 503, data: { error: 'unavailable' } });
+    await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_unavailable', status: 503 });
+    stored.header = 'unreadable-header-envelope';
+    await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
+  });
+
   it.each([
     { error: 'public_share_isolation_unavailable', expected: 'public_share_isolation_unavailable' },
     { error: 'untrusted_server_detail', expected: 'public_share_request_failed' },

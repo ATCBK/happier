@@ -84,7 +84,7 @@ export async function withCliPromptLibraryArtifactReader<T>(
     Promise<
       Awaited<
         ReturnType<
-          ReturnType<typeof createCredentialedAccountArtifactStore>['list']
+          ReturnType<typeof createCredentialedAccountArtifactStore>['readHeader']
         >
       >
     >
@@ -203,30 +203,18 @@ export async function withCliPromptLibraryArtifactReader<T>(
     }),
     readArtifactHeader: async (ref) => read('header', ref, async () => {
       const { serverId, pending } = storeFor(ref);
-      let inventory = headers.get(serverId);
-      if (!inventory) {
-        inventory = pending.then(({ serverUrl, store }) => {
+      const key = JSON.stringify([serverId, ref.artifactId]);
+      let header = headers.get(key);
+      if (!header) {
+        header = pending.then(({ serverUrl, store }) => {
           if (!store) throw new ArtifactEncryptionMaterialUnavailableError();
           return runWithServerHttpBaseUrl(serverUrl, () =>
-            store.list({
-              sort: 'title_asc',
-              includeBody: false,
-              signal: options?.signal,
-            }),
+            store.readHeader(ref.artifactId, { signal: options?.signal }),
           );
         });
-        headers.set(serverId, inventory);
+        headers.set(key, header);
       }
-      const page = await inventory;
-      const artifact = page.items.find(
-        (item) => item.artifactId === ref.artifactId,
-      );
-      if (!artifact && page.coverage !== 'complete')
-        throw Object.assign(new Error('Artifact header inventory is unavailable'), {
-          code: 'artifact_read_unavailable',
-        });
-      if (artifact && Object.keys(artifact.header).length === 0)
-        throw new ArtifactEncryptionMaterialUnavailableError();
+      const artifact = await header;
       return artifact ? { header: artifact.header } : null;
     }),
   });
