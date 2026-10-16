@@ -21,6 +21,7 @@ const {
   openSshParamsCalls,
   transferOpenSshFile,
   localEnrollmentExecutor,
+  enrollmentResponse,
 } = vi.hoisted(() => ({
   spawnSync: vi.fn(),
   mkdirSync: vi.fn(),
@@ -36,6 +37,7 @@ const {
   localEnrollmentExecutor: { current: null as null | {
     runHappierText: (args: readonly string[], opts?: Readonly<{ onStdoutChunk?: (text: string) => void }>) => Promise<Readonly<{ status: number; stdout: string; stderr: string }>>;
   } },
+  enrollmentResponse: { current: null as null | { status: number; stdout: string; stderr: string } },
 }));
 
 const { isLoopbackPortAvailable, findAvailableLoopbackPort } = vi.hoisted(() => ({
@@ -72,6 +74,13 @@ vi.mock('@happier-dev/cli-common/ssh', async (importOriginal) => {
       lastOpenSshParams.current = params as unknown as Record<string, unknown>;
       openSshParamsCalls.push(params as unknown as Record<string, unknown>);
       if (String(params.remoteCommand).includes('enroll-remote')) {
+        if (enrollmentResponse.current) {
+          const response = enrollmentResponse.current;
+          params.onStdoutChunk?.(response.stdout);
+          params.signal?.throwIfAborted();
+          if (response.status !== 0 && params.rejectOnNonZero !== false) throw new Error('SSH command failed');
+          return response;
+        }
         const input = JSON.parse(String(params.input ?? '{}')) as { descriptor?: { homeServerIdentityId?: string } };
         const homeServerIdentityId = input.descriptor?.homeServerIdentityId ?? 'srv_live_remote_bootstrap';
         remoteEnrollmentCompleted = true;
@@ -175,10 +184,10 @@ vi.mock('@happier-dev/cli-common/systemTasks', async () => {
   };
 });
 
-import { createLiveRemoteSshBootstrapTaskKind, createLiveRemoteSshManageHostTaskKind } from './liveRemoteSshBootstrap';
+import { createLiveRemoteEnrollmentExecutor, createLiveRemoteSshBootstrapTaskKind, createLiveRemoteSshManageHostTaskKind } from './liveRemoteSshBootstrap';
 import { createServer } from 'node:http';
 import { encodeHomeQrInviteV2Payload, type HomeQrInviteV2 } from '@happier-dev/protocol';
-import { parseSshKnownHostLine } from '@happier-dev/cli-common/systemTasks';
+import { parseSshKnownHostLine, runRemoteHomeEnrollmentRecipe } from '@happier-dev/cli-common/systemTasks';
 
 function jsonResult(data: Record<string, unknown>) {
   return {
@@ -244,6 +253,7 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
     transferOpenSshFile.mockImplementation(async () => undefined);
     localEnrollmentExecutor.current = null;
     remoteEnrollmentCompleted = false;
+    enrollmentResponse.current = null;
     isLoopbackPortAvailable.mockResolvedValue(true);
     findAvailableLoopbackPort.mockImplementation(async (requestedPort: number) => requestedPort + 1);
     readFileSync.mockImplementation(() => {
@@ -367,6 +377,26 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
         data: {},
       });
     });
+  });
+
+  it('returns the released unsupported enrollment command as update-required through the live SSH executor and recipe', async () => {
+    enrollmentResponse.current = JSON.parse(await readFile(new URL(
+      '../../../../../../packages/cli-common/src/systemTasks/recipes/fixtures/authEnrollRemote.cli-v0.2.16.json', import.meta.url,
+    ), 'utf8'));
+    const approvePairingRequest = vi.fn(async () => {});
+    const error = await runRemoteHomeEnrollmentRecipe({
+      executor: createLiveRemoteEnrollmentExecutor({ ssh: { target: 'example.test', auth: 'agent' },
+        auth: { mode: 'agent' }, knownHostsMode: 'system' }),
+      homeTargetInput: { kind: 'https_url', url: 'https://home.example.test' },
+      approvePairingRequest, timeoutMs: 5_000,
+    }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ code: 'remote_cli_update_required' });
+    expect(approvePairingRequest).not.toHaveBeenCalled();
+    expect(openSshParamsCalls).toHaveLength(1);
+    expect(lastOpenSshParams.current).toMatchObject({ rejectOnNonZero: false, includeStdoutInError: false });
+    expect(String(lastOpenSshParams.current?.remoteCommand)).toContain('enroll-remote');
+    expect(String(error)).not.toContain('Authentication management');
+    expect(JSON.stringify(error)).not.toContain('Authentication management');
   });
 
   it('forwards the manage-host task AbortSignal to the canonical OpenSSH connection test', async () => {

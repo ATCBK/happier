@@ -5,6 +5,7 @@ import { parseHomeTargetInput } from '../../homeTarget/homeTarget.js';
 import type { HappierJsonExecutor } from '../executors/happierJsonExecutor.js';
 
 import { runRemoteHomeEnrollmentRecipe } from './remoteHomeEnrollmentRecipe.js';
+import { createOpenSshHappierJsonExecutor } from '../executors/openSshHappierJsonExecutor.js';
 
 const descriptor = {
   v: 1 as const,
@@ -52,11 +53,11 @@ function createExecutor(params: Readonly<{
 }
 
 describe('runRemoteHomeEnrollmentRecipe', () => {
-  it.each(['buffered', 'streaming'] as const)('requires a remote CLI update for released ordinary auth stdout over %s IO without disclosing it', async (processIO) => {
+  it('requires a remote CLI update for released ordinary auth request stdout without disclosing it', async () => {
     const seen: Array<Readonly<{ args: readonly string[]; input?: string; includeStdoutInError?: boolean }>> = [];
     const approvePairingRequest = vi.fn(async () => {});
     const error = await runRemoteHomeEnrollmentRecipe({
-      executor: createExecutor({ seen, lines: [olderAuthRequest] }), processIO,
+      executor: createExecutor({ seen, lines: [olderAuthRequest] }), processIO: 'buffered',
       homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
       approvePairingRequest, timeoutMs: 5_000,
     }).catch((error: unknown) => error);
@@ -69,6 +70,37 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
       expect(JSON.stringify(error)).not.toContain(secret);
     }
   });
+
+  it.each(['released', 'wrong-status', 'wrong-stderr', 'malformed'] as const)(
+    'classifies only the released unsupported streaming command through the SSH executor (%s)', async variant => {
+      const released: { status: number; stdout: string; stderr: string } = JSON.parse(readFileSync(
+        new URL('./fixtures/authEnrollRemote.cli-v0.2.16.json', import.meta.url), 'utf8',
+      ));
+      const response = { ...released,
+        ...(variant === 'wrong-status' ? { status: 0 } : {}),
+        ...(variant === 'wrong-stderr' ? { stderr: 'Authentication failed\n' } : {}),
+        ...(variant === 'malformed' ? { stdout: 'not JSON\n' } : {}),
+      };
+      const approvePairingRequest = vi.fn(async () => {});
+      const runRemoteText = vi.fn(async (params: Parameters<Parameters<typeof createOpenSshHappierJsonExecutor>[0]['runRemoteText']>[0]) => {
+        expect(params.remoteCommand).toContain("'enroll-remote' '--json-lines' '--home-target-stdin'");
+        expect(params.includeStdoutInError).toBe(false);
+        for (const chunk of [response.stdout.slice(0, 37), response.stdout.slice(37)]) params.onStdoutChunk?.(chunk);
+        return response;
+      });
+      const error = await runRemoteHomeEnrollmentRecipe({
+        executor: createOpenSshHappierJsonExecutor({ ssh: { target: 'guest.example.test', auth: 'agent' },
+          auth: { mode: 'agent' }, knownHostsMode: 'system', runRemoteText }),
+        homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+        approvePairingRequest, timeoutMs: 5_000,
+      }).catch((error: unknown) => error);
+      expect(error).toMatchObject({ code: variant === 'released' ? 'remote_cli_update_required' : 'invalid_cli_response' });
+      expect(approvePairingRequest).not.toHaveBeenCalled();
+      expect(runRemoteText).toHaveBeenCalledTimes(1);
+      expect(String(error)).not.toContain('Authentication management');
+      expect(JSON.stringify(error)).not.toContain('Authentication management');
+    },
+  );
 
   it.each(['buffered', 'streaming'] as const)('keeps malformed or unrecognized stdout invalid over %s IO', async (processIO) => {
     for (const response of [{}, { ...olderAuthRequest, pairing: null }, { ...olderAuthRequest, kind: 'unknown_event' }]) {

@@ -376,8 +376,9 @@ async function runSshCommandResult(params: Readonly<{
   knownHostsMode?: 'app' | 'system';
   remoteCommand: readonly string[];
   signal?: AbortSignal;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
   onStdoutChunk?: (text: string) => void;
+  includeStdoutInError?: boolean;
   input?: string;
 }>): Promise<RemoteCommandResult> {
   if ((params.knownHostsMode ?? 'app') === 'app' && params.knownHostsPath) {
@@ -397,6 +398,7 @@ async function runSshCommandResult(params: Readonly<{
     signal: params.signal,
     timeoutMs: params.timeoutMs,
     onStdoutChunk: params.onStdoutChunk,
+    includeStdoutInError: params.includeStdoutInError,
     input: params.input,
     rejectOnNonZero: false,
   });
@@ -508,8 +510,9 @@ async function runSshPosixCommandResult(params: Readonly<{
   knownHostsMode?: 'app' | 'system';
   shellCommand: string;
   signal?: AbortSignal;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
   onStdoutChunk?: (text: string) => void;
+  includeStdoutInError?: boolean;
   input?: string;
 }>): Promise<RemoteCommandResult> {
   return await runSshCommandResult({
@@ -521,6 +524,7 @@ async function runSshPosixCommandResult(params: Readonly<{
     signal: params.signal,
     timeoutMs: params.timeoutMs,
     onStdoutChunk: params.onStdoutChunk,
+    includeStdoutInError: params.includeStdoutInError,
     input: params.input,
   });
 }
@@ -1175,7 +1179,7 @@ export function createLiveRemoteEnrollmentExecutor(params: Readonly<{
       onStdoutChunk,
       includeStdoutInError,
       input,
-    }) => await runSshPosixText({
+    }) => await runSshPosixCommandResult({
       ssh: params.ssh,
       auth: params.auth,
       knownHostsPath: resolveKnownHostsPath(params.ssh, params.knownHostsMode),
