@@ -1,9 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { SessionWorkflowActivityHeadlineV1Schema } from '@happier-dev/protocol/sessions/work/workflow/sessionWorkflowActivityHeadlineV1';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit';
 import { buildSessionListRenderableFromSession } from '../listing/sessionListRenderable';
 import { projectUiSessionAwareness } from './sessionAwareness';
 
 describe('UI Session awareness acquisition adapter', () => {
+    it('does not parse absent workflow headlines while projecting ordinary Sessions', () => {
+        const session = createSessionFixture({ encryptionMode: 'plain', metadata: { path: '/work', host: 'host' } });
+        const parse = vi.spyOn(SessionWorkflowActivityHeadlineV1Schema, 'safeParse');
+        try {
+            for (let index = 0; index < 20; index += 1) {
+                expect(projectUiSessionAwareness(session, 1_000).encryption).toBe('plain');
+            }
+            expect(parse).not.toHaveBeenCalled();
+        } finally { parse.mockRestore(); }
+    });
     it('uses the same presentation title for detail and list awareness', () => {
         const session = createSessionFixture({ encryptionMode: 'plain', metadata: {
             path: '/work', host: 'host', name: 'Original name', summary: { text: 'Current summary', updatedAt: 100 },

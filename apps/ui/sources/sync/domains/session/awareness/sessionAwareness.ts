@@ -76,7 +76,8 @@ export function createUiSessionAwarenessInput(
     const controlState = readSessionTerminalControlServiceabilityStateV1(
         hydrated ? ownerMetadata?.terminal?.controlServiceabilityV1 : metadata?.terminalControlServiceabilityV1,
     );
-    const workflow = hydrated ? SessionWorkflowActivityHeadlineV1Schema.safeParse(ownerMetadata?.sessionWorkflowActivityHeadlineV1) : null;
+    const workflowHeadline = hydrated ? ownerMetadata?.sessionWorkflowActivityHeadlineV1 : null;
+    const workflow = workflowHeadline == null ? null : SessionWorkflowActivityHeadlineV1Schema.safeParse(workflowHeadline);
     const fork = hasReadableMetadata
         ? hydrated ? presentationMetadata?.forkV1 : session.forkV1
         : undefined;
