@@ -300,8 +300,10 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                         <PageColumnProvider value={widePage ? 'wide' : 'reading'}>
                             <View ref={pageColumnRef} style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
                                 <PopoverScope boundaryRef={pageColumnRef}>
-                                {/* The six-page header (12s1); phones keep the navigation bar and the page cockpit. */}
+                                {/* The six-page header (12s1) always spans the wide page column so it never shifts between
+                                    pages; each body keeps its own column above. Phones keep the navigation bar and the page cockpit. */}
                                 {deviceType !== 'phone' ? (
+                                    <PageColumnProvider value="wide">
                                     <ProjectShellHeaderHost
                                         workspaceRef={workspaceRef}
                                         page={props.page ?? 'overview'}
@@ -313,6 +315,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                                         menuActions={[{ id: 'terminal', title: t('settings.terminal'),
                                             onSelect: () => pane.openBottom({ tabId: 'terminal' }) }]}
                                     />
+                                    </PageColumnProvider>
                                 ) : props.surface === undefined || props.surface === props.page ? (
                                     <ProjectPhoneAtmosphereHeader>
                                         <ProjectPhoneCheckoutRow
