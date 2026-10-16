@@ -566,7 +566,7 @@ function DeclaredScriptRow(
   const operation = useProjectScriptRun(props.workspace, { kind: 'named', name: props.name }, props.controller.accountId);
   const source = describeProjectCommandSource(props.declaration.source, props.invocation);
   const resolvedChoice = resolveProjectExecutionChoiceV1({
-    execution: props.declaration.execution,
+    execution: props.declaration.execution ?? 'primary',
     scriptName: props.name,
     sourceMachineId: props.workspace.machineId,
     preference: props.preference ? { status: 'ready', value: props.preference } : { status: 'unavailable' },

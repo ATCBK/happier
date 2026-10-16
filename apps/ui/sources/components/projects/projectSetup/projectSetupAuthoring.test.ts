@@ -20,6 +20,7 @@ import { createPlainProjectAccountRowListFixture, createProjectAccountRowsFixtur
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
@@ -144,6 +145,48 @@ async function currentGuidance(workspace: Parameters<typeof readProjectSetupAgen
 }
 
 describe('Project setup return inspection data', () => {
+    it('keeps an omitted-execution Script on SOURCE while its Run is pending despite a saved worker preference', async () => {
+        const { ProjectScriptsBody } = await import('./ProjectScriptsBody');
+        const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
+        const manifest = { version: 1, scripts: { build: { source: { kind: 'command', command: 'build' } } } };
+        const inspection = ProjectDefinitionInspectOutputSchema.parse({
+            definition: { basis: { kind: 'present', hash: 'a'.repeat(64) }, document: {
+                status: 'valid', bytes: JSON.stringify(manifest), original: manifest, manifest, diagnostics: [],
+            } },
+            detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
+        });
+        homes.answer(homeId, `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`, { body: { status: 'present', revision: 1,
+            content: { t: 'plain', v: { enabled: true, destination: { kind: 'machine', machineId: 'worker-b' },
+                unavailable: 'ask', allowAdHoc: false, scriptOverrides: {}, services: {} } } } });
+        homes.answer(homeId, '/v1/machines/managed/actions/list', { body: { machines: [] } });
+        const pending = createDeferred<void>();
+        let pendingReads = 0;
+        machineTransport.mockResolvedValue(inspection);
+        const actionSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'projects.script.run': ['ui'] } } };
+        homes.answer(homeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: actionSettings } } });
+        const { settingsParse } = await import('@/sync/domains/settings/settings');
+        storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, settingsParse(actionSettings), 1);
+        homes.answer(homeId, '/v1/actions/projects.script.run/execution-authorization', { select: async () => {
+            pendingReads++;
+            await pending.promise;
+            return { status: 403, body: { error: 'permission_denied' } };
+        } });
+        const screen = await renderScreen(React.createElement(ProjectScriptsBody, { workspace, testID: 'scripts' }));
+        try {
+            await vi.waitFor(() => expect(screen.findByTestId('scripts.script:build.run')).not.toBeNull());
+            await vi.waitFor(() => expect(homes.requestsFor(`${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`).length).toBeGreaterThan(1));
+            await flushHookEffects();
+            await act(async () => { await screen.pressByTestIdAsync('scripts.script:build.run'); });
+            await vi.waitFor(() => expect(pendingReads).toBeGreaterThan(0));
+            await flushHookEffects();
+            expect(homes.requestsFor('/v1/machines/managed/actions/list')).toEqual([]);
+        } finally {
+            await screen.unmount();
+            pending.resolve();
+            await flushHookEffects();
+        }
+    });
+
     it.each([
         undefined,
         { kind: 'unprepared', reviewedEffectDigest: 'current-effect' },
