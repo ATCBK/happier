@@ -13,7 +13,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { isPluginUiResourceReadAuthorityLost } from '@happier-dev/plugin-ui/advanced';
 
 import { randomUUID } from '@/platform/randomUUID';
-import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScope, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { widgetAreaLayoutBaseSurface } from '@/components/widgets/area/widgetAreaLayoutSelection';
@@ -22,7 +22,6 @@ import { resumeActionExecutionResult } from '@/components/approvals/actionApprov
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { t } from '@/text';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 export type ProjectDashboardsState = Readonly<{
@@ -95,7 +94,7 @@ export function useWidgetAreaLayouts(
   const surfaceKey = surface ? JSON.stringify([
     surface.serverId, surface.accountId, buildWidgetSurfaceArtifactIdV1(surface), surface.artifactId ?? null,
   ]) : null;
-  const activeLifetime = captureActiveServerAccountScopeLifetime();
+  const activeLifetime = useActiveServerAccountScopeLifetime();
   const lifetime = activeLifetime && areServerAccountScopesEqual(activeLifetime.scope, scope) ? activeLifetime : null;
   const retained = React.useMemo(() => {
     if (!lifetime) return null;

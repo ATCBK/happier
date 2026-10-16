@@ -23,6 +23,29 @@ const { useWidgetAreaLayouts } = await import('./useProjectDashboards');
 
 afterEach(standardCleanup);
 
+it('renews one mounted inventory read when the same Account lifetime retires', async () => {
+    const previous = storage.getState();
+    const home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://layout-renewal.test', accountId: 'account' }], route: () => undefined });
+    const server = home.homes.a!;
+    const scope = { serverId: server.id, accountId: 'account' };
+    const surface: WidgetSurfaceRefV1 = { ...scope, owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };
+    const execute = vi.fn<WidgetAreaLayoutsExecute>(async () => ({ ok: true, result: { surface, layouts: [] } }));
+    publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
+    storage.setState({ artifacts: {}, profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }) });
+    try {
+        const hook = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
+        await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+        await act(async () => {
+            retireActiveServerAccountScopeLifetime();
+            await Promise.resolve();
+        });
+        await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+        await act(async () => { await Promise.resolve(); });
+        expect(execute).toHaveBeenCalledTimes(2);
+        await hook.unmount();
+    } finally { retireActiveServerAccountScopeLifetime(); storage.setState(previous); await home.dispose(); }
+});
+
 it.each(['network_error', 'denied', 'permission_denied'])(
     'retains only authorized Account inventory across %s and a warm mount with an unanswered read', async errorCode => {
     const previous = storage.getState();

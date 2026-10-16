@@ -4,10 +4,9 @@ import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/doma
 import { createProjectSourcesController, type ProjectSourcesState } from './projectSourcesController';
 import { observeProjectSources } from './observeProjectSources';
 import { readProjectSourceAddressMachines } from './projectSourceAddressMachines';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { readProjectSourcesCatalog } from './projectSourcesCatalog';
-import { useMachineListStatusForServer } from '@/sync/store/hooks';
+import { useActiveServerAccountScopeLifetime, useMachineListStatusForServer } from '@/sync/store/hooks';
 
 /** The Sources' action executor, loaded at first use (shared with Open's repository address). */
 export function useProjectSourceActionExecute() {
@@ -23,9 +22,10 @@ export function useProjectSourceActionExecute() {
 /** The screen opts into catalog demand; mounting a closed picker does no work. */
 export function useProjectSources(scope: ServerAccountScope, options: Readonly<{ enabled?: boolean }> = {}) {
     const execute = useProjectSourceActionExecute();
-    const lifetime = captureActiveServerAccountScopeLifetime();
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const lifetime = activeLifetime && areServerAccountScopesEqual(activeLifetime.scope, scope) ? activeLifetime : null;
     const inventoryStatus = useMachineListStatusForServer(scope.serverId);
-    const catalog = lifetime && areServerAccountScopesEqual(lifetime.scope, scope) ? readProjectSourcesCatalog(lifetime, execute) : null;
+    const catalog = lifetime ? readProjectSourcesCatalog(lifetime, execute) : null;
     const controller = React.useMemo(() => createProjectSourcesController({ serverId: scope.serverId, accountId: scope.accountId }, execute,
         () => readProjectSourceAddressMachines(scope.serverId), catalog?.read),
         [scope.serverId, scope.accountId, execute, catalog]);

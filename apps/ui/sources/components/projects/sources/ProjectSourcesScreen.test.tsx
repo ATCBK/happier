@@ -16,6 +16,7 @@ import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, Wid
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable,
   publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -155,6 +156,22 @@ function signIn() {
 }
 
 describe('Projects › Sources', () => {
+  it('renews the mounted catalog exactly once when the same Account lifetime retires', async () => {
+    signIn();
+    const screen = await renderScreen(<ProjectSourcesScreen />);
+    await vi.waitFor(() => expect(shared.calls.filter((call) => call.actionId === 'projects.sources.list')).toHaveLength(1));
+
+    await act(async () => {
+      retireActiveServerAccountScopeLifetime();
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => expect(shared.calls.filter((call) => call.actionId === 'projects.sources.list')).toHaveLength(2));
+    expect(screen.findByTestId('projects.sources.empty')).toBeTruthy();
+    await act(async () => { await Promise.resolve(); });
+    expect(shared.calls.filter((call) => call.actionId === 'projects.sources.list')).toHaveLength(2);
+  });
+
   it('routes Delete directly to Action admission without a caller-owned confirmation floor', async () => {
     signIn();
     shared.sources = [{ id: 'source-1', revision: 1, name: 'happier', audience: [], createdByAccountId: 'account-1',
