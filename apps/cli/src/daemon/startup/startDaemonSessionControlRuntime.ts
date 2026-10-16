@@ -11026,8 +11026,11 @@ export async function startDaemonSessionControlRuntime(
       }));
   const projectManagedServices: Pick<
     ReturnType<typeof createManagedServicesOwner>,
-    'listProjectServices' | 'resolveProjectService'
+    'listProjectServices' | 'resolveProjectService' | 'readProcessRoots'
   > = {
+    readProcessRoots: () =>
+      localServicesPluginRuntimeController.getState().activeRegistry
+        ?.projectManagedServices.readProcessRoots() ?? [],
     listProjectServices: (options) => {
       const owner =
         localServicesPluginRuntimeController.getState().activeRegistry

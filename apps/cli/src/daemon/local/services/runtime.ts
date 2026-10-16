@@ -239,7 +239,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     internalEndpointUrls?: () => readonly string[];
     runTargets?: () => Promise<readonly LocalServiceLauncherRunTarget[]> | readonly LocalServiceLauncherRunTarget[];
     projectServiceStarter?: ProjectServiceDeclarationStarterInput;
-    projectManagedServices?: Pick<ReturnType<typeof createManagedServicesOwner>, 'listProjectServices' | 'resolveProjectService'>;
+    projectManagedServices?: Pick<ReturnType<typeof createManagedServicesOwner>, 'listProjectServices' | 'resolveProjectService' | 'readProcessRoots'>;
     resolveSessionWorkspacePaths?: (sessionId: string) => Promise<readonly string[]> | readonly string[];
     hostedWebStaticAssets?: Omit<HostedWebStaticAssetLifecycleOptions, 'registerPreview' | 'unregisterPreview'>;
 }>): LocalServicesDaemonRuntime {
