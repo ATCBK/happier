@@ -189,6 +189,21 @@ function measureCanvas(screen: Awaited<ReturnType<typeof renderScreen>>, width: 
 }
 
 describe('WorkspaceShell', () => {
+    it('shows the registered split-down shortcut in the tab menu and withdraws it when shortcuts are disabled', async () => {
+        const { KeyHint } = await import('@/components/ui/keyboard/KeyHint');
+        const screen = await renderWorkspace(initialState());
+        const tab = screen.findAllByTestId('workspace-tab-a').find(node => typeof node.props.onLongPress === 'function');
+        if (!tab) throw new Error('The workspace tab must offer its menu');
+        await act(async () => { tab.props.onLongPress({}); });
+        const splitHint = () => screen.findByTestId('workspace-tab-menu-split-down')?.findAllByType(KeyHint);
+        expect(splitHint()?.map(node => node.props.label)).toEqual(['Alt+Shift+\\']);
+
+        const { storage } = production[7];
+        await act(async () => { storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutsV2Enabled: false } }); });
+        expect(screen.findByTestId('workspace-tab-menu-split-down')).not.toBeNull();
+        expect(splitHint()).toEqual([]);
+    });
+
     it('provides an accessible new-tab action and closes that tab through the registered keyboard owner', async () => {
         const screen = await renderWorkspace(initialState());
         const button = screen.findHostByTestId('workspace-new-tab-group_1');
