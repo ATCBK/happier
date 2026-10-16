@@ -1,3 +1,4 @@
+import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -52,13 +53,41 @@ describe("apiRateLimitPolicy", () => {
         );
     });
 
-    it("parses HAPPIER_SERVER_TRUST_PROXY as a boolean or hop count", () => {
+    it("parses HAPPIER_SERVER_TRUST_PROXY booleans", () => {
         expect(resolveApiTrustProxy({})).toBeUndefined();
         expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "true" })).toBe(true);
-        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "1" })).toBe(1);
         expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "false" })).toBe(false);
-        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "0" })).toBe(0);
-        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "2" })).toBe(2);
+    });
+
+    it("keys ip rate limits by X-Forwarded-For only when the peer is a listed proxy", async () => {
+        const app = Fastify({ trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "10.0.0.0/8, 127.0.0.1" }) });
+        const keyGen = createApiRateLimitKeyGenerator({}, { strategy: "ip-only" });
+        app.get("/key", async (request) => ({ key: await keyGen(request) }));
+        const keyFrom = async (remoteAddress: string) => {
+            const res = await app.inject({
+                method: "GET",
+                url: "/key",
+                remoteAddress,
+                headers: { "x-forwarded-for": "198.51.100.7" },
+            });
+            return res.json().key;
+        };
+
+        try {
+            expect(await keyFrom("10.1.2.3")).toBe("ip:198.51.100.7");
+            expect(await keyFrom("127.0.0.1")).toBe("ip:198.51.100.7");
+            expect(await keyFrom("203.0.113.9")).toBe("ip:203.0.113.9");
+        } finally {
+            await app.close();
+        }
+    });
+
+    it("rejects a HAPPIER_SERVER_TRUST_PROXY hop count instead of trusting nothing", () => {
+        for (const hops of ["0", "1", "2"]) {
+            expect(() => resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: hops })).toThrow(
+                /HAPPIER_SERVER_TRUST_PROXY.*addresses or CIDRs/,
+            );
+        }
     });
 
     it("keys authenticated requests by verified user id (not by raw Authorization header)", async () => {
