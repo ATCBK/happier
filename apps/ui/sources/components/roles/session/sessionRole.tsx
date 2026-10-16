@@ -218,7 +218,7 @@ export function SessionRolePopover(props: Readonly<{
             portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
         >
             {({ maxHeight, maxWidth }) => (
-                <FloatingOverlay maxHeight={maxHeight} scrollEnabled={false} surfaceChrome="theme">
+                <FloatingOverlay role="panel" maxHeight={maxHeight} scrollEnabled={false} surfaceChrome="theme">
                     {/* A fixed frame, so the rail's grid scrolls inside it and its footer stays at the foot.
                         The Popover's bounds include its own edge padding, so the frame is that much smaller;
                         at the full bounds the right column and "Manage roles" were clipped at the edge. */}

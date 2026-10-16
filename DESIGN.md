@@ -375,10 +375,14 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
   .45, Strong .35).
   Light hangs its band from white (`invert(1) brightness() invert(1)`), so a white page stays white
   and the darkest backdrop still carries primary ink. Saturation is kept at 1.05, never reduced
-  (our one deviation from monocode). Centred dialogs (`ModalCardFrame`: alerts, prompts, the command
-  palette) carry the page at a heavy coat behind their blur, as monocode's modals do: 55% at Subtle,
-  70% Medium, 85% Strong, still landing on the floating paint over a plain page; menus and popovers
-  keep the hair. On glass with a picture or the live desktop behind it, faint (secondary) ink takes a
+  (our one deviation from monocode). A floating surface declares its role on the material owner
+  (`FloatingSurfaceRole`): **panels** carry the page at a heavy coat behind their blur, as monocode's
+  modals do: 55% at Subtle, 70% Medium, 85% Strong, still landing on the floating paint over a plain
+  page. Panels are centred dialogs (`ModalCardFrame`: alerts, prompts, the command palette), phone
+  sheets and large anchored panels (`FloatingOverlay role="panel"`: Add widget, About this widget and
+  the other widget flows, Workflow run inputs, Board settings, the workflow examples gallery, the
+  session role panel). **Menus**, tooltips and small popovers keep the hair (owner, 2026-10-16).
+  Custom glass values, Solid and Reduce Transparency apply to both roles unchanged. On glass with a picture or the live desktop behind it, faint (secondary) ink takes a
   stronger step, primary ink at 70%, so it holds about 3:1 over a bright sky; ordinary pages and
   unbacked glass keep the theme's secondary ink.
   Glass identity takes priority over forcing muted ink to meet extreme-backdrop contrast. Accepted limits are secondary ink over saturated

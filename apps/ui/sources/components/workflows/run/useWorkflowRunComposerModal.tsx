@@ -91,7 +91,7 @@ export function useWorkflowRunComposerModal(params: Readonly<{
             onRequestClose={params.props.onCancel}
         >
             {({ maxHeight, maxWidth }) => (
-                <FloatingOverlay maxHeight={maxHeight} surfaceChrome="theme"
+                <FloatingOverlay role="panel" maxHeight={maxHeight} surfaceChrome="theme"
                     containerStyle={{ width: Math.min(maxWidth, 520) }}>
                     <WorkflowRunComposer {...composerProps} autoFocusComposer={composerProps.autoFocusComposer ?? true} triggerNamesShortcut />
                 </FloatingOverlay>

@@ -27,6 +27,7 @@ import { surfaceUsesRim } from '@/components/ui/surfaces/surfaceEdgeTreatment';
 
 import { FLOATING_OVERLAY_METRICS } from './floatingOverlayMetrics';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
+import type { FloatingSurfaceRole } from '@/components/ui/glass/glassMaterial';
 import { createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import { useGlassSurfaceBackdropTone, useGlassSurfaceColor } from '@/components/ui/glass/useGlassSurfaceColor';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
@@ -133,6 +134,12 @@ interface FloatingOverlayProps {
     /** Selects the existing border/shadow chrome; both variants follow the floating material. */
     surfaceChrome?: 'modal' | 'theme';
     /**
+     * The surface's job on the floating material: `panel` for a large anchored panel (Add widget, About
+     * this widget, run inputs, Board settings) takes the dialogs' heavy coat; `menu` (default) for menus,
+     * pickers and small popovers keeps the hair of tint.
+     */
+    role?: FloatingSurfaceRole;
+    /**
      * Initial visibility for scroll edge fades before measurement.
      * Useful for optimistic trailing-edge fades (e.g., bottom: true for lists
      * that typically have more content below).
@@ -160,6 +167,7 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
         edgeIndicators = false,
         arrow = false,
         surfaceChrome = 'modal',
+        role = 'menu',
         containerStyle,
         scrollViewStyle,
         scrollViewRef,
@@ -297,7 +305,7 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
             containerStyle,
             containerPaint,
         ]}>
-            <GlassSurface surfaceGroup="floating" style={[
+            <GlassSurface surfaceGroup="floating" floatingRole={role} style={[
                 surfaceChrome === 'theme' ? styles.themedSurfaceClip : styles.modalClipSurface,
                 { maxHeight },
             ]}>

@@ -144,8 +144,10 @@ Strong .35 (primary ink keeps 4.5:1 over the balloons' bright sky); Strong .7 ov
 `contrast()`, because it lifts dark backdrops toward mid-grey; the light wallpaper shell still uses
 it in its white-anchored tone. Secondary ink would measure about 1.7–1.9:1 over the brightest sky, so backed glass
 strengthens it (below) rather than dimming the picture to a slab. Wallpaper chrome and sidebar planes keep
-their heavy coat over a `brightness(.65)` tone in dark. Dialogs pass `dialog` to `GlassSurface`
-(`ModalCardFrame` owns it): `GLASS_DIALOG_COATS` gives Subtle .55, Medium .7, Strong .85, painted
+their heavy coat over a `brightness(.65)` tone in dark. Panels pass `floatingRole="panel"` to `GlassSurface`
+(`ModalCardFrame` for dialogs and phone sheets; `FloatingOverlay role="panel"` for large anchored panels such as
+Add widget, the widget flows, Workflow run inputs and Board settings; menus keep the default `menu` role and its
+hair, owner 2026-10-16): `GLASS_PANEL_COATS` gives Subtle .55, Medium .7, Strong .85, painted
 as a fixed `color-mix` coat with k ≤ 1 − α and the coat solved so a plain page lands on
 `edge.floatingFill`. Faint ink: a translucent Elements or floating `GlassSurface` with a band,
 wallpaper or live desktop behind it redefines `--colors-text-secondary` for its subtree as

@@ -273,29 +273,37 @@ describe('web glass material', () => {
             standardCleanup();
         }
     });
-    it('gives dialogs the page at a heavy coat at Subtle, landing on the floating paint over a plain page, while menus keep their hair of tint', async () => {
+    it('gives panels (dialogs and anchored panels) the page at a heavy coat at Subtle, landing on the floating paint over a plain page, while menus keep their hair of tint', async () => {
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
         const { glassPresetMaterials } = await import('./glassMaterial');
+        const { FloatingOverlay } = await import('@/components/ui/overlays/FloatingOverlay');
         const { darkTheme } = await import('@/theme');
         themeMode.dark = true;
         const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
-        const paint = async (dialog: boolean) => {
+        const paint = async (surface: React.ReactNode) => {
             const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
-                <GlassSurface surfaceGroup="floating" dialog={dialog}><DraftInput /></GlassSurface>
+                {surface}
             </GlassMaterialSettingsProvider>);
             const style = flattenTestStyle(screen.findAll(hasBackdrop)[0]!.props.style) as Record<string, string>;
             standardCleanup();
             const mix = /color-mix\(in srgb, (rgba?\([^)]*\)|#[0-9a-f]+) (\d+(?:\.\d+)?)%, transparent\)/i.exec(style.backgroundColor!);
             return { filter: style.backdropFilter!, coat: mix ? rgb(mix[1]!) : null, opacity: mix ? Number(mix[2]) / 100 : null };
         };
-        const dialog = await paint(true);
-        expect(dialog.opacity).toBeGreaterThanOrEqual(0.5);
         const page = rgb(darkTheme.colors.surface.base);
-        renderGlassOver({ filter: dialog.filter, coat: dialog.coat!, opacity: dialog.opacity!, backdrop: page })
-            .forEach((value, channel) => expect(Math.abs(value - rgb(darkTheme.colors.edge.floatingFill)[channel]!)).toBeLessThanOrEqual(1));
-        // Menus and popovers keep the 2% hair; their coat is the CSS material variable, not a fixed heavy mix.
-        const menu = await paint(false);
-        expect(menu.opacity === null || menu.opacity <= 0.02).toBe(true);
+        // A dialog declares the panel role on the material; an anchored panel declares it on the floating overlay.
+        for (const panel of [
+            await paint(<GlassSurface surfaceGroup="floating" floatingRole="panel"><DraftInput /></GlassSurface>),
+            await paint(<FloatingOverlay role="panel" scrollEnabled={false}><DraftInput /></FloatingOverlay>),
+        ]) {
+            expect(panel.opacity).toBeGreaterThanOrEqual(0.5);
+            renderGlassOver({ filter: panel.filter, coat: panel.coat!, opacity: panel.opacity!, backdrop: page })
+                .forEach((value, channel) => expect(Math.abs(value - rgb(darkTheme.colors.edge.floatingFill)[channel]!)).toBeLessThanOrEqual(1));
+        }
+        // Menus and popovers keep Subtle's hair, raised only as far as the fixed point needs; never a heavy mix.
+        for (const menu of [
+            await paint(<GlassSurface surfaceGroup="floating"><DraftInput /></GlassSurface>),
+            await paint(<FloatingOverlay scrollEnabled={false}><DraftInput /></FloatingOverlay>),
+        ]) expect(menu.opacity === null || menu.opacity <= 0.07).toBe(true);
     });
     it('keeps rendering glass whose paint is a live theme variable rather than a concrete colour', async () => {
         themeMode.dark = true;

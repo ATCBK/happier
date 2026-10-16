@@ -68,11 +68,14 @@ export type GlassBackdropGround = Readonly<{ page: string; solid: string }>;
 export type GlassBackdropMap = Readonly<{ tone: string; coat: string | null; opacity?: number }>;
 
 /**
- * Centred dialogs carry the page at a heavy coat behind their blur, as monocode's modals do (the page
- * colour at 55% in dark at Subtle); menus and popovers keep the tint's hair. Over the plain page a
- * dialog still lands on its floating paint. Medium and Strong scale up from Subtle.
+ * How a floating surface declares its job. Panels (centred dialogs, phone sheets and large anchored
+ * panels such as Add widget, About this widget or Workflow run inputs) carry the page at a heavy coat
+ * behind their blur, as monocode's modals do (the page colour at 55% in dark at Subtle); menus,
+ * tooltips and small popovers keep the tint's hair (owner, 2026-10-16). Over the plain page a panel
+ * still lands on its floating paint. Medium and Strong scale up from Subtle.
  */
-export const GLASS_DIALOG_COATS = { subtle: 0.55, medium: 0.7, strong: 0.85 } as const;
+export type FloatingSurfaceRole = 'menu' | 'panel';
+export const GLASS_PANEL_COATS = { subtle: 0.55, medium: 0.7, strong: 0.85 } as const;
 
 const toneNumber = (value: number) => String(Math.round(value * 1000) / 1000);
 const parseRgb = (value: string): readonly [number, number, number] | null => {
@@ -146,7 +149,7 @@ function solveGlassFixedPoint(compression: number, alpha: number, ground: GlassB
  * use the fixed-point model; picture-backed shell planes keep a dimming tone under their heavy coat.
  * Custom, Solid, Reduce Transparency and unbacked surfaces return null and paint exactly as set.
  */
-export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, dialog = false): GlassBackdropMap | null {
+export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, panel = false): GlassBackdropMap | null {
     const wallpaperPlane = environment.atmosphereBehind === 'wallpaper' && (group === 'chrome' || group === 'sidebar');
     if ((group !== 'floating' && group !== 'card' && !wallpaperPlane) || readGlassPreset(settings) === 'custom') return null;
     const { opacity } = resolveGlassSurfaceMaterial(settings, group, environment).material;
@@ -154,9 +157,9 @@ export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: 
     if (group === 'floating' || group === 'card') {
         const picture = environment.atmosphereBehind === 'band' || environment.atmosphereBehind === 'wallpaper';
         const tint = settings.glassTintIntensity ?? 'subtle';
-        if (group === 'floating' && dialog) {
-            // The heavy coat carries the dialog: the backdrop passes at most at 1 − α, never brightened.
-            const alpha = GLASS_DIALOG_COATS[tint];
+        if (group === 'floating' && panel) {
+            // The heavy coat carries the panel: the backdrop passes at most at 1 − α, never brightened.
+            const alpha = GLASS_PANEL_COATS[tint];
             const compression = Math.min(1 - alpha, dark ? 1 : GLASS_BACKDROP_COMPRESSION[tint].plain.floating.light);
             return { opacity: alpha, ...solveGlassFixedPoint(compression, alpha, ground) };
         }
@@ -171,6 +174,6 @@ export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: 
 }
 
 /** The backdrop filter of `resolveGlassBackdropMap`, or '' when the surface keeps its exact paint. */
-export function resolveGlassBackdropTone(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, dialog = false): string {
-    return resolveGlassBackdropMap(settings, group, dark, environment, ground, dialog)?.tone ?? '';
+export function resolveGlassBackdropTone(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, panel = false): string {
+    return resolveGlassBackdropMap(settings, group, dark, environment, ground, panel)?.tone ?? '';
 }

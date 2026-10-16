@@ -11,7 +11,7 @@ import { useReduceTransparency } from '@/hooks/ui/useReduceTransparency';
 import { getBlurViewComponent } from './blurMaterial';
 import { getGlassViewComponent, useLiquidGlassAvailable } from './liquidGlass';
 import { resolveGlassCapability } from './resolveGlassCapability';
-import { GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, resolveGlassBackdropMap, resolveGlassSurfaceMaterial, type GlassSurfaceGroup } from './glassMaterial';
+import { GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, resolveGlassBackdropMap, resolveGlassSurfaceMaterial, type FloatingSurfaceRole, type GlassSurfaceGroup } from './glassMaterial';
 import { useGlassMaterialSettings } from './useGlassMaterialSettings';
 import { useGlassRuntimeEnvironment } from './glassRuntimeEnvironment';
 import { glassElementsCoatColor, glassSurfaceBackgroundColor, glassSurfaceTintColor, resolveGlassSurfacePlaneMaterial, glassSurfacePlaneBackdropStyle, type AtmosphereContentCoat } from './glassSurfacePaint';
@@ -59,8 +59,11 @@ export type GlassSurfaceProps = Pick<ViewProps, 'accessibilityRole' | 'accessibi
     atmosphereCoat?: AtmosphereContentCoat;
     /** Structural surfaces select a finish; chrome planes keep their existing flat material. */
     finishRole?: HappierSurfaceFinishRole | null;
-    /** A centred dialog (modal card): the page at a heavy coat behind the blur instead of a menu's hair of tint. */
-    dialog?: boolean;
+    /**
+     * A floating surface's job: `panel` (dialogs, sheets, large anchored panels) carries the page at a
+     * heavy coat behind the blur; `menu` (the default: menus, tooltips, small popovers) keeps the hair of tint.
+     */
+    floatingRole?: FloatingSurfaceRole;
     /** A shared surface passes the state-settled overlay; null explicitly stays flat. */
     gradient?: HappierSurfaceGradient | null;
 }>;
@@ -121,18 +124,18 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const intensity = props.blurIntensity ?? GLASS_BLUR_INTENSITY[material.blur as keyof typeof GLASS_BLUR_INTENSITY];
     const toneReduceTransparency = reduceTransparency || environment.reduceTransparency === true;
     // Resolving the fixed point reads live theme variables from the document; do it once per input change.
-    const dialog = props.dialog === true && group === 'floating';
-    const [tintColor, backdropTone, dialogCoatOpacity] = React.useMemo(() => {
+    const panel = props.floatingRole === 'panel' && group === 'floating';
+    const [tintColor, backdropTone, panelCoatOpacity] = React.useMemo(() => {
         const toneEnvironment = { ...environment, reduceTransparency: toneReduceTransparency };
         // The solid paint this surface shows over the plain page: the glass resolves to it there.
         const groundSolid = group === 'card' ? glassElementsCoatColor(solidColor, theme.colors.surface.base) : solidColor;
-        const map = resolveGlassBackdropMap(settings, group, theme.dark, toneEnvironment, { page: theme.colors.surface.base, solid: groundSolid }, dialog);
+        const map = resolveGlassBackdropMap(settings, group, theme.dark, toneEnvironment, { page: theme.colors.surface.base, solid: groundSolid }, panel);
         return [
-            glassSurfaceTintColor({ color: groundSolid, ink: theme.colors.text.primary, dark: theme.dark, settings, group, page: theme.colors.surface.base, environment: toneEnvironment, dialog }),
+            glassSurfaceTintColor({ color: groundSolid, ink: theme.colors.text.primary, dark: theme.dark, settings, group, page: theme.colors.surface.base, environment: toneEnvironment, panel }),
             map?.tone ?? '',
             map?.opacity,
         ] as const;
-    }, [solidColor, theme, settings, group, environment, toneReduceTransparency, dialog]);
+    }, [solidColor, theme, settings, group, environment, toneReduceTransparency, panel]);
 
     const capability = props.enabled === false || props.atmosphereCoat === 'opaque' || (transparentPlane && Platform.OS !== 'web')
         ? 'solid'
@@ -229,7 +232,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
         // `createBackdropWebStyle` returns web `CSSProperties` (backdrop-filter + -webkit- prefix +
         // tint); cast to the RN-web `ViewStyle` at this web boundary.
         ? createBackdropWebStyle({
-            backgroundColor: glassSurfaceBackgroundColor(tintColor, group, group === 'card' ? false : props.nested, false, dialogCoatOpacity),
+            backgroundColor: glassSurfaceBackgroundColor(tintColor, group, group === 'card' ? false : props.nested, false, panelCoatOpacity),
             blurPx: props.blurIntensity === undefined ? GLASS_BLUR_RADIUS_PX[material.blur as keyof typeof GLASS_BLUR_RADIUS_PX] : Math.round(intensity / 5),
             surfaceGroup: group,
             backdropTone: inheritsTranslucentMaterial ? undefined : backdropTone,

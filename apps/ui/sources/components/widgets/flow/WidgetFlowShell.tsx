@@ -69,7 +69,7 @@ export function AnchoredWidgetShell(props: Readonly<{
                 // A definite width, capped by the room the Popover found inside its own edge padding.
                 <View style={{ alignSelf: 'flex-start', width: Math.min(props.width, maxWidth - 2 * EDGE_PADDING_PX) }}>
                     {/* The flow scrolls its own body inside this room, so its header and footer stay put. */}
-                    <FloatingOverlay maxHeight={maxHeight} scrollEnabled={false} keyboardShouldPersistTaps="always">
+                    <FloatingOverlay role="panel" maxHeight={maxHeight} scrollEnabled={false} keyboardShouldPersistTaps="always">
                         <WidgetFlowHeightBoundContext.Provider value={maxHeight}>
                             {props.children}
                         </WidgetFlowHeightBoundContext.Provider>

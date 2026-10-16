@@ -176,7 +176,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 props.style,
             ]}
         >
-            <GlassSurface surfaceGroup="floating" dialog enabled={framed && !fullscreen && props.material !== 'solid'}
+            <GlassSurface surfaceGroup="floating" floatingRole="panel" enabled={framed && !fullscreen && props.material !== 'solid'}
                 finishRole={framed ? undefined : null}
                 solidColor={!framed ? 'transparent' : fullscreen ? theme.colors.surface.base : undefined} style={[
                 framed ? (fullscreen ? styles.fullscreenSurface : styles.clipSurface) : null,
