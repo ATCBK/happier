@@ -83,6 +83,9 @@ export async function prepareManagedRetentionPolicy(params: Readonly<{
     const { machine, input, options, purpose } = params;
     if (machine.retention.kind === 'until-delete') throw new ManagedMachineControllerError('intent_changed');
     if (purpose.evidence || machine.submittedNativeEffect) return { purpose, draining: Boolean(purpose.evidence) };
+    if (machine.retention.kind === 'unused' && !machine.enrolledMachineId) {
+        throw new ManagedMachineControllerError('admission_unavailable');
+    }
     const bridge = input.managedGuestActivity ?? createManagedGuestActivityTransport(input, options, machine);
     let draining = false;
     const isCurrent = async () => {
@@ -108,7 +111,6 @@ export async function prepareManagedRetentionPolicy(params: Readonly<{
                 assertLive(options.signal);
             }
         }
-        if (!machine.enrolledMachineId) throw new ManagedMachineControllerError('admission_unavailable');
         options.context?.operationOwnerUpdate?.update({ progress: { phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' } });
         const fresh = await waitForIdle({ machine, bridge, duration: machine.retention.afterMs, signal: options.signal,
             isCurrent, onDrain: active => { draining = active; }, onActivity: kind => publishActivity(options, machine, kind) });

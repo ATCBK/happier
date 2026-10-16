@@ -307,7 +307,9 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                     if (purpose.kind === 'creation-cleanup' && machine.archivedAt !== undefined) {
                         throw new ManagedMachineControllerError('native_resource_unavailable');
                     }
-                    if (!await admissionClient.isCurrent(machine)) throw new ManagedMachineControllerError('intent_changed');
+                    // /current belongs to an already admitted request. This new
+                    // policy still has no custody there; admit-policy atomically
+                    // checks its reviewed revision, purpose and controller instead.
                     const admitted = ManagedPolicyAdmissionOutputV1Schema.parse(await admissionClient.post(
                         '/v1/machines/managed/controller/admit-policy', policyInput));
                     const approvedContext = context ?? options.context!;

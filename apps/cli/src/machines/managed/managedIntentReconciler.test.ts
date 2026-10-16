@@ -31,6 +31,7 @@ import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/app
 import { createDaemonApprovalExecutionOriginCurrentness, createDaemonExternalActionTargetResolver } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import * as activitySocket from '@/api/session/sockets';
 
 const unavailable = async (): Promise<never> => { throw new Error('Unexpected credential transport'); };
 function signedIdle(machine: ReturnType<typeof ManagedMachineV1Schema.parse>, since: number, confirmedAt: number) {
@@ -145,7 +146,7 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
     const run = (signal?: AbortSignal) => driver.execute('machines.managed.delete', { homeId, managedId: machine.id,
         ...machine.desiredWhen === 'after-idle' ? { when: 'after-idle', intent: 'delete', afterMs: machine.desiredAfterMs } : { when: 'now', intent: 'delete', expectedRevision: machine.intentRevision },
         reviewedDependencies: true }, { ...options, ...(signal ? { signal } : {}) });
-    return { effects, nativeInputs, reports, post, readActivity, confirmIdle, reopen, waitForChange, run, driver, options, installationKeys,
+    return { effects, nativeInputs, reports, post, readActivity, confirmIdle, reopen, waitForChange, run, driver, driverInput, options, installationKeys,
         readMachine: () => machine,
         setMachine: (update: Partial<typeof machine>) => { machine = { ...machine, ...update }; },
     };
@@ -173,6 +174,19 @@ async function finScopeAuthorization(test: ReturnType<typeof setup>, isSourceCur
 }
 
 describe('managed native intent through the accepted Action', () => {
+    it('refuses unused retention for an unenrolled guest before opening its activity socket', async () => {
+        const test = setup();
+        test.setMachine({ enrolledMachineId: undefined, retention: { kind: 'unused', afterMs: 60_000, effect: 'delete' } });
+        // Network allocation is forbidden for a refusal already established by the retained row.
+        const socket = vi.spyOn(activitySocket, 'createUserScopedSocketConnection').mockImplementation(() => {
+            throw new Error('Unexpected activity socket allocation');
+        });
+        const driver = createManagedMachineAcquisitionDriver({ ...test.driverInput, managedGuestActivity: undefined });
+        await expect(driver.executePolicy(test.readMachine(), { kind: 'retention' }, test.options))
+            .rejects.toMatchObject({ code: 'admission_unavailable' });
+        expect(socket).not.toHaveBeenCalled();
+        expect(test.effects).toEqual([]);
+    });
     it('re-supplies retained native destroy custody instead of replaying resource deletion', async () => {
         const test = setup(undefined, { kind: 'confirmed' }, 'delete', undefined, undefined, undefined, true);
         const machine = test.readMachine();
@@ -496,6 +510,17 @@ describe('managed native intent through the accepted Action', () => {
     });
     it.each([false, true])('permits canceled creation Delete cleanup without granting effects after manual retirement (archived=%s)', async archived => {
         const test = setup();
+        const transport = test.post.getMockImplementation()!;
+        let admitted = false;
+        test.post.mockImplementation(async (url, body, config) => {
+            const path = String(url);
+            // Home's /current endpoint authenticates an already admitted request.
+            // Before admission this new policy request cannot replace Cancel's custody.
+            if (path.endsWith('/current') && !admitted) return { status: 409, data: { code: 'request_conflict' } };
+            const response = await transport(url, body, config);
+            if (path.endsWith('/admit-policy')) admitted = true;
+            return response;
+        });
         test.setMachine({ creationState: 'canceled', enrolledMachineId: undefined,
             ...(archived ? { archivedAt: 1, cleanup: { disposition: 'unavailable', reason: 'manual_responsibility' } } : {}) });
         const work = test.driver.executePolicy(test.readMachine(), { kind: 'creation-cleanup' }, test.options);
