@@ -161,22 +161,28 @@ export function WorkspaceGroupTabs(props: Readonly<{
         }
     }, [close, execute, group.id, menu?.tabId, workspace.state.maximizedGroupId]);
 
-    const overflowItems = React.useMemo((): readonly DropdownMenuItem[] => [...group.tabIds.flatMap((id) => {
-        const tab = tabs.get(id);
-        return tab ? [{
-            id, testID: `workspace-overflow-tab-${toTestIdSafeValue(id)}`, title: tab.title,
-            icon: <Icon name={tab.icon} size={16} color={theme.colors.text.secondary} />,
-            checked: id === group.activeTabId,
-            category: t('workspaceBar.tabsLabel'),
-        }] : [];
-    }), ...workspace.state.recentlyClosed.map((entry, index) => ({
+    // The menu lists the tabs in the strip's order: pinned marks lead, and each says so.
+    const overflowItems = React.useMemo((): readonly DropdownMenuItem[] => [...[...stripTabs].sort((a, b) => Number(b.isPinned) - Number(a.isPinned)).map((tab) => ({
+        id: tab.key, testID: `workspace-overflow-tab-${toTestIdSafeValue(tab.key)}`, title: tab.title,
+        icon: <Icon name={tab.icon} size={16} color={theme.colors.text.secondary} />,
+        ...(tab.isPinned ? {
+            rightElement: <View style={styles.menuTabMarks}>
+                <View testID={`workspace-overflow-pinned-${toTestIdSafeValue(tab.key)}`}>
+                    <Icon name="push-pin" size={14} color={theme.colors.text.tertiary} />
+                </View>
+                {tab.key === group.activeTabId ? <Icon name="check" size={16} color={theme.colors.text.primary} /> : null}
+            </View>,
+        } : {}),
+        checked: tab.key === group.activeTabId,
+        category: t('workspaceBar.tabsLabel'),
+    })), ...workspace.state.recentlyClosed.map((entry, index) => ({
         id: `closed:${entry.tab.id}`, testID: `workspace-reopen-tab-${toTestIdSafeValue(entry.tab.id)}`,
         title: liveTitles.get(`closed:${entry.tab.id}`) ?? t('common.loading'),
         category: t('workspaceTabs.recentlyClosed'),
         icon: <Icon name="clock-counter-clockwise" size={16} color={theme.colors.text.secondary} />,
         ...(index === 0 ? { shortcut: shortcutLabels['workspace.tab.reopen'] } : {}),
     })), ...closeItems(group.activeTabId, 'workspace-overflow').map(item => ({ ...item, category: t('workspaceBar.tabMenuLabel') }))],
-    [closeItems, group.activeTabId, group.tabIds, hasRecentlyClosed, liveTitles, shortcutLabels, tabs, theme.colors.text.secondary, workspace.state.recentlyClosed]);
+    [closeItems, group.activeTabId, hasRecentlyClosed, liveTitles, shortcutLabels, stripTabs, styles.menuTabMarks, theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary, workspace.state.recentlyClosed]);
 
     const entityDragDrop: DocumentTabEntityDragDrop | undefined = scope ? {
         runtime, id: `workspace-tabs:${group.id}`, scope, acceptedKinds: WORKSPACE_ENTITY_KINDS,
@@ -323,5 +329,10 @@ const stylesheet = StyleSheet.create(() => ({
     grow: {
         flex: 1,
         minWidth: 8,
+    },
+    menuTabMarks: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
     },
 }));

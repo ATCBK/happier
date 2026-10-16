@@ -13,7 +13,7 @@ import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { StatusDot } from '@/components/ui/status/StatusDot';
-import { resolveHappierTabKeySelection, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, happierFocusRingStyle, isHappierFocusVisible, resolveHappierTabKeySelection, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
 import { shadowLevelStyle } from '@/shadowElevation';
 import type { EntityDragItemV1, EntityDragKindV1, EntityDragScopeV1, EntityDropAdmissionV1, EntityDropEffectV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
@@ -171,7 +171,7 @@ export const DOCUMENT_TAB_BAR_METRICS = Object.freeze({
     tabPaddingStartPx: 10,
     tabPaddingEndPx: 5,
     tabGapPx: 7,
-    tabMinWidthPx: 120,
+    tabMinWidthPx: 144,
     tabMaxWidthPx: 212,
     glyphBoxPx: 16,
     trailingSlotPx: 18,
@@ -335,6 +335,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     entityTab: {
         flexShrink: 1,
         minWidth: 0,
+    },
+    /** A pinned mark keeps its whole box: its drag wrapper must not be crushed under a crowded strip. */
+    entityTabFixed: {
+        flexShrink: 0,
     },
     /** The carried item lands before this tab: a mark in the gap, so no tab moves under the pointer. */
     entityTabInsertion: {
@@ -896,6 +900,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
         railTabOpen: [stylesheet.railTabOpen, selectedPaint],
     };
     const [hovered, setHovered] = React.useState(false);
+    // The ring is for keyboard focus and belongs on the drawn tab, at its radius, not on the hit box.
+    const [focusVisible, setFocusVisible] = React.useState(false);
     const { tab, strip } = props;
     const draggedDuringPress = React.useRef(false);
     const dismissMenu = React.useRef(strip.onDismissTabMenu);
@@ -940,6 +946,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                 hovered && !props.active ? styles.barTabHovered : null,
                 props.active && !props.rail ? (props.emphasis === 'raised' ? styles.barTabRaised : styles.barTabQuiet) : null,
                 props.rail ? [styles.railTab, props.active ? styles.railTabOpen : null] : null,
+                happierFocusRingStyle({ visible: focusVisible, color: theme.colors.border.focus }),
             ]}
             {...(Platform.OS === 'web' ? {
                 onPointerEnter: () => setHovered(true),
@@ -950,6 +957,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                 ref={(target) => props.registerFocusTarget(target as { focus?: () => void } | null)}
                 onPress={() => strip.onActivate(tab.key)}
                 onPressIn={() => { draggedDuringPress.current = false; }}
+                onFocus={(event) => setFocusVisible(isHappierFocusVisible(event?.target))}
+                onBlur={() => setFocusVisible(false)}
                 onLongPress={openMenu ? (event) => { if (!draggedDuringPress.current) openMenu(event); } : undefined}
                 hitSlop={props.rail ? RAIL_HIT_SLOP : undefined}
                 {...(Platform.OS === 'web' && openMenu ? { onContextMenu: openMenu } : null)}
@@ -957,7 +966,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                     ? (event) => props.onKeyDown(event, props.index)
                     : undefined}
                 testID={strip.testIds?.tab?.(safeTabKey) ?? undefined}
-                style={[styles.barTabPress, pinned ? styles.barTabPressPinned : null, { height: props.heightPx }]}
+                style={[styles.barTabPress, pinned ? styles.barTabPressPinned : null, { height: props.heightPx }, HAPPIER_FOCUS_RING_DELEGATED_STYLE]}
                 accessibilityRole="tab"
                 accessibilityLabel={status
                     ? `${t('session.detailsPanel.openTabA11y', { title: tab.title })}, ${status.label}`
@@ -1048,6 +1057,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
     );
     return entitySource
         ? <DocumentEntityTab tab={tab} binding={entitySource} dropBinding={strip.entityDragDrop} gapPx={B.stripGapPx} first={props.index === 0}
+            fixed={pinned && !props.rail}
             endMark={strip.dropSlot === true && props.index === strip.tabs.length - 1}>{content}</DocumentEntityTab>
         : content;
 }
@@ -1074,6 +1084,8 @@ function DocumentEntityTab(props: Readonly<{
     /** The strip's gap: the insertion mark sits in the gap before this tab. */
     gapPx: number;
     first: boolean;
+    /** The tab keeps its own width (a pinned mark) instead of shrinking with the strip. */
+    fixed?: boolean;
     /**
      * A kept tab lands after this, the strip's last tab (DnD lab C2 tab slot). The same mark as a
      * gap insertion, drawn past the tab's end, so the strip never reflows while the pointer crosses
@@ -1130,7 +1142,8 @@ function DocumentEntityTab(props: Readonly<{
     React.useEffect(() => () => adapter.current?.cancel(), []);
     const content = <View ref={attach} collapsable={false} onLayout={() => {
         void measure().then(() => binding.runtime.refresh());
-    }} testID={`document-tab-entity-${toTestIdSafeValue(tab.key)}`} style={stylesheet.entityTab}>
+    }} testID={`document-tab-entity-${toTestIdSafeValue(tab.key)}`}
+        style={props.fixed ? [stylesheet.entityTab, stylesheet.entityTabFixed] : stylesheet.entityTab}>
         {props.children}
         {props.dropBinding ? <DocumentEntityTabTarget tab={tab} binding={props.dropBinding} bounds={bounds} measure={measure}
             gapPx={props.gapPx} first={props.first} endMark={props.endMark} /> : null}

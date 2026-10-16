@@ -281,4 +281,21 @@ describe('WorkspaceTitleBar', () => {
         expect(stateOf(screen).recentlyClosed.map(entry => entry.tab.id)).toEqual(ids.slice(1, -1).reverse());
         expect(screen.findByTestId('workspace-overflow-group_1')).not.toBeNull();
     });
+
+    it('lists a pinned tab first in the all-tabs menu, as the strip shows it, and marks it pinned', async () => {
+        let state = createWorkspaceState(tab('a'));
+        state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: tab('b') });
+        state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: tab('c', { pinned: true }) });
+        const screen = await renderScreen(<Harness initial={state} clusterEndPx={200} />, {
+            createNodeMock: windowMeasurement({ 'workspace-title-bar': { x: 0, width: 1440 }, 'workspace-group-group_1': { x: 300, width: 600 } }),
+        });
+        await screen.pressByTestIdAsync('workspace-overflow-group_1');
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+        const order = [...new Set(screen.root
+            .findAll((node) => typeof node.props?.testID === 'string' && /^workspace-overflow-tab-[abc]$/.test(node.props.testID))
+            .map((node) => String(node.props.testID).slice(-1)))];
+        expect(order).toEqual(['c', 'a', 'b']);
+        expect(screen.findAllByTestId('workspace-overflow-pinned-c').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('workspace-overflow-pinned-a')).toHaveLength(0);
+    });
 });

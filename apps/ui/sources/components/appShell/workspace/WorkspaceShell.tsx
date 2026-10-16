@@ -1,8 +1,7 @@
 import * as React from 'react';
 import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { hrefForDestinationRef, type CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
@@ -192,8 +191,6 @@ function WorkspaceGroupView(props: Readonly<{
     /** The pane's tabs live in the window's top strip (a top-row pane under a strip that carries them). */
     tabsInTitleBar: boolean;
 }>) {
-    const { theme } = useUnistyles();
-    const materialColor = useHappierMaterialColorResolver();
     const { workspace, group } = props;
     const safeGroup = toTestIdSafeValue(group.id);
     const geometry = React.useContext(WorkspaceBarGeometryContext);
@@ -210,7 +207,7 @@ function WorkspaceGroupView(props: Readonly<{
         return () => geometry.setGroupFrame(group.id, null);
     }, [geometry, group.id, props.tabsInTitleBar, publishFrame]);
     return <View ref={frameRef} testID={`workspace-group-${safeGroup}`} style={styles.group} onLayout={publishFrame}>
-        {props.tabsInTitleBar || workspace.phone ? null : <View style={[styles.strip, { backgroundColor: materialColor(theme.colors.surface.inset, 'transparent') }]}>
+        {props.tabsInTitleBar || workspace.phone ? null : <View style={styles.strip}>
             <WorkspaceGroupTabs workspace={workspace} group={group} catalog={props.catalog}
                 focused={props.focused} placement="strip" />
         </View>}
