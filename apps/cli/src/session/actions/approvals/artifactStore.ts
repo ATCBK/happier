@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, buildExecutionRunHostActionApprovalArtifactHeaderV1, buildTargetActionApprovalArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { APPROVAL_ARTIFACT_KINDS_V1, approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, buildExecutionRunHostActionApprovalArtifactHeaderV1, buildTargetActionApprovalArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 import type { ActionId, ApprovalQueueListItemV1, ApprovalRequest, ExecutionRunHostActionApprovalRequestV1, TargetActionApprovalRequestV1, PromptLibraryArtifactStore } from '@happier-dev/protocol';
 
@@ -293,19 +293,22 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         for (const artifact of page.items) {
           if (items.length >= maxItems) break;
           const header = artifact.header;
-          if (!header || header.kind !== 'approval_request.v1') continue;
+          if (!header || (header.kind !== APPROVAL_ARTIFACT_KINDS_V1.builtIn
+            && header.kind !== APPROVAL_ARTIFACT_KINDS_V1.targetAction)) continue;
           const hydrated = await accountArtifactStore.read(artifact.artifactId);
           if (!hydrated?.body) continue;
-          const request = readBuiltInApprovalArtifact(hydrated.header, hydrated.body);
-          if (!request) continue;
+          const parsed = approvalArtifactBodyMatchesHeaderV1(hydrated.header, hydrated.body);
+          if (!parsed || parsed.family === 'execution_run_host_action') continue;
+          const request = parsed.request;
           if (typeof status === 'string' && request.status !== status) continue;
           const headerServerId = normalizeArtifactServerId(hydrated.header.serverId);
           // V1 has no body-authoritative stable Home identity. Preserve its
           // released profile-scoped history behavior; V2 is Account-scoped and
           // validates creator profile plus Home from its strict body.
-          if (request.v === 1 && !approvalArtifactMatchesServerScope(hydrated.header, normalizedServerId)) continue;
+          if (parsed.family === 'built_in' && parsed.request.v === 1
+            && !approvalArtifactMatchesServerScope(hydrated.header, normalizedServerId)) continue;
 
-          const actionId = parseApprovalActionId(request.actionId);
+          const actionId = parsed.family === 'target_action' ? 'action.invoke' : parseApprovalActionId(parsed.request.actionId);
           const summary = request.summary;
           const approvalStatus = parseApprovalStatus(request.status);
           if (!actionId || !summary || !approvalStatus) continue;
@@ -355,11 +358,12 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       const body = artifact.body;
       if (!body) return null;
 
-      const request = readBuiltInApprovalArtifact(header, body);
-      if (request?.v === 1 && !approvalArtifactMatchesServerScope(header, normalizeArtifactServerId(serverId))) {
+      const parsed = approvalArtifactBodyMatchesHeaderV1(header, body);
+      if (parsed?.family === 'built_in' && parsed.request.v === 1
+        && !approvalArtifactMatchesServerScope(header, normalizeArtifactServerId(serverId))) {
         return null;
       }
-      return request;
+      return parsed && parsed.family !== 'execution_run_host_action' ? parsed.request : null;
     },
 
     approvalsUpdate: async ({ artifactId, request, serverId }) => {

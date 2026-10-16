@@ -9,6 +9,7 @@ import {
 } from './approvalRequestV1.js';
 import { AgentRuntimeJsonValueV1Schema } from '../runtime/agentSessionV1.js';
 import { PluginSourceCustodyV1Schema } from '../plugins/runtime/sourceCustody.js';
+import { InputPathSchema } from '../inputs/inputPredicates.js';
 
 export const TARGET_ACTION_APPROVAL_LIMITS_V1 = Object.freeze({
   artifactJsonBytes: 64 * 1024,
@@ -25,7 +26,7 @@ const TargetActionApprovalStatusV1Schema = lazyZodSchema(() => z.enum([
 ]));
 
 /**
- * Host-stamped routing evidence for a deferred API Action approval. It is
+ * Host-stamped routing evidence for an automated or live-only-input Action approval. It is
  * durable approval subject data, never caller-supplied Action input.
  */
 export const TargetActionApprovalReplayPlacementV1Schema = lazyZodSchema(() => z.strictObject({
@@ -44,6 +45,11 @@ export const TargetActionApprovalRequestV1Schema = lazyZodSchema(() => z.strictO
   requestedSurface: z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units)),
   qualifiedActionId: z.string().check(z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units), z.regex(/^[a-z0-9][a-z0-9._-]*\/actions\/[a-z0-9][a-z0-9/-]*$/)),
   input: AgentRuntimeJsonValueV1Schema, accountId: z.optional(boundedId), resourceId: z.optional(boundedId),
+  /** Absent on older development requests, which remain readable but cannot disclose their input safely. */
+  secretInputPaths: z.optional(z.array(InputPathSchema)),
+  secretInputLabels: z.optional(z.record(InputPathSchema, z.string())),
+  /** Raw operands stay exclusively with the admitted blocking invocation. */
+  approvalInputCustody: z.optional(z.literal('live_only')),
   sourceCustody: PluginSourceCustodyV1Schema,
   policyFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
   subjectFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/)),

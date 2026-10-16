@@ -715,7 +715,8 @@ describe('createCliApprovalsArtifactStore', () => {
     const request = TargetActionApprovalRequestV1Schema.parse({
       v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'cli' }, requestedSurface: 'cli',
-      qualifiedActionId: 'acme.alpha/actions/run', input: { value: 'x' },
+      qualifiedActionId: 'acme.alpha/actions/run', input: { value: 'x', credential: 'synthetic-legacy-secret' },
+      secretInputPaths: ['credential'],
       sourceCustody: { kind: 'development', registeredRootId: 'root-7' },
       policyFingerprint: 'b'.repeat(64), subjectFingerprint: 'a'.repeat(64), summary: 'Approve run',
     });
@@ -733,6 +734,22 @@ describe('createCliApprovalsArtifactStore', () => {
       dataEncryptionKey: payload.dataEncryptionKey, seq: 1, createdAt: 1, updatedAt: 1,
     } }));
     await expect(store.targetActionApprovalsGet({ artifactId: created.artifactId })).resolves.toEqual(request);
+    const row = {
+      id: created.artifactId, header: payload.header, headerVersion: 1, body: payload.body, bodyVersion: 1,
+      ownerAccountId: 'account-1', access: 'owner', encryptionMode: 'e2ee',
+      dataEncryptionKey: payload.dataEncryptionKey, seq: 1, createdAt: 1, updatedAt: 1,
+    };
+    mockGet.mockImplementation(async (url: string) => ({ status: 200,
+      data: new URL(url).pathname === '/v1/artifacts' ? [row] : row }));
+    const executor = createActionExecutor(store);
+    const disclosed = await executor.execute('approval.request.get', { artifactId: created.artifactId }, { surface: 'cli' });
+    expect(disclosed)
+      .toMatchObject({ ok: true, result: { artifactId: created.artifactId,
+        request: { kind: 'plugin_target_action', qualifiedActionId: request.qualifiedActionId,
+          input: { value: 'x', credential: '[REDACTED]' } } } });
+    expect(JSON.stringify(disclosed)).not.toContain('synthetic-legacy-secret');
+    expect(await executor.execute('approval.request.list', { status: 'open' }, { surface: 'cli' }))
+      .toMatchObject({ ok: true, result: { items: [{ artifactId: created.artifactId, actionId: 'action.invoke', status: 'open' }] } });
     const key = openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(payload.dataEncryptionKey), recipientSecretKeyOrSeed: (credentials.encryption as any).machineKey });
     expect(decryptWithDataKey(decodeBase64(payload.header), key!)).toMatchObject({
       kind: 'target_action_approval.v1', qualifiedActionId: request.qualifiedActionId,

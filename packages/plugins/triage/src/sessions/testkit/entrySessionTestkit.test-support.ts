@@ -1,6 +1,7 @@
 import type { PluginActionInputById, PluginActionResultById } from '@happier-dev/plugin-sdk/actions';
 import {
     TriageConfiguredSourceInstanceV1Schema,
+    TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
     type TriageConfiguredSourceInstanceV1,
     type TriagePrepareReviewWorkspaceInputV1,
     type TriagePrepareReviewWorkspaceResultV1,
@@ -20,6 +21,7 @@ import type {
     TriagePrepareReviewWorkspaceOperationV1,
     TriageReviewWorkspacePreparationDepsV1,
 } from '../entrySessionWorkspace.js';
+import { TriageStartEntrySessionInputV1Schema } from '../../actions/entrySessionProtocol.js';
 
 /**
  * Fixtures for the Session start vertical.
@@ -215,3 +217,36 @@ export const TESTKIT_SPAWN_REQUEST = Object.freeze({
         identity: Object.freeze({ pluginId: 'happier.claude', localId: 'claude' }),
     }),
 });
+
+/** The selected-PR input produced by the start controller, with identity-only Account binding. */
+export function createTriageSelectedPrStartApprovalInput() {
+    const entryRef = testkitEntryRef();
+    const instance = testkitConfiguredInstance();
+    if (!('account' in instance.binding)) throw new Error('Expected the Connected Account test binding');
+    const selectedInput = {
+        v: 1,
+        instance: { instance: { source: entryRef.source, sourceInstanceId: TESTKIT_SOURCE_INSTANCE_ID }, binding: {} },
+        entryRef, lastKnownLocator: testkitLocator(), observed: TESTKIT_OBSERVED_REVISION,
+        workspace: TESTKIT_SELECTED_WORKSPACE,
+    };
+    return TriageStartEntrySessionInputV1Schema.parse({
+        v: 1, workspaceMode: 'pull_request', entryRef,
+        display: TESTKIT_LINK_DISPLAY,
+        destination: {
+            kind: 'new', creationKey: 'creation-key-1', spawn: TESTKIT_SPAWN_REQUEST,
+            materialization: { kind: 'reviewWorkspace', request: {
+                instance, entryRef, workflowSubject: 'pullRequest', lastKnownLocator: testkitLocator(),
+                observed: TESTKIT_OBSERVED_REVISION, workspace: TESTKIT_SELECTED_WORKSPACE,
+            } },
+        },
+        prepareReviewWorkspaceSelection: {
+            selection: {
+                target: { pluginId: 'happier.triage', sourceCustody: { kind: 'development', registeredRootId: 'triage-root-1' } },
+                point: { pointId: 'sources', protocol: { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: 1 } },
+                contributor: { pluginId: entryRef.source.pluginId, contributionId: entryRef.source.localId,
+                    sourceCustody: { kind: 'development', registeredRootId: 'source-root-1' } },
+            },
+            input: selectedInput, credentialRef: instance.binding.account,
+        },
+    });
+}

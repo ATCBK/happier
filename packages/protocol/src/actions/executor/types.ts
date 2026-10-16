@@ -1,4 +1,5 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { TargetActionApprovalRequestV1 } from '../../approvals/targetActionApprovalRequestV1.js';
 import type { SessionCapabilitiesActionPortV1 } from './sessionCapabilities.js';
 import type { SessionCapabilitiesGetInputV1, SpawnCapabilitiesPreviewInputV1 } from '../specs/sessionCapabilities.js';
 import type { TeamMembershipHistoryActionIdV1, TeamMembershipHistoryInputV1 } from '../../teams/membershipHistoryPreparationV1.js';
@@ -1978,7 +1979,7 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
   }>) => Promise<ApprovalQueueListResultV1>;
   approvalsCreate?: (args: Readonly<{ request: ApprovalRequest; serverId?: string | null }>) => Promise<{ artifactId: string }>;
-  approvalsGet?: (args: Readonly<{ artifactId: string; serverId?: string | null }>) => Promise<ApprovalRequest | null>;
+  approvalsGet?: (args: Readonly<{ artifactId: string; serverId?: string | null }>) => Promise<ApprovalRequest | TargetActionApprovalRequestV1 | null>;
   approvalsUpdate?: (args: Readonly<{ artifactId: string; request: ApprovalRequest; serverId?: string | null }>) => Promise<{ ok: true } | { ok: false; errorCode: string; error: string }>;
   /** Revalidates the origin against current credential/runtime/target owners before effects. */
   isApprovalExecutionOriginCurrent?: (args: Readonly<{

@@ -1,5 +1,6 @@
 import { StoredApprovalRequestSchema, type ApprovalRequest } from './approvalRequestV1.js';
 import { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
+export { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
 import {
   StoredExecutionRunHostActionApprovalRequestV1Schema,
   type ExecutionRunHostActionApprovalRequestV1,

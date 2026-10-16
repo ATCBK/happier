@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeApprovalActionFields, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
+import { describeApprovalActionFields, projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
 import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
 import { ActionSpecSchema, getActionSpec } from './actionSpecs.js';
 import { readActionSchemaTopLevelFieldNames } from './actionCliProjection.js';
@@ -12,8 +12,138 @@ import { skillFileFromBytesV1 } from '../prompts/library/skills/skillZipV1.js';
 import type { ActionId } from './actionIds.js';
 import { decideApprovalRequestTransition, settleApprovalRequestActionArgs } from '../approvals/approvalRequestTransition.js';
 import { describeApprovalRequestFields } from './actionApprovalPresentation.js';
+import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
+import { TriageStartEntrySessionInputV1Schema } from '../../../plugins/triage/src/actions/entrySessionProtocol.js';
+import { createTriageSelectedPrStartApprovalInput } from '../../../plugins/triage/src/sessions/testkit/entrySessionTestkit.test-support.js';
+import { SharedSavedSecretRefV1Schema } from '../machines/managed/providerFactsV1.js';
 
 describe('approval field presentation', () => {
+
+  it('discloses nested confidential operands by declared label and preserves exact public JSON', () => {
+    const input = { rows: [{ releaseTag: 'private-release', target: ' endpoint ', enabled: false, count: 42,
+      credential: { _isSecretValue: true, value: 'private-carrier' } }], token: 'public-routing-token' };
+    const secretInputPaths = ['rows.[].releaseTag'];
+    const projection = projectTargetActionApprovalInput(input, secretInputPaths);
+    expect(projection).not.toBeNull();
+    const request = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify({
+      v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent' }, requestedSurface: 'agent', qualifiedActionId: 'acme.publisher/actions/publish',
+      sourceCustody: { kind: 'development', registeredRootId: 'publisher-root' },
+      policyFingerprint: 'a'.repeat(64), subjectFingerprint: 'b'.repeat(64), summary: 'Publish',
+      input: projection!.input, secretInputPaths, secretInputLabels: { 'rows.[].releaseTag': 'Release credential' },
+      approvalInputCustody: 'live_only',
+    })));
+    expect(JSON.stringify(request)).not.toContain('private');
+    const admission = resolveApprovalRequestApproveAdmission(request);
+    expect(admission).toMatchObject({ status: 'available', presentation: { rows: expect.arrayContaining([
+      { kind: 'value', path: 'input.rows.0.releaseTag', title: 'Release credential', value: '', valueFormat: 'confidential' },
+      { kind: 'value', path: 'input.token', title: 'Token', value: '"public-routing-token"' },
+      expect.objectContaining({ path: 'input.rows', value: JSON.stringify([{ releaseTag: '[REDACTED]',
+        target: ' endpoint ', enabled: false, count: 42, credential: { _isSecretValue: true } }]) }),
+    ]) } });
+    expect(JSON.stringify(admission)).not.toContain('private');
+  });
+
+
+
+  it('discloses and admits the real Triage selected-PR credential identity', () => {
+    const input = createTriageSelectedPrStartApprovalInput();
+    const presentation = describeApprovalRequestFields({
+      kind: 'plugin_target_action', input, secretInputPaths: [],
+    });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows).toContainEqual(expect.objectContaining({
+      path: 'input.prepareReviewWorkspaceSelection', value: JSON.stringify(input.prepareReviewWorkspaceSelection),
+    }));
+    // The live declaration, rather than a guessed field name, owns the binding.
+    expect(TriageStartEntrySessionInputV1Schema.safeParse(input).success).toBe(true);
+  });
+
+  it.each([
+    { input: { releaseTag: 'private-effect', benign: null }, secretInputPaths: ['releaseTag'] },
+    { input: { credentials: { repository: '/private/effect' }, benign: {} }, secretInputPaths: ['credentials'] },
+    { input: { target: { _isSecretValue: true, value: 'private-effect' }, benign: false }, secretInputPaths: [] },
+    { input: { rows: [{ target: 'private-effect', enabled: true }] }, secretInputPaths: ['rows.[].target'] },
+  ])('withholds plugin approval when an operand is redacted despite readable input: $input', ({ input, secretInputPaths }) => {
+    const request = TargetActionApprovalRequestV1Schema.parse({
+      v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent' }, requestedSurface: 'agent', qualifiedActionId: 'acme.publisher/actions/publish',
+      sourceCustody: { kind: 'development', registeredRootId: 'publisher-root' },
+      policyFingerprint: 'a'.repeat(64), subjectFingerprint: 'b'.repeat(64), summary: 'Publish',
+      input, secretInputPaths,
+    });
+    const admission = resolveApprovalRequestApproveAdmission(request);
+    expect(JSON.stringify(admission.presentation)).not.toContain('private');
+    expect(admission).toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+  });
+
+  it('discloses Saved Secret identity and every effect operand regardless of diagnostic key spelling', () => {
+    const input = { savedSecret: SharedSavedSecretRefV1Schema.parse({ kind: 'shared_resource', resourceId: 'saved-key-1' }),
+      credentials: { repository: '/work/effect' }, token: 'source-routing-token' };
+    const presentation = describeApprovalRequestFields({ kind: 'plugin_target_action', input, secretInputPaths: [] });
+    expect(presentation.unrepresentable).toBeNull();
+    for (const [key, value] of Object.entries(input)) {
+      expect(presentation.rows).toContainEqual(expect.objectContaining({ path: `input.${key}`, value: JSON.stringify(value) }));
+    }
+  });
+
+  it.each([
+    ['null', null], ['false', false], ['42', 42], ['{"target":"release"}', { target: 'release' }],
+    ['[1,2]', [1, 2]], ['', ' '],
+  ])('preserves plugin operand type and exact JSON identity for %j versus %j', (left, right) => {
+    const present = (value: unknown) => describeApprovalRequestFields({
+      kind: 'plugin_target_action', input: { value }, secretInputPaths: [],
+    });
+    const first = present(left);
+    const second = present(right);
+    expect(first.unrepresentable).toBeNull();
+    expect(second.unrepresentable).toBeNull();
+    expect(first.rows).not.toEqual(second.rows);
+    for (const [value, presentation] of [[left, first], [right, second]] as const) {
+      expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'input.value', value: JSON.stringify(value) }));
+    }
+  });
+
+  it('discloses the exact plugin arguments and redacts credentials through the shared approval owner', () => {
+    const base = TargetActionApprovalRequestV1Schema.parse({
+      v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent' }, requestedSurface: 'agent',
+      qualifiedActionId: 'acme.publisher/actions/releases/publish',
+      sourceCustody: { kind: 'development', registeredRootId: 'publisher-root' },
+      policyFingerprint: 'a'.repeat(64), subjectFingerprint: 'b'.repeat(64), summary: 'Publish release',
+      input: { repository: '/work/release', releaseTag: ' v1.2.3 ',
+        arguments: ['--publish', { dryRun: false, count: 0, optional: null }],
+        secretToken: 'private-token', credentials: { password: 'private-password' },
+        opaque: { value: 'private-declared' },
+        rows: [{ value: 'private-array', target: 'public-target' }],
+        saved: { _isSecretValue: true, value: 'private-carrier' } },
+    });
+    const request = { ...base, secretInputPaths: ['secretToken', 'credentials', 'opaque.value', 'rows.[].value'] };
+    expect(TargetActionApprovalRequestV1Schema.parse(request).secretInputPaths).toEqual(request.secretInputPaths);
+    const admission = resolveApprovalRequestApproveAdmission(request);
+    expect(admission.status).toBe('unavailable');
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({ path: 'input.releaseTag', value: JSON.stringify(' v1.2.3 ') }));
+    const presentation = JSON.stringify(admission.presentation);
+    expect(presentation).toContain('/work/release');
+    expect(presentation).toContain('--publish');
+    expect(presentation).toContain('false');
+    expect(presentation).not.toContain('private-token');
+    expect(presentation).not.toContain('private-password');
+    expect(presentation).not.toContain('private-carrier');
+    expect(presentation).not.toContain('private-declared');
+    expect(presentation).not.toContain('private-array');
+    expect(presentation).toContain('public-target');
+    expect(resolveApprovalRequestApproveAdmission(base)).toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+    expect(resolveApprovalRequestApproveAdmission({ ...request, input: { _isSecretValue: true, value: 'private' } }))
+      .toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+    expect(describeApprovalRequestFields({ ...request, input: { unexpected: undefined } }).unrepresentable)
+      .not.toBeNull();
+  });
+
+
+
+
+
   it('admits the neighboring capabilities families without disclosing live-only secret values', () => {
     const entry = { id: 'mcp-a', name: 'mcp-a', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 };
     const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: review\n---\nReview.'), 0o644);

@@ -1148,7 +1148,7 @@ describe('createActionExecutor (approvals)', () => {
     }
   });
 
-  it('lists approval requests through the bounded approval artifact store dependency', async () => {
+  it.each(['rpc', 'cli', 'agent', 'mcp'] as const)('lists approval requests through the bounded approval artifact store on %s', async surface => {
     const approvalsList = vi.fn(async () => ({
       items: [
         {
@@ -1169,7 +1169,7 @@ describe('createActionExecutor (approvals)', () => {
     const res = await executor.execute(
       'approval.request.list' as any,
       { status: 'open', limit: 5 },
-      { surface: 'rpc', serverId: 'server-1' },
+      { surface, serverId: 'server-1' },
     );
 
     expect(res).toEqual({
@@ -1197,7 +1197,7 @@ describe('createActionExecutor (approvals)', () => {
     });
   });
 
-  it('gets approval requests through the keyed approval artifact dependency', async () => {
+  it.each(['rpc', 'cli', 'agent', 'mcp'] as const)('gets approval requests through the keyed approval artifact dependency on %s', async surface => {
     const request = createApprovalRequest();
     const approvalsGet = vi.fn(async () => request);
 
@@ -1205,7 +1205,7 @@ describe('createActionExecutor (approvals)', () => {
     const res = await executor.execute(
       'approval.request.get' as any,
       { artifactId: 'a1' },
-      { surface: 'rpc', serverId: 'server-1' },
+      { surface, serverId: 'server-1' },
     );
 
     expect(res).toEqual({
@@ -1222,6 +1222,13 @@ describe('createActionExecutor (approvals)', () => {
       },
     });
     expect(approvalsGet).toHaveBeenCalledWith({ artifactId: 'a1', serverId: 'server-1' });
+  });
+
+  it.each(['cli', 'agent', 'mcp'] as const)('discovers both approval reads through real %s Action search', async surface => {
+    const result = await createExecutor().execute('action.spec.search', { query: 'approval', limit: 100 }, { surface });
+    expect(result).toMatchObject({ ok: true, result: { actionSpecs: expect.arrayContaining([
+      expect.objectContaining({ id: 'approval.request.list' }), expect.objectContaining({ id: 'approval.request.get' }),
+    ]) } });
   });
 
   it('does not route non-surfaced actions through approvals even when a policy requires approvals', async () => {

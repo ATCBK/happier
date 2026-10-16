@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
 import { ScmDiffSummaryModelSelectorSchema } from '../scm/diffSummary.js';
 import * as z from 'zod/mini';
 import { actionStartTargetUnavailableV1 } from './executor/actionStartDiagnostics.js';
@@ -189,7 +190,7 @@ import { readInputFieldOptionsSourceId } from '../inputs/inputTypeRuntime.js';
 import { resolveActionApprovalRouting, SURFACE_AUTHORITY_AGENT_FLOOR } from './actionApprovalPolicy.js';
 import { resolveWorkflowRunStartedByForActionCallerV1 } from '../workflows/materializeWorkflowAcceptedSnapshotV1.js';
 import { readActionCallerLedSubtreeSessionIds } from './executor/sessionLedSubtree.js';
-import { resolveApprovalRequestApproveAdmission } from './actionApprovalPresentation.js';
+import { projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission } from './actionApprovalPresentation.js';
 import { resolveRequestedSessionModeId } from './sessionModeIds.js';
 import {
   findSpawnConfigOptionAliasConflicts,
@@ -2790,9 +2791,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       return updateFailure ?? { ok: true, request: nextFailed, exec: failure };
     };
 
-    const latestRequest = deps.approvalsGet
+    const latestRaw = deps.approvalsGet
       ? await deps.approvalsGet({ artifactId: args.artifactId, serverId: args.artifactServerId })
       : null;
+    const latestParsed = StoredApprovalRequestSchema.safeParse(latestRaw);
+    const latestRequest = latestParsed.success ? latestParsed.data : null;
     if (latestRequest) {
       const recordedExecutionResult = buildActionExecuteResultFromRecordedApprovalExecution(latestRequest);
       if (recordedExecutionResult) {
@@ -2864,9 +2867,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       });
       const claimFailure = readActionFailureEnvelope(claimed);
       if (claimFailure) {
-        const persisted = deps.approvalsGet
+        const persistedRaw = deps.approvalsGet
           ? await deps.approvalsGet({ artifactId: args.artifactId, serverId: args.artifactServerId })
           : null;
+        const persistedParsed = StoredApprovalRequestSchema.safeParse(persistedRaw);
+        const persisted = persistedParsed.success ? persistedParsed.data : null;
         if (persisted) {
           const recordedExecutionResult = buildActionExecuteResultFromRecordedApprovalExecution(persisted);
           if (recordedExecutionResult) {
@@ -9537,11 +9542,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
         const request = await deps.approvalsGet({ artifactId, serverId: normalizeId(ctx.serverId) || null });
         if (!request) return { ok: false, errorCode: 'approval_not_found', error: 'approval_not_found' };
+        const targetRequest = TargetActionApprovalRequestV1Schema.safeParse(request);
+        const disclosedRequest = targetRequest.success
+          ? { ...targetRequest.data, input: targetRequest.data.secretInputPaths === undefined ? null
+            : projectTargetActionApprovalInput(targetRequest.data.input, targetRequest.data.secretInputPaths)?.input ?? null }
+          : request;
         return {
           ok: true,
           result: {
             artifactId,
-            request,
+            request: disclosedRequest,
             queryPlan: {
               kind: 'approval_artifact_id_lookup',
               backingStore: 'ArtifactStore',

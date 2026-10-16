@@ -1,5 +1,9 @@
 import { StructuredQuestionAnswersV1Schema } from '../tools/structuredQuestionAnswersV1.js';
 import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import type { TargetActionApprovalRequestV1 } from '../approvals/targetActionApprovalRequestV1.js';
+import { AgentRuntimeJsonValueV1Schema } from '../runtime/agentSessionV1.js';
+import type { JsonValue } from '../json/strictJsonValue.js';
+import { InputPathSchema } from '../inputs/inputPredicates.js';
 import { getActionSpec } from './actionSpecs.js';
 import { resolveEffectiveActionInputFields } from './actionInputHintsRuntime.js';
 import { actionInputFieldAcceptsNull } from './actionInputSchemaPath.js';
@@ -54,7 +58,7 @@ export type ApprovalActionFieldRow =
   | Readonly<{
     kind: 'value'; path: string; title: string; value: string; reference?: ApprovalActionReference;
     /** A boolean choice reads through the client's localized yes/no labels. */
-    valueFormat?: 'boolean' | 'unavailable';
+    valueFormat?: 'boolean' | 'unavailable' | 'confidential';
     /** A readable reading of a structured (JSON) value; `value` stays the exact literal. */
     entries?: readonly ApprovalStructuredValueEntry[];
     /** A schema version argument: present, but read only when asked for. */
@@ -706,9 +710,120 @@ function describeApprovalNetworkValue(policy: Readonly<{ network: string; networ
       : 'No network access';
 }
 
+/**
+ * Installed Actions have no built-in ActionSpec. Their admitted JSON is the
+ * review contract; never use the static manifest confirmation as its substitute.
+ * Declared confidential inputs remain opaque. Value-free Connected Account and
+ * Saved Secret bindings retain their exact identity like every other admitted
+ * operand; diagnostic key spelling cannot decide what an effect may hide.
+ */
+export function projectTargetActionApprovalInput(input: unknown, secretInputPaths: readonly string[] | undefined): Readonly<{
+  input: JsonValue;
+  confidentialPaths: readonly string[];
+}> | null {
+  const parsed = AgentRuntimeJsonValueV1Schema.safeParse(input);
+  const parsedSecretPaths = z.safeParse(z.array(InputPathSchema), secretInputPaths);
+  if (!parsed.success || !parsedSecretPaths.success) return null;
+  const secretPaths = parsedSecretPaths.data.map(path => path.split('.'));
+  const isJsonArray = (value: JsonValue): value is readonly JsonValue[] => Array.isArray(value);
+  const confidentialPaths: string[] = [];
+  const pending: Array<Readonly<{ source: JsonValue; destination: JsonValue[] | Record<string, JsonValue>; path: readonly string[] }>> = [];
+  const project = (value: JsonValue, path: readonly string[]): JsonValue => {
+    if (secretPaths.some(secret => secret.length === path.length
+      && secret.every((segment, index) => segment === '[]' || segment === path[index]))) {
+      confidentialPaths.push(path.join('.'));
+      return '[REDACTED]';
+    }
+    if (value === null || typeof value !== 'object') return value;
+    if (!isJsonArray(value) && value._isSecretValue === true) {
+      confidentialPaths.push(path.join('.'));
+      // Preserve the carrier's value-free identity so later readers can still
+      // recognize a confidential operand, including a root-level carrier.
+      return { _isSecretValue: true };
+    }
+    const destination: JsonValue[] | Record<string, JsonValue> = isJsonArray(value) ? [] : Object.create(null);
+    pending.push({ source: value, destination, path });
+    return destination;
+  };
+  const redacted = project(parsed.data, []);
+  while (pending.length) {
+    const next = pending.pop()!;
+    if (isJsonArray(next.source) && Array.isArray(next.destination)) {
+      for (const [index, value] of next.source.entries()) {
+        next.destination.push(project(value, [...next.path, String(index)]));
+      }
+    } else if (!isJsonArray(next.source) && next.source !== null && typeof next.source === 'object' && !Array.isArray(next.destination)) {
+      for (const [key, value] of Object.entries(next.source)) {
+        next.destination[key] = project(value, [...next.path, key]);
+      }
+    }
+  }
+  return { input: redacted, confidentialPaths };
+}
+
+function describeTargetActionApprovalFields(request: TargetActionApprovalFieldsRequest): ApprovalActionFieldsPresentation {
+  const unavailable = (): ApprovalActionFieldsPresentation => {
+    const details = { path: 'input', reason: 'missing_required_context' as const };
+    return { rows: [{ kind: 'unrepresentable', ...details, title: 'Arguments' }], unrepresentable: details };
+  };
+  const projection = projectTargetActionApprovalInput(request.input, request.secretInputPaths);
+  if (!projection) return unavailable();
+  const { input: redacted, confidentialPaths } = projection;
+  const confidentialTitle = (path: string): string => {
+    const declared = request.secretInputPaths?.find(candidate => {
+      const segments = candidate.split('.');
+      const actual = path.split('.');
+      return segments.length === actual.length && segments.every((segment, index) => segment === '[]' || segment === actual[index]);
+    });
+    return (declared && request.secretInputLabels && Object.hasOwn(request.secretInputLabels, declared)
+      ? request.secretInputLabels[declared] : undefined)
+      ?? (path ? humanizeApprovalKey(path) : 'Arguments');
+  };
+  const rows: ApprovalActionFieldRow[] = confidentialPaths.map(path => ({
+    kind: 'value', path: path ? `input.${path}` : 'input', title: confidentialTitle(path),
+    value: '', valueFormat: 'confidential',
+  }));
+  const fields = isRecord(redacted) && Object.keys(redacted).length > 0
+    ? Object.entries(redacted).map(([key, value]) => ({ key, value }))
+    : [{ key: '', value: redacted }];
+  try {
+    for (const { key, value } of fields) {
+      if (confidentialPaths.includes('') || confidentialPaths.includes(key)) continue;
+      // The built-in formatter deliberately trims and joins values. Arbitrary
+      // plugin operands must instead preserve whitespace, nesting and nulls.
+      const literal = JSON.stringify(value);
+      if (literal === undefined) return unavailable();
+      rows.push({ kind: 'value', path: key ? `input.${key}` : 'input',
+        title: key ? humanizeApprovalKey(key) : 'Arguments', value: literal });
+    }
+  } catch {
+    // JSON admission has no depth quota. If this platform cannot serialize the
+    // complete value for its reader, partial disclosure cannot authorize it.
+    return unavailable();
+  }
+  // Only the original admitted invocation can supply the hidden operands.
+  return { rows, unrepresentable: confidentialPaths.length && request.approvalInputCustody !== 'live_only'
+    ? { path: 'input', reason: 'missing_required_context' } : null };
+}
+
+type TargetActionApprovalFieldsRequest = Readonly<{
+  kind: 'plugin_target_action'; input: unknown; secretInputPaths?: readonly string[]; status?: TargetActionApprovalRequestV1['status'];
+  secretInputLabels?: Readonly<Record<string, string>>;
+  approvalInputCustody?: 'live_only';
+}>;
+
+function isTargetActionApprovalFieldsRequest(request: object): request is TargetActionApprovalFieldsRequest {
+  return 'kind' in request && request.kind === 'plugin_target_action';
+}
+
 export function describeApprovalRequestFields(
-  request: Pick<ApprovalRequest, 'actionId' | 'actionArgs' | 'preview'> & Partial<Pick<ApprovalRequest, 'status'>>,
+  request: (Pick<ApprovalRequest, 'actionId' | 'actionArgs' | 'preview'> & Partial<Pick<ApprovalRequest, 'status'>>)
+    | TargetActionApprovalFieldsRequest,
 ): ApprovalActionFieldsPresentation {
+  // `'actionId' in request` would leave the target member as `& Record<'actionId', unknown>`.
+  if (isTargetActionApprovalFieldsRequest(request)) {
+    return describeTargetActionApprovalFields(request);
+  }
   const presentation = describeApprovalActionFields({
     actionId: request.actionId,
     actionArgs: request.actionArgs,
@@ -735,8 +850,14 @@ export function describeApprovalRequestFields(
  * button cannot advertise an effect that the decision owner will reject.
  */
 export function resolveApprovalRequestApproveAdmission(
-  request: ApprovalRequest,
+  request: ApprovalRequest | TargetActionApprovalRequestV1,
 ): ApprovalRequestApproveAdmission {
+  if (!('actionId' in request)) {
+    const presentation = describeApprovalRequestFields(request);
+    return presentation.unrepresentable
+      ? { status: 'unavailable', reason: 'context_unavailable', details: presentation.unrepresentable, presentation }
+      : { status: 'available', presentation };
+  }
   // Current durable requests retain the complete replay input. Validate before
   // typed projectors run; live-only records validate their private operands at
   // the invocation owner and keep only safe observation fields here.

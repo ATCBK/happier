@@ -34,6 +34,7 @@ import {
     testkitConfiguredInstance,
     createTestkitActionInvoker,
     spawnSuccess,
+    createTriageSelectedPrStartApprovalInput,
     type TestkitActionInvoker,
 } from '../sessions/testkit/entrySessionTestkit.test-support.js';
 import {
@@ -1133,59 +1134,7 @@ describe('the Session-start wire', () => {
     });
 
     it('admits the selected prepare-operation payload only as a transient carrier relay', () => {
-        const selection = {
-            target: { pluginId: 'happier.triage',
-                sourceCustody: { kind: 'development', registeredRootId: 'triage-root-1' } },
-            point: {
-                pointId: 'sources',
-                protocol: { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: 1 },
-            },
-            contributor: {
-                pluginId: START_INPUT_BASE.entryRef.source.pluginId,
-                contributionId: START_INPUT_BASE.entryRef.source.localId,
-                sourceCustody: { kind: 'development', registeredRootId: 'source-root-1' },
-            },
-        } as const satisfies PluginTargetedContributionSelectionV1;
-        const selectedInput = {
-            v: 1,
-            instance: {
-                instance: {
-                    source: START_INPUT_BASE.entryRef.source,
-                    sourceInstanceId: TESTKIT_SOURCE_INSTANCE_ID,
-                },
-                binding: {},
-            },
-            entryRef: START_INPUT_BASE.entryRef,
-            lastKnownLocator: START_INPUT_BASE.display.locator,
-            observed: TESTKIT_OBSERVED_REVISION,
-            workspace: TESTKIT_SELECTED_WORKSPACE,
-        } as const;
-
-        const parsed = TriageStartEntrySessionInputV1Schema.safeParse({
-            ...START_INPUT_BASE,
-            workspaceMode: 'pull_request',
-            destination: {
-                kind: 'new',
-                creationKey: 'creation-key-1',
-                spawn: TESTKIT_SPAWN_REQUEST,
-                materialization: {
-                    kind: 'reviewWorkspace',
-                    request: {
-                        instance: testkitConfiguredInstance(),
-                        entryRef: START_INPUT_BASE.entryRef,
-                        workflowSubject: 'pullRequest',
-                        lastKnownLocator: START_INPUT_BASE.display.locator,
-                        observed: TESTKIT_OBSERVED_REVISION,
-                        workspace: TESTKIT_SELECTED_WORKSPACE,
-                    },
-                },
-            },
-            prepareReviewWorkspaceSelection: {
-                selection,
-                input: selectedInput,
-                credentialRef: testkitConfiguredInstance().binding.account,
-            },
-        });
+        const parsed = TriageStartEntrySessionInputV1Schema.safeParse(createTriageSelectedPrStartApprovalInput());
         expect(
             parsed.success,
             parsed.success ? undefined : JSON.stringify(parsed.error, null, 2),

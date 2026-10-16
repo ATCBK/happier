@@ -3318,6 +3318,19 @@ describe('Action Spec Registry', () => {
     expect(getActionSpec('approval.request.decide').surfaces.cli).toBe(true);
   });
 
+  it('publishes safe approval reads wherever approvals can be decided', () => {
+    for (const actionId of ['approval.request.list', 'approval.request.get'] as const) {
+      const spec = getActionSpec(actionId);
+      for (const surface of ['ui', 'agent', 'mcp', 'cli', 'rpc', 'api', 'plugin'] as const) {
+        expect(spec.surfaces[surface], `${actionId} on ${surface}`).toBe(getActionSpec('approval.request.decide').surfaces[surface]);
+        expect(listActionSpecsForCatalogSurface({ surface }).map(entry => entry.id)).toContain(spec.id);
+      }
+      expect(spec.safety).toBe('safe');
+      expect(spec.sideEffectClass).toBe('read');
+      expect(spec.approvalPolicy?.control).toBe(true);
+    }
+  });
+
   it('binds approval queue RPC wire methods to ActionSpec rows', () => {
     const expectedBindings = new Map([
       ['skills.found.list', RPC_METHODS.SKILLS_FOUND_LIST],
