@@ -38,8 +38,8 @@ const accountKeyOf = (
   accountId: string,
 ) => `${service.pluginId}/${service.localId}:${accountId}`;
 
-// Presentation of an answered Account read survives route-owned hook mounts,
-// including services whose answer contains no allowance observation.
+// Observed catalog identity survives route-owned hook mounts and sleeping
+// catalog machines; it does not depend on a service supporting allowance reads.
 const observedServiceNames = new WeakMap<ServerAccountScopeLifetime, Map<string, ConnectedServiceRegistryEntry>>();
 const NO_GROUPS: readonly QualifiedConnectedAccountGroupV4[] = [];
 
@@ -98,8 +98,7 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
     if (!lifetime?.isCurrent()) return;
     for (const account of projection.accounts) {
       const entry = serviceEntryOf(account);
-      if (entry && (account.observedAtMs !== null || !['pending', 'not_loaded'].includes(account.state.status)))
-        retainedNames.set(account.key, entry);
+      if (entry) retainedNames.set(account.key, entry);
     }
   }, [lifetime, projection.accounts, retainedNames, serviceEntryOf]);
   const { present } = useConnectedAccountIdentityPrivacy();
@@ -114,15 +113,7 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
     [summaries.accountIdentities],
   );
   const serviceLabelOf = React.useCallback((account: UsagePlanAccount) => {
-    // Descriptor arrival must not rename an unanswered account mid-read.
-    // Released built-in names are already available synchronously; other
-    // services keep the generic label until their own first read answers.
-    if (account.observedAtMs === null && ['pending', 'not_loaded'].includes(account.state.status)
-      && !serviceEntryOf(account)?.legacyServiceId) {
-      const retained = lifetime?.isCurrent() ? retainedNames.get(account.key) : undefined;
-      return retained ? resolveConnectedServiceRegistryEntryDisplayName(retained, t, localizePluginText)
-        : t('connectedServices.fallbackName');
-    }
+    // The catalog establishes identity independently of Usage read availability.
     const entry = serviceEntryOf(account) ?? (lifetime?.isCurrent() ? retainedNames.get(account.key) : undefined);
     return entry ? resolveConnectedServiceRegistryEntryDisplayName(entry, t, localizePluginText)
       : t('connectedServices.fallbackName');

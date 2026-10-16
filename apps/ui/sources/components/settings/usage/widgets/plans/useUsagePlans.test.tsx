@@ -163,8 +163,22 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
           outcomeReconciliation: 'none', fields: [] }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] },
     captureActiveServerAccountScopeLifetime()!));
     await hook.rerender();
-    expect(hook.getCurrent().nameOf(hook.getCurrent().projection.accounts[1]!).serviceLabel).toBe(t('connectedServices.fallbackName'));
+    expect(hook.getCurrent().nameOf(hook.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
     expect(hook.getCurrent().projection.pools[0]).toMatchObject({ name: 'Studio pool' });
+    // Catalog identity is already known even if this service's Usage read has
+    // never answered. A sleeping catalog machine must not erase that identity.
+    await act(async () => installConnectedAccountDescriptorProjection({ scopeKey: 'plans-offline', status: 'loading',
+      conflicts: [], errorReason: null, descriptors: [] }, captureActiveServerAccountScopeLifetime()!));
+    const offline = await renderHook(() => useUsagePlans(slice, model), {
+      wrapper: ({ children }) => React.createElement(InjectedAuthProvider, { credentials, children }),
+    });
+    expect.soft(offline.getCurrent().nameOf(offline.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
+    await offline.unmount();
+    await act(async () => installConnectedAccountDescriptorProjection({ scopeKey: 'plans', status: 'ready', conflicts: [], errorReason: null,
+      descriptors: [{ id: 'email', serviceId: 'email', pluginId: 'acme.email', title: 'Email IMAP + SMTP', provenance: 'external',
+        sourceKind: 'installed', authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual',
+          outcomeReconciliation: 'none', fields: [] }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] },
+    captureActiveServerAccountScopeLifetime()!));
     // Once the account's read answers, the already-hydrated service title can be shown.
     slice = { ...slice, sources: slice.sources.map(state => state.source === `quota:${JSON.stringify({ bindingKind: 'account', ref: email })}`
       ? { ...state, status: 'partial' } : state) };
