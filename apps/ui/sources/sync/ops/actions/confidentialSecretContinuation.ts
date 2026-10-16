@@ -60,6 +60,8 @@ export async function continueConfidentialSecretFill(input: Readonly<{
         machineId: continuation.request.machineId, serverId: input.scope.serverId,
         accountId: input.scope.accountId, method: RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE,
         payload: continuation, signal: input.signal, onDispatched: () => { dispatched = true; },
+        // Setup stays bounded; admitted native delivery follows the human caller's lifetime.
+        operationTimeoutMs: null,
         ...(continuation.accountEncryptionMode === 'e2ee' ? { requireEncryptedPayload: true as const } : {}),
       });
       const settlement = SecretFillSettlementV1Schema.safeParse(result);
