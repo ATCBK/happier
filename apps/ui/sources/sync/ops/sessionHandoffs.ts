@@ -5,7 +5,7 @@ import type { SessionHandoffStorageMode } from '@happier-dev/protocol/sessions/c
 import type { HandoffTargetReplacementApprovalV1 } from '@happier-dev/protocol/sessions/control/handoff/handoffTargetReplacementApprovalV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
+import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { v4 as uuidv4 } from 'uuid';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -162,7 +162,7 @@ export async function preflightWorkspaceDestinationReplacement(
         return { type: 'error', result: { ok: false, errorCode: 'invalid_input', error: 'invalid_input' } };
     }
     try {
-        return HandoffTargetReplacementPreflightResultV1Schema.parse(await machineRpcWithServerScope({
+        const raw = await machineRpcWithServerScope({
             machineId,
             serverId,
             method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_REPLACEMENT_PREFLIGHT,
@@ -180,10 +180,20 @@ export async function preflightWorkspaceDestinationReplacement(
                 ...(options.destinationIntent ? { destinationIntent: options.destinationIntent } : {}),
             },
             ...(options.signal ? { signal: options.signal } : {}),
-        }));
-    } catch {
-        const errorCode = options.signal?.aborted ? 'cancelled' : 'target_unavailable';
-        return { type: 'error', result: { ok: false, errorCode, error: errorCode } };
+        });
+        const refusal = readError(raw);
+        if (refusal) return { type: 'error', result: { ok: false, errorCode: refusal.errorCode, error: refusal.errorMessage } };
+        const parsed = HandoffTargetReplacementPreflightResultV1Schema.safeParse(raw);
+        return parsed.success ? parsed.data : { type: 'error', result: { ok: false,
+            errorCode: 'invalid_response', error: 'Workspace target returned an invalid preflight response' } };
+    } catch (error) {
+        if (options.signal?.aborted) return { type: 'error', result: { ok: false, errorCode: 'cancelled', error: 'cancelled' } };
+        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+            return { type: 'error', result: { ok: false, errorCode: 'workspace_sync_update_required',
+                error: 'Workspace target preflight requires a newer daemon' } };
+        }
+        const errorCode = readRpcErrorCode(error) ?? 'target_unavailable';
+        return { type: 'error', result: { ok: false, errorCode, error: error instanceof Error ? error.message : errorCode } };
     }
 }
 
