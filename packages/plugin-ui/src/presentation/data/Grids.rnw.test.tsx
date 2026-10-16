@@ -2,6 +2,7 @@ import { act, createElement, type ComponentType } from 'react';
 import { describe, expect, it } from 'vitest';
 
 import * as Presentation from '@happier-dev/plugin-ui/presentation';
+import { resolveVisibleAxisLabels } from './Heatmap.js';
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { createSurfaceContext } from '../../surfaceFixture.testSupport.js';
 
@@ -63,5 +64,35 @@ describe('neutral public grids', () => {
       expect(axis(8).textContent).toBe('');
       expect(axis(6).parentElement!.children).toHaveLength(24);
     } finally { mount.unmount(); }
+  });
+
+  it('a strip names its columns on one line each, centred on the column and free to overflow its slot', () => {
+    const columns = Array.from({ length: 30 }, (_, day) => ({ id: `d${day}`, label: day % 7 === 0 ? String(day + 10) : '' }));
+    const mount = mountThroughReactNativeWeb(createElement(Presentation.Heatmap, { ...props, layout: 'strip', rows: [{ id: 'days', label: '' }], columns,
+      cells: columns.map((column, day) => ({ id: column.id, row: 'days', column: column.id, label: column.id, value: day })) }));
+    try {
+      const axis = (day: number) => mount.container.querySelector<HTMLElement>(`[data-testid="samples-axis-d${day}"]`)!;
+      expect(axis(7).textContent).toBe('17');
+      expect(axis(8).textContent).toBe('');
+      expect(axis(7).parentElement!.children).toHaveLength(30);
+      // A two-digit label in a 13 px column must not wrap one digit per line: the label is a nowrap run.
+      const label = [...axis(7).querySelectorAll<HTMLElement>('div')].find((element) => element.children.length === 0 && element.textContent === '17')!;
+      const classes = label.getAttribute('class') ?? '';
+      expect(classes.includes('r-whiteSpace-') && classes.includes('r-textOverflow-')).toBe(true);
+    } finally { mount.unmount(); }
+  });
+});
+
+describe('resolveVisibleAxisLabels', () => {
+  const labels = (count: number, every: number) => Array.from({ length: count }, (_, index) => (index % every === 0 ? String(index + 10) : ''));
+  it('keeps every label that fits beside its neighbour', () => {
+    expect([...resolveVisibleAxisLabels({ labels: labels(30, 7), stride: 13, characterWidth: 6.6 })]).toEqual([0, 7, 14, 21, 28]);
+  });
+  it('thins to every n-th labelled column once slots are narrower than the labels', () => {
+    // Labels every column, 8 px apart, ~14 px wide each: only every third label can be read.
+    expect([...resolveVisibleAxisLabels({ labels: labels(12, 1), stride: 8, characterWidth: 6.6 })]).toEqual([0, 3, 6, 9]);
+  });
+  it('keeps everything while the width is unknown', () => {
+    expect(resolveVisibleAxisLabels({ labels: labels(12, 1), stride: 0, characterWidth: 6.6 }).size).toBe(12);
   });
 });
