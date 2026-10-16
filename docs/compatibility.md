@@ -2173,11 +2173,13 @@ These current-development shapes do not create a second resolver or a compatibil
 an unshipped input. Exact operation support must be checked before effect; unrelated operations
 remain usable when that support is absent.
 
-The extended compact engine problem/selection contract requires a successor to the currently
-pinned `0.18.1-happier.9` artifact. Source-built integration evidence does not activate that contract
-in ordinary product runtime. Publication and adoption belong to the existing engine release/pin
-owner; consumers must not guess missing fields, accept a second dialect, or silently run a dirty
-fork as a fallback. This dependency remains pending until that owner publishes and adopts it.
+The development pin selects the published `0.18.1-happier.11` engine at
+`0139d6755f7281c84899b207de3179235afe9b9e`, which supplies the extended compact engine
+problem/selection contract. Existing daemons must load the updated CLI and acquire that verified
+manager/agent pair before using it. The historical `.9` endpoint shape still returns
+`workspace_sync_update_required`; consumers must not guess missing fields, accept a second
+dialect, or silently run a dirty fork as a fallback. Source-built integration evidence alone
+does not prove that an existing daemon has loaded the new engine.
 
 The first capable client imports the retired local existing-Session text/semantic stores and the
 singleton new-Session draft into the canonical draft repository. It removes each legacy value only
