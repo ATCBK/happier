@@ -144,6 +144,31 @@ describe('approval field presentation', () => {
 
 
 
+  it.each([undefined, 'own-trigger'])('admits an ordinary Automation pause review with trigger %s', (triggerId) => {
+    const actionId = 'workflow.trigger.update' as const;
+    const actionArgs = getActionSpec(actionId).inputSchema.parse({
+      automationId: 'bd7da11a-909b-497a-98de-b878cd2d0e24', expectedRevision: 1,
+      ...(triggerId ? { triggerId } : {}), patch: { enabled: false },
+    });
+    const request = ApprovalRequestV2Schema.parse({
+      v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1, createdBy: { surface: 'cli' },
+      actionId, actionArgs, preview: { actionId, actionArgs }, summary: 'Pause own Automation',
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' },
+        requestId: 'own-pause-request', surface: 'cli', serverId: 'home', actionId },
+    });
+    const admission = resolveApprovalRequestApproveAdmission(request);
+    expect(admission.status).toBe('available');
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({
+      path: 'patch', value: JSON.stringify({ enabled: false }),
+    }));
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({
+      path: 'automationId', value: actionArgs.automationId,
+    }));
+    if (triggerId) expect(admission.presentation.rows).toContainEqual(expect.objectContaining({
+      path: 'triggerId', value: triggerId,
+    }));
+  });
+
   it('admits the neighboring capabilities families without disclosing live-only secret values', () => {
     const entry = { id: 'mcp-a', name: 'mcp-a', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 };
     const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: review\n---\nReview.'), 0o644);

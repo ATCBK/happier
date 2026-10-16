@@ -4688,14 +4688,15 @@ const WORKFLOW_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORKFLOW_AC
       : actionId === 'workflow.trigger.add'
       ? [{ path: 'workflow', title: 'Workflow', widget: 'select', optionsSourceId: 'workflows.references.available' }]
       : actionId === 'workflow.trigger.update'
-        ? ([
+        ? [
           { path: 'automationId', title: 'Automation', widget: 'text', required: true },
           { path: 'expectedRevision', title: 'Reviewed revision', widget: 'number', required: true },
-          { path: 'confirmLegacyConversion', title: 'Store reviewed workflow without end-to-end encryption', widget: 'boolean', required: true },
-          { path: 'patch.target', title: 'Reviewed workflow', widget: 'json', required: true },
-          { path: 'patch.project', title: 'Reviewed project', widget: 'json', required: true },
-          { path: 'patch.enabled', title: 'Enable after conversion', widget: 'boolean' },
-        ] satisfies ActionInputFieldHint[]).map((field) => ({ ...field, visibleWhen: { op: 'eq' as const, path: 'confirmLegacyConversion', value: true } }))
+          { path: 'triggerId', title: 'Trigger', widget: 'text' },
+          { path: 'patch', title: 'Changes', widget: 'json', required: true,
+            description: 'For a reviewed legacy conversion, include the reviewed target and project, and optionally enabled.' },
+          { path: 'confirmLegacyConversion', title: 'Store reviewed workflow without end-to-end encryption', widget: 'boolean', required: true,
+            visibleWhen: { op: 'eq', path: 'confirmLegacyConversion', value: true } },
+        ]
       : actionId === 'session.trigger.add'
         ? [{ path: 'target.ref', title: 'Workflow', widget: 'select', optionsSourceId: 'workflows.references.available' }]
       : actionId === 'workflow.run.start'
