@@ -33,6 +33,7 @@ import {
 import {
     ITEM_GROUP_CONTAINER_HORIZONTAL_PADDING_PX,
     ITEM_GROUP_CONTENT_MARGIN_HORIZONTAL_PX,
+    ITEM_GROUP_HEADER_HORIZONTAL_PADDING_PX,
     ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX,
 } from './itemGroupSpacing';
 import { Text } from '@/components/ui/text/Text';
@@ -161,7 +162,7 @@ const stylesheet = StyleSheet.create((theme) => {
         header: {
             paddingTop: Platform.select({ ios: 26, default: 20 }),
             paddingBottom: Platform.select({ ios: 8, default: 8 }),
-            paddingHorizontal: Platform.select({ ios: 32, default: 24 }),
+            paddingHorizontal: Platform.select(ITEM_GROUP_HEADER_HORIZONTAL_PADDING_PX),
         },
         headerNoTitle: {
             paddingTop: Platform.select(ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX),
@@ -259,7 +260,7 @@ const stylesheet = StyleSheet.create((theme) => {
         footer: {
             paddingTop: Platform.select({ ios: 6, default: 8 }),
             paddingBottom: Platform.select({ ios: 8, default: 16 }),
-            paddingHorizontal: Platform.select({ ios: 32, default: 24 }),
+            paddingHorizontal: Platform.select(ITEM_GROUP_HEADER_HORIZONTAL_PADDING_PX),
         },
         footerText: {
             ...Typography.variant('body'),

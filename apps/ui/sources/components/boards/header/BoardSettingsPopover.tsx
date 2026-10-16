@@ -10,6 +10,8 @@ import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ITEM_ROW_PADDING_HORIZONTAL } from '@/components/ui/lists/itemDensityMetrics';
+import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
@@ -137,6 +139,8 @@ const BoardSettingsContent = React.memo(function BoardSettingsContent(props: Rea
     const { board, dispatch } = props;
     const [name, setName] = React.useState(board.name);
     const [managingPicks, setManagingPicks] = React.useState(false);
+    // The name field stands in for a row, so it starts where the rows' text does.
+    const rowInset = ITEM_ROW_PADDING_HORIZONTAL[useResolvedItemDensity()];
     const commitName = () => {
         const next = name.trim();
         if (next && next !== board.name) dispatch({ kind: 'update', boardId: board.id, patch: { name: next } });
@@ -197,6 +201,7 @@ const BoardSettingsContent = React.memo(function BoardSettingsContent(props: Rea
         <SelectionList
             testID="board-settings.picks"
             rootStep={rootStep}
+            optionPresentation={managingPicks ? undefined : 'section'}
             syncActiveStep={managingPicks ? pickedStep : undefined}
             onActiveStepChange={step => setManagingPicks(step.id === 'picked')}
             selection={managingPicks ? { kind: 'multiple', selectedIds: new Set(props.pickedCards.map(card => card.key)) } : undefined}
@@ -210,7 +215,7 @@ const BoardSettingsContent = React.memo(function BoardSettingsContent(props: Rea
             heightBehavior="content"
             bodyHeader={!managingPicks ? <View style={styles.content}>
             <ItemGroup surface="none">
-                <View style={styles.field}>
+                <View style={[styles.field, { paddingHorizontal: rowInset }]}>
                     <FieldItem label={t('boards.settings.name')}>
                         <FieldTextInput
                             testID="board-settings.name"
@@ -336,7 +341,6 @@ const styles = StyleSheet.create(() => ({
         paddingVertical: 8,
     },
     field: {
-        paddingHorizontal: 16,
         paddingVertical: 8,
     },
 }));

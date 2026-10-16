@@ -667,7 +667,9 @@ export type SelectionListColumnsLayout = Readonly<{
  * Unselected cards paint `surface.base` and are therefore invisible on a base
  * pane BY DESIGN — only the selected card is meant to read as an envelope.
  */
-export type SelectionListOptionPresentation = 'row' | 'menu' | 'card';
+export type SelectionListOptionPresentation = 'row' | 'menu' | 'card' | 'section';
+// `'section'`: a settings body whose own `ItemGroup` slots share the list (Board settings) — section
+// titles and rows sit on the grouped section's insets, so the panel has one left edge.
 
 export type SelectionListSelection =
     | Readonly<{ kind: 'single'; selectedId: string | null }>

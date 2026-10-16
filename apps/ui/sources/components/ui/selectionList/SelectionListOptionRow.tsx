@@ -20,6 +20,7 @@ import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presenta
 import { Item } from '@/components/ui/lists/Item';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SlideTransitionSwitch } from '@/components/ui/motion/SlideTransitionSwitch';
 
@@ -134,6 +135,10 @@ const menuStyles = StyleSheet.create(() => ({
     marginHorizontal: MENU_ROW_METRICS.insetPx,
     borderRadius: MENU_ROW_METRICS.radiusPx,
     overflow: 'hidden',
+  },
+  // `optionPresentation: 'section'`: rows on a grouped section's content inset, like `ItemGroup` rows.
+  section: {
+    marginHorizontal: resolveItemGroupContentHorizontalInsetPx(),
   },
 }));
 
@@ -380,9 +385,11 @@ export function PlanOptionRow(
         : undefined,
   });
   const isMenu = optionPresentation === 'menu';
+  const isSection = optionPresentation === 'section';
   const wrapperStyle = [
     props.columnCellStyle,
     isMenu ? menuStyles.container : null,
+    isSection ? menuStyles.section : null,
     ...(isCard
       ? [
           cardStyles.container,
@@ -392,7 +399,7 @@ export function PlanOptionRow(
       : []),
   ];
   const cardWrapperProps =
-    props.columnCellStyle !== undefined || isCard || isMenu
+    props.columnCellStyle !== undefined || isCard || isMenu || isSection
       ? { style: wrapperStyle }
       : {};
   // In card mode the trailing accessory leaves the row's flow entirely and
