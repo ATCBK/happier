@@ -54,6 +54,7 @@ import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createCliWidgetDefinitionActionDepsV1 } from '@/session/actions/widgetDefinitionActionDeps';
 import { SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
 import type { WidgetDefinitionArtifactV1 } from '@happier-dev/protocol/widgets';
+import { createSessionBoardWidgetActionPortV1 } from '@happier-dev/protocol/widgets';
 
 const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
 const item = { v: 1, destination: 'board', title: 'Note', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
@@ -98,6 +99,32 @@ describe('CLI Board Action family', () => {
     });
   });
   afterEach(async () => { restore(); vi.restoreAllMocks(); await app.close(); });
+  it('admits the portable Home through the widget Board port while retaining exact HTTP routing', async () => {
+    const serverIdentityId = 'srv_board_identity';
+    const writes: unknown[] = [];
+    app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+    app.get('/v2/sessions/session-one/system-records', async () => ({ records: [], hasNext: false, nextCursor: null }));
+    app.put('/v2/sessions/session-one/board', async request => {
+      writes.push(request.body);
+      return { operation: 'upsert_item', itemId: 'capacity', outcome: 'created', itemRevision: revision, layoutRevision: revision };
+    });
+    const deps = createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+      serverId: 'local-profile', serverIdentityId, serverHttpBaseUrl: 'http://board.test' });
+    const port = createSessionBoardWidgetActionPortV1(deps.sessionBoardAction!);
+    const surface = { serverId: serverIdentityId, accountId: 'owner', owner: { kind: 'sessionBoard' as const, sessionId: 'session-one' } };
+    const instance = { v: 1 as const, id: 'capacity', definition: { kind: 'builtin' as const, id: 'usage_capacity' }, bindings: {} };
+    expect(await port.read(surface, { serverId: 'local-profile' })).toMatchObject({ surface, canEdit: true, instances: [] });
+    expect(await deps.sessionBoardPrepareItem!({ input: { sessionId: 'session-one', itemId: 'capacity', expectedItemRevision: null, item },
+      context: { serverId: serverIdentityId } })).toMatchObject({ item });
+    expect(await port.apply(surface, { kind: 'add', instance, presentation: { size: 'medium' },
+      placement: { tabId: 'overview', tabTitle: 'Overview', width: 'wide' } }, { serverId: 'local-profile' }))
+      .toMatchObject({ ok: true, result: { ref: { surface, instanceId: 'capacity' }, instance } });
+    expect(writes).toEqual([expect.objectContaining({ itemId: 'capacity', itemContent: { t: 'plain', v: expect.objectContaining({ source: { kind: 'widget', instance } }) } })]);
+    expect(await port.read({ ...surface, serverId: 'srv_foreign' }, {})).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(await deps.sessionBoardPrepareItem!({ input: { sessionId: 'session-one', itemId: 'capacity', expectedItemRevision: null, item },
+      context: { serverId: 'srv_foreign' } })).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(writes).toHaveLength(1);
+  });
   it.each([200, 500] as const)('preserves the HTTP %s visual outcome through the real Account-backed Session MCP factory', async status => {
     app.get('/v2/sessions/runtime-session', async () => ({ session: { ...rawSession, id: 'runtime-session' } }));
     app.get('/v2/sessions/runtime-session/system-records/record', async () => ({ record: null }));
