@@ -6244,6 +6244,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             result: {
               actionSpecs: searchSerializedActionSpecsForSurface({
                 surface: ctx.surface ?? null,
+                includeOutputSchema: ctx.surface !== 'agent' && ctx.surface !== 'mcp' && ctx.surface !== 'cli',
                 query: typeof data.query === 'string' ? data.query : '',
                 limit: typeof data.limit === 'number' ? data.limit : undefined,
                 isActionEnabled: (id) => !credentialScopeFailure(id, ctx, undefined, true) && isActionEnabled(getActionSpec(id), ctx),

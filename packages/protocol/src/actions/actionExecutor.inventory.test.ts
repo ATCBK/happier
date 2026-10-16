@@ -6,7 +6,7 @@ import type { ProjectAccountOrganizationV1 } from '../projects/projectAccountRow
 import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
 
 import { createActionExecutor as createRawActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
-import { ActionDiscoveryDefinitionV1Schema, type ActionDefinitionV1 } from './actionDefinitionV1.js';
+import { ActionDiscoveryDefinitionSummaryV1Schema, ActionDiscoveryDefinitionV1Schema, type ActionDefinitionV1 } from './actionDefinitionV1.js';
 import { getActionSpec, PUBLIC_ACTION_OUTPUT_SCHEMAS, resolveActionExecutionPlacementForInput } from './actionSpecs.js';
 import { ActionIdSchema, WorkflowActionIdV1Schema } from './actionIds.js';
 import type { MachinesAgentsListInput } from '../capabilities/machineAgentInventory.js';
@@ -1969,6 +1969,25 @@ describe('createActionExecutor (inventory/discovery)', () => {
       if (!res.ok) throw new Error('Action search did not complete');
       expect(res.result.actionSpecs.some((spec) => spec.id === actionId)).toBe(expected);
     }
+  });
+
+  it.each(['agent', 'mcp', 'cli', 'api'] as const)('keeps %s Browser discovery summaries usable while explicit detail retains its schema', async surface => {
+    const executor = createActionExecutor(createDeps());
+    const search = await executor.execute('action.spec.search', { query: 'browser', limit: 50 }, { surface });
+    expect(search.ok ? null : search).toBeNull();
+    if (!search.ok) throw new Error('Browser Action discovery failed');
+    PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.search'].parse(search.result);
+    expect(search.result.actionSpecs.length).toBeGreaterThan(0);
+    const summaries = search.result.actionSpecs.map(definition => ActionDiscoveryDefinitionSummaryV1Schema.parse(definition));
+    if (surface === 'api') expect(summaries.some(definition => definition.outputSchema !== undefined)).toBe(true);
+    else for (const definition of summaries) expect(Object.hasOwn(definition, 'outputSchema'), definition.id).toBe(false);
+
+    const detail = await executor.execute('action.spec.get', { id: 'action.spec.get' }, { surface });
+    expect(detail.ok ? null : detail).toBeNull();
+    if (!detail.ok) throw new Error('Explicit Action detail failed');
+    const definition = ActionDiscoveryDefinitionV1Schema.parse(detail.result.actionSpec);
+    expect(definition.inputSchema).toMatchObject({ type: 'object' });
+    expect(definition.outputSchema).toBeDefined();
   });
 
   it('discovers current contributed Action definitions through the shared catalog operations', async () => {
