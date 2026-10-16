@@ -200,8 +200,9 @@ export function useTriageActions(): TriageMountedActionsV1 {
     try {
       const result = await transport.administer(input, { signal: controller.signal });
       if (result.status === 'applied') {
+        // Restoring removes the stored set, so what is on screen is the shipped catalog again, not a configured one.
         const projection = readTriageActionsProjectionV1({
-          availability: 'parsed',
+          availability: input.kind === 'reset' ? 'absent' : 'parsed',
           actions: result.actions ?? [],
         });
         setRead(projection);

@@ -312,7 +312,7 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
               <Button
                 titleKey="plugins.triage.surface.actions.close"
                 title="Done"
-                variant="secondary"
+                variant="plain"
                 onPress={props.onClose}
               />
             )}

@@ -39,6 +39,7 @@ import {
     createDirectTriageUnlinkTransport,
 } from '../sessions/cockpit/unlinkLinkedEntry.js';
 import type { TriageListDisplayRowV1 } from './marks/pinnedRows.js';
+import { triageResetActionsInputV1 } from './actions/actionsCommand.js';
 import { useTriageActions } from './actions/useTriageActions.js';
 import { useTriageConfiguredSources } from './configuration/useTriageConfiguredSources.js';
 import { useTriageEntryDetail } from './detail/useTriageEntryDetail.js';
@@ -188,6 +189,10 @@ const durableProbeSurface = defineUiSurface(() => {
                     ? 'actions:unavailable'
                     : `actions:${actions.loaded ? 'loaded' : 'reading'}:[${actions.actions.map((action) => action.label).join(',')}]`}
             />
+            <Text value={`actions-read:${actions.read.kind}`} />
+            <Button title="probe-restore-actions" onPress={() => {
+                if (actions.revision !== null) void actions.administer(triageResetActionsInputV1(actions.revision));
+            }} />
             <Text value={actionResolution} />
             <Button title="probe-resolve-action" onPress={async () => {
                 const result = await actions.resolveForExecution('ask', []);
@@ -389,6 +394,30 @@ describe('durable Account state with no daemon reachable', () => {
             .resolves.toEqual({ content: 'actions:loaded:[Discuss,Ask,Fix,Review,Explain this PR in chat]' });
         // The whole point: not one of those reads went near a daemon.
         expect(harness.actionCalls).toEqual([]);
+    });
+
+    it('reads the catalog as the shipped one again once Restore defaults has removed the stored set', async () => {
+        const harness = createDurableHarness();
+        harness.accountKv.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, {
+            v: 1,
+            actions: [{
+                actionId: 'action-1',
+                label: 'Discuss',
+                enabled: true,
+                appliesTo: ['pullRequest'],
+                profileId: null,
+                workspaceMode: 'reference_only',
+                target: { kind: 'agent', promptInvocationId: 'prompt-1', delivery: 'compose' },
+            }],
+        });
+        const fixture = await mountProbe(harness);
+        await expect(fixture.getByText('actions-read:parsed')).resolves.toEqual({ content: 'actions-read:parsed' });
+
+        await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'probe-restore-actions' })); });
+        for (let settle = 0; settle < 4; settle += 1) await act(async () => { await Promise.resolve(); });
+
+        expect(harness.accountKv.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toBeUndefined();
+        await expect(fixture.getByText('actions-read:absent')).resolves.toEqual({ content: 'actions-read:absent' });
     });
 
     it('does not resolve a deleted built-in for execution when the mount has no known subjects', async () => {
