@@ -7,7 +7,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 
 describe('logger.debugLargeJson', () => {
-    const envKeys = ['DEBUG', 'HAPPIER_HOME_DIR', 'HAPPIER_LOG_LEVEL', 'HAPPIER_DAEMON_LOG_KEEP_COUNT', 'HAPPIER_SESSION_LOG_KEEP_COUNT', 'HAPPIER_CRASHED_SESSION_LOG_KEEP_COUNT', 'DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING', 'HAPPIER_SERVER_URL'] as const;
+    const envKeys = ['DEBUG', 'HAPPIER_HOME_DIR', 'HAPPIER_LOG_LEVEL', 'HAPPIER_DAEMON_LOG_KEEP_COUNT', 'HAPPIER_SESSION_LOG_KEEP_COUNT', 'HAPPIER_CRASHED_SESSION_LOG_KEEP_COUNT', 'DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING', 'HAPPIER_SERVER_URL', 'TZ'] as const;
     let envScope = createEnvKeyScope(envKeys);
     let tempDir: string;
 
@@ -39,6 +39,41 @@ describe('logger.debugLargeJson', () => {
         logger.flushSync();
 
         expect(existsSync(logger.getLogPath())).toBe(false);
+    });
+
+    it.each(['UTC', 'Europe/Amsterdam', 'America/New_York'])('preserves local millisecond timestamps in %s across midnight and daylight saving', async timeZone => {
+        process.env.TZ = timeZone;
+        const { logger } = await import('@/ui/logger');
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            for (const instant of ['2026-01-01T00:00:00.007Z', '2026-03-29T00:59:59.999Z', '2026-03-29T01:00:00.000Z', '2026-11-01T06:00:00.123Z']) {
+                const date = new Date(instant);
+                vi.setSystemTime(date);
+                logger.infoFile('timestamp-format');
+                logger.flushSync();
+                const expected = date.toLocaleTimeString('en-US', { timeZone, hour12: false,
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+                expect(readFileSync(logger.getLogPath(), 'utf8')).toContain(`[${expected}] timestamp-format`);
+            }
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('follows an explicit timezone change in a running process', async () => {
+        process.env.TZ = 'UTC';
+        const { logger } = await import('@/ui/logger');
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            const date = new Date('2026-01-01T00:00:00.007Z');
+            vi.setSystemTime(date);
+            for (const timeZone of ['UTC', 'America/New_York', 'Europe/Amsterdam']) {
+                process.env.TZ = timeZone;
+                logger.infoFile('timezone-change');
+                logger.flushSync();
+                const expected = date.toLocaleTimeString('en-US', { timeZone, hour12: false,
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+                expect(readFileSync(logger.getLogPath(), 'utf8')).toContain(`[${expected}] timezone-change`);
+            }
+        } finally { vi.useRealTimers(); }
     });
 
     it('writes to log file when DEBUG is set', async () => {

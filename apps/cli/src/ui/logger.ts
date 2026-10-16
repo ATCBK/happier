@@ -195,15 +195,26 @@ function createTimestampForFilename(date: Date = new Date()): string {
   }).replace(/[: ]/g, '-').replace(/,/g, '') + '-pid-' + process.pid
 }
 
-function createTimestampForLogEntry(date: Date = new Date()): string {
-  return date.toLocaleTimeString('en-US', { 
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+function createLogEntryTimestampFormatter() {
+  return new Intl.DateTimeFormat('en-US', {
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     fractionalSecondDigits: 3
   })
+}
+
+let logEntryTimeZone = process.env.TZ
+let logEntryTimestampFormatter = createLogEntryTimestampFormatter()
+
+function createTimestampForLogEntry(date: Date = new Date()): string {
+  // An explicit process timezone change still takes effect on the next line.
+  if (process.env.TZ !== logEntryTimeZone) {
+    logEntryTimeZone = process.env.TZ
+    logEntryTimestampFormatter = createLogEntryTimestampFormatter()
+  }
+  return logEntryTimestampFormatter.format(date)
 }
 
 function resolveLogsDir(): string {
