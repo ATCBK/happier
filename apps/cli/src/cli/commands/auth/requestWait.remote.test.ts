@@ -5,8 +5,12 @@ import { join } from 'node:path';
 import axios, { AxiosError, AxiosHeaders } from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sealTerminalProvisioningV3TokenOnlyPayload } from '@happier-dev/protocol/crypto/terminalProvisioningV2';
+import { createHappierJsonExecutorFromTextRunner, runRemoteHomeEnrollmentRecipe } from '@happier-dev/cli-common/systemTasks';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { reloadConfiguration } from '@/configuration';
+import { handleAuthRequest } from './request';
+import { handleAuthWait } from './wait';
 
 const descriptor = { v: 1 as const, homeServerIdentityId: 'srv_buffered_home', canonicalServerUrl: 'https://home.example.test', revision: 1,
   endpoints: [{ kind: 'https' as const, url: 'https://home.example.test' }] };
@@ -17,11 +21,12 @@ const managedEnrollment = { homeId: descriptor.homeServerIdentityId, managedId: 
 
 describe('buffered normal auth request/wait', () => {
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
-  afterEach(() => { env.restore(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.resetModules(); });
+  afterEach(() => { env.restore(); reloadConfiguration(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
   it.each(['current', 'retired'] as const)('retains the admitted tuple privately and saves the Account bearer only for a %s normal registration', async (admission) => {
     await withTempDir('happier-buffered-auth-', async (homeDir) => {
       env.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_SERVER_URL: undefined, HAPPIER_ACTIVE_SERVER_ID: undefined });
+      reloadConfiguration();
       const outputs: string[] = [];
       // Process pipes and HTTP are genuine system boundaries. All auth,
       // profile, pending-state, crypto and registration logic remains real.
@@ -59,8 +64,6 @@ describe('buffered normal auth request/wait', () => {
         }
         return httpResult({});
       });
-      const { handleAuthRequest } = await import('./request');
-      const { handleAuthWait } = await import('./wait');
       await handleAuthRequest(['--json', '--remote-enrollment', '--home-target-stdin', '--managed-enrollment-stdin'], undefined,
         Readable.from([JSON.stringify({ homeTarget, managedEnrollment })]));
       const request = JSON.parse(outputs[0]!) as { publicKey: string; remoteProfileId: string; pairing: { secretB64Url: string; createdAtMs: number; expiresAtMs: number } };
@@ -81,12 +84,22 @@ describe('buffered normal auth request/wait', () => {
       // incumbent profile-scoped pending state.
       env.patch({ HAPPIER_SERVER_URL: undefined, HAPPIER_ACTIVE_SERVER_ID: undefined,
         HAPPIER_LOCAL_SERVER_URL: undefined, HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
-      (await import('@/configuration')).reloadConfiguration();
+      reloadConfiguration();
       const wait = handleAuthWait(['--json', '--remote-enrollment', '--server', request.remoteProfileId, '--no-persist', '--public-key', request.publicKey]);
       if (admission === 'current') {
         await wait;
         expect(JSON.parse(outputs.at(-1)!)).toMatchObject({ kind: 'remote_home_enrollment_result', homeServerIdentityId: descriptor.homeServerIdentityId,
           encryptionType: 'tokenOnly', remoteProfileId: request.remoteProfileId, machineId: expect.any(String) });
+        // Feed the real finite command producers into the exact strict host consumer.
+        const completion = outputs.at(-1)!;
+        const consumed = await runRemoteHomeEnrollmentRecipe({
+          executor: createHappierJsonExecutorFromTextRunner(async (args) => ({ status: 0, stderr: '',
+            stdout: args[1] === 'request' ? outputs[0]! : completion })),
+          processIO: 'buffered', homeTargetInput: homeTarget, managedEnrollment,
+          approvePairingRequest: async () => {}, timeoutMs: 5_000,
+        });
+        expect(consumed).toMatchObject({ machineId: JSON.parse(completion).machineId, remoteProfileId: request.remoteProfileId,
+          homeServerIdentityId: descriptor.homeServerIdentityId });
       } else {
         await expect(wait).rejects.toThrow('retired managed row');
       }
