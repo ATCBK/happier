@@ -109,6 +109,7 @@ async function home(id: string, token: string, accountMarkdownByToken?: Readonly
     else if (url.pathname === '/v1/account/encryption')
       data = { mode: 'plain', updatedAt: 0 };
     else if (url.pathname === '/v1/artifacts') {
+      code = status === 404 ? 200 : status;
       const sorted = [...rows.values()].sort(
         (a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id),
       );
@@ -123,6 +124,8 @@ async function home(id: string, token: string, accountMarkdownByToken?: Readonly
       data = sorted
         .slice(after, after + Number(url.searchParams.get('limit') ?? 500))
         .map(({ body: _body, bodyVersion: _version, ...header }) => header);
+      if (status === 404) data = [];
+      else if (code !== 200) data = { error: 'unavailable' };
     } else {
       code = status;
       const found = rows.get(
@@ -210,8 +213,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     try {
       expect(await resolve({ surface: 'coding', memoryEnabled: false, accountEntries: [entry('doc', a.id)] }))
         .toMatchObject({ blocks: ['Admitted route instructions'], admittedEntries: [{ outcome: 'ready' }] });
-      expect(a.requests).not.toContain('/v1/artifacts');
-      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(2);
+      expect(a.requests.filter(path => path === '/v1/artifacts')).toHaveLength(1);
+      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(1);
     } finally { release(); }
   });
   it('ignores the retired settings-root stack while composing explicit canonical entries', async () => {
@@ -286,8 +289,9 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     expect(result, JSON.stringify(result)).toMatchObject({ ok: false,
       errorCode: state === 'unavailable' ? 'preparation_pending' : 'attachment_unavailable' });
     expect(spawn).not.toHaveBeenCalled();
-    // Birth resolves the selected qualified document, not the optional catalog listing.
-    expect(a.requests, JSON.stringify(a.requests)).toContain('/v1/artifacts/instructions');
+    // Birth classifies the selected qualified header without reading its body.
+    expect(a.requests, JSON.stringify(a.requests)).toContain('/v1/artifacts');
+    expect(a.requests).not.toContain('/v1/artifacts/instructions');
     });
   });
 
@@ -369,6 +373,7 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       expect(await resolve(args)).toEqual({ blocks: ['second'], admittedEntries: [admitted('doc', 2, 'ready'), admitted('empty', 1, 'valid-empty')] });
       expect(await resolve(args)).toEqual({ blocks: ['second'], admittedEntries: [admitted('doc', 2, 'ready'), admitted('empty', 1, 'valid-empty')] });
       expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(3);
+      expect(a.requests.filter(path => path === '/v1/artifacts')).toHaveLength(3);
     });
   });
   it('reads current edited content on every preparation and shares repeated references only within that preparation', async () => {
@@ -527,7 +532,7 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     const memory = a.rows.get('memory')!;
     a.rows.set('memory', { ...memory, body: 'unreadable-body-envelope' });
     const unrelated = a.rows.get('z-other-0')!;
-    a.rows.set('z-other-0', { ...unrelated, header: 'unreadable-header-envelope' });
+    a.rows.set('z-other-0', { ...unrelated, header: 'unreadable-header-envelope', encryptionMode: 'e2ee' });
     const { resolveCliPromptStackSystemAppendBlocks: resolve } =
       await import('./resolveCliPromptStackSystemAppendBlocks');
     expect(
@@ -537,8 +542,11 @@ describe('CLI qualified current Artifact prompt preparation', () => {
         memoryEnabled: false,
       }),
     ).toEqual({ blocks: [], admittedEntries: [] });
-    expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
-    expect(a.requests.filter(path => path.startsWith('/v1/artifacts/'))).toEqual(['/v1/artifacts/memory']);
+    expect(a.requests.filter(path => path === '/v1/artifacts')).toHaveLength(2);
+    expect(a.requests.filter(path => path.startsWith('/v1/artifacts/'))).toEqual([]);
+    a.set('memory', 'Current instructions');
+    expect((await resolve({ surface: 'coding', accountEntries: [entry('memory')], memoryEnabled: false })).blocks)
+      .toEqual(['Current instructions']);
   });
   it('skips disabled inherited selections before Account HTTP', async () => {
     const a = await home('alpha', 'active-token');
@@ -561,6 +569,7 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
     await expect(resolve({ surface: 'coding', accountEntries: [entry('doc')], memoryEnabled: false }))
       .rejects.toMatchObject({ status: 'attachment_unavailable', reason: 'locked' });
-    expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toEqual(['/v1/artifacts/doc']);
+    expect(a.requests.filter(path => path === '/v1/artifacts')).toHaveLength(1);
+    expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toEqual([]);
   });
 });

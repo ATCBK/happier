@@ -89,6 +89,9 @@ export async function withCliPromptLibraryArtifactReader<T>(
       >
     >
   >();
+  const headerReaders = new Map<string, ReturnType<
+    ReturnType<typeof createCredentialedAccountArtifactStore>['createHeaderReader']
+  >>();
   const storeForHome = (serverId: string) => {
     options?.signal?.throwIfAborted();
     let pending = stores.get(serverId);
@@ -208,8 +211,13 @@ export async function withCliPromptLibraryArtifactReader<T>(
       if (!header) {
         header = pending.then(({ serverUrl, store }) => {
           if (!store) throw new ArtifactEncryptionMaterialUnavailableError();
+          let readHeader = headerReaders.get(serverId);
+          if (!readHeader) {
+            readHeader = store.createHeaderReader({ signal: options?.signal });
+            headerReaders.set(serverId, readHeader);
+          }
           return runWithServerHttpBaseUrl(serverUrl, () =>
-            store.readHeader(ref.artifactId, { signal: options?.signal }),
+            readHeader(ref.artifactId),
           );
         });
         headers.set(key, header);

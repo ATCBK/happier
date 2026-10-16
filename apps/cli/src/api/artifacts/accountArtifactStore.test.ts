@@ -68,10 +68,13 @@ describe('createAccountArtifactStore', () => {
       body: 'unreadable-body-envelope', dataEncryptionKey: mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER
         : encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey, recipientPublicKey: credentials.encryption!.publicKey, randomBytes })),
       headerVersion: 2, bodyVersion: 3, seq: 4, createdAt: 1, updatedAt: 2 };
-    mockGet.mockImplementation(async (url: string) => ({ status: 200, data: url.endsWith('/recipients')
+    mockGet.mockImplementation(async (url: string) => ({ status: 200, data: new URL(url).pathname === '/v1/artifacts'
+      ? [{ ...stored, body: undefined }, { ...stored, id: 'unrelated', encryptionMode: 'invalid', header: 'locked' }]
+      : url.endsWith('/recipients')
       ? { artifactId: stored.id, ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: mode,
         dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: stored.dataEncryptionKey, recipients: [] } : stored }));
     expect(await store.readHeader('selected')).toMatchObject({ artifactId: 'selected', header, headerVersion: 2, bodyVersion: 3 });
+    expect(mockGet.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts/selected')).toBe(false);
     await expect(store.read('selected')).rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
     accountMode = mode === 'plain' ? 'e2ee' : 'plain';
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
@@ -81,7 +84,7 @@ describe('createAccountArtifactStore', () => {
     const controller = new AbortController();
     controller.abort(new Error('cancelled'));
     await expect(store.readHeader('selected', { signal: controller.signal })).rejects.toThrow('cancelled');
-    mockGet.mockResolvedValueOnce({ status: 404, data: { error: 'not_found' } });
+    mockGet.mockResolvedValueOnce({ status: 200, data: [] });
     expect(await store.readHeader('selected')).toBeNull();
     mockGet.mockResolvedValueOnce({ status: 503, data: { error: 'unavailable' } });
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_unavailable', status: 503 });
