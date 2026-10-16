@@ -1,3 +1,4 @@
+import type * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, standardCleanup } from '@/dev/testkit';
@@ -19,11 +20,11 @@ vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/ico
 const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
-const { useRealtimeVoiceCatalog } = await import('./realtimeVoiceCatalogMenu');
+const { useRealtimeVoiceCatalog, useRealtimeCatalogMenuItems } = await import('./realtimeVoiceCatalogMenu');
 const { createBundledConversationUi } = await import('@/voice/credentials/bundledConversationClient');
 const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
 const { readDeclaredVoiceSettingsCatalog } = await import('./voiceCatalog');
-const { getPreferredLanguage, setPreferredLanguageFromSettings } = await import('@/text');
+const { getPreferredLanguage, setPreferredLanguageFromSettings, t, tLoose } = await import('@/text');
 const initialLanguage = getPreferredLanguage();
 const initialStorage = storage.getState();
 
@@ -56,6 +57,23 @@ afterEach(async () => { standardCleanup(); await runtime.dispose(); await accoun
 afterAll(() => { setPreferredLanguageFromSettings(initialLanguage); });
 
 describe('the shared realtime voice catalog', () => {
+  it('says one sentence and offers one Retry when the catalog cannot load, instead of a bare text row', async () => {
+    const onRetry = vi.fn();
+    const items = await renderHook(() => useRealtimeCatalogMenuItems({
+      catalog: { phase: 'error' }, credentialUsable: true, credentialUnavailableDetail: '', previewingId: null,
+      onPreview: () => {}, onRetry,
+    }));
+    const [failed, ...rest] = items.getCurrent().statusRows;
+    expect(rest).toEqual([]);
+    expect(failed).toMatchObject({ id: '__retry__', title: tLoose('settingsVoice.realtimeProviders.catalog.loadFailed') });
+    const retry = failed!.rightElement as React.ReactElement<{ title: string; onPress: (event?: { stopPropagation?: () => void }) => void }>;
+    expect(retry.props.title).toBe(t('common.retry'));
+    const stopPropagation = vi.fn();
+    retry.props.onPress({ stopPropagation });
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(stopPropagation).toHaveBeenCalledTimes(1);
+  });
+
   it('uses a provider-declared static catalog without contacting the catalog transport', async () => {
     const entry = createDefaultVoiceProviderRegistry().list().find(candidate => 'declaration' in candidate && candidate.declaration?.id === 'realtime-openai');
     if (!entry || !('declaration' in entry) || !entry.declaration) throw new Error('OpenAI Voice declaration missing');

@@ -5,6 +5,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { t, tLoose } from '@/text';
@@ -94,6 +95,8 @@ export function useRealtimeCatalogMenuItems(
     canPreview?: boolean;
     inUseId?: string | null;
     category?: string;
+    /** Asks the catalog again: the failure row's one recovery. */
+    onRetry?: () => void;
   }>,
 ): Readonly<{
   statusRows: DropdownMenuItem[];
@@ -109,6 +112,7 @@ export function useRealtimeCatalogMenuItems(
     canPreview,
     inUseId,
     category,
+    onRetry,
   } = params;
   return React.useMemo(() => {
     const catalogRows: DropdownMenuItem[] =
@@ -171,8 +175,22 @@ export function useRealtimeCatalogMenuItems(
         : catalog.phase === 'error'
           ? [
               {
+                // One sentence and its one recovery, kept at the foot of the account-voice row.
+                // One sentence and its one recovery, kept at the foot of the account-voice row.
                 id: '__retry__',
-                title: tLoose('settingsVoice.realtimeProviders.catalog.retry'),
+                title: tLoose('settingsVoice.realtimeProviders.catalog.loadFailed'),
+                rightElement: (
+                  <RoundButton
+                    testID="voice-catalog.retry"
+                    size="small"
+                    display="secondary"
+                    title={t('common.retry')}
+                    onPress={(event) => {
+                      event?.stopPropagation?.();
+                      onRetry?.();
+                    }}
+                  />
+                ),
               },
             ]
           : catalog.phase === 'ready' && catalog.rows.length === 0
@@ -195,6 +213,7 @@ export function useRealtimeCatalogMenuItems(
     credentialUsable,
     inUseId,
     onPreview,
+    onRetry,
     previewingId,
     theme.colors.text.secondary,
   ]);

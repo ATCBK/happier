@@ -172,7 +172,7 @@ export function RealtimeProviderFields(props: Readonly<{
   }, [props.providerId, stopPreview]);
 
   const { statusRows: catalogStatusRows, catalogRows } = useRealtimeCatalogMenuItems({ catalog: props.catalog, credentialUsable,
-    credentialUnavailableDetail, previewingId, onPreview: playPreview });
+    credentialUnavailableDetail, previewingId, onPreview: playPreview, onRetry: props.onRequestCatalog });
 
   const write = React.useCallback(async (
     field: RealtimeSettingsFieldDescriptor,
