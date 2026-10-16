@@ -22,6 +22,8 @@ export type Words = Readonly<{
     homeWorkosEnableDetail: string;
     homeWorkosOffboarding: string;
     homeWorkosPlatformRequired: string;
+    homeTeamsUsingIt: string;
+    homeTeamsUsingItNone: string;
     workosRequiredForTeamWork: string;
     workosTeamPolicyHint: string;
     workosLifecycleFootnote: string;
@@ -116,6 +118,7 @@ export type Words = Readonly<{
     workosStepPortalDoneDetail: string;
     workosOpenPortal: string;
     workosOpenPortalAgain: string;
+    workosNothingCreatedYet: string;
     workosStepChooseDetail: string;
     workosStepChooseDone: string;
     workosFindConnections: string;
@@ -289,7 +292,7 @@ export function build(w: Words, github: typeof githubAccessWords[keyof typeof gi
 
 
 export const en: Words = {
-    mappedGroupNotVisible: "a Group you can't see",
+    mappedGroupNotVisible: "a Group you can’t see",
     homeWorkosAdd: "Company sign-in via WorkOS",
     homeWorkosCompanyName: "Company name",
     homeWorkosChooseDetail: "Choose the WorkOS connection people sign in to this Home with.",
@@ -297,6 +300,8 @@ export const en: Words = {
     homeWorkosEnableDetail: "People can then sign in to this Home with their company account.",
     homeWorkosOffboarding: "SSO alone does not remove people who leave your company.",
     homeWorkosPlatformRequired: "Set up WorkOS in Sign-in platforms first.",
+    homeTeamsUsingIt: "Teams using it",
+    homeTeamsUsingItNone: "No Team accepts it yet",
     workosRequiredForTeamWork: 'Required for Team work',
     workosTeamPolicyHint: 'Change accepted sign-in methods under How members sign in.',
     workosLifecycleFootnote: 'Turning it off stops sign-in through it until you turn it back on. Removing deletes the connection from this Home; the WorkOS organization stays.',
@@ -314,6 +319,7 @@ export const en: Words = {
     workosStepPortalDoneDetail: 'Your organization is linked.',
     workosOpenPortal: 'Open portal',
     workosOpenPortalAgain: 'Open again',
+    workosNothingCreatedYet: 'Nothing is created until you open the portal. Leave now and nothing is kept.',
     workosStepChooseDetail: 'Pick which WorkOS connection signs members in.',
     workosStepChooseDone: 'Connection',
     workosFindConnections: 'Find connections',

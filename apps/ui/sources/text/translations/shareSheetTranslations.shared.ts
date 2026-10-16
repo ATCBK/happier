@@ -81,7 +81,7 @@ export const shareSheetTranslationsEnglish = { en: {
         browseAll: 'Browse all',
         browsePeople: 'Browse all people',
         browseTeams: 'Browse all Teams',
-        browseGroups: 'Browse all Team groups',
+        browseGroups: 'Browse all Team Groups',
         membersOnlyLink: 'Copy link is for people who already have access.',
         allLoaded: 'All results loaded',
         copyLink: 'Copy link',
