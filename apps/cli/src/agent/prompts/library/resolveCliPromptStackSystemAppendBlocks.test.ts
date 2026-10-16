@@ -289,9 +289,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     expect(result, JSON.stringify(result)).toMatchObject({ ok: false,
       errorCode: state === 'unavailable' ? 'preparation_pending' : 'attachment_unavailable' });
     expect(spawn).not.toHaveBeenCalled();
-    // Birth classifies the selected qualified header without reading its body.
-    expect(a.requests, JSON.stringify(a.requests)).toContain('/v1/artifacts');
-    expect(a.requests).not.toContain('/v1/artifacts/instructions');
+    // Birth resolves the selected qualified document, not the optional catalog listing.
+    expect(a.requests, JSON.stringify(a.requests)).toContain('/v1/artifacts/instructions');
     });
   });
 
@@ -362,7 +361,7 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       ({ resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks'));
     });
     it('publishes qualified admission facts with current revisions and valid-empty documents on each preparation', async () => {
-      const args = { surface: 'coding' as const, credentials: { token, encryption: null },
+      const args = { surface: 'coding' as const, credentials: { token, encryption: null }, memoryEnabled: false,
         accountEntries: [entry('doc'), entry('empty')] };
       const admitted = (id: string, bodyVersion: number, outcome: 'ready' | 'valid-empty') => ({
         entryId: id, layer: 'account', scope: { serverId: a.id, accountId: a.id },
