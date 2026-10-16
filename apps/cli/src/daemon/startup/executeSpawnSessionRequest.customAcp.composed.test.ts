@@ -751,6 +751,26 @@ describe('Custom ACP fresh daemon launch composition', () => {
     }
   });
 
+  it.each(['requester_machine_admission_unavailable', 'session_handoff_launch_custody_unavailable'] as const)(
+    'identifies the prelaunch admission refusal cause (%s)', async (cause) => {
+      const diagnostic = vi.spyOn(logger, 'infoFile');
+      const preparation = vi.spyOn(logger, 'info');
+      const input = params('alpha', async () => cause !== 'session_handoff_launch_custody_unavailable');
+      // The external authority stays current until the preparation observation,
+      // independent of how many earlier currentness checks the real path makes.
+      input.options.verifyRequesterMachineAdmissionCurrent = async () =>
+        cause !== 'requester_machine_admission_unavailable' || !preparation.mock.calls.some(([message, payload]) =>
+          message === '[DAEMON RUN] Spawn preparation phase' && payload !== null && typeof payload === 'object'
+            && 'phase' in payload && payload.phase === 'child_environment');
+      const result = await executeSpawnSessionRequest(input);
+      expect(result).toMatchObject({ type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' });
+      expect(diagnostic).toHaveBeenCalledWith('[DAEMON RUN] Spawn launch admission refused', expect.objectContaining({ cause }));
+      if (result.type !== 'error') throw new Error('Expected launch admission refusal');
+      expect(SpawnSessionControlErrorResponseSchema.parse(projectSpawnSessionControlErrorResponse(result)))
+        .toMatchObject({ errorCode: 'DAEMON_RPC_UNAVAILABLE' });
+    },
+  );
+
   it('retains a thrown typed launch cause instead of an opaque spawn failure', async () => {
     const result = await executeSpawnSessionRequest(params('alpha', async () => {
       throw Object.assign(new Error('Launch permission refused'), { code: 'EACCES' });

@@ -1754,6 +1754,58 @@ describe('bind-child source handoff through real daemon controllers', () => {
     }
   });
 
+  it('keeps remote workspace preparation in its containing lifetime beyond the RPC cutoff', async () => {
+    let fixture: Awaited<ReturnType<typeof composeBindChildSourcePhaseTestRuntime>> | undefined;
+    let issue = () => {};
+    const issued = new Promise<void>(resolve => { issue = resolve; });
+    let boundaryWork: Promise<unknown> | undefined;
+    let issues = 0;
+    fixture = await composeBindChildSourcePhaseTestRuntime({ socketIo, separateTargetParent: true,
+      handleAdditionalSocketAck: async payload => {
+        if (!fixture || !payload || typeof payload !== 'object' || !('method' in payload)
+          || typeof payload.method !== 'string'
+          || payload.method !== `${fixture.targetRef.machineId}:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_PREPARE}`
+          || !('params' in payload)) return undefined;
+        const target = fixture;
+        const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, payload.params, payload.method);
+        const receiver = target.targetParentRpcHandlers.get(RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_PREPARE);
+        if (!receiver) throw new Error('The real target bootstrap handler was not registered');
+        boundaryWork = (async () => {
+          issues += 1;
+          issue();
+          await new Promise(resolve => setTimeout(resolve, 28_120));
+          const result = await receiver(decoded.params, { signal: new AbortController().signal,
+            callerAuthority: 'present_user', machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner',
+              machineId: target.targetRef.machineId, installationId: 'target-parent-installation', role: 'manage', encryptionMode: 'plain' },
+            verifyMachineAdmissionCurrent: async () => true });
+          return { ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, result, decoded.callId) };
+        })();
+        return await boundaryWork;
+      } });
+    const current = fixture;
+    vi.useFakeTimers();
+    let settled = false;
+    const pending = current.child.handoffAdapter.prepare(current.prepareInput)
+      .then(prepared => ({ ok: true as const, prepared }), error => ({ ok: false as const, error }))
+      .then(result => { settled = true; return result; });
+    try {
+      await Promise.race([issued, pending.then(result => { throw new Error(`Preparation settled before remote admission: ${JSON.stringify(result)}`); })]);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(8_120);
+      vi.useRealTimers();
+      const result = await pending;
+      expect(result, result.ok ? undefined : String(result.error)).toMatchObject({ ok: true, prepared: { kind: 'copy_once' } });
+      expect(issues).toBe(1);
+    } finally {
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(28_120);
+      vi.useRealTimers();
+      await boundaryWork;
+      const result = await pending;
+      if (result.ok) await current.child.handoffAdapter.abort({ operationId: current.prepareInput.operationId, prepared: result.prepared });
+    }
+  });
+
   it.each(['commit', 'abort'] as const)('keeps source custody on the real parent across child preparation and %s', async settlement => {
     const fixture = await composeBindChildSourcePhaseTestRuntime({ socketIo });
     const work = new AbortController();

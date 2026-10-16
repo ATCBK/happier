@@ -1177,14 +1177,25 @@ export async function executeSpawnSessionRequest(
                 }
                 : undefined;
 
-            if (!await isRequesterLaunchAdmissionCurrent(options)) return await refuseSpawn({
-                type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-                errorMessage: 'Requester Machine admission unavailable',
-            });
-            if (options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()) return await refuseSpawn({
-                type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-                errorMessage: 'Session handoff launch custody unavailable',
-            });
+            const revalidateLaunchAdmission = async (): Promise<SpawnSessionResult | null> => {
+                const cause = !await isRequesterLaunchAdmissionCurrent(options)
+                    ? 'requester_machine_admission_unavailable'
+                    : options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()
+                        ? 'session_handoff_launch_custody_unavailable'
+                        : null;
+                if (!cause) return null;
+                logger.infoFile('[DAEMON RUN] Spawn launch admission refused', {
+                    cause, sessionId, elapsedMs: Math.round(performance.now() - startedAt),
+                });
+                return await refuseSpawn({
+                    type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+                    errorMessage: cause === 'requester_machine_admission_unavailable'
+                        ? 'Requester Machine admission unavailable'
+                        : 'Session handoff launch custody unavailable',
+                });
+            };
+            const launchAdmissionRefusal = await revalidateLaunchAdmission();
+            if (launchAdmissionRefusal) return launchAdmissionRefusal;
             childLaunchSubmitted = true;
             const launchResources = params.readMachineResourcesPolicy?.();
             let spawnResult = await routeSpawnModeAndWaitForWebhook({
@@ -1235,7 +1246,14 @@ export async function executeSpawnSessionRequest(
                 warn: (message) => logger.warn(message),
                 sanitizeDiagnosticText: childEnvironment.sanitizeDiagnosticText,
                 createStreamingSanitizer: childEnvironment.createStreamingSanitizer,
-                revalidateBeforeCommit: revalidateProviderBeforeCommit,
+                revalidateBeforeCommit: async () => {
+                    // Preparation and Provider authorization may outlive Stop or
+                    // requester custody. Reuse their admission at physical commit.
+                    const before = await revalidateLaunchAdmission();
+                    if (before || !revalidateProviderBeforeCommit) return before;
+                    const providerRefusal = await revalidateProviderBeforeCommit();
+                    return providerRefusal ?? await revalidateLaunchAdmission();
+                },
                 onUntrackedHostedChild: () => {
                     retainResourcesForUntrackedHostedChild = true;
                 },

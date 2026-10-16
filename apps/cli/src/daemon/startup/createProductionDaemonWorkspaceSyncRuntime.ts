@@ -680,6 +680,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
         machineId: request.sourceMachineId,
         method: RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE,
         request: { t: 'workspace_sync_resolution_v1', ...wireRequest },
+        timeoutMs: null,
         ...(exportSignal ? { signal: exportSignal } : {}),
       });
       if (!preparedRaw || typeof preparedRaw !== 'object' || (preparedRaw as { success?: unknown }).success !== true) {
@@ -735,6 +736,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
             credentials: input.credentials,
             machineId: request.sourceMachineId,
             method: RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE,
+            timeoutMs: null,
             request: { transferId: request.operationId },
           });
         },
@@ -775,6 +777,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
                 machineId: request.sourceMachineId,
                 method: RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE,
                 request: seedRequest,
+                timeoutMs: null,
                 ...(request.signal ? { signal: request.signal } : {}),
               });
             const preparedRaw = await prepare.catch(() => {
@@ -854,6 +857,8 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       machineId: request.machineId,
       method: request.method,
       request: request.request,
+      // Target phases follow Workspace Sync custody and caller cancellation.
+      timeoutMs: null,
       ...(request.signal ? { signal: request.signal } : {}),
     }),
   });
@@ -943,6 +948,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
         machineId: route.controllerMachineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN,
         request,
+        timeoutMs: null,
         ...(signal ? { signal } : {}),
       });
       return WorkspaceSyncPrepareBetweenResultV1Schema.parse(result);
@@ -1184,6 +1190,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
             machineId: relationship.controllerMachineId,
             method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_FLUSH,
             request: { relationshipId },
+            timeoutMs: null,
             ...(signal ? { signal } : {}),
           });
           return parseControllerStatusResponse(response);

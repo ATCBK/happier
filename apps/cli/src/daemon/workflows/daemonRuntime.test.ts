@@ -6,7 +6,7 @@ import { API_TOKEN_FULL_GRANT_V1, freezeActionCompletionContractV1, getActionSpe
   parseWorkflowStoredContentEnvelopeV1, openWorkflowProgressStoredEnvelopeV1,
   type AccountApiTokensListActionOutputV1, type WorkflowDefinitionV1 } from '@happier-dev/protocol';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
-import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
@@ -73,9 +73,12 @@ import {
 
 describe('production daemon retained operation target', () => {
   let releaseHome = () => {};
-  afterEach(() => { releaseHome(); vi.restoreAllMocks(); });
+  afterEach(() => { releaseHome(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
-  it.each(['observation', 'Stop'] as const)('keeps daemon retained %s on its original Machine after replacement', async phase => {
+  it.each(['observation', 'Stop', 'native Stop'] as const)('keeps daemon retained %s on its original Machine after replacement', async phase => {
+    const nativeStop = phase === 'native Stop';
+    const stopping = phase !== 'observation';
+    const actionId = nativeStop ? 'review.start' : 'projects.script.run';
     const accountId = 'account-1';
     const machineId = 'original-worker';
     const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
@@ -86,13 +89,13 @@ describe('production daemon retained operation target', () => {
     mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
     const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
-      { kind: 'action', id: 'script', actionId: 'projects.script.run', input: {} },
+      { kind: 'action', id: 'script', actionId, input: {} },
     ] };
-    const completion = freezeActionCompletionContractV1(getActionSpec('projects.script.run').completion!);
+    const completion = freezeActionCompletionContractV1(getActionSpec(actionId).completion!);
     const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
       binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: {
         startedBy: 'user', definition, authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {},
-        materializedLeaves: [{ sourceKey: '$root', blockId: 'script', kind: 'action', actionId: 'projects.script.run',
+        materializedLeaves: [{ sourceKey: '$root', blockId: 'script', kind: 'action', actionId,
           selection: {}, executionTarget: { kind: 'session' }, authoredWorkspace: { kind: 'inherit' }, actionInput: {},
           actionContract: { inputSchema: {}, outputSchema: completion.terminalOutputSchema, completion } }],
         source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'session' },
@@ -113,16 +116,19 @@ describe('production daemon retained operation target', () => {
         sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
       progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'action',
         invocationPath: { blockId: root ? '$root' : 'script', scope: [] }, attempt: '0', logicalInvocationRecordId: id,
-        ...(root ? {} : { execution: { kind: 'action' as const, actionId: 'projects.script.run', actionRequestId: 'original',
-          localInputId: 'original', input: {}, output: { operation }, awaitedOperations: [{ key: 'command', serverId: 'home',
-            machineId, operationId: operation.operationId }] } }) },
+        ...(root ? {} : { execution: { kind: 'action' as const, actionId, actionRequestId: 'original',
+          localInputId: 'original', input: {}, ...(nativeStop
+            ? { output: { intent: 'review', sessionId: null, results: [{ key: 'codex', ok: true, result: { runId: 'native-run' } }] },
+                awaitedRuns: [{ key: 'codex', runId: 'native-run' }] }
+            : { output: { operation }, awaitedOperations: [{ key: 'command', serverId: 'home',
+                machineId, operationId: operation.operationId }] }) } }) },
     }));
     const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
     await storage.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope,
       rootInvocation: { id: rootId, contentEnvelope: seal(rootId, true) } });
     await storage.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope,
       invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0',
-        lifecycle: phase === 'Stop' ? 'cancel_requested' : 'running', contentEnvelope: seal(childId, false) }] });
+        lifecycle: stopping ? 'cancel_requested' : 'running', contentEnvelope: seal(childId, false) }] });
     await storage.execute({ operation: 'transition', runId, expectedRevision: 2, state: 'interrupted', checkpointEnvelope });
     // The server's opaque storage/HTTP and Socket.IO are the external boundaries.
     vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
@@ -142,10 +148,20 @@ describe('production daemon retained operation target', () => {
     });
     const requests: string[] = [];
     const unavailable = { ok: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
-    bindApiSessionSocketMock(mocks.io, createApiSessionSocketStub({ emitWithAck(event, payload) {
+    if (nativeStop) vi.useFakeTimers();
+    bindApiSessionSocketMock(mocks.io, createApiSessionSocketStub({ async emitWithAck(event, payload) {
       if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object' || !('method' in payload)
         || typeof payload.method !== 'string') throw new Error('Unexpected RPC boundary');
       requests.push(payload.method);
+      if (nativeStop && payload.method === `${machineId}:${SESSION_RPC_METHODS.EXECUTION_RUN_GET}`) return { ok: true, result: { run: {
+        runId: 'native-run', callId: 'call', sidechainId: 'side', intent: 'review',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'default', retentionPolicy: 'resumable',
+        runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 1,
+      } } };
+      if (nativeStop && payload.method === `${machineId}:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}`) {
+        await new Promise(resolve => setTimeout(resolve, 28_120));
+        return { ok: true, result: { ok: true } };
+      }
       if (phase === 'Stop' && payload.method === `${machineId}:actionOperation.get.v2`) return { ok: true, result: { kind: 'found', operation } };
       if (payload.method.startsWith(`${machineId}:`)) return unavailable;
       return { ok: true, result: payload.method.endsWith('cancel.v1') ? { kind: 'requested' } : { kind: 'not_found' } };
@@ -153,11 +169,27 @@ describe('production daemon retained operation target', () => {
     const runtime = createProductionDaemonWorkflowRuntime({ credentials: { token: 'token', encryption: null }, accountId, serverId: 'home' });
     const recover = runtime.createRecoveryForMachine({ machineId,
       machineAdmissionTransport: async () => { throw new Error('Recovery must not enqueue new work'); } });
-    await recover('startup');
-    expect(requests).toEqual(phase === 'Stop' ? [`${machineId}:actionOperation.get.v2`, `${machineId}:actionOperation.cancel.v1`]
-      : [`${machineId}:actionOperation.get.v2`]);
+    if (nativeStop) {
+      let settled = false;
+      const pending = recover('startup').then(() => { settled = true; });
+      try {
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(requests).toContain(`${machineId}:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}`);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(8_120);
+        await pending;
+        expect(requests.filter(method => method.endsWith(SESSION_RPC_METHODS.EXECUTION_RUN_STOP))).toHaveLength(1);
+      } finally {
+        await vi.advanceTimersByTimeAsync(28_120);
+        await pending;
+      }
+    } else {
+      await recover('startup');
+      expect(requests).toEqual(phase === 'Stop' ? [`${machineId}:actionOperation.get.v2`, `${machineId}:actionOperation.cancel.v1`]
+        : [`${machineId}:actionOperation.get.v2`]);
+    }
     expect(storage.run().workflowCustodyState).toBe('pending');
-    expect(storage.rowById(childId)?.index.lifecycle).toBe(phase === 'Stop' ? 'cancel_requested' : 'running');
+    expect(storage.rowById(childId)?.index.lifecycle).toBe(stopping ? 'cancel_requested' : 'running');
   });
 });
 

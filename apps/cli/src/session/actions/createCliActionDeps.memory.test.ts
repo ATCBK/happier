@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createActionExecutor } from '@happier-dev/protocol';
+import { createActionExecutor, SessionEffectiveAccessV1Schema, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import axios from 'axios';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -9,16 +9,18 @@ import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotFor
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { MemoryDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
-import { createPlainSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { createPlainSessionOwnerMetadataEnvelopeV1, SessionMetadataOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountOrganizationV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 
-const { callMachineRpc, callExactMachineRpc, fetchSessionById } = vi.hoisted(() => ({
+const { callMachineRpc, callExactMachineRpc, fetchSessionById, patchSessionMetadataEnvelopeTuple } = vi.hoisted(() => ({
   callMachineRpc: vi.fn(),
   callExactMachineRpc: vi.fn(),
   fetchSessionById: vi.fn(),
+  patchSessionMetadataEnvelopeTuple: vi.fn(),
 }));
 
 vi.mock('@/session/transport/rpc/machineRpc', () => ({
@@ -29,6 +31,7 @@ vi.mock('@/session/transport/rpc/machineRpc', () => ({
 vi.mock('@/session/transport/http/sessionsHttp', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/session/transport/http/sessionsHttp')>(),
   fetchSessionById,
+  patchSessionMetadataEnvelopeTuple,
 }));
 
 import { createCliActionDeps } from './createCliActionDeps';
@@ -98,6 +101,120 @@ describe('createCliActionDeps memory bindings', () => {
     callMachineRpc.mockReset();
     callExactMachineRpc.mockReset();
     fetchSessionById.mockReset();
+    patchSessionMetadataEnvelopeTuple.mockReset();
+  });
+
+  it.each(['srv_memory_home', 'memory-profile'])('creates and attaches Bot memory addressed by %s with portable Home provenance', async requestedServerId => {
+    const serverId = 'memory-profile';
+    const serverIdentityId = 'srv_memory_home';
+    const serverHttpBaseUrl = 'https://memory-home.test';
+    const sessionId = 'cmemorysession000000000001';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null,
+      requesterSessionCredentialScope: { serverId, serverHttpBaseUrl } };
+    fetchSessionById.mockResolvedValue(V2SessionRecordSchema.parse({ id: sessionId, seq: 1, createdAt: 1, updatedAt: 1,
+      active: false, activeAt: 1, encryptionMode: 'plain', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
+      ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, workspace: { path: '/repo', host: 'host' },
+        work: { bot: { kind: 'bot' }, memoryEnabled: true } }),
+      metadataVersion: 3, dataEncryptionKey: null, share: null, agentState: null, agentStateVersion: 1,
+      effectiveAccess: SessionEffectiveAccessV1Schema.parse({ v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+        capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) }) }));
+    patchSessionMetadataEnvelopeTuple.mockImplementation(async ({ patch }) => {
+      SessionMetadataOwnerPatchV1Schema.parse(patch);
+      return { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 4 }, agentState: { version: 2 } };
+    });
+    const artifacts: { id: string; header: string; body: string; dataEncryptionKey: string }[] = [];
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      expect(new URL(String(url)).origin).toBe(serverHttpBaseUrl);
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith('/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      const stored = artifacts.map(artifact => ({ ...artifact,
+        ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', headerVersion: 1, bodyVersion: 1,
+        seq: 1, createdAt: 1, updatedAt: 1 }));
+      if (path === '/v1/artifacts') return { status: 200, data: stored };
+      const artifact = stored.find(value => path === `/v1/artifacts/${value.id}`);
+      if (artifact) return { status: 200, data: artifact };
+      throw new Error(`Unexpected read: ${path}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      expect(String(url)).toBe(`${serverHttpBaseUrl}/v1/artifacts`);
+      // HTTP boundary: retain the actual producer's encoded Artifact for its real header/body readers.
+      artifacts.push(body as typeof artifacts[number]);
+      return { status: 200, data: { id: artifacts.at(-1)!.id, headerVersion: 1, bodyVersion: 1 } };
+    });
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+      serverId, serverIdentityId, serverHttpBaseUrl });
+    const result = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => createActionExecutor(deps).execute('memory.remember', {
+      sessionRef: { serverId: requestedServerId, sessionId }, expectedMetadataRevision: 3, text: 'Keep the quartz notebook',
+    }, { surface: 'cli', authority: 'present_user', serverId: requestedServerId, defaultSessionId: sessionId }));
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { ok: true, attachment: 'attached',
+      ref: { kind: 'doc', artifactId: expect.any(String), serverId: serverIdentityId } } });
+    expect(artifacts).toHaveLength(1);
+    const envelope = decodePlainArtifactStoredContent(artifacts[0]!.body);
+    if (!envelope || typeof envelope !== 'object' || !('body' in envelope) || typeof envelope.body !== 'string') throw new Error('Expected plain text body');
+    expect(MemoryDocBodyV1Schema.parse(JSON.parse(envelope.body)).index).toEqual([expect.objectContaining({
+      text: 'Keep the quartz notebook', sourceSessionRef: { serverId: serverIdentityId, sessionId },
+    })]);
+    await expect(runWithServerHttpBaseUrl(serverHttpBaseUrl, () => createActionExecutor(deps).execute('memory.read', {
+      ref: { kind: 'doc', artifactId: artifacts[0]!.id, serverId },
+    }, { surface: 'cli', serverId: serverIdentityId }))).resolves.toMatchObject({ ok: true, result: {
+      body: { index: [expect.objectContaining({ text: 'Keep the quartz notebook',
+        sourceSessionRef: { serverId: serverIdentityId, sessionId } })] },
+    } });
+    const patch = SessionMetadataOwnerPatchV1Schema.parse(patchSessionMetadataEnvelopeTuple.mock.calls[0]?.[0]?.patch);
+    expect(patch.ownerMetadata).toMatchObject({ t: 'plain', v: {
+        work: expect.objectContaining({ promptStack: [expect.objectContaining({ id: 'session.memory',
+          ref: { kind: 'doc', artifactId: artifacts[0]!.id, serverId: serverIdentityId } })] }),
+      } });
+  });
+
+  it('rejects a foreign Memory Home before reading or allocating anything', async () => {
+    const get = vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unexpected foreign Home read'));
+    const post = vi.spyOn(axios, 'post').mockRejectedValue(new Error('Unexpected foreign Home write'));
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId: 'unused', mode: 'plain', ctx: null, serverId: 'memory-profile', serverIdentityId: 'srv_memory_home',
+      serverHttpBaseUrl: 'https://memory-home.test' });
+    const result = await createActionExecutor(deps).execute('memory.remember', {
+      sessionRef: { serverId: 'srv_foreign_home', sessionId: 'cmemorysession000000000001' },
+      expectedMetadataRevision: 3, text: 'Must stay private',
+    }, { surface: 'cli', authority: 'present_user', serverId: 'memory-profile' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    await expect(createActionExecutor(deps).execute('memory.read', {
+      ref: { kind: 'doc', artifactId: 'foreign', serverId: 'srv_foreign_home' },
+    }, { surface: 'cli', serverId: 'memory-profile' })).resolves.toMatchObject({ ok: false, errorCode: 'action_failed', error: 'server_target_mismatch' });
+    await expect(deps.sessionStateFieldSet!({ actionId: 'session.instructions.set',
+      context: { surface: 'cli' }, sessionId: 'cmemorysession000000000001', serverId: 'srv_foreign_home',
+      fieldId: 'intent.context', expectedMetadataRevision: 3,
+      value: { kind: 'attach', entry: { id: 'session.instructions', ref: { kind: 'doc', artifactId: 'foreign' },
+        enabled: true, placement: 'system_append' } },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(fetchSessionById).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+    expect(patchSessionMetadataEnvelopeTuple).not.toHaveBeenCalled();
+  });
+
+  it.each(['memory', 'session'] as const)('refuses to translate a Home reference into an unbound private reader scope for %s', async owner => {
+    const get = vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unexpected foreign Home read'));
+    const credentials = { token: 'token', encryption: null, requesterSessionCredentialScope: {
+      serverId: 'foreign-profile', serverHttpBaseUrl: 'https://foreign-home.test',
+    } };
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'unused', mode: 'plain', ctx: null,
+      serverId: 'memory-profile', serverIdentityId: 'srv_memory_home', serverHttpBaseUrl: 'https://memory-home.test' });
+    const ref = { kind: 'doc' as const, artifactId: 'private-memory', serverId: 'srv_memory_home' };
+    if (owner === 'memory') {
+      await expect(deps.memoryLibrary!.readArtifactHeaders!([ref], { surface: 'cli' }))
+        .rejects.toMatchObject({ code: 'server_target_mismatch' });
+    } else {
+      await expect(deps.sessionStateFieldSet!({ actionId: 'session.context.update', context: { surface: 'cli' },
+        sessionId: 'cmemorysession000000000001', serverId: 'srv_memory_home', fieldId: 'intent.context',
+        value: { kind: 'attach', entry: { id: 'session.memory', ref, enabled: true, placement: 'system_append' } },
+      })).resolves.toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    }
+    expect(get).not.toHaveBeenCalled();
   });
 
   it('attaches Account memory with the captured coding row revision and preserves neighboring entries', async () => {
@@ -230,10 +347,11 @@ describe('createCliActionDeps memory bindings', () => {
   });
 
   it('serves Project memory without reading an unavailable Account coding catalog', async () => {
-    const serverId = 'project-memory-home';
+    const serverId = 'srv_project_memory_home';
+    const serverProfileId = 'project-memory-profile';
     const serverHttpBaseUrl = 'https://project-memory-home.test';
     const credentials = { token: 'project-memory-token', encryption: null,
-      requesterSessionCredentialScope: { serverId, serverHttpBaseUrl } };
+      requesterSessionCredentialScope: { serverId: serverProfileId, serverHttpBaseUrl } };
     const entry = { id: 'project.memory', ref: { kind: 'doc' as const, artifactId: 'memory' }, enabled: true,
       placement: 'system_append' as const };
     const entries = ['instructions-1', 'instructions-2'].map(id => ({ ...entry, id, ref: { kind: 'doc' as const, artifactId: id } }));
@@ -261,7 +379,7 @@ describe('createCliActionDeps memory bindings', () => {
       { key: organizationKey, revision: 1, content: { t: 'plain', v: { key: organizationKey, value: { promptStack: entries } } } },
     ] } });
     const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'session', mode: 'plain', ctx: null,
-      serverId, serverHttpBaseUrl });
+      serverId: serverProfileId, serverIdentityId: serverId, serverHttpBaseUrl });
     const inherited = await deps.memoryLibrary!.readInheritedContext!({ revision: 1, machineId: 'actual-machine',
       metadata: { workspaceId: 'checkout', projectId: 'project', path: '/repo' } }, { surface: 'cli' });
     expect(inherited.projectEntries).toEqual(entries.map(value => ({ ...value, ref: { ...value.ref, serverId } })));
@@ -596,12 +714,14 @@ describe('createCliActionDeps memory bindings', () => {
         machineId: 'machine-1',
         method: RPC_METHODS.DAEMON_MEMORY_ENSURE_UP_TO_DATE,
         request: { sessionId: 'session-1' },
+        timeoutMs: null,
       }],
       [{
         credentials,
         machineId: 'machine-1',
         method: RPC_METHODS.DAEMON_MEMORY_ENSURE_UP_TO_DATE,
         request: {},
+        timeoutMs: null,
       }],
     ]);
   });

@@ -148,7 +148,12 @@ describe('headless registered Session field Actions', () => {
       if (request.pathname === '/v1/artifacts') return { status: 200, data: inventory };
       throw new Error(`Unexpected Artifact HTTP read: ${url}`);
     });
-    const owner = executor();
+    const owner = createActionExecutor(createCliActionDeps({
+      token: 'token', credentials: { token: 'token', encryption: null,
+        requesterSessionCredentialScope: { serverId: 'home-profile', serverHttpBaseUrl: 'https://home.example.test' } },
+      sessionId, mode: 'plain', ctx: null, serverId: 'home-profile', serverIdentityId: 'home',
+      serverHttpBaseUrl: 'https://home.example.test',
+    }));
     const target = { sessionId, serverId: 'home', expectedMetadataRevision: 4 };
     const context = { surface: 'cli', authority: 'present_user', serverId: 'home' } as const;
     const deniedIntent = { kind: 'attach', entry: { id: 'dashboard', ref: { kind: 'bundle', artifactId: 'dashboard' } } };

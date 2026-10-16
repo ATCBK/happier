@@ -940,6 +940,9 @@ export function createCliActionDeps(params: Readonly<{
   const readServerFeaturesSnapshot = async (): Promise<CliServerFeaturesSnapshot | undefined> =>
     await params.resolveServerFeaturesSnapshot?.();
   const projectHomeId = params.serverId ?? configuration.activeServerId;
+  const actionHomeId = params.serverIdentityId ?? projectHomeId;
+  const isSameActionHomeId = (serverId: string) => areServerProfileIdentifiersEquivalent(actionHomeId, serverId, identifier =>
+    identifier === projectHomeId || identifier === params.serverIdentityId ? params.serverIdentityId : undefined);
   const projectHomeAdmission = async (serverId?: string, context?: ActionExecutorContext) => {
     if ((serverId !== undefined && !await isServerProfileHomeIdentity(projectHomeId, serverId.trim()))
       || (context?.serverId && !await isServerProfileHomeIdentity(projectHomeId, context.serverId))
@@ -1515,6 +1518,9 @@ export function createCliActionDeps(params: Readonly<{
     }),
     RPC_METHODS.DAEMON_VITALS_WATCH, RPC_METHODS.DAEMON_PROCESSES_WATCH,
     RPC_METHODS.DAEMON_STORAGE_WATCH, RPC_METHODS.DAEMON_GUARD_WATCH,
+    // Issuer-side approval has no receiving Machine stamp. Open's ordinary
+    // Account replay must pass authenticated ingress, like resource effects.
+    RPC_METHODS.PROJECTS_OPEN,
   ]);
   const callMachineAction = async (input: Readonly<{
     machineId: string;
@@ -3227,7 +3233,8 @@ export function createCliActionDeps(params: Readonly<{
       return result;
     },
     ...(approvalsStore ? { memoryLibrary: {
-      serverId: params.serverId ?? configuration.activeServerId,
+      serverId: actionHomeId,
+      isSameServerId: isSameActionHomeId,
       store: approvalsStore.promptLibraryStore, randomId: randomUUID,
       readExposure: async (artifactId, context) => {
         if (!actionDeps.artifactAccessAction || !actionDeps.artifactAction) throw Object.assign(new Error('memory_exposure_unavailable'), { code: 'memory_exposure_unavailable' });
@@ -3253,7 +3260,7 @@ export function createCliActionDeps(params: Readonly<{
       readInheritedContext: async (snapshot, context) => {
         if (!params.credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
         const read = () => readCliMemoryInheritedContext({ credentials: params.credentials!,
-          serverId: params.serverId ?? configuration.activeServerId, snapshot, context });
+          serverId: actionHomeId, snapshot, context });
         return params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, read) : read();
       },
       readScopeContext: async (target, context) => {
@@ -3277,11 +3284,12 @@ export function createCliActionDeps(params: Readonly<{
           ?? params.serverId ?? configuration.activeServerId;
         if ((params.credentials?.requesterSessionCredentialScope || context.externalActionCredential
           || context.externalActionExecutionAuthorization)
-          && refs.some(ref => ref.serverId?.trim() && ref.serverId.trim() !== serverId)) {
+          && (!isSameActionHomeId(serverId) || refs.some(ref => ref.serverId?.trim() && !isSameActionHomeId(ref.serverId)))) {
           throw Object.assign(new Error('server_target_mismatch'), { code: 'server_target_mismatch' });
         }
         return withCliPromptLibraryArtifactReader(reader => Promise.all(refs.map(async ref =>
-          (await reader.readArtifactHeader(ref))?.header ?? null)), {
+          (await reader.readArtifactHeader(ref.serverId && isSameActionHomeId(ref.serverId)
+            ? { ...ref, serverId } : ref))?.header ?? null)), {
           credentials: params.credentials, serverId, signal: context.signal,
         });
       },
@@ -4327,6 +4335,8 @@ export function createCliActionDeps(params: Readonly<{
         machineId,
         method: RPC_METHODS.DAEMON_MEMORY_ENSURE_UP_TO_DATE,
         request: sessionId ? { sessionId } : {},
+        // The Memory worker owns the awaited indexing lifetime.
+        timeoutMs: null,
       });
     },
     ...(homeHubArtifactPort ? { homeHubArtifacts: {
@@ -4735,6 +4745,8 @@ export function createCliActionDeps(params: Readonly<{
         method: RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY,
         authorization: { kind: 'session.write', sessionId: request.replay.previousSessionId },
         request,
+        // Replay preparation and startup follow their containing caller lifetime.
+        timeoutMs: null,
         ...(signal ? { signal } : {}),
       });
     },
@@ -7000,8 +7012,7 @@ export function createCliActionDeps(params: Readonly<{
       const credentials = params.credentials;
       if (!credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       if (params.serverId !== undefined && serverId != null
-        && !areServerProfileIdentifiersEquivalent(params.serverId, serverId, identifier =>
-          identifier === params.serverId || identifier === params.serverIdentityId ? params.serverIdentityId : undefined)) {
+        && !isSameActionHomeId(serverId)) {
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
       const mutate = async () => {
@@ -7059,7 +7070,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
-      if (params.serverId !== undefined && serverId != null && params.serverId !== serverId)
+      if (params.serverId !== undefined && serverId != null && !isSameActionHomeId(serverId))
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       const metadataContext: ActionExecutorContext = context.externalActionExecutionAuthorization
         ? { ...context, externalActionTarget: { kind: 'session', sessionId } }
@@ -7073,8 +7084,11 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
       if (fieldId === 'intent.context') {
-        await withCliPromptLibraryArtifactReader(reader => admitSessionContextIntentV1(value, reader.readArtifactHeader), {
-          credentials, serverId, signal: context.signal,
+        const readerServerId = credentials.requesterSessionCredentialScope?.serverId ?? projectHomeId;
+        if (!isSameActionHomeId(readerServerId)) return executionRunActionFailure('server_target_mismatch');
+        await withCliPromptLibraryArtifactReader(reader => admitSessionContextIntentV1(value, ref => reader.readArtifactHeader(
+          ref.serverId && isSameActionHomeId(ref.serverId) ? { ...ref, serverId: readerServerId } : ref)), {
+          credentials, serverId: readerServerId, signal: context.signal,
         });
         context.signal?.throwIfAborted();
       }

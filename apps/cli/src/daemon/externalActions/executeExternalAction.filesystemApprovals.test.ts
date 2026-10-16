@@ -332,6 +332,23 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
     } finally { await h.close(); }
   });
 
+  it.each(['ui', 'cli'] as const)('opens an issuer-approved folder from %s through authenticated Machine ingress', async surface => {
+    const h = await createHarness('projects.open', 'ask');
+    const input = { serverId: 'srv_n2', machineId: 'machine', source: { kind: 'folder', path: h.rootPath }, materialization: { kind: 'attach' } };
+    try {
+      const initialRows = JSON.stringify(h.rows);
+      expect(await h.run(input, surface, surface === 'ui' ? 'unsigned-ui' : true, 'present_user'))
+        .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      expect(JSON.stringify(h.rows)).toBe(initialRows);
+      const result = await h.decide('approve');
+      expect(result, JSON.stringify({ result, rpcOutcomes: h.rpcOutcomes })).toMatchObject({ ok: true, result: {
+        status: 'executed', execution: { ok: true, result: { kind: 'opened', directory: h.rootPath,
+          workspace: { serverId: 'srv_n2', machineId: 'machine', rootPath: h.rootPath } } },
+      } });
+      expect(await readFile(join(h.rootPath, 'original'))).toEqual(bytes);
+    } finally { await h.close(); }
+  });
+
   it.each((['ui', 'cli'] as const).flatMap(surface => (['ask', 'allowed'] as const).map(approval => ({ surface, approval }))))
   ('opens a real folder from $surface under $approval policy and retains its accepted row', async ({ surface, approval }) => {
     const h = await createHarness('projects.open', approval);

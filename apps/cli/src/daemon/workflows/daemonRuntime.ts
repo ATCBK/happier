@@ -593,7 +593,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
             get: async (runId, signal) => await callMachineRpc({ credentials: params.credentials, machineId: input.machineId,
               method: SESSION_RPC_METHODS.EXECUTION_RUN_GET, request: { runId, includeStructured: true }, ...(signal ? { signal } : {}) }),
             stop: async (runId, signal) => await callMachineRpc({ credentials: params.credentials, machineId: input.machineId,
-              method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, request: { runId }, ...(signal ? { signal } : {}) }),
+              method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, request: { runId }, timeoutMs: null, ...(signal ? { signal } : {}) }),
             wait: async (runId, signal, observation) => {
               if (observation) return await callMachineRpc({
                 credentials: params.credentials, machineId: input.machineId,
