@@ -42,6 +42,7 @@ import { finishExecutionRun } from './finishExecutionRun';
 import { createExecutionRunControllerMessageHandler } from './messages/sessionStateEmission';
 import { createPiRuntimeEventProjector } from '@happier-dev/plugins-pi/agent/runtime/rpc/events';
 import { createSessionHooksService } from '@/plugins/runtime/hooks/session/service';
+import { readExecutionRunErrorCode } from './errors';
 
 import {
     createNativeAgentExecutionRunHostRuntime,
@@ -57,6 +58,30 @@ import {
 afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+});
+
+it('settles a native execution-only Run when send returns unavailable without a terminal event', async () => {
+    const host = createNativeAgentExecutionRunHostRuntime({
+        runtime: { executionRuns: { async open() { return {
+            async send() { return { status: 'unavailable' as const, diagnostic: { code: 'native_input_unavailable', severity: 'error' as const } }; },
+            async stop() { return { status: 'notRunning' as const }; },
+            watch() { return { dispose() {} }; }, async dispose() {},
+        }; } } },
+        lease: { pluginId: 'acme.execution-only', pluginVersion: '1.0.0', agentId: 'acme.execution-only/default',
+            localAgentId: 'default', occurrenceId: 'unavailable-fixture', isCurrent: () => true },
+        options: { cwd: '/repo', runId: 'native-unavailable', scope: 'detached', backendId: 'acme.execution-only/default',
+            permissionMode: 'no_tools', start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable' } },
+        supportsResume: false,
+    });
+    const outcome: { completed?: boolean; code?: string | null } = {};
+    let completion: Promise<void> | undefined;
+    try {
+        await host.provisionRuntime({ initialPrompt: 'Initial input' });
+        completion = host.waitForTurnCompletion!().then(() => { outcome.completed = true; }, error => { outcome.code = readExecutionRunErrorCode(error); });
+        await expect(host.deliverInput('native-unavailable', { text: 'Follow up' })).rejects.toThrow();
+        await Promise.resolve();
+        expect(outcome).toEqual({ code: 'native_input_unavailable' });
+    } finally { await host.dispose(); await completion; }
 });
 
 it.each([
@@ -1840,8 +1865,21 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
         await activeHost.provisionRuntime({ initialPrompt: 'start' });
         await expect(activeHost.deliverInput('run-provider-redaction', { text: 'again' }))
             .rejects.toThrow('send echoed [REDACTED]');
+        await expect(activeHost.waitForTurnCompletion!()).rejects.toMatchObject({
+            executionRunErrorCode: 'provider_send_rejected', message: 'send echoed [REDACTED]',
+        });
+        expect(messages).toContainEqual({ type: 'status', status: 'error', detail: 'send echoed [REDACTED]' });
         await expect(activeHost.cancel('run-provider-redaction'))
             .rejects.toThrow('stop echoed [REDACTED]');
+        // Definite send rejection already settled this Run. Check provider-event
+        // redaction on a fresh Run so a second terminal event cannot replace it.
+        await activeHost.dispose();
+        const eventHost = createNativeAgentExecutionRunHostRuntime({
+            runtime: activeRuntime, lease: createLease(activeRuntime), options: baseOptions, supportsResume: false,
+        });
+        const eventMessages: AgentMessage[] = [];
+        eventHost.subscribeMessages(message => eventMessages.push(message));
+        await eventHost.provisionRuntime({ initialPrompt: 'start' });
         watchState.listener?.({
             sequence: 0,
             runId: 'run-provider-redaction',
@@ -1853,7 +1891,7 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 message: `event echoed ${secret}`,
             },
         });
-        expect(messages).toContainEqual({
+        expect(eventMessages).toContainEqual({
             type: 'status',
             status: 'error',
             detail: 'event echoed [REDACTED]',
@@ -1865,7 +1903,10 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
         });
         expect(JSON.stringify(failureLog.mock.calls)).not.toContain(secret);
         expect(JSON.stringify(failureLog.mock.calls)).not.toContain('private-policy-value');
-        await activeHost.dispose();
+        await expect(eventHost.waitForTurnCompletion!()).rejects.toMatchObject({
+            executionRunErrorCode: 'provider_run_failed', message: 'event echoed [REDACTED]',
+        });
+        await eventHost.dispose();
     });
 
     it('fails a finite plugin Run when it emits an event outside the strict runtime contract', async () => {

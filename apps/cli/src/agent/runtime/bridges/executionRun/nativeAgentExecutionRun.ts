@@ -960,10 +960,10 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             : input;
     }
 
-    function failRuntime(message: string): void {
+    function failRuntime(message: string, code?: string): void {
         if (terminal) return;
         terminal = true;
-        const error = new Error(message);
+        const error = code ? createExecutionRunCodedError(code, message) : new Error(message);
         emit({ type: 'status', status: 'error', detail: message });
         rejectTerminal(error);
     }
@@ -1302,10 +1302,10 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             }
             if (result.status !== 'admitted') {
                 logProviderFailure();
-                throw new Error(diagnosticMessage(
-                    result.diagnostic,
-                    sanitizeProviderDiagnosticText,
-                ));
+                const message = diagnosticMessage(result.diagnostic, sanitizeProviderDiagnosticText);
+                const code = result.diagnostic?.code ?? 'agent_execution_run_failed';
+                failRuntime(message, code);
+                throw createExecutionRunCodedError(code, message);
             }
             // The execution-run-native surface has a deliberately looser
             // refusal shape than Agent Session delivery. Non-admission was
