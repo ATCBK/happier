@@ -112,6 +112,7 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
         const destinationMachine = resolveSessionOwningMachineId({
           credentials: input.credentials,
           rawSession: destination.rawSession,
+          accountEncryptionMode: destination.accountEncryptionCurrentness.mode,
         });
         if (!destinationMachine.ok || !destinationMachine.machineId) {
           return { kind: 'waiting', reason: 'runner_unreachable' };

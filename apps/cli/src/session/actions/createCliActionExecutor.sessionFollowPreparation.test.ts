@@ -11,6 +11,7 @@ import {
   sealRunnerMachineContentKeyVerifierFactV1,
   signRunnerMachineContentKeyBindingV1,
 } from '@happier-dev/protocol';
+import { sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
@@ -60,6 +61,10 @@ describe('credentialed CLI relation source-key preparation composition', () => {
   it.each(([
     { name: 'active Home authenticated context', fixed: false, provenance: 'authenticated', plain: false, prepares: true },
     { name: 'explicit verified Home', fixed: true, provenance: 'public', plain: false, prepares: true },
+    { name: 'layout-one Runner destination', fixed: true, provenance: 'public', plain: false, prepares: true,
+      layoutOne: true },
+    { name: 'layout-one persistent destination', fixed: true, provenance: 'public', plain: false, prepares: false,
+      layoutOne: true, persistent: true },
     { name: 'unverified active Home', fixed: false, provenance: 'public', plain: false, prepares: false },
     { name: 'Plain source without Home identity', fixed: false, provenance: 'public', plain: true, prepares: false },
     { name: 'persistent destination without standalone source key', fixed: true, provenance: 'public', plain: false, prepares: false,
@@ -67,8 +72,8 @@ describe('credentialed CLI relation source-key preparation composition', () => {
     { name: 'Runner destination without standalone source key', fixed: true, provenance: 'public', plain: false, prepares: false,
       persistent: false, standaloneSourceKey: false },
   ] as const).flatMap((scenario) => (['follow', 'reports_to', 'spawn'] as const).map((relation) => ({
-    persistent: false, standaloneSourceKey: true, ...scenario, relation,
-  }))))('$name ($relation)', async ({ fixed, provenance, plain, prepares, persistent, standaloneSourceKey, relation }) => {
+    persistent: false, standaloneSourceKey: true, layoutOne: false, ...scenario, relation,
+  }))))('$name ($relation)', async ({ fixed, provenance, plain, prepares, persistent, standaloneSourceKey, layoutOne, relation }) => {
     const serverUrl = normalizeServerHttpBaseUrl(fixed ? 'https://fixed-follow.example.test' : configuration.apiServerUrl);
     // Follow-source mutation is a dangerous CLI Action. Keep the production
     // approval owner wired (the credentialed artifact store remains available)
@@ -103,12 +108,19 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       const id = (request.params as { sessionId: string }).sessionId;
       return { session: createSessionRecordFixture({
         id,
+        ...(layoutOne && id === destinationSessionId ? {
+          metadataLayoutVersion: 1,
+          share: null,
+          ownerMetadata: sealSessionOwnerMetadataEnvelopeV1({ material: credentials.encryption,
+            ownerMetadata: { v: 1, workspace: { machineId } }, randomBytes }),
+        } : {}),
         encryptionMode: plain && id === sourceSessionId ? 'plain' : 'e2ee',
         dataEncryptionKey: id === sourceSessionId && (plain || !standaloneSourceKey) ? null : sealKey(sourceKey),
         metadata: plain && id === sourceSessionId
           ? JSON.stringify({ sessionCreationCorrespondenceV1: creationCorrespondence })
           : encodeBase64(encrypt(id === sourceSessionId && !standaloneSourceKey ? machineKey : sourceKey, 'dataKey',
-            { machineId, sessionCreationCorrespondenceV1: creationCorrespondence })),
+            layoutOne && id === destinationSessionId ? { v: 1 }
+              : { machineId, sessionCreationCorrespondenceV1: creationCorrespondence })),
       }) };
     });
     const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(19));
@@ -223,7 +235,7 @@ describe('credentialed CLI relation source-key preparation composition', () => {
         expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: false, errorCode: 'session_follow_source_key_preparation_waiting',
           details: { edgeCommitted: true, reason: standaloneSourceKey ? 'runner_unreachable' : 'source_key_unavailable' } });
       }
-      expect(events).toEqual(prepares || !standaloneSourceKey ? ['edge_committed', 'exact_machine'] : ['edge_committed']);
+      expect(events).toEqual(prepares || persistent || !standaloneSourceKey ? ['edge_committed', 'exact_machine'] : ['edge_committed']);
       expect(preparedRequests).toEqual(prepares ? [{
         v: 1, sourceSessionId, destinationSessionId, sourceDataEncryptionKeyBase64: encodeBase64(sourceKey),
       }] : []);
