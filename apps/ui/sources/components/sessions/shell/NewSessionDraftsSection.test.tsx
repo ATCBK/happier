@@ -8,6 +8,7 @@ import { FocusReturnProvider, useFocusReturnFallbackRef } from '@/keyboard/focus
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { NewSessionDraftProjection } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { resolveSessionListRowTitleTextMetrics } from '@/components/sessions/shell/resolveSessionListDensityViewState';
 
 type CataloguedNewSessionDraftDocument = Extract<
     NewSessionDraftProjection['document'],
@@ -706,7 +707,7 @@ describe('NewSessionDraftsSection', () => {
             titleLines: 2,
             subtitle: 'sessionDrafts.status.syncing',
             style: { height: 84, minHeight: 84, paddingVertical: 0 },
-            titleStyle: { fontSize: 14, lineHeight: 18 },
+            titleStyle: resolveSessionListRowTitleTextMetrics({ density: 'default', readableNativePhoneMinimal: false }),
             subtitleStyle: { fontSize: 12, lineHeight: 16 },
         });
         expect(detailed.findByTestId(`session-draft-row:new-session:${projection.draftId}`)?.props.leftElement).toBeUndefined();

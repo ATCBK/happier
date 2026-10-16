@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import { SessionAuthoringExecutionTargetV2Schema, TemporaryComputerActivationRefV1Schema } from '@happier-dev/protocol/sessions/authoring/fieldCatalog';
 import { isNewSessionDraftLaunchInCustody } from '@/components/sessions/new/modules/newSessionDraftLaunchCustody';
 import type { NewSessionDraftProjection } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
@@ -12,8 +13,8 @@ export function resolveRunnerDraftActivation(input: Pick<Draft, 'document'>): Re
     if (document.v !== 2 || document.target.kind !== 'newSession') {
         return { isTemporaryComputer: false, publicRef: null };
     }
-    const targetResult = SessionAuthoringExecutionTargetV2Schema.nullable().safeParse(document.target.authoring.executionTarget?.value ?? null);
-    const referenceResult = TemporaryComputerActivationRefV1Schema.nullable().safeParse(document.target.authoring.temporaryComputerActivationRef?.value ?? null);
+    const targetResult = z.nullable(SessionAuthoringExecutionTargetV2Schema).safeParse(document.target.authoring.executionTarget?.value ?? null);
+    const referenceResult = z.nullable(TemporaryComputerActivationRefV1Schema).safeParse(document.target.authoring.temporaryComputerActivationRef?.value ?? null);
     const publicRef = referenceResult.success ? referenceResult.data : null;
     return { isTemporaryComputer: (targetResult.success && targetResult.data?.kind === 'temporary_computer') || publicRef !== null, publicRef };
 }
