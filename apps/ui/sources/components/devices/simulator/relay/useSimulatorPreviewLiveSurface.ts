@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useMachineLiveStreamId } from '@/components/stream/useMachineLiveStreamId';
 import type { MachineLiveStreamCapsV1, SimulatorDeviceResourceV1 } from '@happier-dev/protocol';
 
 import {
@@ -148,6 +149,7 @@ export function useSimulatorPreviewLiveSurface(
         input.relay?.createStreamId,
     ]);
 
+    const streamId = useMachineLiveStreamId(identity?.streamId ?? '');
     const ingestion = useSimulatorRelayIngestion({
         enabled: relayEnabled && identity !== null,
         transport,
@@ -158,7 +160,7 @@ export function useSimulatorPreviewLiveSurface(
         // open mints a tab-scoped grant and the server delivers frames to exactly this tab.
         viewerSocketId: identity?.viewerSocketId ?? '',
         simulatorId: identity?.simulatorId ?? '',
-        streamId: identity?.streamId ?? '',
+        streamId,
         streamFamily: identity?.streamFamily ?? '',
         // Simulator registration uses its physical source id as the stream family too.
         sourceId: identity?.streamFamily,

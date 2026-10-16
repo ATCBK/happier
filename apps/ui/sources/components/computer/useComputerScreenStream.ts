@@ -4,6 +4,7 @@ import type { MachineLiveStreamCapsV1, MachineLiveStreamControlSidebandV1 } from
 import type { BrowserStreamedSurfaceRuntime } from '@/components/browser/adapters/BrowserStreamedTarget';
 import { useSimulatorRelayIngestion, type SimulatorRelayTransport } from '@/components/devices/simulator/relay/useSimulatorRelayIngestion';
 import { useMachineLiveStreamRelaySocket } from '@/components/stream/useMachineLiveStreamRelaySocket';
+import { useMachineLiveStreamId } from '@/components/stream/useMachineLiveStreamId';
 import { publishComputerStatusFrame, publishComputerStreamInputFailure } from '@/sync/domains/computer/computerControlClient';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
@@ -45,7 +46,7 @@ export function useComputerScreenStream(input: Readonly<{
         : null), [socket]);
     const viewerSocketId = socket?.socketId ?? '';
     // Viewer-specific: two devices watching one window get two logical streams over one capture source.
-    const streamId = sourceId && socket && viewerSocketId ? `computer-live:${socket.machineId}:${sourceId}:${viewerSocketId}` : '';
+    const streamId = useMachineLiveStreamId(sourceId && socket && viewerSocketId ? `computer-live:${socket.machineId}:${sourceId}:${viewerSocketId}` : '');
     const ingestion = useSimulatorRelayIngestion({
         enabled: Boolean(streamId && transport),
         transport,

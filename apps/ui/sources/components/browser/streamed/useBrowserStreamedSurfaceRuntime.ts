@@ -10,11 +10,12 @@ import { decodeBase64 } from '@/encryption/base64';
 
 import { useSimulatorRelayIngestion, type SimulatorRelayTransport } from '@/components/devices/simulator/relay/useSimulatorRelayIngestion';
 import { useMachineLiveStreamRelaySocket } from '@/components/stream/useMachineLiveStreamRelaySocket';
+import { useMachineLiveStreamId } from '@/components/stream/useMachineLiveStreamId';
 import { isDaemonAuthoritativeBrowserView } from '@/sync/domains/browser/control/commands';
-import { listBrowserDaemonViewsViaMachineRpc } from '@/sync/domains/browser/control/machineRpc';
+import { listBrowserDaemonViewsViaMachineRpc, type BrowserDaemonControlDispatchClientResult } from '@/sync/domains/browser/control/machineRpc';
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
 import { resolveBrowserDaemonStreamTarget } from '@/sync/domains/browser/store';
-import { selectBrowserTargetAdapter } from '@/sync/domains/browser/adapters/selection';
+import { buildBrowserAdapterCapabilities } from '@/sync/domains/browser/adapters/capabilities';
 
 import type { BrowserStreamedSurfaceRuntime } from '../adapters/BrowserStreamedTarget';
 
@@ -27,7 +28,7 @@ type Discovery =
     | Readonly<{ status: 'idle' }>
     | Readonly<{ status: 'discovering' }>
     | Readonly<{ status: 'ready'; view: BrowserDaemonViewV1 | null; machineId: string; serverId: string }>
-    | Readonly<{ status: 'failed' }>;
+    | Readonly<{ status: 'failed'; reason: Extract<BrowserDaemonControlDispatchClientResult, { ok: false }>['reason'] }>;
 
 /**
  * The live picture of the agent's browser for one daemon-owned view.
@@ -71,19 +72,24 @@ export function useBrowserStreamedSurfaceRuntime(input: Readonly<{
         void listBrowserDaemonViewsViaMachineRpc({ machineId, serverId, browserSessionId, signal: abort.signal })
             .then((result) => {
                 if (abort.signal.aborted) return;
-                if (!result.ok) { setDiscovery({ status: 'failed' }); return; }
+                if (!result.ok) { setDiscovery({ status: 'failed', reason: result.reason }); return; }
                 const views = result.views.filter(candidate => candidate.browserSessionId === browserSessionId);
                 for (const candidate of views) {
                     const target = resolveBrowserDaemonStreamTarget(candidate);
                     if (!target) continue;
-                    const selection = selectBrowserTargetAdapter({ target, platform: candidate.platform });
-                    if (!selection.ok || selection.outcome !== 'renderEngine') continue;
+                    // Discovery already identifies the daemon's semantic owner. The viewer uses a
+                    // stream target for display, but must retain Chromium's capture/Action route.
+                    const adapterCapabilities = buildBrowserAdapterCapabilities({
+                        adapterKind: candidate.adapterKind,
+                        supportedTargetKinds: [target.kind],
+                        supportedRenderEngines: ['streamedSurface'],
+                    });
                     const opened = candidate.events.find(event => event.kind === 'viewOpened');
                     onBrowserEventRef.current?.({ kind: 'viewOpened', eventId: `browser-discovery:${candidate.sourceId}`,
                         occurredAt: opened?.occurredAt ?? Date.now(), browserSessionId: candidate.browserSessionId,
                         viewId: candidate.viewId, target, platform: candidate.platform,
-                        adapterKind: selection.adapterKind, engineKind: selection.engineKind,
-                        adapterCapabilities: selection.capabilities,
+                        adapterKind: candidate.adapterKind, engineKind: 'streamedSurface',
+                        adapterCapabilities,
                         ...(opened?.kind === 'viewOpened' && opened.currentUrl ? { currentUrl: opened.currentUrl } : {}) });
                     for (const event of candidate.events) {
                         if (event.kind !== 'viewOpened' && event.browserSessionId === browserSessionId
@@ -115,9 +121,9 @@ export function useBrowserStreamedSurfaceRuntime(input: Readonly<{
         : null), [socket]);
     const viewerSocketId = socket?.socketId ?? '';
     // Viewer-specific: two tabs watching one view get two logical streams over one capture source.
-    const streamId = sourceId && socket && viewerSocketId
+    const streamId = useMachineLiveStreamId(sourceId && socket && viewerSocketId
         ? `browser-live:${socket.machineId}:${sourceId}:${viewerSocketId}`
-        : '';
+        : '');
     const ingestion = useSimulatorRelayIngestion({
         enabled: input.enabled !== false && Boolean(streamId && transport),
         transport,
@@ -155,19 +161,25 @@ export function useBrowserStreamedSurfaceRuntime(input: Readonly<{
     const playerState = sourceId ? ingestion.playerStatesBySimulatorId[sourceId] ?? null : null;
     const retry = React.useCallback(() => setAttempt((current) => current + 1), []);
     const machineName = input.machineName ?? null;
+    const unavailableReason = discovery.status === 'failed' ? discovery.reason : undefined;
 
     return React.useMemo<BrowserStreamedSurfaceRuntime | null>(() => {
-        if (!view) return null;
+        // Before any view exists the empty Session Browser still explains the one prerequisite
+        // that keeps the agent's browser from ever opening; any other discovery failure stays quiet.
+        if (!view) return unavailableReason === 'managed_package_missing'
+            ? { machineName, playerState: null, unavailableReason, onRetry: retry }
+            : null;
         const connecting = discovery.status === 'discovering'
             || (Boolean(sourceId) && (!socket || !playerState));
         return {
             machineName,
             connecting,
+            ...(unavailableReason ? { unavailableReason } : {}),
             playerState,
             onRetry: retry,
             input: sendControl && sourceId && streamId
                 ? { sourceId, streamId, send: sendControl }
                 : null,
         };
-    }, [discovery.status, machineName, playerState, retry, sendControl, socket, sourceId, streamId, view]);
+    }, [discovery.status, machineName, playerState, retry, sendControl, socket, sourceId, streamId, unavailableReason, view]);
 }

@@ -6,6 +6,7 @@ import type { DaemonPluginUiCaptureSourceDescriptorV1 } from '@happier-dev/proto
 import type { HappierLiveStreamProps } from '@happier-dev/plugin-ui/presentation';
 import { LiveStreamPlayer, type LiveStreamPlayerDisplayState } from '@/components/stream/LiveStreamPlayer';
 import { useMachineLiveStreamRelaySocket } from '@/components/stream/useMachineLiveStreamRelaySocket';
+import { useMachineLiveStreamId } from '@/components/stream/useMachineLiveStreamId';
 import { useSimulatorRelayIngestion, type SimulatorRelayTransport } from '@/components/devices/simulator/relay/useSimulatorRelayIngestion';
 import type { PluginSurfaceHostApiV1 } from './createPluginSurfaceHostApi';
 import type { BoundPluginSurfaceMountLifetime } from './boundPluginSurfaceController';
@@ -51,7 +52,7 @@ export function PluginLiveStreamViewer(props: HappierLiveStreamProps & Readonly<
         enabled: Boolean(source && mountLifetime.isCurrent()), disconnectTag: 'plugin-live-stream-disconnect' });
     const transport = React.useMemo<SimulatorRelayTransport | null>(() => socket
         ? { send: (_event, envelope) => socket.sendEnvelope(envelope), onEnvelope: listener => socket.onEnvelope(listener) } : null, [socket]);
-    const streamId = source && socket?.socketId ? `plugin-live:${viewingId}:${source.sourceOccurrenceId}:${socket.socketId}` : '';
+    const streamId = useMachineLiveStreamId(source && socket?.socketId ? `plugin-live:${source.sourceOccurrenceId}:${socket.socketId}` : '');
     const ingestion = useSimulatorRelayIngestion({ enabled: Boolean(source && streamId && mountLifetime.isCurrent()), transport,
         serverId: props.serverId, sourceMachineId: socket?.machineId ?? '', targetMachineId: socket?.machineId ?? '',
         viewerSocketId: socket?.socketId, simulatorId: viewingId, streamId, streamFamily: source?.streamFamily ?? '',

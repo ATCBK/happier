@@ -16,6 +16,7 @@ export type SimulatorLiveStreamIdentity = Readonly<{
     viewerId: string;
     /** Per-tab viewer socket id. Required for product viewer relays so the server can target the tab. */
     viewerSocketId: string;
+    /** Source/viewer identity; the mounted ingestion consumer adds its subscription identity. */
     streamId: string;
     streamFamily: string;
     sourceCodecs: readonly MachineLiveStreamCodecIdV1[];
@@ -31,7 +32,9 @@ export type CreateSimulatorLiveStreamId = (input: Readonly<{
 }>) => string;
 
 /**
- * Deterministic per-(viewer, daemon, capture source) stream id. The daemon relay keys active
+ * Deterministic per-(viewer, daemon, capture source) stream key. The mounted viewer qualifies it
+ * through `useMachineLiveStreamId` so an old subscriber's Stop cannot close its successor.
+ * The daemon relay keys active
  * streams by `${streamId}:${targetMachineId}` AND, for the viewer path, by the per-tab viewer
  * socket. The id therefore binds the viewer identity so two tabs of the same user get isolated
  * logical streams (it previously dropped the target entirely, collapsing all viewers of a daemon
