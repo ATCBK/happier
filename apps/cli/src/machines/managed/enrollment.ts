@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import type { ResolvedHomeTarget } from '@happier-dev/cli-common/homeTarget';
+import { resolveManagedCliReleaseChannelSync } from '@happier-dev/cli-common/firstPartyRuntime';
 import { safeBashSingleQuote } from '@happier-dev/cli-common/ssh';
 import {
   createRemoteNativeBootstrapMachineTaskKind, installRemoteFirstPartyComponentPayload,
@@ -58,7 +59,9 @@ export async function runManagedMachineEnrollment(input: Readonly<{
   const configuration = {
     relay: { relayUrl: input.target.canonicalAuthUrl, webappUrl: input.target.webappUrl },
     homeTarget: input.target, managedEnrollment: correlation,
-    requireLocalApproval: true, channel: input.channel ?? 'stable', serviceMode: nativeGuestHome ? 'none' as const : 'user' as const,
+    requireLocalApproval: true,
+    channel: input.channel ?? resolveManagedCliReleaseChannelSync({ argv: process.argv, invokedPath: process.argv[1], processEnv: process.env }).label,
+    serviceMode: nativeGuestHome ? 'none' as const : 'user' as const,
   };
   const runPreparedTask = async (kind: InteractiveSystemTaskKind) => {
     const { getLiveSystemTasksRunnerAdapter } = await import('@/capabilities/systemTasks/liveSystemTasksRunner');

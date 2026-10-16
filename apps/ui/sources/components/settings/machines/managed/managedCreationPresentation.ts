@@ -75,7 +75,7 @@ export function canRetryManagedInstallation(machine: ManagedMachineV1, operation
         && lifecycle.kind !== 'cleanupPending' && lifecycle.kind !== 'absent' && lifecycle.kind !== 'volumeLost'
         && snapshot?.state === 'failed' && snapshot.scope.machineId === machine.controller.machineId
         && (snapshot.actionId === 'machines.managed.acquire' || snapshot.actionId === 'machines.managed.bootstrap.retry')
-        && snapshot.error?.errorCode !== 'credential_unavailable' && snapshot.error?.errorCode !== 'provider_unavailable'
+        && snapshot.error?.errorCode !== 'credential_unavailable'
         && snapshot.domainRef?.kind === 'managedMachine' && snapshot.domainRef.id === machine.id;
 }
 

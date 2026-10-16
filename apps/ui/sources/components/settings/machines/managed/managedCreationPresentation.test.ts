@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { t } from '@/text';
-import { describeManagedCreation, managedCreationState, managedMachineDestination, managedCreationSetup } from './managedCreationPresentation';
+import { canRetryManagedInstallation, describeManagedCreation, managedCreationState, managedMachineDestination, managedCreationSetup } from './managedCreationPresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 
 const machine: ManagedMachineV1 = { id: 'managed', homeId: 'home', custodianAccountId: 'owner',
@@ -11,6 +11,20 @@ const machine: ManagedMachineV1 = { id: 'managed', homeId: 'home', custodianAcco
     desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
 
 describe('managed creation presentation', () => {
+    it('offers installation recovery after the provider becomes available without borrowing a replaced resource failure', () => {
+        const operation: ActionOperationProjection = { serverId: machine.homeId, observation: 'available', isUnavailableProjection: false,
+            snapshot: { version: 1, operationId: 'provider-failure', revision: 1, actionId: 'machines.managed.bootstrap.retry', state: 'failed',
+                scope: { accountId: 'owner', machineId: machine.controller.machineId }, title: 'Retry installation', createdAt: 1, settledAt: 2,
+                domainRef: { kind: 'managedMachine', id: machine.id, resource: machine.resource, controller: machine.controller },
+                cancellation: 'supported', error: { errorCode: 'provider_unavailable', error: 'Provider unavailable' } } };
+        expect(managedCreationState(machine, { providerAvailable: false }).kind).toBe('providerRemoved');
+        expect(managedCreationState(machine, { providerAvailable: true }).kind).toBe('resourceReady');
+        expect(canRetryManagedInstallation(machine, operation)).toBe(true);
+        expect(canRetryManagedInstallation({ ...machine, resource: { ...machine.resource!, value: { nativeId: 'replacement' } } }, operation)).toBe(false);
+        expect(canRetryManagedInstallation(machine, { ...operation, snapshot: { ...operation.snapshot,
+            error: { errorCode: 'credential_unavailable', error: 'Credential unavailable' } } })).toBe(false);
+        expect(canRetryManagedInstallation(machine, { ...operation, observation: 'unavailable' })).toBe(false);
+    });
     it.each([
         ['managed.intent.busy', 'busy'],
         ['managed.intent.activity-unknown', 'activityUnknown'],

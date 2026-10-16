@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
 import { resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTarget';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { ManagedResourceV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
@@ -16,6 +17,38 @@ const target = resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerI
 const carrier = { kind: 'native', transport: { contributionRef: resource.contributionRef, schemaVersion: 1 } };
 
 describe('runManagedMachineEnrollment', () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+  it.each([
+    ['preview', undefined, 'cli-preview'],
+    ['dev', undefined, 'cli-dev'],
+    ['preview', 'stable', 'cli-stable'],
+  ] as const)('selects the %s controller channel unless explicitly overridden by %s through the real installer', async (hostChannel, channel, releaseTag) => {
+    vi.stubEnv('HAPPIER_PUBLIC_RELEASE_CHANNEL', hostChannel);
+    const releases: string[] = [];
+    // GitHub is the external boundary; enrollment, task composition and HTTP selection stay real.
+    const mirror = createServer((request, response) => {
+      releases.push(request.url ?? '');
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end('{}');
+    });
+    await new Promise<void>((resolve, reject) => { mirror.once('error', reject); mirror.listen(0, '127.0.0.1', resolve); });
+    try {
+      const address = mirror.address();
+      if (!address || typeof address === 'string') throw new Error('Release mirror was not listening');
+      vi.stubEnv('NODE_ENV', 'development');
+      vi.stubEnv('HAPPIER_FIRST_PARTY_RELEASE_API_BASE_URL', `http://127.0.0.1:${address.port}`);
+      await expect(runManagedMachineEnrollment({ correlation, target, carrier, ...(channel ? { channel } : {}) }, {
+        readCurrentManagedRow: async () => machine,
+        native: { exec: async () => ({ status: 0, stdout: 'Linux\nx86_64\n/home/guest\n', stderr: '' }),
+          putFile: async () => { throw new Error('No payload may be delivered after release lookup fails'); } },
+      })).rejects.toThrow(/first-party-release/);
+      expect(releases).toHaveLength(1);
+      expect(releases[0]).toBe(`/repos/happier-dev/happier/releases/tags/${releaseTag}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => mirror.close(error => error ? reject(error) : resolve()));
+    }
+  });
   it('retries an unconfirmed native boot update after enrollment using the same installed binary and Machine without reinstalling or pairing', async () => {
     const bootCarrier = { ...carrier, guestHome: { homeDir: '/persistent/home', happyHomeDir: '/persistent/home/.happier', daemonStartup: 'native-process' } };
     const requests: unknown[] = [];
