@@ -1,3 +1,5 @@
+import { z } from 'zod/mini';
+
 import {
   HappierReplayRecentMessagesCountSchema,
   HappierReplayWireMaxSeedCharsSchema,
@@ -1833,7 +1835,7 @@ export function buildHappierReplayPromptFromDialog(params: Readonly<{
 }>): string {
   const recentMessagesCount = params.recentMessagesCount === null
     ? null
-    : HappierReplayRecentMessagesCountSchema.catch(16).parse(params.recentMessagesCount);
+    : z.catch(HappierReplayRecentMessagesCountSchema, 16).parse(params.recentMessagesCount);
 
   const dialog: Array<{
     role: 'User' | 'Assistant';
