@@ -5,6 +5,7 @@ const boundary = await installSessionOpsNetworkBoundary();
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 await loadSyncSingletonForTests();
 const { createServerScopedRelaySocket } = await import('./serverScopedRelaySocket');
+const { resolveServerScopedMachineLiveStreamRelaySocket } = await import('./serverScopedMachineLiveStreamRelaySocket');
 const { serverScopedRpcSocketPool } = await import('./serverScopedRpcSocketPool');
 const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
 const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
@@ -72,6 +73,33 @@ describe('createServerScopedRelaySocket (real scoped network)', () => {
         expect(activeTransport.on).toHaveBeenCalledWith(listener);
         expect(scopedTransport).not.toHaveBeenCalled();
         await client.disconnect();
+    });
+
+    it.each([
+        { scope: 'active', borrowed: false },
+        { scope: 'active', borrowed: true },
+        { scope: 'scoped', borrowed: false },
+    ] as const)('reads the current live-stream viewer after $scope reconnect (borrowed=$borrowed)', async ({ scope, borrowed }) => {
+        if (scope === 'active') {
+            await upsertAndActivateServer({ serverUrl: home.serverUrl });
+            await restoreConnectionToActiveServer({ token: home.token });
+            activeConnection = true;
+            storage.getState().activateProfileScope({ serverId: home.id, accountId: home.accountId });
+            storage.getState().applyProfile({ ...profileDefaults, id: home.accountId });
+        }
+        const accountLifetime = borrowed ? captureActiveServerAccountScopeLifetime() : undefined;
+        if (borrowed && !accountLifetime) throw new Error('Expected the connected Account authority');
+        const client = await resolveServerScopedMachineLiveStreamRelaySocket({
+            machineId: 'machine-1', serverId: home.id, accountLifetime,
+        });
+        try {
+            const network = boundary.socketBoundaries.find(entry => entry.socket.id === client.socketId);
+            if (!network) throw new Error('Expected the actual viewer Socket.IO boundary');
+            // Socket.IO replaces its connection id on reconnect. The retained logical
+            // reader must not keep addressing the previous connection's room.
+            network.socket.id = 'reconnected-viewer';
+            expect(client.socketId).toBe(network.socket.id);
+        } finally { await client.disconnect(); }
     });
 
     it('retires retained active relay sends and deliveries with the borrowed Account authority', async () => {

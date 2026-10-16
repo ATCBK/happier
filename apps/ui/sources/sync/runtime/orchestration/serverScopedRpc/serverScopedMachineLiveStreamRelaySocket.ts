@@ -134,7 +134,7 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         scopeUserId: socket.scopeUserId,
         machineId: socket.machineId,
         viewerId: socket.scopeUserId,
-        socketId: socket.socketId ?? '',
+        get socketId() { return socket.socketId ?? ''; },
         sendEnvelope: envelope => {
             if (!disconnectStarted && (!closing || (envelope.message.kind === 'control' && envelope.message.control.kind === 'stop'))) {
                 socket.sendEnvelope(envelope);

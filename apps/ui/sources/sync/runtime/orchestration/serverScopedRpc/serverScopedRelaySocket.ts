@@ -125,7 +125,7 @@ export async function resolveServerScopedRelaySocket<TPayload>(params: Readonly<
         return retainSourceAccountRelay({
             scopeUserId,
             machineId: context.machineId,
-            socketId: params.getActiveSocketId?.(),
+            get socketId() { return params.getActiveSocketId?.(); },
             sendEnvelope: params.activeTransport.send,
             onEnvelope: params.activeTransport.on,
             disconnect: async () => {},
@@ -159,11 +159,12 @@ export async function resolveServerScopedRelaySocket<TPayload>(params: Readonly<
         const scopedTransport = typeof params.scopedTransport === 'function'
             ? params.scopedTransport(socket, context)
             : params.scopedTransport;
+        const connectedSocket = socket;
 
         const resolvedSocket: ServerScopedRelaySocket<TPayload> = {
             scopeUserId,
             machineId: context.machineId,
-            socketId: params.getScopedSocketId?.(socket) ?? scopedTransport.socketId ?? socket.getSocketId(),
+            get socketId() { return params.getScopedSocketId?.(connectedSocket) ?? scopedTransport.socketId ?? connectedSocket.getSocketId(); },
             sendEnvelope: scopedTransport.send,
             onEnvelope: scopedTransport.on,
             disconnect: async () => {
@@ -206,6 +207,7 @@ function retainSourceAccountRelay<TPayload>(socket: ServerScopedRelaySocket<TPay
     });
     return {
         ...socket,
+        get socketId() { return socket.socketId; },
         sendEnvelope: payload => { if (isCurrent()) socket.sendEnvelope(payload); },
         onEnvelope: listener => {
             if (!isCurrent()) return () => {};
