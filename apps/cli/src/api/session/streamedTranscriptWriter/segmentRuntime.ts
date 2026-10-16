@@ -14,6 +14,7 @@ export type StreamedTranscriptSegmentRuntime = {
   kind: StreamedTranscriptSegmentKind;
   sidechainId: string | null;
   segmentLocalId: string;
+  sourceMessageId?: string;
   startedAtMs: number;
   accumulatedText: string;
   textVersion: number;

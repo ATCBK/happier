@@ -160,7 +160,7 @@ export function createHostTerminalTranscriptFollowService(params: Readonly<{
                 if (!committedBaseline.complete) {
                     throw terminalFollowFailure('plugin_external_follow_unavailable', 'Committed transcript baseline is incomplete');
                 }
-                const committedLocalIds = new Set(committedBaseline.localIds);
+                const committedLocalIds = committedBaseline.localIds;
                 let admittingSource = true;
                 result = await params.followProviderSession(
                     {

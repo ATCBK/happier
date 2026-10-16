@@ -1,12 +1,27 @@
+import { readStreamedTranscriptSourceMessageId } from '../../streamedTranscriptWriter/buildStreamedTranscriptSegmentSnapshot';
+
 export type CommittedTranscriptLocalIdBaseline = Readonly<{
-  localIds: ReadonlySet<string>;
+  localIds: Set<string>;
   complete: boolean;
 }>;
+
+const committedLocalIdsBySession = new WeakMap<object, Set<string>>();
+
+/** Live projection and follow retain the same custody identities for the Session lifetime. */
+export function getSessionCommittedTranscriptLocalIds(session: object): Set<string> {
+  let localIds = committedLocalIdsBySession.get(session);
+  if (!localIds) {
+    localIds = new Set<string>();
+    committedLocalIdsBySession.set(session, localIds);
+  }
+  return localIds;
+}
 
 type TranscriptLocalIdBaselinePage = Readonly<{
   messages: readonly Readonly<{
     seq?: unknown;
     localId?: unknown;
+    meta?: unknown;
   }>[];
   hasMore: boolean;
   nextBeforeSeq: number | null;
@@ -14,6 +29,7 @@ type TranscriptLocalIdBaselinePage = Readonly<{
 
 export async function loadCommittedTranscriptLocalIdBaseline(params: Readonly<{
   take?: number;
+  localIds?: Set<string>;
   signal?: AbortSignal;
   deadlineAtMs?: number;
   fetchPage(input: Readonly<{
@@ -26,7 +42,7 @@ export async function loadCommittedTranscriptLocalIdBaseline(params: Readonly<{
   const take = typeof params.take === 'number' && Number.isFinite(params.take) && params.take > 0
     ? Math.trunc(params.take)
     : 5_000;
-  const localIds = new Set<string>();
+  const localIds = params.localIds ?? new Set<string>();
   let remaining = take;
   let beforeSeq: number | undefined;
   let complete = true;
@@ -43,6 +59,8 @@ export async function loadCommittedTranscriptLocalIdBaseline(params: Readonly<{
     for (const row of page.messages) {
       if (typeof row.localId === 'string' && row.localId.trim().length > 0) {
         localIds.add(row.localId);
+        const sourceMessageId = readStreamedTranscriptSourceMessageId(row.localId, row.meta);
+        if (sourceMessageId) localIds.add(sourceMessageId);
       }
     }
     remaining -= page.messages.length;

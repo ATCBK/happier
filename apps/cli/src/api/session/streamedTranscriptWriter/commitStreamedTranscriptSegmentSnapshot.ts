@@ -4,6 +4,7 @@ import { serializeAxiosErrorForLog } from '../../client/serializeAxiosErrorForLo
 import type { ACPProvider } from '../sessionMessageTypes';
 import type { StreamedTranscriptWriterSession } from './types';
 import type { StreamedTranscriptSegmentRuntime, StreamedTranscriptSegmentState } from './segmentRuntime';
+import type { CommittedTranscriptAdmission } from '../transcriptPort';
 import {
   buildStreamedTranscriptSegmentSnapshotBody,
   buildStreamedTranscriptSegmentSnapshotMeta,
@@ -17,6 +18,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
   interruptedReason?: string;
   failureRetryDelayMs?: number;
   onStreamingCommitFailure?: () => void;
+  admission?: CommittedTranscriptAdmission;
 }) {
   const { provider, session, segment, state, interruptedReason } = params;
 
@@ -65,13 +67,14 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
         .enqueueAgentMessageCommitted(provider, body, {
           localId: durableLocalId,
           meta,
+          ...(params.admission ? { admission: params.admission } : {}),
           provenance: {
             kind: 'non_dependent',
             source: segment.sidechainId ? 'sidechain' : 'external',
           },
         })
         .then((result) => {
-          if (result.persisted) markDurablyPersisted();
+          if (result.persisted && (!params.admission?.requireDelivery || result.delivered)) markDurablyPersisted();
         });
     } else {
       throw new Error('enqueueAgentMessageCommitted unavailable');
@@ -126,6 +129,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
           interruptedReason: pendingCommit.interruptedReason,
           failureRetryDelayMs: params.failureRetryDelayMs,
           onStreamingCommitFailure: params.onStreamingCommitFailure,
+          admission: params.admission,
         });
         return;
       }

@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RuntimeCheckpointToolProtocolV1 } from '@happier-dev/agents';
 import type {
@@ -21,6 +21,10 @@ import { cleanupBackendRunResources } from '@/agent/runtime/cleanupBackendRunRes
 import type { Metadata } from '@/api/types';
 import type { ApiClient } from '@/api/api';
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { loadCommittedTranscriptLocalIdBaseline } from '@/api/session/client/transcript/committedTranscriptLocalIdBaseline';
+import { createHostTerminalTranscriptFollowService } from '@/agent/runtime/session/terminal/transcriptFollow';
+import { createExternalSessionTerminalFollowProjector } from '@/session/external/terminalFollowProjection';
+import { projectRuntimeTranscriptEvent } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { createDeferredStartupBootstrap } from '@/agent/runtime/startup/createDeferredStartupBootstrap';
 import {
   computeRunnerTerminationOutcome,
@@ -47,6 +51,13 @@ import * as persistence from '@/persistence';
 import { BROWSER_RUNTIME_ACTION_CONTROL_PATH, BrowserRuntimeActionControlRequestSchema } from '@/daemon/browser/actions/controlTransport';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
+
+// A real prompt plan reads the Home's Project associations even for an
+// unassociated checkout. Keep that HTTP boundary in-process, not the resolver.
+let restoreProjectHttp: (() => void) | undefined;
+beforeEach(() => { restoreProjectHttp = installEmptyProjectAccountRowsHttpBoundary(); });
+afterEach(() => { restoreProjectHttp?.(); restoreProjectHttp = undefined; });
 
 const { loggerDebugMock, recoveryNotify, capabilityRestart, recoveryBoundary } = vi.hoisted(() => ({
   loggerDebugMock: vi.fn(),
@@ -1452,6 +1463,148 @@ describe('runSessionLoopLifecycle daemon exact-turn custody', () => {
 describe('runSessionLoopLifecycle runtime transcript projection', () => {
   afterAll(async () => {
     await pluginReloadController.shutdown({ timeoutMs: 5_000 });
+  });
+
+  it.each(['assistant-first', 'reasoning-first', 'two-outputs', 'cancelled', 'repeated-commit', 'session-replay'] as const)(
+    'persists one native assistant message after unkeyed streaming and retains the other channel (%s)', async (scenario) => {
+    const registry = await pluginReloadController.acquireRuntimeRegistry({
+      resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
+        contributes: getResolvedContributionRegistry(), pluginIds: [],
+      }),
+    });
+    const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const stored = new Map<string, Parameters<NonNullable<typeof base.session.enqueueAgentMessageCommitted>>[1]>();
+    const storedOptions = new Map<string, Parameters<NonNullable<typeof base.session.enqueueAgentMessageCommitted>>[2]>();
+    vi.mocked(base.session.enqueueAgentMessageCommitted!).mockImplementation(async (_provider, body, options) => {
+      if (!options?.localId) throw new Error('A durable transcript row requires its local identity');
+      stored.set(options.localId, body);
+      storedOptions.set(options.localId, options);
+      return { persisted: true, delivered: false };
+    });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      (mode) => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts },
+    );
+    queue.push({ text: 'Explain the change', localId: 'input-stream', userMessageSeq: 1 }, { permissionMode: 'default' });
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    let checkpointLocalId: string | undefined;
+    // The Agent runtime is the external producer boundary. Host admission, prompt loop,
+    // projection, stream writer and durable-message validation remain production code.
+    const provider: AgentSessionRuntime = {
+      async send(request) {
+        const turnId = request.delivery.turnId;
+        for (const event of [
+          { kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery },
+          { kind: 'turn-start', turnId: request.delivery.turnId, startedBy: 'host' },
+          { kind: 'message-delta', turnId: request.delivery.turnId, channel: 'reasoning', text: 'Checking the change.' },
+          { kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: 'The change is complete.' },
+          ...(scenario === 'reasoning-first' ? [{ kind: 'transcript-message-committed', turnId,
+            messageId: 'native-reasoning-fact', role: 'reasoning', text: 'Checked the change.' }] : []),
+          ...(scenario === 'cancelled' ? [] : [{ kind: 'transcript-message-committed', turnId,
+            messageId: 'native-assistant-fact', role: 'assistant', text: 'The authoritative change is complete.' }]),
+          ...(scenario === 'two-outputs' ? [
+            { kind: 'message-delta', turnId, channel: 'assistant', text: 'A second output.' },
+            { kind: 'transcript-message-committed', turnId, messageId: 'native-assistant-second', role: 'assistant', text: 'The authoritative change is complete.' },
+          ] : []),
+          ...(scenario === 'repeated-commit' ? [
+            { kind: 'message-delta', turnId, channel: 'assistant', text: 'A distinct unfinished output.' },
+            { kind: 'transcript-message-committed', turnId, messageId: 'native-assistant-fact', role: 'assistant', text: 'The authoritative change is complete.' },
+          ] : []),
+          ...(scenario === 'cancelled' || scenario === 'repeated-commit'
+            ? [{ kind: 'turn-cancelled', turnId, cause: 'user' }]
+            : [{ kind: 'turn-complete', turnId }]),
+          ...(scenario === 'session-replay' ? [
+            { kind: 'transcript-message-committed', messageId: 'native-assistant-fact', role: 'assistant', text: 'The authoritative change is complete.' },
+          ] : []),
+          { kind: 'runtime-ended', cause: 'providerEnded', retryable: false },
+        ]) {
+          // The real report already had a durable checkpoint before native completion.
+          // A fix that only discards an unpersisted draft must not pass this case.
+          if ((event.kind === 'transcript-message-committed' || event.kind === 'turn-cancelled') && checkpointLocalId === undefined) {
+            await vi.waitFor(() => expect([...stored.values()].some(body => body.type === 'message')).toBe(true), { timeout: 10_000 });
+            checkpointLocalId = [...stored].find(([, body]) => body.type === 'message')?.[0];
+          }
+          listener?.(canonicalRuntimeEvent({ ...event, sessionId: 'session-1', emittedAtMs: 1 }));
+        }
+        return { status: 'admitted' };
+      },
+      watch(next) { listener = next; return { dispose() { listener = undefined; } }; },
+      dispose() {},
+    };
+    const runtime = createNativeAgentSessionOperations(provider, 'session-1', undefined, undefined, undefined, undefined, undefined,
+      { context: { signal: new AbortController().signal } as AgentSessionRuntimeContext,
+        cwd: '/workspace', connectedAccounts: [], capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+        cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false } });
+    try {
+      await runSessionLoopLifecycle({ ...base, runtime, hookRuntime: runtime,
+        permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+        deps: { ...base.deps, registerRunnerTerminationHandlersFn: (registration) => registerRunnerTerminationHandlers({
+          process: registration.process, exit: registration.exit, onTerminate: registration.onTerminate, processLifecycleOwnership: 'caller',
+        }) },
+      });
+      const rows = [...stored.values()];
+      expect(rows.filter(body => body.type === 'message')).toEqual([
+        { type: 'message', message: scenario === 'cancelled' ? 'The change is complete.' : 'The authoritative change is complete.' },
+        ...(scenario === 'two-outputs' ? [{ type: 'message', message: 'The authoritative change is complete.' }] : []),
+        ...(scenario === 'repeated-commit' ? [{ type: 'message', message: 'A distinct unfinished output.' }] : []),
+      ]);
+      expect(rows.filter(body => body.type === 'thinking')).toEqual([
+        { type: 'thinking', text: scenario === 'reasoning-first' ? 'Checked the change.' : 'Checking the change.' },
+      ]);
+      expect(checkpointLocalId).toBeDefined();
+      expect(stored.get(checkpointLocalId!)?.type).toBe('message');
+      expect(storedOptions.get(checkpointLocalId!)?.meta).toMatchObject({ happierStreamSegmentV1: {
+        segmentLocalId: checkpointLocalId,
+        segmentState: scenario === 'cancelled' ? 'interrupted' : 'complete',
+        ...(scenario === 'cancelled' ? {} : { sourceMessageId: 'native-assistant-fact' }),
+      } });
+      if (scenario === 'two-outputs') {
+        const sourceIds = [...stored].filter(([, body]) => body.type === 'message').map(([localId]) =>
+          storedOptions.get(localId)?.meta?.happierStreamSegmentV1);
+        expect(sourceIds).toEqual([
+          expect.objectContaining({ sourceMessageId: 'native-assistant-fact' }),
+          expect.objectContaining({ sourceMessageId: 'native-assistant-second' }),
+        ]);
+      }
+      if (scenario === 'repeated-commit') {
+        const unfinished = [...stored].find(([, body]) => body.type === 'message' && body.message === 'A distinct unfinished output.');
+        expect(unfinished).toBeDefined();
+        expect(storedOptions.get(unfinished![0])?.meta).toMatchObject({ happierStreamSegmentV1: {
+          segmentLocalId: unfinished![0], segmentState: 'interrupted',
+        } });
+      }
+      if (scenario !== 'cancelled') {
+        const beforeReplay = [...stored.entries()];
+        const follow = createHostTerminalTranscriptFollowService({
+          signal: new AbortController().signal,
+          loadCommittedLocalIdBaseline: (input) => loadCommittedTranscriptLocalIdBaseline({ ...input,
+            // Home page transport: these are the envelopes produced from the durable writes above.
+            fetchPage: async () => ({ messages: [...stored].map(([localId, body]) => ({ localId,
+              meta: buildAcpAgentMessageEnvelope({ provider: 'agent', body, meta: storedOptions.get(localId)?.meta }).meta,
+            })), hasMore: false, nextBeforeSeq: null }),
+          }),
+          followProviderSession: async (_request, consume) => {
+            await consume({ kind: 'data', phase: 'initial_replay', fromCursor: null, nextCursor: 'tail', items: [
+              { id: 'native-assistant-fact', localId: 'native-assistant-fact', kind: 'agent', timestampMs: 2,
+                data: buildAcpAgentMessageEnvelope({ provider: 'agent', body: { type: 'message', message: 'The authoritative change is complete.' } }) },
+            ] });
+            return { status: 'following', startingCursor: 'tail', subscription: { dispose: async () => undefined } };
+          },
+          publish: createExternalSessionTerminalFollowProjector({ sessionId: 'session-1', agentId: 'agent',
+            projectRuntimeEvent: (event, admission) => projectRuntimeTranscriptEvent({ session: base.session,
+              provider: 'agent', event, admission }),
+          }),
+        });
+        try {
+          await expect(follow.bindProviderSession({ agentId: 'agent', providerSessionId: 'native-session' }))
+            .resolves.toMatchObject({ status: 'following' });
+          expect([...stored.entries()]).toEqual(beforeReplay);
+        } finally {
+          await follow.releaseActiveBindings();
+        }
+      }
+    } finally {
+      await registry.release();
+    }
   });
 
   it.each([

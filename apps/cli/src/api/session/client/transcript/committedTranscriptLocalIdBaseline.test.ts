@@ -7,7 +7,8 @@ describe('loadCommittedTranscriptLocalIdBaseline', () => {
     const fetchPage = vi.fn()
       .mockResolvedValueOnce({
         messages: [
-          { seq: 9, localId: 'fact-9', createdAt: 900 },
+          { seq: 9, localId: 'segment-9', createdAt: 900,
+            meta: { happierStreamSegmentV1: { v: 1, segmentKind: 'assistant', segmentState: 'complete', segmentLocalId: 'segment-9', sourceMessageId: 'fact-9', futurePresentation: 'ignored' } } },
           { seq: 8, localId: 'fact-8', createdAt: 800 },
         ],
         hasMore: true,
@@ -25,13 +26,29 @@ describe('loadCommittedTranscriptLocalIdBaseline', () => {
       take: 3,
       fetchPage,
     })).resolves.toEqual({
-      localIds: new Set(['fact-9', 'fact-8', 'fact-7']),
+      localIds: new Set(['segment-9', 'fact-9', 'fact-8', 'fact-7']),
       complete: false,
     });
     expect(fetchPage).toHaveBeenNthCalledWith(2, {
       limit: 1,
       beforeSeq: 8,
     });
+  });
+
+  it.each([
+    { segmentState: 'streaming' },
+    { segmentState: 'interrupted' },
+    { segmentLocalId: 'another-row' },
+    { sourceMessageId: '   ' },
+    { sourceMessageId: 42 },
+  ])('does not grant source identity to malformed or incomplete stored segments (%j)', async (override) => {
+    const result = await loadCommittedTranscriptLocalIdBaseline({
+      fetchPage: async () => ({ messages: [{ localId: 'segment-1', meta: { happierStreamSegmentV1: {
+        v: 1, segmentKind: 'assistant', segmentState: 'complete', segmentLocalId: 'segment-1',
+        sourceMessageId: 'native-1', futurePresentation: 'ignored', ...override,
+      } } }], hasMore: false, nextBeforeSeq: null }),
+    });
+    expect(result.localIds).toEqual(new Set(['segment-1']));
   });
 
   it('reports an incomplete identity baseline when committed history exceeds 5,000 rows', async () => {

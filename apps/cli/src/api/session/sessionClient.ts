@@ -131,8 +131,8 @@ import {
     CommittedUserMessageSeqTracker,
     type CommittedUserMessageSeqListener,
 } from './committedUserMessageSeqTracker';
-import { loadCommittedTranscriptLocalIdBaseline } from './client/transcript/committedTranscriptLocalIdBaseline';
-import { fetchCommittedTranscriptIdentitySnapshot } from './transcriptQueries';
+import { fetchCommittedTranscriptIdentitySnapshot, fetchCommittedTranscriptLocalIdBaseline } from './transcriptQueries';
+import { getSessionCommittedTranscriptLocalIds } from './client/transcript/committedTranscriptLocalIdBaseline';
 import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncryptedTranscriptMessages';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { findTranscriptEncryptedMessageByLocalIdV2 } from './transcriptMessageLookup';
@@ -2490,23 +2490,13 @@ export class ApiSessionClient extends EventEmitter {
         signal?: AbortSignal;
         deadlineAtMs?: number;
     }) {
-        const request = async () => await this.runSessionRequest(async () => loadCommittedTranscriptLocalIdBaseline({
-            ...(opts?.take === undefined ? {} : { take: opts.take }),
+        const request = async () => await this.runSessionRequest(async () => fetchCommittedTranscriptLocalIdBaseline({
+            token: this.token, sessionId: this.sessionId, ...this.getTranscriptQueryContext(),
+            localIds: getSessionCommittedTranscriptLocalIds(this),
             ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
             ...(opts?.deadlineAtMs === undefined
                 ? {}
                 : { deadlineAtMs: opts.deadlineAtMs }),
-            fetchPage: async ({ limit, beforeSeq, signal, deadlineAtMs }) =>
-                await fetchEncryptedTranscriptMessagesPage({
-                    token: this.token,
-                    sessionId: this.sessionId,
-                    limit,
-                    scope: 'all',
-                    roles: ['user', 'agent', 'event'],
-                    ...(beforeSeq === undefined ? {} : { beforeSeq }),
-                    ...(signal === undefined ? {} : { signal }),
-                    ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
-                }),
         }));
         const supervisor = this.sessionConnectionSupervisor;
         return supervisor

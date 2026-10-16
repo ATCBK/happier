@@ -1057,8 +1057,18 @@ Whole-Session permission reset reaches the existing Session request store even w
 
 In development source, a `message-delta` can supply the same stable `messageId` as its
 `transcript-message-committed` event. The host stream bridge uses that identity for live and
-durable rows and separates distinct messages within a turn; Agents without a witness retain
-the existing generated stream identity. OpenCode derives its stable ID through the same
+durable rows and separates distinct messages within a turn. When an unnamed foreground
+stream receives its native committed fact, the writer finalizes that channel's existing
+row under its generated localId, including an already durable checkpoint, with the
+authoritative text and `happierStreamSegmentV1.sourceMessageId`. Assistant and reasoning
+segments remain independent; later outputs in the turn start new segments. Cancellation
+retains the interrupted checkpoint. Named deltas retain their native localId path, and
+Session-scoped output does not acquire this foreground handoff.
+The host's metadata reader recognizes the recorded source identity for both follow/replay
+and cold reconciliation. Follow opens metadata through the existing Session-mode decoder
+and retains both row and source identities in its paged baseline; plugins receive the
+native identity in their existing reconciliation baseline, without a second dedupe owner.
+OpenCode derives its stable ID through the same
 provider-session/message helper used by history import, so cold reconciliation recognizes
 streamed rows without a second persisted format or native-ID parser.
 
@@ -1070,8 +1080,8 @@ keeps foreground lifecycle, token hooks, change tracking, tool execution and req
 foreground transcript custody separate from this output. Foreground output with a turn
 and no sidechain still requires the active host turn. All output retains strict schema,
 Session identity, sequence and runtime-lifetime admission. Foreground boundaries flush
-only foreground streams; a successful authoritative text commit retires its matching
-stream through the existing stable message identity. Native child turn identifiers stay
+only foreground streams; a successful authoritative text commit retires only its matching
+channel through the named identity or unnamed-segment handoff above. Native child turn identifiers stay
 in provider-owned evidence rather than claiming a host foreground turn.
 
 Both the host and public SDK Session-to-Run projections admit assistant/reasoning

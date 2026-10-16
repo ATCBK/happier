@@ -6,6 +6,7 @@ import {
 } from '@happier-dev/protocol';
 import type { RuntimeTranscriptProjectionSession } from './projectRuntimeTranscriptEvent';
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { projectSessionUsageWorkEvidence } from '@happier-dev/protocol/usage/usageWorkEvidence';
 
 type EnqueueAgentMessageCommitted = NonNullable<
@@ -42,6 +43,85 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('projectRuntimeTranscriptEvent', () => {
+  it('retains the checkpoint identity when native final custody is refused and retried', async () => {
+    const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
+    const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+    let available = true;
+    const stored = new Map<string, CommittedAgentMessageBody>();
+    const session = { sessionId: 'session-1',
+      enqueueAgentMessageCommitted: async (_provider: unknown, body: CommittedAgentMessageBody, opts: { localId: string }) => {
+        if (available) stored.set(opts.localId, body);
+        return { persisted: available, delivered: false };
+      },
+    };
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'agent', createSessionForStream: () => session });
+    const project = async (event: Record<string, unknown>) => projectRuntimeTranscriptEvent({ session, provider: 'agent',
+      runtimeMessageDeltaBridge: bridge, event: canonicalRuntimeEvent({ sessionId: session.sessionId, emittedAtMs: 1, turnId: 'turn-1', ...event }) });
+    await project({ kind: 'message-delta', channel: 'assistant', text: 'Checkpoint' });
+    await vi.waitFor(() => expect(stored.size).toBe(1));
+    const checkpointLocalId = [...stored.keys()][0]!;
+    available = false;
+    const final = { kind: 'transcript-message-committed', role: 'assistant', messageId: 'native-final', text: 'Authoritative' };
+    await expect(project(final)).rejects.toMatchObject({ code: 'runtime_transcript_required_admission_failed', reason: 'streamed_final_not_durable' });
+    expect(stored.get(checkpointLocalId)).toEqual({ type: 'message', message: 'Checkpoint' });
+    available = true;
+    await project(final);
+    expect([...stored.entries()]).toEqual([[checkpointLocalId, { type: 'message', message: 'Authoritative' }]]);
+    bridge.clear();
+  });
+
+  it('keeps a named commit separate from a simultaneous unnamed stream in the same channel', async () => {
+    const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
+    const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+    const stored = new Map<string, CommittedAgentMessageBody>();
+    const session = { sessionId: 'session-1',
+      enqueueAgentMessageCommitted: async (_provider: unknown, body: CommittedAgentMessageBody, opts: { localId: string }) => {
+        stored.set(opts.localId, body); return { persisted: true, delivered: false };
+      },
+    };
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'agent', createSessionForStream: () => session });
+    const project = async (event: Record<string, unknown>) => projectRuntimeTranscriptEvent({ session, provider: 'agent',
+      runtimeMessageDeltaBridge: bridge, event: canonicalRuntimeEvent({ sessionId: session.sessionId, emittedAtMs: 1, turnId: 'turn-1', ...event }) });
+    await project({ kind: 'message-delta', channel: 'assistant', text: 'Unnamed output' });
+    await project({ kind: 'message-delta', channel: 'assistant', messageId: 'named', text: 'Named draft' });
+    await project({ kind: 'transcript-message-committed', role: 'assistant', messageId: 'named', text: 'Named final' });
+    await project({ kind: 'turn-complete' });
+    expect(stored.get('named')).toEqual({ type: 'message', message: 'Named final' });
+    expect([...stored.values()]).toHaveLength(2);
+    expect([...stored.values()]).toContainEqual({ type: 'message', message: 'Unnamed output' });
+    bridge.clear();
+  });
+
+  it.each(['assistant', 'reasoning'] as const)('finalizes the checkpoint for an unnamed %s output under its existing identity', async (channel) => {
+    const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
+    const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+    const stored = new Map<string, { body: CommittedAgentMessageBody; meta?: Record<string, unknown> }>();
+    const session = { sessionId: 'session-1',
+      enqueueAgentMessageCommitted: async (_provider: unknown, body: CommittedAgentMessageBody, opts: { localId: string; meta?: Record<string, unknown> }) => {
+        stored.set(opts.localId, { body, meta: opts.meta });
+        return { persisted: true, delivered: false };
+      },
+    };
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'agent', createSessionForStream: () => session });
+    const project = async (event: Record<string, unknown>) => projectRuntimeTranscriptEvent({ session, provider: 'agent',
+      runtimeMessageDeltaBridge: bridge, event: canonicalRuntimeEvent({ sessionId: session.sessionId, emittedAtMs: 1, turnId: 'turn-1', ...event }) });
+    await project({ kind: 'message-delta', channel, text: 'Draft' });
+    await vi.waitFor(() => expect(stored.size).toBe(1));
+    const checkpointLocalId = [...stored.keys()][0]!;
+    await project({ kind: 'message-delta', channel: channel === 'assistant' ? 'reasoning' : 'assistant', text: 'Other channel' });
+    await project({ kind: 'transcript-message-committed', role: channel, messageId: 'native-fact', text: 'Authoritative' });
+    await project({ kind: 'turn-complete' });
+    expect(stored.size).toBe(2);
+    expect(stored.get(checkpointLocalId)).toMatchObject({ body: channel === 'assistant'
+      ? { type: 'message', message: 'Authoritative' } : { type: 'thinking', text: 'Authoritative' },
+      meta: { happierStreamSegmentV1: { segmentLocalId: checkpointLocalId, segmentState: 'complete', sourceMessageId: 'native-fact' } },
+    });
+    expect([...stored.values()].some(({ body }) => channel === 'assistant'
+      ? body.type === 'thinking' && body.text === 'Other channel'
+      : body.type === 'message' && body.message === 'Other channel')).toBe(true);
+    bridge.clear();
+  });
+
   it('durably replaces a Pi draft by identity without dropping an earlier artifact or adding the draft prefix', async () => {
     const { createPiRuntimeEventProjector } = await import('@happier-dev/plugins-pi/agent/runtime/rpc/events');
     const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
@@ -392,18 +472,13 @@ describe('projectRuntimeTranscriptEvent', () => {
   it('projects canonical runtime tool events through the durable transcript queue', async () => {
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
     const { createAcpToolIdentity } = await import('@/agent/acp/toolCalls');
-    const runtimeMessageDeltaBridge = {
-      appendAssistantDelta: vi.fn(),
-      appendThinkingDelta: vi.fn(),
-      discardStream: vi.fn(),
-      flushAll: vi.fn(async () => []),
-    };
     const session = {
       sessionId: 'session-1',
       sendUserTextMessage: vi.fn(),
       sendAgentMessageCommitted: vi.fn(async () => undefined),
       enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const })),
     };
+    const runtimeMessageDeltaBridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session });
 
     await expect(projectRuntimeTranscriptEvent({
       session,
@@ -439,7 +514,6 @@ describe('projectRuntimeTranscriptEvent', () => {
       sidechainId: null,
       toolCallId: 'call-1',
     });
-    expect(runtimeMessageDeltaBridge.flushAll).toHaveBeenCalledWith(expect.objectContaining({ reason: 'tool-call-boundary' }));
     expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
       'codex',
       {
@@ -487,14 +561,9 @@ describe('projectRuntimeTranscriptEvent', () => {
     } = await import('../../../../../../../packages/protocol/src/sessions/messages/canonicalTurnDiffTool');
     const { NormalizedToolTurnChangeTracker } = await import('@/agent/tools/diff/normalizedToolTurnChangeTracker');
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
-    const runtimeMessageDeltaBridge = {
-      appendAssistantDelta: vi.fn(),
-      appendThinkingDelta: vi.fn(),
-      discardStream: vi.fn(),
-      flushAll: vi.fn(async () => []),
-    };
     const { bodies, enqueueAgentMessageCommitted } = createCommittedAgentMessageCapture();
     const session = { sessionId: 'session-1', enqueueAgentMessageCommitted };
+    const runtimeMessageDeltaBridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session });
     const normalizedToolTurnChangeTracker = new NormalizedToolTurnChangeTracker({ provider: 'codex' });
 
     await projectRuntimeTranscriptEvent({
@@ -571,12 +640,7 @@ describe('projectRuntimeTranscriptEvent', () => {
     const common = {
       session: { sessionId: 'session-patch', enqueueAgentMessageCommitted },
       provider: 'codex' as const,
-      runtimeMessageDeltaBridge: {
-        appendAssistantDelta: vi.fn(),
-        appendThinkingDelta: vi.fn(),
-        discardStream: vi.fn(),
-        flushAll: vi.fn(async () => []),
-      },
+      runtimeMessageDeltaBridge: createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => ({ enqueueAgentMessageCommitted }) }),
       normalizedToolTurnChangeTracker: new NormalizedToolTurnChangeTracker({ provider: 'codex' }),
       toolNormalizationProtocol: 'codex' as const,
     };
@@ -649,12 +713,7 @@ describe('projectRuntimeTranscriptEvent', () => {
     const common = {
       session: { sessionId: 'session-terminal', enqueueAgentMessageCommitted },
       provider: 'codex' as const,
-      runtimeMessageDeltaBridge: {
-        appendAssistantDelta: vi.fn(),
-        appendThinkingDelta: vi.fn(),
-        discardStream: vi.fn(),
-        flushAll: vi.fn(async () => []),
-      },
+      runtimeMessageDeltaBridge: createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => ({ enqueueAgentMessageCommitted }) }),
       normalizedToolTurnChangeTracker: new NormalizedToolTurnChangeTracker({ provider: 'codex' }),
       toolNormalizationProtocol: 'codex' as const,
     };
@@ -705,14 +764,9 @@ describe('projectRuntimeTranscriptEvent', () => {
     } = await import('../../../../../../../packages/protocol/src/sessions/messages/canonicalTurnDiffTool');
     const { NormalizedToolTurnChangeTracker } = await import('@/agent/tools/diff/normalizedToolTurnChangeTracker');
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
-    const runtimeMessageDeltaBridge = {
-      appendAssistantDelta: vi.fn(),
-      appendThinkingDelta: vi.fn(),
-      discardStream: vi.fn(),
-      flushAll: vi.fn(async () => []),
-    };
     const { bodies, enqueueAgentMessageCommitted } = createCommittedAgentMessageCapture();
     const session = { sessionId: 'session-1', enqueueAgentMessageCommitted };
+    const runtimeMessageDeltaBridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session });
     const normalizedToolTurnChangeTracker = new NormalizedToolTurnChangeTracker({ provider: 'codex' });
     const common = {
       session,
@@ -973,12 +1027,7 @@ describe('projectRuntimeTranscriptEvent', () => {
       sendAgentMessageCommitted: vi.fn(async () => undefined),
       enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const })),
     };
-    const runtimeMessageDeltaBridge = {
-      appendAssistantDelta: vi.fn(),
-      appendThinkingDelta: vi.fn(),
-      discardStream: vi.fn(),
-      flushAll: vi.fn(async () => []),
-    };
+    const runtimeMessageDeltaBridge = createKeyedStreamedTranscriptBridge({ provider: 'opencode', createSessionForStream: () => session });
 
     await expect(projectRuntimeTranscriptEvent({
       session,
@@ -1045,25 +1094,10 @@ describe('projectRuntimeTranscriptEvent', () => {
       sessionId: 'session-1',
       sendUserTextMessage: vi.fn(),
       sendAgentMessageCommitted: vi.fn(async () => undefined),
+      enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: false, delivered: false })),
     };
-    const runtimeMessageDeltaBridge = {
-      appendAssistantDelta: vi.fn(),
-      appendThinkingDelta: vi.fn(),
-      discardStream: vi.fn(),
-      flushAll: vi.fn(async () => [{
-        assistant: { sawText: true, didDurablyFlush: false },
-        assistantRoot: { sawText: true, didDurablyFlush: false },
-        thinking: { sawText: false, didDurablyFlush: false },
-        thinkingRoot: { sawText: false, didDurablyFlush: false },
-        segments: [{
-          kind: 'assistant' as const,
-          sidechainId: null,
-          sawText: true,
-          didDurablyFlush: false,
-          lastCommittedState: null,
-        }],
-      }]),
-    };
+    const runtimeMessageDeltaBridge = createKeyedStreamedTranscriptBridge({ provider: 'agent', createSessionForStream: () => session });
+    runtimeMessageDeltaBridge.appendAssistantDelta({ streamKey: 'turn-1', sidechainId: null, foregroundTurnId: 'turn-1', deltaText: 'Required output' });
 
     await expect(projectRuntimeTranscriptEvent({
       session,

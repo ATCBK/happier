@@ -20,6 +20,7 @@ import {
 } from '@/api/session/client/transcript/ephemeralSendOutcome';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import type { StreamedTranscriptFlushSummary } from '@/api/session/streamedTranscriptWriter';
+import { getSessionCommittedTranscriptLocalIds } from '@/api/session/client/transcript/committedTranscriptLocalIdBaseline';
 import {
   CommittedTranscriptAdmissionExpiredError,
   type CommittedTranscriptAdmission,
@@ -37,6 +38,13 @@ type RuntimeMessageDeltaBridge = Readonly<{
   appendAssistantDelta: (args: RuntimeMessageStreamArgs & Readonly<{ deltaText: string }>) => void;
   appendThinkingDelta: (args: RuntimeMessageStreamArgs & Readonly<{ deltaText: string }>) => void;
   discardStream: (args: RuntimeMessageStreamArgs) => void;
+  finalizeUnnamedSegment: (args: RuntimeMessageStreamArgs & Readonly<{
+    channel: 'assistant' | 'reasoning';
+    text: string;
+    sourceMessageId: string;
+    namedStreamKey: string;
+    admission?: CommittedTranscriptAdmission;
+  }>) => Promise<StreamedTranscriptFlushSummary | null>;
   flushAll: (args: Readonly<{
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';
     interruptedReason?: string;
@@ -146,14 +154,15 @@ function resolveCommittedTranscriptObservation(event: Readonly<{
 function buildRuntimeMessageStreamArgs(
   event: Extract<AgentSessionRuntimeEvent, { kind: 'message-delta' | 'transcript-message-committed' }>,
   channel: 'assistant' | 'reasoning',
+  messageId: string | null = event.messageId ?? null,
 ): RuntimeMessageStreamArgs {
   const foreground = isForegroundTurnRuntimeTranscriptEvent(event);
   return {
     streamKey: foreground
-      ? event.messageId ? JSON.stringify([event.turnId, channel, event.messageId]) : event.turnId
-      : JSON.stringify([event.sessionId, event.sidechainId ?? null, event.turnId ?? null, channel, event.messageId ?? null]),
+      ? JSON.stringify([event.turnId, channel, messageId])
+      : JSON.stringify([event.sessionId, event.sidechainId ?? null, event.turnId ?? null, channel, messageId]),
     sidechainId: event.sidechainId ?? null,
-    ...(event.messageId ? { messageId: event.messageId } : {}),
+    ...(messageId ? { messageId } : {}),
     ...(foreground ? { foregroundTurnId: event.turnId } : {}),
   };
 }
@@ -458,7 +467,7 @@ async function commitRequiredRuntimeTranscriptUserText(params: Readonly<{
 
 function assertStreamedTranscriptFlushDurability(
   summaries: readonly StreamedTranscriptFlushSummary[],
-  eventKind: 'tool-call' | 'turn-complete' | 'turn-failed' | 'turn-cancelled',
+  eventKind: 'tool-call' | 'turn-complete' | 'turn-failed' | 'turn-cancelled' | 'transcript-message-committed',
 ): void {
   const failedRequiredSegment = summaries
     .flatMap((summary) => summary.segments)
@@ -868,6 +877,26 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   }
 
   const observation = resolveCommittedTranscriptObservation(event);
+  assertRequiredTranscriptAdmission(params.admission, event.kind);
+  const committedLocalIds = getSessionCommittedTranscriptLocalIds(params.session);
+  if (committedLocalIds.has(event.messageId)) return { projected: true, kind: event.kind };
+  if (isForegroundTurnRuntimeTranscriptEvent(event) && params.runtimeMessageDeltaBridge) {
+    assertRequiredTranscriptAdmission(params.admission, event.kind);
+    const summary = await params.runtimeMessageDeltaBridge.finalizeUnnamedSegment({
+      ...buildRuntimeMessageStreamArgs(event, event.role, null),
+      channel: event.role,
+      text: event.text,
+      sourceMessageId: event.messageId,
+      namedStreamKey: buildRuntimeMessageStreamArgs(event, event.role).streamKey,
+      ...(params.admission ? { admission: params.admission } : {}),
+    });
+    assertRequiredTranscriptAdmission(params.admission, event.kind);
+    if (summary) {
+      assertStreamedTranscriptFlushDurability([summary], event.kind);
+      committedLocalIds.add(event.messageId);
+      return { projected: true, kind: event.kind };
+    }
+  }
   await commitRequiredRuntimeTranscriptMessage({
     session: params.session,
     provider: params.provider,
@@ -879,6 +908,7 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     eventKind: event.kind,
     ...(params.admission === undefined ? {} : { admission: params.admission }),
   });
+  committedLocalIds.add(event.messageId);
   if (event.role !== 'user') {
     params.runtimeMessageDeltaBridge?.discardStream(buildRuntimeMessageStreamArgs(event, event.role));
   }

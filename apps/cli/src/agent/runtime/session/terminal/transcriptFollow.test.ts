@@ -5,6 +5,8 @@ import type { ExternalSessionsSource, PluginAgentContributionV2 } from '@happier
 import { createPluginExternalSessionsAdapter } from '@/session/external/pluginExternalSessionsAdapter';
 import { createConfiguredPluginExternalSessionsAdapter } from '@/session/external/configuredSourceMaterializer';
 import type { HostExternalTranscriptFollowEvent } from '@/session/external/privateContract';
+import { getSessionCommittedTranscriptLocalIds, loadCommittedTranscriptLocalIdBaseline } from '@/api/session/client/transcript/committedTranscriptLocalIdBaseline';
+import { projectRuntimeTranscriptEvent, type RuntimeTranscriptProjectionSession } from '../transcripts/projectRuntimeTranscriptEvent';
 
 import { createHostTerminalTranscriptFollowService } from './transcriptFollow';
 
@@ -20,6 +22,40 @@ const loadCompleteBaseline = async () => ({
 });
 
 describe('createHostTerminalTranscriptFollowService', () => {
+    it('shares committed identities with live projection while initial follow is admitting', async () => {
+        const published: HostExternalTranscriptFollowEvent[] = [];
+        const session: RuntimeTranscriptProjectionSession = {
+            sessionId: 'shared-session',
+            enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: true }),
+        };
+        const service = createHostTerminalTranscriptFollowService({
+            signal: new AbortController().signal,
+            loadCommittedLocalIdBaseline: input => loadCommittedTranscriptLocalIdBaseline({
+                ...input, localIds: getSessionCommittedTranscriptLocalIds(session),
+                fetchPage: async () => ({ messages: [], hasMore: false, nextBeforeSeq: null }),
+            }),
+            followProviderSession: async (_request, listener) => {
+                // A live native fact commits after the Home baseline was read, but before
+                // the external source's initial replay arrives. Both paths own one set.
+                await projectRuntimeTranscriptEvent({ session, provider: 'agent', event: {
+                    kind: 'transcript-message-committed', sessionId: session.sessionId, sequence: 1,
+                    emittedAtMs: 1, messageId: 'native-live', role: 'assistant', text: 'Already recorded.',
+                } });
+                await listener({ kind: 'data', phase: 'initial_replay', fromCursor: null, nextCursor: 'tail',
+                    items: [{ id: 'native-live', localId: 'native-live', kind: 'agent', data: { role: 'agent', text: 'Already recorded.' } }] });
+                return { status: 'following', startingCursor: 'tail', subscription: { dispose: async () => undefined } };
+            },
+            publish: async event => { published.push(event); },
+        });
+        try {
+            await expect(service.bindProviderSession({ agentId: 'external-agent', providerSessionId: 'native-session' }))
+                .resolves.toMatchObject({ status: 'following' });
+            expect(published).toEqual([{ kind: 'data', phase: 'initial_replay', fromCursor: null, nextCursor: 'tail', items: [] }]);
+        } finally {
+            await service.releaseActiveBindings();
+        }
+    });
+
     it('admits a slow committed baseline without inventing a deadline and still follows', async () => {
         vi.useFakeTimers();
         let releaseBaseline!: () => void;

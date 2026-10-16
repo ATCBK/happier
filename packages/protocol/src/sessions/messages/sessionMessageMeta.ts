@@ -52,6 +52,7 @@ export const SessionMessageStreamSegmentV1Schema = lazyZodSchema(() => z.strictO
   startedAtMs: z.catch(z.nullish(z.number()), undefined),
   updatedAtMs: z.catch(z.nullish(z.number()), undefined),
   interruptedReason: z.catch(z.optional(z.string()), undefined),
+  sourceMessageId: z.optional(z.string().check(z.refine((value) => value.trim().length > 0))),
 }));
 
 export const SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY = 'happierDeliveryIntentV1';
