@@ -1,5 +1,5 @@
 import { storage } from '@/sync/domains/state/storage';
-import { readStoredSessionMessages } from "@happier-dev/session-core/messages";
+import { readStoredSessionMessages, type Message } from "@happier-dev/session-core/messages";
 import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 
 export type AssistantTextMessageBaseline = Readonly<{
@@ -12,8 +12,8 @@ export type AssistantTextMessageEntry = Readonly<{
   text: string;
 }>;
 
-function getSessionMessages(sessionId: string): any[] {
-  return readStoredSessionMessages(storage.getState(), sessionId) as any[];
+function getSessionMessages(sessionId: string): readonly Message[] {
+  return readStoredSessionMessages(storage.getState(), sessionId);
 }
 
 export function captureAssistantTextMessageBaseline(sessionId: string): AssistantTextMessageBaseline {
@@ -22,8 +22,7 @@ export function captureAssistantTextMessageBaseline(sessionId: string): Assistan
     baselineCount: messages.length,
     baselineIds: new Set<string>(
       messages
-        .map((message: any) => message?.id)
-        .filter((messageId: any): messageId is string => typeof messageId === 'string'),
+        .map((message) => message.id),
     ),
   };
 }
@@ -74,6 +73,7 @@ export async function waitForNextAssistantTextMessageEntry(
   baselineIds: Set<string>,
   baselineCount: number,
   signal?: AbortSignal,
+  submittedUserLocalId?: string,
 ): Promise<AssistantTextMessageEntry | null> {
   if (signal?.aborted) return null;
   return await new Promise((resolve) => {
@@ -117,14 +117,38 @@ export async function waitForNextAssistantTextMessageEntry(
           baselineIds,
           baselineCount,
         );
-        if (matches.length > 0) done(matches[0] ?? null);
+        if (matches.length > 0) {
+          done(matches[0] ?? null);
+          return;
+        }
+        // Admission returns the submitted row's localId. Only its committed
+        // sequence can bind this wait to a turn; latest-turn status can belong
+        // to an older or concurrent input from another client.
+        if (!submittedUserLocalId) return;
+        const user = getSessionMessages(sessionId).find((message) =>
+          message.kind === 'user-text' && message.localId === submittedUserLocalId);
+        const userSeq = user?.seq;
+        if (typeof userSeq !== 'number') return;
+        const turn = storage.getState().sessions[sessionId]?.sessionTurns?.turns.find((candidate) =>
+          candidate.transcriptAnchors?.startUserMessageSeq === userSeq
+          || candidate.transcriptAnchors?.userMessageSeqs?.includes(userSeq));
+        const finalAssistantMessageSeq = turn?.transcriptAnchors?.finalAssistantMessageSeq;
+        // Cancellation can finish without a final anchor. For other terminal
+        // outcomes, only explicit null proves no reply; omission may precede
+        // the final diagnostic/text projection.
+        if (turn && turn.status !== 'in_progress'
+          && (finalAssistantMessageSeq === null
+            || (turn.status === 'cancelled' && finalAssistantMessageSeq === undefined))) {
+          done(null);
+        }
       } catch {
         done(null);
       }
     };
 
     // Reply latency belongs to the active Voice turn. Its cancellation signal
-    // releases this demand on End, interrupt, retarget or disconnect.
+    // releases this demand on End, interrupt, retarget or disconnect. The exact
+    // submitted turn's terminal projection also releases a no-reply wait.
     if (signal && abortListener) {
       try {
         signal.addEventListener('abort', abortListener, { once: true });
@@ -146,13 +170,15 @@ export async function waitForNextAssistantTextMessage(
   sessionId: string,
   baselineIds: Set<string>,
   baselineCount: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  submittedUserLocalId?: string,
 ): Promise<string | null> {
   const entry = await waitForNextAssistantTextMessageEntry(
     sessionId,
     baselineIds,
     baselineCount,
     signal,
+    submittedUserLocalId,
   );
   return entry?.text ?? null;
 }

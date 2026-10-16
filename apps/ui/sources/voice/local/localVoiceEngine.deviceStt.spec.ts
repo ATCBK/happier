@@ -3,6 +3,8 @@ import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
+import { buildSessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
+import { createSessionMessagesFixture } from '@/dev/testkit';
 
 import {
     audioStreamStart,
@@ -74,6 +76,31 @@ describe('local voice engine device STT (experimental)', () => {
     registerLocalVoiceEngineHarnessHooks();
     const previousWindow = (globalThis as { window?: object }).window;
     const previousDocument = (globalThis as { document?: object }).document;
+
+    it('rearms hands-free capture when the submitted coding turn is cancelled remotely without a reply', async () => {
+        const storage = await configureDuplexDeviceSpeech(true);
+        speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
+        const engine = await loadLocalVoiceEngineWithCompatState();
+        try {
+            await engine.toggleLocalVoiceTurn('s1');
+            emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'explain the forecast', confidence: 0.9 }] });
+            await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1));
+            const request = localVoicePendingEnqueue.mock.calls[0]![0];
+            const user = { id: 'voice-user', kind: 'user-text' as const, text: 'explain the forecast',
+                localId: String(request.body.localId), seq: 17, createdAt: Date.now() };
+            storage.__setState({ sessions: { ...storage.getState().sessions, s1: { ...storage.getState().sessions.s1!,
+                sessionTurns: buildSessionTurnsProjectionV1({ sessionId: 's1', updatedAt: Date.now(), turns: [{
+                    turnId: 'coding-turn', startedAt: Date.now(), updatedAt: Date.now(), status: 'cancelled',
+                    transcriptAnchors: { startUserMessageSeq: user.seq, finalAssistantMessageSeq: null },
+                }] }),
+            } }, sessionMessages: { s1: createSessionMessagesFixture({ messageIdsOldestFirst: [user.id], messagesById: { [user.id]: user } }) } });
+            await vi.waitFor(() => expect(engine.getLocalVoiceState().status).toBe('recording'));
+            expect(speechRecStart).toHaveBeenCalledTimes(2);
+            expect(expoSpeechSpeak).not.toHaveBeenCalled();
+        } finally {
+            await engine.stopLocalVoiceSession();
+        }
+    }, 180_000);
 
     it.each(['direct interruption', 'after a backchannel', 'manual capture'])(
       'captures a second utterance through the real recognizer while an ordinary spoken reply is held (%s)', async (scenario) => {
