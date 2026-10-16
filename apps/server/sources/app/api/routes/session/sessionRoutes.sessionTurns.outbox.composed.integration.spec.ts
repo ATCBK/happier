@@ -9,6 +9,7 @@ import { registerSessionTurnMutationRoute } from './registerSessionTurnMutationR
 import { createRuntimeSessionClientDurableMutationOutbox } from '../../../../../../cli/src/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox';
 import { reloadConfiguration } from '../../../../../../cli/src/configuration';
 import { loadSessionClientDurableMutationOutbox, loadSessionClientDurableMutationDeadLetters } from '../../../../../../cli/src/api/session/client/transport/mutations/sessionClientDurableMutationPersistence';
+import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
 describe('Session turn outbox → real HTTP admission', () => {
     let harness: LightSqliteHarness;
@@ -22,6 +23,41 @@ describe('Session turn outbox → real HTTP admission', () => {
     afterAll(async () => {
         if (harness) await harness.close();
         reloadConfiguration();
+    });
+
+    it.each(['complete', 'fail', 'cancel'] as const)('retains exact quiet Workflow correspondence after %s through HTTP and the strict reader', async (action) => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}',
+        } });
+        const app = createAuthenticatedTestApp();
+        app.addHook('onRequest', async (request: FastifyRequest) => { request.headers['x-test-user-id'] = account.id; });
+        registerSessionTurnMutationRoute(app);
+        const serverUrl = await app.listen({ host: '127.0.0.1', port: 0 });
+        const outbox = createRuntimeSessionClientDurableMutationOutbox({ token: 'fixture', serverUrl,
+            sessionId: session.id, getSocket: () => null, requestReconnect: () => undefined });
+        const base = { v: 1 as const, sessionId: session.id, turnId: 'quiet-turn' };
+        const facts = { initiator: 'workflow' as const, workDepth: 1,
+            workflowInvocation: { runId: 'own-run', invocationRecordId: 'own-input' } };
+        try {
+            await outbox.awaitReady();
+            await outbox.enqueueSessionTurnMutation({ ...base, action: 'begin', mutationId: 'begin', observedAt: 100, ...facts });
+            const terminal = { ...base, mutationId: 'terminal', observedAt: 200 };
+            await outbox.enqueueSessionTurnMutation(action === 'fail'
+                ? { ...terminal, action, issue: { v: 1, scope: 'primary_session', status: 'failed',
+                    code: 'claude_error_during_execution', source: 'agent_session_error', occurredAt: 200 } }
+                : { ...terminal, action });
+            await outbox.flush('flush');
+            expect(await loadSessionClientDurableMutationDeadLetters(session.id)).toEqual([]);
+            const response = await app.inject({ method: 'GET', url: `/v1/sessions/${session.id}/turns` });
+            expect(response.statusCode).toBe(200);
+            const projection = SessionTurnsProjectionV1Schema.parse(response.json());
+            expect(projection.turns).toEqual([expect.objectContaining({ ...facts,
+                status: action === 'complete' ? 'completed' : action === 'fail' ? 'failed' : 'cancelled' })]);
+        } finally {
+            await outbox.close();
+            await app.close();
+        }
     });
 
     it.each([false, true])('settles completion (invalid anchor: %s) and delivers the next turn', async (invalidAnchor) => {
