@@ -27,7 +27,7 @@ import { useHomeHubLayout, type HomeHubLayout } from './useHomeHubLayout';
 import { WIDGET_GROUP_ICON, describeWidgetGroupAmong, widgetGroupCopyPosition } from '@/components/widgets/group/widgetGroupMenu';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { HomeReachabilityGate } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
-import { useHomeHubLayoutWritePending } from './useHomeHubArtifactLayout';
+import { useHomeHubLayoutWritePending, useHomeHubSectionVisibilityPending } from './useHomeHubArtifactLayout';
 
 type EditorRow = Readonly<{ id: string; section: HomeHubSection<WidgetCandidate> }>;
 
@@ -199,12 +199,12 @@ function EditorRowView(props: Readonly<{
     // A pressed switch shows its new value at once and its row waits (the reorder owner's treatment) until the
     // Account acknowledges. A press while one is waiting is ignored: the switch always shows the one intent in
     // flight, so a queued second press can never land later and flip the row back.
-    const [requestedShown, setRequestedShown] = React.useState<boolean | null>(null);
-    const shown = requestedShown ?? !row.section.hidden;
+    const requestedHidden = useHomeHubSectionVisibilityPending(row.id);
+    const pending = requestedHidden !== undefined;
+    const shown = !(requestedHidden ?? row.section.hidden);
     const setShown = (next: boolean) => {
-        if (requestedShown !== null) return;
-        setRequestedShown(next);
-        layout.setHidden(row.id, !next).catch(() => {}).finally(() => setRequestedShown(null));
+        if (pending) return;
+        void layout.setHidden(row.id, !next).catch(() => {});
     };
     const sizeChoices = row.section.kind === 'widget' ? resolveWidgetSizeChoicesV1('home', row.section.widget?.sizeDeclaration) : null;
     const size = row.section.kind === 'widget' && row.section.widget && sizeChoices?.defaultSize ? (
@@ -246,7 +246,7 @@ function EditorRowView(props: Readonly<{
             {size ? <View style={[styles.size, props.showDivider ? styles.sizeDivided : null]}>{size}</View> : null}
         </>
     );
-    return <EntityFlatReorderRow id={row.id} pending={requestedShown !== null}>{({ renderHandle }) => content(renderHandle)}</EntityFlatReorderRow>;
+    return <EntityFlatReorderRow id={row.id} pending={pending}>{({ renderHandle }) => content(renderHandle)}</EntityFlatReorderRow>;
 }
 
 const styles = StyleSheet.create((theme) => ({

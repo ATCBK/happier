@@ -151,3 +151,13 @@ export function useHomeHubLayoutWritePending() {
     const getSnapshot = React.useCallback(() => store.getSnapshot().isWriting, [store]);
     return React.useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
 }
+
+/** Each editor row observes only its own visibility intent in the surviving Account queue. */
+export function useHomeHubSectionVisibilityPending(sectionId: string): boolean | undefined {
+    const store = useHomeHubAccountStore();
+    const getSnapshot = React.useCallback(() => {
+        const intent = store.getSnapshot().pendingIntents.find(entry => entry.kind === 'visibility' && entry.sectionId === sectionId);
+        return intent?.kind === 'visibility' ? intent.hidden : undefined;
+    }, [sectionId, store]);
+    return React.useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+}

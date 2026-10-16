@@ -28,6 +28,7 @@ vi.mock('react-native-reanimated', async () => {
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { HomeLayoutEditor } = await import('./HomeLayoutEditor');
 const { EntityFlatReorderList, EntityFlatReorderRow } = await import('@/components/ui/treeDragDrop/ui/EntityFlatReorder');
+const { Switch } = await import('@/components/ui/forms/Switch');
 const { EntityDragGripChooser } = await import('@/components/ui/treeDragDrop/ui/EntityDragGripChooser');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { useHomeHubArtifactLayout } = await import('./useHomeHubArtifactLayout');
@@ -278,37 +279,54 @@ describe('Home Customize entity reorder binding', () => {
         expect(titles.get('g2')).toMatch(/groupNameCopyOf.*index=2/);
         expect(titles.get('g3')).toBe('Release room');
     });
-    it('shows a pressed Sections switch at once, waits for the Account, and ignores a second press meanwhile (H18)', async () => {
+    it.each([false, true])('shares a pending visibility intent across Sections remounts and Appearance until settlement (refused: %s, H18)', async refused => {
         const artifact = createHomeHubArtifactHttpBoundary('account-a');
         artifact.seed({ v: 1, items: [], order: [], hidden: ['setup'] });
         await import('@/sync/syncEngine');
         let hold = false;
+        let attempts = 0;
         let release!: () => void;
         const held = new Promise<void>(resolve => { release = resolve; });
         restoreActionLoader = await installRealActionExecutorModuleLoader();
         connection = await restoreServerAccountForTest({ serverUrl: 'https://home-switch-pending.test', accountId: 'account-a', request: async (url, init) => {
-            if (hold && init?.method === 'POST' && new URL(String(url)).pathname === `/v1/artifacts/${artifact.artifactId}`) await held;
+            if (hold && init?.method === 'POST' && new URL(String(url)).pathname === `/v1/artifacts/${artifact.artifactId}`) {
+                attempts++;
+                await held;
+                if (refused) return Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
+            }
             return artifact.request(url, init);
         } });
         const scope = { serverId: connection.home.id, accountId: 'account-a' };
         storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
-        const screen = await renderScreen(<AccountShell><HomeLayoutEditor presentation="popover" /></AccountShell>);
+        const editors = (sectionsOpen: boolean) => <AccountShell>
+            {sectionsOpen ? <HomeLayoutEditor key="sections" presentation="popover" /> : null}
+            <HomeLayoutEditor key="appearance" />
+        </AccountShell>;
+        const screen = await renderScreen(editors(true));
         await flushHookEffects({ cycles: 3 });
-        const value = () => screen.findByTestId('home-layout.setup.shown')!.props.value;
-        const waiting = () => screen.root.findAllByType(EntityFlatReorderRow).find(row => row.props.id === 'setup')!.props.pending;
-        expect([value(), waiting()]).toEqual([false, false]);
+        const rows = () => screen.root.findAllByType(EntityFlatReorderRow).filter(row => row.props.id === 'setup');
+        const states = () => rows().map(row => [row.findByType(Switch).props.value, row.props.pending]);
+        expect(states()).toEqual([[false, false], [false, false]]);
         hold = true;
-        await act(async () => { screen.findByTestId('home-layout.setup.shown')!.props.onValueChange(true); });
-        // The Account has not answered: the switch already shows the new value and its row waits.
-        expect([value(), waiting(), artifact.writes.length]).toEqual([true, true, 0]);
-        await act(async () => { screen.findByTestId('home-layout.setup.shown')!.props.onValueChange(false); });
-        expect(value()).toBe(true);
-        await act(async () => { release(); });
-        await flushHookEffects({ cycles: 3 });
-        // One write landed (the ignored press queued none) and the row stopped waiting on the acknowledged value.
-        expect(artifact.writes).toHaveLength(1);
-        expect(artifact.layout().hidden).not.toContain('setup');
-        expect([value(), waiting()]).toEqual([true, false]);
+        try {
+            await act(async () => { rows()[0]!.findByType(Switch).props.onValueChange(true); });
+            expect(states()).toEqual([[true, true], [true, true]]);
+            expect(artifact.writes).toHaveLength(0);
+            await act(async () => { screen.update(editors(false)); });
+            expect(states()).toEqual([[true, true]]);
+            await act(async () => { screen.update(editors(true)); });
+            expect(states()).toEqual([[true, true], [true, true]]);
+            // Both newly mounted and existing observers must suppress duplicate writes.
+            await act(async () => { for (const row of rows()) row.findByType(Switch).props.onValueChange(false); });
+            expect(states()).toEqual([[true, true], [true, true]]);
+            await act(async () => { release(); });
+            await flushHookEffects({ cycles: 3 });
+            expect(attempts).toBe(1);
+            expect(artifact.writes).toHaveLength(refused ? 0 : 1);
+            expect(artifact.layout().hidden.includes('setup')).toBe(refused);
+            expect(states()).toEqual([[!refused, false], [!refused, false]]);
+            if (refused) expect(screen.findByTestId('home-layout.save-error')).not.toBeNull();
+        } finally { await act(async () => { release(); }); }
     });
     it('names an unreachable Home when a preparatory read prevents a Customize write', async () => {
         const artifact = createHomeHubArtifactHttpBoundary('account-a');
