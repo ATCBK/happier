@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,6 +12,9 @@ import {
   publishAgentRuntimeDaemonServiceAuthority,
 } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { prepareRunnerDaemonPluginServices } from './runnerDaemonPluginServices';
+import { encodeRunnerDaemonPluginServiceWireValueV1 } from './agentRuntimeDaemonPluginServicesProtocol';
 import {
   admitCurrentRunnerSessionInput,
   closeCurrentRunnerTeamCredentialProviderBinding,
@@ -93,6 +98,90 @@ async function createTestAuthority(input: Readonly<{
 }
 
 describe('current Agent runtime daemon service authority client', () => {
+  it.each(['preparation', 'invocation', 'caller', 'invocation-with-caller'] as const)(
+    'cancels runner service %s through the real daemon transport',
+    async phase => {
+      const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-runner-service-cancellation-'));
+      roots.push(happyHomeDir);
+      const authority = await createTestAuthority({ happyHomeDir, runner: {
+        pid: 1234, processStartTimeMs: 1_717_171_717_000,
+        processCommandHash: 'a'.repeat(64), snapshotIdentity: 'snapshot:runner-a',
+      } });
+      const invocation = new AbortController();
+      const caller = new AbortController();
+      let requestStarted!: () => void;
+      const started = new Promise<void>(resolve => { requestStarted = resolve; });
+      let closeCompleted!: () => void;
+      const closed = new Promise<void>(resolve => { closeCompleted = resolve; });
+      const server = createServer(async (request, response) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        const { operation } = JSON.parse(Buffer.concat(chunks).toString()) as {
+          operation: { kind: string; requestId: string };
+        };
+        const reply = (value: Parameters<typeof encodeRunnerDaemonPluginServiceWireValueV1>[0]) => {
+          response.end(JSON.stringify({ ok: true, result: {
+            kind: 'plugin_services.result_v1', requestId: operation.requestId,
+            value: encodeRunnerDaemonPluginServiceWireValueV1(value),
+          } }));
+        };
+        if (operation.kind === 'plugin_services.close_v1') {
+          reply(null);
+          closeCompleted();
+        } else if (operation.kind === 'plugin_services.prepare_v1' && phase !== 'preparation') {
+          reply({ availability: { storage: { status: 'available' } },
+            storageConsistency: { ephemeral: null, daemonSession: null, daemon: { kind: 'authoritativeSerializable' } },
+            settingsDescriptors: { account: [], daemon: [] }, resourceDescriptors: {},
+            subscriptionCapabilities: { settingsWatch: false, eventSubscriptions: [], resourceWatches: [], notificationPreferencesWatch: false },
+          });
+        } else {
+          // A connected daemon holds its reply. Only caller lifetime can end this wait.
+          requestStarted();
+        }
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing server address');
+      await publishAgentRuntimeDaemonServiceAuthority({ ...authority,
+        httpPort: address.port, capability: 'A'.repeat(43) });
+      const dispatchControllers: AbortController[] = [];
+      let observation: Promise<void> | undefined;
+      try {
+        const preparation = prepareRunnerDaemonPluginServices({ invocationId: 'invocation-1',
+          signal: invocation.signal, local: createUnavailablePluginServices(),
+          dispatch: (operation, options) => {
+            // The emergency transport controller only releases a failing test's owned HTTP wait.
+            const transport = new AbortController();
+            dispatchControllers.push(transport);
+            return dispatchCurrentRunnerDaemonPluginService({ authority, operation, ...options,
+              signal: options?.signal ? AbortSignal.any([options.signal, transport.signal]) : transport.signal });
+          },
+        });
+        const pending = phase === 'preparation' ? preparation : (await preparation).storage.daemon.get('held',
+          phase === 'invocation' ? undefined : { signal: caller.signal });
+        observation = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        await started;
+        (phase === 'caller' ? caller : invocation).abort();
+        // Observe a real event-loop turn without imposing a production deadline.
+        let settled = false;
+        void observation.then(() => { settled = true; }, () => { settled = true; });
+        await vi.waitFor(() => expect(settled).toBe(true));
+        await observation;
+        if (phase !== 'preparation') {
+          invocation.abort();
+          await closed;
+        }
+      } finally {
+        invocation.abort();
+        for (const controller of dispatchControllers) controller.abort();
+        await observation?.catch(() => undefined);
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    },
+  );
+
   it('admits a new prompt after daemon replacement changes only the runner command witness', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-reattached-input-'));
     roots.push(happyHomeDir);

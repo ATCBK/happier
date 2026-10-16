@@ -457,6 +457,13 @@ export async function prepareRunnerDaemonPluginServices(
         >;
     }>,
 ): Promise<PluginServices> {
+    const dispatchInInvocation: RunnerDaemonPluginServicesDispatchV1 = (operation, options) =>
+        input.dispatch(operation, {
+            ...options,
+            signal: options?.signal
+                ? AbortSignal.any([input.signal, options.signal])
+                : input.signal,
+        });
     let prepared:
         PreparedRunnerDaemonPluginServicesSnapshotV1;
     let prepareInFlight:
@@ -482,7 +489,7 @@ export async function prepareRunnerDaemonPluginServices(
     });
     const startPreparedManagedProvider = async (
         snapshot: PreparedRunnerDaemonPluginServicesSnapshotV1,
-        send: RunnerDaemonPluginServicesDispatchV1 = input.dispatch,
+        send: RunnerDaemonPluginServicesDispatchV1 = dispatchInInvocation,
     ): Promise<void> => {
         if (!snapshot.managedProvider) return;
         await send({
@@ -494,7 +501,9 @@ export async function prepareRunnerDaemonPluginServices(
             ),
         });
     };
-    const prepareCurrentAuthority = async () => {
+    const prepareCurrentAuthority = async (
+        send: RunnerDaemonPluginServicesDispatchV1 = dispatchInInvocation,
+    ) => {
         prepareInFlight ??= (async () => {
             const recoveredRetention =
                 managedProviderRetention
@@ -508,7 +517,7 @@ export async function prepareRunnerDaemonPluginServices(
                 : null;
             managedProviderRetention = requestedRetention;
             const snapshot = parsePreparedSnapshot(
-                await input.dispatch({
+                await send({
                 kind: 'plugin_services.prepare_v1',
                 requestId: randomUUID(),
                 invocationId: input.invocationId,
@@ -549,7 +558,7 @@ export async function prepareRunnerDaemonPluginServices(
             prepared = snapshot;
             refreshManagedServicesBinding?.();
             if (refreshManagedServicesBinding) {
-                await startPreparedManagedProvider(snapshot);
+                await startPreparedManagedProvider(snapshot, send);
                 managedProviderRetention = snapshot.managedProvider
                     ? retainedFromBootstrap(
                         snapshot.managedProvider,
@@ -601,14 +610,16 @@ export async function prepareRunnerDaemonPluginServices(
             || operation.kind === 'plugin_sessions.external.close_list_v1'
             || operation.kind
                 === 'plugin_storage.transaction.rollback_v1';
+        // Cleanup keeps its own existing lifetime after the invocation retires.
+        const send = lifecycleCleanup ? input.dispatch : dispatchInInvocation;
         const ensurePreparedAfterObservedAuthority = async () => {
             if (prepareRevision !== observedPrepareRevision) {
                 return prepared;
             }
-            return await prepareCurrentAuthority();
+            return await prepareCurrentAuthority(send);
         };
         try {
-            return await input.dispatch(operation, options) as T;
+            return await send(operation, options) as T;
         } catch (error) {
             if (
                 readErrorCode(error)
@@ -625,7 +636,7 @@ export async function prepareRunnerDaemonPluginServices(
                 // reaching any canonical service method. Reprepare the same
                 // invocation on the current authority and retry once.
                 await ensurePreparedAfterObservedAuthority();
-                return await input.dispatch(
+                return await send(
                     operation,
                     options,
                 ) as T;
