@@ -116,6 +116,7 @@ export const managedMachinesEn = {
                 needsSetup: "Needs setup",
                 notInstalled: "Not installed",
                 noAccount: "No account yet",
+                checking: "Checking…",
             },
             action: {
                 choose: "Choose",

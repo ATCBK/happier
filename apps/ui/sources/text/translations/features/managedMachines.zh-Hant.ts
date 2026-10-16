@@ -110,6 +110,7 @@ export const managedMachines: ManagedMachinesTranslations = {
                 needsSetup: "需要設定",
                 notInstalled: "未安裝",
                 noAccount: "尚無帳號",
+                checking: "正在檢查…",
             },
             action: {
                 choose: "選擇",

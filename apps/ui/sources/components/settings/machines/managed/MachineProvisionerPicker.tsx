@@ -124,13 +124,15 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
             : noAccount ? t('managedMachines.add.status.noAccount')
             : check ? t(check.available ? 'managedMachines.add.status.ready'
                 : missingExecutable ? 'managedMachines.add.status.notInstalled' : 'managedMachines.add.status.needsSetup')
-                : t('managedMachines.providers.loading');
+                : unreadable ? '' : t('managedMachines.add.status.checking');
         const title = localized(provisioner.contribution.pluginId, provisioner.descriptor.title);
         const kind = provisioner.descriptor.kindTitle ? localized(provisioner.contribution.pluginId, provisioner.descriptor.kindTitle) : undefined;
         // Two provisioners of one product ("Cua") are told apart by what each creates, from their own declarations.
         const sharesTitle = catalog.provisioners.some(other => other !== provisioner
             && localized(other.contribution.pluginId, other.descriptor.title) === title);
-        return [{ id, title: sharesTitle && kind ? `${title} ${kind}` : title, kind,
+        // A kind reads inside a title ("Cua sandbox"); shown on its own, as a badge or row subtitle, it starts a label.
+        return [{ id, title: sharesTitle && kind ? `${title} ${kind}` : title,
+            kind: kind ? kind.charAt(0).toLocaleUpperCase() + kind.slice(1) : undefined,
             description: provisioner.descriptor.description ? localized(provisioner.contribution.pluginId, provisioner.descriptor.description) : '',
             location: location === 'local' ? 'local' : 'cloud', mark: (size: number) => markFor(provisioner, size),
             status: { tone: check ? check.available && location !== 'unknown' ? 'ready' : 'attention' : noAccount ? 'attention' : 'none',

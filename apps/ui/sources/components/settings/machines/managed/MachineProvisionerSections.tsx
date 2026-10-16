@@ -156,7 +156,8 @@ function ProvisionerFooter(
   const { card } = props;
   return (
     <View style={styles.footer}>
-      {/* A long status keeps its words and moves the button beneath it instead of truncating. */}
+      {/* Every card reads the same at every width: the status line, then its button beneath it on
+          the text column. A status never truncates and never decides the button's place. */}
       <View style={styles.statusGroup}>
         {card.status.tone === 'none' ? null : (
           <StatusDot color={toneColor(theme, card.status.tone)} />
@@ -202,19 +203,14 @@ function toneColor(
 
 const styles = StyleSheet.create((theme) => ({
   footer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.space.s6,
+    alignItems: 'flex-start',
+    gap: theme.space.s10,
   },
   statusGroup: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.space.s6,
-    flexGrow: 1,
-    flexShrink: 0,
-    maxWidth: '100%',
+    alignSelf: 'stretch',
   },
   status: {
     ...Typography.default(),
