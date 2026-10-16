@@ -15,6 +15,7 @@ import { parsePreflightModelListFromProbeModelsResult } from '@/sync/domains/mod
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { invokeAgentInventoryProbeAction } from './actions/agentInventoryActionDeps';
 import type { MachineCapabilitiesInvokeResult } from './capabilities';
+import { SpawnFailureV1Schema, type SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 
 /** Shared discovery lifecycle for model pickers and voice catalog requests. */
 type MachineModelDiscoveryParams = Readonly<{
@@ -53,6 +54,7 @@ async function discoverMachineModelsWithTransport(params: MachineModelDiscoveryP
     if (!params.bypassCache && isDynamicModelProbeCacheFresh(cached)) return cached;
 
     return runDynamicModelProbeDedupe(params.cacheKey, async () => {
+        let spawnFailure: SpawnFailureV1 | undefined;
         try {
             const response = await invoke();
             if (response.supported && response.response.ok) {
@@ -63,15 +65,19 @@ async function discoverMachineModelsWithTransport(params: MachineModelDiscoveryP
                 const runtimeAccepted = params.capabilityParams.runtimeDescriptorV1 == null
                     || record?.runtimeDescriptorV1Accepted === true;
                 const parsed = runtimeAccepted ? parsePreflightModelListFromProbeModelsResult(result) : null;
+                if (runtimeAccepted) {
+                    const failure = SpawnFailureV1Schema.safeParse(record?.spawnFailure);
+                    if (failure.success) spawnFailure = failure.data;
+                }
                 if (parsed && record) {
                     if (parsed.unavailable === true) {
-                        writeDynamicModelProbeCacheUnavailable(params.cacheKey);
+                        writeDynamicModelProbeCacheUnavailable(params.cacheKey, Date.now(), spawnFailure);
                         return readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
                     }
                     const previous = readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
                     const previousList = previous?.kind === 'success' && !previous.value.unavailable ? previous.value : null;
                     const list = previousList && stableJsonStringify(previousList) === stableJsonStringify(parsed) ? previousList : parsed;
-                    const failed = record.refreshError === true || (record.source === 'static' && record.refreshError !== false);
+                    const failed = Boolean(spawnFailure) || record.refreshError === true || (record.source === 'static' && record.refreshError !== false);
                     const observedAt = typeof record.observedAt === 'number' && Number.isFinite(record.observedAt)
                         ? record.observedAt : Date.now();
                     if (!failed) {
@@ -92,7 +98,7 @@ async function discoverMachineModelsWithTransport(params: MachineModelDiscoveryP
         } catch {
             // Transport failures are visible through the resource error state, including retained data.
         }
-        writeDynamicModelProbeCacheError(params.cacheKey);
+        writeDynamicModelProbeCacheError(params.cacheKey, Date.now(), spawnFailure);
         return readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
     });
 }

@@ -23,6 +23,7 @@ import {
     type NewSessionCapabilityProbeContext,
 } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 import { NEW_SESSION_MODEL_PROBE_TIMEOUT_MS } from '@/components/sessions/new/modules/newSessionCapabilityProbeTimeoutMs';
+import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 
 export function useNewSessionPreflightModelsState(params: Readonly<{
     backendTarget: BackendTargetRefV2 | null | undefined;
@@ -41,6 +42,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
         phase: 'idle' | 'loading' | 'refreshing';
         failed: boolean;
         refreshedAt: number | null;
+        spawnFailure: SpawnFailureV1 | null;
         onRefresh?: () => void;
     }>;
 }> {
@@ -48,6 +50,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
     const [preflightModelsTargetKey, setPreflightModelsTargetKey] = React.useState<string | null>(null);
     const [probePhase, setProbePhase] = React.useState<'idle' | 'loading' | 'refreshing'>('idle');
     const [modelDiscoveryFailed, setModelDiscoveryFailed] = React.useState(false);
+    const [spawnFailure, setSpawnFailure] = React.useState<SpawnFailureV1 | null>(null);
     const [refreshedAt, setRefreshedAt] = React.useState<number | null>(null);
     const [refreshNonce, setRefreshNonce] = React.useState(0);
     const [retryNonce, setRetryNonce] = React.useState(0);
@@ -124,6 +127,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
             setPreflightModelsTargetKey(null);
             setProbePhase('idle');
             setModelDiscoveryFailed(false);
+            setSpawnFailure(null);
             setRefreshedAt(null);
             lastCacheKeyRef.current = preflightModelsKey;
             return;
@@ -142,6 +146,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
                 setRefreshedAt(entry.staticFallback || entry.value.unavailable ? null : entry.updatedAt);
             }
             setModelDiscoveryFailed(entry?.kind === 'error' || (entry?.kind === 'success' && entry.errorUpdatedAt !== undefined));
+            setSpawnFailure(entry?.spawnFailure ?? null);
         };
         if (cacheEntry?.kind === 'success') {
             applyEntry(cacheEntry);
@@ -235,7 +240,8 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
         phase: probePhase,
         failed: hasCurrentIdentity && modelDiscoveryFailed,
         refreshedAt: hasCurrentIdentity ? refreshedAt : null,
+        spawnFailure: hasCurrentIdentity ? spawnFailure : null,
         ...(dynamicProbeEnabled && preflightModelsKey && params.enabled !== false ? { onRefresh } : {}),
-    }), [hasCurrentIdentity, probePhase, modelDiscoveryFailed, refreshedAt, dynamicProbeEnabled, preflightModelsKey, params.enabled, onRefresh]);
+    }), [hasCurrentIdentity, probePhase, modelDiscoveryFailed, refreshedAt, spawnFailure, dynamicProbeEnabled, preflightModelsKey, params.enabled, onRefresh]);
     return { preflightModels: currentModels, preflightModelsTargetKey: currentModels ? preflightModelsTargetKey : null, modelOptions, probe };
 }

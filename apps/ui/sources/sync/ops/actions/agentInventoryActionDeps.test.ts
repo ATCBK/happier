@@ -10,6 +10,9 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import { act } from 'react-test-renderer';
+import { renderHook, flushHookEffects } from '@/dev/testkit';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -20,6 +23,8 @@ await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { useNewSessionPreflightModelsState } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState');
+const { resetDynamicModelProbeCacheForTests } = await import('@/sync/domains/models/dynamicModelProbeCache');
 const baseline = storage.getState();
 let serverId: string;
 let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
@@ -67,7 +72,7 @@ beforeEach(async () => {
   (await import('@/utils/system/runtimeFetch')).setRuntimeFetch(network.request);
   clearDaemonMergedProjectionCacheForTests();
   const state = storage.getState();
-  storage.setState({ settings: { ...state.settings, acpCatalogSettingsV1: { v: 2, backends: [] }, backendEnabledByTargetKey: {} },
+  storage.setState({ settings: { ...state.settings, backendEnabledByTargetKey: {} },
     profile: { ...profileDefaults, ...state.profile, ...AccountProfileSchema.parse({ id: 'account-a', connectedAccountsV4 }) },
   });
 });
@@ -82,6 +87,46 @@ afterEach(async () => {
 afterAll(async () => { await network.dispose(); });
 
 describe('defaultActionExecutor canonical agent inventory corridor', () => {
+  it('carries typed model launch failures through the runner hook, Action and cache, retaining last-good data and clearing recovered diagnostics', async () => {
+    resetDynamicModelProbeCacheForTests();
+    const spawnFailure = { reason: 'other', errno: 'ENOENT' } as const;
+    const respond = (result: unknown) => network.respond(RPC_METHODS.CAPABILITIES_INVOKE,
+      { ok: true, result: AgentModelsProbeObservationSchema.parse(result) });
+    respond({ availableModels: [], supportsFreeform: false, source: 'unavailable', refreshError: true, spawnFailure });
+    const render = (enabled = true) => renderHook((props: { enabled: boolean; cwd: string }) => useNewSessionPreflightModelsState({
+      backendTarget: { kind: 'backend', backendId: 'acme-voice-agent' }, runtimeCarrierAgentId: 'acme-voice-agent',
+      selectedMachineId: 'machine-1', capabilityServerId: serverId, cwd: props.cwd, enabled: props.enabled,
+    }), { initialProps: { enabled, cwd: '/repo' } });
+    const hook = await render();
+    try {
+      await flushHookEffects();
+      expect(hook.getCurrent().probe).toMatchObject({ failed: true, refreshedAt: null, spawnFailure });
+      expect(hook.getCurrent().preflightModels?.unavailable).toBe(true);
+      const cached = await render(false);
+      try { expect(cached.getCurrent().probe).toMatchObject({ failed: true, spawnFailure }); }
+      finally { await cached.unmount(); }
+
+      respond({ availableModels: [{ id: 'live-model', name: 'Live model' }], supportsFreeform: false,
+        source: 'dynamic', refreshError: false, observedAt: Date.now() });
+      await act(async () => { hook.getCurrent().probe.onRefresh?.(); });
+      await flushHookEffects();
+      expect(hook.getCurrent().probe.failed).toBe(false);
+      expect(hook.getCurrent().probe.spawnFailure).toBeNull();
+      const observedAt = hook.getCurrent().probe.refreshedAt;
+      const previous = hook.getCurrent().preflightModels;
+      expect(previous?.availableModels.map(model => model.id)).toEqual(['live-model']);
+
+      respond({ availableModels: [], supportsFreeform: false, source: 'dynamic', refreshError: false, spawnFailure });
+      await act(async () => { hook.getCurrent().probe.onRefresh?.(); });
+      await flushHookEffects();
+      expect(hook.getCurrent().probe).toMatchObject({ failed: true, refreshedAt: observedAt, spawnFailure });
+      expect(hook.getCurrent().preflightModels).toBe(previous);
+      await hook.rerender({ enabled: false, cwd: '/other' });
+      expect(hook.getCurrent().probe.spawnFailure).toBeNull();
+      expect(hook.getCurrent().preflightModels).toBeNull();
+    } finally { await hook.unmount(); }
+  });
+
   it('answers sessions.spawn.connected_services.list for a novel external qualified Agent instead of unsupported_action', async () => {
     network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, describeAgent('acme-voice-agent'));
     const res = await createDefaultActionExecutor().execute('sessions.spawn.connected_services.list',

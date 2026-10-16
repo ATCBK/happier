@@ -3,6 +3,7 @@ import { createUnavailablePreflightModelList, type PreflightModelList } from '@/
 import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { ProbedResourceSnapshot } from '@happier-dev/protocol/common/probedResourceCache';
+import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 
 import { createPersistentProbedResourceCache } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
 
@@ -15,8 +16,16 @@ export type DynamicModelProbeCacheEntry =
         cacheable?: boolean;
         staticFallback?: boolean;
         errorUpdatedAt?: number;
+        spawnFailure?: SpawnFailureV1;
     }>
-    | Readonly<{ kind: 'error'; updatedAt: number; expiresAt: number }>;
+    | Readonly<{ kind: 'error'; updatedAt: number; expiresAt: number; spawnFailure?: SpawnFailureV1 }>;
+
+// Launch diagnostics belong to the transient error, never the persisted last-good catalog.
+class DynamicModelProbeError extends Error {
+    constructor(readonly spawnFailure?: SpawnFailureV1) {
+        super('dynamic-model-probe-failed');
+    }
+}
 
 export const DYNAMIC_MODEL_PROBE_SUCCESS_TTL_MS = 24 * 60 * 60_000;
 export const DYNAMIC_MODEL_PROBE_ERROR_BACKOFF_MS = 60_000;
@@ -162,9 +171,12 @@ export function readDynamicModelProbeCache(
     key: string,
     successMaxAgeMs = DYNAMIC_MODEL_PROBE_SUCCESS_TTL_MS,
 ): DynamicModelProbeCacheEntry | null {
-    const transient = readTransientSuccess(key, Date.now(), successMaxAgeMs);
-    if (transient) return transient;
     const snap: ProbedResourceSnapshot<PreflightModelList> = persistedCache.getSnapshot(key);
+    const failure = snap.error instanceof DynamicModelProbeError ? snap.error.spawnFailure : undefined;
+    const diagnostic = failure ? { spawnFailure: failure } : {};
+    const transient = readTransientSuccess(key, Date.now(), successMaxAgeMs);
+    if (transient) return failure && transient.kind === 'success' && transient.errorUpdatedAt !== undefined
+        ? { ...transient, ...diagnostic } : transient;
     if (snap.dataUpdatedAt !== null && snap.data) {
         return {
             kind: 'success',
@@ -173,15 +185,17 @@ export function readDynamicModelProbeCache(
             value: snap.data,
             cacheable: true,
             ...(snap.errorUpdatedAt !== null ? { errorUpdatedAt: snap.errorUpdatedAt } : {}),
+            ...diagnostic,
         };
     }
     const transientUnavailable = readTransientUnavailable(key);
-    if (transientUnavailable) return transientUnavailable;
+    if (transientUnavailable) return failure ? { ...transientUnavailable, ...diagnostic } : transientUnavailable;
     if (snap.errorUpdatedAt !== null) {
         return {
             kind: 'error',
             updatedAt: snap.errorUpdatedAt,
             expiresAt: snap.errorUpdatedAt + DYNAMIC_MODEL_PROBE_ERROR_BACKOFF_MS,
+            ...diagnostic,
         };
     }
     return null;
@@ -211,22 +225,22 @@ export function writeDynamicModelProbeCacheTransientSuccess(
     notifyDynamicModelProbeCache(key);
 }
 
-export function writeDynamicModelProbeCacheError(key: string, nowMs = Date.now()): void {
+export function writeDynamicModelProbeCacheError(key: string, nowMs = Date.now(), spawnFailure?: SpawnFailureV1): void {
     const transient = transientSuccessByKey.get(key);
     if (transient) transientSuccessByKey.set(key, { ...transient, errorUpdatedAt: nowMs });
     transientUnavailableByKey.delete(key);
-    persistedCache.writeError(key, new Error('dynamic-model-probe-failed'), nowMs);
+    persistedCache.writeError(key, new DynamicModelProbeError(spawnFailure), nowMs);
     notifyDynamicModelProbeCache(key);
 }
 
-export function writeDynamicModelProbeCacheUnavailable(key: string, nowMs = Date.now()): void {
+export function writeDynamicModelProbeCacheUnavailable(key: string, nowMs = Date.now(), spawnFailure?: SpawnFailureV1): void {
     const previous = readDynamicModelProbeCache(key);
     if (previous?.kind === 'success' && !previous.value.unavailable && !previous.staticFallback) {
-        writeDynamicModelProbeCacheError(key, nowMs);
+        writeDynamicModelProbeCacheError(key, nowMs, spawnFailure);
         return;
     }
     transientSuccessByKey.delete(key);
-    persistedCache.writeError(key, new Error('dynamic-model-probe-unavailable'), nowMs);
+    persistedCache.writeError(key, new DynamicModelProbeError(spawnFailure), nowMs);
     transientUnavailableByKey.set(key, {
         updatedAt: nowMs,
         expiresAt: nowMs + DYNAMIC_MODEL_PROBE_ERROR_BACKOFF_MS,
