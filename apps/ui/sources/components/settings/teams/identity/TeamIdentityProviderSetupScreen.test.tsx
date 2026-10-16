@@ -8,6 +8,9 @@ const providerExecuteMock = vi.hoisted(() => vi.fn());
 const identityExecuteMock = vi.hoisted(() => vi.fn());
 const routerReplaceMock = vi.hoisted(() => vi.fn());
 const canMutateMock = vi.hoisted(() => ({ current: true }));
+// Opening an external page is the OS/browser boundary.
+const openExternalUrlMock = vi.hoisted(() => vi.fn(async () => true));
+vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: openExternalUrlMock }));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -28,7 +31,8 @@ vi.mock('@/components/settings/home/identity/managedIdentityProviderClient', () 
 vi.mock('@/components/settings/home/githubApps/managedGitHubAppsClient', () => ({
     createManagedGitHubAppsClient: () => ({ execute: vi.fn() }),
 }));
-vi.mock('./identityAdministrationClient', () => ({
+vi.mock('./identityAdministrationClient', async (importOriginal) => ({
+    ...await importOriginal<typeof import('./identityAdministrationClient')>(),
     createIdentityAdministrationClient: () => ({ execute: identityExecuteMock }),
 }));
 vi.mock('../TeamSection', () => ({
@@ -90,6 +94,43 @@ describe('TeamIdentityProviderSetupScreen', () => {
             screen.changeTextByTestId('team-oidc-client-secret', 'secret-1');
         });
     }
+
+    it('creates nothing for WorkOS until the portal opens, then opens it on the new connection', async () => {
+        openExternalUrlMock.mockClear();
+        identityExecuteMock.mockImplementation(async (actionId: string) => {
+            switch (actionId) {
+                case 'teams.identity.connections.list':
+                    return { ok: true, value: {
+                        items: [], memberSignInUrl: null,
+                        eligibleProviders: [{ v: 1, providerKind: 'workos_sso', providerId: null, displayName: null, owner: 'team',
+                            availability: { status: 'available', setupChoice: { kind: 'create_managed', actionId: 'teams.identity.workos.connection.create' } } }],
+                    } };
+                case 'teams.identity.workos.connection.create':
+                    return { ok: true, value: { connection: { id: 'connection-1' } } };
+                case 'teams.identity.workos.adminPortalLink.create':
+                    return { ok: true, value: { url: 'https://portal.workos.example/setup' } };
+                default:
+                    return { ok: false, failure: { code: 'unexpected', retryable: false } };
+            }
+        });
+        const screen = await renderScreen(<TeamIdentityProviderSetupScreen serverId="home-1" teamId="team-1" providerKind="workos_sso" />);
+        await vi.waitFor(() => expect(screen.findByTestId('identity-workos-company-name')?.props.editable).toBe(true));
+        await act(async () => { screen.changeTextByTestId('identity-workos-company-name', 'Northwind Studio'); });
+        const actionsBefore = identityExecuteMock.mock.calls.map(([actionId]) => actionId);
+        expect(actionsBefore).not.toContain('teams.identity.workos.connection.create');
+
+        await screen.pressByTestIdAsync('identity-workos-create');
+
+        await vi.waitFor(() => expect(routerReplaceMock).toHaveBeenCalledWith('/settings/teams/home-1/team-1/authentication/connection-1'));
+        const writes = identityExecuteMock.mock.calls
+            .filter(([actionId]) => actionId !== 'teams.identity.connections.list')
+            .map(([actionId, input]) => [actionId, input]);
+        expect(writes).toEqual([
+            ['teams.identity.workos.connection.create', { v: 1, teamId: 'team-1', displayName: 'Northwind Studio' }],
+            ['teams.identity.workos.adminPortalLink.create', { v: 1, teamId: 'team-1', connectionId: 'connection-1', intent: 'sso' }],
+        ]);
+        expect(openExternalUrlMock).toHaveBeenCalledWith('https://portal.workos.example/setup');
+    });
 
     it('keeps Team-owned provider fields read-only when Team mutations are unavailable', async () => {
         canMutateMock.current = false;

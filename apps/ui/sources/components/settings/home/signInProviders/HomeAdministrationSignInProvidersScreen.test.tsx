@@ -34,6 +34,9 @@ const workosApiKey = (overrides?: Partial<HomeSettingEntryV1>) => homeSettingEnt
 });
 
 const routeParams = vi.hoisted(() => ({ value: {} as Record<string, string> }));
+// Opening an external page is the OS/browser boundary.
+const openExternalUrlMock = vi.hoisted(() => vi.fn(async () => true));
+vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: openExternalUrlMock }));
 const routerPush = vi.hoisted(() => vi.fn());
 const routerReplace = vi.hoisted(() => vi.fn());
 installSettingsViewCommonModuleMocks({
@@ -106,7 +109,7 @@ describe('Sign-in providers page', () => {
         expect(harness.requestsFor('/v1/home/identity/workos/connection/create')).toHaveLength(0);
     });
 
-    it('navigates Team WorkOS creation to the same named setup and creates only after submission', async () => {
+    it('navigates Team WorkOS creation to the same named setup and creates nothing until the portal opens', async () => {
         const serverId = await harness.addHome({ name: 'Company Home', serverUrl: 'https://company-team.example', accountId: 'owner-1', teamsEnabled: true });
         harness.answer(serverId, '/v1/teams/get', { body: teamSummaryFixture({ capabilities: teamCapabilitiesFixture({ manageAuthentication: true }) }) });
         harness.answer(serverId, '/v1/teams/identity/connections/list', { body: {
@@ -114,6 +117,8 @@ describe('Sign-in providers page', () => {
             admissionModeApplicability: { v: 1, modes: { invite_only: { status: 'available' }, provisioned: { status: 'unavailable', reason: 'directory_source_required' }, jit: { status: 'unavailable', reason: 'team_connection_required' } } },
         } });
         harness.answer(serverId, '/v1/teams/identity/workos/connection/create', { body: { connection: companyConnection('team-1') } });
+        harness.answer(serverId, '/v1/teams/identity/workos/admin-portal-link/create', { body: { url: 'https://portal.workos.example/setup' } });
+        openExternalUrlMock.mockClear();
         const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId={serverId} teamId="team-1" />);
         await waitForHomeGovernance(() => expect(screen.findByTestId('team-authentication-add-connection')).not.toBeNull());
         await act(async () => { screen.pressByTestId('team-authentication-add-connection'); });
@@ -127,6 +132,10 @@ describe('Sign-in providers page', () => {
         await screen.pressByTestIdAsync('identity-workos-create');
         await waitForHomeGovernance(() => expect(routerReplace).toHaveBeenCalledWith(`/settings/teams/${serverId}/team-1/authentication/company-connection`));
         expect(harness.requestsFor('/v1/teams/identity/workos/connection/create').map((request) => request.input)).toEqual([{ v: 1, teamId: 'team-1', displayName: 'Acme' }]);
+        // The one submit is opening the portal: the draft and its portal link are made together.
+        expect(harness.requestsFor('/v1/teams/identity/workos/admin-portal-link/create').map((request) => request.input))
+            .toEqual([{ v: 1, teamId: 'team-1', connectionId: 'company-connection', intent: 'sso' }]);
+        expect(openExternalUrlMock).toHaveBeenCalledWith('https://portal.workos.example/setup');
     });
 
     it('explains why WorkOS cannot be set up instead of offering a form that cannot succeed', async () => {

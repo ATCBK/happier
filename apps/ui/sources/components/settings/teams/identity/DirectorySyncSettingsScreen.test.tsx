@@ -365,6 +365,20 @@ describe('DirectorySyncSettingsScreen source setup', () => {
         expect(screen.getTextContent()).not.toContain('workos_portal_open_failed');
     });
 
+    it('says who can set WorkOS up when the Home has no WorkOS, instead of only refusing', async () => {
+        executeDirectoryMock.mockResolvedValueOnce({ ok: true, value: { v: 1, items: [] } });
+        executeIdentityMock.mockResolvedValueOnce({ ok: false, failure: { code: 'workos_platform_unavailable', retryable: false } });
+        const screen = await renderScreen(<DirectorySyncSettingsScreen serverId="home-1" teamId="team-1" />);
+
+        await screen.pressByTestIdAsync('team-directory-source-add');
+        await vi.waitFor(() => expect(screen.findByTestId('team-directory-setup-workos')).not.toBeNull());
+        await screen.pressByTestIdAsync('team-directory-setup-workos');
+
+        await vi.waitFor(() => expect(screen.findByTestId('team-directory-setup-workos-unavailable')).not.toBeNull());
+        expect(screen.getTextContent()).toContain('identityAdministration.errorWorkosPlatformUnavailable');
+        expect(screen.getTextContent()).toMatch(/teams\.authentication\.add\.ask(Named|Unnamed)/);
+    });
+
     it('continues approved WorkOS connection and portal Actions through the same setup flow', async () => {
         executeDirectoryMock.mockResolvedValueOnce({
             ok: true,

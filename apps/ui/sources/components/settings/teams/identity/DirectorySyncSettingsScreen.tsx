@@ -29,6 +29,9 @@ import { createIdentityAdministrationClient, executeIdentityAdministrationRead }
 import { useDirectoryAdministration } from './useDirectoryAdministration';
 import { identityProviderKindMark } from './identityAdministrationPresentation';
 import { createWorkosPortalReturnController } from './workosPortalReturn';
+import { homeSignInPlatformHref } from '@/components/settings/home/signInProviders/homeSignInPlatforms';
+import { useEligibleProviderRecoveryViewer } from './eligibleProviderAvailability';
+import { askAdministratorsText } from '../collection/teamsCreateGuidanceText';
 
 
 /** The directories a Team can follow, drawn at the pane state's own glyph size and gap. */
@@ -77,7 +80,12 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
     const projectionCurrent = state.kind === 'ready' && !state.refreshing && !state.stale;
     // Setup failures render in the shared recovery line, out of the pressed
     // control's reading order, and announce the same sentence as it is stored.
+    // WorkOS Directory Sync refused because WorkOS is not set up on the Home: the recovery line
+    // leads a Home owner to the WorkOS row and names, for anyone else, who can set it up.
+    const [workosPlatformMissing, setWorkosPlatformMissing] = React.useState(false);
+    const recoveryViewer = useEligibleProviderRecoveryViewer(props.scope);
     const reportSetupFailure = React.useCallback((code: string) => {
+        setWorkosPlatformMissing(code.trim().toLowerCase() === 'workos_platform_unavailable');
         const message = identityAdministrationFailureMessage(code);
         announceAccessibilityMessage(message);
         return message;
@@ -332,7 +340,8 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                     </View>}
                     title={t('teams.authentication.directory.empty')}
                     reason={t('teams.authentication.directory.emptyBody')}
-                    note={t('teams.authentication.directory.setup.optionsFooter')}
+                    // Once the choices are open, their section says this; the card does not repeat it.
+                    note={setupOpen ? undefined : t('teams.authentication.directory.setup.optionsFooter')}
                     action={{
                         label: t('teams.authentication.directory.setup.add'),
                         testID: 'team-directory-source-add',
@@ -444,7 +453,18 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                             title={t('teams.authentication.directory.setup.loadMore')}
                         />
                     ) : null}
-                    {setup.failure || setup.kind === 'unavailable' ? (
+                    {setup.failure && workosPlatformMissing ? (
+                        <SurfaceStateCard
+                            testID="team-directory-setup-workos-unavailable"
+                            kind="unavailable"
+                            size="line"
+                            title={setup.failure}
+                            reason={recoveryViewer.viewerHomeRole === 'owner' ? undefined : askAdministratorsText(recoveryViewer.administratorNames ?? [])}
+                            action={recoveryViewer.viewerHomeRole === 'owner'
+                                ? { testID: 'team-directory-setup-workos-fix', label: t('teams.authentication.add.fixInSignInProviders'), onPress: () => router.push(homeSignInPlatformHref(props.scope.serverId, 'workos')) }
+                                : undefined}
+                        />
+                    ) : setup.failure || setup.kind === 'unavailable' ? (
                         <SurfaceStateCard
                             kind="error"
                             size="line"

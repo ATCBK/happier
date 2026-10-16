@@ -98,6 +98,13 @@ describe('validateServerConfigValue', () => {
 });
 
 describe('registry declaration rules', () => {
+    it('accepts only absolute HTTPS relay addresses from a Home write, as the Iroh runtime requires', () => {
+        const relays = SERVER_CONFIG.HAPPIER_IROH_RELAY_URLS;
+        expect(validateServerConfigValue(relays, ['https://relay.northwind.example'])).toEqual({ ok: true, value: ['https://relay.northwind.example'] });
+        expect(validateServerConfigValue(relays, ['relay.northwind.example'])).toEqual({ ok: false, reason: 'invalid_type' });
+        expect(validateServerConfigValue(relays, ['http://relay.northwind.example'])).toEqual({ ok: false, reason: 'out_of_bounds' });
+    });
+
     it('groups Sentry tuning separately while keeping reporting destinations in monitoring', () => {
         expect(Object.values(SERVER_CONFIG_REGISTRY_BASE)
             .filter((entry) => entry.group === 'errorReporting')

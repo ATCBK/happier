@@ -209,7 +209,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
     const [workosReturn, setWorkosReturn] = React.useState<'portal' | 'route' | null>(
         props.workosPortalReturn ? 'portal' : null,
     );
-    const portalReturnController = React.useRef(createWorkosPortalReturnController()).current;
+    const portalReturnController = React.useRef(createWorkosPortalReturnController(props.connectionId)).current;
     const handledTestReturnRef = React.useRef<string | null>(null);
     const connection = state.kind === 'ready'
         ? state.items.find((candidate) => candidate.id === props.connectionId) ?? null
@@ -572,6 +572,15 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
     };
 
     const setupSteps = workosSetupSteps(connection);
+    // Which Teams accept this Home connection in their sign-in policy; unknown (older Home) shows nothing.
+    const teamsUsingItRow = props.teamId === null && connection.teamsUsingIt ? <Item
+        testID="identity-connection-teams-using-it"
+        title={t('identityAdministration.homeTeamsUsingIt')}
+        subtitle={connection.teamsUsingIt.length > 0
+            ? connection.teamsUsingIt.map((team) => team.name).join(', ')
+            : t('identityAdministration.homeTeamsUsingItNone')}
+        showChevron={false}
+    /> : null;
     const isWorkos = connection.provider.kind === 'workos_sso';
     const workosObservation = connection.lastObservation?.kind === 'workos_sso' ? connection.lastObservation.presentation : null;
     const chosenCandidate = workosCandidates.find((candidate) => candidate.connectionId === chosenWorkosCandidateId) ?? null;
@@ -704,6 +713,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
                 accessibilityLiveRegion={pending === 'test:return' ? 'polite' : undefined}
                 showChevron={false}
             />}
+            {teamsUsingItRow}
         </ItemGroup></SettingSection>}
         {setupSteps ? (
             // The WorkOS path as visible steps: only the current step offers its
@@ -741,6 +751,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
                     ) : undefined}
                     showChevron={false}
                 />
+                {teamsUsingItRow}
                 {props.teamId !== null ? <Item
                     testID="identity-workos-required-for-team"
                     title={t('identityAdministration.workosRequiredForTeamWork')}

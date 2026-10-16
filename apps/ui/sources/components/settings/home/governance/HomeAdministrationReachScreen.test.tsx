@@ -267,6 +267,48 @@ describe('HomeAdministrationReachScreen', () => {
         expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-reach-exposure:internet');
     });
 
+    it('edits custom relay servers entry by entry, naming a refused entry before asking the Home', async () => {
+        const RELAY_POLICY = 'HAPPIER_IROH_RELAY_POLICY';
+        const RELAY_URLS = 'HAPPIER_IROH_RELAY_URLS';
+        const withRelays = (revision: number, urls: string[] | null) => {
+            const settings = reachSettings(revision);
+            settings.entries = [
+                ...settings.entries,
+                homeSettingEntryFixture(RELAY_POLICY, {
+                    value: 'automatic',
+                    apply: 'restart',
+                    declaration: { type: 'enum', section: 'reach', group: 'iroh', default: 'automatic', bounds: { values: ['automatic', 'disabled'] } },
+                }),
+                homeSettingEntryFixture(RELAY_URLS, {
+                    value: urls,
+                    source: urls ? 'home' : 'default',
+                    apply: 'restart',
+                    declaration: { type: 'list', section: 'reach', group: 'iroh', bounds: { scheme: 'https' } },
+                }),
+            ];
+            return settings;
+        };
+        const home = await addHome();
+        harness.answer(home, SETTINGS_GET, { body: withRelays(2, null) });
+        harness.answer(home, REACH_GET, { body: homeReachabilityFixture() });
+        harness.answer(home, SETTINGS_SET, { body: withRelays(3, ['https://relay.northwind.example']) });
+        const screen = await renderReach(home);
+
+        await act(async () => { screen.pressByTestId('home-reach-relay-servers.list.add'); });
+        await act(async () => { screen.changeTextByTestId('home-reach-relay-servers.list.item.0', 'relay.northwind.example'); });
+        await act(async () => { screen.findByTestId('home-reach-relay-servers.list.item.0')?.props.onBlur?.(); });
+        expect(harness.requestsFor(SETTINGS_SET)).toHaveLength(0);
+        expect(screen.findByTestId('home-reach-relay-servers.list.item.0.error')).not.toBeNull();
+
+        await act(async () => { screen.changeTextByTestId('home-reach-relay-servers.list.item.0', 'https://relay.northwind.example'); });
+        await act(async () => { screen.findByTestId('home-reach-relay-servers.list.item.0')?.props.onBlur?.(); });
+        await waitForHomeGovernance(() => expect(harness.requestsFor(SETTINGS_SET)).toHaveLength(1));
+        expect(harness.requestsFor(SETTINGS_SET)[0]?.input).toEqual({
+            expectedRevision: 2,
+            values: { [RELAY_URLS]: ['https://relay.northwind.example'] },
+        });
+    });
+
     it('refuses a plain http public address before asking the Home, and stores an https one', async () => {
         const home = await addHome();
         harness.answer(home, SETTINGS_GET, { body: reachSettings(2) });

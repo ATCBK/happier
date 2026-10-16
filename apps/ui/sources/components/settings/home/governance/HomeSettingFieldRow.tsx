@@ -7,6 +7,7 @@ import {
     SchemaFieldRow,
     SchemaFieldValueSlot,
 } from '@/components/settings/schemaFields/SchemaFieldRow';
+import { StringListField } from '@/components/ui/forms/StringListField';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { t } from '@/text';
 
@@ -16,6 +17,7 @@ import { isHomeSettingWritable } from './homeSettingDeclaration';
 import type { HomeSettingDraftValue } from './homeSettingDraft';
 import { homeServerSettingUnit, homeSettingChoiceLabel } from './homeServerSettingLabels';
 import { homeSettingShownValue } from './HomeSettingRowState';
+import { homeSettingFieldError, homeSettingTextRefusal } from './useHomeSettingsWrite';
 
 export type HomeSettingStage = (key: string, value: HomeSettingDraftValue | null) => void;
 
@@ -24,10 +26,94 @@ function fieldText(entry: HomeSettingEntryV1): string {
     return Array.isArray(entry.value) ? entry.value.join(', ') : homeSettingText(entry);
 }
 
+function listItems(entry: HomeSettingEntryV1, staged: HomeSettingDraftValue | undefined): string[] {
+    if (staged?.kind === 'text') return staged.text.split(',').map((item) => item.trim()).filter(Boolean);
+    return Array.isArray(entry.value) ? entry.value.map(String) : [];
+}
+
+/** The list's text for the one draft model: its filled entries, each once, comma-separated. */
+function listText(items: readonly string[]): string {
+    return [...new Set(items.map((item) => item.trim()).filter(Boolean))].join(', ');
+}
+
+/**
+ * A list setting, one field per entry with remove beside each and Add below (the shared
+ * `StringListField`). Edits are staged as the list's comma-separated text, so the registry codec
+ * parses them on the one draft path. Each entry is checked on its own once the list has been
+ * committed, so a refusal names the entry it is about; a duplicate says so.
+ */
+const HomeSettingListControl = React.memo(function HomeSettingListControl(props: Readonly<{
+    entry: HomeSettingEntryV1;
+    title: string;
+    staged: HomeSettingDraftValue | undefined;
+    disabled: boolean;
+    error: string | null;
+    onStage: HomeSettingStage;
+    onCommit?: (key: string) => void;
+    testID: string;
+}>) {
+    const { entry, staged, onStage, onCommit } = props;
+    const savedText = fieldText(entry);
+    const [items, setItems] = React.useState(() => listItems(entry, staged));
+    const [checked, setChecked] = React.useState(false);
+    // A saved or reloaded value replaces the local entries.
+    const latest = React.useRef(entry);
+    latest.current = entry;
+    React.useEffect(() => {
+        setItems(listItems(latest.current, undefined));
+        setChecked(false);
+    }, [savedText]);
+    const change = React.useCallback((next: string[]) => {
+        setItems(next);
+        const text = listText(next);
+        onStage(entry.key, text === savedText ? null : { kind: 'text', text });
+    }, [entry.key, onStage, savedText]);
+    // Removing an entry stages and commits in one press: the commit waits for that render, so the
+    // page's draft already holds the shorter list when it is written.
+    const [commitRequest, setCommitRequest] = React.useState(0);
+    const commit = React.useCallback(() => {
+        setChecked(true);
+        setCommitRequest((count) => count + 1);
+    }, []);
+    const commitRef = React.useRef(onCommit);
+    commitRef.current = onCommit;
+    React.useEffect(() => {
+        if (commitRequest > 0) commitRef.current?.(entry.key);
+    }, [commitRequest, entry.key]);
+    // Each entry's own refusal (a duplicate, or one the registry codec refuses), once committed.
+    const entryRefusals = React.useMemo(() => items.map((raw, index) => {
+        const item = raw.trim();
+        if (!checked || !item) return null;
+        if (items.slice(0, index).some((earlier) => earlier.trim() === item)) return t('homeSettings.row.listDuplicate');
+        const refusal = homeSettingTextRefusal(entry, item);
+        return refusal ? homeSettingFieldError(entry, refusal) : null;
+    }), [checked, entry, items]);
+    // A refusal for the whole list is said on the first entry only when no entry already says why.
+    const listRefusalShown = entryRefusals.some((refusal) => refusal !== null);
+    const itemError = React.useCallback((index: number): string | null => {
+        if (!items[index]?.trim()) return null;
+        return entryRefusals[index] ?? (index === 0 && !listRefusalShown ? props.error : null);
+    }, [entryRefusals, items, listRefusalShown, props.error]);
+    return (
+        <StringListField
+            testID={`${props.testID}.list`}
+            values={items}
+            onChange={change}
+            onCommit={commit}
+            itemError={itemError}
+            disabled={props.disabled}
+            itemLabel={(position) => t('homeSettings.row.listItem', { title: props.title, position })}
+            removeLabel={(position) => t('homeSettings.row.listRemove', { position })}
+            addLabel={t('homeSettings.row.listAdd')}
+            itemPlaceholder={entry.declaration?.bounds?.scheme === 'https' ? 'https://' : undefined}
+        />
+    );
+});
+
 /**
  * One registry-declared Home setting rendered from its declaration (plan §3.14 "Console
  * rendering"): boolean → switch; enum of up to four → segmented; longer enum → menu; int/float →
- * number field; string/url/email/list → text field (a list as comma-separated text); anything
+ * number field; string/url/email → text field; list → one field per entry; anything
  * else, a fixed key, or a read-only viewer → the value in words; a fixed key also carries the shared
  * `HomeDeploymentFixedNote`. Every change is staged through
  * `onStage`; a page that saves field by field commits on `onCommit` (focus leaves or submit).
@@ -90,6 +176,26 @@ export const HomeSettingFieldRow = React.memo(function HomeSettingFieldRow(props
     if (declaration?.type === 'enum' && declaration.bounds?.values?.length === 1) return null;
     if (kind === null) {
         return <SchemaFieldRow {...row} layout="inline" value={homeSettingShownValue(entry)} />;
+    }
+    if (declaration?.type === 'list') {
+        return (
+            <SchemaFieldRow
+                {...row}
+                layout="stacked"
+                control={(
+                    <HomeSettingListControl
+                        entry={entry}
+                        title={props.title}
+                        staged={staged}
+                        disabled={props.disabled}
+                        error={props.error}
+                        onStage={onStage}
+                        onCommit={onCommit}
+                        testID={testID}
+                    />
+                )}
+            />
+        );
     }
     const stagedValue = staged?.kind === 'value' ? staged.value : undefined;
     const values = declaration?.bounds?.values ?? [];

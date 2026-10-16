@@ -20,11 +20,18 @@ import {
 import { askAdministratorsText } from '../collection/teamsCreateGuidanceText';
 import { WorkosMark } from '@/components/settings/identity/WorkosMark';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
+import { markWorkosPortalOpenedFor } from './workosPortalReturn';
 
 import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
 import { t } from '@/text';
 
-/** One draft-creation entry for the Home and Team scopes, using the same server-owned eligibility. */
+/**
+ * The first WorkOS setup step for the Home and Team scopes, using the same server-owned eligibility.
+ * Nothing is created until the owner opens the Admin Portal: that one press creates the connection
+ * and its portal link together, opens the portal and shows the connection's own setup page, so
+ * leaving this page earlier keeps no draft (lab `tsWorkos-S1`).
+ */
 export function IdentityWorkosSetupContent(props: Readonly<{
     scope: ServerAccountScope;
     teamId: string | null;
@@ -46,12 +53,24 @@ export function IdentityWorkosSetupContent(props: Readonly<{
     const create = async () => {
         if (!canCreate || pending || !displayName.trim()) return;
         setPending(true); setFailure(null);
+        // The portal opens on the created connection; its page then continues setup either way, and
+        // says why when the portal could not open ("Open again" is the same step).
+        const openPortal = async (connectionId: string) => {
+            try {
+                const link = await client.execute('teams.identity.workos.adminPortalLink.create', { v: 1, teamId: props.teamId, connectionId, intent: 'sso' }, {
+                    onApprovalSucceeded: async (value) => { if (await openExternalUrl(value.url)) markWorkosPortalOpenedFor(connectionId); },
+                    onApprovalFailed: () => undefined,
+                });
+                if (link.ok && await openExternalUrl(link.value.url)) markWorkosPortalOpenedFor(connectionId);
+            } catch { /* The connection page offers the portal again. */ }
+            props.onCreated(connectionId);
+        };
         try {
             const result = await client.execute('teams.identity.workos.connection.create', { v: 1, teamId: props.teamId, displayName: displayName.trim() }, {
-                onApprovalSucceeded: (value) => props.onCreated(value.connection.id),
+                onApprovalSucceeded: (value) => openPortal(value.connection.id),
                 onApprovalFailed: setFailure,
             });
-            if (result.ok) props.onCreated(result.value.connection.id);
+            if (result.ok) await openPortal(result.value.connection.id);
             else if (!('approvalPending' in result)) setFailure(result.failure.code);
         } catch { setFailure('home_unreachable'); }
         finally { setPending(false); }
@@ -76,7 +95,7 @@ export function IdentityWorkosSetupContent(props: Readonly<{
             // The page's one decision is creating the connection, so it is the header's primary, as on
             // every other "new" page (New Team). It waits for a name and for the Home to allow it.
             primaryAction={blocked ? undefined : {
-                title: t('identityAdministration.add'),
+                title: t('identityAdministration.workosOpenPortal'),
                 testID: 'identity-workos-create',
                 loading: pending,
                 disabled: !canCreate || !displayName.trim() || pending,
@@ -93,7 +112,7 @@ export function IdentityWorkosSetupContent(props: Readonly<{
                 reason={recovery?.kind === 'ask' ? askAdministratorsText(recovery.names) ?? undefined : undefined}
                 action={fix ? { label: fix.label, onPress: () => router.push(fix.href), testID: 'identity-workos-fix' } : undefined}
             />
-        ) : /* Search for "Add connection" lands on the form its header primary submits. */ <SettingAnchor setting={settings.settings.create}><ItemGroup>
+        ) : /* Search for "Add connection" lands on the form its header primary submits. */ <SettingAnchor setting={settings.settings.create}><ItemGroup description={t('identityAdministration.workosNothingCreatedYet')}>
             {state.kind === 'loading' ? <SurfaceStateCard kind="loading" size="line" title={t('common.loading')} /> : null}
             {state.kind === 'unavailable' ? <SurfaceStateCard kind="error" size="line" title={identityAdministrationFailureMessage(state.failure.code)} action={state.failure.retryable ? { label: t('common.retry'), onPress: refresh } : undefined} /> : null}
             {state.kind === 'ready' && state.failure ? <SurfaceStateCard kind="error" size="line" title={identityAdministrationFailureMessage(state.failure.code)} action={{ label: t('common.retry'), onPress: refresh }} /> : null}

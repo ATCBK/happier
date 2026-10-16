@@ -38,6 +38,9 @@ export function homeSettingFieldError(
   entry: HomeSettingEntryV1,
   reason: 'out_of_bounds' | 'invalid',
 ): string {
+  // A Home write must use HTTPS where the registry says so (the deployment env may use HTTP).
+  if (reason === 'out_of_bounds' && entry.declaration?.bounds?.scheme === 'https')
+    return t('homeSettings.row.httpsOnly');
   const bounds = homeSettingBoundsLine(entry);
   return reason === 'out_of_bounds' && bounds
     ? t('homeSettings.row.outOfBounds', { bounds })

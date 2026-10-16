@@ -83,4 +83,31 @@ describe('HomeSettingFieldRow', { timeout: 180_000 }, () => {
     expect(readOnly.getTextContent()).toContain('105 MB');
     expect(readOnly.getTextContent()).not.toContain('104857600');
   });
+  it('says a refused list entry under that entry only, not again on the first entry', async () => {
+    const { HomeSettingFieldRow } = await import('./HomeSettingFieldRow');
+    const { act } = await import('react-test-renderer');
+    const entry = homeSettingEntryFixture('HAPPIER_IROH_RELAY_URLS', {
+      value: ['https://relay-a.northwind.example'],
+      source: 'home',
+      declaration: { type: 'list', section: 'reach', bounds: { scheme: 'https' } },
+    });
+    const screen = await renderScreen(
+      <HomeSettingFieldRow
+        testID="row"
+        entry={entry}
+        title="Relay servers"
+        staged={undefined}
+        readOnly={false}
+        disabled={false}
+        error="The Home refused this list"
+        onStage={vi.fn()}
+        onCommit={vi.fn()}
+      />,
+    );
+    await screen.pressByTestIdAsync('row.list.add');
+    await act(async () => { screen.changeTextByTestId('row.list.item.1', 'relay-b.northwind.example'); });
+    await act(async () => { screen.findByTestId('row.list.item.1')?.props.onBlur?.(); });
+    expect(screen.findByTestId('row.list.item.1.error')).not.toBeNull();
+    expect(screen.findByTestId('row.list.item.0.error')).toBeNull();
+  });
 });

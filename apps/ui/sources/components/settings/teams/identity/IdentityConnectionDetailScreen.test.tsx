@@ -158,7 +158,7 @@ vi.mock('../TeamSection', () => ({
     }),
 }));
 
-import { IdentityConnectionDetailScreen } from './IdentityConnectionDetailScreen';
+import { IdentityConnectionDetailContent, IdentityConnectionDetailScreen } from './IdentityConnectionDetailScreen';
 
 beforeEach(() => {
     standardCleanup();
@@ -934,4 +934,39 @@ describe('IdentityConnectionDetailScreen test return', () => {
             expect.anything(),
         );
     });
+
+    it('names the Teams that accept a Home sign-in connection, and says so when none do', async () => {
+        const homeWorkos = {
+            ...identityStateMock.current.items[0]!,
+            teamId: null,
+            provider: { id: 'provider-workos', kind: 'workos_sso' as const, displayName: 'Northwind' },
+            externalReference: { v: 1 as const, kind: 'workos_sso' as const, organizationId: 'organization-1', connectionId: 'workos-connection-1' },
+            settings: { v: 1 as const, kind: 'workos_sso' as const },
+            lastObservation: null,
+        };
+        const render = async (teamsUsingIt?: { teamId: string; name: string }[]) => {
+            identityStateMock.current.items[0] = { ...homeWorkos, ...(teamsUsingIt ? { teamsUsingIt } : {}) } as unknown as TeamIdentityConnectionV1;
+            return renderScreen(<IdentityConnectionDetailContent
+                scope={{ serverId: 'home-1', accountId: 'account-1' } as never}
+                teamId={null}
+                connectionId="connection-1"
+                mutationsAvailable
+            />);
+        };
+        const used = await render([{ teamId: 'platform', name: 'Platform' }, { teamId: 'design', name: 'Design' }]);
+        const row = used.findByTestId('identity-connection-teams-using-it');
+        expect(row).not.toBeNull();
+        expect(findTestInstanceByTypeContainingText(row!, 'Text', 'Platform, Design')).toBeDefined();
+        await used.unmount();
+
+        const unused = await render([]);
+        expect(findTestInstanceByTypeContainingText(unused.findByTestId('identity-connection-teams-using-it')!, 'Text',
+            t('identityAdministration.homeTeamsUsingItNone'))).toBeDefined();
+        await unused.unmount();
+
+        // An older Home that does not project usage is unknown, not "none".
+        const unknown = await render(undefined);
+        expect(unknown.findByTestId('identity-connection-teams-using-it')).toBeNull();
+    });
+
 });
