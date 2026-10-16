@@ -50,6 +50,17 @@ const result = {
 };
 
 describe('workspace.sync.relationship.create Action', () => {
+  it('preserves the controller RPC refusal instead of validating it as a committed relationship', async () => {
+    const executor = createActionExecutor({
+      sessionHandoffTargetReplacementApprovalPreflight: async () => ({ type: 'not_required' as const }),
+      workspaceSyncRelationshipCreate: async () => ({ error: 'Workspace root identity is unavailable', errorCode: 'workspace_root_identity_unavailable' }),
+      isActionApprovalRequired: () => false,
+    } satisfies ActionExecutorDeps);
+    expect(await executor.execute('workspace.sync.relationship.create', input, {
+      surface: 'ui', authority: 'present_user', serverId: 'home-1', actionRequestId: 'link-failure',
+    })).toMatchObject({ ok: false, errorCode: 'workspace_root_identity_unavailable' });
+  });
+
   it('keeps worker-copy purpose and the chosen folder in the existing destination approval', async () => {
     const exactInput = { ...input, mode: 'keep_synced' as const, destinationIntent: 'materialize_from_source_workspace' as const,
       targetPath: '/chosen-worker', purpose: 'worker_clean_copy' as const };

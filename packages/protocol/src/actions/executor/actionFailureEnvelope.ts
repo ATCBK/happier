@@ -23,8 +23,8 @@ export function readActionFailureEnvelope(
   const errorCode = record.errorCode.trim();
   if (!errorCode) return null;
   if (record.ok !== false) {
-    if (record.type !== 'error' || (options.treatReturnedErrorEnvelopeAsFailure !== true
-      && !SpawnSessionErrorCodeSchema.safeParse(errorCode).success)) return null;
+    if (options.treatReturnedErrorEnvelopeAsFailure !== true
+      && (record.type !== 'error' || !SpawnSessionErrorCodeSchema.safeParse(errorCode).success)) return null;
   }
   const rawError = typeof record.error === 'string' ? record.error.trim() : '';
   const rawFallbackMessage = typeof record.errorMessage === 'string' && record.errorMessage.trim().length > 0
