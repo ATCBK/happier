@@ -15,7 +15,7 @@ import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from './vo
 import { resolveVoiceInferenceWorkerRequestTimeoutMs } from './voiceInferenceWorkerConfig';
 
 const KOKORO_PACK_ID = 'kokoro-82m-v1.0-onnx-q8-wasm';
-const EXPECTED_MANIFEST_SHA256 = '221f9dcc5b70b98cc4dbe017402b2f6e17e36d4ca2f7a062c10127e0b90622a4';
+const EXPECTED_MANIFEST_SHA256 = '34a32bd9a524d26d9019e66cb385713f16d525cdae8678a6e8661adf9fa3af5b';
 const EXPECTED_FILE_COUNT = 362;
 const EXPECTED_TOTAL_BYTES = 186_129_644;
 const EXPECTED_NORMALIZED_ALIAS_COUNT = 104;
@@ -197,14 +197,21 @@ describe.runIf(enabled)('canonical public Kokoro consumed lifecycle', () => {
     expect(manifest.voices).toHaveLength(103);
     expect(manifest.defaultVoiceId).toBe('af_maple');
     expect(manifest.voices?.slice(0, 4)).toMatchObject([
-      { id: 'af_maple', sid: 0 },
-      { id: 'af_sol', sid: 1 },
-      { id: 'bf_vale', sid: 2 },
-      { id: 'zf_001', sid: 3 },
+      { id: 'af_maple', title: 'Maple', subtitle: 'American English · female', sid: 0 },
+      { id: 'af_sol', title: 'Sol', subtitle: 'American English · female', sid: 1 },
+      { id: 'bf_vale', title: 'Vale', subtitle: 'British English · female', sid: 2 },
+      { id: 'zf_001', title: 'Mandarin voice 1', subtitle: 'Mandarin Chinese · female', sid: 3 },
     ]);
-    expect(manifest.voices?.at(-1)).toMatchObject({ id: 'zm_100', sid: 102 });
+    expect(manifest.voices?.[58]).toMatchObject({
+      id: 'zm_009', title: 'Mandarin voice 9', subtitle: 'Mandarin Chinese · male', sid: 58,
+    });
+    expect(manifest.voices?.at(-1)).toMatchObject({
+      id: 'zm_100', title: 'Mandarin voice 100', subtitle: 'Mandarin Chinese · male', sid: 102,
+    });
     expect(new Set(manifest.voices?.map((voice) => voice.id)).size).toBe(103);
     for (const [sid, voice] of (manifest.voices ?? []).entries()) {
+      expect(voice.title).not.toMatch(/^[ABZ][FM][ _]/);
+      expect(voice.subtitle?.trim()).toBeTruthy();
       expect(resolveKokoroVoiceSid(manifest, voice.id, 103)).toBe(sid);
     }
     expect(resolveKokoroVoiceSid(manifest, null, 103)).toBe(0);
