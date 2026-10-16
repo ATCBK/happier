@@ -10,6 +10,7 @@ import {
 import type { AnchoredListPositionV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 import type { ActionExecuteResult, ActionId } from '@happier-dev/protocol';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { isPluginUiResourceReadAuthorityLost } from '@happier-dev/plugin-ui/advanced';
 
 import { randomUUID } from '@/platform/randomUUID';
 import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
@@ -170,10 +171,15 @@ export function useWidgetAreaLayouts(
         ].safeParse(outcome.result)
       : null;
     if (!isCurrent() || current !== generation.current) return null;
+    const authorityLost = !outcome.ok && isPluginUiResourceReadAuthorityLost({
+      freshness: 'unknown', pending: 'idle', subscription: 'ended',
+      error: { code: outcome.errorCode, message: outcome.error ?? outcome.errorCode ?? '' },
+    });
+    if (authorityLost && surfaceKey) retained?.delete(surfaceKey);
     if (parsed?.success && surfaceKey) retained?.set(surfaceKey, { status: 'ready', dashboards: parsed.data.layouts });
     setInventory((previous) => ({ observation, state: parsed?.success
       ? { status: 'ready', dashboards: parsed.data.layouts }
-      : { status: 'offline', dashboards: previous.observation === observation ? previous.state.dashboards : [] },
+      : { status: 'offline', dashboards: !authorityLost && previous.observation === observation ? previous.state.dashboards : [] },
     }));
     return parsed?.success ? parsed.data.layouts : null;
   }, [interest, isCurrent, observation, run, surface, surfaceKey, retained]);

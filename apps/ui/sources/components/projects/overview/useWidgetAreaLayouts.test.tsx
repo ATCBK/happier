@@ -23,7 +23,8 @@ const { useWidgetAreaLayouts } = await import('./useProjectDashboards');
 
 afterEach(standardCleanup);
 
-it('retains the acknowledged Account layout list on a warm mount while the replacement list is unanswered', async () => {
+it.each(['network_error', 'denied', 'permission_denied'])(
+    'retains only authorized Account inventory across %s and a warm mount with an unanswered read', async errorCode => {
     const previous = storage.getState();
     const home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://layout-retention.test', accountId: 'account' }], route: () => undefined });
     const server = home.homes.a!;
@@ -34,6 +35,7 @@ it('retains the acknowledged Account layout list on a warm mount while the repla
     const boundary = createWorkBoardArtifactBoundary();
     let held = createDeferred<void>();
     let hold = false;
+    let failure = false;
     const transport = { ...boundary.forAccount(scope.accountId), delete: boundary.transport.delete,
         list: async (...args: Parameters<typeof boundary.transport.list>) => { if (hold) await held.promise; return boundary.transport.list(...args); } };
     const owner = createWidgetAreaLayoutArtifactPortV1(transport, { surface, isCurrent: () => true });
@@ -42,18 +44,27 @@ it('retains the acknowledged Account layout list on a warm mount while the repla
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
         widgetSurfaceActions: { corePage: createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(transport, { surface: target, isCurrent: () => true })) },
         widgetAreaLayouts: { list: () => owner.list(), create: unused, rename: unused, delete: unused, reorder: unused, reset: unused, undo: unused } }));
-    const execute: WidgetAreaLayoutsExecute = (actionId, args) => executor.execute(actionId, args, {
+    // The Action invocation is the transport boundary; successful reads still use the real Artifact/Action owners.
+    const execute: WidgetAreaLayoutsExecute = (actionId, args) => failure
+        ? Promise.resolve({ ok: false, errorCode, error: errorCode })
+        : executor.execute(actionId, args, {
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId, authority: 'present_user', actionCaller: { kind: 'host' },
     });
     try {
         const cold = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
         await vi.waitFor(() => expect(cold.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']));
+        failure = true;
+        await act(async () => { await cold.getCurrent().reload(); });
+        const expectedNames = errorCode === 'network_error' ? ['My usage'] : [];
+        expect(cold.getCurrent().state).toEqual({ status: 'offline', dashboards: errorCode === 'network_error'
+            ? expect.arrayContaining([expect.objectContaining({ name: 'My usage' })]) : [] });
         await cold.unmount();
+        failure = false;
         hold = true;
         const warm = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
-        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']);
+        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(expectedNames);
         await warm.rerender();
-        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']);
+        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(expectedNames);
         held.resolve();
         await warm.unmount();
         held = createDeferred<void>();
