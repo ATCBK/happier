@@ -41,8 +41,6 @@ import {
 
 /** Room the peak figure, axis, legend and a one-line coverage note take around the plot in a sized frame. */
 const CHROME_PX = 84;
-/** The plot fills the room its frame gives it (a Usage band's shorter column grows to its neighbour), up to the height a bar chart stays readable at in a half-width cell. */
-const MAX_PLOT_PX = 480;
 /**
  * Below this width the legend's "Show all" and the coverage note each wrap onto a second line (a Board
  * rail is ~315 px wide), which the plot has to leave room for or the last line is cut by the frame.
@@ -227,7 +225,7 @@ export function UsageDailyWidget(props: UsageBodyProps) {
   const chromePx = CHROME_PX + ((presentation?.geometry?.width ?? NARROW_FRAME_PX) < NARROW_FRAME_PX ? NARROW_CHROME_PX : 0);
   const height = compact ? Math.max(1, (presentation?.geometry?.height ?? 96) - CHROME_PX / 2) : Math.max(
     phone ? 140 : 120,
-    Math.min(MAX_PLOT_PX, (presentation?.geometry?.height ?? 260) - chromePx),
+    (presentation?.geometry?.height ?? 260) - chromePx,
   );
   return (
     <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.daily`}>

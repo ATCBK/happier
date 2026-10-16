@@ -551,4 +551,39 @@ describe('few-bucket bar columns', () => {
       expect(axis(6).parentElement!.children).toHaveLength(24);
     } finally { mount.unmount(); }
   });
+  it('places plain string ticks on buckets (first on the first, last on the last), never between bars', () => {
+    const input = [{ id: 'days', label: 'Days', points: Array.from({ length: 7 }, (_, day) => ({ id: `d${day}`, x: day, y: day + 1 })) }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Daily" series={input}
+      width={280} scaleGutter={40} viewportHeight={60} variant="bar" size="tile" testID="days" axisTicks={['Oct 12', 'Oct 15', 'Oct 18']} />);
+    try {
+      const axis = (index: number) => find(mount.container, `days-axis-${index}`);
+      expect([0, 3, 6].map((index) => axis(index).textContent)).toEqual(['Oct 12', 'Oct 15', 'Oct 18']);
+      expect([1, 2, 4, 5].map((index) => axis(index).textContent)).toEqual(['', '', '', '']);
+      // The slots share the plot's width, which stops short of the scale gutter.
+      const slots = axis(0).parentElement!;
+      expect(Number.parseFloat(getComputedStyle(slots).paddingRight)).toBe(40);
+    } finally { mount.unmount(); }
+  });
+  it('sets a bucket tick at that bucket on a line, and the default ends on the first and last bucket', () => {
+    const input = [{ id: 'cpu', label: 'CPU', points: [0, 1, 2, 3, 4].map((x) => ({ id: `p${x}`, x, y: x })) }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="CPU" series={input}
+      width={240} viewportHeight={60} variant="line" size="tile" testID="line" axisTicks={[{ label: 'start', bucket: 0 }, { label: 'mid', bucket: 2 }, { label: 'end', bucket: 4 }]} />);
+    try {
+      const axis = (index: number) => find(mount.container, `line-axis-${index}`);
+      const middle = axis(2);
+      expect(middle.textContent).toBe('mid');
+      expect(Number.parseFloat(middle.style.left) + Number.parseFloat(middle.style.width) / 2).toBe(120);
+      expect(axis(0).textContent).toBe('start');
+      expect(axis(4).textContent).toBe('end');
+      expect(axis(4).style.right).toBe('0px');
+    } finally { mount.unmount(); }
+  });
+  it('without ticks names the first and last bucket at the plot edges', () => {
+    const input = [{ id: 'cpu', label: 'CPU', points: [0, 1, 2, 3].map((x) => ({ id: `p${x}`, x, y: x, label: `t${x}` })) }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="CPU" series={input}
+      width={200} viewportHeight={60} variant="area" size="tile" testID="ends" />);
+    try {
+      expect([0, 1, 2, 3].map((index) => find(mount.container, `ends-axis-${index}`)?.textContent)).toEqual(['t0', undefined, undefined, 't3']);
+    } finally { mount.unmount(); }
+  });
 });

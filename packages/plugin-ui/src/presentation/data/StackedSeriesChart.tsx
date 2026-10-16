@@ -76,8 +76,9 @@ export type StackedSeriesChartProps = Readonly<{
   barEmphasis?: 'last' | 'maximum' | 'none';
   showPointLabels?: boolean;
   showPeakValue?: boolean;
-  /** Plain labels spread from edge to edge. A `{ label, bucket }` tick sits under that bar's centre
-   * (bar charts: "6 AM" belongs under the 6 AM bar, not at a third of the width). */
+  /** Every tick sits at a bucket: a `{ label, bucket }` tick at that bucket ("6 AM" under the 6 AM bar; on a line or area, at
+   * the bucket's own x). Plain strings are spread over the buckets in order, the first on the first bucket and the last on the
+   * last, so a label is never set between buckets. Absent, the first and last bucket name the plot's two ends. */
   axisTicks?: readonly (string | Readonly<{ label: string; bucket: number }>)[];
   /** One labelled reference level (a typical day): a quiet dotted rule, never a series of its own. */
   reference?: Readonly<{ value: number; label: string }>;
@@ -201,6 +202,25 @@ function StackRise(props: Readonly<{ rise: Readonly<{ durationMs: number; delayM
   }
   return <Animated.View testID={props.testID} style={[fill, { transform: [{ translateY: lift }] }]}>{props.children}</Animated.View>;
 }
+
+type AxisTick = Readonly<{ label: string; bucket: number }>;
+
+/** The one tick rule: every axis label belongs to a bucket, and the plot places it there. */
+function resolveAxisTicks(ticks: StackedSeriesChartProps['axisTicks'], buckets: readonly HappierSeriesBucket[], pointLabels: boolean): readonly AxisTick[] {
+  const last = buckets.length - 1;
+  if (last < 0) return [];
+  if (ticks) {
+    return ticks.flatMap((tick, index): AxisTick[] => {
+      if (typeof tick === 'string') return [{ label: tick, bucket: ticks.length === 1 ? 0 : Math.round(index * last / (ticks.length - 1)) }];
+      return Number.isInteger(tick.bucket) && tick.bucket >= 0 && tick.bucket <= last ? [tick] : [];
+    });
+  }
+  if (pointLabels) return buckets.map((bucket, index) => ({ label: bucket.label, bucket: index }));
+  return last === 0 ? [{ label: buckets[0]!.label, bucket: 0 }] : [{ label: buckets[0]!.label, bucket: 0 }, { label: buckets[last]!.label, bucket: last }];
+}
+
+/** Reach past a tick's own column or point on each side so a centred label never wraps or clips. */
+const AXIS_TICK_REACH_PX = 40;
 
 /** Finite series renderer. All variants share bucket identity, scale, interaction and exact facts. */
 /** A fragment of fewer consecutive samples than this (cut off by gaps) is drawn as a line only: an area under 2 or 3 points is a hard-edged sliver. A chart that is itself that short keeps its area. */
@@ -501,21 +521,41 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
         ? (props.barLeadingInset ?? 0) + index * (barSlotWidth + barGap) + barSlotWidth / 2 : geometry.xAt(index)) })}
     </View> : null}
   </View>;
-  const chartBody = <View>
-    {plot}
-    {showAxis && geometry.buckets.length && props.variant === 'bar' && props.axisTicks?.some((tick) => typeof tick !== 'string') ? <View testID={props.testID ? `${props.testID}-axis` : undefined}
-      style={{ flexDirection: 'row', gap: barGap, paddingHorizontal: props.barLeadingInset, marginTop: HAPPIER_DATA_METRICS.axisGapPx }}>
+  const axisTicks = resolveAxisTicks(props.axisTicks, geometry.buckets, props.showPointLabels === true);
+  const axisTop = props.showPeakValue && props.showPointLabels ? 16 : HAPPIER_DATA_METRICS.axisGapPx;
+  const axisId = (bucket: number) => props.testID ? `${props.testID}-axis-${bucket}` : undefined;
+  // A bar's tick lives in its bar's slot; a line or area has no slots, so its tick sits at the bucket's own x.
+  const axis = props.variant === 'bar'
+    ? <View testID={props.testID ? `${props.testID}-axis` : undefined}
+      style={{ flexDirection: 'row', gap: barGap, paddingLeft: props.barLeadingInset, paddingRight: (props.barLeadingInset ?? 0) + (props.scaleGutter ?? 0), marginTop: axisTop }}>
       {geometry.buckets.map((bucket, index) => {
-        const tick = props.axisTicks!.find((entry) => typeof entry !== 'string' && entry.bucket === index);
-        return <View key={bucket.id} testID={props.testID ? `${props.testID}-axis-${index}` : undefined} style={{ ...(props.barSlotWidth ? { width: props.barSlotWidth } : { flex: 1, minWidth: 0 }), height: text.caption.lineHeight }}>
-          {tick && typeof tick !== 'string' ? <HappierText style={{ ...text.caption, position: 'absolute',
+        const tick = axisTicks.find((entry) => entry.bucket === index);
+        const slot = props.barSlotWidth ? { width: props.barSlotWidth } : { flex: 1, minWidth: 0 };
+        if (props.showPointLabels) return <View key={bucket.id} testID={axisId(index)} style={slot}>
+          {tick ? <HappierText style={{ ...text.caption, textAlign: 'center' }}>{tick.label}</HappierText> : null}
+        </View>;
+        return <View key={bucket.id} testID={axisId(index)} style={{ ...slot, height: text.caption.lineHeight }}>
+          {tick ? <HappierText style={{ ...text.caption, position: 'absolute',
             // An edge bar's tick reads inward from the plot's edge, which would otherwise cut half of it off.
-            ...(index === 0 ? { left: 0, right: -40, textAlign: 'left' } : index === geometry.buckets.length - 1 ? { left: -40, right: 0, textAlign: 'right' } : { left: -20, right: -20, textAlign: 'center' }) }}>{tick.label}</HappierText> : null}
+            ...(index === 0 ? { left: 0, right: -AXIS_TICK_REACH_PX, textAlign: 'left' } : index === geometry.buckets.length - 1 ? { left: -AXIS_TICK_REACH_PX, right: 0, textAlign: 'right' }
+              : { left: -AXIS_TICK_REACH_PX / 2, right: -AXIS_TICK_REACH_PX / 2, textAlign: 'center' }) }}>{tick.label}</HappierText> : null}
         </View>;
       })}
-    </View> : showAxis && geometry.buckets.length ? <View style={{ flexDirection: 'row', justifyContent: props.barSlotWidth && props.showPointLabels ? 'flex-start' : 'space-between', gap: props.showPointLabels ? barGap : undefined, paddingHorizontal: props.showPointLabels ? props.barLeadingInset : undefined, paddingRight: props.showPointLabels ? undefined : props.scaleGutter, marginTop: props.showPeakValue && props.showPointLabels ? 16 : HAPPIER_DATA_METRICS.axisGapPx }}>
-      {(props.axisTicks?.map((tick) => typeof tick === 'string' ? tick : tick.label) ?? (props.showPointLabels ? geometry.buckets.map((bucket) => bucket.label) : [geometry.buckets[0]!.label, ...(geometry.buckets.length > 1 ? [geometry.buckets[geometry.buckets.length - 1]!.label] : [])])).map((label, index) => <HappierText key={index} style={{ ...text.caption, ...(props.showPointLabels ? { ...(props.barSlotWidth ? { width: props.barSlotWidth } : { flex: 1 }), textAlign: 'center' } : {}) }}>{label}</HappierText>)}
-    </View> : null}
+    </View>
+    : <View testID={props.testID ? `${props.testID}-axis` : undefined}
+      style={{ position: 'relative', width: plotWidth, height: text.caption.lineHeight, marginTop: axisTop }}>
+      {plotWidth > 0 ? axisTicks.map((tick) => {
+        const x = geometry.xAt(tick.bucket);
+        // A tick at either end of the plot reads inward from its edge, as a bar's edge tick does.
+        const place: HappierPortableStyle = x <= AXIS_TICK_REACH_PX / 2 ? { left: 0, textAlign: 'left' }
+          : x >= plotWidth - AXIS_TICK_REACH_PX / 2 ? { right: 0, textAlign: 'right' }
+            : { left: x - AXIS_TICK_REACH_PX, width: AXIS_TICK_REACH_PX * 2, textAlign: 'center' };
+        return <HappierText key={tick.bucket} testID={axisId(tick.bucket)} style={{ ...text.caption, position: 'absolute', ...place }}>{tick.label}</HappierText>;
+      }) : null}
+    </View>;
+  const chartBody = <View>
+    {plot}
+    {showAxis && geometry.buckets.length ? axis : null}
   </View>;
   return <View testID={props.testID} accessible={nativeInline ? true : undefined}
     accessibilityRole={threshold || props.mirrored || props.liveMotion ? 'image' : undefined}

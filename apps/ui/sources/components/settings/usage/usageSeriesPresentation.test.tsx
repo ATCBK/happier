@@ -5,7 +5,7 @@ import { StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 import { pressTestInstance, renderScreen } from '@/dev/testkit';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { lightTheme } from '@/theme';
-import { fillUsageMixCalendar, fillUsageTrendCalendar, usageSeriesFrame, usageSourceTimelineSeries, usageVolumeSeries, useUsageSeriesLens, type UsageSeriesChoice } from './usageSeriesPresentation';
+import { fillUsageMixCalendar, fillUsageTrendCalendar, usageAxisTicks, usageSeriesFrame, usageSourceTimelineSeries, usageVolumeSeries, useUsageSeriesLens, type UsageSeriesChoice } from './usageSeriesPresentation';
 import type { UsageAnalyticsCoverage } from '@happier-dev/protocol';
 
 const coverage = (startMs: number, endMs: number, complete: boolean): UsageAnalyticsCoverage => ({
@@ -169,5 +169,17 @@ describe('usage projection into the shared series renderer', () => {
             'tokens', 'Tokens', lightTheme.colors.text.link, 840);
         expect(series[0]!.points[0]!.label).toBe(new Intl.DateTimeFormat(undefined,
             { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 8, 28))));
+    });
+});
+
+describe('usage axis ticks', () => {
+    const week = ['Oct 10', 'Oct 11', 'Oct 12', 'Oct 13', 'Oct 14', 'Oct 15', 'Oct 16'];
+    it('names each label by the bucket it belongs to, never closer than two buckets', () => {
+        expect(usageAxisTicks(week, 'Today')).toEqual([
+            { label: 'Oct 10', bucket: 0 }, { label: 'Oct 12', bucket: 2 }, { label: 'Oct 14', bucket: 4 }, { label: 'Today', bucket: 6 },
+        ]);
+        const month = usageAxisTicks(Array.from({ length: 30 }, (_, day) => `d${day}`));
+        expect(month.map((tick) => tick.bucket)).toEqual([0, 7, 15, 22, 29]);
+        expect(month.every((tick) => tick.label === `d${tick.bucket}`)).toBe(true);
     });
 });

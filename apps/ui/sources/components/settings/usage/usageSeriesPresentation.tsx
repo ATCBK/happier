@@ -133,13 +133,16 @@ export function fillUsageTrendCalendar(points: readonly UsageCalendarTrendPoint[
     });
 }
 
-/** Up to five evenly spaced bucket labels for the axis, ending on the last bucket. */
-export function usageAxisTicks(labels: readonly string[], lastLabel?: string): readonly string[] {
+/** Up to five evenly spaced bucket labels for the axis, each on its own bucket (never closer than two buckets apart, so neighbours
+ * keep their room) and ending on the last bucket. */
+export function usageAxisTicks(labels: readonly string[], lastLabel?: string): readonly Readonly<{ label: string; bucket: number }>[] {
     if (labels.length === 0) return [];
-    const count = Math.min(5, labels.length);
-    const ticks = Array.from({ length: count }, (_, index) =>
-        labels[count === 1 ? 0 : Math.round(index * (labels.length - 1) / (count - 1))]!);
-    if (lastLabel) ticks[ticks.length - 1] = lastLabel;
+    const count = Math.min(5, labels.length, Math.max(2, Math.floor((labels.length - 1) / 2) + 1));
+    const ticks = Array.from({ length: count }, (_, index) => {
+        const bucket = count === 1 ? 0 : Math.round(index * (labels.length - 1) / (count - 1));
+        return { label: labels[bucket]!, bucket };
+    });
+    if (lastLabel) ticks[ticks.length - 1] = { ...ticks[ticks.length - 1]!, label: lastLabel };
     return ticks;
 }
 
