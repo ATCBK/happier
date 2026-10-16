@@ -55,6 +55,17 @@ describe('Session creation Agent preconditions', () => {
 });
 
 describe('Session creation Provider recovery', () => {
+  it('keeps a bounded incompatibility predicate only on a nonretryable incompatible target', () => {
+    const result = { type: 'error', code: 'incompatible_target', retryable: false,
+      incompatibleTarget: { reason: 'target_preparation_invalid_result' } };
+    expect(SessionSpawnNewResultV1Schema.safeParse(result)).toMatchObject({ success: true, data: result });
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result, code: 'spawn_failed' }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result, retryable: true }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      incompatibleTarget: { reason: 'unbounded_exception_message' } }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      incompatibleTarget: { reason: 'target_preparation_invalid_result', response: 'private' } }).success).toBe(false);
+  });
   it('retains terminal-host setup recovery only for nonretryable incompatible targets', () => {
     const terminalHostError = { kind: 'terminal_host_unavailable', host: 'herdr', reason: 'installation_unavailable' };
     const result = { type: 'error', code: 'incompatible_target', retryable: false, terminalHostError };
