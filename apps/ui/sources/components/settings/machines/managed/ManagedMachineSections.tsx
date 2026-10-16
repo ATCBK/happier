@@ -590,10 +590,12 @@ export function ManagedMachineSections(props: SectionProps) {
             })} onMove={moveController} /> : null}
         {/* A phone reads the receipt right after; the same recipe rows above it would repeat it. */}
         {compact ? null : <ManagedMachineRecipeSection testID="managed-machine.recipe" rows={recipeRows} />}
+        {/* The state row owns Check now whenever it offers it; the observation row then only says how fresh the facts are. */}
         {machine.observation ? <ItemGroup><Item testID="managed-machine.observation" mode="info" showChevron={false}
             title={t('surfaceState.asOf', { time: formatAsOfTime(machine.observation.observedAt) })}
-            rightElement={<RoundButton title={t('managedMachines.inspect.checkNow')} display="inverted" size="small"
-                testID="managed-machine.observation-check" onPress={inspect} />} /></ItemGroup> : null}
+            rightElement={describeManagedCreation(machine, creationContext).actions.includes('checkNow') ? undefined
+                : <RoundButton title={t('managedMachines.inspect.checkNow')} display="inverted" size="small"
+                    testID="managed-machine.observation-check" onPress={inspect} />} /></ItemGroup> : null}
         {currentRebuildReview ? <>
             {(['host', 'child'] as const).map(scope => <ItemGroup key={scope} title={t(`managedMachines.rebuildReview.${scope}`)}>
                 {currentRebuildReview.effects.map((effect, index) => effect.scope === scope ? <Item key={index}

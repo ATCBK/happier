@@ -359,6 +359,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         limitNone: "Без ограничения одновременных",
         limitHelp: "Остановленный ресурс может всё ещё оплачиваться. Это не бюджет.",
         fromRevision: ({ name, revision }: { name: string; revision: number }) => `Из ${name} · версия ${revision}`,
+        nameRevision: ({ name, revision }: { name: string; revision: number }) => `${name} · версия ${revision}`,
         runningAtOnce: "Одновременно",
         atMost: "Не более",
         controllerRow: "Машина",

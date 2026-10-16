@@ -366,6 +366,7 @@ export const managedMachinesEn = {
         limitNone: "No simultaneous limit",
         limitHelp: "A stopped resource can still be billed. This is not a spending budget.",
         fromRevision: ({ name, revision }: { name: string; revision: number }) => `Made from ${name} · revision ${revision}`,
+        nameRevision: ({ name, revision }: { name: string; revision: number }) => `${name} · revision ${revision}`,
         runningAtOnce: "Running at once",
         atMost: "At most",
         controllerRow: "Machine",

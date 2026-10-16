@@ -359,6 +359,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         limitNone: "无同时运行限制",
         limitHelp: "已停止的资源仍可能计费。这不是支出预算。",
         fromRevision: ({ name, revision }: { name: string; revision: number }) => `来自 ${name} · 版本 ${revision}`,
+        nameRevision: ({ name, revision }: { name: string; revision: number }) => `${name} · 版本 ${revision}`,
         runningAtOnce: "同时运行",
         atMost: "最多",
         controllerRow: "机器",

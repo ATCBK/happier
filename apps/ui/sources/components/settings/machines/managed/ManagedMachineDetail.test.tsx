@@ -1024,7 +1024,9 @@ describe('managed Machine detail', () => {
             await act(async () => keep.onChange({ retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true }));
             expect(policyWrites).toEqual([]);
             expect(screen.tree.findByType(MachineConfigurationReceipt).props.model.name).toBe('Retained BYOC');
-            expect(screen.findByTestId('managed-machine.observation-check')).not.toBeNull();
+            // One Check now: the state row owns it; the observation row only dates the facts.
+            expect(screen.findByTestId('managed-machine.progress:checkNow')).not.toBeNull();
+            expect(screen.findByTestId('managed-machine.observation-check')).toBeNull();
         } else {
             expect(keep.defaultPolicy).toBeDefined();
             expect(keep.finiteOnly === true).toBe(finite);
@@ -1094,7 +1096,9 @@ describe('managed Machine detail', () => {
         }) : undefined);
         if (observed) {
             expect(screen.getTextContent()).toContain(t('surfaceState.asOf', { time: formatAsOfTime(machine.observation!.observedAt) }));
-            expect(screen.findByTestId('managed-machine.observation-check')).not.toBeNull();
+            // One Check now: the state row owns it; the observation row only dates the facts.
+            expect(screen.findByTestId('managed-machine.progress:checkNow')).not.toBeNull();
+            expect(screen.findByTestId('managed-machine.observation-check')).toBeNull();
         }
         expect(keep.nativeDuration).toBeUndefined();
         expect(keep.policy.retention).toEqual(machine.retention);

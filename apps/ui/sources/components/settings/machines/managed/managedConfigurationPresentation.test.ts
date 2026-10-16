@@ -152,6 +152,13 @@ describe('one managed configuration receipt projection', () => {
         // Creation-time headroom no longer describes the host.
         expect(receipt.cost).toEqual({ kind: 'local', computer: t('common.unknown'), meters: [] });
     });
+    it('names the preset in its receipt row by name and revision alone, beside the "Made from" label', () => {
+        const receipt = buildManagedConfigurationReceipt({ launch, providerTitle: 'Compute', reviewedFacts: { ...reviewedFacts,
+            preset: { id: 'recipe', revision: 3, name: 'Build box' } } });
+        expect(receipt.facts.find(fact => fact.id === 'preset')).toMatchObject({ label: t('machinePresets.madeFrom'),
+            value: t('machinePresets.nameRevision', { name: 'Build box', revision: 3 }) });
+        expect(receipt.facts.find(fact => fact.id === 'preset')?.value).toBe('Build box · revision 3');
+    });
     it('keeps the captured native duration unless the created detail already presents its live lifetime', () => {
         const facts = { ...reviewedFacts, nativeFacts: { duration: { id: 'native-duration', title: '2 hours', afterMs: 7_200_000 } } };
         const input = { launch, providerTitle: 'Compute', reviewedFacts: facts };

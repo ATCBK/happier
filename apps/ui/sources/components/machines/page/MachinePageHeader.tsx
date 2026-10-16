@@ -357,7 +357,7 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
                 kind: 'card',
                 title: t('machine.replacementRepair.pickerTitle'),
                 testID: 'machine-replacement-picker-modal',
-                scrollHost: 'body',
+                scrollHost: 'bounded',
                 bodyScroll: 'auto',
                 dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86, size: 'md' },
             },

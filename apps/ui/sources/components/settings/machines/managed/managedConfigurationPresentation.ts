@@ -86,7 +86,9 @@ export function buildManagedConfigurationReceipt(input: ManagedConfigurationRece
         : t('managedMachines.receipt.eachOne', { revision: preset.revision }) : null;
     // A created machine names its preset in the caption, where the lab puts it.
     // A preset's own receipt is captioned with its revision already; the row is for a machine about to be made from one.
-    if (presetLine && !input.created && !input.caption) rows.push({ id: 'preset', label: t('machinePresets.madeFrom'), value: presetLine });
+    // The row is already labelled "Made from this preset", so its value is the preset alone (the caption says "Made from ...").
+    if (preset && presetLine && !input.created && !input.caption) rows.push({ id: 'preset', label: t('machinePresets.madeFrom'),
+        value: preset.name ? t('machinePresets.nameRevision', { name: preset.name, revision: preset.revision }) : presetLine });
     if (facts) {
         if (facts.nativeFacts?.monthlyCapStatus) rows.push({ id: 'monthly-cap', label: t('managedMachines.billing.monthlyCap'),
             value: t(facts.nativeFacts.monthlyCapStatus === 'none' ? 'managedMachines.billing.noMonthlyCap' : 'managedMachines.billing.unknownMonthlyCap') });

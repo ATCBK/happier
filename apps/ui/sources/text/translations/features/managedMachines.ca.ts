@@ -359,6 +359,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         limitNone: "Sense límit simultani",
         limitHelp: "Un recurs aturat encara es pot facturar. No és un pressupost.",
         fromRevision: ({ name, revision }: { name: string; revision: number }) => `Creada a partir de ${name} · revisió ${revision}`,
+        nameRevision: ({ name, revision }: { name: string; revision: number }) => `${name} · revisió ${revision}`,
         runningAtOnce: "Alhora",
         atMost: "Com a màxim",
         controllerRow: "Màquina",

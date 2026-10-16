@@ -359,6 +359,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         limitNone: "Kein gleichzeitiges Limit",
         limitHelp: "Eine gestoppte Ressource kann weiter berechnet werden. Das ist kein Budget.",
         fromRevision: ({ name, revision }: { name: string; revision: number }) => `Aus ${name} · Revision ${revision}`,
+        nameRevision: ({ name, revision }: { name: string; revision: number }) => `${name} · Revision ${revision}`,
         runningAtOnce: "Gleichzeitig laufend",
         atMost: "Höchstens",
         controllerRow: "Rechner",

@@ -359,6 +359,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         limitNone: "同時実行の上限なし",
         limitHelp: "停止中のリソースにも課金されることがあります。これは予算ではありません。",
         fromRevision: ({ name, revision }: { name: string; revision: number }) => `${name} から作成 · リビジョン ${revision}`,
+        nameRevision: ({ name, revision }: { name: string; revision: number }) => `${name} · リビジョン ${revision}`,
         runningAtOnce: "同時実行",
         atMost: "最大",
         controllerRow: "マシン",
