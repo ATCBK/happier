@@ -101,6 +101,7 @@ export function useIdentityAdministration(
     React.useEffect(() => subscribeHomeAccountChange((event) => {
         if (event.serverId !== scope.serverId) return;
         if (teamId === null ? !isHomeAdministrationAccountChange(event)
+            && !event.entityIds?.includes(TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1)
             : event.entityIds !== undefined && !event.entityIds.includes(TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1)) return;
         refresh();
     }), [refresh, scope.serverId, teamId]);

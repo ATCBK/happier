@@ -160,14 +160,28 @@ afterEach(() => {
 });
 
 describe('createIdentityAdministrationClient', () => {
-    it('refreshes Home company connections on the Home governance wake', async () => {
+    it('refreshes Home company usage on Home governance and exact-Home Team wakes', async () => {
         const serverId = (await upsertServerProfile({ serverUrl: 'https://home-company-wake.example', name: 'Company Home' })).id;
         const scope = createServerAccountScope(serverId, 'account-1')!;
-        runtimeFetchMock.mockImplementation(async () => new Response(JSON.stringify({ items: [], eligibleProviders: [] }), { status: 200 }));
+        let teamsUsingIt: { teamId: string; name: string }[] = [];
+        runtimeFetchMock.mockImplementation(async () => new Response(JSON.stringify({
+            items: [{ ...connection(false), teamId: null, allowedActions: [], teamsUsingIt }], eligibleProviders: [],
+        }), { status: 200 }));
         const hook = await renderHook(() => useIdentityAdministration(scope, null));
-        await vi.waitFor(() => expect(hook.getCurrent().state.kind).toBe('ready'));
+        await vi.waitFor(() => expect(hook.getCurrent().state).toMatchObject({ kind: 'ready', items: [{ teamsUsingIt: [] }] }));
+        teamsUsingIt = [{ teamId: 'product', name: 'Product' }];
+        await act(async () => { publishHomeAccountChange('other-home', [TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1]); });
+        expect(hook.getCurrent().state).toMatchObject({ kind: 'ready', items: [{ teamsUsingIt: [] }] });
+        await act(async () => { publishHomeAccountChange(serverId, [TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1]); });
+        await vi.waitFor(() => expect(hook.getCurrent().state).toMatchObject({
+            kind: 'ready', refreshing: false, items: [{ teamsUsingIt: [{ teamId: 'product', name: 'Product' }] }],
+        }));
         await act(async () => { publishHomeAccountChange(serverId, [HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1]); });
-        await vi.waitFor(() => expect(runtimeFetchMock.mock.calls.filter(([input]) => new URL(input.url).pathname === '/v1/home/identity/connections/list')).toHaveLength(2));
+        await vi.waitFor(() => expect(runtimeFetchMock.mock.calls.filter(([input]) => new URL(input.url).pathname === '/v1/home/identity/connections/list')).toHaveLength(3));
+        await hook.unmount();
+        const reads = runtimeFetchMock.mock.calls.length;
+        await act(async () => { publishHomeAccountChange(serverId, [TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1]); });
+        expect(runtimeFetchMock.mock.calls).toHaveLength(reads);
     });
 
     it('creates a named Home WorkOS draft through the shared setup with the captured Home scope', async () => {

@@ -1,6 +1,11 @@
 import * as React from 'react';
 import type { PrincipalRefV1, SessionGrantMutationV1 } from '@happier-dev/protocol';
-import type { SessionAccessCandidatesInspectResponseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
+import type {
+    RemoveSessionAccessGrantResponseV1,
+    SetSessionAccessGrantResponseV1,
+    SetSessionAccessContextResponseV1,
+    SessionAccessCandidatesInspectResponseV1,
+} from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -293,21 +298,35 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         void migrateHistoricalLayout();
     },[currentLayoutMigration?.phase,migrateHistoricalLayout]);
     /** The one tail for a committed set/remove, whether it answered directly or through its approval. */
-    const settleCommittedMutation=React.useCallback(async(key:string,mutation:SessionGrantMutationV1|null,adds:boolean)=>{
-        // Set responses contain acknowledged values but no allowed transitions or principal summary.
-        // The authoritative list refresh supplies the complete current row before it is rendered.
-        await refresh();
+    const settleCommittedMutation=React.useCallback(async(
+        key:string,mutation:SessionGrantMutationV1|null,adds:boolean,
+        result:SetSessionAccessGrantResponseV1|RemoveSessionAccessGrantResponseV1,
+    )=>{
+        const snapshot=stateRef.current.scopeKey===scopeKey?stateRef.current.snapshot:null;
+        const subject='grant' in result?result.grant.subject:result.subject;
+        const row=snapshot?.grants.find(row=>sessionAccessSubjectKey(row.grant.subject)===key);
+        const alreadyCurrent=result.changed===false&&snapshot!==null&&sessionAccessSubjectKey(subject)===key
+            &&('grant' in result
+                ? row!==undefined&&row.grant.accessLevel===result.grant.accessLevel
+                    &&row.grant.canApprovePermissions===result.grant.canApprovePermissions
+                    &&('requiredByTeamPolicy' in row.grant?row.grant.requiredByTeamPolicy:false)
+                        ===('requiredByTeamPolicy' in result.grant?result.grant.requiredByTeamPolicy:false)
+                : row===undefined);
+        // A changed audience can change this manager's own effective capabilities;
+        // set results also omit names and allowed transitions. Keep one authoritative
+        // inspection for those details, but an already-reconciled no-op needs none.
+        if(!alreadyCurrent)await refresh();
         if(!lifetime.current||currentScope.current!==scopeKey)return;
         dispatch({type:'operation',scopeKey,key,operation:{kind:'idle'}});
         dispatch({type:'confirm',scopeKey,key:null});
         if(adds)setQuery('');
-        setDirectoryRevision(value=>value+1);
+        if(!alreadyCurrent)setDirectoryRevision(value=>value+1);
         // A newly authorized recipient can hold a grant long before it can open
         // anything, so the key owner's pass starts from the acknowledged audience.
         // Removing a grant leaves its stored tuple inert at that owner and needs
         // no pass. This deliberately follows the authoritative refresh: the worklist
         // is only worth fetching once the Home agrees the grant exists.
-        if(mutation)prepareEncryptedAccess(undefined,'pass');
+        if(mutation&&result.changed)prepareEncryptedAccess(undefined,'pass');
     },[lifetime,prepareEncryptedAccess,refresh,scopeKey]);
     const settleFailedMutation=React.useCallback(async(
         key:string,mutation:SessionGrantMutationV1|null,subject:PrincipalRefV1,issue:SessionAccessUiError,
@@ -340,9 +359,9 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
             }
         }
         try {
-            if(mutation)await client.set(mutation);else await client.remove(subject);
+            const result=mutation?await client.set(mutation):await client.remove(subject);
             if(!lifetime.current||currentScope.current!==scopeKey)return;
-            await settleCommittedMutation(key,mutation,adds);
+            await settleCommittedMutation(key,mutation,adds,result);
         }catch(error){
             if(!lifetime.current||currentScope.current!==scopeKey)return;
             if(error instanceof SessionAccessApprovalPendingError){
@@ -354,7 +373,7 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
                     mutation?{sessionId:input.sessionId,...mutation}:{sessionId:input.sessionId,subject},
                     {
                         isCurrent:isScopeCurrent,
-                        onSucceeded:()=>settleCommittedMutation(key,mutation,adds),
+                        onSucceeded:(value)=>settleCommittedMutation(key,mutation,adds,value),
                         onFailed:(issue)=>{if(issue)void settleFailedMutation(key,mutation,subject,issue);},
                     });
                 return;
@@ -381,8 +400,11 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         if (!snapshot?.effectiveAccess.capabilities.manageAccess || snapshot.primaryTeamId === teamId) return;
         setContextOperation('saving');
         setContextError(undefined);
-        const settleCommittedContext = async () => {
-            await refresh();
+        const settleCommittedContext = async (result: SetSessionAccessContextResponseV1) => {
+            const acknowledged=stateRef.current.scopeKey===scopeKey?stateRef.current.snapshot:null;
+            // A context transition can add the Team-policy floor or clear a
+            // responsibility. Those projections are not present in this response.
+            if(result.changed||!acknowledged||acknowledged.primaryTeamId!==result.primaryTeamId)await refresh();
             if (lifetime.current && currentScope.current === scopeKey) {
                 setContextOperation('idle');
                 setPendingContextTeamId(undefined);
@@ -404,9 +426,9 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
                 }
             }
         };
-        void client.setContext(teamId).then(async () => {
+        void client.setContext(teamId).then(async (result) => {
             if (!lifetime.current || currentScope.current !== scopeKey) return;
-            await settleCommittedContext();
+            await settleCommittedContext(result);
         }).catch(async (error) => {
             if (!lifetime.current || currentScope.current !== scopeKey) return;
             if (error instanceof SessionAccessApprovalPendingError) {
@@ -618,8 +640,8 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         return projection.grants.find((row)=>row.grant.kind==='account'&&row.grant.accountId===accountId)?.principal.displayName;
     },[projection.grants,projection.owner]);
     // A recipient reachable only through a Team grant has no grant row at all, so the
-    // Team's own bounded member lookup names the ones currently on screen. Everyone
-    // else — Group-only and out-of-Team recipients — keeps the identifier.
+    // principal-resolution owner names the ones currently on screen. The adapter
+    // only renders unmatched recipients in the explicitly opened all-people census.
     const sessionTeamIds=React.useMemo(
         ()=>current.snapshot?.grants.flatMap((row)=>row.grant.subject.kind==='team'?[row.grant.subject.teamId]:[])??[],
         [current.snapshot],
@@ -631,7 +653,8 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
     const teamRecipientLabelFor=useSessionAccessTeamRecipientLabels({
         scope:input.scope,teamIds:sessionTeamIds,visibleRecipientAccountIds,
         isAlreadyNamed:(accountId)=>grantedDisplayNameForAccount(accountId)!==undefined,
-        enabled:availability==='available'&&current.snapshot?.effectiveAccess.capabilities.manageAccess===true,
+        enabled:availability==='available'&&current.snapshot?.effectiveAccess.capabilities.manageAccess===true
+            &&current.recipients.view==='all',
     });
     const displayNameForAccount=React.useCallback(
         (accountId:string)=>grantedDisplayNameForAccount(accountId)??teamRecipientLabelFor(accountId),

@@ -1,6 +1,7 @@
 import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { TeamSummaryV1Schema } from '../teams/projections.js';
 import {
   HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1,
 } from '../teams/identity/actionIds.js';
@@ -34,6 +35,11 @@ export { HOME_IDENTITY_ACTION_IDS_V1, HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V
 export const HomeIdentityConnectionV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionV1Schema, {
   teamId: z.null(),
   allowedActions: z.array(z.enum(HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1)).check(z.maxLength(HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1.length), z.refine((actions) => new Set(actions).size === actions.length)),
+  /** Explicit Team authentication-policy references; omission by an older Home is unknown. */
+  teamsUsingIt: z.optional(z.array(z.strictObject({
+    teamId: TeamSummaryV1Schema.shape.id,
+    name: TeamSummaryV1Schema.shape.name,
+  }))),
 }));
 export type HomeIdentityConnectionV1 = z.infer<typeof HomeIdentityConnectionV1Schema>;
 export const HomeIdentityEligibleProviderV1Schema = lazyZodSchema(() => IdentityEligibleProviderV1Schema.check(z.refine((value) => value.owner === 'home' && !(value.availability.status === 'available'

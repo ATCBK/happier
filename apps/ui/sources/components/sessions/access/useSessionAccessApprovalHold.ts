@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { SessionAccessActionResultById } from '@happier-dev/plugin-sdk/actions';
 import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 import { createActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
@@ -46,28 +47,28 @@ export function useSessionAccessApprovalHold(input: Readonly<{
     currentRef.current = current;
     const requestApproval = approval.requestApproval;
 
-    const hold = React.useCallback((
+    const hold = React.useCallback(<TActionId extends SessionAccessApprovalActionId>(
         routed: SessionAccessApprovalPendingError,
-        actionId: SessionAccessApprovalActionId,
+        actionId: TActionId,
         expectedInput: unknown,
         settle: Readonly<{
             isCurrent: () => boolean;
-            onSucceeded: () => Promise<void>;
+            onSucceeded: (value: SessionAccessActionResultById[TActionId]) => Promise<void>;
             /** `null` is the person's own decline or cancel: nothing changed. */
             onFailed: (issue: SessionAccessUiError | null) => void;
         }>,
     ) => {
         heldRef.current = true;
         setPending({ scopeKey, artifactId: routed.artifactId, serverId });
-        requestApproval(createActionApprovalContinuation<unknown, SessionAccessApprovalActionId>({
+        requestApproval(createActionApprovalContinuation<SessionAccessActionResultById[TActionId], TActionId>({
             artifactId: routed.artifactId,
             actionId,
             scope: { serverId, accountId },
             expectedInput,
-            onSucceeded: async () => {
+            onSucceeded: async (value) => {
                 if (!settle.isCurrent()) return;
                 setPending(null);
-                await settle.onSucceeded();
+                await settle.onSucceeded(value);
             },
             onFailed: (code) => {
                 if (!settle.isCurrent()) return;

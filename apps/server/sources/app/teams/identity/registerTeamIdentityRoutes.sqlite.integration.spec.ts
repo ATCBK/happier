@@ -12,7 +12,8 @@ import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
-import { registerTeamIdentityRoutes } from "./registerTeamIdentityRoutes";
+import { registerScopedIdentityRoutes, registerTeamIdentityRoutes } from "./registerTeamIdentityRoutes";
+import { HomeIdentityConnectionListResultV1Schema, HomeIdentityConnectionV1Schema } from "@happier-dev/protocol/home";
 import { TEAM_CHANGE_ENTITY_ID } from "../teamChanges";
 
 describe("Team identity WorkOS routes", () => {
@@ -41,6 +42,7 @@ describe("Team identity WorkOS routes", () => {
         });
         const generateLink = vi.fn(async () => ({ link: "https://setup.workos.test/portal" }));
         app = createAuthenticatedTestApp();
+        registerScopedIdentityRoutes(app, {}, "home");
         registerTeamIdentityRoutes(app, {
             resolvePlatform: () => ({
                 available: true,
@@ -75,6 +77,73 @@ describe("Team identity WorkOS routes", () => {
     afterAll(async () => {
         if (app) await app.close();
         if (harness) await harness.close();
+    });
+
+    it("projects the exact Teams using a Home identity connection and refreshes policy changes", async () => {
+        const owner = await db.account.create({ data: { homeRole: "owner" } });
+        const admin = await db.account.create({ data: { homeRole: "admin" } });
+        const ordinary = await db.account.create({ data: {} });
+        const provider = await db.identityProviderInstance.create({ data: {
+            kind: "workos_sso", displayName: "Company SSO", config: { v: 1, kind: "workos_sso" },
+        } });
+        const connection = await db.teamIdentityConnection.create({ data: {
+            teamId: null, providerInstanceId: provider.id,
+            externalReference: { v: 1, kind: "workos_sso", organizationId: null, connectionId: null },
+            settings: { v: 1, kind: "workos_sso" },
+        } });
+        const acceptedPolicy = (methodId: string) => ({
+            v: 1, mode: "restricted", accepted: [{ kind: "home_method", methodId }],
+        });
+        const alpha = await db.team.create({ data: { name: "Alpha", authenticationPolicy: acceptedPolicy(provider.id) } });
+        const beta = await db.team.create({ data: {
+            name: "Beta", archivedAt: new Date(),
+            authenticationPolicy: acceptedPolicy(provider.id.toUpperCase()),
+        } });
+        await db.team.createMany({ data: [
+            { name: "Inherited sign-in" },
+            { name: "Another sign-in", authenticationPolicy: acceptedPolicy("another_provider") },
+            { name: "Unreadable policy", authenticationPolicy: { v: 1, mode: "restricted", accepted: [] } },
+        ] });
+        const list = async (accountId: string) => await app.inject({
+            method: "POST", url: "/v1/home/identity/connections/list",
+            headers: { "x-test-user-id": accountId }, payload: { v: 1 },
+        });
+        try {
+            const response = await list(owner.id);
+            expect(response.statusCode).toBe(200);
+            const projected = HomeIdentityConnectionListResultV1Schema.parse(response.json());
+            expect(projected.items.find((item) => item.id === connection.id)).toMatchObject({
+                teamsUsingIt: [{ teamId: alpha.id, name: "Alpha" }, { teamId: beta.id, name: "Beta" }],
+            });
+            const item = projected.items.find((item) => item.id === connection.id);
+            if (!item) throw new Error("Home identity connection missing");
+            const { teamsUsingIt: _usage, ...olderProjection } = item;
+            expect(HomeIdentityConnectionV1Schema.parse(olderProjection)).toEqual(olderProjection);
+            const adminResponse = await list(admin.id);
+            expect(adminResponse.statusCode).toBe(200);
+            expect(HomeIdentityConnectionListResultV1Schema.parse(adminResponse.json()).items
+                .find((item) => item.id === connection.id)).toMatchObject({
+                    allowedActions: [],
+                    teamsUsingIt: [{ teamId: alpha.id, name: "Alpha" }, { teamId: beta.id, name: "Beta" }],
+                });
+            expect((await list(ordinary.id)).statusCode).toBe(403);
+            await db.team.update({ where: { id: alpha.id }, data: { authenticationPolicy: acceptedPolicy("another_provider") } });
+            await db.team.update({ where: { id: beta.id }, data: { name: "Beta renamed" } });
+            const refreshed = await list(owner.id);
+            expect(refreshed.statusCode).toBe(200);
+            expect(HomeIdentityConnectionListResultV1Schema.parse(refreshed.json()).items
+                .find((item) => item.id === connection.id)).toMatchObject({
+                    teamsUsingIt: [{ teamId: beta.id, name: "Beta renamed" }],
+                });
+            await db.team.update({ where: { id: beta.id }, data: { authenticationPolicy: { v: 1, mode: "inherit" } } });
+            const unused = await list(owner.id);
+            expect(unused.statusCode).toBe(200);
+            expect(HomeIdentityConnectionListResultV1Schema.parse(unused.json()).items
+                .find((item) => item.id === connection.id)).toMatchObject({ teamsUsingIt: [] });
+        } finally {
+            await db.teamIdentityConnection.delete({ where: { id: connection.id } });
+            await db.identityProviderInstance.delete({ where: { id: provider.id } });
+        }
     });
 
     it("keeps Team identity administration membership-scoped and maps credential qualification distinctly", async () => {

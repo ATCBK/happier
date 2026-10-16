@@ -2,19 +2,19 @@ import * as React from 'react';
 
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { listTeamMembers } from '@/sync/ops/teams/teamMemberOperations';
+import { resolveSessionAccessPrincipals } from '@/sync/api/session/sessionAccessApi';
+
+const NO_LABELS: Readonly<Record<string, string | null>> = Object.freeze({});
 
 /**
  * Names the recipients an access manager can see but Lane 04's grant projection cannot.
  *
  * A Session granted to a Team has one grant row and many recipients, so every recipient
  * reachable only through that Team has no principal row to take a name from and the
- * encryption resource deliberately carries none. This asks the Home the same bounded
- * `teams.members.list` question the responsibility picker and the Home governance picker
- * already ask — exact `accountId` equality, one Account at a time — and only for the
- * recipients currently on screen. It never pages a roster, never caches a directory, and
- * never invents a label: an Account the Team lookup does not answer for keeps its
- * identifier, which is what a Group-only or out-of-Team recipient still shows.
+ * encryption resource deliberately carries none. The existing principal-resolution
+ * owner admits discoverable identities (including shared-Team colleagues) together.
+ * Omitted or unnamed Accounts keep their identifiers; this does not make them eligible
+ * for a new grant or turn the encryption diagnostic into a Team directory.
  */
 export function useSessionAccessTeamRecipientLabels(input: Readonly<{
     scope: ServerAccountScope;
@@ -26,59 +26,55 @@ export function useSessionAccessTeamRecipientLabels(input: Readonly<{
     isAlreadyNamed: (accountId: string) => boolean;
     enabled: boolean;
 }>): (accountId: string) => string | undefined {
-    const { enabled, isAlreadyNamed, scope } = input;
-    const scopeKey = `${scope.serverId} ${scope.accountId}`;
-    const teamKey = [...input.teamIds].sort().join(',');
-    const visibleKey = input.visibleRecipientAccountIds.join(',');
-    // A resolved answer and a "this Team does not know them" answer are both final for
+    const { enabled, isAlreadyNamed } = input;
+    const { serverId, accountId } = input.scope;
+    const teamKey = JSON.stringify([...input.teamIds].sort());
+    const scopeKey = JSON.stringify([serverId, accountId, teamKey]);
+    const visibleKey = JSON.stringify(input.visibleRecipientAccountIds);
+    // A resolved identity and an omitted identity are both final for
     // this mounted scope: neither is worth asking twice while the manager pages around.
-    const [labels, setLabels] = React.useState<Readonly<Record<string, string | null>>>({});
+    const [resolution, setResolution] = React.useState<Readonly<{
+        scopeKey: string; labels: Readonly<Record<string, string | null>>;
+    }>>({ scopeKey, labels: NO_LABELS });
+    const labels = resolution.scopeKey === scopeKey ? resolution.labels : NO_LABELS;
     const labelsRef = React.useRef(labels);
     labelsRef.current = labels;
     const isAlreadyNamedRef = React.useRef(isAlreadyNamed);
     isAlreadyNamedRef.current = isAlreadyNamed;
-    const lifetime = React.useRef(scopeKey);
-
-    React.useEffect(() => {
-        lifetime.current = scopeKey;
-        setLabels({});
-    }, [scopeKey]);
+    const visibleIdsRef = React.useRef(input.visibleRecipientAccountIds);
+    visibleIdsRef.current = input.visibleRecipientAccountIds;
 
     React.useEffect(() => {
         if (!enabled) return;
-        const teamIds = teamKey.length > 0 ? teamKey.split(',') : [];
-        if (teamIds.length === 0) return;
-        const unresolved = [...new Set(visibleKey.length > 0 ? visibleKey.split(',') : [])]
+        if (teamKey === '[]') return;
+        const unresolved = [...new Set(visibleIdsRef.current)]
             .filter((accountId) => accountId.length > 0
                 && labelsRef.current[accountId] === undefined
                 && !isAlreadyNamedRef.current(accountId));
         if (unresolved.length === 0) return;
-        const requestScope = scopeKey;
-        let cancelled = false;
-        void (async () => {
+        const abort = new AbortController();
+        void resolveSessionAccessPrincipals({
+            scope: { serverId, accountId }, availability: 'available',
+            subjects: unresolved.map(accountId => ({ kind: 'account', accountId })),
+            signal: abort.signal,
+        }).then(principals => {
+            if (abort.signal.aborted) return;
+            const accounts = new Map(principals.flatMap(principal => principal.kind === 'account'
+                ? [[principal.accountId, principal] as const] : []));
             const resolved: Record<string, string | null> = {};
             for (const accountId of unresolved) {
-                let label: string | null = null;
-                for (const teamId of teamIds) {
-                    const outcome = await listTeamMembers({
-                        scope, address: { serverId: scope.serverId, teamId }, filter: 'all', query: accountId, limit: 1,
-                    });
-                    if (cancelled || lifetime.current !== requestScope) return;
-                    if (outcome.kind !== 'succeeded') continue;
-                    const membership = outcome.value.items.find((item) => item.accountId === accountId);
-                    if (!membership) continue;
-                    // A membership with no display profile at all stays on its
-                    // identifier: the existing fallback is honest, a generic word is not.
-                    label = formatAccountDisplayName(membership.account);
-                    break;
-                }
-                resolved[accountId] = label;
+                const account = accounts.get(accountId);
+                resolved[accountId] = account ? formatAccountDisplayName(account) : null;
             }
-            if (cancelled || lifetime.current !== requestScope) return;
-            setLabels((previous) => ({ ...previous, ...resolved }));
-        })();
-        return () => { cancelled = true; };
-    }, [enabled, scope, scopeKey, teamKey, visibleKey]);
+            setResolution(previous => ({ scopeKey, labels: {
+                ...(previous.scopeKey === scopeKey ? previous.labels : NO_LABELS), ...resolved,
+            } }));
+        }).catch(() => {
+            // Identity discovery is optional presentation. Unavailable or unsupported
+            // Homes retain identifiers and can be asked again on the next visible page.
+        });
+        return () => abort.abort();
+    }, [accountId, enabled, serverId, scopeKey, teamKey, visibleKey]);
 
     return React.useCallback(
         (accountId: string) => labels[accountId] ?? undefined,

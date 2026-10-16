@@ -1484,16 +1484,6 @@
       "types": "./dist/actions/diagnosticsActionFamily.d.ts",
       "default": "./dist/actions/diagnosticsActionFamily.js"
     },
-    "./actions/sessionCanvasActionFamily": {
-      "happier-source": "./src/actions/sessionCanvasActionFamily.ts",
-      "types": "./dist/actions/sessionCanvasActionFamily.d.ts",
-      "default": "./dist/actions/sessionCanvasActionFamily.js"
-    },
-    "./actions/sessionCanvasActionIds": {
-      "happier-source": "./src/actions/sessionCanvasActionIds.ts",
-      "types": "./dist/actions/sessionCanvasActionIds.d.ts",
-      "default": "./dist/actions/sessionCanvasActionIds.js"
-    },
     "./actions/sessionModeIds": {
       "happier-source": "./src/actions/sessionModeIds.ts",
       "types": "./dist/actions/sessionModeIds.d.ts",

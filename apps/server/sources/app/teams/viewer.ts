@@ -11,9 +11,12 @@ import type { TeamRecord } from "./projections";
  *
  * This is the read-oriented view of the canonical Team actor context: the same
  * single lookup and the same capability decision, narrowed to what a route that
- * may only serve readable Teams needs. It deliberately carries no denied
- * context, because its whole contract is that an unreadable Team is indistinct
+ * may serve Team summaries (including a self-leave-only summary) needs. It carries
+ * no denied context, because its whole contract is that an unreadable Team is indistinct
  * from an absent one.
+ *
+ * A leave-only summary does not confer `viewTeam`: every protected read and
+ * mutation must still check its own capability.
  */
 export type TeamViewer = Readonly<{
     team: TeamRecord;
@@ -36,7 +39,7 @@ export type TeamViewer = Readonly<{
  * context directly instead of re-deriving the collapse.
  */
 export function toTeamViewer(context: TeamActorContext | null): TeamViewer | null {
-    if (!context || !context.capabilities.viewTeam) return null;
+    if (!context || (!context.capabilities.viewTeam && !context.capabilities.leave)) return null;
     return {
         team: context.team,
         viewerRole: context.membership?.role ?? null,

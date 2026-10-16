@@ -108,6 +108,22 @@ not read or mutation authority, and retires with the Account's trigger state.
 Without removed-revision evidence, clients keep revalidation and the existing
 ordering limitation for previously unseen higher revisions.
 
+### Home identity connection Team usage (0.3 development)
+
+Home identity connections may include `teamsUsingIt`, an optional read-only list
+of `{ teamId, name }` facts from explicit Team authentication-policy Home-method
+references. Current projections share that usage reader with removal admission
+and resolve it once for the connection set. An unavailable method or an archived
+Team can still have a configured reference; inherited Home sign-in choices are
+not explicit uses. This list grants no Team content or roster authority.
+
+The Home connection V1 envelope and each Team identity remain closed. The
+generated SDK DTOs project the optional field from that same Protocol schema;
+no mutation input, persisted shape or wire epoch changes. Omission by an older
+Home means unknown usage, while an empty list means no explicit references.
+Readers continue accepting omission. This is an unreleased 0.3 projection, not
+a promise that older clients can execute the new Home identity operations.
+
 ### Quota recovery details (0.3 development)
 
 The moving 0.2 predecessor keeps optional `recoveryCreditDetails` outside its

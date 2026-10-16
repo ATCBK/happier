@@ -735,9 +735,12 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
     const source = TeamCredentialSourceBindingV1Schema.safeParse(rawSource);
     const policy = TeamCredentialRequestPolicyV1Schema.nullable().safeParse(rawPolicy);
     if (!source.success || !policy.success) return failure('resource_unavailable');
+    // The Runner's reviewed selection remains bound to its original request.
+    // Established refreshes recheck current policy above without advancing
+    // that activation identity; fresh opens still pin the resource revision.
     if (runnerSelection !== null && (
         runnerSelection.resourceId !== request.resourceId
-        || runnerSelection.revision !== resource.revision
+        || runnerSelection.revision !== request.expectedResourceRevision
         || !pluginJsonValuesEqual(runnerSelection.application, request.application)
         || runnerSelection.sourceRevision !== request.sourceRevision
     )) return failure('resource_changed');

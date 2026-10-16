@@ -478,10 +478,17 @@ function teamPolicyRequiresGrant(
  * also where the now-stale marker is cleared: there is no bulk relaxation job.
  */
 export async function teamPolicyStillRequiresGrant(tx: Tx, teamId: string): Promise<boolean> {
-    return teamPolicyRequiresGrant(await tx.team.findUnique({
-        where: { id: teamId },
-        select: { sessionCreationPolicy: true, archivedAt: true },
-    }));
+    return (await teamsPolicyStillRequireGrants(tx, [teamId])).has(teamId);
+}
+
+/** Evaluate the same required-Team floor once for a complete grant roster. */
+export async function teamsPolicyStillRequireGrants(tx: Tx, teamIds: readonly string[]): Promise<ReadonlySet<string>> {
+    if (teamIds.length === 0) return new Set();
+    const teams = await tx.team.findMany({
+        where: { id: { in: [...new Set(teamIds)] } },
+        select: { id: true, sessionCreationPolicy: true, archivedAt: true },
+    });
+    return new Set(teams.filter(teamPolicyRequiresGrant).map((team) => team.id));
 }
 
 async function resolveAffectedAccountIdsInTx(
