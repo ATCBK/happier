@@ -72,6 +72,7 @@ function buildRuntime(params: Readonly<{
   controlPortCaptures?: readonly string[] | null;
   configDir: string;
   initialModelId?: string;
+  workspaceWrites?: 'allow' | 'deny';
   publishSessionEvent?: ReturnType<typeof vi.fn>;
   sessionWriteAgentState?: ReturnType<typeof vi.fn>;
 }>) {
@@ -97,6 +98,7 @@ function buildRuntime(params: Readonly<{
     hostPreference: 'zellij',
     launchEnv: { CLAUDE_CONFIG_DIR: params.configDir },
     permissionMode: 'default',
+    workspaceWrites: params.workspaceWrites,
     ...(params.initialModelId ? { initialModelId: params.initialModelId } : {}),
     tuiControl: { timings: FAST_TIMINGS },
   }));
@@ -120,6 +122,23 @@ type ConnectedServiceApplicationNativeRuntime = Readonly<{
 }>;
 
 describe('Claude Unified TUI runtime control integration (updateSessionRuntimeConfig)', () => {
+  it.each([undefined, 'allow', 'deny'] as const)('keeps the effective workspace-write policy after terminal launch (%s)', async (workspaceWrites) => {
+    const configDir = await makeConfigDir();
+    const { runtime } = buildRuntime({ featureEnabled: true, configDir, workspaceWrites });
+    const effective = workspaceWrites ?? 'allow';
+    try {
+      await runtime.startProviderSession();
+      await expect(runtime.updateSessionRuntimeConfig({ workspaceWrites: effective })).resolves.toMatchObject({
+        status: 'applied', timing: 'skipped_already_effective',
+      });
+      await expect(runtime.updateSessionRuntimeConfig({ workspaceWrites: effective === 'allow' ? 'deny' : 'allow' })).resolves.toMatchObject({
+        status: 'requires_restart', reason: 'role_policy_restart_required',
+      });
+    } finally {
+      await runtime.resetOrDisposeRuntime().catch(() => undefined);
+    }
+  });
+
   it('keeps the legacy requires_interactive_control outcome when the feature is OFF', async () => {
     const configDir = await makeConfigDir();
     const { runtime, terminalHost } = buildRuntime({

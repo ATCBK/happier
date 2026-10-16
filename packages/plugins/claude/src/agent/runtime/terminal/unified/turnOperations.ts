@@ -1110,7 +1110,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
   // Effective permission mode at spawn. Plan-inclusive: a pre-launch `{modeId:'plan'}` toggle
   // wins over the raw permission mode so the TUI launches in plan rather than the raw mode.
   let launchPermissionMode: string | null = params.permissionMode;
-  let launchWorkspaceWrites = params.workspaceWrites;
+  let launchWorkspaceWrites = params.workspaceWrites ?? 'allow';
 
   /**
    * Publishes the resume id together with the transcript path that holds its
