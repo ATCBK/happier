@@ -205,7 +205,7 @@ function serializeBrowserControlActionResult(
 
 async function executeBrowserControlAction(
     args: RuntimeActionExecuteArgs,
-    input: Pick<CreateBrowserRuntimeActionExecutorInput, 'control' | 'resolveControl' | 'automation' | 'resolveAutomation'>,
+    input: Pick<CreateBrowserRuntimeActionExecutorInput, 'control' | 'resolveControl' | 'automation' | 'resolveAutomation' | 'executeOnMachine'>,
 ): Promise<unknown> {
     if (args.actionId === 'browser.workspace.open') {
         // Input is parsed by the catalog schema, not a second workspace parser.
@@ -251,6 +251,16 @@ async function executeBrowserControlAction(
         return invalidParametersResult;
     }
 
+    // A Machine-targeted open creates the daemon-owned Browser before any viewer exists.
+    // Mounted in-app engines supply their control explicitly and retain their local policy owner.
+    const machineTarget = args.context.externalActionTarget;
+    if (command.data.kind === 'openView' && !input.control && machineTarget?.kind === 'machine') {
+        if (!machineTarget.machineId.trim() || !input.executeOnMachine) {
+            return browserRuntimeActionDisabledResult('browser_control_route_unavailable');
+        }
+        return await input.executeOnMachine({ ...args, input: command.data });
+    }
+
     const control = input.control ?? input.resolveControl?.(command.data) ?? undefined;
     if (!control) {
         return browserRuntimeActionDisabledResult('browser_control_unavailable');
@@ -261,12 +271,12 @@ async function executeBrowserControlAction(
         return browserRuntimeActionDisabledResult('browser_control_unavailable');
     }
 
-    let daemonDispatch: Promise<BrowserDaemonControlDispatchClientResult> | undefined = undefined;
+    const daemonDispatch: { pending?: Promise<BrowserDaemonControlDispatchClientResult> } = {};
     const result = dispatchBrowserControlCommand(state, command.data, {
         ...control.readDispatchOptions?.(command.data),
         clientControlService: (input.automation ?? input.resolveAutomation?.(command.data))?.controlService ?? undefined,
         ...(control.sendDaemonCommand ? { sendDaemonCommand: (cmd: BrowserCommandV1) => {
-            daemonDispatch = control.sendDaemonCommand?.(cmd);
+            daemonDispatch.pending = control.sendDaemonCommand?.(cmd);
         } } : {}),
     });
     const rejected = result.effects.find((effect): effect is Extract<BrowserControlCommandEffect, { kind: 'commandRejected' }> => (
@@ -280,7 +290,7 @@ async function executeBrowserControlAction(
         return browserRuntimeActionDisabledResult(mapControlRejectedReason(rejected.reasonCode));
     }
     if (result.effects.some((effect) => effect.kind === 'daemonCommand')) {
-        const dispatched = await daemonDispatch;
+        const dispatched = await daemonDispatch.pending;
         if (!dispatched) return browserRuntimeActionDisabledResult('browser_control_route_unavailable');
         if (dispatched.ok) return dispatched.result;
         if (dispatched.reason === 'unavailable') return browserRuntimeActionDisabledResult('browser_control_route_unavailable');
@@ -393,13 +403,16 @@ export function createBrowserRuntimeActionExecutor(
             return await executeBrowserAutomationAction(args, input);
         }
 
-        // SUPPORT MATRIX (FINALIZATION-PLAN §3.2 / §10 "label every deferral"):
-        // `browser.diagnostics.*` has no UI-local producer — diagnostics/devtools/eval run against
-        // the live page on the DAEMON side (sidecar CDP), which is the real owner. The UI runtime
-        // executor fails closed here. The canonical surface map exposes the backed daemon Actions;
-        // their execution belongs to the daemon, not this UI-local adapter.
+        // Diagnostics run on the daemon; an exact Machine target uses the same admitted
+        // Account transport as other daemon-owned Browser Actions.
         if (BROWSER_DIAGNOSTICS_ACTION_IDS.has(args.actionId)) {
-            return browserRuntimeActionDisabledResult('browser_diagnostics_unavailable');
+            const parsed = parseRuntimeActionInput(args);
+            if (!parsed.ok) return parsed.result;
+            const machineTarget = args.context.externalActionTarget;
+            if (!input.executeOnMachine || machineTarget?.kind !== 'machine' || !machineTarget.machineId.trim()) {
+                return browserRuntimeActionDisabledResult('browser_diagnostics_unavailable');
+            }
+            return await input.executeOnMachine({ ...args, input: parsed.input });
         }
         // `browser.context.annotation.*` is an IN-APP capture family — it mutates the canonical
         // `BrowserContextState` (mode machine + draft capture + composer attach) through the

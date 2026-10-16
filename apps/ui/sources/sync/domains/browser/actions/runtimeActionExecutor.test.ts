@@ -10,6 +10,7 @@ import type {
 import {
     BrowserAutomationCancelActiveResultV1Schema,
     BrowserCommandDispatchResultV1Schema,
+    BrowserTargetPolicyDecisionV1Schema,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -197,7 +198,7 @@ describe('browser runtime action executor', () => {
         const execute = createBrowserRuntimeActionExecutor({ control: {
             readState: () => state,
             applyDispatchResult: () => {},
-            readDispatchOptions: () => ({ targetPolicyDecision: { targetKind: 'externalUrl', state: 'allowed' },
+            readDispatchOptions: () => ({ targetPolicyDecision: BrowserTargetPolicyDecisionV1Schema.parse({ targetKind: 'externalUrl', state: 'allowed' }),
                 desktopWebViewAvailability: unavailableDesktopWebViewNativeAvailability('desktop_webview_unsupported_platform') }),
         } });
         const result = await execute(runtimeArgs({ actionId: 'browser.view.open', input: {
@@ -229,7 +230,7 @@ describe('browser runtime action executor', () => {
         const execute = createBrowserRuntimeActionExecutor({ control: {
             readState: createBrowserControlState,
             applyDispatchResult: () => {},
-            readDispatchOptions: () => ({ targetPolicyDecision: { targetKind: 'externalUrl', state: 'allowed' },
+            readDispatchOptions: () => ({ targetPolicyDecision: BrowserTargetPolicyDecisionV1Schema.parse({ targetKind: 'externalUrl', state: 'allowed' }),
                 desktopWebViewAvailability: unavailableDesktopWebViewNativeAvailability('desktop_webview_unsupported_platform') }),
         } });
         expect(await execute(runtimeArgs({ actionId: 'browser.view.open', input: {
@@ -242,17 +243,39 @@ describe('browser runtime action executor', () => {
         expect(mod?.createBrowserRuntimeActionExecutor).toBeTypeOf('function');
         if (!mod?.createBrowserRuntimeActionExecutor) return;
         let state = createBrowserControlState();
+        const executeOnMachine = vi.fn();
         const execute = mod.createBrowserRuntimeActionExecutor({ control: {
             readState: () => state,
             applyDispatchResult: result => { state = result.state; },
-            readDispatchOptions: () => ({ targetPolicyDecision: { targetKind: 'externalUrl', state: 'denied' } }),
-        } });
+            readDispatchOptions: () => ({ targetPolicyDecision: BrowserTargetPolicyDecisionV1Schema.parse({ targetKind: 'externalUrl', state: 'denied', reasonCode: 'policy_denied' }) }),
+        }, executeOnMachine });
         const result = await execute(runtimeArgs({ actionId: 'browser.view.open', input: {
             kind: 'openView', commandId: 'open-through-action', browserSessionId: 'browser_session_1', viewId: 'view_1',
             target: externalTarget, platform: 'ios', currentUrl: externalTarget.url, focus: true,
-        } }));
+        }, context: { externalActionTarget: { kind: 'machine', machineId: 'machine_1' } } }));
         expect(result).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
         expect(state.viewsById.view_1).toBeUndefined();
+        expect(executeOnMachine).not.toHaveBeenCalled();
+    });
+
+    it('does not replace an explicitly targeted managed open with a registered local Browser', async () => {
+        const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const local = { readState: createBrowserControlState, applyDispatchResult: vi.fn() };
+        const command = { kind: 'openView' as const, commandId: 'managed-open', browserSessionId: 'session_1',
+            viewId: 'managed-view', target: externalTarget, platform: 'web' as const, focus: true };
+        const result = BrowserCommandDispatchResultV1Schema.parse({ v: 1, commandId: command.commandId,
+            status: 'failed', error: { code: 'feature_disabled', message: 'Managed Browser is disabled' } });
+        // The Machine Action transport is the network boundary; its refusal must survive intact.
+        const executeOnMachine = vi.fn(async () => result);
+        const execute = createBrowserRuntimeActionExecutor({ resolveControl: () => local, executeOnMachine });
+        const context = { authority: 'present_user' as const,
+            externalActionTarget: { kind: 'machine' as const, machineId: 'machine_1' } };
+        expect(await execute(runtimeArgs({ actionId: 'browser.view.open', input: command, context }))).toEqual(result);
+        expect(local.applyDispatchResult).not.toHaveBeenCalled();
+        const unavailable = createBrowserRuntimeActionExecutor({ resolveControl: () => local });
+        expect(await unavailable(runtimeArgs({ actionId: 'browser.view.open', input: command, context })))
+            .toMatchObject({ ok: false, error: 'runtime_action_disabled:browser:browser_control_route_unavailable' });
+        expect(local.applyDispatchResult).not.toHaveBeenCalled();
     });
 
     it('routes browser.navigate through the domain control dispatcher and commits the accepted state', async () => {
@@ -853,17 +876,51 @@ describe('browser runtime action executor', () => {
         });
     });
 
-    // SUPPORT MATRIX (FINALIZATION-PLAN §3.2 / §10): the UI runtime executor has NO local producer
-    // for browser diagnostics, context capture, or the non-attach recording actions — those are
-    // serviced by the DAEMON executor. The UI executor must fail closed with a labeled reason
-    // (never fake a dispatch). These lock the honest deferral so it cannot silently regress.
+    it.each(['ui', 'agent'] as const)('routes Machine-targeted diagnostics through the %s front door', async (surface) => {
+        const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        // This port is the remote Machine Action transport; all local validation stays real.
+        const refused = { ok: false, errorCode: 'browser_view_unavailable', error: 'browser_view_unavailable' };
+        const executeOnMachine = vi.fn(async () => refused);
+        const execute = createBrowserRuntimeActionExecutor({ executeOnMachine });
+        const context = { surface, externalActionTarget: { kind: 'machine', machineId: 'machine_1' } } satisfies RuntimeActionExecuteArgs['context'];
+        const input = { browserSessionId: ' browser_session_1 ', viewId: ' view_1 ' };
+        expect(await execute(runtimeArgs({ actionId: 'browser.diagnostics.snapshot', input, context }))).toEqual(refused);
+        expect(executeOnMachine).toHaveBeenCalledWith({ actionId: 'browser.diagnostics.snapshot',
+            input: { browserSessionId: 'browser_session_1', viewId: 'view_1' }, context });
+    });
+
+    it('rejects invalid diagnostics input and missing exact Machine targets before transport', async () => {
+        const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const executeOnMachine = vi.fn();
+        const execute = createBrowserRuntimeActionExecutor({ executeOnMachine });
+        const input = { browserSessionId: 'browser_session_1', viewId: 'view_1' };
+        expect(await execute(runtimeArgs({ actionId: 'browser.diagnostics.snapshot', input: { ...input, viewId: '' },
+            context: { externalActionTarget: { kind: 'machine', machineId: 'machine_1' } } })))
+            .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        for (const context of [
+            {},
+            { defaultSessionMachineId: 'machine_1' },
+            { externalActionTarget: { kind: 'session', sessionId: 'session_1' } },
+            { externalActionTarget: { kind: 'machine', machineId: ' ' } },
+        ] satisfies RuntimeActionExecuteArgs['context'][]) {
+            expect(await execute(runtimeArgs({ actionId: 'browser.diagnostics.snapshot', input, context })))
+                .toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+        }
+        expect(executeOnMachine).not.toHaveBeenCalled();
+        const withoutMachineTransport = createBrowserRuntimeActionExecutor();
+        expect(await withoutMachineTransport(runtimeArgs({ actionId: 'browser.diagnostics.snapshot', input,
+            context: { externalActionTarget: { kind: 'machine', machineId: 'machine_1' } } })))
+            .toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+    });
+
+    // These daemon-owned actions remain unavailable without the explicit Machine transport.
     it('fails closed with a labeled reason for daemon-owned diagnostics actions', async () => {
         const realMod = await import('./runtimeActionExecutor');
         const execute = realMod.createBrowserRuntimeActionExecutor({});
 
         await expect(execute(runtimeArgs({
-            actionId: 'browser.diagnostics.eval',
-            input: { browserSessionId: 'browser_session_1', viewId: 'view_1', expression: '1+1' },
+            actionId: 'browser.diagnostics.snapshot',
+            input: { browserSessionId: 'browser_session_1', viewId: 'view_1' },
         }))).resolves.toMatchObject({
             ok: false,
             errorCode: 'runtime_action_disabled',
