@@ -190,6 +190,8 @@ export type DropdownMenuProps = Readonly<{
     /** On a phone, present the menu as the shared bottom sheet (named by `popoverAccessibilityLabel`). */
     popoverPhonePresentation?: 'sheet';
     popoverAccessibilityLabel?: string;
+    /** The phone sheet's line under its title. */
+    popoverSheetSubtitle?: string;
     overlayStyle?: ViewStyle;
     /** When true, category titles like "General" are rendered (default false). */
     showCategoryTitles?: boolean;
@@ -622,6 +624,35 @@ export function DropdownMenu(props: DropdownMenuProps) {
         return { size: typeof arrow.size === 'number' ? arrow.size : 12 } as const;
     }, [props.overlayArrow]);
 
+    const searchField = props.search ? (
+        <View style={{
+            paddingHorizontal: contentPadding,
+            paddingTop: contentPadding,
+            paddingBottom: rowVariant === 'slim' ? 4 : 8,
+        }}>
+            <TextInput
+                ref={inputRef as any}
+                value={searchQuery}
+                onChangeText={handleSearchChange}
+                placeholder={props.searchPlaceholder ?? t('commandPalette.placeholder')}
+                placeholderTextColor={theme.colors.input.placeholder}
+                autoFocus={false}
+                autoCorrect={false}
+                autoCapitalize="none"
+                onKeyPress={handleKeyDown}
+                style={{
+                    borderRadius: theme.borderRadius.md,
+                    borderWidth: 1,
+                    borderColor: theme.colors.border.default,
+                    paddingHorizontal: rowVariant === 'slim' ? 10 : 12,
+                    paddingVertical: rowVariant === 'slim' ? 8 : 10,
+                    fontSize: Typography.variant('label').fontSize,
+                    color: theme.colors.text.primary,
+                }}
+            />
+        </View>
+    ) : null;
+
     return (
         <View
             ref={anchorRef}
@@ -655,11 +686,14 @@ export function DropdownMenu(props: DropdownMenuProps) {
                     boundaryRef={props.popoverBoundaryRef}
                     phonePresentation={props.popoverPhonePresentation}
                     accessibilityLabel={props.popoverAccessibilityLabel}
+                    sheetSubtitle={props.popoverSheetSubtitle}
                     onRequestClose={onRequestClose}
                 >
                     {({ maxHeight, maxWidth, placement, presentation }) => (<>
                         <FloatingOverlay
-                            header={props.header}
+                            // The search field stays pinned above the scrolling results, so a long list scrolled to
+                            // its current choice never carries the field out of view.
+                            header={props.header || props.search ? <>{props.header}{searchField}</> : undefined}
                             footer={props.footer}
                             maxHeight={maxHeight}
                             edgeFades={{ top: true, bottom: true }}
@@ -689,35 +723,6 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                 props.overlayStyle ?? null,
                             ]}
                         >
-                            {props.search ? (
-                                <View style={{
-                                    paddingHorizontal: contentPadding,
-                                    paddingTop: contentPadding,
-                                    paddingBottom: rowVariant === 'slim' ? 4 : 8,
-                                }}>
-                                    <TextInput
-                                        ref={inputRef as any}
-                                        value={searchQuery}
-                                        onChangeText={handleSearchChange}
-                                        placeholder={props.searchPlaceholder ?? t('commandPalette.placeholder')}
-                                        placeholderTextColor={theme.colors.input.placeholder}
-                                        autoFocus={false}
-                                        autoCorrect={false}
-                                        autoCapitalize="none"
-                                        onKeyPress={handleKeyDown}
-                                        style={{
-                                            borderRadius: theme.borderRadius.md,
-                                            borderWidth: 1,
-                                            borderColor: theme.colors.border.default,
-                                            paddingHorizontal: rowVariant === 'slim' ? 10 : 12,
-                                            paddingVertical: rowVariant === 'slim' ? 8 : 10,
-                                            fontSize: Typography.variant('label').fontSize,
-                                            color: theme.colors.text.primary,
-                                        }}
-                                    />
-                                </View>
-                            ) : null}
-
                             <View style={{ paddingBottom: resultsPaddingBottom }}>
                                 <SelectableMenuResults
                                     ref={resultsRef}

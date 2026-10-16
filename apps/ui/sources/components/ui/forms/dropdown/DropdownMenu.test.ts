@@ -57,7 +57,7 @@ vi.mock('@/components/ui/popover', () => ({
 vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
     FloatingOverlay: (props: any) => {
         const React = require('react');
-        return React.createElement('FloatingOverlay', props, props.children);
+        return React.createElement('FloatingOverlay', props, props.header, props.children);
     },
 }));
 
@@ -1035,5 +1035,25 @@ describe('DropdownMenu', () => {
         const selectableResults = screen.findByType('SelectableMenuResults' as any);
         expect(input).toBeTruthy();
         expect(selectableResults).toBeTruthy();
+    });
+
+    it('pins the search field in the overlay header, never inside the scrolling results', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+        const { Text } = await import('react-native');
+        const { TextInput } = await import('@/components/ui/text/Text');
+
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true,
+            onOpenChange: vi.fn(),
+            items: [{ id: 'a', title: 'A' }],
+            onSelect: () => {},
+            trigger: React.createElement(Text, null, 'Trigger'),
+            search: true,
+        }));
+
+        // A long list scrolled to its current choice must never carry the field out of view.
+        const results = screen.findByType('SelectableMenuResults' as any)!;
+        expect(results.findAllByType(TextInput as any)).toEqual([]);
+        expect(screen.findAllByType(TextInput as any)).toHaveLength(1);
     });
 });
