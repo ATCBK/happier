@@ -496,17 +496,33 @@ describe('a settled list body keeps the tallest height it has drawn', () => {
         await hook.rerender({ settled: true, shapeKey: 'wide' });
         await act(async () => { hook.getCurrent()!.onLayout(layout(457)); });
         await act(async () => { hook.getCurrent()!.onLayout(layout(491)); });
-        // A re-read drops the pace alert: the body is shorter, the floor is not.
-        await act(async () => { hook.getCurrent()!.onLayout(layout(457)); });
-        expect(hook.getCurrent()!.minHeight).toBe(491);
         // A re-read puts accounts back to pending: the floor holds.
         await hook.rerender({ settled: false, shapeKey: 'wide' });
         expect(hook.getCurrent()!.minHeight).toBe(491);
         await hook.rerender({ settled: true, shapeKey: 'wide' });
+        // The re-read drops the pace alert: the body is shorter, the floor is not.
+        await act(async () => { hook.getCurrent()!.onLayout(layout(457)); });
+        expect(hook.getCurrent()!.minHeight).toBe(491);
         // Show all / a resize is a deliberate new shape, not a re-read.
         await hook.rerender({ settled: true, shapeKey: 'narrow' });
         expect(hook.getCurrent()!.minHeight).toBeUndefined();
         await act(async () => { hook.getCurrent()!.onLayout(layout(300)); });
         expect(hook.getCurrent()!.minHeight).toBe(300);
+    });
+
+    it('lets the first settle after a cold read follow the drawn height down once, then keeps the ratchet for re-reads (R5)', async () => {
+        const hook = await renderHook(({ settled }: { settled: boolean }) => useSettledBodyHeightFloor(settled, 'phone'),
+            { initialProps: { settled: false } });
+        // Cold read: the evidence settles with three findings (403), then the stored dismissals arrive and one is left (213).
+        await hook.rerender({ settled: true });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(403)); });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(213)); });
+        expect(hook.getCurrent()!.minHeight).toBe(213);
+        // A re-read begins: from here the body only keeps its tallest height, so nothing below it moves.
+        await hook.rerender({ settled: false });
+        await hook.rerender({ settled: true });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(260)); });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(180)); });
+        expect(hook.getCurrent()!.minHeight).toBe(260);
     });
 });

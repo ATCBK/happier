@@ -248,9 +248,11 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   // keeps the tallest height it has drawn, so a re-read never moves what sits below.
   const reading = readUsageCoachState(props.slice) === 'reading';
   const floor = useSettledBodyHeightFloor(!reading, `${glance}:${strip}`);
-  const bodyStyle = [styles.body, reading && glance
+  // The held room is a wrapper's min height and the body inside it is what gets measured, so the floor can follow
+  // the drawn height down once at the first settle instead of measuring itself.
+  const heldRoom = reading && glance
     ? { minHeight: strip ? SETTLED_COACH_STRIP_BODY_PX : SETTLED_COACH_LIST_BODY_PX }
-    : floor.minHeight !== undefined ? { minHeight: floor.minHeight } : null];
+    : floor.minHeight !== undefined ? { minHeight: floor.minHeight } : null;
   // Preferences are rare: a quiet disclosure after the findings, never a bar above them (lab d2coach).
   const configuration = <UsagePlanDisclosure title={t('usage.board.coach.configure')} testID={`${props.testID}.configure`}>
     <UsageCoachSettingsGroup serverId={props.serverId} testID={`${props.testID}.preferences`} />
@@ -266,18 +268,20 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   );
   if (!coach)
     return (
-      <View style={bodyStyle} onLayout={floor.onLayout}>
-        <UsageBodyInsufficient
-          testID={`${props.testID}.unavailable`}
-          title={t('usage.board.coach.unavailableTitle')}
-        />
-        {configuration}
-        <UsageCoverageLine
-          slice={props.slice}
-          sources={['how_you_work', 'accounting']}
-          onRetry={refresh}
-          testID={`${props.testID}.coverage`}
-        />
+      <View style={heldRoom}>
+        <View style={styles.body} onLayout={floor.onLayout}>
+          <UsageBodyInsufficient
+            testID={`${props.testID}.unavailable`}
+            title={t('usage.board.coach.unavailableTitle')}
+          />
+          {configuration}
+          <UsageCoverageLine
+            slice={props.slice}
+            sources={['how_you_work', 'accounting']}
+            onRetry={refresh}
+            testID={`${props.testID}.coverage`}
+          />
+        </View>
       </View>
     );
   const { visible, suppressed, appliedOnly } = projectUsageCoachFindings(coach.findings, snapshot, nowMs);
@@ -322,81 +326,83 @@ export function UsageCoachWidget(props: UsageBodyProps) {
     />
   );
   return (
-    <View style={bodyStyle} onLayout={floor.onLayout} testID={`${props.testID}.coach`}>
-      {/* The facts band belongs to the Coach view; the Overview strip is the findings alone (lab wgusage-CD). */}
-      {glance ? null : <UsageCoachSummaryBand facts={summary} testID={`${props.testID}.summary`} />}
-      {visible.length === 0 && appliedOnly.length === 0 ? (
-        reading ? <UsageBodyReading testID={`${props.testID}.loading`} {...(strip ? { shape: { kind: 'strip' as const } } : {})} /> :
-        <SurfaceStateCard
-          testID={`${props.testID}.empty`}
-          kind="empty"
-          layout="inline"
-          size="line"
-          title={t('usage.board.coach.emptyTitle')}
-          // "Every check ran" is only true when none is waiting for evidence.
-          reason={insufficient.length ? t('usage.board.coach.insufficientCount', { count: insufficient.length }) : t('usage.board.coach.emptyReason')}
+    <View style={heldRoom}>
+      <View style={styles.body} onLayout={floor.onLayout} testID={`${props.testID}.coach`}>
+        {/* The facts band belongs to the Coach view; the Overview strip is the findings alone (lab wgusage-CD). */}
+        {glance ? null : <UsageCoachSummaryBand facts={summary} testID={`${props.testID}.summary`} />}
+        {visible.length === 0 && appliedOnly.length === 0 ? (
+          reading ? <UsageBodyReading testID={`${props.testID}.loading`} {...(strip ? { shape: { kind: 'strip' as const } } : {})} /> :
+          <SurfaceStateCard
+            testID={`${props.testID}.empty`}
+            kind="empty"
+            layout="inline"
+            size="line"
+            title={t('usage.board.coach.emptyTitle')}
+            // "Every check ran" is only true when none is waiting for evidence.
+            reason={insufficient.length ? t('usage.board.coach.insufficientCount', { count: insufficient.length }) : t('usage.board.coach.emptyReason')}
+          />
+        ) : null}
+        {/* No findings, no container: an empty one still takes the body's row gap, which grew the reading state past its settled height. */}
+        {shown.length > 0 || (!glance && appliedOnly.length > 0) ? <View style={strip ? styles.strip : styles.list}>
+          {strip ? shown.map((finding, index) => <React.Fragment key={finding.evidenceKey}>
+            {index > 0 ? <View style={styles.stripRule} /> : null}
+            {row(finding)}
+          </React.Fragment>) : shown.map(row)}
+          {glance ? null : appliedOnly.map((entry) => row(entry.finding))}
+        </View> : null}
+        {glance && visible.length > shown.length ? <Text style={styles.quiet}>
+          {t('usage.board.coach.moreFindings', { count: visible.length - shown.length })}</Text> : null}
+        {!glance && suppressed.length ? <UsagePlanDisclosure testID={`${props.testID}.hidden`}
+          title={t('usage.board.coach.hiddenFindings', { count: suppressed.length })}>
+          {suppressed.map(finding => <View key={finding.evidenceKey} style={styles.hiddenRow}>
+            <Icon name={DETECTOR_GLYPHS[finding.detectorId]} size={ICON_SIZE.sm} color={theme.colors.text.tertiary} />
+            <View style={styles.hiddenText}>
+              <Text style={styles.checkName} numberOfLines={2}>{t(`usage.board.coach.summary_${finding.summaryCode}`)}</Text>
+              <Text style={styles.quiet}>{finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs
+                ? t('usage.board.coach.hiddenSnoozed', { time: formatAsOfTime(finding.state.snoozedUntilMs) })
+                : t('usage.board.coach.hiddenDismissed')}</Text>
+            </View>
+            <RoundButton size="small" display="secondary" testID={`${props.testID}.hidden.${finding.detectorId}.restore`}
+              title={t('common.restore')} disabled={!controller || snapshot.retired || snapshot.pending.some(row => row.evidenceKey === finding.evidenceKey)}
+              action={async () => {
+                if (!controller) return;
+                if (finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs) {
+                  await controller.snooze(props.query, finding.evidenceKey, null);
+                } else {
+                  await controller.dismiss(props.query, finding.evidenceKey, false);
+                }
+              }} />
+            {snapshot.error?.evidenceKey === finding.evidenceKey ? <Text accessibilityRole="alert" style={styles.error}>
+              {t('usage.board.coach.actionFailed')}</Text> : null}
+            {snapshot.approval?.evidenceKey === finding.evidenceKey ? <Text style={styles.pendingNote}>
+              {t('usage.board.coach.approvalPending')}</Text> : null}
+          </View>)}
+        </UsagePlanDisclosure> : null}
+        {!glance && insufficient.length + clear.length > 0 ? (
+          <UsageCoachChecks
+            insufficient={insufficient}
+            clear={clear}
+            testID={`${props.testID}.checks`}
+          />
+        ) : null}
+        {!glance && coach.digestSuggestion ? (
+          <UsageCoachDigestSuggestionRow
+            key={coach.digestSuggestion.queryKey}
+            suggestion={coach.digestSuggestion}
+            controller={controller}
+            snapshot={snapshot}
+            serverId={props.serverId}
+            testID={`${props.testID}.digest`}
+          />
+        ) : null}
+        {glance ? null : configuration}
+        <UsageCoverageLine
+          slice={props.slice}
+          sources={['how_you_work', 'accounting']}
+          onRetry={refresh}
+          testID={`${props.testID}.coverage`}
         />
-      ) : null}
-      {/* No findings, no container: an empty one still takes the body's row gap, which grew the reading state past its settled height. */}
-      {shown.length > 0 || (!glance && appliedOnly.length > 0) ? <View style={strip ? styles.strip : styles.list}>
-        {strip ? shown.map((finding, index) => <React.Fragment key={finding.evidenceKey}>
-          {index > 0 ? <View style={styles.stripRule} /> : null}
-          {row(finding)}
-        </React.Fragment>) : shown.map(row)}
-        {glance ? null : appliedOnly.map((entry) => row(entry.finding))}
-      </View> : null}
-      {glance && visible.length > shown.length ? <Text style={styles.quiet}>
-        {t('usage.board.coach.moreFindings', { count: visible.length - shown.length })}</Text> : null}
-      {!glance && suppressed.length ? <UsagePlanDisclosure testID={`${props.testID}.hidden`}
-        title={t('usage.board.coach.hiddenFindings', { count: suppressed.length })}>
-        {suppressed.map(finding => <View key={finding.evidenceKey} style={styles.hiddenRow}>
-          <Icon name={DETECTOR_GLYPHS[finding.detectorId]} size={ICON_SIZE.sm} color={theme.colors.text.tertiary} />
-          <View style={styles.hiddenText}>
-            <Text style={styles.checkName} numberOfLines={2}>{t(`usage.board.coach.summary_${finding.summaryCode}`)}</Text>
-            <Text style={styles.quiet}>{finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs
-              ? t('usage.board.coach.hiddenSnoozed', { time: formatAsOfTime(finding.state.snoozedUntilMs) })
-              : t('usage.board.coach.hiddenDismissed')}</Text>
-          </View>
-          <RoundButton size="small" display="secondary" testID={`${props.testID}.hidden.${finding.detectorId}.restore`}
-            title={t('common.restore')} disabled={!controller || snapshot.retired || snapshot.pending.some(row => row.evidenceKey === finding.evidenceKey)}
-            action={async () => {
-              if (!controller) return;
-              if (finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs) {
-                await controller.snooze(props.query, finding.evidenceKey, null);
-              } else {
-                await controller.dismiss(props.query, finding.evidenceKey, false);
-              }
-            }} />
-          {snapshot.error?.evidenceKey === finding.evidenceKey ? <Text accessibilityRole="alert" style={styles.error}>
-            {t('usage.board.coach.actionFailed')}</Text> : null}
-          {snapshot.approval?.evidenceKey === finding.evidenceKey ? <Text style={styles.pendingNote}>
-            {t('usage.board.coach.approvalPending')}</Text> : null}
-        </View>)}
-      </UsagePlanDisclosure> : null}
-      {!glance && insufficient.length + clear.length > 0 ? (
-        <UsageCoachChecks
-          insufficient={insufficient}
-          clear={clear}
-          testID={`${props.testID}.checks`}
-        />
-      ) : null}
-      {!glance && coach.digestSuggestion ? (
-        <UsageCoachDigestSuggestionRow
-          key={coach.digestSuggestion.queryKey}
-          suggestion={coach.digestSuggestion}
-          controller={controller}
-          snapshot={snapshot}
-          serverId={props.serverId}
-          testID={`${props.testID}.digest`}
-        />
-      ) : null}
-      {glance ? null : configuration}
-      <UsageCoverageLine
-        slice={props.slice}
-        sources={['how_you_work', 'accounting']}
-        onRetry={refresh}
-        testID={`${props.testID}.coverage`}
-      />
+      </View>
     </View>
   );
 }

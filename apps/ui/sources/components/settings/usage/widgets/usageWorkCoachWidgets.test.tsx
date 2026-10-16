@@ -193,8 +193,14 @@ describe('Work and Coach widget bodies', () => {
         footprint: { columns: 1, columnSpan: 1, rowSpan: 2, width: 'full', height: 'regular' }, geometry: { width: 326, height: 260 } }}>
         <UsageCoachWidget {...props} slice={pendingSlice} model={{ ...model, slice: pendingSlice, pending: true }} id="usage_coach" testID="phone-coach" />
       </WidgetPresentationProvider>);
-      const style = ([] as unknown[]).concat(screen.findHostByTestId('phone-coach.coach')?.props.style ?? []).flat(2);
-      return style.reduce<number>((held, entry) => (entry && typeof entry === 'object' && 'minHeight' in entry ? Number(entry.minHeight) : held), 0);
+      // The held room is the min height of the wrapper around the body (the body is what gets measured).
+      let held = 0;
+      for (let node = screen.findHostByTestId('phone-coach.coach')?.parent; node; node = node.parent) {
+        for (const entry of ([] as unknown[]).concat(node.props.style ?? []).flat(2)) {
+          if (entry && typeof entry === 'object' && 'minHeight' in entry) held = Math.max(held, Number(entry.minHeight));
+        }
+      }
+      return held;
     };
     expect(await heldRoom('medium')).toBeGreaterThan(0);
     // The Coach's own view lists freely: nothing is held there.
