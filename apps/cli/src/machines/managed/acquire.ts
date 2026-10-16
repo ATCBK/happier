@@ -148,10 +148,19 @@ export function createManagedMachineControllerClient(input: ManagedMachineAcquis
                 && current.controller.machineId === input.controller.machineId
                 && current.controller.installationId === input.controller.installationId;
             return verified ? current : null;
-        } catch { return null; }
+        } catch (error) {
+            if (options.signal?.aborted) return null;
+            // An unreadable authority is not evidence that the admitted row changed.
+            // Preserve safe Home refusals, never transport diagnostics or request data.
+            throw error instanceof ManagedMachineControllerError ? error
+                : new ManagedMachineControllerError('managed_controller_request_failed');
+        }
     }
     async function isCurrent(machine: ManagedMachineV1, nativeRole?: 'inspect'): Promise<boolean> {
-        return await readCurrent(machine, nativeRole) !== null;
+        // Passive lifetime queries fail closed. Effect admission uses the strict
+        // read so an unreadable source retains its typed refusal.
+        try { return await readCurrent(machine, nativeRole) !== null; }
+        catch { return false; }
     }
     async function submitIdentity(machine: ManagedMachineV1, kind: 'acquire' | 'rebuild') {
         const provider = input.runtimeRegistry.contributes.machineProvisioners?.find(candidate =>

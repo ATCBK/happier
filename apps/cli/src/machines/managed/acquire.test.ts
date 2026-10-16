@@ -27,6 +27,7 @@ import type { PluginServices, PluginInvocationContext } from '@happier-dev/plugi
 import { ManagedBootstrapCredentialCreateV1Schema, ManagedControllerCurrentInputV1Schema, ManagedControllerReportV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { logger } from '@/ui/logger';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { MachineProvisionerNativeExecResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import type { SharedSavedSecretCreateInputV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -957,6 +958,70 @@ describe('managed acquisition durable custody', () => {
         }, { requestId: 'request' }, 'machines.managed.bootstrap.retry');
         expect(await client.isCurrent(bound)).toBe(false);
     });
+    it.each(['permission_denied', 'transport', 'replaced-resource'] as const)('keeps the native currentness refusal typed before handler IO (%s)', async refusal => {
+        const homeId = 'srv_native_currentness';
+        const native = nativeFixture({ credentialPurposes: [] });
+        const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', resource: {
+            contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
+        } });
+        let reads = 0;
+        const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            expect(String(url)).toBe('https://home.example/v1/machines/managed/controller/current');
+            expect(ManagedControllerCurrentInputV1Schema.parse(body)).toEqual({ homeId, managedId: retained.id,
+                expectedIntentRevision: retained.intentRevision, controller, requestId: 'retained-creation' });
+            if (++reads === 1) return { status: 200, data: { machine: retained } };
+            if (refusal === 'permission_denied') return { status: 403, data: { code: 'permission_denied' } };
+            if (refusal === 'transport') throw new Error('Private transport diagnostic must not reach the operation');
+            return { status: 200, data: { machine: { ...retained, resource: { ...retained.resource!, value: { replaced: true } } } } };
+        });
+        const driverInput = { token: 'token', serverUrl: 'https://home.example', homeId, controller,
+            ...accountInputs, runtimeRegistry: native.runtimeRegistry,
+            homeTarget: resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId,
+                canonicalServerUrl: 'https://home.example', revision: 1, endpoints: [{ kind: 'https', url: 'https://home.example' }] },
+                authority: 'current_connection' }) };
+        const options = { requestId: 'retained-creation', context: { operationOwnerUpdate: { update() {} } } };
+        const action = 'machines.managed.bootstrap.retry' as const;
+        const client = createManagedMachineControllerClient(driverInput, options, action);
+        const invocation = createManagedNativeInvocation({ input: driverInput, options, client, machine: retained, action }, () => retained);
+        const code = refusal === 'transport' ? 'managed_controller_request_failed' : refusal === 'replaced-resource' ? 'intent_changed' : refusal;
+        await expect(invocation.invoke('exec', { resource: {}, argv: ['true'] })).rejects.toMatchObject({
+            name: 'ManagedMachineControllerError', code, message: code,
+        });
+        expect(native.effects()).toBe(0);
+        expect(native.activations()).toBe(0);
+        expect(await client.isCurrent(retained)).toBe(false);
+        post.mockResolvedValue({ status: 200, data: { machine: retained } });
+        const recovered = MachineProvisionerNativeExecResultV1Schema.parse(await invocation.invoke('exec', { resource: {}, argv: ['true'] }));
+        expect(recovered).toMatchObject({ termination: { observed: { kind: 'exit', exitCode: 0 } } });
+        expect(native.effects()).toBe(1);
+    });
+    it('preserves a refused managed currentness code through the real enrollment task', async () => {
+        const homeId = 'srv_native_currentness_task';
+        const native = nativeFixture({ credentialPurposes: [] });
+        const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', resource: {
+            contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
+        } });
+        let installing = false;
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            if (String(url).endsWith('/current')) {
+                ManagedControllerCurrentInputV1Schema.parse(body);
+                if (installing) return { status: 403, data: { code: 'permission_denied' } };
+            }
+            return { status: 200, data: { machine: retained,
+                ...(String(url).endsWith('/context') ? { requestId: 'retained-creation' } : {}) } };
+        });
+        const recovery = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId, controller,
+            ...accountInputs, runtimeRegistry: native.runtimeRegistry,
+            homeTarget: resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId,
+                canonicalServerUrl: 'https://home.example', revision: 1, endpoints: [{ kind: 'https', url: 'https://home.example' }] },
+                authority: 'current_connection' }) });
+        await expect(recovery.execute('machines.managed.bootstrap.retry', { homeId, managedId: retained.id,
+            expectedIntentRevision: retained.intentRevision }, { requestId: 'fresh-retry', context: {
+                operationAcceptance: { operationId: 'retry-operation', accept() {} },
+                operationOwnerUpdate: { update(value) { if (value.progress?.kind === 'phase' && value.progress.phase === 'ssh.installCli') installing = true; } },
+            } })).rejects.toMatchObject({ code: 'permission_denied' });
+        expect(installing).toBe(true);
+    });
     it('retires pending recovery when the retained native handle changes without an intent revision change', async () => {
         const pending = { ...machine, nativeOperationRef: {
             contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { requestId: 'original' },
@@ -1106,7 +1171,7 @@ describe('managed acquisition durable custody', () => {
         } })).resolves.toMatchObject({ ok: true, result: { managedId: retained.id, operation: { operationId: 'pending-recovery' } } });
         if (passive && !withdrawn) await expect(work).resolves.toMatchObject({ machine: { id: retained.id, resource } });
         else if (passive) await expect(work).rejects.toMatchObject({ code: 'admission_unavailable' });
-        else if (withdrawn) await expect(work).rejects.toMatchObject({ code: 'intent_changed' });
+        else if (withdrawn) await expect(work).rejects.toMatchObject({ code: 'admission_unavailable' });
         else await expect(work).rejects.toBeInstanceOf(Error);
         expect(events).toEqual(passive ? withdrawn ? ['reconcile'] : ['reconcile', 'report', 'report']
             : withdrawn ? ['reconcile', 'report'] : ['reconcile', 'report', 'bootstrap']);
@@ -1298,7 +1363,8 @@ describe('managed acquisition durable custody', () => {
                     externalActionTarget: wireAuthorization.binding.target } : {}) }, signal: context.signal });
             return { ok: true, result: await work };
         } })).resolves.toMatchObject({ ok: true, result: { managedId: retained.id, operation: { operationId: 'late-resource' } } });
-        await expect(work).rejects.toMatchObject({ code: resultKind === 'pending' ? 'native_acquisition_unconfirmed' : 'intent_changed' });
+        await expect(work).rejects.toMatchObject({ code: resultKind === 'pending' ? 'native_acquisition_unconfirmed'
+            : retirement === 'operation-cancel' ? 'intent_changed' : 'admission_unavailable' });
         if (retirement === 'operation-cancel') expect(cancellation).toEqual({ kind: 'requested' });
         expect(reports).toEqual([{ homeId: nativeHomeId, managedId: retained.id, expectedIntentRevision: 0,
             requestId: 'creation', controller, result: nativeResult,

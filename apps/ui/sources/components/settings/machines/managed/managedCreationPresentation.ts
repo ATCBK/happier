@@ -64,15 +64,22 @@ export function describeManagedCreation(machine: ManagedMachineV1, context?: Man
     return describeManagedLifecycleState(managedCreationState(machine, context));
 }
 
-/** Installation and boot recovery follow the correlated host operation's failure. */
-export function canRetryManagedInstallation(machine: ManagedMachineV1, operation?: ActionOperationProjection | null): boolean {
+/** Enrolled healthy resources use the observation row instead of repeating their creation state. */
+export function isManagedCreationStateRowVisible(machine: Pick<ManagedMachineV1, 'enrolledMachineId'>, state: ManagedLifecycleState): boolean {
+    return !machine.enrolledMachineId || state.kind !== 'resourceReady';
+}
+
+/** Retained unenrolled resources remain recoverable when controller history is lost. */
+export function canRetryManagedInstallation(machine: ManagedMachineV1, operation?: ActionOperationProjection | null,
+    context: Pick<ManagedCreationContext, 'providerAvailable'> = {}): boolean {
+    const lifecycle = managedCreationState(machine);
+    if (context.providerAvailable === false || machine.creationState !== 'active' || machine.archivedAt !== undefined || machine.desired === 'delete'
+        || machine.allocation !== 'bound' || !machine.resource || machine.cleanup
+        || lifecycle.kind === 'cleanupPending' || lifecycle.kind === 'absent' || lifecycle.kind === 'volumeLost') return false;
+    if (!operation) return !machine.enrolledMachineId;
     operation = currentManagedCreationOperation(machine, operation);
     const snapshot = operation?.snapshot;
-    const lifecycle = managedCreationState(machine);
     return operation?.observation === 'available' && !operation.isUnavailableProjection
-        && machine.creationState === 'active'
-        && machine.allocation === 'bound' && Boolean(machine.resource) && !machine.cleanup
-        && lifecycle.kind !== 'cleanupPending' && lifecycle.kind !== 'absent' && lifecycle.kind !== 'volumeLost'
         && snapshot?.state === 'failed' && snapshot.scope.machineId === machine.controller.machineId
         && (snapshot.actionId === 'machines.managed.acquire' || snapshot.actionId === 'machines.managed.bootstrap.retry')
         && snapshot.error?.errorCode !== 'credential_unavailable'

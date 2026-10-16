@@ -11,6 +11,22 @@ const machine: ManagedMachineV1 = { id: 'managed', homeId: 'home', custodianAcco
     desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
 
 describe('managed creation presentation', () => {
+    it('recovers a retained unenrolled resource after controller operation history is lost', () => {
+        const retained: ManagedMachineV1 = { ...machine,
+            preset: { id: 'admitted-preset', revision: 1 },
+            observation: { availability: 'present', power: 'running', observedAt: 1 },
+            environmentSetup: { environment: { setupScript: 'echo setup' }, state: 'pending' } };
+        expect(canRetryManagedInstallation(retained, null)).toBe(true);
+        expect(canRetryManagedInstallation(retained, null, { providerAvailable: false })).toBe(false);
+        expect(canRetryManagedInstallation({ ...retained, enrolledMachineId: 'guest' }, null)).toBe(false);
+        expect(canRetryManagedInstallation({ ...retained, creationState: 'canceled' }, null)).toBe(false);
+        expect(canRetryManagedInstallation({ ...retained, archivedAt: 2 }, null)).toBe(false);
+        expect(canRetryManagedInstallation({ ...retained, desired: 'delete' }, null)).toBe(false);
+        expect(canRetryManagedInstallation({ ...retained, cleanup: { disposition: 'pending', reason: 'late_allocation' } }, null)).toBe(false);
+        expect(canRetryManagedInstallation({ ...retained, allocation: 'may-exist', resource: undefined }, null)).toBe(false);
+        expect(canRetryManagedInstallation({ ...retained, observation: { availability: 'absent', observedAt: 2 } }, null)).toBe(false);
+        expect(canRetryManagedInstallation({ ...retained, observation: { availability: 'present', storage: 'lost', observedAt: 2 } }, null)).toBe(false);
+    });
     it('offers installation recovery after the provider becomes available without borrowing a replaced resource failure', () => {
         const operation: ActionOperationProjection = { serverId: machine.homeId, observation: 'available', isUnavailableProjection: false,
             snapshot: { version: 1, operationId: 'provider-failure', revision: 1, actionId: 'machines.managed.bootstrap.retry', state: 'failed',

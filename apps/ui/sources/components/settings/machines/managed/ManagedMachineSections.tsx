@@ -52,7 +52,7 @@ import { buildManagedConfigurationReceipt, managedCredentialReceiptTargets, mana
 import { useQualifiedConnectedAccountTargetPresentations } from '@/hooks/server/connectedServices/useQualifiedConnectedAccountTargetPresentations';
 import { describeRetention, describeRetentionConsequence, formatRetentionDuration } from './managedRetentionPresentation';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
-import { canRetryManagedInstallation, describeManagedCreation, managedCreationSetup, type ManagedCreationContext } from './managedCreationPresentation';
+import { canRetryManagedInstallation, describeManagedCreation, isManagedCreationStateRowVisible, managedCreationSetup, managedCreationState, type ManagedCreationContext } from './managedCreationPresentation';
 import { useManagedMachineActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
 import { publishActionOperationObservation, reconcileActionOperationsOnce } from '@/sync/domains/actionOperations/actionOperationRuntime';
 import { readManagedMachinePolicyParent, readManagedMachineRebuildReview, type ManagedMachinePolicyParent } from './managedMachinePolicyParent';
@@ -496,7 +496,7 @@ export function ManagedMachineSections(props: SectionProps) {
     const consequence = (retention: MachineRetentionPolicyV1['retention']) => billing && providerName
         ? describeRetentionConsequence(retention, { location: billing.location, stoppedBilling: billing.stoppedBilling, provider: providerName })
         : describeRetention(retention);
-    const creationContext: ManagedCreationContext = { provider: providerName,
+    const creationContext: ManagedCreationContext = { provider: providerName, operation,
         providerAvailable: requiredController && provisionerPresentation.projectionReady ? provisionerPresentation.title !== null : undefined,
         ...(controller && controllerPresence ? { controller: { name: controllerName, online: controllerPresence.online } } : {}) };
     const keep: ManagedKeepProps = { policy, inherited: false, defaultPolicy: policyParent?.policy,
@@ -553,7 +553,7 @@ export function ManagedMachineSections(props: SectionProps) {
                 ...(creationContext.providerAvailable === false ? { reinstall: () => router.push({ pathname: SETTINGS_ROUTES.plugins,
                     params: { serverId: props.serverId, machineId: machine.controller.machineId } }) } : {}),
             } : {}),
-            ...(canMutate && currentControllerAvailable && canRetryManagedInstallation(machine, operation) ? {
+            ...(canMutate && currentControllerAvailable && canRetryManagedInstallation(machine, operation, creationContext) ? {
                 reinstall: () => fireAndForget(run('machines.managed.bootstrap.retry', { ...target,
                     expectedIntentRevision: machine.intentRevision }), { tag: 'ManagedMachineSections.retryInstall' }),
             } : {}) }} />
@@ -593,7 +593,8 @@ export function ManagedMachineSections(props: SectionProps) {
         {/* The state row owns Check now whenever it offers it; the observation row then only says how fresh the facts are. */}
         {machine.observation ? <ItemGroup><Item testID="managed-machine.observation" mode="info" showChevron={false}
             title={t('surfaceState.asOf', { time: formatAsOfTime(machine.observation.observedAt) })}
-            rightElement={describeManagedCreation(machine, creationContext).actions.includes('checkNow') ? undefined
+            rightElement={isManagedCreationStateRowVisible(machine, managedCreationState(machine, creationContext))
+                && describeManagedCreation(machine, creationContext).actions.includes('checkNow') ? undefined
                 : <RoundButton title={t('managedMachines.inspect.checkNow')} display="inverted" size="small"
                     testID="managed-machine.observation-check" onPress={inspect} />} /></ItemGroup> : null}
         {currentRebuildReview ? <>

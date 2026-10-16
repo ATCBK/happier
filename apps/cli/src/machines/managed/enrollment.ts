@@ -13,6 +13,7 @@ import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelation
 import { ManagedBootstrapCarrierV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { SavedSecretRefV1 } from '@happier-dev/protocol';
+import { ManagedMachineControllerError } from './controllerErrors';
 
 export type ManagedNativeBootstrapIO = Readonly<{
   /** Buffered stdout/stderr/status is sufficient; output observers are optional. */
@@ -66,10 +67,17 @@ export async function runManagedMachineEnrollment(input: Readonly<{
   const runPreparedTask = async (kind: InteractiveSystemTaskKind) => {
     const { getLiveSystemTasksRunnerAdapter } = await import('@/capabilities/systemTasks/liveSystemTasksRunner');
     const owner = getLiveSystemTasksRunnerAdapter();
-    const task = await owner.startAdmitted({ run: async (ctx) => kind.run({ ...ctx, emit: (event) => {
-      ctx.emit(event);
-      input.onEvent?.(event);
-    } }) });
+    const task = await owner.startAdmitted({ run: async (ctx) => {
+      try {
+        return await kind.run({ ...ctx, emit: (event) => {
+          ctx.emit(event);
+          input.onEvent?.(event);
+        } });
+      } catch (error) {
+        if (error instanceof ManagedMachineControllerError) throw new SystemTaskExecutionError(error.code, error.code);
+        throw error;
+      }
+    } });
     const cancel = () => { void owner.cancel(task); };
     input.signal?.addEventListener('abort', cancel, { once: true });
     if (input.signal?.aborted) cancel();

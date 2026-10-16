@@ -251,7 +251,7 @@ export function createManagedNativeInvocation(params: ManagedMachineReconciliati
         const actionId = buildQualifiedPluginContributionKey({ pluginId: contribution.pluginId, localId });
         const invocationSignal = io?.signal ?? params.options.signal;
         const stdoutDecoder = new TextDecoder();
-        let rowCurrent = await params.client.isCurrent(machine, role === 'inspect' || role === 'cleanup' ? 'inspect' : undefined);
+        let rowCurrent = await params.client.readCurrent(machine, role === 'inspect' || role === 'cleanup' ? 'inspect' : undefined) !== null;
         if (!rowCurrent) throw new ManagedMachineControllerError('intent_changed');
         const credentials = (machine.launch.credentials ?? []).filter(credential => isMachineProvisionerCredentialPurposeRequiredV1(
             contribution.definition, credential.purpose.purpose, machine.launch.choices));
@@ -300,36 +300,49 @@ export function createManagedNativeInvocation(params: ManagedMachineReconciliati
                 } } : {}),
                 ...(activation.exactPurposeBindingSubjectId ? { exactPurposeBindingSubjectId: activation.exactPurposeBindingSubjectId } : {}),
                 isCurrent: async () => {
-                    rowCurrent = await params.client.isCurrent(machine, role === 'inspect' || role === 'cleanup' ? 'inspect' : undefined);
-                    if (!rowCurrent || !activation.isCurrent()) {
-                        // Only this host-owned pre-handler check proves that
-                        // an admitted FIN native effect has not been issued.
-                        // Other custody failures and issued IO remain uncertain.
-                        if ((role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin) {
-                            nativeEffectGuardFailure = { error: new ManagedMachineNativeEffectGuardRefusal('intent_changed') };
-                        }
-                        return false;
-                    }
-                    if (!await configurationCurrent()) {
-                        nativeEffectGuardFailure = { error: new ManagedMachineControllerError('credential_unavailable') };
-                        rowCurrent = false;
-                        return false;
-                    }
-                    if ((role === 'power' || role === 'destroy') && io?.beforeNativeEffect) {
-                        try { await io.beforeNativeEffect(); }
-                        catch (error) { nativeEffectGuardFailure = { error }; rowCurrent = false; return false; }
-                    }
-                    if ((role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin) {
-                        // Credential preparation and final idle confirmation
-                        // both await. Re-read the same Home-issued source only
-                        // after those awaits, immediately before handler IO.
-                        rowCurrent = await params.client.isCurrent(machine);
-                        if (!rowCurrent) {
-                            nativeEffectGuardFailure = { error: new ManagedMachineNativeEffectGuardRefusal('intent_changed') };
+                    try {
+                        rowCurrent = await params.client.readCurrent(machine, role === 'inspect' || role === 'cleanup' ? 'inspect' : undefined) !== null;
+                        if (!rowCurrent || !activation.isCurrent()) {
+                            // Only this host-owned pre-handler check proves that
+                            // an admitted FIN native effect has not been issued.
+                            // Other custody failures and issued IO remain uncertain.
+                            if ((role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin) {
+                                nativeEffectGuardFailure = { error: new ManagedMachineNativeEffectGuardRefusal('intent_changed') };
+                            } else if (!rowCurrent) {
+                                nativeEffectGuardFailure = { error: new ManagedMachineControllerError('intent_changed') };
+                            }
                             return false;
                         }
+                        if (!await configurationCurrent()) {
+                            nativeEffectGuardFailure = { error: new ManagedMachineControllerError('credential_unavailable') };
+                            rowCurrent = false;
+                            return false;
+                        }
+                        if ((role === 'power' || role === 'destroy') && io?.beforeNativeEffect) {
+                            try { await io.beforeNativeEffect(); }
+                            catch (error) { nativeEffectGuardFailure = { error }; rowCurrent = false; return false; }
+                        }
+                        if ((role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin) {
+                            // Credential preparation and final idle confirmation
+                            // both await. Re-read the same Home-issued source only
+                            // after those awaits, immediately before handler IO.
+                            rowCurrent = await params.client.readCurrent(machine) !== null;
+                            if (!rowCurrent) {
+                                nativeEffectGuardFailure = { error: new ManagedMachineNativeEffectGuardRefusal('intent_changed') };
+                                return false;
+                            }
+                        }
+                        return true;
+                    } catch (error) {
+                        rowCurrent = false;
+                        // The dispatcher still fails closed; retain only the safe
+                        // domain refusal rather than its generic custody wrapper.
+                        if (error instanceof ManagedMachineControllerError) nativeEffectGuardFailure = {
+                            error: (role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin
+                                ? new ManagedMachineNativeEffectGuardRefusal(error.code) : error,
+                        };
+                        return false;
                     }
-                    return true;
                 },
             };
             const context = params.options.context;
