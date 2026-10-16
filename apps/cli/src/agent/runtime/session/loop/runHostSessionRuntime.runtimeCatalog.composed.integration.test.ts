@@ -1,8 +1,14 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
+import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRuntimeActionSettingsProvider';
+import { extractAssistantTextSnapshotFromAcpMessage } from '@/api/session/turns/extractAssistantTextSnapshot';
 import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { clearDaemonStateForTestTeardown, writeDaemonState } from '@/persistence';
@@ -19,17 +25,21 @@ import type { WorkflowStepExecutor } from '@/daemon/workflows/coordinator';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { resolveExecutionRunChildSelection } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
 import * as daemonControl from '@/daemon/controlClient';
+import { logger } from '@/ui/logger';
 import { createManifestAgentCatalogEntry } from '@/plugins/projection/registry/agentCliMetadata';
 import { createExternalContributionFixtures } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { readSessionCapabilityApplyChange, sessionCapabilityApplyNotice } from '../../../../../../ui/sources/components/sessions/capabilities/sessionCapabilityApplyNotice';
 import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionOwnerMetadataV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { readPendingCapabilityApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { CheckpointCodeRollbackResultSchema } from '@happier-dev/protocol/sessions/control/rollback/checkpointCodeRollback';
+import { buildRepositoryCheckpointRefs } from '@/scm/checkpoints';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   buildBackendTargetKey,
   accountSettingsParse,
+  normalizeActionsSettingsV1,
   buildBackendTargetKeyV2,
   DEFAULT_SESSION_PENDING_QUEUE_DELIVERY_TIMING,
   deriveSessionFollowWakeEventLocalIdV1,
@@ -40,6 +50,8 @@ import {
   SESSION_FOLLOW_WAKE_EVENT_MESSAGE,
   sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
   sealWorkflowFinalResultStoredEnvelopeV1,
+  sealWorkflowProgressStoredEnvelopeV1,
+  deriveWorkflowSessionInputLocalIdV2,
   serializeWorkflowStoredContentEnvelopeV1,
   type WorkflowRunSummaryV1,
   type WorkflowAcceptedSnapshotV1,
@@ -52,9 +64,10 @@ import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionModelMutationReversalV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { emptyMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { emptyPromptLibraryRecordV1, readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
-import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowMutationV1Schema, PromptLibraryRowMutationResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { createSkillStore } from '@/prompts/skills/store/skillStore';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { SESSION_MESSAGE_PROVENANCE_META_KEY } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type {
   AgentSessionRealtimeConversation,
@@ -94,7 +107,8 @@ vi.mock('@/agent/catalog/snapshot', async (importOriginal) => {
   };
 });
 
-import { runHostSessionRuntime, type HostRuntimeReplacementLifecycle, type HostSessionRuntimeConfig, type HostSessionRuntimeRunOptions } from './runHostSessionRuntime';
+import { runHostSessionRuntime, type HostRuntimeReplacementLifecycle, type HostSessionRuntimeConfig, type HostSessionRuntimeFactoryParams, type HostSessionRuntimeRunOptions } from './runHostSessionRuntime';
+import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import type { CreateSessionMetadataOptions } from '@/agent/runtime/createSessionMetadata';
 import type { cleanupBackendRunResources } from '@/agent/runtime/cleanupBackendRunResources';
 import type { InitializeBackendRunSessionOptions } from '@/agent/runtime/initializeBackendRunSession';
@@ -134,6 +148,7 @@ import {
 import { createMutableApiSessionClientFixture, createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { DeferredApiSessionClient } from '@/agent/runtime/startup/DeferredApiSessionClient';
+import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
 import { createMachineContentCodec } from '@/api/machine/machineStoredContent';
 import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 // The composed Follow gate below runs the real prompt loop over the real admitted
@@ -887,6 +902,69 @@ async function useShellBridgeRuntimeFixture(config: HostSessionRuntimeConfig) {
 }
 
 describe('runHostSessionRuntime', () => {
+  it('rolls back host repository checkpoints through the registered Session Action without an Agent rollback facet', async () => {
+    const harness = createHarness();
+    const rpc = new RpcHandlerManager({ scopePrefix: harness.session.sessionId, encryptionMode: 'plain' });
+    harness.session.rpcHandlerManager = rpc;
+    const root = await mkdtemp(join(tmpdir(), 'happier-host-checkpoint-rollback-'));
+    const execFile = promisify(execFileCallback);
+    const git = async (...args: string[]) => (await execFile('git', args, { cwd: root })).stdout.trim();
+    try {
+      await git('init');
+      await git('config', 'user.name', 'Happier Test');
+      await git('config', 'user.email', 'test@example.com');
+      await writeFile(join(root, 'tracked.txt'), 'initial\n');
+      await git('add', 'tracked.txt');
+      await git('commit', '-m', 'initial');
+      const repoRoot = await git('rev-parse', '--show-toplevel');
+      await harness.session.updateMetadata((metadata: Metadata) => ({ ...metadata, path: repoRoot }));
+      harness.deps.createSessionMetadataFn = () => ({
+        state: { controlledByUser: false },
+        metadata: { path: repoRoot, permissionMode: 'default', permissionModeUpdatedAt: Date.now() },
+      });
+      harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof import('@/agent/runtime/runPermissionModePromptLoop').runPermissionModePromptLoop>[0]) => {
+        await params.checkpointLifecycle?.onBeforePromptDispatch?.({ messageId: 'message-1', prompt: 'edit' });
+        await params.checkpointLifecycle?.onTurnStarted?.({ messageId: 'message-1', turnId: 'turn-1' });
+        await writeFile(join(root, 'tracked.txt'), 'agent change\n');
+        await params.checkpointLifecycle?.onTurnFinal?.({ messageId: 'message-1', turnId: 'turn-1', status: 'completed' });
+        const refs = buildRepositoryCheckpointRefs({ scopeId: `${harness.session.sessionId}:${repoRoot}`, turnId: 'turn-1' });
+        const request = {
+          v: 1, sessionId: harness.session.sessionId, turnId: 'turn-1', cwd: repoRoot,
+          codeMode: 'code_only_without_stash', backupMode: 'happier_checkpoint_only',
+          expectedStartRef: refs.turnStart?.ref, expectedFinalRef: refs.turnFinal?.ref,
+          codeOnlyTranscriptDivergenceConfirmed: true,
+        };
+        const invoke = async (input: unknown) => await rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_CHECKPOINT_CODE_ROLLBACK, input);
+        const foreign = CheckpointCodeRollbackResultSchema.parse(await invoke({ ...request, sessionId: 'another-session' }));
+        expect(foreign).toMatchObject({ status: 'unavailable', diagnostics: ['checkpoint_rollback_session_mismatch'] });
+        const wrongDirectory = CheckpointCodeRollbackResultSchema.parse(await invoke({ ...request, cwd: tmpdir() }));
+        expect(wrongDirectory).toMatchObject({ status: 'unavailable', diagnostics: ['checkpoint_rollback_worktree_mismatch'] });
+        expect(await readFile(join(root, 'tracked.txt'), 'utf8')).toBe('agent change\n');
+        const executor = createCliActionExecutor({
+          token: '', sessionId: harness.session.sessionId, mode: 'plain', ctx: null,
+          pluginActionExecutionOwner: 'current_process',
+          actionsSettingsProvider: createScopedRuntimeActionSettingsProvider(normalizeActionsSettingsV1({
+            v: 1, approvalWaivedSurfaces: { 'session.checkpoint_code_rollback': ['agent'] },
+          })),
+          invokeBoundSessionRpc: async (method, input) => await rpc.invokeLocal(method, input),
+        });
+        const executed = await executor.execute('session.checkpoint_code_rollback', request, {
+          surface: 'agent', authority: 'account_automation', defaultSessionId: harness.session.sessionId,
+        });
+        expect(executed, JSON.stringify(executed)).toMatchObject({ ok: true });
+        if (!executed.ok) throw new Error('Checkpoint Action failed');
+        const result = CheckpointCodeRollbackResultSchema.parse(executed.result);
+        expect(result).toMatchObject({ status: 'applied', changedPaths: ['tracked.txt'], diagnostics: [] });
+        expect(result.receipts).toContain('checkpoint.rollback_backup_captured');
+        expect(await readFile(join(root, 'tracked.txt'), 'utf8')).toBe('initial\n');
+        expect(await git('show', `${result.backupCheckpointRef}:tracked.txt`)).toBe('agent change');
+      };
+      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a hookless runtime before the Session loop can dispatch provider input', async () => {
     const harness = createHarness();
     const { setOnPromptDeliveryOutcome: _omittedOutcomePort, ...hooklessRuntime } = harness.runtime;
@@ -927,7 +1005,7 @@ describe('runHostSessionRuntime', () => {
     await pluginReloadController.shutdown({ timeoutMs: 5_000 });
   });
 
-  it.each(['create', 'resume', 'missing-skill', 'admitted-route', 'retired-during-skills'] as const)(
+  it.each(['create', 'resume', 'missing-skill', 'admitted-route', 'retired-during-skills', 'selected-role', 'selected-role-account-wake', 'selected-role-later-turn', 'selected-role-loading', 'selected-role-loading-unavailable', 'selected-role-settings-refresh'] as const)(
     'starts the real host runner with a skipped optional MCP server once for %s', async scenario => {
       const harness = createHarness();
       if (!runtimeRegistryLease) throw new Error('Missing runtime fixture');
@@ -949,6 +1027,17 @@ describe('runHostSessionRuntime', () => {
       } };
       harness.opts.credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'optional-account' })).toString('base64url')}.signature`, encryption: null };
       if (scenario === 'resume') harness.opts.resume = 'vendor-optional-session';
+      const selectedRole = scenario.startsWith('selected-role');
+      const loadingRole = scenario.startsWith('selected-role-loading');
+      const settingsRefresh = scenario === 'selected-role-settings-refresh';
+      if (selectedRole) {
+        const initialMetadata = harness.session.getMetadataSnapshot();
+        harness.session.getMetadataSnapshot = () => ({ ...initialMetadata, work: { sessionRolesV1: {
+          roleId: 'builder', overrides: loadingRole
+            ? { builder: { roleId: 'builder', secondOpinion: 'encouraged' } } : {},
+          sessionRoles: {}, notes: loadingRole ? 'ROLE_SESSION_CONTEXT' : '',
+        } } });
+      }
       const admittedRoute = 'http://127.0.0.1:59173';
       if (scenario === 'admitted-route') {
         vi.spyOn(harness.session, 'getServerBinding').mockReturnValue({
@@ -963,9 +1052,9 @@ describe('runHostSessionRuntime', () => {
         target: { t: 'allMachines' as const }, enabled: true, createdAt: 1, updatedAt: 1 }] : [];
       setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings: {}, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
-        promptLibraryCatalog: { status: 'ready', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ revision: 1,
+        ...(selectedRole ? {} : { promptLibraryCatalog: { status: 'ready' as const, rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ revision: 1,
           record: key === 'skill-rules' ? { key, value: { v: 1, rules } } : emptyPromptLibraryRecordV1(key) })),
-          tombstones: [], diagnostics: [] },
+          tombstones: [], diagnostics: [] } }),
         mcpServerCatalog: { status: 'ready', authority: 'active', revision: 1, diagnostics: [], catalog: { v: 1,
           servers: [{ id: 'optional-linear', name: 'optional-linear', transport: 'stdio', stdio: { command: 'echo', args: [] },
             env: { HAPPIER_FIX1_MISSING_KEY: { t: 'literal', v: '${HAPPIER_FIX1_MISSING_KEY}' } }, createdAt: 1, updatedAt: 1 }],
@@ -979,10 +1068,80 @@ describe('runHostSessionRuntime', () => {
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
       // HTTP/daemon IPC and the native Agent are external boundaries. The real
       // runner, MCP bridge/materializer, skill resolver and prompt owner compose here.
+      let inventoryReads = 0;
+      let invalidatedDuringRoleInventory = false;
+      let roleOverrideWritten = false;
+      const profiles = { status: 'ready' as const, authority: 'active' as const, source: 'destination' as const,
+        records: [], diagnostics: [], referenceGuardRevision: 1, control: null, controlRevision: 'absent' as const };
+      const roleRowsIssued = createDeferred<void>();
+      const releaseRoleRows = createDeferred<void>();
+      let settledTurns = 0;
+      let recaptureAccount: HostSessionRuntimeFactoryParams['resolveAccountSettingsSnapshot'];
+      let refreshedAccount: Awaited<ReturnType<NonNullable<HostSessionRuntimeFactoryParams['resolveAccountSettingsSnapshot']>>> | undefined;
+      const sentPrompts: string[] = [];
+      const preparationFailures: unknown[] = [];
+      if (scenario === 'selected-role-later-turn') {
+        // The substituted Agent accepts the real host's Role ceiling update.
+        harness.runtime.updateSessionRuntimeConfig = async () => ({ status: 'applied', timing: 'current_window' });
+        harness.runtime.sendTurnPrompt = async (prompt: string) => { sentPrompts.push(prompt); };
+        harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
+          params.messageQueue.push({ text: 'ROLE_FIRST_TURN', localId: null }, { permissionMode: 'default' });
+          await runPermissionModePromptLoop({ ...params, shouldExit: () => settledTurns === 2,
+            formatPromptErrorMessage: error => {
+              preparationFailures.push(error);
+              return params.formatPromptErrorMessage(error);
+            },
+            sendReady: () => {
+              settledTurns += 1;
+              params.sendReady();
+              if (settledTurns === 1) {
+                beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
+                params.messageQueue.push({ text: 'ROLE_SECOND_TURN', localId: null }, { permissionMode: 'default' });
+              }
+            } });
+        };
+      }
       const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+          mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0,
+        } };
+        if (path === '/v2/account/settings' && settingsRefresh) {
+          return { status: 200, data: AccountSettingsV2GetResponseSchema.parse({ version: 2,
+            content: { t: 'plain', v: { mcpServersStrictMode: false, preferredLanguage: 'fr' } } }) };
+        }
+        if (path === '/v1/account/entity-rows/prompt-library') {
+          inventoryReads += 1;
+          if (loadingRole && invalidatedDuringRoleInventory) {
+            roleRowsIssued.resolve();
+            await releaseRoleRows.promise;
+            if (scenario === 'selected-role-loading-unavailable') return { status: 503, data: {} };
+          }
+          if (scenario === 'selected-role-account-wake' || scenario === 'selected-role-later-turn') {
+            // Independent Account hydration is an external wake. The private
+            // Session reader still owns its in-flight prompt/Role demand.
+            commitActiveProfileCatalog({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+              catalog: { status: 'ready', authority: 'active', source: 'destination', records: [], diagnostics: [],
+                referenceGuardRevision: inventoryReads, control: null, controlRevision: 'absent' } });
+            if (settledTurns === 1) await recaptureAccount?.();
+          }
+          return { status: 200, data: { status: 'listed',
+            rows: PromptLibraryCatalogKeyV1Schema.options.filter(key => !settingsRefresh || roleOverrideWritten || key !== 'role-overrides')
+              .map(key => ({ key, revision: key === 'role-overrides' && settledTurns === 1 ? 2 : 1,
+              content: { t: 'plain', v: key === 'role-overrides' && settledTurns === 1
+                ? { key, value: { v: 1, overrides: { builder: { roleId: 'builder', instructionsOverride: 'ROLE_SECOND_CONTEXT' } } } }
+                : key === 'role-overrides' && loadingRole
+                  ? { key, value: { v: 1, overrides: { builder: { roleId: 'builder', instructionsOverride: 'ROLE_ACCOUNT_CONTEXT' } } } }
+                : emptyPromptLibraryRecordV1(key) } })),
+          } };
+        }
         if (path === '/v1/artifacts') {
+          if (loadingRole && !invalidatedDuringRoleInventory
+            && new URL(String(url)).searchParams.get('includeBody') === 'true') {
+            invalidatedDuringRoleInventory = true;
+            beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
+          }
           if (scenario === 'retired-during-skills') {
             const snapshot = getActiveAccountSettingsSnapshot();
             if (!snapshot) throw new Error('Missing captured Account');
@@ -994,6 +1153,18 @@ describe('runHostSessionRuntime', () => {
         if (path === '/v1/artifacts/missing-skill') return { status: 404, data: { error: 'not_found' } };
         throw new Error(`Unexpected optional-capability HTTP path: ${path}`);
       });
+      const post = settingsRefresh ? vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+        expect(new URL(String(url)).pathname).toBe('/v1/account/entity-rows/prompt-library/role-overrides');
+        const mutation = PromptLibraryRowMutationV1Schema.parse(body);
+        expect(mutation).toMatchObject({ expectedRevision: 'absent', sourceSettingsVersion: 2 });
+        roleOverrideWritten = true;
+        // The real source reader has privately accepted Settings v2. An
+        // independent domain now publishes from the still-v1 ambient owner.
+        expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(1);
+        expect(commitActiveProfileCatalog({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+          catalog: profiles })).toBe(true);
+        return { status: 200, data: PromptLibraryRowMutationResponseV1Schema.parse({ status: 'updated', revision: 1, cursor: 1 }) };
+      }) : null;
       const catalog = vi.spyOn(daemonControl, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
       const home = await mkdtemp(join(tmpdir(), 'happier-fix1-composed-'));
       const store = createSkillStore({ happyHomeDir: home });
@@ -1002,28 +1173,79 @@ describe('runHostSessionRuntime', () => {
       delete harness.deps.cleanupBackendRunResourcesFn;
       const createRuntime = harness.config.createSessionRuntime!;
       let opened = false;
+      const constructionDiagnostic = vi.spyOn(logger, 'infoFile');
       setSessionRuntimeFactory(harness.config, async params => {
+        recaptureAccount = params.resolveAccountSettingsSnapshot;
         expect(params.mcpServers?.['optional-linear']).toBeUndefined();
         expect(params.mcpServers?.happier).toBeDefined();
+        if (settingsRefresh) {
+          refreshedAccount = await params.resolveAccountSettingsSnapshot?.();
+        }
         if (!params.resolveFreshSessionSystemPrompt) throw new Error('Missing production prompt binding');
-        expect(await params.resolveFreshSessionSystemPrompt({ baseOverride: 'Base instructions' })).toContain('Base instructions');
+        const prompt = await params.resolveFreshSessionSystemPrompt({ baseOverride: 'Base instructions' });
+        expect(prompt).toContain('Base instructions');
+        if (selectedRole) expect(prompt).toContain('Builder');
+        if (loadingRole) {
+          expect(prompt).toContain('ROLE_ACCOUNT_CONTEXT');
+          expect(prompt).toContain('ROLE_SESSION_CONTEXT');
+          // The real host must publish its admitted Role holder to the Action
+          // receiver, rather than leaving that receiver to construct another.
+          const bound = applyRunnerMcpSessionContext(params.session, {}).getSessionRoleContext?.();
+          expect(await bound?.readAccountOverrides()).toMatchObject({ status: 'ready', overrides: {
+            builder: { instructionsOverride: 'ROLE_ACCOUNT_CONTEXT' },
+          } });
+          expect(bound?.readOperationContext?.()).toBeDefined();
+        }
         opened = true;
         return createRuntime(params);
       });
       try {
         if (scenario === 'retired-during-skills') {
-          await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toMatchObject({
-            code: 'context_source_unavailable', reason: 'scope-retired',
-          });
+          await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).resolves.toBeUndefined();
           expect(opened).toBe(false);
           expect(harness.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({
             action: 'fail',
             issue: expect.objectContaining({ code: 'preparation_pending', source: 'dependency_failure' }),
           }));
+          const { SessionTurnMutationV1Schema } = await import('@happier-dev/protocol/sessions/turns/sessionTurnMutationV1');
+          const mutationCalls: readonly (readonly unknown[])[] = harness.session.enqueueSessionTurnMutation.mock.calls;
+          const mutations = mutationCalls.map(([mutation]) => SessionTurnMutationV1Schema.parse(mutation));
+          expect(mutations.filter(mutation => mutation.action === 'fail')).toEqual([
+            expect.objectContaining({ issue: expect.objectContaining({ code: 'preparation_pending', source: 'dependency_failure' }) }),
+          ]);
           return;
         }
-        await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+        const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+        if (loadingRole) {
+          // The real Role source read crosses a Home boundary after its initial
+          // preparation. A withdrawn catalog must be demanded again before use.
+          await Promise.race([roleRowsIssued.promise, running]);
+          expect(opened).toBe(false);
+          releaseRoleRows.resolve();
+        }
+        await running;
+        if (scenario === 'selected-role-loading-unavailable') {
+          expect(opened).toBe(false);
+          expect(constructionDiagnostic.mock.calls.filter(([message]) => message.includes('Session construction failed')))
+            .toEqual([[expect.any(String), expect.objectContaining({ originalCode: 'role_overrides_unavailable', reason: 'unreachable' })]]);
+          expect(harness.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({ action: 'fail',
+            issue: expect.objectContaining({ code: 'preparation_pending', source: 'dependency_failure' }) }));
+          return;
+        }
+        expect(constructionDiagnostic.mock.calls.filter(([message]) => message.includes('Session construction failed'))).toEqual([]);
         expect(opened).toBe(true);
+        if (settingsRefresh) {
+          expect(roleOverrideWritten).toBe(true);
+          expect(refreshedAccount).toMatchObject({ settingsVersion: 2, rawSettings: { mcpServersStrictMode: false, preferredLanguage: 'fr' },
+            settings: { preferredLanguage: 'fr' }, profileCatalog: profiles });
+          expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(1);
+        }
+        if (scenario === 'selected-role-later-turn') {
+          expect(preparationFailures.map(readSessionPreparationFailureDiagnostic)).toEqual([]);
+          expect(sentPrompts).toEqual([expect.stringContaining('ROLE_FIRST_TURN'), expect.stringContaining('ROLE_SECOND_TURN')]);
+          expect(sentPrompts[1]).toContain('ROLE_SECOND_CONTEXT');
+          expect(settledTurns).toBe(2);
+        }
         if (scenario === 'admitted-route') {
           expect(get.mock.calls.length).toBeGreaterThan(0);
           expect(get.mock.calls.some(call => new URL(String(call[0])).pathname === '/v1/artifacts')).toBe(true);
@@ -1038,7 +1260,8 @@ describe('runHostSessionRuntime', () => {
         const skills = notices.flatMap(notice => notice?.items ?? []).filter(item => item.kind === 'skill');
         expect(skills).toEqual(scenario === 'missing-skill' ? [expect.objectContaining({ itemId: 'missing-skill', detail: 'content_unreadable' })] : []);
       } finally {
-        get.mockRestore(); catalog.mockRestore(); ensure.mockRestore();
+        releaseRoleRows.resolve();
+        get.mockRestore(); post?.mockRestore(); catalog.mockRestore(); ensure.mockRestore(); constructionDiagnostic.mockRestore();
         await store.releaseSkillSessionDirs('session-1'); await store.collectSkillCache({ libraryDigests: [] });
         await rm(home, { recursive: true, force: true });
         vi.unstubAllEnvs(); resetActiveAccountSettingsSnapshotForTests();
@@ -1285,9 +1508,9 @@ describe('runHostSessionRuntime', () => {
     const scopeKey = resolveAccountSettingsScopeKey(credentials);
     setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings: {}, scopeKey,
       settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] });
-    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+    const executor = createActionExecutor({ ...createCliActionDeps({ token: credentials.token, credentials,
       serverId: configuration.activeServerId, serverIdentityId: configuration.activeServerId, serverHttpBaseUrl: url,
-      sessionId: 'account-client', mode: 'plain', ctx: null }));
+      sessionId: 'account-client', mode: 'plain', ctx: null }) });
     const actionContext = { surface: 'ui' as const, authority: 'present_user' as const };
     const store = createSkillStore({ happyHomeDir: join(sqlite.baseDir, 'skills-home') });
     let run: Promise<void> | null = null;
@@ -1311,7 +1534,7 @@ describe('runHostSessionRuntime', () => {
       if (mcpRules) {
         const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'rule-mcp', name: 'rule-mcp',
           transport: 'http', remote: { url: 'https://example.com/mcp', headers: {} }, env: {}, createdAt: 1, updatedAt: 1 }],
-          bindings: [{ id: 'rule-mcp-machine', serverId: 'rule-mcp', target: { t: 'machine', machineId: harness.opts.machineId ?? 'machine-1' },
+          bindings: [{ id: 'rule-mcp-machine', serverId: 'rule-mcp', target: { t: 'machine', machineId: 'machine-1' },
             enabled: !startOff, createdAt: 1, updatedAt: 1 }] });
         await db.userKVStore.create({ data: { accountId: account.id, key: MCP_SERVER_CATALOG_ACCOUNT_KEY_V1, version: 1,
           value: new TextEncoder().encode(JSON.stringify(sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog }))) } });
@@ -1319,9 +1542,11 @@ describe('runHostSessionRuntime', () => {
       }
       let startupDocumentId: string | undefined;
       if (duringPreparation) {
-        const document = await executor.execute('prompt_doc.create', { title: 'Startup context', markdown: 'FIX20D_PREPARED_CONTEXT' }, actionContext);
+        const document = await executor.execute('prompt_doc.create', { title: 'Startup context', markdown: 'FIX20D_PREPARED_CONTEXT' }, {
+          ...actionContext, presentUserConfirmation: { actionId: 'prompt_doc.create' },
+        });
         if (!document.ok || typeof document.result !== 'object' || document.result === null
-          || !('artifactId' in document.result) || typeof document.result.artifactId !== 'string') throw new Error('Startup document creation failed');
+          || !('artifactId' in document.result) || typeof document.result.artifactId !== 'string') throw new Error(`Startup document creation failed: ${JSON.stringify(document)}`);
         startupDocumentId = document.result.artifactId;
         await harness.session.updateMetadata((metadata: Metadata) => ({ ...metadata, work: { ...metadata.work,
           promptStack: [{ id: 'startup-context', ref: { kind: 'doc', artifactId: startupDocumentId! }, enabled: true, placement: 'system_append' }] } }));
@@ -1359,7 +1584,7 @@ describe('runHostSessionRuntime', () => {
           const opened = openMcpServerCatalogContentV1({ content: row.content, mode: 'plain', material: null });
           if (opened.status !== 'opened') throw new Error('Unreadable MCP row');
           const catalog = applyMcpServerCatalogMutationV1(opened.catalog, { kind: 'rules-change', serverIds: ['rule-mcp'],
-            change: { kind: 'write', write: { place: { t: 'machine', machineId: harness.opts.machineId ?? 'machine-1' }, state } } },
+            change: { kind: 'write', write: { place: { t: 'machine', machineId: 'machine-1' }, state } } },
             { nowMs: Date.now(), newId: () => 'rule-mcp-machine' });
           const mutation = McpServerCatalogRowMutationV1Schema.parse({ expectedRevision: row.revision,
             content: sealMcpServerCatalogContentV1({ catalog, mode: 'plain', material: null }) });
@@ -1375,7 +1600,7 @@ describe('runHostSessionRuntime', () => {
         const rules = [...opened.record.value.rules.filter(rule => rule.skillId !== item.skillId),
           ...applyReachRulesChangeV1(opened.record.value.rules.filter(rule => rule.skillId === item.skillId),
             { kind: 'write', write: { place: loadingAtAdmission
-              ? { t: 'machine', machineId: harness.opts.machineId ?? 'machine-1' } : { t: 'allMachines' }, state } },
+              ? { t: 'machine', machineId: 'machine-1' } : { t: 'allMachines' }, state } },
             { nowMs: Date.now(), newId: () => 'socket-rule' }).map(rule => ({ ...rule, skillId: item.skillId }))];
         const mutation = PromptLibraryRowMutationV1Schema.parse({ expectedRevision: row.revision,
           content: sealPromptLibraryContentV1({ record: { ...opened.record, value: { ...opened.record.value, rules } }, mode: 'plain', material: null }) });
@@ -1418,7 +1643,7 @@ describe('runHostSessionRuntime', () => {
       let root = '';
       const acknowledged: string[][] = [];
       const restoredAck = createDeferred<void>();
-      const refresh = vi.fn(async ({ skills }: Parameters<NonNullable<import('@happier-dev/plugin-sdk/agent-runtime').AgentSessionRuntime['refreshSkills']>>[0]) => {
+      const refresh = vi.fn(async ({ skills }: Parameters<NonNullable<import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionRuntime['refreshSkills']>>[0]) => {
         const delivery = AgentSessionSkillDeliveryV1Schema.parse(skills);
         acknowledged.push(delivery.items.map(skill => skill.skillId));
         if (delivery.items.some(skill => skill.skillId === item.skillId)) restoredAck.resolve();
@@ -1933,9 +2158,11 @@ describe('runHostSessionRuntime', () => {
     harness.runtime.updateSessionRuntimeConfig = async () => ({ status: 'applied' });
     harness.runtime.resetOrDisposeRuntime = async () => { await harness.runtime.reset(); };
     harness.runtime.readSessionIdentity = () => ({ sessionId: null });
-    harness.runtime.readAppliedTeamCredentialModel = () => null;
+    let appliedIdentityReady = false;
+    harness.runtime.readAppliedTeamCredentialModel = () => appliedIdentityReady ? null : undefined;
     harness.runtime.openedWithoutConnectedServices = () => true;
     let registrationComplete = false;
+    let daemonSelectionReady = false;
     let authAppliedAfterRegistration = false;
     harness.runtime.runtimeAuth = {
       apply: async () => {
@@ -1946,9 +2173,20 @@ describe('runHostSessionRuntime', () => {
     };
     let controls: SessionRuntimeControls | null = null;
     harness.session.setSessionRuntimeControls = (next: SessionRuntimeControls | null) => { controls = next; };
+    const diagnostics = vi.spyOn(logger, 'infoFile');
     harness.deps.runPermissionModePromptLoopFn = async () => {
       expect(registrationComplete).toBe(false);
       if (!controls?.readAppliedChildSelection) throw new Error('Attached parent reader was not installed');
+      expect(await controls.readAppliedChildSelection()).toEqual({ status: 'unavailable' });
+      expect(diagnostics).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        reason: 'native_applied_selection_unavailable',
+      }));
+      appliedIdentityReady = true;
+      expect(await controls.readAppliedChildSelection()).toEqual({ status: 'unavailable' });
+      expect(diagnostics).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        reason: 'connected_services_unavailable',
+      }));
+      daemonSelectionReady = true;
       const authApply = controls.applyConnectedServiceAuthGeneration?.({
         serviceId: 'openai-codex', reason: 'manual', authGeneration: { credential: { kind: 'oauth' } },
       });
@@ -1978,7 +2216,7 @@ describe('runHostSessionRuntime', () => {
           } else {
             // An ordinary inheritance read before registration has no applied
             // authority, even though the parent's first prompt can proceed.
-            response.end(JSON.stringify(registrationComplete
+            response.end(JSON.stringify(registrationComplete && daemonSelectionReady
               ? { status: 'applied', connectedServices: { v: 2, bindingsByServiceId: {} } }
               : { status: 'unavailable' }));
           }
@@ -1995,6 +2233,7 @@ describe('runHostSessionRuntime', () => {
         startedWithCliVersion: 'test', controlToken: 'test-token' });
       await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
     } finally {
+      diagnostics.mockRestore();
       await clearDaemonStateForTestTeardown();
       envScope.restore();
       reloadConfiguration();
@@ -8722,21 +8961,67 @@ describe('runHostSessionRuntime', () => {
     }
   });
 
-  it.each(['preparation_pending', 'profile_missing'] as const)('publishes typed %s before releasing Session startup custody', async (code) => {
+  it('records the runtime issue when an admitted Session loses Account context before its next person turn', async () => {
+    const harness = createHarness();
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'context-refusal-account' })).toString('base64url')}.signature`, encryption: null };
+    const scopeKey = resolveAccountSettingsScopeKey(credentials);
+    const account = { scopeKey, source: 'network' as const, settings: accountSettingsParse({}),
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null };
+    harness.opts.credentials = credentials;
+    harness.opts.accountSettingsContext = account;
+    setActiveAccountSettingsSnapshot({ ...account, promptLibraryCatalog: { status: 'ready', rows: [], diagnostics: [],
+      tombstones: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1 })) } });
+    let settled = false;
+    harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
+      // A sign-out/lifetime retirement is an external Account-state transition.
+      // Keep the actual prompt resolver, dispatch loop and lifecycle wiring.
+      resetActiveAccountSettingsSnapshotForTests();
+      params.messageQueue.push({ text: 'Continue the goal', localId: 'person-context-refusal' }, { permissionMode: 'default' });
+      await runPermissionModePromptLoop({ ...params, shouldExit: () => settled,
+        sendReady: () => { settled = true; } });
+    };
+    try {
+      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      expect(harness.runtime.sendPrompt).not.toHaveBeenCalled();
+      expect(harness.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'fail', issue: expect.objectContaining({ code: 'preparation_pending', source: 'dependency_failure' }),
+      }));
+    } finally { resetActiveAccountSettingsSnapshotForTests(); }
+  });
+
+  it.each(['preparation_pending', 'profile_missing', 'context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete'] as const)('publishes typed %s before releasing Session startup custody', async (code) => {
     const { PromptStackPreparationError } = await import('@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1');
     const { HomeTargetResolutionError } = await import('@happier-dev/cli-common/homeTarget');
     const harness = createHarness();
-    const failure = new PromptStackPreparationError('unavailable', { kind: 'doc', artifactId: 'private-prompt' });
+    const failure = code === 'context_source_unavailable' || code === 'role_overrides_unavailable' || code === 'role_source_incomplete'
+      ? Object.assign(new Error('private preparation content'), { code,
+        reason: code === 'role_source_incomplete' ? 'private-reason' : 'scope-retired',
+        contextSource: code === 'role_source_incomplete' ? 'private-source' : 'account_lifetime' })
+      : new PromptStackPreparationError('unavailable', { kind: 'doc', artifactId: 'private-prompt' });
     if (code === 'profile_missing') Object.assign(failure, {
       cause: new HomeTargetResolutionError('profile_missing', 'private Home reference'),
     });
     // The Agent runtime factory is the plugin boundary; host lifecycle and publication stay real.
     setSessionRuntimeFactory(harness.config, async () => { throw failure; });
-
-    await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toBe(failure);
+    const diagnostic = vi.spyOn(logger, 'infoFile');
+    const publishedCode = code === 'profile_missing' ? code : 'preparation_pending';
+    const run = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    if (publishedCode === 'preparation_pending') await expect(run).resolves.toBeUndefined();
+    else await expect(run).rejects.toBe(failure);
+    const diagnosticIndex = diagnostic.mock.calls.findIndex(([message]) => message.includes('Session construction failed'));
+    expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
+    const diagnosticFields = diagnostic.mock.calls[diagnosticIndex]?.[1];
+    expect(diagnosticFields).toMatchObject({
+      originalCode: code === 'profile_missing' ? 'preparation_pending' : code,
+      reason: code === 'role_source_incomplete' ? 'unknown'
+        : code === 'context_source_unavailable' || code === 'role_overrides_unavailable' ? 'scope-retired' : 'unavailable',
+      contextSource: code === 'context_source_unavailable' || code === 'role_overrides_unavailable' ? 'account_lifetime' : 'unknown',
+      phase: 'skills_preparation',
+    });
+    expect(JSON.stringify(diagnosticFields)).not.toContain('private');
     expect(harness.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({
       action: 'fail',
-      issue: expect.objectContaining({ code, source: 'dependency_failure' }),
+      issue: expect.objectContaining({ code: publishedCode, source: 'dependency_failure' }),
     }));
     const failureCallIndex = harness.session.enqueueSessionTurnMutation.mock.calls
       .findIndex((call: readonly unknown[]) => {
@@ -8746,7 +9031,10 @@ describe('runHostSessionRuntime', () => {
       });
     expect(harness.session.enqueueSessionTurnMutation.mock.invocationCallOrder[failureCallIndex])
       .toBeLessThan(harness.session.deactivateDurableMutationDelivery.mock.invocationCallOrder[0]!);
+    expect(diagnostic.mock.invocationCallOrder[diagnosticIndex])
+      .toBeLessThan(harness.session.enqueueSessionTurnMutation.mock.invocationCallOrder[failureCallIndex]!);
     expect(harness.session.close).toHaveBeenCalledOnce();
+    diagnostic.mockRestore();
   });
 
   it('resolves and passes native MCP servers for the Grok catalog policy', async () => {
@@ -11093,13 +11381,14 @@ describe('runHostSessionRuntime', () => {
     expect(harness.session.acknowledgeSessionFollow).not.toHaveBeenCalled();
   });
 
-  it('pulls an originating workflow through the default host context owner and ACKs only accepted context', async () => {
+  it.each(['attached', 'wake', 'step'] as const)('pulls an originating workflow through the default host context owner (%s)', async (delivery) => {
     const harness = createHarness();
     const accountId = 'origin-account';
     harness.opts.credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
     const run: WorkflowRunSummaryV1 = { sourceArtifactId: null, ownerAccountId: accountId, visibleTeamId: null,
       id: 'origin-run', origin: { kind: 'direct', originSessionId: 'session-1' }, machineId: 'machine-1',
-      state: 'succeeded', revision: 3, workflowCustodyState: 'settled', originDeliveryAckRevision: 0,
+      state: delivery === 'step' ? 'running' : 'succeeded', revision: 3,
+      workflowCustodyState: delivery === 'step' ? 'pending' : 'settled', originDeliveryAckRevision: delivery === 'step' ? null : 0,
       attentionRequired: false, createdAt: '2026-09-30T00:00:00.000Z', updatedAt: '2026-09-30T00:00:00.000Z',
       availability: { pause: false, resumeBoundary: false, restoreWorkspace: false, cancel: false, inspectExecution: true, disabledReasons: [] },
     };
@@ -11127,22 +11416,147 @@ describe('runHostSessionRuntime', () => {
       dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [],
     };
     const requests: string[] = [];
+    const invocationId = 'upkeep';
+    const localInputId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId: run.id, invocationRecordId: invocationId });
+    const index = { id: invocationId, runId: run.id, sequence: '1', parentRecordId: 'root', memberOrdinal: '0', attempt: '0',
+      lifecycle: 'admitting', contentRevision: '0', createdAt: run.createdAt, updatedAt: run.updatedAt };
+    const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'invocation_progress', accountId, runId: run.id, recordId: invocationId,
+        sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: '0', attempt: '0' },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: 'work', scope: [] },
+        attempt: '0', logicalInvocationRecordId: invocationId,
+        input: { document: { text: 'DEFAULT_ORIGIN_RESULT', references: [], attachments: [] }, input: [], renderedText: 'DEFAULT_ORIGIN_RESULT' },
+        resultContract: { kind: 'text' }, execution: { kind: 'session', sessionId: harness.session.sessionId, localInputId } },
+    }));
     // HTTP is the real storage/currentness boundary; the context consumer, schemas and codecs remain real.
     const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
       const operation = (body as Readonly<{ operation: string }>).operation;
       requests.push(operation);
-      const data = operation === 'delivery.pull' ? { runs: [{ run, acceptedEnvelope, resultEnvelope, hasOriginInputCandidates: false }] }
+      const data = operation === 'delivery.pull' ? { runs: [{ run, acceptedEnvelope,
+        resultEnvelope: delivery === 'step' ? null : resultEnvelope, hasOriginInputCandidates: delivery === 'step' }] }
         : operation === 'run-key.census' ? census
-        : operation === 'invocations.get' ? { invocation: null }
+        : operation === 'invocations.list' ? { invocations: [index], progressEnvelopesByInvocationId: { [invocationId]: contentEnvelope } }
+        : operation === 'invocations.get' || operation === 'invocations.current' ? { invocation: delivery === 'step' ? { index, contentEnvelope } : null }
         : operation === 'delivery.ack' ? { acknowledgedRevision: 3 }
         : operation === 'get' ? { run, acceptedEnvelope, resultEnvelope }
         : (() => { throw new Error(`unexpected mutation: ${operation}`); })();
       return { status: 200, data };
     });
-    const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
-      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
-    } });
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (url.includes('/messages/by-local-id/')) throw Object.assign(new Error('Message not found'), {
+        isAxiosError: true, response: { status: 404, data: { error: 'Message not found' } },
+      });
+      return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+    });
     try {
+      if (delivery !== 'attached') {
+        const [{ createClaudeNativeSessionRuntimeFromOperations }, { createClaudeAgentSdkTurnOperations }, fixtures,
+          { createNativeAgentSessionOperations }, { createTurnAssistantTextSnapshotStore }, { SessionTurnMutationV1Schema }] = await Promise.all([
+          import('../../../../../../../packages/plugins/claude/src/agent/runtime/nativeRuntime'),
+          import('../../../../../../../packages/plugins/claude/src/agent/runtime/remote/sdk/session'),
+          import('../../../../../../../packages/plugins/claude/src/agent/runtime/engine.testkit'),
+          import('@/agent/runtime/registry/engineRegistry/nativeAgentSession'),
+          import('@/api/session/turns/assistantTextSnapshotStore'),
+          import('@happier-dev/protocol/sessions/turns/sessionTurnMutationV1'),
+        ]);
+        const exec = fixtures.createSdkExecFixture();
+        const ctx = fixtures.createPluginContextFixture(fixtures.createTerminalHostFixture().service,
+          fixtures.createEventsFixture().service, { exec: exec.service });
+        // SDK host services are the OS/resource boundary; Claude codecs and both lifecycle owners are real.
+        const context = { signal: new AbortController().signal, services: { exec: exec.service }, session: { services: {
+          activeInput: { bind: () => ({ dispose() {} }) }, models: { bind: () => ({ dispose() {} }) },
+        } } } as unknown as import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionRuntimeContext;
+        const native = createClaudeNativeSessionRuntimeFromOperations(createClaudeAgentSdkTurnOperations({
+          ctx, directory: '/tmp/host-wake', launchEnv: {}, permissionMode: 'default', happierSessionId: harness.session.sessionId,
+          initialModelId: 'claude-haiku-4-5', initialEffort: 'low', publishTranscriptMessages: true,
+        }), { kind: 'create', sessionId: harness.session.sessionId, cwd: '/tmp/host-wake' }, context);
+        const runtime = createNativeAgentSessionOperations(native, harness.session.sessionId, undefined, undefined, undefined, undefined, undefined, {
+          context, cwd: '/tmp/host-wake', connectedAccounts: [],
+          capabilities: { open: ['create'], delivery: ['newTurn'], cancel: true },
+          cancellation: { declared: true }, configuration: { declared: false }, manualCompaction: { declared: false },
+        });
+        const snapshot = createTurnAssistantTextSnapshotStore();
+        let observedSeq = 16;
+        let finalAssistantSeq: number | null = null;
+        const events: unknown[] = [];
+        const mutations: import('@happier-dev/protocol').SessionTurnMutationV1[] = [];
+        Object.assign(harness.session, {
+          hasPendingProviderInput: () => false,
+          getLastObservedMessageSeq: () => observedSeq,
+          getCommittedUserMessageSeq: () => null,
+          getTurnAssistantTextSnapshotStore: () => snapshot,
+          enqueueSessionTurnMutation: async (value: unknown) => { mutations.push(SessionTurnMutationV1Schema.parse(value)); },
+          sendAgentMessageEphemeral: () => ({ accepted: true as const, epoch: 0 }),
+          enqueueAgentMessageCommitted: async (provider: Parameters<ApiSessionClient['enqueueAgentMessageCommitted']>[0], body: import('@/api/session/sessionMessageTypes').ACPMessageData,
+            options: Parameters<ApiSessionClient['enqueueAgentMessageCommitted']>[2]) => {
+            events.push(body);
+            observedSeq += 1;
+            const assistant = extractAssistantTextSnapshotFromAcpMessage(provider, body);
+            if (assistant) {
+              snapshot.observe({ ...assistant, localId: options.localId, seq: observedSeq, source: 'committed' });
+              finalAssistantSeq = observedSeq;
+            }
+            return { persisted: true as const, delivered: true as const };
+          },
+        });
+        setSessionRuntimeFactory(harness.config, () => ({ operations: runtime, nativeRuntime: runtime }));
+        let finished = false;
+        const testController = new AbortController();
+        harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
+          await runPermissionModePromptLoop({ ...params, getAbortSignal: () => testController.signal,
+            shouldExit: () => finished, sendReady: () => { finished = true; } });
+          // The next pull flushes the Workflow owner's accepted-delivery ACKs.
+          await params.prepareHostContext?.({ signal: new AbortController().signal, requiredPrompt: '' });
+        };
+        const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+        void running.catch(() => undefined);
+        try {
+          await vi.waitFor(() => expect(exec.written, JSON.stringify({ requests,
+            workflowErrors: loggerDebugMock.mock.calls.filter(([label]) => String(label).includes('Workflow origin context unavailable')),
+          })).toHaveLength(1));
+          expect(JSON.stringify(exec.written)).toContain('DEFAULT_ORIGIN_RESULT');
+          const { resolveCausalPermissionMode } = await import('@/agent/permissions/causalPermissionMode');
+          const witness = runtime.readActiveTurnPermissionWitness?.();
+          const permission = resolveCausalPermissionMode({ currentPermissionMode: 'yolo', context: {
+            causalPermissionAuthority: witness?.causalPermissionAuthority ?? null,
+          } });
+          await exec.emit({ type: 'system', subtype: 'init', session_id: 'native-wake-session' });
+          await exec.emit({ type: 'assistant', uuid: 'wake-answer', session_id: 'native-wake-session',
+            message: { id: 'wake-message', type: 'message', role: 'assistant', model: 'claude-haiku-4-5',
+              content: [{ type: 'text', text: 'WAKE_COMPLETE' }], stop_reason: 'end_turn', stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 1 } } });
+          await exec.emit({ type: 'result', subtype: 'success', is_error: false, session_id: 'native-wake-session',
+            result: 'WAKE_COMPLETE', duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0,
+            usage: { input_tokens: 1, output_tokens: 1 } });
+          await exec.resolveExit();
+          await running;
+          if (delivery === 'step') expect(permission)
+            .toMatchObject({ ok: true, authority: 'admittedSessionInputV1', effectiveMode: 'default' });
+          expect(mutations).toContainEqual(expect.objectContaining({ action: 'begin',
+            ...(delivery === 'step' ? { initiator: 'workflow', workDepth: 1,
+              workflowInvocation: { runId: run.id, invocationRecordId: invocationId } } : { initiator: 'host' }) }));
+          const completed = mutations.find(value => value.action === 'complete');
+          expect(finalAssistantSeq).toBeTypeOf('number');
+          expect(completed).toMatchObject({ transcriptAnchors: { startSeqInclusive: 18, endSeqInclusive: observedSeq,
+            finalAssistantMessageSeq: finalAssistantSeq } });
+          expect(completed && 'transcriptAnchors' in completed ? completed.transcriptAnchors : null)
+            .not.toHaveProperty('startUserMessageSeq');
+          expect(events).toContainEqual(expect.objectContaining({ type: 'event', data: expect.objectContaining(delivery === 'step'
+            ? { type: 'message', message: 'Workflow step input' }
+            : { type: 'worker-update', update: expect.objectContaining({ workerKind: 'workflow_run', workerId: run.id }) }) }));
+          if (delivery === 'step') expect(requests).toContain('invocations.current');
+          else expect(requests).toContain('delivery.ack');
+        } finally {
+          finished = true;
+          testController.abort();
+          await exec.resolveExit();
+          await runtime.resetOrDisposeRuntime('session_end');
+          await running;
+        }
+        return;
+      }
       harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
         const input = { signal: new AbortController().signal, requiredPrompt: 'normal user input' };
         const context = await params.prepareHostContext?.(input);
@@ -11317,6 +11731,7 @@ describe('runHostSessionRuntime', () => {
         return step ? {
           kind: 'workflow_step', ...step,
           workflowInvocation: { runId: 'isolated-run', invocationRecordId: step.localInputId },
+          causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
           workDepth: 2,
           acknowledgeAccepted: () => undefined,
         } : null;
@@ -11388,6 +11803,7 @@ describe('runHostSessionRuntime', () => {
         return {
           kind: 'workflow_step', localInputId: 'step-after-user', text: 'WORKFLOW_AFTER_USER',
           workflowInvocation: { runId: 'priority-run', invocationRecordId: 'priority-invocation' },
+          causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
           workDepth: 1,
           acknowledgeAccepted: () => { stepAvailable = false; },
         };

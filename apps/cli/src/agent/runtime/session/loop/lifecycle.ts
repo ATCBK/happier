@@ -495,6 +495,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         const finalAssistantMessageSeq = (snapshot?.source === 'committed' || snapshot?.source === 'socket')
           && typeof snapshot.seq === 'number' && Number.isSafeInteger(snapshot.seq) && snapshot.seq >= 0
           ? snapshot.seq : null;
+        // Context-only turns have no user row. Their existing snapshot frontier
+        // still bounds the reply; a non-null final anchor requires that range.
+        const startSeqInclusive = startUserMessageSeq ?? (finalAssistantMessageSeq === null
+          ? undefined
+          : snapshot?.startSeqExclusive != null
+            ? snapshot.startSeqExclusive + 1
+            : finalAssistantMessageSeq);
         const observedSeq = params.session.getLastObservedMessageSeq?.();
         const endSeqs = [...userMessageSeqs,
           ...(typeof observedSeq === 'number' && Number.isSafeInteger(observedSeq) && observedSeq >= 0 ? [observedSeq] : []),
@@ -515,9 +522,9 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
                 ...mutation,
                 transcriptAnchors: {
                   ...mutation.transcriptAnchors,
-                  ...(startUserMessageSeq !== undefined ? {
-                    startUserMessageSeq, userMessageSeqs,
-                    startSeqInclusive: startUserMessageSeq, endSeqInclusive: Math.max(...endSeqs),
+                  ...(startUserMessageSeq !== undefined ? { startUserMessageSeq, userMessageSeqs } : {}),
+                  ...(startSeqInclusive !== undefined ? {
+                    startSeqInclusive, endSeqInclusive: Math.max(...endSeqs),
                   } : {}),
                   finalAssistantMessageSeq,
                 },
@@ -1239,6 +1246,15 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         params.permissionModeState.releaseRejectedBeforeProviderPromptIdentity(session, message),
       initialResumeId: initialResumeId || undefined,
       strictInitialResume: initialResumeId.length > 0,
+      onPromptFailure: async error => {
+        await surfacePrimarySessionRuntimeIssue({
+          provider: params.policyAgentId,
+          cause: 'session_error',
+          error,
+          session: { sessionId: params.session.sessionId, sessionTurnLifecycle },
+          allocateTurnWhenIdle: true,
+        });
+      },
       onStrictInitialResumeFailure: async (failure) => {
         try {
           await params.onStrictInitialResumeFailure?.(failure);

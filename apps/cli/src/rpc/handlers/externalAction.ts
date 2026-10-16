@@ -13,6 +13,7 @@ import type {
   PrepareExternalActionRequesterAccountContext,
 } from '@/daemon/externalActions/executeExternalAction';
 import { executeExternalAction } from '@/daemon/externalActions/executeExternalAction';
+import { traceExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 
 export type ExternalActionRpcRegistrationOptions = Readonly<{
   machineId: string;
@@ -24,10 +25,13 @@ export type ExternalActionRpcRegistrationOptions = Readonly<{
   resolveInstallationId: () => string | null;
   verifyExecutionAuthorization: VerifyExternalActionExecutionAuthorization;
   resolveTarget: ResolveExternalActionTarget;
-  executor: ExternalActionExecutor & Partial<Pick<ReturnType<typeof createActionExecutor>, 'replayApprovedApprovalRequest'>>;
+  executor: ExternalActionExecutor & Partial<Pick<ReturnType<typeof createActionExecutor>,
+    'replayApprovedApprovalRequest' | 'continueConfidentialApprovalRequest'>>;
   resolveEncryption?: ResolveExternalActionEncryption;
   prepareRequesterAccountContext?: PrepareExternalActionRequesterAccountContext;
   externalActionMachineRequestPrivateKey?: string | Uint8Array;
+  acquirePluginRuntimeRegistryLease?: Parameters<typeof executeExternalAction>[0]['acquirePluginRuntimeRegistryLease'];
+  resolvePluginExecutionOriginContext?: Parameters<typeof executeExternalAction>[0]['resolvePluginExecutionOriginContext'];
 }>;
 
 /** Shared Action-owner dependencies; transport adapters add only identity facts. */
@@ -40,6 +44,8 @@ export type ExternalActionIngressOwner = Readonly<Pick<
   | 'executor'
   | 'resolveEncryption'
   | 'externalActionMachineRequestPrivateKey'
+  | 'acquirePluginRuntimeRegistryLease'
+  | 'resolvePluginExecutionOriginContext'
 >>;
 
 function forbidden() {
@@ -103,6 +109,8 @@ export function registerExternalActionRpcHandler(
     const parsed = ExternalActionDaemonDispatchRequestSchema.safeParse(raw);
     if (!parsed.success) return forbidden();
     const request = parsed.data;
+    const trace = (stage: string) => traceExternalActionStage(request.actionId, request.envelope.requestId, stage, context?.transportRequestId);
+    trace('rpc.received');
     if (
       request.placement.machineId !== options.machineId
       || request.placement.target.machineId !== options.machineId
@@ -116,10 +124,12 @@ export function registerExternalActionRpcHandler(
     const signal = context?.signal;
     let accountId: string | null;
     try {
+      trace('rpc.account_resolution.begin');
       accountId = await options.resolveAccountId(signal);
     } catch {
       accountId = null;
     }
+    trace('rpc.account_resolution.end');
     const installationId = options.resolveInstallationId();
     if (
       signal?.aborted
@@ -151,10 +161,14 @@ export function registerExternalActionRpcHandler(
       resolveEncryption: options.resolveEncryption,
       resolveTarget: options.resolveTarget,
       executor: options.executor,
+      acquirePluginRuntimeRegistryLease: options.acquirePluginRuntimeRegistryLease,
+      resolvePluginExecutionOriginContext: options.resolvePluginExecutionOriginContext,
       executionAuthorization: request.executionAuthorization,
       externalActionMachineRequestPrivateKey: options.externalActionMachineRequestPrivateKey,
+      transportRequestId: context?.transportRequestId,
       ...(signal ? { signal } : {}),
     });
+    trace('rpc.completed');
     if (result.kind === 'invalid_request') return result;
     return createExternalActionDaemonDispatchResponse(result.prepared);
   });

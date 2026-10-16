@@ -7,7 +7,7 @@ import {
 } from '@happier-dev/agents';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { resolveLinkedExternalSessionAuthorityV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
-import { SESSION_MESSAGE_PROVENANCE_META_KEY, SessionInputRequestSchema, SessionMessageProvenanceSchema, stripSessionInputProtectedMeta } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SESSION_MESSAGE_PROVENANCE_META_KEY, SessionInputRequestSchema, SessionMessageProvenanceSchema, stripSessionInputProtectedMeta, readSessionInputAuthority, deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { withSessionMessageModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { ProviderErrorV1, SessionInputRequest, SessionMessageProvenance, SessionInputAdmissionRejectionCodeV1, SessionInputAdmissionResultV1, SessionMessageSendResultV1, SessionPendingEnqueueByMachineRequestV1, SessionPendingExecutionRunEnqueueByMachineRequestV2, PendingRequestedActionV1, ParticipantRecipientV1, ExecutionRunInputTurnV1, ExecutionRunPublicState } from '@happier-dev/protocol';
 import { SessionInputAdmissionRejectionCodeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
@@ -40,7 +40,8 @@ import {
   readSessionProjectedTurnStatus,
   type SessionTurnActivity,
 } from '@/session/query/detectSessionTurnInFlight';
-import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionById, fetchSessionTurnsProjection, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import type { SessionTurnV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { openSessionEventSource, waitForIdleViaSocket } from '@/session/transport/socket/sessionSocketAgentState';
 import {
   decryptSessionPayload,
@@ -649,6 +650,9 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
+  /** Host-owned correspondence takes precedence over transcript adjacency. */
+  turn?: SessionTurnV1;
+  precedingTurnEndSeq?: number;
   ctx: Readonly<{
     encryptionKey: Uint8Array;
     encryptionVariant: 'legacy' | 'dataKey';
@@ -660,10 +664,10 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
   finalAssistantText: string | null;
   usage?: SessionInputUsageV1;
 }>> {
-  let afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1);
+  let afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1, params.precedingTurnEndSeq ?? 0);
   let currentUserSeq = Math.max(0, Math.trunc(params.materializedSeq));
   let observedAgentProgress = false;
-  let sawCompletion = false;
+  let sawCompletion = params.turn?.transcriptAnchors?.finalAssistantMessageSeq === null;
   let finalAssistantText: string | null = null;
   const exactTurnUsage = createExactTurnUsageAccumulator();
 
@@ -709,6 +713,8 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
       if (row.seq <= currentUserSeq) {
         continue;
       }
+      const endSeq = params.turn?.transcriptAnchors?.endSeqInclusive;
+      if (typeof endSeq === 'number' && row.seq > endSeq) break;
       const decrypted = decryptTranscriptRowContent({
         content: row.content,
         ctx: params.ctx,
@@ -716,11 +722,11 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
       // The exact input's terminal proof closes this scan. A later input
       // starts another turn and must not become a fallback result for this
       // input when a legacy transcript lacks an explicit turn anchor.
-      if (isSessionAgentThreadTextUserMessage(decrypted) || isSessionContextOnlyHostInput(decrypted)) {
+      if (!params.turn && (isSessionAgentThreadTextUserMessage(decrypted) || isSessionContextOnlyHostInput(decrypted))) {
         const usage = currentUsage();
         return { failure: null, sawCompletion, finalAssistantText, ...(usage ? { usage } : {}) };
       }
-      const failure = readAssistantTurnFailure(decrypted);
+      const failure = params.turn ? null : readAssistantTurnFailure(decrypted);
       if (failure) {
         const usage = currentUsage();
         return {
@@ -732,9 +738,12 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
       }
       const decoded = decodeTranscriptBody(decrypted);
       addTurnUsage(decrypted);
-      if (decoded?.semanticRole === 'assistant' && decoded.sidechainId === undefined && decoded.text) {
+      if (decoded?.semanticRole === 'assistant' && decoded.sidechainId === undefined && decoded.text
+        && (!params.turn || row.seq === params.turn.transcriptAnchors?.finalAssistantMessageSeq)) {
         finalAssistantText = decoded.text;
+        if (params.turn) sawCompletion = true;
       }
+      if (params.turn) continue;
       if (isAssistantTurnCompletionProof(decrypted)) {
         sawCompletion = true;
         // Completion can precede a terminal runtime issue in the same
@@ -753,7 +762,9 @@ async function scanAssistantTurnAfterCurrentUserTurn(params: Readonly<{
       }
     }
 
-    if (orderedRows.length < ASSISTANT_TURN_SCAN_PAGE_LIMIT) {
+    const endSeq = params.turn?.transcriptAnchors?.endSeqInclusive;
+    if (orderedRows.length < ASSISTANT_TURN_SCAN_PAGE_LIMIT
+      || (typeof endSeq === 'number' && (orderedRows.at(-1)?.seq ?? 0) >= endSeq)) {
       const usage = currentUsage();
       return { failure: null, sawCompletion, finalAssistantText, ...(usage ? { usage } : {}) };
     }
@@ -771,13 +782,37 @@ async function readAssistantTurnOutcomeAfterCurrentUserTurn(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
+  materializedContent?: TranscriptMessageLookupResult['content'];
   ctx: Readonly<{
     encryptionKey: Uint8Array;
     encryptionVariant: 'legacy' | 'dataKey';
   }> | null;
   resolveAuthorizationHeaders?: ResolveSessionMessageAuthorizationHeaders;
 }>): Promise<AssistantTurnOutcome> {
-  const scan = await scanAssistantTurnAfterCurrentUserTurn(params);
+  const projection = await fetchSessionTurnsProjection(params);
+  const input = params.materializedContent
+    ? asRecord(decryptTranscriptRowContent({ content: params.materializedContent, ctx: params.ctx })) : null;
+  const workflowInput = readSessionInputAuthority(input?.meta, 'stored')?.producer === 'workflow';
+  const turn = projection?.turns.find(candidate => candidate.transcriptAnchors?.userMessageSeqs?.includes(params.materializedSeq)
+    || candidate.transcriptAnchors?.startUserMessageSeq === params.materializedSeq
+    || (candidate.workflowInvocation && deriveWorkflowSessionInputLocalIdV2({
+      purpose: 'invocation', ...candidate.workflowInvocation,
+    }) === params.localId));
+  // A queued input can be materialized before the current provider turn ends.
+  // Neither that turn's text nor the next input's transcript position owns it.
+  if ((!projection && (workflowInput || isSessionContextOnlyHostInput(input)))
+    || (projection && (!turn || turn.status === 'in_progress'))) return { kind: 'missing' };
+  const precedingTurnEndSeq = turn && projection ? projection.turns.reduce((latest, candidate) => {
+    const end = candidate.transcriptAnchors?.endSeqInclusive;
+    const currentEnd = turn.transcriptAnchors?.endSeqInclusive;
+    return candidate.status !== 'in_progress' && typeof end === 'number' && typeof currentEnd === 'number' && end < currentEnd
+      ? Math.max(latest, end) : latest;
+  }, 0) : undefined;
+  const scan = await scanAssistantTurnAfterCurrentUserTurn({ ...params, ...(turn ? { turn, precedingTurnEndSeq } : {}) });
+  if (turn?.status === 'failed' || turn?.status === 'cancelled') {
+    return { kind: turn.status, message: formatStructuredTurnFailureMessage(turn.status,
+      readStructuredIssuePreview(turn.lastRuntimeIssue)), ...(scan.usage ? { usage: scan.usage } : {}) };
+  }
   if (scan.failure) {
     return scan.failure;
   }
@@ -809,6 +844,7 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
+  materializedContent?: TranscriptMessageLookupResult['content'];
   ctx: Readonly<{
     encryptionKey: Uint8Array;
     encryptionVariant: 'legacy' | 'dataKey';
@@ -1116,6 +1152,7 @@ export async function waitForSessionInputResult(
       sessionId: sessionTarget.sessionId,
       localId,
       materializedSeq: promptDelivery.message.seq,
+      materializedContent: promptDelivery.message.content,
       ctx: sessionTarget.ctx,
       deadlineMs: acceptedDeadlineMs,
       ...(params.signal ? { signal: params.signal } : {}),
@@ -1718,6 +1755,7 @@ export async function sendSessionMessage(
         sessionId,
         localId,
         materializedSeq: materialized.seq,
+        materializedContent: materialized.content,
         ctx: sessionTarget.ctx,
         deadlineMs,
         ...(params.signal ? { signal: params.signal } : {}),
@@ -1874,6 +1912,7 @@ export async function sendSessionMessage(
       sessionId,
       localId,
       materializedSeq: materialized.seq,
+      materializedContent: materialized.content,
       ctx: sessionTarget.ctx,
       deadlineMs,
       ...(params.signal ? { signal: params.signal } : {}),

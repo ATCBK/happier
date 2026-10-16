@@ -83,7 +83,6 @@ import {
   registerMachinePromptAssetTransferRpcHandlers,
   type MachinePromptAssetTransferRpcRegistration,
 } from './rpcHandlers.promptAssetTransfers';
-import { registerMachinePluginInstallDecisionRpcHandlers } from './rpcHandlers.pluginInstallDecision';
 import { registerMachineRegistriesRpcHandlers } from './rpcHandlers.registries';
 import {
   registerMachineRegistryTransferRpcHandlers,
@@ -388,6 +387,9 @@ export type MachineRpcHandlerDeps = Readonly<{
   installExternalSessionHostOperations?: (
     operations: ExternalSessionHostOperationSet,
   ) => Promise<ExternalSessionHostOperationInstallation>;
+  readMaterializedStateObservationBinding?: Parameters<
+    typeof registerMachineExternalSessionsRpcHandlers
+  >[0]['readMaterializedStateObservationBinding'];
   createAccountPet?: (request: AccountPetCreateRequestV1) => Promise<AccountPetCreateResponseV1>;
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
@@ -445,6 +447,7 @@ export type MachineRpcHandlerDeps = Readonly<{
   stageWorkStateMutation?: (input: Readonly<{
     mutation: DaemonWorkStateFieldMutation;
     rawSession: RawSessionRecord;
+    signal?: AbortSignal;
   }>) => Promise<void>;
 }>;
 
@@ -589,6 +592,7 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       execute: (actionId, input, context) => externalAction.executor.execute(
         actionId as Parameters<typeof externalAction.executor.execute>[0], input, context),
       replayApprovedApprovalRequest: externalAction.executor.replayApprovedApprovalRequest,
+      continueConfidentialApprovalRequest: externalAction.executor.continueConfidentialApprovalRequest,
     } } : {}),
   });
   // Detached execution runs are owned by this exact authenticated daemon. Reuse
@@ -793,7 +797,6 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
     rpcHandlerManager,
   });
   registerMachineRegistriesRpcHandlers({rpcHandlerManager,createHost:params.deps?.createRegistryHost});
-  registerMachinePluginInstallDecisionRpcHandlers({ rpcHandlerManager });
   registerPetRpcHandlers({
     rpcHandlerManager,
     createAccountPet: params.deps?.createAccountPet,
@@ -859,6 +862,8 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       params.deps?.attachPersistedTakeoverAdmissionOwner,
     installExternalSessionHostOperations:
       params.deps?.installExternalSessionHostOperations,
+    readMaterializedStateObservationBinding:
+      params.deps?.readMaterializedStateObservationBinding,
     transientMediaReadAllowance: params.deps?.transientMediaReadAllowance,
     getServerFeaturesSnapshot: params.deps?.getServerFeaturesSnapshot,
     machineId: params.deps?.currentMachineId,

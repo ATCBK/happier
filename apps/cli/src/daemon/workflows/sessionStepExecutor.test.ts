@@ -15,7 +15,10 @@ import { TeamCredentialResourceEntitledPageV1Schema } from '@happier-dev/protoco
 const readiness = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn(), callMachineRpc: vi.fn() }));
 vi.mock('axios', () => ({ default: { get: readiness.get, post: readiness.post, request: readiness.request,
   isAxiosError: () => false, isCancel: () => false } }));
-vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc: readiness.callMachineRpc }));
+vi.mock('@/session/transport/rpc/machineRpc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>();
+  return { ...actual, callMachineRpc: readiness.callMachineRpc, callExactMachineRpc: readiness.callMachineRpc };
+});
 vi.mock('socket.io-client', async () => {
   const { createApiSessionSocketStub } = await import('@/testkit/backends/apiSessionSocketHarness');
   return { io: () => createApiSessionSocketStub() };
@@ -443,7 +446,8 @@ describe('workflow Session step executor', () => {
       resolveRoleInstructions: () => 'Frozen workflow role',
       prepareConversation: async () => ({ kind: 'workflow_session_conversation', inputPath: 'origin_session',
         existing: { sessionId: 'origin', machineId: 'machine-1', directory: '/repo' } }),
-      materializeConversation: async () => { throw new Error('origin must not create or enqueue'); },
+      materializeConversation: async () => ({ sessionId: 'origin',
+        machineAdmissionTransport: async () => { throw new Error('origin must not enqueue'); } }),
 
       sessionInput: { enqueue: async () => { throw new Error('origin must not enqueue'); },
         observe: async ({ sessionId, localId }) => {

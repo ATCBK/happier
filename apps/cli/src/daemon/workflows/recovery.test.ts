@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import * as sessionSockets from '@/api/session/sockets';
+import * as sessionRpc from '@/session/transport/rpc/sessionRpc';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import {
@@ -33,6 +34,10 @@ import type { AvailableAutomationAccountEncryptionV1 } from '@/plugins/runtime/a
 import type { SessionInputResultV1 } from '@/session/services/sendSessionMessage';
 import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
 import { normalizePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { WORKFLOW_STEP_INPUT_EVENT_MESSAGE } from '@/session/shared/sessionTurnLifecycle';
+import { parseStoredSessionTurn } from '../../../../server/sources/app/session/turns/parseSessionTurnState';
 
 const accountId = 'account-1';
 const machineId = 'machine-1';
@@ -522,11 +527,16 @@ describe.each(['plain', 'e2ee'] as const)('frozen result recovery (%s)', (mode) 
 });
 
 describe('workflow Run startup/reconnect recovery', () => {
-  it.each(['cancelled_input', 'other_input', 'handled_input', 'unknown_launch'] as const)('recovers exact discarded Session input custody without treating inactive or unknown work as stopped (%s)', async scenario => {
+  it.each(['cancelled_input', 'other_input', 'handled_input', 'unknown_launch', 'deleted_session', 'failed_detached', 'failed_quiet', 'cancelled_quiet'] as const)('recovers exact discarded Session input custody without treating inactive or unknown work as stopped (%s)', async scenario => {
     const rootId = '33333333-3333-4333-8333-333333333333';
     const childId = '44444444-4444-4444-8444-444444444444';
     const sessionId = 'stopped-workflow-session';
-    const localId = 'exact-workflow-input';
+    const quiet = scenario === 'failed_quiet' || scenario === 'cancelled_quiet';
+    const workflowInvocation = { runId, invocationRecordId: childId };
+    const localId = quiet ? deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', ...workflowInvocation }) : 'exact-workflow-input';
+    const hostInput = { id: 'host-event', localId, seq: 1, createdAt: 100, updatedAt: 100,
+      content: { t: 'plain', v: buildAcpAgentMessageEnvelope({ provider: 'claude', body: { id: localId,
+        type: 'event', data: { type: 'message', message: WORKFLOW_STEP_INPUT_EVENT_MESSAGE } } }) } };
     const kit = createWorkflowRunStorageTestkit({ runId, machineId, now, origin: { kind: 'direct' },
       acceptedEnvelope: directAcceptedEnvelope() });
     const seal = (id: string, root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
@@ -534,12 +544,15 @@ describe('workflow Run startup/reconnect recovery', () => {
         sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
       progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
         invocationPath: { blockId: root ? '$root' : 'step', scope: [] }, attempt: '0', logicalInvocationRecordId: id,
-        ...(!root && scenario !== 'unknown_launch' ? { execution: { kind: 'session' as const, sessionId, localInputId: localId } } : {}) },
+        ...(!root && scenario !== 'unknown_launch' ? { execution: scenario === 'failed_detached'
+          ? { kind: 'detached_run' as const, runId: 'failed-native-run', localInputId: localId, runtimeSelection: {} }
+          : { kind: 'session' as const, sessionId, localInputId: localId } } : {}) },
     }));
     await kit.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope: checkpointEnvelope(rootId),
       rootInvocation: { id: rootId, contentEnvelope: seal(rootId, true) } });
     await kit.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope: checkpointEnvelope(rootId),
-      invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'running', contentEnvelope: seal(childId, false) }] });
+      invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0',
+        lifecycle: scenario === 'failed_detached' ? 'outcome_uncertain' : 'running', contentEnvelope: seal(childId, false) }] });
     kit.requestControl('cancelled');
     expect(kit.run()).toMatchObject({ workflowCustodyState: 'pending', attentionRequired: false });
     const requests: { method: string; path: string }[] = [];
@@ -554,11 +567,22 @@ describe('workflow Run startup/reconnect recovery', () => {
         mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
         recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
       });
+      if (scenario === 'deleted_session') {
+        if (url.pathname === `/v2/sessions/${sessionId}`) return reply({ error: 'Session not found' }, 404);
+        if (url.pathname === '/v2/sessions' || url.pathname === '/v2/sessions/archived') return reply({ sessions: [], hasNext: false, nextCursor: null });
+        if (url.pathname === '/v2/sessions/lookup-by-tags') return reply({ sessions: [] });
+      }
       if (url.pathname === `/v2/sessions/${sessionId}`) return reply({ session: createSessionRecordFixture({
         id: sessionId, active: false, encryptionMode: 'plain', machineId,
         metadata: JSON.stringify({ machineId, path: '/repo' }),
       }) });
-      if (url.pathname.startsWith(`/v2/sessions/${sessionId}/messages/by-local-id/`)) return reply({ error: 'Message not found' }, 404);
+      if (url.pathname.startsWith(`/v2/sessions/${sessionId}/messages/by-local-id/`)) return quiet
+        ? reply({ message: hostInput }) : reply({ error: 'Message not found' }, 404);
+      if (quiet && url.pathname === `/v1/sessions/${sessionId}/turns`) return reply({ v: 1, sessionId, updatedAt: 200,
+        turns: [parseStoredSessionTurn({ turnId: 'quiet-turn', status: scenario === 'failed_quiet' ? 'failed' : 'cancelled',
+          startedAt: 100, updatedAt: 200, terminalAt: 200, initiator: 'workflow', workDepth: 1,
+          workflowInvocationJson: JSON.stringify(workflowInvocation) })] });
+      if (quiet && url.pathname === `/v1/sessions/${sessionId}/messages`) return reply({ messages: [hostInput] });
       if (url.pathname === `/v2/sessions/${sessionId}/pending` && request.method === 'GET') {
         return reply({ pending: url.searchParams.get('includeDiscarded') === 'true' ? [{
           localId: scenario === 'other_input' ? 'different-input' : localId,
@@ -575,6 +599,100 @@ describe('workflow Run startup/reconnect recovery', () => {
       const socket = Object.assign(new EventEmitter(), { connected: false, connect() {}, disconnect() {}, close() {} }) as unknown as ReturnType<typeof sessionSockets.createSessionScopedSocketConnection>['socket'];
       return { socket, transport: createSocketTransportAdapter(socket) };
     });
+    const controller = new AbortController();
+    try {
+      const observe = createWorkflowInvocationRecoveryObserver({
+        credentials: { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null }, machineId,
+        actionExecutor: { execute: async (actionId) => {
+          if (scenario === 'failed_detached' && actionId === 'execution.run.get') return { ok: true, result: {
+            run: { runId: 'failed-native-run', callId: 'call', sidechainId: 'side', intent: 'agent',
+              backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'default',
+              retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response',
+              status: 'failed', startedAtMs: 1, finishedAtMs: 2, error: { code: 'execution_run_failed' },
+              inputTurns: { occurrenceId: 'initial-provisioning',
+                last: { turnId: localId, inputIds: [localId], state: 'failed' } } },
+          } };
+          throw new Error('Recovery cannot start an Action');
+        } },
+      });
+      const recover = createWorkflowRunRecoveryReader({ accountId, machineId,
+        storage: { execute: async (operation, options) => operation.operation === 'recovery.list'
+          ? { candidates: [{ run: kit.run(), parentAttempt: 0 }] } : await kit.execute(operation, options) },
+        resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+        reconcileInvocation: observe,
+      });
+      await runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () => recover('startup', controller.signal));
+      const cancelled = scenario === 'cancelled_input' || scenario === 'cancelled_quiet';
+      const failed = scenario === 'failed_detached' || scenario === 'failed_quiet';
+      const settled = cancelled || failed;
+      if (!quiet && !['unknown_launch', 'deleted_session', 'failed_detached'].includes(scenario)) expect(requests).toContainEqual({ method: 'GET', path: `/v2/sessions/${sessionId}/pending` });
+      expect(kit.rowById(childId)?.index.lifecycle).toBe(failed ? 'failed' : cancelled ? 'cancelled' : 'cancel_requested');
+      expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: settled ? 'settled' : 'pending', attentionRequired: false });
+      if (scenario === 'cancelled_input' || quiet) expect(requests.every(request => request.method === 'GET')).toBe(true);
+      if (scenario === 'unknown_launch') expect(requests).toEqual([]);
+    } finally {
+      controller.abort();
+      socketBoundary.mockRestore();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('settles Session custody when its exact terminal arrives after the cancellation read without another recovery trigger', async () => {
+    const rootId = '33333333-3333-4333-8333-333333333333';
+    const childId = '44444444-4444-4444-8444-444444444444';
+    const sessionId = 'stopped-workflow-session';
+    const localId = 'exact-workflow-input';
+    const kit = createWorkflowRunStorageTestkit({ runId, machineId, now, origin: { kind: 'direct' },
+      acceptedEnvelope: directAcceptedEnvelope() });
+    const seal = (id: string, root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: id,
+        sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
+        invocationPath: { blockId: root ? '$root' : 'step', scope: [] }, attempt: '0', logicalInvocationRecordId: id,
+        ...(!root ? { execution: { kind: 'session' as const, sessionId, localInputId: localId } } : {}) },
+    }));
+    await kit.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope: checkpointEnvelope(rootId),
+      rootInvocation: { id: rootId, contentEnvelope: seal(rootId, true) } });
+    await kit.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope: checkpointEnvelope(rootId),
+      invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'running', contentEnvelope: seal(childId, false) }] });
+    kit.requestControl('cancelled');
+    let terminal = false;
+    const inputMessage = { id: 'input-row', localId, seq: 1, createdAt: 1, updatedAt: 1,
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Work' } } } };
+    const terminalMessage = { id: 'terminal-row', localId: null, seq: 2, createdAt: 2, updatedAt: 2,
+      content: { t: 'plain', v: { role: 'agent', content: { type: 'acp', data: { type: 'turn_cancelled', id: 'turn-1' } } } } };
+    // HTTP and Session RPC are system boundaries; recovery, input observation,
+    // cancellation, stored-envelope readers and the fact writer stay real.
+    const server = createServer((request, response) => {
+      const url = new URL(request.url ?? '/', 'http://localhost');
+      response.setHeader('Content-Type', 'application/json');
+      const reply = (data: unknown, status = 200) => { response.statusCode = status; response.end(JSON.stringify(data)); };
+      if (url.pathname === '/v1/account/encryption/currentness') return reply({
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+      });
+      if (url.pathname === `/v2/sessions/${sessionId}`) return reply({ session: createSessionRecordFixture({
+        id: sessionId, active: false, encryptionMode: 'plain', machineId,
+        metadata: JSON.stringify({ machineId, path: '/repo' }),
+      }) });
+      if (url.pathname.startsWith(`/v2/sessions/${sessionId}/messages/by-local-id/`)) return reply({ message: inputMessage });
+      if (url.pathname === `/v1/sessions/${sessionId}/messages`) return reply({ messages: terminal ? [inputMessage, terminalMessage] : [inputMessage] });
+      if (url.pathname === `/v2/sessions/${sessionId}/pending/${localId}/discard`) return reply({ error: 'not-found' }, 404);
+      return reply({ error: 'session-not-found' }, 404);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test_http_address_unavailable');
+    const socketBoundary = vi.spyOn(sessionSockets, 'createSessionScopedSocketConnection').mockImplementation(() => {
+      // socket.io supplies an untyped event adapter at this boundary.
+      const socket = Object.assign(new EventEmitter(), { connected: false, connect() {}, disconnect() {}, close() {} }) as unknown as ReturnType<typeof sessionSockets.createSessionScopedSocketConnection>['socket'];
+      return { socket, transport: createSocketTransportAdapter(socket) };
+    });
+    const rpcBoundary = vi.spyOn(sessionRpc, 'callSessionRpc').mockImplementation(async () => {
+      terminal = true;
+      return { ok: false, sessionId, localId, status: 'notRunning' };
+    });
+    const controller = new AbortController();
     try {
       const observe = createWorkflowInvocationRecoveryObserver({
         credentials: { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null }, machineId,
@@ -586,14 +704,15 @@ describe('workflow Run startup/reconnect recovery', () => {
         resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
         reconcileInvocation: observe,
       });
-      await runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () => recover('startup'));
-      const cancelled = scenario === 'cancelled_input';
-      if (scenario !== 'unknown_launch') expect(requests).toContainEqual({ method: 'GET', path: `/v2/sessions/${sessionId}/pending` });
-      expect(kit.rowById(childId)?.index.lifecycle).toBe(cancelled ? 'cancelled' : 'cancel_requested');
-      expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: cancelled ? 'settled' : 'pending', attentionRequired: false });
-      if (cancelled) expect(requests.every(request => request.method === 'GET')).toBe(true);
-      if (scenario === 'unknown_launch') expect(requests).toEqual([]);
+      await runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, async () => {
+        await recover('startup', controller.signal);
+        expect(terminal).toBe(true);
+        await vi.waitFor(() => expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: 'settled' }));
+        expect(kit.rowById(childId)?.index.lifecycle).toBe('cancelled');
+      });
     } finally {
+      controller.abort();
+      rpcBoundary.mockRestore();
       socketBoundary.mockRestore();
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
