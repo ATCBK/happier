@@ -46,6 +46,7 @@ import { updateSettings, type StoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -55,9 +56,10 @@ const provisionerCatalog = await loadManagedProvisionerCatalogForTests();
 
 describe('managed catalog original Account transport', () => {
   let database: LightSqliteHarness;
+  let channel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>>;
   beforeAll(async () => { database = await createLightSqliteHarness({ tempDirPrefix: 'happier-fx16-catalog-', initAuth: true, initEncrypt: true }); }, 120_000);
-  beforeEach(async () => { await home.reset(); provisionerCatalog.reset(); });
-  afterEach(() => vi.restoreAllMocks());
+  beforeEach(async () => { await home.reset(); provisionerCatalog.reset(); channel = await createRequesterCurrentnessSocketHarness(); });
+  afterEach(async () => { await channel.close(); vi.restoreAllMocks(); });
   afterAll(async () => { await home.reset(); await database.close(); });
 
   it.each(['account', 'terminal'] as const)('round-trips the real provisioner catalog through Home minting and installed daemon admission with recovery-key crypto for %s credentials', async kind => {
@@ -229,7 +231,7 @@ describe('managed catalog original Account transport', () => {
   it('claims a release-less provisioner, saves a preset through the real Home Action adapter, and preserves it through disable/re-enable', async () => {
     const account = await db.account.create({ data: { encryptionMode: 'plain' } });
     const homeId = await getOrCreateServerIdentityId();
-    const token = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
+    const token = await createAccountTokenForTests(account.id, { kind: 'account', authority: 'present_user' });
     const credentials: StoredCredentials = { token, encryption: null };
     const controller = { machineId: 'preset-seam-controller', installationId: 'preset-seam-installation' };
     const provisioner = nativeFixture({ credentialPurposes: [] });
