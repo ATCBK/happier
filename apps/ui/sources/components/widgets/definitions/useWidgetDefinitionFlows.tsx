@@ -99,7 +99,12 @@ export function useWidgetDefinitionFlows(input: Readonly<{
         [capturable, onBoard, sessionItem?.canEdit]);
 
     let panel: React.ReactElement | null = null;
-    if (flow === 'addTo' && scope && instance && copyTo === null) {
+    if (flow === 'about' && scope && instance) {
+        // The read belongs to the open flow, above the shell that recomposes on resize.
+        panel = <AboutFlow key={`${scope.serverId}/${scope.accountId}/${instance.id}/${artifactId ?? instance.definition.kind}`}
+            account={{ serverId: scope.serverId, accountId: scope.accountId }} scope={scope} instance={instance} artifactId={artifactId}
+            anchorRef={anchorRef} editInputs={editInputs} providedContext={input.providedContext} onClose={close} testID={`${testID}.about`} />;
+    } else if (flow === 'addTo' && scope && instance && copyTo === null) {
         panel = <WidgetCopyChooser instance={instance} current={scope} anchorRef={anchorRef} onChoose={setCopyTo} onClose={close} testID={`${testID}.addTo`} />;
     } else if (flow && scope) {
         const title = flow === 'about' ? t('widgetDefinition.aboutTitle') : flow === 'save' ? t('widgetDefinition.saveTitle')
@@ -111,10 +116,6 @@ export function useWidgetDefinitionFlows(input: Readonly<{
                 {flow === 'addTo' && instance && copyTo !== null ? (
                     <WidgetCopyPanel instance={instance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}
                         onBack={() => setCopyTo(null)} onClose={close} testID={`${testID}.addTo`} />
-                ) : flow === 'about' && instance ? (
-                    <AboutFlow key={`${scope.serverId}/${scope.accountId}/${instance.id}/${artifactId ?? instance.definition.kind}`} account={account} scope={scope} instance={instance} artifactId={artifactId} editInputs={editInputs}
-                        providedContext={input.providedContext}
-                        onClose={close} testID={`${testID}.about`} />
                 ) : flow === 'save' && sessionItem && scope.owner.kind === 'sessionBoard' ? (
                     <SaveAsWidgetPanel
                         account={account}
@@ -143,6 +144,7 @@ function AboutFlow(props: Readonly<{
     scope: WidgetSurfaceRefV1;
     instance: WidgetInstanceV1;
     artifactId: string | null;
+    anchorRef: React.RefObject<View | null>;
     providedContext?: Readonly<Record<string, readonly JsonValue[]>>;
     editInputs?: Readonly<{ onPress: () => void; binding: string | null }> | undefined;
     onClose: () => void;
@@ -163,21 +165,25 @@ function AboutFlow(props: Readonly<{
         return () => controller.abort();
     }, [accountId, artifactId, serverId, current]);
 
-    if (!current) return <WidgetFlowPanel title={t('widgetDefinition.aboutTitle')} testID={props.testID} onClose={props.onClose}
+    let content: React.ReactElement;
+    if (!current) content = <WidgetFlowPanel title={t('widgetDefinition.aboutTitle')} testID={props.testID} onClose={props.onClose}
         note={t('widgetDefinition.aboutUnavailable')}>{null}</WidgetFlowPanel>;
-    if (artifactId && (opened === 'loading' || opened === 'unavailable')) {
-        return (
+    else if (artifactId && (opened === 'loading' || opened === 'unavailable')) {
+        content = (
             <WidgetFlowPanel title={t('widgetDefinition.aboutTitle')} testID={props.testID} onClose={props.onClose}
                 note={opened === 'unavailable' ? t('widgetDefinition.aboutUnavailable') : null}>
                 {opened === 'loading' ? <ItemLoadStateRows testID={`${props.testID}.loading`} state={{ kind: 'loading' }} rows={4} lines={2} shape="list" /> : null}
             </WidgetFlowPanel>
         );
+    } else {
+        const definition = !artifactId ? props.instance.definition.kind === 'inline' ? props.instance.definition.definition : null
+            : typeof opened === 'object' ? opened.definition : null;
+        const placements = artifactId && typeof opened === 'object' ? opened.placements
+            : { placements: [{ surface: props.scope, instanceId: props.instance.id }], unavailableScopes: [] };
+        content = <AboutResolvedFlow {...props} definition={definition} placements={placements} />;
     }
-    const definition = !artifactId ? props.instance.definition.kind === 'inline' ? props.instance.definition.definition : null
-        : typeof opened === 'object' ? opened.definition : null;
-    const placements = artifactId && typeof opened === 'object' ? opened.placements
-        : { placements: [{ surface: props.scope, instanceId: props.instance.id }], unavailableScopes: [] };
-    return <AboutResolvedFlow {...props} definition={definition} placements={placements} />;
+    return <WidgetFlowShell anchorRef={props.anchorRef} title={t('widgetDefinition.aboutTitle')}
+        onRequestClose={props.onClose} testID={props.testID}>{content}</WidgetFlowShell>;
 }
 
 function AboutResolvedFlow(props: Parameters<typeof AboutFlow>[0] & Readonly<{

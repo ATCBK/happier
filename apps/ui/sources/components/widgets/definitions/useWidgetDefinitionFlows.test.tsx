@@ -707,6 +707,40 @@ describe('widget definition flows', () => {
         } finally { await hook.unmount(); publishAppliedActiveServerSnapshot(snapshot); }
     });
 
+    it('keeps a settled About definition while resizing into the phone sheet', async () => {
+        const serverId = await addDefinitionHome();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const account = { serverId, accountId: ACCOUNT_ID };
+        expect(await createDefaultActionExecutor().execute('widgets.definition.create', { account, artifactId: 'resize-definition', definition: DRAFT },
+            { serverId, surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+        const React = await import('react');
+        const native = await import('react-native');
+        const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+        const { useWidgetDefinitionFlows } = await import('./useWidgetDefinitionFlows');
+        const dimensions = vi.spyOn(native, 'useWindowDimensions').mockReturnValue({ width: 1440, height: 1000, scale: 1, fontScale: 1 });
+        function Card() {
+            const flows = useWidgetDefinitionFlows({ instance: { v: 1, id: 'copy', definition: { kind: 'artifact', artifactId: 'resize-definition' }, bindings: {} },
+                scope: { ...account, owner: { kind: 'home' } }, anchorRef: React.useRef(null), testID: 'resizeAbout' });
+            return React.createElement(native.View, {}, React.createElement(native.Pressable, { testID: 'openAbout', onPress: flows.about }), flows.panel);
+        }
+        const screen = await renderScreen(React.createElement(Card));
+        let release = () => {};
+        try {
+            await screen.pressByTestIdAsync('openAbout');
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain(DRAFT.name));
+            const pending = new Promise<void>(resolve => { release = resolve; });
+            harness.answer(serverId, '/v1/artifacts/resize-definition', { status: 503, body: {}, respondAfter: pending });
+            dimensions.mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+            await screen.update(React.createElement(Card));
+            expect(screen.findByTestId('resizeAbout.about.loading')).toBeNull();
+            expect(screen.getTextContent()).toContain(DRAFT.name);
+            dimensions.mockReturnValue({ width: 1440, height: 1000, scale: 1, fontScale: 1 });
+            await screen.update(React.createElement(Card));
+            expect(screen.findByTestId('resizeAbout.about.loading')).toBeNull();
+            expect(screen.getTextContent()).toContain(DRAFT.name);
+        } finally { release(); dimensions.mockRestore(); await screen.unmount(); }
+    });
+
     it('dismisses About on a phone while loading, after an unavailable read, and for a resolved widget', async () => {
         const serverId = await addDefinitionHome();
         const React = await import('react');
