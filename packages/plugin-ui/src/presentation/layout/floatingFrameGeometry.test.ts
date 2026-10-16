@@ -2,6 +2,31 @@ import { describe, expect, it } from 'vitest';
 import { resolveFloatingFrameRect, resolveFloatingFrameResizeRect } from './floatingFrameGeometry.js';
 
 describe('measured floating frame placement', () => {
+    it('grows to newly measured controls when they fit instead of docking a smaller retained frame', () => {
+        // The real Session Watch frame measures its controls after its first placement.
+        const input = {
+            rect: { x: 136, y: 397, width: 384, height: 280 },
+            availableRect: { x: 16, y: 16, width: 914, height: 665 },
+            aspectRatio: 1.6, chromeHeight: 40,
+        };
+        expect(resolveFloatingFrameRect(input).rect.width).toBe(384);
+        const measured = resolveFloatingFrameRect({ ...input, minWidth: 453 });
+        expect(measured.fits).toBe(true);
+        expect(measured.rect.width).toBe(453);
+        expect(measured.rect.width / (measured.rect.height - 40)).toBeCloseTo(1.6);
+        expect(measured.rect.y + measured.rect.height).toBeLessThanOrEqual(681);
+
+        // Growth still goes through placement: a newly overlapped obstacle moves the frame.
+        const obstacle = { x: 550, y: 300, width: 300, height: 381 };
+        const moved = resolveFloatingFrameRect({ ...input, minWidth: 453, avoidRects: [obstacle] });
+        expect(moved.fits).toBe(true);
+        expect(moved.rect.width).toBe(453);
+        expect(moved.rect.x + moved.rect.width).toBeLessThanOrEqual(obstacle.x);
+
+        expect(resolveFloatingFrameRect({ ...input, minWidth: 915 }).fits).toBe(false);
+        expect(resolveFloatingFrameRect({ ...input, minWidth: 453,
+            availableRect: { ...input.availableRect, height: 300 } }).fits).toBe(false);
+    });
     it('resizes the leading-bottom grip around the trailing edge with aspect, chrome and measured limits', () => {
         const input = {
             rect: { x: 100, y: 50, width: 200, height: 165 },

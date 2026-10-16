@@ -678,7 +678,8 @@ export function FloatingFrame(props: FloatingFrameProps) {
           }}
           {...webOnly({ happierFloatingFrameHandle: String(dragEnabled) })}
         >
-          {props.footer}
+          {/* Content wider than the frame (a long machine name) shrinks inside it instead of spilling past both edges. */}
+          <View style={{ maxWidth: '100%', minWidth: 0, flexShrink: 1 }}>{props.footer}</View>
         </View>
       ) : null}
     </View>

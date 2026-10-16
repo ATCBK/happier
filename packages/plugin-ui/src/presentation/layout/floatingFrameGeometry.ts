@@ -74,7 +74,8 @@ export function frameRectsOverlap(a: FrameRect, b: FrameRect): boolean {
  * `aspectRatio` is the body's own width ÷ height; `chromeHeight` is the frame's fixed vertical
  * space around the body (its controls band, gaps and footer), so shrinking keeps the picture's
  * shape instead of squeezing one axis. `minWidth` is the host's measured usable minimum (its
- * controls must fit across): positive space narrower than that is not a usable frame.
+ * controls must fit across). Grow to that minimum before fitting available space;
+ * positive space narrower than that is not a usable frame.
  */
 export function resolveFloatingFrameRect(input: Readonly<{
     rect: FrameRect;
@@ -91,7 +92,7 @@ export function resolveFloatingFrameRect(input: Readonly<{
     const availableWidth = Math.max(0, available.width);
     const availableHeight = Math.max(0, available.height);
     const chrome = Math.max(0, input.chromeHeight ?? 0);
-    let width = Math.min(Math.max(0, input.rect.width), availableWidth);
+    let width = Math.min(Math.max(0, input.rect.width, input.minWidth ?? 0), availableWidth);
     let height = Math.min(Math.max(0, input.rect.height), availableHeight);
     if (input.aspectRatio && input.aspectRatio > 0) {
         width = Math.max(0, Math.min(width, (availableHeight - chrome) * input.aspectRatio));
