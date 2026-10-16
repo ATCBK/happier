@@ -17,6 +17,29 @@ type RemoteEnrollmentExecutorParams = Parameters<
 >[0];
 
 describe('native transport through the remote bootstrap task', () => {
+  it('preserves the released guest update requirement through the composed native task runner', async () => {
+    const stdout = await readFile(new URL('../recipes/fixtures/authRequest.cli-v0.2.16.json', import.meta.url), 'utf8');
+    const approveLocalAuthRequest = vi.fn(async () => {});
+    const task = createRemoteNativeBootstrapMachineTaskKind({
+      configuration: { relay: { relayUrl: HOME_TARGET.canonicalAuthUrl }, homeTarget: HOME_TARGET, serviceMode: 'none' },
+      assertCurrent: async () => {}, installRemoteCli: async () => {}, approveLocalAuthRequest,
+      executor: {
+        runHappierJson: async () => ({ ok: true, data: { authenticated: false, machineId: null } }),
+        runHappierText: async (_args, options) => {
+          expect(options?.includeStdoutInError).toBe(false);
+          return { status: 0, stdout, stderr: '' };
+        },
+      },
+    });
+    const runner = createSystemTasksRunner({ kinds: {} });
+    await runner.startAdmitted({ taskId: 'older-guest', kind: 'remote.ssh.bootstrapMachine.v1', params: {} }, task);
+    const result = await runner.wait({ taskId: 'older-guest' });
+    expect(result).toMatchObject({ ok: false, error: { code: 'remote_cli_update_required' } });
+    expect(approveLocalAuthRequest).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('redacted-claim-secret');
+    expect(JSON.stringify(result)).not.toContain('redacted-pairing-secret');
+  });
+
   it('preserves the daemon service replacement prompt from a normal CLI JSON envelope', async () => {
     const prompts: string[] = [];
     const task = createRemoteNativeBootstrapMachineTaskKind({

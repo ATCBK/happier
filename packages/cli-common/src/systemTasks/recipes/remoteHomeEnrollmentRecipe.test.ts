@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import { parseHomeTargetInput } from '../../homeTarget/homeTarget.js';
 import type { HappierJsonExecutor } from '../executors/happierJsonExecutor.js';
@@ -17,6 +18,12 @@ const descriptor = {
 };
 const PUBLIC_KEY = Buffer.alloc(32, 1).toString('base64');
 const PAIRING_SECRET = Buffer.alloc(32, 2).toString('base64url');
+
+// Ordinary stdout from cli-v0.2.16 (b8d1c449c46ab4dfa8637db36b66f643d149e66d),
+// apps/cli/src/cli/commands/auth/request.ts#handleAuthRequest; values redacted.
+const olderAuthRequest: Record<string, unknown> = JSON.parse(readFileSync(
+  new URL('./fixtures/authRequest.cli-v0.2.16.json', import.meta.url), 'utf8',
+));
 
 function createExecutor(params: Readonly<{
   lines: readonly Record<string, unknown>[];
@@ -45,6 +52,36 @@ function createExecutor(params: Readonly<{
 }
 
 describe('runRemoteHomeEnrollmentRecipe', () => {
+  it.each(['buffered', 'streaming'] as const)('requires a remote CLI update for released ordinary auth stdout over %s IO without disclosing it', async (processIO) => {
+    const seen: Array<Readonly<{ args: readonly string[]; input?: string; includeStdoutInError?: boolean }>> = [];
+    const approvePairingRequest = vi.fn(async () => {});
+    const error = await runRemoteHomeEnrollmentRecipe({
+      executor: createExecutor({ seen, lines: [olderAuthRequest] }), processIO,
+      homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+      approvePairingRequest, timeoutMs: 5_000,
+    }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ code: 'remote_cli_update_required' });
+    expect(approvePairingRequest).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.includeStdoutInError).toBe(false);
+    for (const secret of ['redacted-claim-secret', 'redacted-pairing-secret', '/redacted/auth/pending']) {
+      expect(String(error)).not.toContain(secret);
+      expect(JSON.stringify(error)).not.toContain(secret);
+    }
+  });
+
+  it.each(['buffered', 'streaming'] as const)('keeps malformed or unrecognized stdout invalid over %s IO', async (processIO) => {
+    for (const response of [{}, { ...olderAuthRequest, pairing: null }, { ...olderAuthRequest, kind: 'unknown_event' }]) {
+      const approvePairingRequest = vi.fn(async () => {});
+      await expect(runRemoteHomeEnrollmentRecipe({
+        executor: createExecutor({ seen: [], lines: [response] }), processIO,
+        homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+        approvePairingRequest, timeoutMs: 5_000,
+      })).rejects.toMatchObject({ code: 'invalid_cli_response' });
+      expect(approvePairingRequest).not.toHaveBeenCalled();
+    }
+  });
+
   it('enrolls over buffered exec only, approving between the finite request and wait commands', async () => {
     const seen: Array<Readonly<{ args: readonly string[]; input?: string }>> = [];
     let approved = false;

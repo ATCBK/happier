@@ -45,6 +45,26 @@ function readNonEmptyString(value: unknown): string | null {
   return text || null;
 }
 
+/** Recognize ordinary cli-v0.2.16 auth stdout only to refuse unsupported enrollment. */
+function readOlderAuthRequestError(value: unknown): SystemTaskExecutionError | null {
+  if (!isRecord(value) || value.kind !== undefined
+    || !['publicKey', 'publicKeyB64Url', 'claimSecret', 'serverId', 'serverUrl', 'publicServerUrl', 'webappUrl', 'stateFile']
+      .every((key) => readNonEmptyString(value[key]))
+    || (value.pairingRequirement !== 'compatible' && value.pairingRequirement !== 'v3')) return null;
+  const links = value.links;
+  if (!isRecord(links)
+    || !['configureWebUrl', 'configureMobileUrl', 'webUrl', 'mobileUrl'].every((key) => readNonEmptyString(links[key]))
+    || !isRecord(value.pairing)) return null;
+  const pairing = value.pairing;
+  if (!readNonEmptyString(pairing.secretB64Url)
+    || typeof pairing.createdAtMs !== 'number' || !Number.isSafeInteger(pairing.createdAtMs)
+    || typeof pairing.expiresAtMs !== 'number' || !Number.isSafeInteger(pairing.expiresAtMs)
+    || pairing.expiresAtMs <= pairing.createdAtMs) return null;
+  // Never attach the response: ordinary auth stdout contains claim/pairing secrets.
+  return new SystemTaskExecutionError('remote_cli_update_required',
+    'Update Happier CLI on the remote machine to connect it to this Home, then retry setup.');
+}
+
 function parsePairingRequest(value: unknown): RemoteHomeEnrollmentPairingRequest | null {
   if (!isRecord(value)
     || value.kind !== 'remote_home_enrollment_pairing_request'
@@ -186,10 +206,13 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
         throw new SystemTaskExecutionError('invalid_cli_response', 'Remote enrollment returned invalid JSON.');
       }
     };
-    const request = parsePairingRequest(await capture(
+    const response = await capture(
       ['auth', 'request', '--json', '--remote-enrollment', '--home-target-stdin', ...(managedEnrollment ? ['--managed-enrollment-stdin'] : [])],
       JSON.stringify(managedEnrollment ? { homeTarget: homeTargetInput, managedEnrollment } : homeTargetInput),
-    ));
+    );
+    const olderAuthRequestError = readOlderAuthRequestError(response);
+    if (olderAuthRequestError) throw olderAuthRequestError;
+    const request = parsePairingRequest(response);
     if (!request?.remoteProfileId) throw new SystemTaskExecutionError('invalid_cli_response', 'Remote enrollment did not return a pairing request.');
     if (homeTargetInput.kind === 'descriptor' && request.homeServerIdentityId !== homeTargetInput.descriptor.homeServerIdentityId) {
       throw new SystemTaskExecutionError('home_identity_mismatch', 'Remote enrollment request does not match the selected Home identity.');
@@ -230,6 +253,12 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
       return;
     }
     state.lineCount += 1;
+    const olderAuthRequestError = state.lineCount === 1 ? readOlderAuthRequestError(parsed) : null;
+    if (olderAuthRequestError) {
+      approvalError = olderAuthRequestError;
+      linked.controller.abort();
+      return;
+    }
     const request = parsePairingRequest(parsed);
     if (state.lineCount === 1 && request) {
       if (
