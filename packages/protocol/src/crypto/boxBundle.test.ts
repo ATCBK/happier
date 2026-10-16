@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { x25519 } from '@noble/curves/ed25519';
 
 import { sha512 } from '@noble/hashes/sha512';
 import tweetnacl from 'tweetnacl';
@@ -43,6 +44,26 @@ const LOW_ORDER_PUBLIC_KEYS: ReadonlyArray<Readonly<{ name: string; bytes: Uint8
 ];
 
 describe('boxBundle', () => {
+  it('validates identical public-key bytes once across sealing and opening, without trusting mutable identities', () => {
+    const recipient = tweetnacl.box.keyPair();
+    const sender = tweetnacl.box.keyPair();
+    const payload = new Uint8Array(32).fill(42);
+    const probe = vi.spyOn(x25519, 'getSharedSecret');
+    try {
+      for (let index = 0; index < 3; index++) {
+        const bundle = sealBoxBundle({ plaintext: payload, recipientPublicKey: recipient.publicKey.slice(),
+          randomBytes: length => length === 32 ? sender.secretKey.slice() : new Uint8Array(length).fill(index) });
+        expect(openBoxBundle({ bundle, recipientSecretKeyOrSeed: recipient.secretKey })).toEqual(payload);
+      }
+      expect(probe).toHaveBeenCalledTimes(2);
+      const mutable = recipient.publicKey.slice();
+      expect(isValidBoxBundlePublicKey(mutable)).toBe(true);
+      mutable.fill(0);
+      expect(isValidBoxBundlePublicKey(mutable)).toBe(false);
+      expect(isValidBoxBundlePublicKey(new Uint8Array(32))).toBe(false);
+      expect(probe).toHaveBeenCalledTimes(3);
+    } finally { probe.mockRestore(); }
+  });
   it('seals to an installed Ed25519 identity without requiring its private seed', () => {
     const installed = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(37));
     const payload = new TextEncoder().encode('original SOURCE writer and exact TARGET custody');

@@ -1,4 +1,5 @@
 import { x25519 } from '@noble/curves/ed25519';
+import { bytesToHex } from '@noble/hashes/utils';
 
 import { BOX_BUNDLE_PUBLIC_KEY_BYTES } from './boxBundleFormat.js';
 
@@ -15,13 +16,24 @@ const BOX_BUNDLE_LOW_ORDER_PROBE_SECRET_SCALAR = new Uint8Array([
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
 ]);
 
+// Public bytes only. Seal, open and schema readers share the same cryptographic
+// admission result, including when a decoder creates another Uint8Array. Key
+// objects are mutable, so object identity cannot establish prior validation.
+const validatedPublicKeys = new Map<string, boolean>();
+
 /** Rejects malformed X25519 encodings and low-order public keys. */
 export function isValidBoxBundlePublicKey(publicKey: Uint8Array): boolean {
   if (publicKey.length !== BOX_BUNDLE_PUBLIC_KEY_BYTES) return false;
+  const identity = bytesToHex(publicKey);
+  const previous = validatedPublicKeys.get(identity);
+  if (previous !== undefined) return previous;
+  let valid = false;
   try {
     const probe = x25519.getSharedSecret(BOX_BUNDLE_LOW_ORDER_PROBE_SECRET_SCALAR, publicKey);
-    return probe.some((byte) => byte !== 0);
+    valid = probe.some((byte) => byte !== 0);
   } catch {
-    return false;
+    valid = false;
   }
+  validatedPublicKeys.set(identity, valid);
+  return valid;
 }
