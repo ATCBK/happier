@@ -85,7 +85,7 @@ it.each(['legacy', 'legacy-terminal', 'current', 'malformed'] as const)('routes 
   const socket = sockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
   if (!socket) throw new Error('Missing Account reverse receiver');
   const registered = new Set<string>();
-  vi.mocked(socket.emit).mockImplementation((event, ...args) => {
+  vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
     const payload: unknown = args[0];
     if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
       if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
