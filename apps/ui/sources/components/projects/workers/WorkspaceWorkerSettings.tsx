@@ -6,6 +6,7 @@ import type {
   ProjectExecutionChoiceV1,
   WorkerDestinationV1,
   WorkspaceWorkerPreferenceReadResultV1,
+  WorkspaceWorkerPreferenceMutationResultV1,
   WorkspaceWorkerPreferenceV1,
 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
@@ -52,7 +53,7 @@ export function useWorkspaceWorkerPreference(workspace: WorkspaceAddressV1, opti
     () => ({ serverId: workspace.serverId, refId: workspace.workspaceId }),
     [workspace.serverId, workspace.workspaceId],
   );
-  const setting = useObservedWorkerSetting<ReadyPreference, WorkspaceWorkerPreferenceDraft>({
+  const setting = useObservedWorkerSetting<ReadyPreference, WorkspaceWorkerPreferenceDraft, WorkspaceWorkerPreferenceMutationResultV1>({
     enabled: options?.enabled,
     serverId: address.serverId,
     scopeKey: JSON.stringify([
@@ -69,9 +70,9 @@ export function useWorkspaceWorkerPreference(workspace: WorkspaceAddressV1, opti
     observedFromReceipt: (receipt) =>
       'preference' in receipt
         ? ({
-            ...(receipt as Omit<ReadyPreference, 'status'>),
+            ...receipt,
             status: 'ready',
-          } as ReadyPreference)
+          })
         : null,
   });
   const { mutate } = setting;
