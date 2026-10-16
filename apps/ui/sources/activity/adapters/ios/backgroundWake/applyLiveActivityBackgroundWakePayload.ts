@@ -25,7 +25,7 @@ const BackgroundWakePayloadSchema = z.object({
     event: z.enum(['update', 'end']),
     activityKey: BackgroundWakeActivityKeySchema,
     snapshotFingerprint: z.string().trim().min(1),
-    contentState: HappierFocusLiveActivityContentStateV1Schema.nullable().optional(),
+    contentState: z.nullable(HappierFocusLiveActivityContentStateV1Schema).optional(),
 }).strict().superRefine((payload, ctx) => {
     if (payload.event !== 'update') return;
     if (payload.contentState !== null && payload.contentState !== undefined) return;

@@ -3,7 +3,7 @@ import { ScmDiffSummaryResultResponseSchema, type ScmDiffSummaryResultResponse }
 import { createScmDiffSummaryResultOperationsWithTransport as createScmDiffSummaryResultOperations } from '@/dev/testkit/harness/scmActionTransport';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 
-const result = ScmDiffSummaryResultResponseSchema.options[0].parse({ success: true, result: { resultId: 'saved', revision: 0, canUndo: false,
+const result = ScmDiffSummaryResultResponseSchema.def.options[0].parse({ success: true, result: { resultId: 'saved', revision: 0, canUndo: false,
   output: { success: true, resultId: 'saved', revision: 0, sourceKey: 'comparison', metadata: { sourceKey: 'comparison', source: { kind: 'workingTree' } },
     comparison: { id: 'comparison', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } },
     requestedOutputs: ['summary'], outputs: { summary: { state: 'pending' } },

@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import React from 'react';
+import { z } from 'zod/mini';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -188,7 +189,7 @@ async function installCodexDescriptor(options: Readonly<{
 }> = {}) {
   // Authored daemon reply bytes, validated again by the whole Socket DTO.
   // The CLI projector is explicitly outside this downstream UI suite.
-  descriptorReplies = options.available === false ? [] : ConnectedAccountUiProjectionEntryV1Schema.array().parse([{
+  descriptorReplies = options.available === false ? [] : z.array(ConnectedAccountUiProjectionEntryV1Schema).parse([{
       id: 'openai-codex',
       serviceId: 'openai-codex',
       pluginId: 'happier.agent.codex',
