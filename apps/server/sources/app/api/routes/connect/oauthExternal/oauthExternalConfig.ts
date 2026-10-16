@@ -131,9 +131,12 @@ export function resolveWebAppOAuthReturnUrlFromRequestHeaders(params: {
         try {
             const url = new URL(raw);
             if (!isLoopbackHostname(url.hostname)) continue;
-            if (url.protocol !== "http:" && url.protocol !== "https:" && !isDesktopWebviewScheme(url.protocol)) continue;
-            const loopbackUiBasePath = resolveLoopbackUiBasePath(url.pathname, uiPrefix, configuredWebAppBasePath);
-            const returnUrl = `${url.protocol}//${url.host}${loopbackUiBasePath.replace(/\/+$/, "")}/oauth/${encodeURIComponent(providerId)}`;
+            const desktopWebview = isDesktopWebviewScheme(url.protocol);
+            if (url.protocol !== "http:" && url.protocol !== "https:" && !desktopWebview) continue;
+            const loopbackUiBasePath = desktopWebview
+                ? ""
+                : resolveLoopbackUiBasePath(url.pathname, uiPrefix, configuredWebAppBasePath).replace(/\/+$/, "");
+            const returnUrl = `${url.protocol}//${url.host}${loopbackUiBasePath}/oauth/${encodeURIComponent(providerId)}`;
             const normalized = tryNormalizeSafeWebRedirectUrl(params.env, returnUrl);
             if (normalized) return normalized;
         } catch {

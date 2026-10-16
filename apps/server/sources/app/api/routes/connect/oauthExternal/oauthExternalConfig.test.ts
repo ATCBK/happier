@@ -106,6 +106,22 @@ describe('resolveWebAppOAuthReturnUrlFromRequestHeaders', () => {
     expect(resolved).toBe('tauri://localhost/oauth/okta');
   });
 
+  it('returns the Tauri desktop webview to its root oauth route regardless of the relay UI prefix', () => {
+    const resolved = resolveWebAppOAuthReturnUrlFromRequestHeaders({
+      env: {
+        HAPPIER_PUBLIC_SERVER_URL: 'https://stack.example.test/base/',
+        HAPPIER_SERVER_UI_DIR: '/tmp/ui',
+        HAPPIER_SERVER_UI_PREFIX: '/ui',
+        HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES: 'tauri',
+      },
+      providerId: 'okta',
+      headers: {
+        origin: 'tauri://localhost',
+      },
+    });
+    expect(resolved).toBe('tauri://localhost/oauth/okta');
+  });
+
   it('ignores the Tauri desktop webview origin when its scheme is not an allowed return scheme', () => {
     const resolved = resolveWebAppOAuthReturnUrlFromRequestHeaders({
       env: {
