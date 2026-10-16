@@ -46,6 +46,24 @@ async function compileFixture(root: string, entry: string, artifactId: string) {
 }
 
 describe('compileUniversalPluginUiCommonJs', () => {
+    it('compiles the public-authoring renderer exported to external plugin authors', async () => {
+        const projectRoot = resolve(import.meta.dirname, '../../../examples/public-authoring');
+        const manifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+            exports: Record<string, string>;
+        };
+        const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+        const result = await compileUniversalPluginUiCommonJs({
+            projectRoot,
+            entryPath: resolve(projectRoot, manifest.exports['./happier-plugin-ui/review-native']!),
+            artifactId: 'review-native', requestedExports: ['renderSurface'],
+            exportConditions: ['happier-source'],
+            resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
+                ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native'] }) : undefined,
+        });
+        expect(result.exports).toContain('renderSurface');
+        expect(result.bytes.byteLength).toBeGreaterThan(0);
+    });
+
     it('configures bundled Mini before an authored entry parses during module evaluation', async () => {
         const { root, entry } = await fixture([
             "import { z } from 'zod/mini';",

@@ -581,7 +581,7 @@ describe('apps/ui/metro.config.js (Expo resolution fallbacks)', () => {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const metroResolver = require('metro-resolver');
         const context = {
-            originModulePath: path.join(exampleUiRoot, 'reviewPanel.native.tsx'),
+            originModulePath: path.join(exampleUiRoot, 'reviewPanelPortable.tsx'),
             resolveRequest: metroResolver.resolve,
             fileSystemLookup: (candidate: string) => {
                 try {

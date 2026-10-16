@@ -302,7 +302,7 @@ test('retains the portable production reference package contract', async () => {
     { surfaces: reviewSummaryTool.surfaces, action: reviewSummaryTool.action },
     { surfaces: ['agent', 'mcp'], action: 'review-summary' },
   );
-  const nativeSurface = await readFile(new URL('../ui/reviewPanel.native.tsx', import.meta.url), 'utf8');
+  const nativeSurface = await readFile(new URL('../ui/reviewPanelPortable.tsx', import.meta.url), 'utf8');
   assert.match(nativeSurface, /readSessionWidgetMount/u);
   assert.match(nativeSurface, /readReviewWidgetView\(context\.launchInput\)/u);
   assert.match(nativeSurface, /useLivePluginResource\('review-session-status'\)/u);

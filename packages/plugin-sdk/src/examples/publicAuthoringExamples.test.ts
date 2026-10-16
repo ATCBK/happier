@@ -1696,7 +1696,7 @@ describe('public SDK authoring examples', { timeout: 60_000 }, () => {
         }
 
         const nativeSurface = readFileSync(
-            join(examplesRoot, 'public-authoring', 'ui', 'reviewPanel.native.tsx'),
+            join(examplesRoot, 'public-authoring', 'ui', 'reviewPanelPortable.tsx'),
             'utf8',
         );
         const webSurface = readFileSync(

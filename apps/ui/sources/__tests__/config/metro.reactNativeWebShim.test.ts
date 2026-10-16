@@ -116,7 +116,7 @@ describe('metro.config.js (web)', () => {
             const publicAuthoringUi = join(repoRoot, 'packages/plugin-sdk/examples/public-authoring/ui');
             const authoringContext = {
                 ...context,
-                originModulePath: join(publicAuthoringUi, 'reviewPanel.native.tsx'),
+                originModulePath: join(publicAuthoringUi, 'reviewPanelPortable.tsx'),
             };
             for (const name of ['reviewClientActions', 'reviewOpenableContent']) {
                 expect(config.resolver.resolveRequest(authoringContext, `./${name}.js`, platform)).toEqual({
