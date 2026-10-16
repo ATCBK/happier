@@ -247,7 +247,7 @@ export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFac
               osUser: props.sharedRunAs,
               machine: props.machineName,
             })}
-            {' '}{t('machines.terminals.sharedOsDetail')}
+            {' '}{t('machines.terminals.sharedOsDetail', { machine: props.machineName })}
           </Text>
         </View>
       ) : null}
