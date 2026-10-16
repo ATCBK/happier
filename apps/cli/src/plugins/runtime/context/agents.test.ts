@@ -14,6 +14,7 @@ import { createPluginAgentCliReadinessService } from './agents';
 function authorizedReadiness(input: Readonly<{
     env: NodeJS.ProcessEnv;
     authorizeLaunch?: Parameters<typeof createStablePluginExecService>[0]['authorizeLaunch'];
+    readiness?: ReturnType<typeof createPluginAgentCliReadinessService>;
 }>) {
     const definition = { toolId: 'claude-cli', displayName: 'Claude Code' };
     const systemTools = createAgentCliSystemToolService({
@@ -33,7 +34,7 @@ function authorizedReadiness(input: Readonly<{
         },
         signal: new AbortController().signal,
         isOccurrenceCurrent: () => true,
-        agentCli: createPluginAgentCliReadinessService({ processEnv: input.env }),
+        agentCli: input.readiness ?? createPluginAgentCliReadinessService({ processEnv: input.env }),
         systemTools,
         resolveExecutable: async () => { throw new Error('The already-resolved system tool must be retained'); },
         resolvePath: async () => input.env.HAPPIER_HOME_DIR!,
@@ -93,13 +94,13 @@ afterEach(async () => {
 });
 
 describe('createPluginAgentCliReadinessService', () => {
-    it('probes the exact configured CLI version only when requested', async () => {
+    it('reuses an unchanged CLI version and observes an updated executable without a refresh timer', async () => {
         await createIsolatedEnv();
         const root = process.env.HAPPIER_HOME_DIR!;
         const marker = join(root, 'version-probe');
         const executable = join(root, 'claude-version.cjs');
         await writeFile(executable, [
-            "require('node:fs').writeFileSync(process.env.PROBE_MARKER, process.env.PROBE_VERSION);",
+            "require('node:fs').appendFileSync(process.env.PROBE_MARKER, process.env.PROBE_VERSION);",
             "console.log(process.env.PROBE_VERSION + ' (Claude Code)');",
         ].join('\n'));
         const service = authorizedReadiness({
@@ -120,6 +121,49 @@ describe('createPluginAgentCliReadinessService', () => {
             candidates: ['claude'], requirement: 'any', includeVersion: true,
         })).toEqual({ launchable: [{ agentId: 'claude', version: '2.1.71' }] });
         expect(await readFile(marker, 'utf8')).toBe('2.1.71');
+        expect(await service.checkReadiness({
+            candidates: ['claude'], requirement: 'any', includeVersion: true,
+        })).toEqual({ launchable: [{ agentId: 'claude', version: '2.1.71' }] });
+        expect(await readFile(marker, 'utf8')).toBe('2.1.71');
+
+        await writeFile(executable, [
+            "require('node:fs').appendFileSync(process.env.PROBE_MARKER, 'updated');",
+            "console.log('2.1.72 (Claude Code)');",
+        ].join('\n'));
+        expect(await service.checkReadiness({
+            candidates: ['claude'], requirement: 'any', includeVersion: true,
+        })).toEqual({ launchable: [{ agentId: 'claude', version: '2.1.72' }] });
+        expect(await readFile(marker, 'utf8')).toBe('2.1.71updated');
+
+        const cancelled = AbortSignal.abort();
+        await expect(service.checkReadiness({
+            candidates: ['claude'], requirement: 'any', includeVersion: true, signal: cancelled,
+        })).rejects.toMatchObject({ code: 'plugin_exec_aborted' });
+        await rm(executable);
+        expect(await service.checkReadiness({
+            candidates: ['claude'], requirement: 'any', includeVersion: true,
+        })).toEqual({ launchable: [] });
+    });
+
+    it('keeps shared readiness version observations bound to the invoking Exec environment', async () => {
+        await createIsolatedEnv();
+        const root = process.env.HAPPIER_HOME_DIR!;
+        const marker = join(root, 'scoped-version-probe');
+        const executable = join(root, 'claude-scoped.cjs');
+        await writeFile(executable, [
+            "require('node:fs').appendFileSync(process.env.PROBE_MARKER, process.env.PROBE_VERSION);",
+            "console.log(process.env.PROBE_VERSION + ' (Claude Code)');",
+        ].join('\n'));
+        const env = { ...process.env, HAPPIER_CLAUDE_PATH: executable,
+            HAPPIER_JS_RUNTIME_PATH: process.execPath, PROBE_MARKER: marker };
+        const readiness = createPluginAgentCliReadinessService({ processEnv: env });
+        const first = authorizedReadiness({ env: { ...env, PROBE_VERSION: '2.1.71' }, readiness });
+        const second = authorizedReadiness({ env: { ...env, PROBE_VERSION: '2.1.72' }, readiness });
+        const request = { candidates: ['claude'], requirement: 'any', includeVersion: true } as const;
+        expect(await first.checkReadiness(request)).toEqual({ launchable: [{ agentId: 'claude', version: '2.1.71' }] });
+        expect(await first.checkReadiness(request)).toEqual({ launchable: [{ agentId: 'claude', version: '2.1.71' }] });
+        expect(await second.checkReadiness(request)).toEqual({ launchable: [{ agentId: 'claude', version: '2.1.72' }] });
+        expect(await readFile(marker, 'utf8')).toBe('2.1.712.1.72');
     });
 
     it('refuses a denied version launch without running the CLI', async () => {

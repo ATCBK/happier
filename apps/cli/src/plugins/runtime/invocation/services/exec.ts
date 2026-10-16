@@ -939,6 +939,7 @@ export function createStablePluginExecService(params: Readonly<{
                 fail('plugin_exec_agent_cli_readiness_unavailable', 'Agent CLI readiness is unavailable in this invocation host');
             }
             const result = await params.agentCli.checkReadiness(request, request.includeVersion === true ? {
+                ...(params.environment ? { environment: params.environment } : {}),
                 async runVersionCommand(input) {
                     guard(input.signal);
                     const toolId = findCatalogEntry(input.agentId)?.agentCliSystemTool?.toolId;
