@@ -1184,7 +1184,7 @@ export function sessionUpdateHandler(
             const parsedUserActionRequiredOccurrences =
                 rawUserActionRequiredOccurrences === undefined
                     ? null
-                    : SessionUserActionRequiredOccurrenceV1Schema.array().safeParse(
+                    : z.array(SessionUserActionRequiredOccurrenceV1Schema).safeParse(
                         rawUserActionRequiredOccurrences,
                     );
             // Validate input
