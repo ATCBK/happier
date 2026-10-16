@@ -2345,10 +2345,30 @@ describe('ApprovalDetailScreen', () => {
     expect(text).toContain('projects.authoring.sessionAsk');
     expect(text).toContain('Rebound workstation');
     expect(screen.findByTestId('approvals.project-command')).not.toBeNull();
+    expect(screen.findHostByTestId('approvals.project-command.checkout')?.props.children).toBe('/home/happier/tidewater');
     for (const raw of ['ws-8e7638ae', 'machine-target', 'Qualified checkout', 'Preparation phase']) expect(text).not.toContain(raw);
     expect(screen.findByTestId('approvals.approve')).not.toBeNull();
     expect(screen.findByTestId('approvals.reject')).not.toBeNull();
     expect(screen.findByTestId('approvals.cancel')).toBeNull();
+  });
+
+  it('shows the requested source checkout in a Script approval sent to a worker', async () => {
+    currentArtifact = createBuiltInApprovalArtifact({
+      actionId: 'projects.script.run',
+      summary: 'Run the tests',
+      actionArgs: {
+        workspace: { serverId: 'server-cache', machineId: 'machine-target', workspaceId: 'tidewater-checkout', rootPath: '/home/happier/tidewater' },
+        selection: { kind: 'named', name: 'test' },
+        choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'worker-target' } },
+      },
+    });
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="artifact-1" />);
+
+    expect(screen.findHostByTestId('approvals.project-command.checkout')?.props.children).toBe('/home/happier/tidewater');
+    expect(screen.findHostByTestId('approvals.project-command.where')?.props.children).toBe('worker-target');
+    expect(readRenderedText(screen)).not.toContain('tidewater-checkout');
+    expect(screen.findByTestId('approvals.approve')).not.toBeNull();
   });
 
   it('places the primary approve action before the reject action', async () => {
