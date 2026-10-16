@@ -6,6 +6,8 @@ import type {
   ExecutionRunRetentionPolicy,
   ExecutionRunStartRequest,
   ExecutionRunResultContractV1,
+  ConnectedServiceBindingsV2,
+  ProviderBoundModelRef,
 } from '@happier-dev/protocol';
 
 /**
@@ -22,6 +24,10 @@ export type ExecutionRunProfileStartParams = Readonly<{
   intent: ExecutionRunIntent;
   backendId: string;
   backendTarget: BackendTargetRefV1;
+  /** Captured launch selection for same-Run profile continuations. */
+  modelId?: string;
+  modelSelection?: ProviderBoundModelRef;
+  connectedServices?: ConnectedServiceBindingsV2 | null;
   instructions: string;
   intentInput?: unknown;
   resultContract?: ExecutionRunResultContractV1;

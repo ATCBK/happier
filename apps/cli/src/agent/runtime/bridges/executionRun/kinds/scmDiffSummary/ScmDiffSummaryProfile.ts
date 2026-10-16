@@ -232,6 +232,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
       ...(readNonEmptyString(request.modelId) ? { modelId: readNonEmptyString(request.modelId) } : {}),
       ...(readNonEmptyString(request.profileId) ? { profileId: readNonEmptyString(request.profileId) } : {}),
       ...(modelSelection.success ? { modelSelection: modelSelection.data } : {}),
+      ...(request.connectedServices !== undefined ? { connectedServices: request.connectedServices } : {}),
     });
     const savedId = typeof input.resultId === 'string' ? input.resultId : undefined;
     const scope = { cwd: input.cwd || cwd, ...(sessionId ? { sessionId } : {}) };

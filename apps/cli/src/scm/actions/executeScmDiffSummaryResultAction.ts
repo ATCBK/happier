@@ -3,7 +3,7 @@ import { ExecutionRunGetResponseSchema, ExecutionRunStartResponseSchema, Executi
 import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionInputAdmissionRejectionCodeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
 import { resolveExecutionRunInteractionAffordances } from '@happier-dev/protocol/execution/runs/interactionAffordances';
-import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { buildReviewCommentsOutboundMessage } from '@happier-dev/protocol/messages/structured/reviewCommentsInput';
 import { ScmDiffSummaryResultReadInputSchema, ScmDiffSummaryResultEditInputSchema, ScmDiffSummaryResultRevisionInputSchema, ScmDiffSummaryRefineInputSchema, ScmDiffSummaryAddOutputsInputSchema, ScmDiffSummaryDiscussInputSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import type { ScmActionExecute, ScmActionId, ScmDiffSummaryResultResponse, ScmDiffSummaryResultDeleteResponse, ScmDiffSummaryOutputKind, ScmComparison, ScmReviewedMarkResponse, ReviewCommentDraftMessageV1, ActionExecutorContext, ScmReviewExplanationRequester, ScmDiffSummaryGeneratorSelection } from '@happier-dev/protocol';
@@ -124,10 +124,30 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
         unifiedDiff: file.evidence.unifiedDiff, ...(file.binary !== null ? { binary: file.binary } : {}),
         ...(file.evidence.state === 'unavailable' ? { description: file.evidence.reason } : {}) })) });
   if (discuss?.startNew || (!affordances.canSend && !affordances.canResume && params.actionId !== 'scm.diffSummary.discuss')) {
-    // Saved admission retains provider binding; public run state intentionally exposes less configuration.
-    const generator: ScmDiffSummaryGeneratorSelection | undefined = result.generator ?? (run ? { backendTarget: readBackendTargetRefV2(run.backendTarget),
-      ...(run.requestedConfiguration?.modelId ? { modelId: run.requestedConfiguration.modelId } : {}) } : undefined);
+    const originalSelection = run?.resolvedSelection;
+    const originalModelId = originalSelection?.modelSelection?.modelId ?? originalSelection?.modelId ?? run?.requestedConfiguration?.modelId;
+    // Historical results can recover their exact observed Run selection. Team custody
+    // is not representable by this saved generator and cannot become a native choice.
+    const generator: ScmDiffSummaryGeneratorSelection | undefined = result.generator ?? (run && !originalSelection?.teamCredentialModel
+      ? { backendTarget: readBackendTargetRefV2(run.backendTarget),
+        ...(originalModelId ? { modelId: originalModelId } : {}),
+        ...(originalSelection?.modelSelection ? { modelSelection: originalSelection.modelSelection } : {}),
+        ...(originalSelection?.connectedServices !== undefined ? { connectedServices: originalSelection.connectedServices } : {}) } : undefined);
     if (!generator || !result.output.comparison) return { success: false, errorCode: 'discussion_unavailable', error: 'A proven generator selection is unavailable for a new conversation.' };
+    const savedModelId = generator.modelSelection?.modelId ?? generator.modelId;
+    // Historical saved generators omitted the credential route. Recover only an observed
+    // original selection for this exact Agent/model/Provider, never a different saved choice.
+    const sameOriginalAgentAndModel = run && originalSelection
+      && buildBackendTargetKeyV2(generator.backendTarget) === buildBackendTargetKeyV2(readBackendTargetRefV2(run.backendTarget))
+      && savedModelId !== undefined && savedModelId === (originalSelection.modelSelection?.modelId ?? originalSelection.modelId);
+    if (sameOriginalAgentAndModel && originalSelection.teamCredentialModel
+      && generator.modelSelection === undefined && generator.connectedServices === undefined) {
+      return { success: false, errorCode: 'discussion_unavailable', error: 'A proven generator selection is unavailable for a new conversation.' };
+    }
+    const sameOriginalRoute = sameOriginalAgentAndModel && !originalSelection.teamCredentialModel
+      && (generator.modelSelection?.providerConnectionId ?? null) === (originalSelection.modelSelection?.providerConnectionId ?? null);
+    const connectedServices = generator.connectedServices !== undefined ? generator.connectedServices
+      : sameOriginalRoute ? originalSelection.connectedServices : undefined;
     const { investigateSurroundingFiles, outputLanguage: _savedLanguage, ...engine } = generator;
     const initialInputId = randomUUID();
     const explanationInputId = explanationRequest ? initialInputId : undefined;
@@ -140,6 +160,7 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
       ...runTarget, ...(!sessionId ? { machineId, cwd: scope.cwd } : {}),
       localInputId: initialInputId,
       kind: 'scm_diff_summary.v1', intent: 'scm_diff_summary', ...engine,
+      ...(connectedServices !== undefined ? { connectedServices } : {}),
       permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
       intentInput: { cwd: scope.cwd, ...(sessionId ? { sessionId } : {}), source: result.output.comparison.source, comparisonId: result.output.comparison.id,
         resultId: result.resultId, expectedRevision: result.revision, outputs,

@@ -6,7 +6,8 @@ import { executeScmActionOperation as executeScmOperation } from './executeScmAc
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { configuration } from '@/configuration';
-import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 
 const cwd = '/saved/repository';
 beforeEach(() => {
@@ -290,6 +291,84 @@ describe('saved SCM result Action boundary', () => {
     expect(starts[0]?.localInputId).toBe((response as { inputId: string }).inputId);
     expect(starts).toEqual([expect.objectContaining({ kind: 'scm_diff_summary.v1', backendTarget: generator.backendTarget, modelId: 'chosen-model', modelSelection,
       intentInput: expect.objectContaining({ resultId: created.resultId, comparisonId, expectedRevision: 0, investigateSurroundingFiles: true }) })]);
+  });
+  it.each(['matching', 'differentModel', 'differentProvider', 'differentAgent', 'missingGenerator', 'missingGeneratorTeam', 'legacyGeneratorTeam'] as const)(
+    'preserves legacy retained Connected Services only for the same saved route (%s)', async route => {
+      const backendTarget = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
+      const modelSelection = ProviderBoundModelRefSchema.parse({ agentTargetKey: buildBackendTargetKeyV2(backendTarget),
+        providerConnectionId: route === 'missingGenerator' ? 'original-provider' : null, modelId: 'chosen-model' });
+      const connectedServices = { v: 2 as const, bindingsByServiceId: {
+        'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'original-profile' },
+      } };
+      const originalTarget = route === 'differentAgent' ? { kind: 'builtInAgent' as const, agentId: 'claude' } : run.backendTarget;
+      const originalModel = route === 'differentModel' ? 'other-model' : 'chosen-model';
+      const original = ExecutionRunGetResponseSchema.parse({ run: { ...run, backendTarget: originalTarget,
+        resolvedSelection: { source: 'inherited', modelId: originalModel, connectedServices,
+          ...(route === 'missingGeneratorTeam' || route === 'legacyGeneratorTeam' ? { teamCredentialModel: TeamCredentialProviderModelSelectionV1Schema.parse({
+            kind: 'team_credential_provider_model', resourceId: 'resource', teamId: 'team', expectedResourceRevision: 2,
+            agentTargetKey: modelSelection.agentTargetKey, modelId: originalModel, deliveryMode: 'brokered',
+          }) } : { modelSelection: { agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(originalTarget)), modelId: originalModel,
+            providerConnectionId: route === 'differentProvider' ? 'other-provider' : modelSelection.providerConnectionId } }) },
+      } }).run;
+      const comparisonId = 'b'.repeat(64);
+      const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session',
+        output: ScmDiffSummaryGenerateOutputSchema.parse({ ...output, sourceKey: comparisonId,
+          metadata: { ...output.metadata, sourceKey: comparisonId }, comparison: { ...output.comparison, id: comparisonId } }),
+        ...(route === 'missingGenerator' || route === 'missingGeneratorTeam' ? {} : { generator: { backendTarget, modelId: 'chosen-model',
+          ...(route === 'legacyGeneratorTeam' ? {} : { modelSelection }) } }) });
+      const starts: Record<string, unknown>[] = [];
+      const response = await executeScmActionOperation({ actionId: 'scm.diffSummary.discuss',
+        input: { cwd, resultId: saved.resultId, expectedRevision: 0, message: 'Explain this change', startNew: true }, workingDirectory: cwd,
+        executeCanonicalAction: async (id, input) => {
+          if (id === 'execution.run.get') return { ok: true, result: { run: original } };
+          if (id !== 'execution.run.start') throw new Error('Expected canonical replacement admission');
+          starts.push(getActionSpec('execution.run.start').inputSchema.parse(input));
+          await scmDiffSummaryResultStore.bindRun({ cwd, resultId: saved.resultId, expectedRevision: 0, runId: 'replacement' });
+          return { ok: true, result: { runId: 'replacement', callId: 'call', sidechainId: 'sidechain' } };
+        },
+      });
+      if (route === 'missingGeneratorTeam' || route === 'legacyGeneratorTeam') {
+        expect(response).toMatchObject({ success: false, errorCode: 'discussion_unavailable' });
+        expect(starts).toEqual([]);
+        return;
+      }
+      expect(response).toMatchObject({ success: true, runId: 'replacement' });
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.modelSelection).toEqual(modelSelection);
+      expect(starts[0]?.connectedServices).toEqual(route === 'matching' || route === 'missingGenerator' ? connectedServices : undefined);
+    });
+  it.each([['connected', true], ['native', true], ['connected', false]] as const)(
+    'keeps the saved %s credential choice over the original Run selection (available=%s)', async (choice, originalAvailable) => {
+    const backendTarget = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
+    const modelSelection = ProviderBoundModelRefSchema.parse({ agentTargetKey: buildBackendTargetKeyV2(backendTarget),
+      providerConnectionId: null, modelId: 'chosen-model' });
+    const originalBindings = { v: 2 as const, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'original-profile' },
+    } };
+    const savedBindings = choice === 'native' ? null : { ...originalBindings, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { ...originalBindings.bindingsByServiceId['happier.agent.codex/openai-codex'], profileId: 'saved-profile' },
+    } };
+    const comparisonId = 'c'.repeat(64);
+    const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session',
+      output: ScmDiffSummaryGenerateOutputSchema.parse({ ...output, sourceKey: comparisonId,
+        metadata: { ...output.metadata, sourceKey: comparisonId }, comparison: { ...output.comparison, id: comparisonId } }),
+      generator: { backendTarget, modelId: 'chosen-model', modelSelection, connectedServices: savedBindings } });
+    const starts: Record<string, unknown>[] = [];
+    const response = await executeScmActionOperation({ actionId: 'scm.diffSummary.discuss',
+      input: { cwd, resultId: saved.resultId, expectedRevision: 0, message: 'Explain this change', startNew: true }, workingDirectory: cwd,
+      executeCanonicalAction: async (id, input) => {
+        if (id === 'execution.run.get') return originalAvailable ? { ok: true, result: { run: { ...run,
+          resolvedSelection: { source: 'inherited', modelId: 'chosen-model', modelSelection, connectedServices: originalBindings },
+        } } } : { ok: false, errorCode: 'execution_run_not_found', error: 'Gone' };
+        if (id !== 'execution.run.start') throw new Error('Expected canonical replacement admission');
+        starts.push(getActionSpec('execution.run.start').inputSchema.parse(input));
+        await scmDiffSummaryResultStore.bindRun({ cwd, resultId: saved.resultId, expectedRevision: 0, runId: 'replacement' });
+        return { ok: true, result: { runId: 'replacement', callId: 'call', sidechainId: 'sidechain' } };
+      },
+    });
+    expect(response).toMatchObject({ success: true, runId: 'replacement' });
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.connectedServices).toEqual(savedBindings);
   });
   it('reads and edits a retained result without a live generator and preserves strict revision failures', async () => {
     const created = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });

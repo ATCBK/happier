@@ -109,6 +109,17 @@ Headless Actions and direct Runs use the same Account preference resolver;
 without a prose override they use Account `preferredLanguage` when available.
 The Settings Action anchor is `sourceControl.outputLanguage`.
 
+The saved generator also retains its admitted Connected Services selection,
+including explicit absence of Connected Services. A model selection with no Provider
+connection does not imply native credential routing. Replacement replays the
+saved binding through ordinary current credential admission; no credentials are
+stored in the generator. Earlier records without that selection can recover it
+from the original retained Run only when its Agent, model and Provider agree
+with the saved choice. If that Run is unavailable, its omitted binding cannot be
+reconstructed from the model tuple. A known original Team route without a
+representable saved credential choice refuses replacement rather than switching
+to current defaults.
+
 Output notification opt-in uses the existing `RunWorkNotifications` owner and
 configured notification channels; it does not change Account preferences. An
 explicit selected comparison, saved result and output are checked against
