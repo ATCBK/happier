@@ -13271,7 +13271,6 @@ const widgetDefinitionTranslations = { ru: {
         refreshed: "Обновлено",
         refreshFailed: "Не удалось обновить. Остаются последние значения.",
         placedOnHome: "Главная",
-        placedOnBoard: ({ board }) => `Доска ${board}`,
         placedOnABoard: "Доска",
         placedInASession: "Сессия",
         placedInAProject: "Проект",

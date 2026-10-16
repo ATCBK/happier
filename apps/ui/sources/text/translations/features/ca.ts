@@ -13268,7 +13268,6 @@ const widgetDefinitionTranslations = { ca: {
         refreshed: "Actualitzat",
         refreshFailed: "No s’ha pogut actualitzar. Es mantenen les últimes xifres.",
         placedOnHome: "Inici",
-        placedOnBoard: ({ board }) => `Tauler ${board}`,
         placedOnABoard: "Un tauler",
         placedInASession: "Una sessió",
         placedInAProject: "Un projecte",

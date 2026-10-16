@@ -13229,7 +13229,6 @@ const widgetDefinitionTranslations = { 'zh-Hant': {
         refreshed: "已重新整理",
         refreshFailed: "無法重新整理。保留上次的數字。",
         placedOnHome: "首頁",
-        placedOnBoard: ({ board }) => `${board} 看板`,
         placedOnABoard: "某個看板",
         placedInASession: "某個工作階段",
         placedInAProject: "某個專案",

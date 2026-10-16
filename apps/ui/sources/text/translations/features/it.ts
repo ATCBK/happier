@@ -13245,7 +13245,6 @@ const widgetDefinitionTranslations = { it: {
         refreshed: "Aggiornato",
         refreshFailed: "Impossibile aggiornare. Restano gli ultimi numeri.",
         placedOnHome: "Home",
-        placedOnBoard: ({ board }) => `Bacheca ${board}`,
         placedOnABoard: "Una bacheca",
         placedInASession: "Una sessione",
         placedInAProject: "Un progetto",

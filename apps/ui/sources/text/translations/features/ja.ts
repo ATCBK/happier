@@ -13233,7 +13233,6 @@ const widgetDefinitionTranslations = { ja: {
         refreshed: "更新しました",
         refreshFailed: "更新できませんでした。前回の数値を表示しています。",
         placedOnHome: "ホーム",
-        placedOnBoard: ({ board }) => `${board} ボード`,
         placedOnABoard: "ボード",
         placedInASession: "セッション",
         placedInAProject: "プロジェクト",

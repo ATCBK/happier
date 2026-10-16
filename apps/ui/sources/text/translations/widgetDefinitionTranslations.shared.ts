@@ -30,7 +30,6 @@ export type WidgetDefinitionTranslation = Readonly<{
     refreshed: string;
     refreshFailed: string;
     placedOnHome: string;
-    placedOnBoard: (params: Readonly<{ board: string }>) => string;
     placedOnABoard: string;
     placedInASession: string;
     placedInAProject: string;
@@ -110,7 +109,6 @@ export const widgetDefinitionTranslationsEnglish = { en: {
         refreshed: "Refreshed",
         refreshFailed: "Couldn’t refresh it. The last numbers stay.",
         placedOnHome: "Home",
-        placedOnBoard: ({ board }) => `${board} board`,
         placedOnABoard: "A board",
         placedInASession: "A session",
         placedInAProject: "A project",

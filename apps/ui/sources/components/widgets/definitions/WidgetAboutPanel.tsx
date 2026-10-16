@@ -9,7 +9,7 @@ import { readWidgetDescriptor, type WidgetCandidate } from '@/components/widgets
 import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/widgetBinding';
 import { useWorkBoardSummaries } from '@/components/boards/model/useWorkBoards';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
@@ -63,30 +63,42 @@ export function readWidgetAboutSources(input: Readonly<{
     });
 }
 
-/** Where the copies are, in words ("Launch board · Home"); scopes it cannot list are said, never guessed. */
-export function useWidgetPlacementLabels(summary: PlacementSummary | null): readonly string[] {
+/** One place a copy is used: its name as the person knows it, led by that place's own mark. */
+export type WidgetPlacementLabel = Readonly<{ label: string; icon: IconName }>;
+
+/**
+ * Where the copies are ("Launch week" with the Board mark, "Home"); scopes it cannot list are said,
+ * never guessed. The mark says what kind of place it is, so a Board's name is never followed by "board".
+ */
+export function useWidgetPlacementLabels(summary: PlacementSummary | null): readonly WidgetPlacementLabel[] {
     const boards = useWorkBoardSummaries(summary?.placements.some(ref => ref.surface.owner.kind === 'workBoard') ?? false);
     return React.useMemo(() => {
         if (!summary) return [];
-        const labels = summary.placements.map((ref: WidgetInstanceRefV1) => {
+        const labels = summary.placements.map((ref: WidgetInstanceRefV1): WidgetPlacementLabel => {
             const owner = ref.surface.owner;
             switch (owner.kind) {
-                case 'home': return t('widgetDefinition.placedOnHome');
+                case 'home': return { label: t('widgetDefinition.placedOnHome'), icon: 'chats-circle' };
                 case 'workBoard': {
                     const board = boards.find((candidate) => candidate.id === owner.boardId);
-                    return board ? t('widgetDefinition.placedOnBoard', { board: board.name }) : t('widgetDefinition.placedOnABoard');
+                    return { label: board ? board.name : t('widgetDefinition.placedOnABoard'), icon: 'squares-four' };
                 }
                 case 'sessionBoard':
                 case 'companion': {
                     const session = storage.getState().sessions[owner.sessionId];
-                    return session ? getSessionName(session, ref.surface.serverId) : t('widgetDefinition.placedInASession');
+                    return { label: session ? getSessionName(session, ref.surface.serverId) : t('widgetDefinition.placedInASession'), icon: 'chat-circle' };
                 }
-                case 'project': return t('widgetDefinition.placedInAProject');
-                case 'corePage': return t('widgetDefinition.placedOnACorePage');
-                case 'pluginArea': return t('widgetDefinition.placedOnAPluginPage');
+                case 'project': return { label: t('widgetDefinition.placedInAProject'), icon: 'folder' };
+                case 'corePage': return { label: t('widgetDefinition.placedOnACorePage'), icon: 'layout' };
+                case 'pluginArea': return { label: t('widgetDefinition.placedOnAPluginPage'), icon: 'puzzle-piece' };
             }
         });
-        return [...new Set(labels)];
+        const seen = new Set<string>();
+        return labels.filter((entry) => {
+            const key = `${entry.icon}\u0000${entry.label}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
     }, [boards, summary]);
 }
 
@@ -143,7 +155,8 @@ export function WidgetAboutPanel(props: Readonly<{
             {...(props.descriptor?.icon ? { mark: props.descriptor.icon } : {})}
             testID={props.testID}
             onClose={props.onClose}
-            footerStart={(
+            // A widget with nothing to change or copy here (a built-in) ends on its last fact, with no empty footer band.
+            {...(props.onChangeWithAgent || props.onDuplicate ? { footerStart: (
                 <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.s12 }}>
                     {props.onChangeWithAgent ? (
                         <RoundButton testID={`${props.testID}.changeWithAgent`} size="small" display="secondary"
@@ -167,7 +180,7 @@ export function WidgetAboutPanel(props: Readonly<{
                         </Text>
                     ) : null}
                 </View>
-            )}
+            ) } : {})}
         >
             {sources.length > 0 ? (
                 <WidgetFactRow label={t('widgetDefinition.aboutData')} testID={`${props.testID}.data`}>
@@ -227,7 +240,12 @@ export function WidgetAboutPanel(props: Readonly<{
                 </WidgetFactRow>
             ) : null}
             <WidgetFactRow label={t('widgetDefinition.aboutUsedIn')} testID={`${props.testID}.usedIn`}>
-                <Text style={text.primary}>{placements.length > 0 ? placements.join(' · ') : t('widgetDefinition.notPlacedYet')}</Text>
+                {placements.length > 0 ? placements.map((place) => (
+                    <View key={`${place.icon}:${place.label}`} style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
+                        <Icon name={place.icon} size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
+                        <Text style={text.primary} numberOfLines={1}>{place.label}</Text>
+                    </View>
+                )) : <Text style={text.primary}>{t('widgetDefinition.notPlacedYet')}</Text>}
                 {unlisted ? <Text style={text.secondary}>{t('widgetDefinition.otherPlacesNotListed')}</Text> : null}
                 {props.artifactId ? <Text style={text.secondary} testID={`${props.testID}.consequence`}>
                     {unlisted || count === 0 ? t('widgetDefinition.editsChangeEverywhere') : t('widgetDefinition.editsChangeAll', { count })}

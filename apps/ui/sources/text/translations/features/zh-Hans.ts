@@ -13229,7 +13229,6 @@ const widgetDefinitionTranslations = { 'zh-Hans': {
         refreshed: "已刷新",
         refreshFailed: "无法刷新。保留上次的数字。",
         placedOnHome: "主页",
-        placedOnBoard: ({ board }) => `${board} 看板`,
         placedOnABoard: "某个看板",
         placedInASession: "某个会话",
         placedInAProject: "某个项目",

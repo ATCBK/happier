@@ -12739,7 +12739,6 @@ const widgetDefinitionTranslations = { de: {
         refreshed: "Aktualisiert",
         refreshFailed: "Aktualisieren fehlgeschlagen. Die letzten Zahlen bleiben.",
         placedOnHome: "Home",
-        placedOnBoard: ({ board }) => `Board ${board}`,
         placedOnABoard: "Ein Board",
         placedInASession: "Eine Sitzung",
         placedInAProject: "Ein Projekt",
