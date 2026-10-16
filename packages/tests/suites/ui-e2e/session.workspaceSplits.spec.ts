@@ -37,6 +37,18 @@ async function selectTabMenu(page: Page, tabId: string, item: 'maximize' | 'clos
     await page.getByTestId(`workspace-tab-menu-${item}`).click();
 }
 
+async function resizeWorkspaceDivider(page: Page, direction: 'right' | 'down') {
+    const divider = page.locator('[data-testid^="split-canvas-divider-handle-"]').first();
+    const bounds = await divider.boundingBox();
+    if (!bounds) throw new Error('Missing workspace divider geometry');
+    const x = bounds.x + bounds.width / 2;
+    const y = bounds.y + bounds.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + (direction === 'right' ? 120 : 0), y + (direction === 'down' ? 120 : 0), { steps: 12 });
+    await page.mouse.up();
+}
+
 test.describe('ui e2e: workspace Session splits', () => {
     test.describe.configure({ mode: 'serial' });
 
@@ -189,6 +201,29 @@ test.describe('ui e2e: workspace Session splits', () => {
                 if (!firstBounds || !secondBounds) throw new Error('Missing visible workspace Session geometry');
                 if (direction === 'right') expect(secondBounds.x).toBeGreaterThanOrEqual(firstBounds.x + firstBounds.width);
                 else expect(secondBounds.y).toBeGreaterThanOrEqual(firstBounds.y + firstBounds.height);
+
+                await resizeWorkspaceDivider(page, direction);
+                await expect.poll(async () => {
+                    const bounds = await sessionSurface(page, sessionOneId).boundingBox();
+                    return direction === 'right' ? bounds?.width : bounds?.height;
+                }, { timeout: 60_000 }).toBeGreaterThan(direction === 'right' ? firstBounds.width : firstBounds.height);
+
+                // Repository, file and terminal presentation stays local to each Session.
+                const firstSurface = sessionSurface(page, sessionOneId);
+                const secondSurface = sessionSurface(page, sessionTwoId);
+                await firstSurface.getByTestId('session-open-source-control').click();
+                const firstRepository = firstSurface.getByTestId('session-right-panel-root');
+                await expect(firstRepository).toBeVisible({ timeout: 60_000 });
+                await expect(secondSurface.getByTestId('session-right-panel-root')).toHaveCount(0);
+                await firstRepository.getByTestId('repository-tree-row-AGENTS.md').first().click();
+                await expect(firstSurface.getByTestId('session-details-panel-root')).toBeVisible({ timeout: 60_000 });
+                await expect(secondSurface.getByTestId('session-details-panel-root')).toHaveCount(0);
+                await firstSurface.getByTestId('session-header-terminal-button').click();
+                await expect(firstSurface.getByTestId('session-bottompanel-surface-terminal')).toBeVisible({ timeout: 120_000 });
+                await expect(secondSurface.getByTestId('session-bottompanel-surface-terminal')).toHaveCount(0);
+                await secondSurface.getByTestId('session-header-terminal-button').click();
+                await expect(secondSurface.getByTestId('session-bottompanel-surface-terminal')).toBeVisible({ timeout: 120_000 });
+                await expect(firstSurface.getByTestId('session-bottompanel-surface-terminal')).toBeVisible();
 
                 // Center adds a kept workspace tab, preserving the previous Session and its draft.
                 await page.getByTestId(`session-list-item-${sessionThreeId}`).dragTo(sessionSurface(page, sessionTwoId));
