@@ -45,8 +45,9 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     const scope = binding?.isCurrent() ? binding.scope : null;
     const canControl = Boolean(scope) && params.canControl;
     const canSend = canControl && params.canSend;
+    const comparisonKey = comparison ? scmComparisonKey(comparison) : null;
     const hostKey = JSON.stringify([scope?.serverId, scope?.accountId, sessionId, host.machineId, machine?.basePath,
-        comparison ? scmComparisonKey(comparison) : null, output]);
+        comparisonKey, output]);
     const currentHostKey = React.useRef<string | null>(hostKey);
     currentHostKey.current = hostKey;
     const isCurrent = React.useCallback(() => binding?.isCurrent() === true && currentHostKey.current === hostKey, [binding, hostKey]);
@@ -114,7 +115,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         // activity, the existing invalidation owner; once a result is bound this listener retires.
         const unsubscribe = sessionId ? subscribeExecutionRunActivity({ sessionId, serverId: scope.serverId }, () => { if (current()) void restore(); }) : () => {};
         return () => { abort.abort(); unsubscribe(); };
-    }, [binding, isCurrent, scope?.serverId, scope?.accountId, machine?.machineId, machine?.basePath, machineReachable, operations, sessionId, host.machineId, comparison, Boolean(viewModel)]);
+    }, [binding, isCurrent, scope?.serverId, scope?.accountId, machine?.machineId, machine?.basePath, machineReachable, operations, sessionId, host.machineId, comparisonKey, Boolean(viewModel)]);
 
     const onStart = React.useCallback(async (outputs: readonly ScmDiffSummaryOutputKind[] = [output]) => {
         if (!isCurrent() || !scope || !cwd || !comparison || !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return;

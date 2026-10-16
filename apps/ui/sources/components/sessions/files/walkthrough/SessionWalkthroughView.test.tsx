@@ -130,6 +130,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', a
 });
 
 const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+const { renderHook } = await import('@/dev/testkit');
 const { standardCleanup } = await import('@/dev/testkit/cleanup/standardCleanup');
 const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
 const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
@@ -364,6 +365,50 @@ describe('SessionWalkthroughView retained offline reading through real Account m
             payload: expect.not.objectContaining({ sessionId: expect.anything() }) })]);
         expect(boundary.sessionCalls).toEqual([]);
     }, 120_000);
+    it('restores once for equivalent comparisons and invalidates on source, checkout and Account changes', async () => {
+        const home = await createHome('https://workspace-restore-identity.example.test');
+        const machine = createMachineFixture({ id: 'workspace-restore-identity-machine', activeAt: Date.now(), storageMode: 'plain' });
+        getStorage().setState({ sessions: {}, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
+            profileScope: { serverId: home.id, accountId: 'walkthrough-account' } });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        const firstList = createDeferred<void>();
+        boundary.listBarrier = () => firstList.promise;
+        const hook = await renderHook((props: { rootPath: string; comparison: SessionScmReviewComparison }) =>
+            useWorkspaceScmDiffSummaryBinding({ machineId: machine.id, serverId: home.id, ...props, output: 'walkthrough' }), {
+            initialProps: { rootPath: '/workspace/exact', comparison: { kind: 'workingTree' } },
+            wrapper: ({ children }) => <InjectedAuthProvider credentials={accountCredentials}>{children}</InjectedAuthProvider>,
+        });
+        const lists = () => boundary.calls.filter(call => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST);
+        await vi.waitFor(() => expect(lists()).toHaveLength(1));
+        for (let render = 0; render < 3; render += 1) {
+            await hook.rerender({ rootPath: '/workspace/exact', comparison: { kind: 'workingTree' } });
+        }
+        expect(lists()).toHaveLength(1);
+        boundary.listBarrier = null;
+        await act(async () => firstList.resolve());
+        await hook.rerender({ rootPath: '/workspace/exact', comparison: { kind: 'workingTree' } });
+        expect(lists()).toHaveLength(1);
+
+        await hook.rerender({ rootPath: '/workspace/exact', comparison: { kind: 'commit', commit: 'a'.repeat(40) } });
+        await vi.waitFor(() => expect(lists()).toHaveLength(2));
+        await hook.rerender({ rootPath: '/workspace/other', comparison: { kind: 'commit', commit: 'a'.repeat(40) } });
+        await vi.waitFor(() => expect(lists()).toHaveLength(3));
+        const retiredBinding = hook.getCurrent().binding;
+        await act(async () => servedHome!.switchAccount('home', 'another-walkthrough-account'));
+        accountCredentials = (await TokenStorage.getCredentialsForServerUrl(home.serverUrl))!;
+        // Account restoration clears the previous Account's machine projection;
+        // publish the newly signed-in Account's own observation before restoring.
+        await act(async () => getStorage().setState({ machines: { [machine.id]: machine },
+            machineListByServerId: { [home.id]: [machine] },
+            profileScope: { serverId: home.id, accountId: 'another-walkthrough-account' } }));
+        await hook.rerender();
+        await vi.waitFor(() => expect(hook.getCurrent().scope?.accountId).toBe('another-walkthrough-account'));
+        await vi.waitFor(() => expect(lists().filter(call => call.accountId === 'another-walkthrough-account')).toHaveLength(1));
+        expect(retiredBinding?.isCurrent()).toBe(false);
+        expect(lists()).toHaveLength(4);
+        expect(generationCalls()).toEqual([]);
+    }, 120_000);
+
     it('restores and edits workspace-native saved reading without a Session and retires it on another checkout', async () => {
         const home = await createHome('https://workspace-only.example.test');
         const machine = createMachineFixture({ id: 'workspace-only-machine', activeAt: Date.now(), storageMode: 'plain' });
