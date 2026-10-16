@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import type { DaemonMergedProjectionPhase } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import type { useMachineCapabilitiesCache } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { StatusPillVariant } from '@/components/ui/status/StatusPill';
@@ -523,7 +524,7 @@ export function readPluginManagedResourceRemovalReview(
         || !isRecord(value) || !isRecord(value.change)
         || value.change.pluginId !== expectedPluginId
         || !hasOnlyKeys(value.change, ['kind', 'pluginId', 'resources'])) return null;
-    const parsed = ManagedResourceDependencyV1Schema.array().safeParse(value.change.resources);
+    const parsed = z.array(ManagedResourceDependencyV1Schema).safeParse(value.change.resources);
     return parsed.success ? parsed.data : null;
 }
 
