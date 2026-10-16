@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveTranscriptBodySemanticEvent } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 
 import {
     projectClaudeJsonlLineRecord,
@@ -7,6 +8,79 @@ import {
 } from './projection.js';
 
 describe('Claude JSONL projection', () => {
+    it('projects image tool results without inline bytes while retaining text, tool correlation and the visible unsupported image', () => {
+        const bytes = 'A'.repeat(628_392);
+        const projection = projectClaudeJsonlLineRecord({ fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42,
+            lineValue: { type: 'user', uuid: 'result', message: { role: 'user', content: [
+                { type: 'tool_result', tool_use_id: 'read-image', content: [
+                    { type: 'text', text: 'Image caption' },
+                    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: bytes } },
+                ] },
+            ] }, toolUseResult: { type: 'image', file: { base64: bytes, type: 'image/png', width: 20, height: 10 } } },
+        });
+        expect(JSON.stringify(projection).includes(bytes)).toBe(false);
+        expect(projection.disposition).toBe('unsupported');
+        expect(projection.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ messageRole: 'event', raw: { role: 'agent', content: {
+                type: 'acp', agentId: 'claude', data: expect.objectContaining({ type: 'tool-result', callId: 'read-image',
+                    output: expect.objectContaining({ content: expect.arrayContaining([{ type: 'text', text: 'Image caption' }]),
+                        tool_use_result: { type: 'image', file: { type: 'image/png', width: 20, height: 10 } } }) }),
+            } } }),
+            expect.objectContaining({ messageRole: 'agent', raw: { role: 'agent', content: {
+                type: 'acp', agentId: 'claude', data: { type: 'message', message: 'Claude emitted an unsupported image content block.' },
+            } } }),
+        ]));
+    });
+    it.each([
+        { type: 'cost-state', sessionId: 'native', totalCostUSD: 0, modelUsage: {}, hasUnknownModelCost: false },
+        { type: 'atis-latch', sessionId: 'native', atis: 'fixture bookkeeping' },
+    ])('recognizes observed native bookkeeping without losing transcript continuity: $type', lineValue => {
+        expect(projectClaudeJsonlLineRecord({ fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42, lineValue }))
+            .toEqual({ disposition: 'known_non_transcript', items: [] });
+    });
+    it.each([
+        { type: 'thinking', thinking: null, signature: 'fixture-signature' },
+        { type: 'image', source: { type: 'base64', data: 'fixture-image' } },
+        { type: 'tool_use', name: 'Read' },
+    ])('keeps an unsupported native block admissible by the strict transcript consumer: $type', (block) => {
+        const [item] = projectClaudeJsonlLineToDirectMessages({
+            fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42,
+            lineValue: { type: 'assistant', uuid: 'unsupported', message: { role: 'assistant', content: [block] } },
+        });
+        expect(item?.raw.role).toBe('agent');
+        if (!item || item.raw.role !== 'agent') throw new Error('Expected a visible unsupported-content marker');
+        const semantic = resolveTranscriptBodySemanticEvent({ protocol: 'acp', body: item.raw.content });
+        expect(semantic).not.toBeNull();
+        expect(item.messageRole).toBe(semantic?.role);
+    });
+
+    it('advances past empty signed thinking without inventing unsupported assistant speech', () => {
+        // Observed Claude native JSONL, 2026-10-15: signed thinking may be intentionally empty.
+        const lineValue = { type: 'assistant', uuid: 'empty-thinking', message: {
+            role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: 'native-signature' }],
+        } };
+        expect(projectClaudeJsonlLineRecord({ fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42, lineValue }))
+            .toEqual({ disposition: 'known_non_transcript', items: [] });
+    });
+
+    it('keeps mixed native tool-result and text rows admissible by the strict transcript consumer', () => {
+        const items = projectClaudeJsonlLineToDirectMessages({
+            fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42,
+            lineValue: { type: 'user', uuid: 'mixed-result', message: { role: 'user', content: [
+                { type: 'tool_result', tool_use_id: 'call', content: 'tool output' },
+                { type: 'text', text: 'additional result context' },
+            ] } },
+        });
+        expect(items).toHaveLength(2);
+        for (const item of items) {
+            expect(item.raw.role).toBe('agent');
+            if (item.raw.role !== 'agent') throw new Error('Expected canonical agent content');
+            const semantic = resolveTranscriptBodySemanticEvent({ protocol: 'acp', body: item.raw.content });
+            expect(semantic).not.toBeNull();
+            expect(item.messageRole).toBe(semantic?.role);
+        }
+    });
+
     it('drops Claude internal event records from raw message projection', () => {
         expect(projectClaudeJsonlLineToRawMessage({ type: 'rate_limit_event', message: 'capacity' })).toBeNull();
     });
@@ -82,6 +156,19 @@ describe('Claude JSONL projection', () => {
                 },
             },
         ],
+        [
+            'assistant API error carrying text',
+            { type: 'assistant', uuid: 'assistant-api-error-text', isApiErrorMessage: true, message: { role: 'assistant', content: [{ type: 'text', text: 'provider failed' }] } },
+            'event',
+            {
+                role: 'agent',
+                content: {
+                    type: 'acp',
+                    agentId: 'claude',
+                    data: { type: 'turn_failed', id: 'claude-jsonl:main:assistant:assistant-api-error-text' },
+                },
+            },
+        ],
     ] as const)('projects a canonical semantic body for %s', (_name, lineValue, expectedRole, expectedRaw) => {
         const [projected] = projectClaudeJsonlLineToDirectMessages({
             fileRelPath: 'session.jsonl',
@@ -94,7 +181,7 @@ describe('Claude JSONL projection', () => {
         expect(projected?.userProjection).toBeUndefined();
     });
 
-    it('drops opaque rows instead of disclosing private source metadata through the transcript', () => {
+    it('marks opaque rows without disclosing private source metadata through the transcript', () => {
         const projected = projectClaudeJsonlLineToDirectMessages({
             fileRelPath: 'private/projects/session.jsonl',
             lineStartOffsetBytes: 42,
@@ -106,7 +193,10 @@ describe('Claude JSONL projection', () => {
             },
         });
 
-        expect(projected).toEqual([]);
+        expect(projected).toHaveLength(1);
+        expect(projected[0]?.raw).toMatchObject({ role: 'agent', content: { type: 'acp',
+            data: { type: 'message', message: 'Agent emitted an unsupported content block.' } } });
+        expect(JSON.stringify(projected)).not.toContain('must remain private');
         expect(JSON.stringify(projected)).not.toContain('fileRelPath');
         expect(JSON.stringify(projected)).not.toContain('/private/provider/session.jsonl');
     });
@@ -389,9 +479,8 @@ describe('Claude JSONL projection', () => {
 
 /**
  * Row shapes taken from the local `~/.claude/projects` corpus written by the
- * pinned Claude CLI. `unsupported` is the disposition that stops a page from
- * ever reporting completeness, so a row the CLI durably writes must never land
- * there: `bridge-session` / `ai-title` / `agent-setting` carry no message body,
+ * pinned Claude CLI. Unsupported records retain a visible fallback; ratified
+ * `bridge-session` / `ai-title` / `agent-setting` carry no message body,
  * and a sidechain or `isMeta` `user` row is a conversation row this projection
  * withholds on purpose because it has no admissible user projection.
  */
@@ -407,6 +496,7 @@ describe('Claude JSONL record disposition', () => {
     it.each([
         ['bridge-session', { type: 'bridge-session', bridgeSessionId: 'b1', lastSequenceNum: 4, sessionId: 's1' }],
         ['ai-title', { type: 'ai-title', aiTitle: 'Refactor the parser', sessionId: 's1' }],
+        ['custom-title', { type: 'custom-title', customTitle: 'User title', sessionId: 's1' }],
         ['agent-setting', { type: 'agent-setting', agentSetting: 'model', sessionId: 's1' }],
     ])('advances past the durable content-free record %s', (_label, record) => {
         expect(project(record)).toEqual({ disposition: 'known_non_transcript', items: [] });
@@ -437,13 +527,18 @@ describe('Claude JSONL record disposition', () => {
         expect(projected.items[0]?.userProjection).toBe('source_fact');
     });
 
-    it('still refuses a record type the pinned CLI does not ratify', () => {
-        expect(project({ type: 'not-a-real-claude-record', sessionId: 's1' }).disposition)
-            .toBe('unsupported');
-    });
-
-    it('still refuses a conversation row it cannot parse', () => {
-        expect(project({ type: 'assistant', uuid: 'assistant-9', message: 7 }).disposition)
-            .toBe('unsupported');
+    it.each([
+        { type: 'not-a-real-claude-record', sessionId: 's1', privateContent: 'do not disclose' },
+        { type: 'assistant', uuid: 'assistant-9', message: 7 },
+        { type: 'assistant', uuid: 'missing-content', message: {} },
+        null,
+    ])('represents an unsupported native record with a safe visible fallback: %j', record => {
+        const projected = project(record);
+        expect(projected.disposition).toBe('unsupported');
+        expect(projected.items).toHaveLength(1);
+        expect(projected.items[0]).toMatchObject({ id: 'claude:000000000000', messageRole: 'agent',
+            raw: { role: 'agent', content: { type: 'acp', data: { type: 'message',
+                message: 'Agent emitted an unsupported content block.' } } } });
+        expect(JSON.stringify(projected.items)).not.toContain('do not disclose');
     });
 });

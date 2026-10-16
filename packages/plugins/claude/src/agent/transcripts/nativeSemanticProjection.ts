@@ -183,9 +183,20 @@ function readTextContentParts(value: unknown): string | null {
 
 /** Keep native result metadata with its report for every conversation codec. */
 export function withClaudeNativeToolResultMetadata(content: unknown, row: unknown): unknown {
-  if (!isRecord(row)) return content;
+  // Image blocks have the same unsupported-image meaning inside tool results
+  // as at the message level. Their bytes (also duplicated by native Read
+  // metadata) are not display text and cannot enter a bounded transcript page.
+  const projectedContent = Array.isArray(content)
+    ? content.map(part => isRecord(part) && part.type === 'image' ? { type: 'image' } : part)
+    : content;
+  if (!isRecord(row)) return projectedContent;
   const metadata = row.toolUseResult ?? row.tool_use_result;
-  return metadata === undefined ? content : { content, tool_use_result: metadata };
+  let projectedMetadata = metadata;
+  if (isRecord(metadata) && metadata.type === 'image' && isRecord(metadata.file)) {
+    const { base64: _imageBytes, ...file } = metadata.file;
+    projectedMetadata = { ...metadata, file };
+  }
+  return metadata === undefined ? projectedContent : { content: projectedContent, tool_use_result: projectedMetadata };
 }
 
 function readMessageContentParts(value: unknown, row: RawJSONLines): readonly ClaudeNativeTranscriptContentPart[] {
@@ -222,7 +233,7 @@ function readMessageContentParts(value: unknown, row: RawJSONLines): readonly Cl
 
     flushText();
     if (type === 'thinking') {
-      const text = readTextContent(valuePart.thinking);
+      const text = typeof valuePart.thinking === 'string' ? valuePart.thinking : null;
       parts.push(text === null
         ? { kind: 'unsupported', source: 'thinking' }
         : { kind: 'thinking', text });
@@ -251,6 +262,9 @@ function readMessageContentParts(value: unknown, row: RawJSONLines): readonly Cl
             output: withClaudeNativeToolResultMetadata(valuePart.content ?? '', row),
             ...(typeof valuePart.is_error === 'boolean' ? { isError: valuePart.is_error } : {}),
           });
+      if (Array.isArray(valuePart.content) && valuePart.content.some(part => isRecord(part) && part.type === 'image')) {
+        parts.push({ kind: 'unsupported', source: 'image' });
+      }
       continue;
     }
     parts.push({ kind: 'unsupported', source: type === 'image' ? 'image' : 'content' });
@@ -291,8 +305,8 @@ function createBaseClassification(params: Readonly<{
     ...params,
     // A record is a safe skip only when the pinned CLI ratifies it as
     // non-transcript, or when it is a conversation row this projection
-    // deliberately hides. Everything else stays unsupported so the paging
-    // owner reports the loss instead of advancing past user data.
+    // deliberately hides. Everything else stays unsupported so the shared
+    // projection publishes a visible fallback and safe diagnostic.
     knownNonTranscriptRecord:
       (params.rawType !== null && CLAUDE_NON_TRANSCRIPT_RECORD_TYPES.has(params.rawType))
       || ((params.rawType === 'user' || params.rawType === 'assistant')
@@ -433,7 +447,11 @@ export function classifyClaudeNativeTranscriptRow(
       };
     }
     const stopReason = readString(readMessageRecord(row)?.stop_reason);
-    if (stopReason) {
+    // Claude JSONL can split a message into content-block rows that each carry
+    // its stop_reason. A thinking block can precede the final text row.
+    const thinkingOnly = base.semanticParts.length > 0
+      && base.semanticParts.every(part => part.kind === 'thinking');
+    if (stopReason && !thinkingOnly) {
       return {
         ...base,
         lifecycle: { kind: 'assistant_stop', stopReason },

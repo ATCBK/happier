@@ -5,6 +5,7 @@ import {
     type AgentExternalSessionTranscriptItem,
 } from '@happier-dev/plugin-sdk/sessions/external';
 import { parseTimestampMs } from '@happier-dev/plugin-sdk';
+import { createExternalSessionUnsupportedTranscriptItem } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import { classifyClaudeNativeTranscriptRow } from './nativeSemanticProjection.js';
 import { buildClaudeJsonlProviderFactLocalId } from './providerFactIdentity.js';
@@ -123,16 +124,16 @@ function semanticItemId(params: Readonly<{
  * The one disposition every Claude JSONL reader shares. Paging, read-after,
  * and materialization all need the same three-way answer about a source row —
  * it produced transcript items, it is a ratified non-transcript record that is
- * safe to advance past, or it is unsupported and its loss must be reported —
+ * safe to advance past, or it is unsupported and needs a visible fallback —
  * so the answer is computed once here instead of being re-derived per reader.
  */
 export type ClaudeJsonlLineRecordProjection =
     | Readonly<{
-        disposition: 'mapped';
+        disposition: 'mapped' | 'unsupported';
         items: AgentExternalSessionTranscriptItem[];
     }>
     | Readonly<{
-        disposition: 'known_non_transcript' | 'unsupported';
+        disposition: 'known_non_transcript';
         items: readonly [];
     }>;
 
@@ -143,13 +144,10 @@ export function projectClaudeJsonlLineRecord(params: Readonly<{
     maxItems?: number;
 }>): ClaudeJsonlLineRecordProjection {
     const projected = projectClaudeJsonlLine(params);
+    if (projected.unsupportedRecord) return { disposition: 'unsupported', items: projected.items };
     if (projected.items.length > 0) return { disposition: 'mapped', items: projected.items };
     return {
-        disposition:
-            projected.withheldEveryPart
-            || classifyClaudeNativeTranscriptRow(params.lineValue).knownNonTranscriptRecord
-                ? 'known_non_transcript'
-                : 'unsupported',
+        disposition: 'known_non_transcript',
         items: [],
     };
 }
@@ -170,7 +168,8 @@ export function projectClaudeJsonlLineToDirectMessages(params: Readonly<{
 
 /**
  * `withheldEveryPart` records that this projection understood the row and chose
- * to publish nothing, rather than failing to understand it. A non-root `user`
+ * to publish nothing, rather than failing to understand it. Empty signed
+ * thinking carries no display content. A non-root `user`
  * row — a sidechain prompt or an `isMeta` context row — has no admissible user
  * projection in this vocabulary (`terminalFollowProjection` rejects a user item
  * without one) and must not be relabelled as agent speech, so its text parts
@@ -181,6 +180,7 @@ export function projectClaudeJsonlLineToDirectMessages(params: Readonly<{
 type ClaudeJsonlLineProjection = Readonly<{
     items: AgentExternalSessionTranscriptItem[];
     withheldEveryPart: boolean;
+    unsupportedRecord?: boolean;
 }>;
 
 function projectClaudeJsonlLine(params: Readonly<{
@@ -212,15 +212,20 @@ function projectClaudeJsonlLine(params: Readonly<{
             withheldEveryPart: false,
         } : noItems;
     }
+    const unsupportedRecord = (): ClaudeJsonlLineProjection => ({
+        items: [createExternalSessionUnsupportedTranscriptItem({ agentId: 'claude', id: stableId, localId, createdAtMs })],
+        withheldEveryPart: false,
+        unsupportedRecord: true,
+    });
     if (
         classification.rawType
         && classification.rawType !== 'user'
         && classification.rawType !== 'assistant'
     ) {
-        return noItems;
+        return classification.knownNonTranscriptRecord ? noItems : unsupportedRecord();
     }
 
-    if (classification.content.kind === 'opaque') return noItems;
+    if (classification.content.kind === 'opaque') return classification.knownNonTranscriptRecord ? noItems : unsupportedRecord();
 
     if (classification.content.kind === 'compact_summary') {
         const raw = createClaudeAgentMessageRaw(classification.content.text);
@@ -272,7 +277,9 @@ function projectClaudeJsonlLine(params: Readonly<{
             withheldEveryPart: false,
         };
     }
-    if (classification.content.kind !== 'message' || !classification.row) return noItems;
+    if (classification.content.kind !== 'message' || !classification.row) {
+        return classification.knownNonTranscriptRecord ? noItems : unsupportedRecord();
+    }
 
     if (classification.lifecycle.kind === 'assistant_api_error') {
         const raw = createClaudeAgentEventRaw('turn_failed', localId ?? stableId);
@@ -283,7 +290,7 @@ function projectClaudeJsonlLine(params: Readonly<{
                     id: stableId,
                     localId,
                     createdAtMs,
-                    messageRole: classification.messageRole,
+                    messageRole: 'event',
                     raw,
                 },
             ],
@@ -293,7 +300,7 @@ function projectClaudeJsonlLine(params: Readonly<{
 
     const items: AgentExternalSessionTranscriptItem[] = [];
     let preservedTextIdentity = false;
-    let withheldTextPart = false;
+    let withheldPart = false;
     for (const [index, part] of classification.semanticParts.entries()) {
         const preserveBaseIdentity = part.kind === 'text' && !preservedTextIdentity;
         if (part.kind === 'text') preservedTextIdentity = true;
@@ -322,7 +329,7 @@ function projectClaudeJsonlLine(params: Readonly<{
                 continue;
             }
             if (classification.messageRole !== 'agent' && classification.messageRole !== 'event') {
-                withheldTextPart = true;
+                withheldPart = true;
                 continue;
             }
             const raw = createClaudeAgentMessageRaw(part.text);
@@ -330,9 +337,14 @@ function projectClaudeJsonlLine(params: Readonly<{
             items.push({
                 ...identity,
                 createdAtMs,
-                messageRole: classification.messageRole,
+                messageRole: 'agent',
                 raw,
             });
+            continue;
+        }
+
+        if (part.kind === 'thinking' && part.text.trim().length === 0) {
+            withheldPart = true;
             continue;
         }
 
@@ -366,15 +378,19 @@ function projectClaudeJsonlLine(params: Readonly<{
         items.push({
             ...identity,
             createdAtMs,
-            messageRole: 'event',
+            // Unsupported blocks become visible message markers, whose role
+            // must agree with the canonical raw body at strict host admission.
+            messageRole: data !== null && raw !== null ? 'event' : 'agent',
             raw: admittedRaw,
         });
     }
     const maxItems = params.maxItems === undefined
         ? null
         : Math.max(1, Math.trunc(params.maxItems));
+    if (items.length === 0 && !withheldPart && !classification.knownNonTranscriptRecord) return unsupportedRecord();
     if (maxItems === null || items.length <= maxItems) {
-        return { items, withheldEveryPart: items.length === 0 && withheldTextPart };
+        return { items, withheldEveryPart: items.length === 0 && withheldPart,
+            ...(classification.semanticParts.some(part => part.kind === 'unsupported') ? { unsupportedRecord: true } : {}) };
     }
     const raw = createClaudeAgentMessageRaw(unsupportedContentMessage('content'));
     if (!raw) return noItems;
@@ -383,7 +399,7 @@ function projectClaudeJsonlLine(params: Readonly<{
             id: stableId,
             localId,
             createdAtMs,
-            messageRole: 'event',
+            messageRole: 'agent',
             raw,
         }],
         withheldEveryPart: false,
