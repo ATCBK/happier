@@ -125,8 +125,10 @@ function createScmDiffSummaryStreamingRuntime(): TestExecutionRunHostRuntime {
 
   runtime = createTestExecutionRunHostRuntime({
     onSendPrompt: async () => {
-      runtime.emitMessage({ type: 'model-output', fullText: 'Inspecting checkpoint diff evidence...\n' });
-      runtime.emitMessage({ type: 'model-output', fullText: finalJson });
+      const progress = 'Inspecting checkpoint diff evidence...\n';
+      runtime.emitMessage({ type: 'model-output', fullText: progress });
+      // Unkeyed fullText is the authoritative whole-turn snapshot, not a delta.
+      runtime.emitMessage({ type: 'model-output', fullText: progress + finalJson });
     },
     onWaitForTurnCompletion: async () => {},
   });
@@ -660,7 +662,8 @@ describe('startExecutionRun', () => {
       const result = await startExecutionRun({
         params: {
           sessionId: 'parent_session_1', intent, runClass, notifyParentOnCompletion,
-          backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID },
+          backendTarget: { kind: 'builtInAgent', agentId: intent === 'review' ? 'claude' : TEST_BACKEND_ID },
+          ...(intent === 'review' ? { modelId: readOfferedSummaryModelId(), modelSelection: null } : {}),
           instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable', ioMode: 'request_response',
           accountSettings: { executionRunsNotifyParentOnCompletionDefault: false },
         },
@@ -1090,6 +1093,8 @@ describe('startExecutionRun', () => {
           sessionId: 'session_1',
           intent: 'review',
           backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+          modelId: readOfferedSummaryModelId(),
+          modelSelection: null,
           instructions: 'Review the selected pull request.',
           intentInput,
           permissionMode: 'read_only',
@@ -1801,6 +1806,7 @@ describe('startExecutionRun', () => {
         .join('');
       expect(streamedText).toContain('Inspecting checkpoint diff evidence');
       expect(streamedText).not.toContain('## Summary');
+      expect(sidechainCommits.at(-1)?.body.message).toBe('Inspecting checkpoint diff evidence...');
       expect(sidechainCommits[0]?.meta?.happierStreamSegmentV1).toMatchObject({ segmentState: 'streaming' });
       expect(sidechainCommits.at(-1)?.meta?.happierStreamSegmentV1).toMatchObject({ segmentState: 'complete' });
 
