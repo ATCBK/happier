@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders } from 'axios';
-import { createActionExecutor, getActionSpec, ScmDiffSummaryGenerateOutputSchema, ExecutionRunGetResponseSchema, ProviderBoundModelRefSchema, ReviewCommentsV1Schema, type ActionExecutorContext, type ActionExecutorDeps, type ScmActionExecute } from '@happier-dev/protocol';
+import { createActionExecutor, getActionSpec, ScmDiffSummaryGenerateOutputSchema, ExecutionRunGetResponseSchema, ProviderBoundModelRefSchema, type ActionExecutorContext, type ActionExecutorDeps, type ScmActionExecute } from '@happier-dev/protocol';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { executeScmActionOperation as executeScmOperation } from './executeScmActionOperation';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
@@ -46,24 +46,34 @@ function createScmResultActionExecutor(scmActionExecute: NonNullable<ActionExecu
 }
 
 describe('saved SCM result Action boundary', () => {
-  it.each(['rejected', 'outcomeUnknown', 'transportFailure'] as const)('preserves the actual %s follow-up admission outcome', async outcome => {
+  it.each(['rejected', 'outcomeUnknown', 'transportFailure', 'invalidParameters'] as const)('preserves the actual %s follow-up admission outcome', async outcome => {
     const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });
+    let attemptedInputId = '';
     const response = await executeScmActionOperation({ actionId: 'scm.diffSummary.refine',
       input: { cwd, resultId: saved.resultId, expectedRevision: 0, output: 'walkthrough', instructions: 'Shorten the explanation.' },
       workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] },
-      executeCanonicalAction: async actionId => actionId === 'execution.run.get' ? { ok: true, result: { run } }
+      executeCanonicalAction: async (actionId, request) => {
+        if (actionId === 'execution.run.get') return { ok: true, result: { run } };
+        attemptedInputId = String((request as { localId: string }).localId);
+        return outcome === 'invalidParameters' ? { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' }
         : outcome === 'transportFailure'
           ? { ok: false, errorCode: 'execution_run_target_unavailable', error: 'Execution Run executable snapshot is unavailable' }
           : { ok: true, result: outcome === 'rejected' ? { status: outcome, code: 'session_input_target_unavailable' }
-            : { status: outcome, localId: 'uncertain-input', code: 'machine_admission_pending_custody_unconfirmed' } },
+            : { status: outcome, localId: 'uncertain-input', code: 'machine_admission_pending_custody_unconfirmed' } };
+      },
     });
     getActionSpec('scm.diffSummary.refine').outputSchema.parse(response);
-    expect(response).toMatchObject({ success: false, errorCode: outcome === 'rejected' ? 'admission_failed' : 'admission_unknown',
+    expect(response).toMatchObject({ success: false, errorCode: outcome === 'rejected' ? 'session_input_target_unavailable'
+      : outcome === 'invalidParameters' ? 'invalid_parameters' : 'admission_unknown',
       error: outcome === 'transportFailure' ? expect.stringContaining('execution_run_target_unavailable')
         : outcome === 'outcomeUnknown' ? expect.stringContaining('machine_admission_pending_custody_unconfirmed')
+        : outcome === 'invalidParameters' ? 'invalid_parameters'
         : 'session_input_target_unavailable' });
     expect(await scmDiffSummaryResultStore.read({ cwd, resultId: saved.resultId })).toMatchObject({ success: true,
       result: { output: { outputs: output.outputs } } });
+    const pending = await scmDiffSummaryResultStore.readInput({ cwd, resultId: saved.resultId, inputIds: [attemptedInputId] });
+    if (outcome === 'rejected' || outcome === 'invalidParameters') expect(pending).toBeNull();
+    else expect(pending).not.toBeNull();
   });
   it('admits an RPC parent’s canonical child with its requester and approval context while refusing direct closed RPC', async () => {
     const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });
@@ -191,7 +201,15 @@ describe('saved SCM result Action boundary', () => {
     });
     const created = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output: selected,
       generator: { backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, modelId: 'selected-model' } });
-    let sent: { message: string; localId: string; metaOverrides?: { happier?: { kind: string; payload: unknown } } } | undefined;
+    let sent: { message: string; localId?: string } | undefined;
+    // The Session transport alone is replaced. Targeted refine must pass the
+    // real Action parser, participant admission and Session send dispatcher.
+    const messageExecutor = createScmResultActionExecutor(async () => { throw new Error('Unexpected SCM recursion'); }, {
+      sessionSendMessage: async request => {
+        sent = request;
+        return { status: 'accepted', localId: request.localId! };
+      },
+    });
     let seededInput: Record<string, unknown> | undefined;
     const executeCanonicalAction: Parameters<ScmActionExecute>[0]['executeCanonicalAction'] = async (id, input) => {
       if (id === 'execution.run.get') return operation === 'seedExplain' ? { ok: false, errorCode: 'execution_run_not_found', error: 'Unavailable' } : { ok: true, result: { run } };
@@ -200,8 +218,7 @@ describe('saved SCM result Action boundary', () => {
         return { ok: true, result: { runId: 'seeded', callId: 'call', sidechainId: 'side', status: 'running' } };
       }
       if (id !== 'session.message.send') throw new Error('Discussion must target saved generator');
-      sent = input as NonNullable<typeof sent>;
-      return { ok: true, result: { status: 'accepted', localId: sent.localId } };
+      return messageExecutor.execute(id, input, { surface: 'ui', bypassApprovals: true });
     };
     const targets = [{ stopId: 'stop', findingRefs: [{ runId: 'review-1', findingId: 'finding-1' }] }];
     expect(await executeScmActionOperation({ actionId: operation === 'discuss' ? 'scm.diffSummary.discuss' : 'scm.diffSummary.refine', input: {
@@ -234,11 +251,8 @@ describe('saved SCM result Action boundary', () => {
           explanationMarkdown: 'Current manual reasoning', reviewExplanations: [{ markdown: 'Separate explanation' }],
         }] } } } } } });
     } else if (operation === 'discuss') {
-      expect(sent?.metaOverrides?.happier?.kind).toBe('review_comments.v1');
-      expect(ReviewCommentsV1Schema.parse(sent?.metaOverrides?.happier?.payload)).toMatchObject({ sessionId: 'session', comments: [{
-      filePath: 'code.ts', body: expect.stringContaining('Current manual reasoning'),
-      anchor: { kind: 'diffLine', side: 'after', newLine: 2 }, snapshot: { selectedLines: [], beforeContext: [], afterContext: [] },
-      }] });
+      expect(sent?.message).toContain('code.ts');
+      expect(sent?.message).toContain('after L2');
     } else if (operation === 'refine') {
       expect(sent?.message).toContain('Prose language: fr');
       expect(await scmDiffSummaryResultStore.publish({ cwd, resultId: created.resultId, inputId: sent!.localId,

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ExecutionRunGetResponseSchema, ExecutionRunStartResponseSchema, ExecutionRunSendResponseSchema, readExecutionRunStartRunCreation } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionInputAdmissionRejectionCodeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
 import { resolveExecutionRunInteractionAffordances } from '@happier-dev/protocol/execution/runs/interactionAffordances';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { buildReviewCommentsOutboundMessage } from '@happier-dev/protocol/messages/structured/reviewCommentsInput';
@@ -168,15 +169,20 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
     ...(explanationRequest ? { reviewExplanation: explanationRequest } : {}) });
   if (!begun.success) return begun;
   const sent = await (sessionId
-    ? execute('session.message.send', { sessionId, recipient: { kind: 'execution_run', runId: previousRunId }, message, localId: inputId,
-      ...(reviewInput ? { metaOverrides: reviewInput.metaOverrides } : {}) })
+    ? execute('session.message.send', { sessionId, recipient: { kind: 'execution_run', runId: previousRunId }, message, localId: inputId })
     : execute('execution.run.send', { ...runTarget, runId: previousRunId, message, localInputId: inputId,
       ...(affordances.canResume ? { resume: true } : {}) })).catch(() => null);
   if (!sent) return { success: false, errorCode: 'admission_unknown', error: 'The generator input admission is unconfirmed.' };
   // A transport failure does not prove that the input was never admitted.
   // Preserve its typed reason while retaining the uncertain input basis.
-  if (!sent.ok) return { success: false, errorCode: 'admission_unknown',
-    error: sent.errorCode ?? 'admission_unknown' };
+  if (!sent.ok) {
+    const rejection = SessionInputAdmissionRejectionCodeV1Schema.safeParse(sent.errorCode);
+    if (sent.errorCode === 'invalid_parameters' || rejection.success) {
+      await store.abandonInput({ ...scope, inputId });
+      return { success: false, errorCode: rejection.success ? rejection.data : 'invalid_parameters', error: sent.errorCode };
+    }
+    return { success: false, errorCode: 'admission_unknown', error: sent.errorCode ?? 'admission_unknown' };
+  }
   if (!sessionId) {
     if (!ExecutionRunSendResponseSchema.safeParse(sent.result).success) return { success: false, errorCode: 'admission_unknown', error: 'The generator input admission is unconfirmed.' };
     return { ...begun, runId: previousRunId, inputId };
@@ -186,7 +192,7 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   if (admitted.data.status === 'outcomeUnknown') return { success: false, errorCode: 'admission_unknown', error: admitted.data.code };
   if (admitted.data.status === 'rejected') {
     await store.abandonInput({ ...scope, inputId });
-    return { success: false, errorCode: 'admission_failed', error: admitted.data.code };
+    return { success: false, errorCode: admitted.data.code, error: admitted.data.code };
   }
   if (admitted.data.status !== 'accepted' && admitted.data.status !== 'alreadyAccepted') return { success: false, errorCode: 'admission_failed', error: admitted.data.status };
   return { ...begun, runId: previousRunId, inputId };

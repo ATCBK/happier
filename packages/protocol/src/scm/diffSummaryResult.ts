@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { BackendTargetRefV2Schema } from '../backends/targets/backendTargetRefV2.js';
 import { ProviderBoundModelRefSchema } from '../providers/selection/v1.js';
+import { SESSION_INPUT_ADMISSION_REJECTION_CODES_V1 } from '../sessions/messages/sessionInputAdmissionRejectionV1.js';
 import { ScmCommitPlanApplicationSchema } from './diffSummaryCommitPlan.js';
 import {
   ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema,
@@ -99,6 +100,7 @@ export const ScmDiffSummaryResultErrorCodeSchema = lazyZodSchema(() => z.enum([
   'discussion_unavailable', 'admission_failed', 'admission_unknown', 'result_unavailable',
   'application_locked', 'application_unavailable', 'source_not_pending', 'plan_unavailable',
   'acceptance_mismatch', 'backend_unsupported', 'source_changed', 'head_moved', 'selection_conflict',
+  'invalid_parameters', ...SESSION_INPUT_ADMISSION_REJECTION_CODES_V1,
 ]));
 export const ScmDiffSummaryResultFailureSchema = lazyZodSchema(() => z.strictObject({
   success: z.literal(false), errorCode: ScmDiffSummaryResultErrorCodeSchema,
