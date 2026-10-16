@@ -1198,7 +1198,7 @@ describe('useMachineSelectionListModel', () => {
             kind: 'unavailable', serverId: 'server-a', accountId: 'account-a', poolId, reason: 'worker_status_unavailable',
         } });
         expect(optionIdsOf().find(option => option.id === `pool:server-a:${poolId}`)?.subtitle)
-            .toBe('projectWorkers.statusUnavailable');
+            .toBe('machinePools.resolvePresenceUnavailable');
 
         // A current Home with a cached zero-connected summary still reaches the authoritative
         // resolve; only the Home's own currentness may deny activation.

@@ -21,14 +21,14 @@ export type MachineReplacementPickerModalProps = CustomModalInjectedProps & Read
 export function MachineReplacementPickerModal(props: MachineReplacementPickerModalProps) {
     return (
         <ItemList presentation="grouped">
-            <ItemGroup title={t('machine.replacementRepair.pickerCandidatesTitle')}>
+            <ItemGroup title={t('machine.replacementRepair.pickerCandidatesTitle')}
+                description={t('machine.replacementRepair.chooseReplacementSubtitle')}>
                 {props.candidates.map((candidate) => (
                     <Item
                         key={candidate.id}
                         testID={`machine-replacement-picker-candidate:${candidate.id}`}
                         title={candidate.label}
-                        subtitle={`${candidate.subtitle}\n${t('machine.replacementRepair.confirmBody', { machine: candidate.label })}`}
-                        subtitleLines={0}
+                        subtitle={candidate.subtitle}
                         detail={candidate.online ? t('status.online') : t('status.offline')}
                         showChevron={false}
                         onPress={() => {

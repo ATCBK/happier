@@ -46,6 +46,23 @@ describe('managed lifecycle presentation', () => {
     await screen.pressByTestIdAsync('managed-machine.progress:remove');
     expect(remove).toHaveBeenCalledOnce();
   });
+  it('reads a native resource identity as one fact per line, never a JSON dump', async () => {
+    const { ManagedCreationProgress } = await import('./ManagedCreationProgress');
+    const { ManagedMachineV1Schema } = await import('@happier-dev/protocol/machines/managed/managedMachineV1');
+    const provider = { pluginId: 'custom.provisioner', localId: 'native' };
+    const machine = ManagedMachineV1Schema.parse({ id: 'bound-resource', homeId: 'home', custodianAccountId: 'owner',
+      launch: { provider, schemaVersion: 1, name: 'Bound resource', choices: {} },
+      controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound', creationState: 'active',
+      resource: { contributionRef: provider, schemaVersion: 1, value: { instance: 'happier-qb-design', cpus: 2, mounts: [] } },
+      desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false });
+    const screen = await renderScreen(<ManagedCreationProgress machine={machine} />);
+    const identity = screen.tree.findAll(node => typeof node.type === 'string' && node.props.testID === 'managed-machine.recovery');
+    expect(identity).toHaveLength(1);
+    const text = screen.getTextContent();
+    expect(text).not.toContain('{"');
+    expect(text).toContain('instance: happier-qb-design');
+    expect(text).toContain('cpus: 2');
+  });
   it('never words an accepted or unknown outcome as done', async () => {
     const { describeManagedLifecycleState } =
       await import('./managedLifecyclePresentation');

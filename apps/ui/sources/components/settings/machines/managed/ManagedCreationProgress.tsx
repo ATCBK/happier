@@ -9,6 +9,8 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { ManagedMachineStateRow, type ManagedLifecycleHandlers } from './ManagedMachineStateRow';
 import { canRetryManagedInstallation, currentManagedCreationOperation, managedCreationSetup, managedCreationState } from './managedCreationPresentation';
@@ -73,7 +75,7 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
         {machine.resource || machine.recovery ? <ItemGroup title={t('managedMachines.detail.recoveryTitle')}>
             <Item title={t('managedMachines.detail.nativeIdentity')} mode="info" showChevron={false}
                 testID="managed-machine.recovery" accessoryLayout="stacked" rightElement={
-                    <Text selectable style={Typography.mono()}>{machine.recovery?.reference ?? JSON.stringify(machine.resource?.value)}</Text>
+                    <Text selectable style={styles.identity}>{machine.recovery?.reference ?? describeNativeIdentity(machine.resource?.value)}</Text>
                 } />
             {machine.allocation !== 'confirmed-absent' && (machine.cleanup || machine.allocation === 'may-exist')
                 && !machine.recovery?.consoleUrl ? <Item title={t('managedCleanup.consoleHelp')} mode="info" showChevron={false}
@@ -81,5 +83,15 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
         </ItemGroup> : null}
     </>;
 }
+
+/** A flat native value reads as one fact per line; anything nested keeps its JSON on that line. */
+function describeNativeIdentity(value: unknown): string {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return JSON.stringify(value);
+    return Object.entries(value).map(([key, entry]) => `${key}: ${typeof entry === 'string' ? entry : JSON.stringify(entry)}`).join('\n');
+}
+
+const styles = StyleSheet.create(theme => ({
+    identity: { ...Typography.mono(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary },
+}));
 
 const setupActions: ViewStyle = { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' };

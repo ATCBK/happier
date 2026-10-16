@@ -293,8 +293,9 @@ function poolSelectionFeedback(
     switch (status.reason) {
         case 'empty': return t('machinePools.resolveEmpty');
         case 'no_available_machine': return t('machinePools.resolveNoAvailable');
-        case 'presence_unavailable': return t('machinePools.resolvePresenceUnavailable');
-        case 'worker_status_unavailable': return t('projectWorkers.statusUnavailable');
+        // A worker whose status cannot be read leaves the pool's availability just as unknown as presence does.
+        case 'presence_unavailable':
+        case 'worker_status_unavailable': return t('machinePools.resolvePresenceUnavailable');
     }
 }
 

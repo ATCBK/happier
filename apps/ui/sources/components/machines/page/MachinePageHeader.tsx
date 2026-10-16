@@ -72,9 +72,11 @@ const styles = StyleSheet.create(() => ({
     },
 }));
 
-function replacementCandidateSubtitle(machine: Machine): string {
-    return [machine.metadata?.platform, machine.metadata?.homeDir, machine.id]
-        .filter((part): part is string => Boolean(part)).join(' • ');
+function replacementCandidateSubtitle(machine: Machine, label: string): string {
+    // What tells machines apart to a person: the system and the host name when it adds to the name, never a path or an id.
+    const host = machine.metadata?.host;
+    return [formatOSPlatform(machine.metadata?.platform), host && host !== label ? host : undefined]
+        .filter((part): part is string => Boolean(part)).join(' · ');
 }
 
 /**
@@ -312,12 +314,15 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
         const eligible = allMachines.filter((candidate) => candidate.id !== machineId && !candidate.revokedAt && !candidate.replacedByMachineId);
         // Candidates are shown together, so same-named machines are told apart by the naming owner.
         const names = resolveMachineDisplayNames(eligible);
-        return eligible.map((candidate) => ({
-            id: candidate.id,
-            label: names.get(candidate.id) ?? getMachineDisplayName(candidate),
-            subtitle: replacementCandidateSubtitle(candidate),
-            online: isMachineReachable(accountScope, candidate, nowMs),
-        }));
+        return eligible.map((candidate) => {
+            const label = names.get(candidate.id) ?? getMachineDisplayName(candidate);
+            return {
+                id: candidate.id,
+                label,
+                subtitle: replacementCandidateSubtitle(candidate, label),
+                online: isMachineReachable(accountScope, candidate, nowMs),
+            };
+        });
     }, [accountScope, allMachines, machineId, nowMs, reachabilityRevision]);
 
     const replace = React.useCallback((replacementMachineId: string) => {

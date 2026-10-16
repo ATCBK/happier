@@ -39,7 +39,7 @@ export const ManagedMachineStateRow = React.memo(
       /** The provider's name, for "Open Hetzner". */
       provider?: string;
       handlers: ManagedLifecycleHandlers;
-      /** Mute an ended resource's facts while keeping its recovery actions available. */
+      /** Mute an ended resource's name and mark; its cause stays readable and its recovery actions stay primary. */
       ended?: boolean;
       testID: string;
     }>,
@@ -96,7 +96,6 @@ export const ManagedMachineStateRow = React.memo(
           )
         }
         subtitleLines={0}
-        subtitleStyle={props.ended ? styles.ended : undefined}
         subtitleLeading={
           presentation.tone === 'pending' ? (
             <ActivitySpinner
@@ -117,9 +116,7 @@ export const ManagedMachineStateRow = React.memo(
                   key={action}
                   testID={`${props.testID}:${action}`}
                   size="small"
-                  display={
-                    index === 0 && !props.ended ? 'secondary' : 'inverted'
-                  }
+                  display={index === 0 ? 'secondary' : 'inverted'}
                   title={managedLifecycleActionLabel(action, props.provider)}
                   onPress={props.handlers[action]!}
                 />

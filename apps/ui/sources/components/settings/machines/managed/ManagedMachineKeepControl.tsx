@@ -61,6 +61,8 @@ export type ManagedMachineKeepControlProps = Readonly<{
   finiteOnly?: boolean;
   /** A live detail cannot offer policy edits until its current native capability owner qualifies it. */
   capabilitiesAvailable?: boolean;
+  /** Why the policy cannot be edited yet, when its owner knows (the controller is offline). */
+  unavailableReason?: string;
   /** Exact complete option identities; selection writes its returned native launch, never an inferred field. */
   nativeDuration?: Readonly<{
     value: string | null;
@@ -135,13 +137,11 @@ export const ManagedMachineKeepControl = React.memo(
 );
 
 function UnavailableKeepPolicy(props: ManagedMachineKeepControlProps) {
-  return <>
-    <Item testID={`${props.testID}:retention`} title={t('managedRetention.whenUnused')}
-      subtitle={describeRetention(props.policy.retention)} mode="info" showChevron={false} />
-    <SectionContentRow testID={`${props.testID}:unavailable`}>
-      <Text style={styles.quiet}>{props.nativeExpiry ?? t('managedMachines.options.unavailable')}</Text>
-    </SectionContentRow>
-  </>;
+  // One row says the current rule and why it cannot change yet; no second row, no trailing rule.
+  return <Item testID={`${props.testID}:retention`} title={t('managedRetention.whenUnused')}
+    subtitle={[describeRetention(props.policy.retention),
+      props.nativeExpiry ?? props.unavailableReason ?? t('managedMachines.options.unavailable')].join('\n')}
+    subtitleLines={0} mode="info" showChevron={false} />;
 }
 
 function KeepFinite(props: ManagedMachineKeepControlProps) {

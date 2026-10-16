@@ -28,6 +28,21 @@ describe('retained wake choices', () => {
     });
 });
 
+describe('a rule that cannot be edited yet', () => {
+    it('shows the current rule and the reason it is read-only in one row', async () => {
+        const { ManagedMachineKeepControl } = await import('./ManagedMachineKeepControl');
+        const screen = await renderScreen(<ManagedMachineKeepControl
+            policy={{ retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false }} inherited={false}
+            presentation="choices" capabilitiesAvailable={false} unavailableReason="NLDW3 manages this machine and needs to be online."
+            consequence={() => 'Kept'} onChange={vi.fn()} onReset={vi.fn()} testID="keep" />);
+        const text = screen.getTextContent();
+        expect(text).toContain('NLDW3 manages this machine and needs to be online.');
+        expect(text).not.toContain('no longer available');
+        expect(screen.findByTestId('keep:unavailable')).toBeNull();
+        await screen.unmount();
+    });
+});
+
 describe('explicit interrupting deadline', () => {
     const at = new Date(2099, 0, 2, 18, 30).getTime();
     const render = async (onChange: (policy: unknown) => void, deadline: boolean) => {

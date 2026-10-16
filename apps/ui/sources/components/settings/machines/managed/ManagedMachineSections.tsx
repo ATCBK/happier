@@ -174,6 +174,7 @@ export function ManagedMachineSections(props: SectionProps) {
     approvalRequestRef.current = approval.requestApproval;
     const [policyParent, setPolicyParent] = React.useState<ManagedMachinePolicyParent | null>(null);
     const [parentReadRevision, refreshPolicyParent] = React.useReducer(value => value + 1, 0);
+    const [parentReadFailed, setParentReadFailed] = React.useState(false);
     const policyController = requiredController && controllerPresence?.online ? machine.controller
         : controllerMachines?.map(row => currentManagedMoveController(row, machine.custodianAccountId, reachabilityScope)).find(row => row !== null)
             ?? (requiredController ? machine.controller : null);
@@ -183,13 +184,18 @@ export function ManagedMachineSections(props: SectionProps) {
     React.useEffect(() => {
         const binding = props.binding;
         setPolicyParent(null);
+        setParentReadFailed(false);
         if (!props.current || !binding?.isCurrent() || !policyController) return;
         const abort = new AbortController();
         const retirement = binding.onRetire(() => { abort.abort(); setPolicyParent(null); });
         void readManagedMachinePolicyParent({ machine, controller: policyController, binding, signal: abort.signal,
             onApprovalPending: registration => approvalRequestRef.current(registration) }).then(result => {
-                if (!abort.signal.aborted && binding.isCurrent() && result.kind === 'ready') setPolicyParent(result.parent);
-            }).catch(() => { /* An unavailable parent cannot enable Reset; the live row remains readable. */ });
+                if (abort.signal.aborted || !binding.isCurrent()) return;
+                if (result.kind === 'ready') setPolicyParent(result.parent); else setParentReadFailed(true);
+            }).catch(() => {
+                // An unavailable parent cannot enable Reset; the live row stays readable and says why it is read-only.
+                if (!abort.signal.aborted) setParentReadFailed(true);
+            });
         return () => { abort.abort(); retirement.dispose(); };
     }, [props.binding, props.current, parentControllerAvailable, parentReadKey, parentReadRevision]);
     const policy = proposedPolicy ?? machine;
@@ -496,6 +502,10 @@ export function ManagedMachineSections(props: SectionProps) {
     const keep: ManagedKeepProps = { policy, inherited: false, defaultPolicy: policyParent?.policy,
         finiteOnly: policyParent?.capabilities.finiteOnly,
         capabilitiesAvailable: policyParent !== null,
+        // Until the controller answers, the rule is read-only: say who it waits for, or that it is being read.
+        unavailableReason: controllerPresence?.online === false ? t('managedMachines.controller.required', { controller: controllerName })
+            : parentReadFailed ? t('managedMachines.options.error')
+                : providerName ? t('managedMachines.options.loading', { provider: providerName }) : undefined,
         nativeExpiry: nativeExpiryDescription,
         effects: supportedIntents.filter((intent): intent is 'stop' | 'delete' => intent === 'stop' || intent === 'delete'),
         canWake: isMachineRetainedWakeEligibleV1(policy.retention, { supportedIntents }),
@@ -620,9 +630,10 @@ export function ManagedMachineSections(props: SectionProps) {
                     fireAndForget(run('machines.managed.delete', input), { tag: 'ManagedMachineSections.delete' });
                 } }} /> : null}
         {canRemove && removeReviewKey !== deleteReviewKey && !describeManagedCreation(machine, creationContext).actions.includes('remove')
-            ? <ItemGroup surface="none"><SectionButtonRow testID="managed-machine.remove-row">
-                <RoundButton title={t('managedMachines.actions.remove')} display="secondary" size="small"
-                    testID="managed-machine.remove" onPress={reviewRemoval} />
+            ? <ItemGroup surface="none"><SectionButtonRow testID="managed-machine.remove-row"
+                trailing={<RoundButton title={t('managedMachines.actions.remove')} display="secondary" size="small"
+                    testID="managed-machine.remove" onPress={reviewRemoval} />}>
+                {null}
             </SectionButtonRow></ItemGroup> : null}
         {removeReviewKey === deleteReviewKey ? <ManagedDecisionRow testID="managed-machine.remove-decision"
             footnote={machine.allocation === 'confirmed-absent' || machine.observation?.availability === 'absent'

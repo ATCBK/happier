@@ -605,7 +605,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
                 onChange: next => { if (activeBinding?.isCurrent()) setLimit(next); } })} />
         </ItemGroup> : null}
         {error ? <SurfaceStateCard kind="error" title={error === 'conflict' ? t('machinePresets.conflict') : t('managedMachines.options.error')}
-            testID="managed-config.error" action={{ label: t('managedMachines.actions.tryAgain'), onPress: retry }} /> : null}
+            testID="managed-config.error" action={{ label: t(error === 'conflict' ? 'managedMachines.actions.review' : 'managedMachines.actions.tryAgain'), onPress: retry }} /> : null}
         {saved && !props.presetOnly ? <SurfaceStateCard testID="managed-config.saved" kind="success" size="line" title={t('machinePresets.saved', { name: saved.name })}
             action={{ label: t('machinePresets.openPreset'), onPress: () => router.push(`/settings/machines/presets/${encodeURIComponent(saved.id)}?serverId=${encodeURIComponent(saved.serverId)}` as never) }} /> : null}
     </ManagedMachineConfigurator>;

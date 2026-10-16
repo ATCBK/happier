@@ -19,6 +19,17 @@ function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+/** What a person recognises an image by: its file name, and where it is served from. */
+function describeImage(location: string) {
+  try {
+    const url = new URL(location);
+    const name = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() ?? '');
+    return name ? { title: name, description: url.host } : { title: location };
+  } catch {
+    return { title: location.split(/[\\/]/u).filter(Boolean).pop() ?? location };
+  }
+}
+
 function refusalCode(error: unknown) {
   return typeof record(error).code === 'string' ? String(record(error).code) : 'provider_unavailable';
 }
@@ -133,7 +144,7 @@ export function createLimaProvider<TResult extends LimaCommandResult>(executor: 
         nativeFacts: {
           size: { id: `${launch.cpus}/${launch.memoryGiB}/${launch.diskGiB}`, title: launch.instance,
             cpuCores: launch.cpus, memoryBytes: launch.memoryGiB * gib, diskBytes: launch.diskGiB * gib },
-          image: { id: launch.image, title: launch.image },
+          image: { id: launch.image, ...describeImage(launch.image) },
         },
       }] };
     },
