@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { z } from 'zod/mini';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1 } from '@happier-dev/transfers';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -254,7 +255,7 @@ function parseStoredArtifact(raw: unknown): StoredArtifact | null {
     ...readStoredAccess(value) };
 }
 
-const artifactAuthorityProjectionSchema = ArtifactAccessRecipientCensusResponseV1Schema.pick({ ownerAccountId: true, access: true, encryptionMode: true });
+const artifactAuthorityProjectionSchema = z.pick(ArtifactAccessRecipientCensusResponseV1Schema, { ownerAccountId: true, access: true, encryptionMode: true });
 
 function readStoredAccess(value: Record<string, unknown>): Pick<StoredArtifact, 'ownerAccountId' | 'access' | 'encryptionMode'> {
   const projection = artifactAuthorityProjectionSchema
@@ -441,6 +442,23 @@ export function createAccountArtifactStore(params: Readonly<{
   };
   const store = {
     read,
+    /** Exact selection opens only the header, never unrelated headers or the body. */
+    readHeader: async (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<AccountArtifactHeader | null> => {
+      options?.signal?.throwIfAborted();
+      const stored = await fetchStored(artifactId, options?.signal);
+      if (!stored) return null;
+      const codec = await openStored(stored);
+      const header = decode(codec, stored.header);
+      if (!header || typeof header !== 'object' || Array.isArray(header) || Object.keys(header).length === 0) {
+        throw new ArtifactEncryptionMaterialUnavailableError();
+      }
+      await prepare(stored, codec, options?.signal);
+      options?.signal?.throwIfAborted();
+      return { artifactId: stored.id, header: header as Readonly<Record<string, unknown>>,
+        ownerAccountId: stored.ownerAccountId, access: stored.access, publicAudience: stored.publicAudience,
+        headerVersion: stored.headerVersion, bodyVersion: stored.bodyVersion,
+        seq: stored.seq, createdAt: stored.createdAt, updatedAt: stored.updatedAt };
+    },
     publicLinks: async (args: Readonly<{ actionId: ArtifactPublicLinkActionIdV1; input: unknown; signal?: AbortSignal }>,
       onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>) => createArtifactPublicLinkActionsV1({
         randomBytes: getRandomBytes, onPublicLinkIssued,
