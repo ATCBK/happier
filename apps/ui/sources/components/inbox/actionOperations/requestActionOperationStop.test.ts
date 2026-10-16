@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
@@ -9,12 +10,19 @@ import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit/render/re
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import { useActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
 import { OverlayPortalProvider, OverlayPortalHost } from '@/components/ui/popover/OverlayPortal';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance as waitForHomeGovernanceRequests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance as waitForHomeGovernanceRequests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn(), session: vi.fn() }));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
@@ -32,7 +40,10 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
         prepareSessionDataKeyEnvelopesForScope: unused, prepareSessionDataKeyEnvelopesDetached: unused };
 });
 const harness = createHomeGovernanceHarness();
+installDisconnectedServerSocketBoundary();
 installHomeGovernanceBoundaries(harness);
+await loadSyncSingletonForTests();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 const { requestActionOperationStop, requestAcceptedActionOperationStop } = await import('./requestActionOperationStop');
 const { useActionOperationStopControl } = await import('./useActionOperationStopControl');
 const { ActionOperationLedgerView } = await import('./ActionOperationLedger');
@@ -50,6 +61,8 @@ function WorkRowPortal(props: React.PropsWithChildren) {
 // Host layout measurement is an OS/renderer boundary; the real Popover and menu run beneath it.
 function createMeasuredWorkHost() {
     return {
+        offsetTop: 0,
+        offsetHeight: 44,
         measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(20, 20, 600, 44),
         getBoundingClientRect: () => ({ left: 20, top: 20, width: 600, height: 44 }),
     };
@@ -84,16 +97,24 @@ function operation(serverId: string): ActionOperationProjection {
     };
 }
 
-async function addOriginHome(options: Parameters<typeof harness.addHome>[0]) {
+async function addOriginHome(options: Parameters<typeof harness.addHome>[0], mountedAccount = false) {
     const serverId = await harness.addHome({ ...options, currentAccount: true,
         serverIdentityId: options.serverIdentityId ?? 'srv_origin_test' });
+    // Mounted approval readers consume the restored Account's Artifact projection.
+    // Saving credentials/profile alone does not activate that content scope.
+    if (mountedAccount) connection = await restoreServerAccountForTest({ serverUrl: options.serverUrl, accountId: 'alice',
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: harness.request });
     await installOwnMachineApprovalReplayBoundary({ harness, serverId, accountId: 'alice', machineId: 'machine-1' });
     return serverId;
 }
 
 describe('requestActionOperationStop', () => {
     beforeEach(async () => { await harness.reset(); actionOperationStore.reset(); rpc.machine.mockReset(); rpc.session.mockReset(); });
-    afterEach(() => standardCleanup());
+    afterEach(async () => {
+        standardCleanup();
+        await connection?.dispose(); connection = null;
+        installHomeGovernanceBoundaries(harness);
+    });
 
     it('routes through the operation transport Home rather than ambient focus', async () => {
         const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
@@ -120,7 +141,7 @@ describe('requestActionOperationStop', () => {
     });
 
     it.each(['unsupported', 'not_found'] as const)('keeps native %s feedback after an Ask-first Stop refusal', async kind => {
-        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' }, true);
         await harness.requireUiApproval(serverId, 'action.operations.cancel');
         const target = operation(serverId);
         const hook = await renderHook(() => useActionOperationStopControl(target));
@@ -159,7 +180,7 @@ describe('requestActionOperationStop', () => {
     });
 
     it('joins the real deferred replay and releases rejected or retired mounted interest without dispatch', async () => {
-        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' }, true);
         // A mounted active-Home reader observes decision writes through the real Account-scoped Artifact store.
         await harness.requireUiApproval(serverId, 'action.operations.cancel');
         let target = operation(serverId);
@@ -291,7 +312,7 @@ describe('requestActionOperationStop', () => {
         });
     });
 
-    it('requests contextual Work Stop before output exists and joins approval without opening or settling the row', async () => {
+    it('requests contextual Work Stop before output exists and joins approval without opening or settling the row', async () => withPopoverWebGlobals(async () => {
         const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         await harness.requireUiApproval(serverId, 'action.operations.cancel');
         const accepted: ActionOperationProjection = {
@@ -322,32 +343,39 @@ describe('requestActionOperationStop', () => {
         };
         const row = (target: React.ComponentProps<typeof WorkItemRow>['item']) => React.createElement(WorkItemRow, { item: target, onOpen, onShowInTranscript });
         const screen = await renderScreen(row(item), { wrapper: WorkRowPortal, createNodeMock: createMeasuredWorkHost });
-        act(() => invokeTestInstanceHandler(screen.findByTestId(`session-work-row:${item.key}`), 'onLongPress'));
-        await screen.pressByTestIdAsync(`session-work-stop:${item.key}`);
-        await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
-        expect(opened).toBe(false);
-        expect(rpc.machine).not.toHaveBeenCalled();
-        const artifactId = harness.artifacts(serverId).list()[0]!.id;
-        rpc.machine.mockResolvedValue({ kind: 'requested' });
-        await decideApprovalAsInbox(serverId, artifactId, 'approve');
-        await waitForHomeGovernance(() => expect(rpc.machine).toHaveBeenCalledOnce());
-        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine-1',
-            method: 'actionOperation.cancel.v1', payload: { operationId: 'operation-1' } }));
-        expect(opened).toBe(false);
-        expect([...actionOperationStore.getSnapshot().operationsByKey.values()][0]?.snapshot.state).toBe('accepted');
-        act(() => invokeTestInstanceHandler(screen.findByTestId(`session-work-row:${item.key}`), 'onLongPress'));
-        await screen.pressByTestIdAsync(`session-work-open:${item.key}`);
-        await waitForHomeGovernance(() => expect(opened).toBe(true));
-        expect(openedTarget).toEqual({ kind: 'action_operation', serverId, operationId: 'operation-1' });
-        act(() => invokeTestInstanceHandler(screen.findByTestId(`session-work-row:${item.key}`), 'onLongPress'));
-        await screen.pressByTestIdAsync(`session-work-transcript:${item.key}`);
-        await waitForHomeGovernance(() => expect(transcript).toEqual({ serverId, sessionId: 'session-1' }));
-        const terminalItem = project({ ...accepted, snapshot: { ...accepted.snapshot, revision: 2, state: 'cancelled', settledAt: 3 } }).projectCommands[0];
-        if (!terminalItem) throw new Error('Expected the retained terminal Work row');
-        await screen.update(row(terminalItem));
-        act(() => invokeTestInstanceHandler(screen.findByTestId(`session-work-row:${item.key}`), 'onLongPress'));
-        expect(screen.findAllHostsByTestId(`session-work-stop:${item.key}`)).toHaveLength(0);
-        expect(screen.findByTestId(`session-work-open:${item.key}`)).not.toBeNull();
-        expect(screen.findByTestId(`session-work-transcript:${item.key}`)).not.toBeNull();
-    });
+        try {
+            const openMenu = async () => {
+                await act(async () => invokeTestInstanceHandler(screen.findByTestId(`session-work-row:${item.key}`), 'onLongPress'));
+                act(() => reportPopoverContentLayout(screen.tree, { width: 280, height: 200 }));
+                await flushHookEffects();
+            };
+            await openMenu();
+            await screen.pressByTestIdAsync(`session-work-stop:${item.key}`);
+            await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
+            expect(opened).toBe(false);
+            expect(rpc.machine).not.toHaveBeenCalled();
+            const artifactId = harness.artifacts(serverId).list()[0]!.id;
+            rpc.machine.mockResolvedValue({ kind: 'requested' });
+            await decideApprovalAsInbox(serverId, artifactId, 'approve');
+            await waitForHomeGovernance(() => expect(rpc.machine).toHaveBeenCalledOnce());
+            expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine-1',
+                method: 'actionOperation.cancel.v1', payload: { operationId: 'operation-1' } }));
+            expect(opened).toBe(false);
+            expect([...actionOperationStore.getSnapshot().operationsByKey.values()][0]?.snapshot.state).toBe('accepted');
+            await openMenu();
+            await screen.pressByTestIdAsync(`session-work-open:${item.key}`);
+            await waitForHomeGovernance(() => expect(opened).toBe(true));
+            expect(openedTarget).toEqual({ kind: 'action_operation', serverId, operationId: 'operation-1' });
+            await openMenu();
+            await screen.pressByTestIdAsync(`session-work-transcript:${item.key}`);
+            await waitForHomeGovernance(() => expect(transcript).toEqual({ serverId, sessionId: 'session-1' }));
+            const terminalItem = project({ ...accepted, snapshot: { ...accepted.snapshot, revision: 2, state: 'cancelled', settledAt: 3 } }).projectCommands[0];
+            if (!terminalItem) throw new Error('Expected the retained terminal Work row');
+            await screen.update(row(terminalItem));
+            await openMenu();
+            expect(screen.findAllHostsByTestId(`session-work-stop:${item.key}`)).toHaveLength(0);
+            expect(screen.findByTestId(`session-work-open:${item.key}`)).not.toBeNull();
+            expect(screen.findByTestId(`session-work-transcript:${item.key}`)).not.toBeNull();
+        } finally { await screen.unmount(); }
+    }));
 });

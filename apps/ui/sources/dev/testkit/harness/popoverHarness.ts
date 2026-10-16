@@ -123,6 +123,14 @@ export function findFirstHostNodeByTestId(tree: TreeLike, testID: string): React
     return findHostNodesByTestId(tree, testID)[0] ?? null;
 }
 
+/** Report the native layout event that Test Renderer cannot produce for portal content. */
+export function reportPopoverContentLayout(tree: TreeLike, size: Readonly<{ width: number; height: number }>): void {
+    const portals = resolveRoot(tree).findAll(node => typeof node.type === 'string'
+        && typeof node.props.nativeID === 'string' && node.props.nativeID.startsWith('popover-')
+        && typeof node.props.onLayout === 'function');
+    for (const portal of portals) portal.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, ...size } } });
+}
+
 export function withPopoverWebGlobals(options?: PopoverWebGlobalsOptions): () => void;
 export function withPopoverWebGlobals<TResult>(
     run: () => TResult | Promise<TResult>,
