@@ -73,6 +73,12 @@ type RequestDiagnostic = {
     admissionPredicate: string;
     admissionDenied?: boolean;
     acknowledgementOutcomeCode?: string;
+    failure?: Readonly<{
+        failedPhase: string;
+        cancelled: boolean;
+        phaseDurationsMs: Readonly<Record<string, number>>;
+        causeCode?: string;
+    }>;
 };
 
 function readOutcomeCode(value: unknown, thrown = false): string {
@@ -256,6 +262,7 @@ export class RpcHandlerManager {
                 ...(diagnostic.admissionDenied || diagnostic.outcomeCode === RPC_ERROR_CODES.FORBIDDEN
                     ? { admissionPredicate: diagnostic.admissionPredicate } : {}),
                 ...(diagnostic.acknowledgementOutcomeCode ? { acknowledgementOutcomeCode: diagnostic.acknowledgementOutcomeCode } : {}),
+                ...(diagnostic.failure ?? {}),
             });
         }
     }
@@ -522,6 +529,15 @@ export class RpcHandlerManager {
         armDeadline();
         let handlerExecutionId: number | null = null;
         let disposeRequesterAccountContext: (() => Promise<void>) | undefined;
+        let phase = 'request_admission';
+        let phaseStartedAtMs = this.nowMs();
+        const phaseDurationsMs: Record<string, number> = {};
+        const nextPhase = (next: string) => {
+            const now = this.nowMs();
+            phaseDurationsMs[phase] = (phaseDurationsMs[phase] ?? 0) + Math.max(0, Math.round(now - phaseStartedAtMs));
+            phase = next;
+            phaseStartedAtMs = now;
+        };
         try {
             const isReservedAutomationReplyHandoff = this.isReservedAutomationReplyHandoffRequest(request);
             const isReservedSessionServerStart = this.isReservedSessionServerStartRequest(request);
@@ -602,14 +618,18 @@ export class RpcHandlerManager {
                     ...(workspaceSyncTargetRouting?.success ? { workspaceSyncTargetRouting: Object.freeze(workspaceSyncTargetRouting.data) } : {}),
                     ...(workspaceSyncSourceWriterTargetRouting?.success ? { workspaceSyncSourceWriterTargetRouting: Object.freeze(workspaceSyncSourceWriterTargetRouting.data) } : {}),
                     ...(workspaceSyncSeedRouting?.success ? { workspaceSyncSeedRouting: Object.freeze(workspaceSyncSeedRouting.data) } : {}),
-                    ...((sessionTransitionInputAuthorizationMatchesRequest || sourceInputAuthorizationMatchesRequest || writerTargetInputAuthorizationMatchesRequest || seedInputAuthorizationMatchesRequest) && parsedInputAuthorization?.success
+                    ...((serviceMoveChild || sessionTransitionInputAuthorizationMatchesRequest || sourceInputAuthorizationMatchesRequest || writerTargetInputAuthorizationMatchesRequest || seedInputAuthorizationMatchesRequest || workflowRoleInputAuthorizationMatchesRequest) && parsedInputAuthorization?.success
                         ? { callerInputAuthorization: parsedInputAuthorization.data } : {}),
                     signal: controller.signal,
             });
             if (this.authorizeRequest) {
+                nextPhase('authorize_request');
                 diagnostic.callerClass = 'unadmitted';
                 diagnostic.admissionPredicate = 'authorize_request';
                 const authorization = await this.authorizeRequest(authorizationRequest);
+                // Home verification can settle false because this request was cancelled.
+                // Preserve that lifecycle result before interpreting an access refusal.
+                controller.signal.throwIfAborted();
                 if (!authorization.ok) {
                     diagnostic.admissionDenied = true;
                     if (authorization.admissionPredicate) this.reportAdmissionDenial(diagnostic, authorization.admissionPredicate);
@@ -619,6 +639,7 @@ export class RpcHandlerManager {
                     });
                 }
             }
+            nextPhase('input_binding');
             // Session handlers validate the relay's actor themselves and need
             // not install a manager admission callback. Attribute its parsed
             // stamp without treating the presence of authorization as denial.
@@ -723,8 +744,10 @@ export class RpcHandlerManager {
                     || controller.signal.aborted) {
                     return await deny('requester_account_admission');
                 }
+                nextPhase('requester_preparation');
                 const prepared = await this.prepareRequesterAccountContext({ authorization: callerInputAuthorization,
                     purpose: { kind: 'machine_rpc', method: this.readUnprefixedMethod(request.method), params: decryptedParams }, signal: controller.signal });
+                nextPhase('input_binding');
                 if (!prepared) {
                     return await deny('requester_account_preparation');
                 }
@@ -738,6 +761,7 @@ export class RpcHandlerManager {
             }
 
             // Call the handler
+            nextPhase('handler');
             diagnostic.admissionPredicate = 'handler_admission';
             handlerExecutionId = this.beginHandlerExecution(
                 this.readUnprefixedMethod(request.method),
@@ -790,6 +814,7 @@ export class RpcHandlerManager {
             }));
 
             // Encrypt and return the response
+            nextPhase('response');
             const acknowledgement = confidential ? null : this.projectAcknowledgement(
                 request,
                 decryptedParams,
@@ -799,6 +824,12 @@ export class RpcHandlerManager {
             const response = await respond(request, result, acknowledgement);
             return response;
         } catch (error) {
+            const failedPhase = phase;
+            nextPhase('response');
+            const causeCode = error instanceof Error && error.cause ? readOutcomeCode(error.cause, true) : 'unclassified_error';
+            diagnostic.failure = { failedPhase, cancelled: controller.signal.aborted, phaseDurationsMs,
+                ...(['RPC_REQUEST_TIMEOUT', 'ERR_CANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT']
+                    .includes(causeCode) ? { causeCode } : {}) };
             if (confidential) {
                 return await respond(request, { error: 'confidential_continuation_failed', errorCode: 'confidential_continuation_failed' });
             }
@@ -814,7 +845,9 @@ export class RpcHandlerManager {
             diagnostic.outcomeCode = outcomeCode;
             return response;
         } finally {
+            nextPhase('requester_cleanup');
             await disposeRequesterAccountContext?.();
+            nextPhase('complete');
             if (handlerExecutionId !== null) {
                 this.activeHandlerExecutions.delete(handlerExecutionId);
             }

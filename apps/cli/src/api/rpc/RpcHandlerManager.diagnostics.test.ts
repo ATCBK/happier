@@ -9,8 +9,54 @@ import { RpcHandlerManager } from './RpcHandlerManager';
 import { logger as fileLogger } from '@/ui/logger';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { registerScmHandlers } from '@/rpc/handlers/scm';
+import axios from 'axios';
+import tweetnacl from 'tweetnacl';
+import { verifyMachineRpcAdmissionCurrent } from '@/api/machine/machineRpcAuthorization';
 
 describe('RPC completion diagnostics', () => {
+    it('preserves request cancellation during Home admission instead of reporting a currentness refusal', async () => {
+        const logger = vi.fn();
+        const key = tweetnacl.sign.keyPair();
+        // Only the HTTP boundary waits for the real manager-owned cancellation signal.
+        const network = vi.spyOn(axios, 'post').mockImplementation((_url, _body, config) => new Promise((_resolve, reject) => {
+            const cancel = () => reject(new axios.CanceledError());
+            if (config?.signal?.aborted) cancel();
+            else config?.signal?.addEventListener?.('abort', cancel, { once: true });
+        }));
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger,
+            authorizeRequest: request => authorizeMachineRpcRequest(request, {
+                machineId: 'machine', resolveCustodianAccountId: async () => 'owner', resolveInstallationId: () => 'installation',
+                verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({ ...input,
+                    privateKey: key.secretKey, daemonToken: 'test-token', serverHttpBaseUrl: 'https://home.invalid' }),
+            }) });
+        let dispatched = false;
+        rpc.registerHandler('demo', () => { dispatched = true; });
+        try {
+            expect(await rpc.handleRequest({ method: 'machine:demo', params: {}, timeoutMs: 1,
+                machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine',
+                    installationId: 'installation', role: 'manage', encryptionMode: 'plain' } }))
+                .toEqual({ error: 'RPC request timed out' });
+            expect(dispatched).toBe(false);
+            expect(logger).toHaveBeenLastCalledWith('[RPC] Request completed', expect.objectContaining({
+                outcomeCode: 'RPC_REQUEST_TIMEOUT', failedPhase: 'authorize_request', cancelled: true,
+                phaseDurationsMs: expect.objectContaining({ authorize_request: expect.any(Number) }),
+            }));
+        } finally { network.mockRestore(); }
+    });
+    it.each(['ECONNABORTED', 'private_token'])('bounds wrapped failure diagnostics for %s', async code => {
+        const logger = vi.fn();
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger });
+        rpc.registerHandler('demo', () => {
+            throw new Error('never-log-error', { cause: Object.assign(new Error('never-log-cause'), { code }) });
+        });
+        expect(await rpc.handleRequest({ method: 'machine:demo', params: {} })).toEqual({ error: 'never-log-error' });
+        const completed = logger.mock.calls.at(-1)?.[1];
+        expect(completed).toMatchObject({ failedPhase: 'handler', cancelled: false,
+            phaseDurationsMs: expect.objectContaining({ handler: expect.any(Number) }) });
+        if (code === 'ECONNABORTED') expect(completed).toMatchObject({ causeCode: code });
+        else expect(completed).not.toHaveProperty('causeCode');
+        expect(JSON.stringify(logger.mock.calls)).not.toMatch(/never-log|private_token/);
+    });
     it('records only generation schema issue paths and codes at the real Machine SCM boundary', async () => {
         const record = vi.spyOn(fileLogger, 'infoFile').mockImplementation(() => {});
         const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {} });
