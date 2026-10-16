@@ -8,6 +8,7 @@ import { createCliApprovalsArtifactStore } from './artifactStore';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { registerApprovalRpcHandlers } from '@/rpc/handlers/approvals';
+import { registerMachineRpcHandlers } from '@/api/machine/rpcHandlers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { AccountSettingsSchema, FeaturesResponseSchema, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
 import { createCliActionExecutorFromCredentials } from '../createCliActionExecutorFromCredentials';
@@ -38,7 +39,7 @@ const request = { serverId: 'home', sessionId: 'session', machineId: 'machine', 
 afterEach(resetActiveAccountSettingsSnapshotForTests);
 
 describe('confidential continuation Artifact custody', () => {
-  it('consumes default production registration with isolated stored credentials and real Home/Session currentness', async () => {
+  it.each(['credential fallback', 'installed Machine owner'] as const)('consumes %s registration with isolated stored credentials and real Home/Session currentness', async registrationKind => {
     const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_TOKEN',
       'HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE', 'HAPPIER_ACCOUNT_SETTINGS_MODE', 'HAPPIER_ACTIONS_SETTINGS_V1']);
     try {
@@ -128,11 +129,27 @@ describe('confidential continuation Artifact custody', () => {
         });
         const uninstall = installDaemonMachineAdmissionTransport({ serverId,
           transport: async () => { throw new Error('Session input is not part of confidential delivery'); }, confidentialSecretFill: trustedProducer });
+        let machineRegistration: ReturnType<typeof registerMachineRpcHandlers> | undefined;
         try {
           const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {},
             authorizeRequest: input => authorizeMachineRpcRequest(input, { machineId: 'machine', resolveCustodianAccountId: async () => 'alice',
               resolveInstallationId: () => 'installation', verifyMachineAdmission: async () => true }) });
-          registerApprovalRpcHandlers({ rpcHandlerManager: rpc });
+          if (registrationKind === 'installed Machine owner') {
+            const executor = createCliActionExecutorFromCredentials({ credentials, serverId,
+              serverIdentityId: 'srv_private_approval', serverApiUrl: endpoint, machineId: 'machine',
+              pluginActionExecutionOwner: 'current_process',
+              actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({}), getAccountSettings: () => settings },
+              isApprovalExecutionOriginCurrent: isOriginCurrent });
+            machineRegistration = registerMachineRpcHandlers({ rpcHandlerManager: rpc,
+              handlers: { spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
+                stopSession: async () => true, requestShutdown: () => {} },
+              deps: { currentMachineId: 'machine', externalAction: {
+                machineId: 'machine', currentServerId: serverId, executor,
+                resolveAccountId: async () => 'alice', resolveInstallationId: () => 'installation',
+                // Home authorization is the network boundary; the installed Action/approval path is real.
+                verifyExecutionAuthorization: async () => true, resolveTarget: async ({ target }) => target ?? null,
+              } } });
+          } else registerApprovalRpcHandlers({ rpcHandlerManager: rpc });
           expect(await rpc.handleRequest({ method: `machine:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`,
             callerAuthority: 'present_user', machineAdmission: { actorAccountId: 'alice', custodianAccountId: 'alice',
               machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
@@ -145,7 +162,7 @@ describe('confidential continuation Artifact custody', () => {
           expect(JSON.stringify(stored)).not.toContain(value);
           expect(stored?.actionArgs).toEqual(reviewedRequest);
           expect(ApprovalRequestV2Schema.parse(stored).executionOriginV1).toEqual(approval.executionOriginV1);
-        } finally { uninstall(); }
+        } finally { await machineRegistration?.dispose(); uninstall(); }
       });
     } finally { vi.unstubAllGlobals(); env.restore(); reloadConfiguration(); }
   });
