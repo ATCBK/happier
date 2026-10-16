@@ -19,6 +19,7 @@ import { createHttpStatusError } from './httpStatusError';
 import { logServerEndpointFailure } from './serverEndpointFailureLog';
 import { resolveServerHttpBaseUrl } from './serverHttpBaseUrl';
 import { readAccountEncryptionModeOnce } from './accountEncryptionMode';
+import { readObservedAccountEncryptionCurrentness } from './accountEncryptionCurrentnessObservation';
 
 const CONNECTED_SERVICE_PROFILE_LIST_CACHE_TTL_MS = 10_000;
 const ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS = 10_000;
@@ -144,13 +145,22 @@ function createHeaders(token: string): Readonly<Record<string, string>> {
   };
 }
 
-export async function fetchAccountEncryptionCurrentness(params: Readonly<{
+type AccountEncryptionCurrentnessRead = Readonly<{
   token: string;
   authorizationHeaders?: Readonly<Record<string, string>>;
   serverBaseUrl?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
-}>): Promise<AccountEncryptionCurrentnessResponse> {
+}>;
+
+export async function fetchAccountEncryptionCurrentness(params: AccountEncryptionCurrentnessRead): Promise<AccountEncryptionCurrentnessResponse> {
+  // Exact witnesses include the Account-wide cursor. Identity observations
+  // cannot supply it: a claim advances that cursor before its socket wake.
+  return await fetchAccountEncryptionCurrentnessFromServer(params);
+}
+
+/** The observation's initial/unknown/reconnect read; never consult its own pending fact. */
+export async function fetchAccountEncryptionCurrentnessFromServer(params: AccountEncryptionCurrentnessRead): Promise<AccountEncryptionCurrentnessResponse> {
   const serverBaseUrl = (params.serverBaseUrl ?? resolveServerHttpBaseUrl())
     .replace(/\/+$/, '');
   const readCurrentness = async () => await axios.get(
@@ -479,6 +489,8 @@ export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCre
   }
 
   private async readAccountEncryptionMode(options?: AccountEncryptionModeReadOptions): Promise<ConnectedServiceAccountEncryptionMode> {
+    const observed = readObservedAccountEncryptionCurrentness({ token: this.token, serverBaseUrl: resolveServerHttpBaseUrl(), signal: options?.signal });
+    if (observed) return (await observed).mode;
     if (options?.signal) return await this.fetchAccountEncryptionModeFromServer(options.signal);
     const cached = this.accountEncryptionModeCache;
     const nowMs = Date.now();

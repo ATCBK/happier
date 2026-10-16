@@ -16,6 +16,7 @@ import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifet
 import { resolveSessionProjectPromptStack } from './sessionProjectPromptStack';
 import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { logger } from '@/ui/logger';
 
 /** Birth copies Session memory attachments, not document bodies or the lead's instructions/identity.
  * Account/Profile/Project context continues to resolve through the worker's own composition. */
@@ -102,9 +103,16 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
     lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
     settings: null,
   };
-  const unavailable = (reason?: string): never => {
+  const unavailable = (reason?: string, contextSource: 'account_lifetime' | 'account_prompt_inventory' | 'profile_prompt_inventory' | 'project_association' = 'account_lifetime'): never => {
+    const snapshot = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
+    logger.infoFile('[prompts] Context source unavailable', {
+      sessionId: input.sessionId, contextSource, reason: reason ?? 'scope-unavailable',
+      accountSnapshotSource: snapshot?.source ?? 'absent',
+      promptLibraryStatus: snapshot?.promptLibraryCatalog?.status ?? 'unobserved',
+      profileCatalogStatus: snapshot?.profileCatalog?.status ?? 'unobserved',
+    });
     throw Object.assign(new Error('context_source_unavailable'), {
-      code: 'context_source_unavailable', status: 'preparation_pending', ...(reason ? { reason } : {}),
+      code: 'context_source_unavailable', status: 'preparation_pending', contextSource, ...(reason ? { reason } : {}),
     });
   };
   const readCurrentAccount = (): ActiveAccountSettingsSnapshot | null => {
@@ -141,20 +149,25 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
     } : null;
     let currentAccount = readCurrentAccount();
     if (accountContext.scopeKey && currentAccount && input.credentials) {
-      const demand: Promise<unknown>[] = [];
-      const { prepareActivePromptLibraryRecord, refreshActivePromptLibraryCatalog } = await import('@/settings/prompts/hydratePromptLibraryCatalog');
+      logger.infoFile('[prompts] Account prompt source demand', {
+        sessionId: input.sessionId, capturedAccount: input.operationContext !== undefined,
+        accountSnapshotSource: currentAccount.source,
+        promptLibraryStatus: currentAccount.promptLibraryCatalog?.status ?? 'unobserved',
+        profileCatalogStatus: currentAccount.profileCatalog?.status ?? 'unobserved',
+      });
+      const { prepareActivePromptLibraryRecord } = await import('@/settings/prompts/hydratePromptLibraryCatalog');
       // Import completion cannot admit a replacement Account lifetime.
       assertCurrentAccount();
-      demand.push(input.refreshCatalogs && !input.operationContext
-        ? refreshActivePromptLibraryCatalog({ credentials: input.credentials, signal: input.signal })
-        : prepareActivePromptLibraryRecord({ credentials: input.credentials, scopeKey: accountContext.scopeKey,
-            lifetimeToken: accountContext.lifetimeToken, key: 'coding', signal: input.signal, operationContext: input.operationContext }));
       if (profileId && (input.refreshCatalogs || currentAccount.profileCatalog?.status !== 'ready')) {
         const { refreshActiveProfileCatalog } = await import('@/settings/profiles/hydrateProfileCatalog');
         assertCurrentAccount();
-        demand.push(refreshActiveProfileCatalog({ credentials: input.credentials, signal: input.signal, operationContext: input.operationContext }));
+        await refreshActiveProfileCatalog({ credentials: input.credentials, signal: input.signal, operationContext: input.operationContext });
       }
-      await Promise.all(demand);
+      // Profile preparation can observe an Account wake that withdraws the
+      // earlier prompt inventory. Demand its readiness at the consumption cut.
+      await prepareActivePromptLibraryRecord({ credentials: input.credentials, scopeKey: accountContext.scopeKey,
+        lifetimeToken: accountContext.lifetimeToken, key: 'coding', signal: input.signal, operationContext: input.operationContext,
+        ...(input.refreshCatalogs && !input.operationContext ? { refresh: true } : {}) });
       await assertOperationCurrent();
       currentAccount = readCurrentAccount();
     }
@@ -167,8 +180,19 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
       ? readAccountPromptStackSources(currentAccount, sourceSelection) : readActiveAccountPromptStackSources({
       scopeKey: accountContext.scopeKey, lifetimeToken: accountContext.lifetimeToken, surface: 'coding', profileId,
     }) : null;
-    if (accountSources?.status === 'unavailable') return unavailable(accountSources.reason);
-    if (!input.credentials && (workspaceId !== undefined || projectId !== undefined)) return unavailable();
+    logger.infoFile('[prompts] Account prompt source readiness', {
+      sessionId: input.sessionId, capturedAccount: input.operationContext !== undefined,
+      accountSnapshotSource: currentAccount?.source ?? 'absent',
+      promptLibraryStatus: currentAccount?.promptLibraryCatalog?.status ?? 'unobserved',
+      profileCatalogStatus: currentAccount?.profileCatalog?.status ?? 'unobserved',
+      selectionStatus: accountSources?.status ?? 'not_applicable',
+      ...(accountSources?.status === 'unavailable' ? { reason: accountSources.reason } : {}),
+    });
+    if (accountSources?.status === 'unavailable') {
+      const accountInventory = currentAccount ? readAccountPromptStackSources(currentAccount, { surface: 'coding' }) : null;
+      return unavailable(accountSources.reason, accountInventory?.status === 'ready' ? 'profile_prompt_inventory' : 'account_prompt_inventory');
+    }
+    if (!input.credentials && (workspaceId !== undefined || projectId !== undefined)) return unavailable(undefined, 'project_association');
     const projectEntries = input.credentials ? await resolveSessionProjectPromptStack({
       credentials: input.credentials, metadata, signal: input.signal, machineId: input.machineId, directory: input.directory, serverId,
       operationContext: input.operationContext,

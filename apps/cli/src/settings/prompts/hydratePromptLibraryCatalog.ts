@@ -23,6 +23,8 @@ export type ActivePromptLibraryDemand = Readonly<{
   credentials: StoredCredentials; scopeKey: string; lifetimeToken: number;
   key: PromptLibraryCatalogKeyV1; signal?: AbortSignal;
   operationContext?: SavedSecretOperationContextV1;
+  /** Reobserve destination rows without making optional source/history maintenance an admission dependency. */
+  refresh?: boolean;
 }>;
 export type ActivePromptLibraryRecordRead = ReturnType<typeof readPromptLibraryCatalogRecordV1>
   | Readonly<{ status: 'unavailable'; reason: 'catalog-unobserved' }>;
@@ -47,23 +49,33 @@ export async function prepareActivePromptLibraryRecord(input: ActivePromptLibrar
     const current = operation.readSnapshot();
     const currentRead = current?.promptLibraryCatalog ? readPromptLibraryCatalogRecordV1({ catalog: current.promptLibraryCatalog,
       key: input.key, rawSettings: current.source === 'none' ? undefined : current.rawSettings }) : undefined;
-    if (currentRead?.status === 'ready') return currentRead;
+    if (currentRead?.status === 'ready' && !input.refresh) return currentRead;
     const store = createCliPromptLibraryStore(input);
+    let resolveReadable!: () => void;
+    const readable = new Promise<void>(resolve => { resolveReadable = resolve; });
     const publish = async (catalog: PromptLibraryCatalogSnapshotV1) => {
       const snapshot = operation.readSnapshot();
       if (!snapshot || !await operation.commitPromptLibraryCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog })) {
         throw Object.assign(new Error('Captured Prompt library Account retired'), { code: 'scope-retired' });
       }
+      if (readPromptLibraryCatalogRecordV1({ catalog, key: input.key,
+        rawSettings: snapshot.source === 'none' ? undefined : snapshot.rawSettings }).status === 'ready') resolveReadable();
     };
-    let catalog: PromptLibraryCatalogSnapshotV1;
-    try { catalog = await store.readPromptLibraryCatalog(publish); }
-    catch (error) {
-      input.signal?.throwIfAborted();
-      const current = await operation.isCurrent() && operation.readSnapshot()?.scopeKey === input.scopeKey;
-      if (!current) return { status: 'unavailable', reason: 'scope-retired' };
-      catalog = catalogReadFailure(error, false, current);
-    }
-    await publish(catalog);
+    // Destination authority is readable before optional source/history cleanup,
+    // just as for the incumbent Account refresh below. The same loader retains
+    // cleanup and its publication fences; it cannot hold admission open.
+    const completion = (async () => {
+      let catalog: PromptLibraryCatalogSnapshotV1;
+      try { catalog = await store.readPromptLibraryCatalog(publish); }
+      catch (error) {
+        input.signal?.throwIfAborted();
+        const current = await operation.isCurrent() && operation.readSnapshot()?.scopeKey === input.scopeKey;
+        if (!current) return;
+        catalog = catalogReadFailure(error, false, current);
+      }
+      await publish(catalog);
+    })();
+    await Promise.race([completion, readable]);
     input.signal?.throwIfAborted();
     const snapshot = operation.readSnapshot();
     if (!snapshot || !await operation.isCurrent()) return { status: 'unavailable', reason: 'scope-retired' };
@@ -76,7 +88,7 @@ export async function prepareActivePromptLibraryRecord(input: ActivePromptLibrar
     || getActiveAccountSettingsSnapshotLifetimeToken() !== input.lifetimeToken) return { status: 'unavailable', reason: 'scope-retired' };
   const currentRead = current.promptLibraryCatalog ? readPromptLibraryCatalogRecordV1({ catalog: current.promptLibraryCatalog,
     key: input.key, rawSettings: current.source === 'none' ? undefined : current.rawSettings }) : undefined;
-  if (currentRead?.status !== 'ready') {
+  if (input.refresh || currentRead?.status !== 'ready') {
     const completion = refresh(input, { scopeKey: input.scopeKey, lifetimeToken: input.lifetimeToken });
     const readers = pending.get(`${input.scopeKey}:${input.lifetimeToken}`)?.readers;
     let resolveReadable!: () => void;
