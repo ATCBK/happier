@@ -68,7 +68,7 @@ export type SharedSubscriptionStoreConfig<
      * rather than silently showing another scope's state. Omit it and every matching entry applies
      * the snapshot, which is right for a domain whose entries and publications share a scope.
      */
-    snapshotCoversEntry?: (entryInput: TInput, snapshot: TSnapshot) => boolean;
+    snapshotCoversEntry?: (entryInput: TInput, snapshot: TSnapshot, publishInput: TInput) => boolean;
     /**
      * Optional push half. While an entry has subscribers the store keeps exactly one watch
      * outstanding and re-arms it on every answer, so a domain that supplies this stays fresh
@@ -109,6 +109,7 @@ type SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>
     readonly listeners: Set<() => void>;
     refCount: number;
     inFlight: Promise<void> | null;
+    refreshRequested: boolean;
     readStarted: boolean;
     abortController: AbortController | null;
     watchAbortController: AbortController | null;
@@ -164,6 +165,7 @@ export function createSharedSubscriptionStore<
                 listeners: new Set(),
                 refCount: 0,
                 inFlight: null,
+                refreshRequested: false,
                 readStarted: false,
                 abortController: null,
                 watchAbortController: null,
@@ -192,6 +194,7 @@ export function createSharedSubscriptionStore<
     ): Promise<void> => {
         if (entry.inFlight) return entry.inFlight;
         if (config.shouldRefresh?.(entry.state) === false) return Promise.resolve();
+        entry.refreshRequested = false;
         entry.readStarted = true;
         const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
         entry.abortController = abortController;
@@ -217,6 +220,11 @@ export function createSharedSubscriptionStore<
             entry.inFlight = null;
             if (entry.abortController === abortController) {
                 entry.abortController = null;
+            }
+            // A mutation or source update during this read must not be swallowed by
+            // single-flight sharing. Coalesce those invalidations into one subsequent read.
+            if (entry.refreshRequested && entry.refCount > 0 && !abortController?.signal.aborted) {
+                void runRefresh(entry);
             }
         } })();
         entry.inFlight = promise;
@@ -331,8 +339,10 @@ export function createSharedSubscriptionStore<
             // An explicit invalidation also permits a new one-shot read of a retained entry.
             if (entry) entry.readStarted = false;
             if (entry && entry.refCount > 0) {
+                if (entry.inFlight) entry.refreshRequested = true;
                 const refresh = runRefresh(entry);
                 // A user-initiated refresh is also the recovery path for a retired watch.
+                if (entry.watching) entry.watchRecoveryRequested = true;
                 entry.watchRetired = false;
                 if (config.watchAfterRefresh) void refresh.then(() => runWatchLoop(entry));
                 else runWatchLoop(entry);
@@ -349,7 +359,8 @@ export function createSharedSubscriptionStore<
                 if (!matches) {
                     continue;
                 }
-                if (snapshotCoversEntry && !snapshotCoversEntry(entry.input, snapshot)) {
+                if (snapshotCoversEntry && !snapshotCoversEntry(entry.input, snapshot, input)) {
+                    if (entry.inFlight) entry.refreshRequested = true;
                     void runRefresh(entry);
                     continue;
                 }

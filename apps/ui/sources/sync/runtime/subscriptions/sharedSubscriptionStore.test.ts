@@ -15,6 +15,42 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it('reads again when invalidation lands during a read, retaining the last snapshot until the follow-up settles', async () => {
+        const reads: Array<(value: number) => void> = [];
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            defaultSnapshotClient: () => new Promise<number>(resolve => reads.push(resolve)),
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, snapshot: number) => snapshot,
+        });
+        const unsubscribe = store.subscribe('machine', () => {});
+        store.invalidate('machine');
+        store.invalidate('machine');
+        reads[0]!(1);
+        await vi.waitFor(() => expect(reads).toHaveLength(2));
+        expect(store.getState('machine')).toBe(1);
+        reads[1]!(2);
+        await vi.waitFor(() => expect(store.getState('machine')).toBe(2));
+        unsubscribe();
+    });
+
+    it('keeps watching when an invalidation overtakes an unavailable watch reply', async () => {
+        const replies: Array<(value: SharedSubscriptionWatchOutcome<number>) => void> = [];
+        let value = 1;
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            defaultSnapshotClient: async () => value, defaultWatchClient: {}, watchAfterRefresh: true,
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, snapshot: number) => snapshot,
+            watch: () => new Promise<SharedSubscriptionWatchOutcome<number>>(resolve => replies.push(resolve)),
+        });
+        const unsubscribe = store.subscribe('machine', () => {});
+        await vi.waitFor(() => expect(replies).toHaveLength(1));
+        value = 2;
+        store.invalidate('machine');
+        replies[0]!({ status: 'unavailable' });
+        await vi.waitFor(() => expect(replies).toHaveLength(2));
+        expect(store.getState('machine')).toBe(2);
+        unsubscribe();
+    });
     it.each(['unavailable', 'rejection', 'changed', 'idle'] as const)('restores publication freshness while an old watch finishes with %s', async outcome => {
         const pending: Array<{ signal?: AbortSignal; resolve(value: SharedSubscriptionWatchOutcome<number>): void; reject(error: unknown): void }> = [];
         const store = createSharedSubscriptionStore({
