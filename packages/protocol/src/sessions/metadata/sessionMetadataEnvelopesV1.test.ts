@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as canonicalBase64 from '../../crypto/base64.js';
 import { projectSessionMetadataForWire } from './terminalMetadata.js';
 import { readSessionRoleIdV1, readSessionRolesV1, writeSessionRoleIdV1ToMetadata } from '../../prompts/roles/sessionRolesSnapshot.js';
 import { z } from 'zod/mini';
@@ -61,6 +62,7 @@ import {
   sealSessionOwnerMetadataEnvelopeV1,
   sealSessionOwnerMetadataV1,
   validateSessionOwnerMetadataEnvelopeForAccountModeV1,
+  withSessionOwnerMetadataCiphertextValidationReuseV1,
 } from './sessionMetadataEnvelopesV1.js';
 
 describe('metadata schema consumer contracts', () => {
@@ -904,6 +906,38 @@ describe('session metadata privacy envelopes v1', () => {
       expect(SessionOwnerMetadataCiphertextV1Schema.safeParse(alias).success)
         .toBe(false);
     }
+  });
+
+  it('reuses only canonical envelope proofs and restores validation after nested or throwing reads', () => {
+    const ciphertext = 'oRoBAgMEBQYHCAkKCwwNDg8QERITFBUWFxh8aC0+8+YDECLScN6uQTItPyWVR7XbQA==';
+    const retained = SessionOwnerMetadataEnvelopeV1Schema.parse({ t: 'encrypted', c: ciphertext });
+    if (retained.t !== 'encrypted') throw new Error('Expected encrypted owner fixture');
+    const validate = vi.spyOn(canonicalBase64, 'readCanonicalPaddedBase64DecodedLength');
+    const read = (envelope: unknown) => SessionOwnerMetadataEnvelopeV1Schema.safeParse(envelope);
+    try {
+      withSessionOwnerMetadataCiphertextValidationReuseV1([retained], () => {
+        expect(read({ ...retained }).success).toBe(true);
+        expect(read({ ...retained, unexpectedAuthority: true }).success).toBe(false);
+        withSessionOwnerMetadataCiphertextValidationReuseV1([], () => expect(read({ ...retained }).success).toBe(true));
+      });
+      expect(validate).not.toHaveBeenCalled();
+      // A raw lookalike cannot seed a proof, even when its c bytes are valid.
+      withSessionOwnerMetadataCiphertextValidationReuseV1([{ ...retained }], () => expect(read({ ...retained }).success).toBe(true));
+      expect(validate).toHaveBeenCalled();
+      validate.mockClear();
+      retained.c = `${ciphertext}\n`;
+      withSessionOwnerMetadataCiphertextValidationReuseV1([retained], () => expect(read(retained).success).toBe(false));
+      expect(validate).toHaveBeenCalledWith(retained.c);
+      retained.c = ciphertext;
+      validate.mockClear();
+      expect(() => withSessionOwnerMetadataCiphertextValidationReuseV1([retained], () => {
+        expect(read(retained).success).toBe(true);
+        throw new Error('Abort synchronous parse');
+      })).toThrow('Abort synchronous parse');
+      expect(validate).not.toHaveBeenCalled();
+      expect(read(retained).success).toBe(true);
+      expect(validate).toHaveBeenCalled();
+    } finally { validate.mockRestore(); }
   });
 
   it.each(['plain', 'e2ee'] as const)('round-trips a Replay seed above the old field clamp through an admitted %s envelope', (accountMode) => {

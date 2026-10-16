@@ -1,5 +1,6 @@
 import type { Session } from '../../domains/state/storageTypes';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 function arePlainObjectValuesEqual(
     previous: Record<string, unknown>,
@@ -56,6 +57,7 @@ export function areStoredSessionsEqual(
     next: Session,
 ): boolean {
     if (!previous) return false;
+    if ((previous[SESSION_OWNER_METADATA_PROJECTION] ?? null) !== (next[SESSION_OWNER_METADATA_PROJECTION] ?? null)) return false;
 
     const activeAtMatches =
         previous.activeAt === next.activeAt

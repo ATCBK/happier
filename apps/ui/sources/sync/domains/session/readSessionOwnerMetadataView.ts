@@ -1,5 +1,20 @@
 import { type Metadata } from '@happier-dev/session-core/state';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import type { SessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+
+/** In-memory provenance travels with the Session/list projection, never with wire or warm-cache data. */
+export const SESSION_OWNER_METADATA_PROJECTION = Symbol('sessionOwnerMetadataProjection');
+export type SessionOwnerMetadataProjection = Readonly<{
+  kind: 'owner';
+  ownerMetadataEnvelope: SessionOwnerMetadataEnvelopeV1;
+  ownerMetadata: SessionOwnerMetadataV1;
+  canReuse?: (input: Readonly<{
+    accountMode?: AccountEncryptionCurrentnessResponse['mode'];
+    credentials: object;
+    ownerMetadataEnvelope: unknown;
+  }>) => boolean;
+}>;
 
 type SessionOwnerMetadataViewInput = Readonly<{
   metadataLayoutVersion?: number;

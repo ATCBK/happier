@@ -65,6 +65,7 @@ import {
   AccountEncryptionCurrentnessReadinessError,
   fetchAccountEncryptionCurrentness,
 } from '@/sync/api/account/apiAccountEncryptionMode';
+import { SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 type SessionEncryption = {
   encryptRaw?: (payload: unknown) => Promise<string>;
@@ -625,6 +626,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
         ownerMetadataEnvelope: row.ownerMetadata,
         credentials: params.credentials,
         composerOptionsInput: params.composerOptionsInput,
+        previousProjection: params.getExistingSession?.(sessionId)?.[SESSION_OWNER_METADATA_PROJECTION],
       })
     : null;
   const lockedOwnerVisibility = projectSessionLayout1LockedOwnerVisibility(
@@ -908,6 +910,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     thinkingAt: 0,
     metadata,
     ownerMetadataView,
+    [SESSION_OWNER_METADATA_PROJECTION]: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
     composerOptionsInput,
     metadataProjection: params.composerOptionsInput !== undefined ? 'sessionOnly' as const : undefined,
     agentState,

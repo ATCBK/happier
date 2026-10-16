@@ -21,9 +21,11 @@ import type { SessionMessageAcceptedDeliveryFactsV1 } from '@happier-dev/protoco
 import { StoredMachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import type { Metadata, AgentState } from "@happier-dev/session-core/state";
 import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
+import { SESSION_OWNER_METADATA_PROJECTION, type SessionOwnerMetadataProjection } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { ScmOperationState as ProtocolScmOperationState } from '@happier-dev/protocol/scm';
 
 export interface Session {
+    [SESSION_OWNER_METADATA_PROJECTION]?: SessionOwnerMetadataProjection | null,
     id: string,
     serverId?: string,
     seq: number,

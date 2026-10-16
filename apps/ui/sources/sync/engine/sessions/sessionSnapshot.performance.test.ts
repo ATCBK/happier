@@ -1,5 +1,8 @@
 import { cpus, platform, arch } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
+import * as ownerEnvelopes from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import * as dataKeyEnvelopes from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import * as canonicalBase64 from '@happier-dev/protocol/crypto/base64';
 import {
     createPlainSessionOwnerMetadataEnvelopeV1,
     projectLegacySessionAccessCapabilitiesV1,
@@ -14,6 +17,7 @@ import { createSessionListQueryHomeController } from '@/sync/domains/session/lis
 import { buildSessionListQueryKey } from '@/sync/domains/session/listing/sessionListQueryKey';
 import { storage } from '@/sync/domains/state/storage';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+import { buildSessionListCacheEntriesFromRenderables } from '@/sync/domains/state/warmCacheAdapters';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 import { fetchAndApplySessions } from './sessionSnapshot';
@@ -24,7 +28,58 @@ const QUERY: SessionListQueryV1 = {
 };
 const initialState = storage.getState();
 
+it('settles demanded Session hydration without sweeping older rows on refresh and opens deferred rows on demand', async () => {
+    const secret = new Uint8Array(32).fill(31);
+    const encryption = await Encryption.create(secret);
+    encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+    const rows = await Promise.all(Array.from({ length: 6 }, async (_, index) => {
+        const key = new Uint8Array(32).fill(index + 41);
+        const cipher = await encryption.openEncryption(key);
+        const [metadata] = await cipher.encrypt([{ path: `/hydration/${index}`, host: 'home', summary: { text: `Session ${index}`, updatedAt: 1 } }]);
+        return { id: `demand-${index}`, seq: 1, createdAt: 1, updatedAt: 1, active: index === 3, activeAt: 1,
+            archivedAt: null, encryptionMode: 'e2ee', metadata: encodeBase64(metadata!), metadataVersion: 1,
+            agentState: null, agentStateVersion: 0, share: null,
+            dataEncryptionKey: encodeBase64(await encryption.encryptEncryptionKey(key)) };
+    }));
+    const serverId = 'hydration-demand-home';
+    const sessionDataKeys = new Map<string, Uint8Array>();
+    const sessionDataKeyEnvelopes = new Map<string, string>();
+    const readRows = () => storage.getState().sessionListRowsByServerId[serverId] ?? {};
+    const open = vi.spyOn(dataKeyEnvelopes, 'openEncryptedDataKeyEnvelopeV1');
+    const refresh = (demand?: string) => fetchAndApplySessions({
+        serverId, credentials: { token: 'demand', secret: encodeBase64(secret) }, encryption, sessionDataKeys, sessionDataKeyEnvelopes,
+        request: async () => Response.json({ sessions: rows, nextCursor: null, hasNext: false }),
+        getExistingSession: id => storage.getState().sessions[id], getCurrentSessionListRenderable: id => readRows()[id],
+        cachedSessionListEntries: buildSessionListCacheEntriesFromRenderables(readRows()),
+        applySessionListRenderables: values => storage.getState().applyServerScopedSessionListRows(serverId, values, { source: 'rowOnly', mode: 'replace' }),
+        applySessionListRenderablePatches: patches => storage.getState().applyServerScopedSessionListRowPatches(serverId, patches),
+        applySessions: values => storage.getState().applySessions(values),
+        priorityHydrationSessionIds: ['demand-1'], activeSessionIds: ['demand-2', ...(demand ? [demand] : [])],
+        sessionListEagerHydrationCount: 1, sessionListBackgroundHydrationMaxRows: 0,
+        log: { log() {} },
+    });
+    vi.useFakeTimers();
+    await refresh();
+    await vi.runAllTimersAsync();
+    expect([...sessionDataKeys.keys()].sort()).toEqual(['demand-0', 'demand-1', 'demand-2', 'demand-3']);
+    expect(open).toHaveBeenCalledTimes(4);
+    await vi.waitFor(() => expect(Object.keys(storage.getState().sessions).filter(id => id.startsWith('demand-')).sort()).toEqual(['demand-0', 'demand-1', 'demand-2', 'demand-3']));
+    await refresh();
+    await vi.runAllTimersAsync();
+    expect(open).toHaveBeenCalledTimes(4);
+    expect(storage.getState().sessions['demand-4']).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+    await refresh('demand-4');
+    await vi.runAllTimersAsync();
+    expect(open).toHaveBeenCalledTimes(5);
+    // AES completes at the platform boundary, independently of fake timer drains.
+    await vi.waitFor(() => expect(storage.getState().sessions['demand-4']?.metadata?.summary?.text).toBe('Session 4'));
+    expect(storage.getState().sessions['demand-5']).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+});
+
 afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     storage.setState(initialState, true);
     syncPerformanceTelemetry.configure({ enabled: false });
@@ -49,6 +104,93 @@ function createOwnerChoicesPage() {
     return SessionListQueryResponseV1Schema.parse({ sessions: rows, nextCursor: null, hasNext: false,
         attentionNextCursor: null, attentionHasNext: false });
 }
+
+it('opens an unchanged owner envelope once and retains unrelated scoped row subscriptions', async () => {
+    const secret = new Uint8Array(32).fill(7);
+    const credentials = { token: 'owner-projection-test', secret: encodeBase64(secret, 'base64') };
+    const body = createOwnerChoicesPage();
+    body.sessions = body.sessions.slice(0, 2).map(row => ({ ...row,
+        ownerMetadata: ownerEnvelopes.sealSessionOwnerMetadataEnvelopeV1({
+            material: { type: 'legacy', secret },
+            ownerMetadata: { v: 1, workspace: { path: '/owner-projection' } },
+            randomBytes: length => new Uint8Array(length).fill(row.id === 'choice-0' ? 1 : 2),
+        }),
+    }));
+    const open = vi.spyOn(ownerEnvelopes, 'openSessionOwnerMetadataEnvelopeV1');
+    const openValue = vi.spyOn(ownerEnvelopes, 'openSessionOwnerMetadataV1');
+    const parseEnvelope = vi.spyOn(ownerEnvelopes.SessionOwnerMetadataEnvelopeV1Schema, 'safeParse');
+    const opens = () => open.mock.calls.length + openValue.mock.calls.length;
+    // Forward the real canonical validator: fresh HTTP objects must not rescan
+    // retained ciphertext, while new bytes still go through full validation.
+    const canonicalValidation = vi.spyOn(canonicalBase64, 'readCanonicalPaddedBase64DecodedLength');
+    const ciphertexts = new Set(body.sessions.flatMap(row => row.ownerMetadata?.t === 'encrypted' ? [row.ownerMetadata.c] : []));
+    const validations = () => canonicalValidation.mock.calls.filter(([value]) => ciphertexts.has(value)).length;
+    const serverId = 'owner-projection-home';
+    const readRows = () => storage.getState().sessionListRowsByServerId[serverId] ?? {};
+    const refresh = () => fetchAndApplySessions({
+        serverId, credentials, encryption: null, sessionDataKeys: new Map(),
+        accountCurrentness: { mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content', updatedAt: 1 },
+        request: async () => Response.json(body),
+        getExistingSession: id => storage.getState().sessions[id],
+        getCurrentSessionListRenderable: id => readRows()[id],
+        applySessionListRenderables: rows => storage.getState().applyServerScopedSessionListRows(serverId, rows, { source: 'rowOnly', mode: 'replace' }),
+        applySessionListRenderablePatches: patches => storage.getState().applyServerScopedSessionListRowPatches(serverId, patches),
+        applySessions: rows => storage.getState().applySessions(rows),
+        awaitSessionListHydration: true,
+        log: { log() {} },
+    });
+    await refresh();
+    expect(readRows()['choice-0']?.metadata?.path).toBe('/owner-projection');
+    expect(opens()).toBe(2);
+    expect(parseEnvelope).toHaveBeenCalledTimes(2);
+    const initialValidations = validations();
+    expect(initialValidations).toBeGreaterThan(0);
+    const unchanged = readRows()['choice-1'];
+    let unrelatedUpdates = 0;
+    const unsubscribe = storage.subscribe((next, previous) => {
+        if (next.sessionListRowsByServerId[serverId]?.['choice-1'] !== previous.sessionListRowsByServerId[serverId]?.['choice-1']) unrelatedUpdates++;
+    });
+    try {
+        await refresh();
+        expect(opens()).toBe(2);
+        expect(parseEnvelope).toHaveBeenCalledTimes(2);
+        expect(validations()).toBe(initialValidations);
+        body.sessions[0] = { ...body.sessions[0]!, updatedAt: 2, seq: 2, metadataVersion: 2,
+            metadata: JSON.stringify({ v: 1, summary: { text: 'Updated', updatedAt: 2 } }),
+        };
+        await refresh();
+        expect(opens()).toBe(2);
+        expect(parseEnvelope).toHaveBeenCalledTimes(2);
+        expect(readRows()['choice-0']?.metadata?.summaryText).toBe('Updated');
+        expect(readRows()['choice-1']).toBe(unchanged);
+        expect(unrelatedUpdates).toBe(0);
+        expect(validations()).toBe(initialValidations);
+        const retainedEnvelope = body.sessions[0]!.ownerMetadata;
+        if (retainedEnvelope?.t !== 'encrypted') throw new Error('Expected encrypted owner fixture');
+        const invalidCiphertext = `${retainedEnvelope.c}\n`;
+        ciphertexts.add(invalidCiphertext);
+        body.sessions[0] = { ...body.sessions[0]!, ownerMetadata: { t: 'encrypted', c: invalidCiphertext } };
+        await expect(refresh()).rejects.toThrow();
+        expect(validations()).toBeGreaterThan(initialValidations);
+        expect(readRows()['choice-1']).toBe(unchanged);
+        const changedEnvelope = ownerEnvelopes.sealSessionOwnerMetadataEnvelopeV1({
+            material: { type: 'legacy', secret }, ownerMetadata: { v: 1, workspace: { path: '/owner-projection/changed' } },
+            randomBytes: length => new Uint8Array(length).fill(9),
+        });
+        if (changedEnvelope.t !== 'encrypted') throw new Error('Expected encrypted owner fixture');
+        ciphertexts.add(changedEnvelope.c);
+        const beforeChangedCiphertext = validations();
+        body.sessions[0] = { ...body.sessions[0]!, seq: 3, updatedAt: 3, metadataVersion: 3, ownerMetadata: changedEnvelope };
+        await refresh();
+        expect(validations()).toBeGreaterThan(beforeChangedCiphertext);
+        expect(opens()).toBe(3);
+        expect(readRows()['choice-0']?.metadata?.path).toBe('/owner-projection/changed');
+        const afterChangedCiphertext = validations();
+        await refresh();
+        expect(validations()).toBe(afterChangedCiphertext);
+        expect(opens()).toBe(3);
+    } finally { unsubscribe(); }
+});
 
 it.each([
     { queryMs: 245, currentnessMs: 9216 },

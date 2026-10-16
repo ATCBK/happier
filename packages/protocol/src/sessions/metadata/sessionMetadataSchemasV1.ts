@@ -93,6 +93,31 @@ const SessionEnvelopeVersionSchema =
 const SessionOpaqueCiphertextSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(10_000_000)));
 const MAX_PUBLIC_COMPLETED_REQUESTS_V1 = 2_048;
 
+// Proof belongs to the parsed envelope's lifetime, not a process-wide list of
+// ciphertext strings. Mutating its c field invalidates this identity proof.
+const validatedOwnerMetadataCiphertexts = new WeakMap<object, string>();
+let ownerMetadataCiphertextValidationScope: Map<string, boolean> | null = null;
+
+/** Reuse canonical structural validation during one synchronous schema read. */
+export function withSessionOwnerMetadataCiphertextValidationReuseV1<T>(
+  previousEnvelopes: Iterable<unknown>,
+  parse: () => T & (T extends PromiseLike<unknown> ? never : unknown),
+): T {
+  const enclosing = ownerMetadataCiphertextValidationScope;
+  const scope = new Map(enclosing);
+  for (const envelope of previousEnvelopes) {
+    if (envelope === null || typeof envelope !== 'object') continue;
+    const ciphertext = validatedOwnerMetadataCiphertexts.get(envelope);
+    if (ciphertext !== undefined && 'c' in envelope && envelope.c === ciphertext) scope.set(ciphertext, true);
+  }
+  ownerMetadataCiphertextValidationScope = scope;
+  try {
+    return parse();
+  } finally {
+    ownerMetadataCiphertextValidationScope = enclosing;
+  }
+}
+
 export const SessionOwnerMetadataCiphertextV1Schema =
   lazyZodSchema(() => SessionOpaqueCiphertextSchema.check(z.refine(isSessionOwnerMetadataCiphertextV1, {
     message: 'Expected canonical Session owner-metadata ciphertext',
@@ -108,8 +133,12 @@ export const SessionOwnerMetadataEnvelopeV1Schema = lazyZodSchema(() => z.discri
   }),
   z.strictObject({
     t: z.literal('encrypted'),
-    c: SessionOwnerMetadataCiphertextV1Schema,
-  }),
+    c: SessionOpaqueCiphertextSchema,
+  }).check(z.refine(envelope => {
+    if (!isSessionOwnerMetadataCiphertextV1(envelope.c)) return false;
+    validatedOwnerMetadataCiphertexts.set(envelope, envelope.c);
+    return true;
+  }, { path: ['c'], message: 'Expected canonical Session owner-metadata ciphertext' })),
 ]));
 export type SessionOwnerMetadataEnvelopeV1 = z.infer<
   typeof SessionOwnerMetadataEnvelopeV1Schema
@@ -2675,9 +2704,11 @@ export function validateSessionOwnerMetadataEnvelopeForAccountModeV1(
 export function isSessionOwnerMetadataCiphertextV1(
   ciphertext: string,
 ): boolean {
-  if (typeof ciphertext !== 'string' || readCanonicalPaddedBase64DecodedLength(ciphertext) === null) {
-    return false;
-  }
-  return readAccountScopedCiphertextKindByte(ciphertext)
-    === SESSION_OWNER_METADATA_ACCOUNT_SCOPED_KIND_BYTE_V1;
+  if (typeof ciphertext !== 'string') return false;
+  const retained = ownerMetadataCiphertextValidationScope?.get(ciphertext);
+  if (retained !== undefined) return retained;
+  const valid = readCanonicalPaddedBase64DecodedLength(ciphertext) !== null
+    && readAccountScopedCiphertextKindByte(ciphertext) === SESSION_OWNER_METADATA_ACCOUNT_SCOPED_KIND_BYTE_V1;
+  ownerMetadataCiphertextValidationScope?.set(ciphertext, valid);
+  return valid;
 }

@@ -116,7 +116,7 @@ import {
 } from './sessions.repositoryTreeExpansion';
 import { resolveWorkspaceTargetForSessionFromState } from '@/sync/domains/session/resolveWorkspaceTargetForSessionFromState';
 import { preserveSessionRuntimeLocalMetadata } from '@/sync/domains/session/preserveSessionRuntimeLocalMetadata';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { createKeyedTimeoutScheduler } from '@/utils/time/keyedTimeoutScheduler';
 import {
@@ -564,6 +564,7 @@ function resolveOrderedSessionApply(
             metadata: previousSession.metadata,
             metadataVersion: previousSession.metadataVersion,
             ownerMetadataView: previousSession.ownerMetadataView,
+            [SESSION_OWNER_METADATA_PROJECTION]: previousSession[SESSION_OWNER_METADATA_PROJECTION],
             composerOptionsInput: previousSession.composerOptionsInput,
         });
     }

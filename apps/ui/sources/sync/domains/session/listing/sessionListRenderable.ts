@@ -57,7 +57,7 @@ import {
     projectUiSessionRuntimeAwareness,
     resolveSessionRuntimePresenceFields,
 } from '../attention/runtimePresentation';
-import { readSessionOwnerMetadataView } from '../readSessionOwnerMetadataView';
+import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from '../readSessionOwnerMetadataView';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 
 export { derivePendingRequestFlagsFromAgentState } from '@/sync/domains/session/pending/listPendingSessionRequests';
@@ -115,6 +115,7 @@ export function readSessionListGuardState(raw: unknown): SessionListGuardState |
 }
 
 export interface SessionListRenderableSession {
+    [SESSION_OWNER_METADATA_PROJECTION]?: Session[typeof SESSION_OWNER_METADATA_PROJECTION];
     forkV1?: Metadata['forkV1'];
     /**
      * Owner-readable compact Agent roster. This is deliberately a parsed
@@ -630,6 +631,7 @@ export function buildSessionListRenderableFromSession(
         metadataVersion: preserveMetadata && previous ? previous.metadataVersion : session.metadataVersion,
         agentStateVersion: preservePendingFlags && previous ? previous.agentStateVersion : session.agentStateVersion,
         lockedDisplayTitle,
+        [SESSION_OWNER_METADATA_PROJECTION]: session[SESSION_OWNER_METADATA_PROJECTION] ?? null,
         metadata: previous && areSessionListRenderableMetadataComparisonsEqual(previousMetadata, projectedMetadata)
             ? previous.metadata
             : projectedMetadata,
@@ -874,6 +876,7 @@ export function areSessionListRenderablesEqual(
     next: SessionListRenderableSession,
 ): boolean {
     if (!previous) return false;
+    if ((previous[SESSION_OWNER_METADATA_PROJECTION] ?? null) !== (next[SESSION_OWNER_METADATA_PROJECTION] ?? null)) return false;
     if (previous.viewer !== next.viewer && JSON.stringify(previous.viewer ?? null) !== JSON.stringify(next.viewer ?? null)) return false;
     if (previous.encryptionMode !== next.encryptionMode) return false;
     if (previous.encryptedContentAvailability !== next.encryptedContentAvailability) return false;
