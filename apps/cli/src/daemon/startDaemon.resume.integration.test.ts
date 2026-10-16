@@ -285,10 +285,10 @@ const sessionRespawnManagerCapture = vi.hoisted(() => ({
     const manager = {
       hasPendingIntendedRestarts: vi.fn(() => false),
       markStopRequested: vi.fn(),
-      prepareFreshExplicitResumeAdmission: vi.fn(() => {
+      prepareFreshExplicitResumeAdmission: vi.fn((_sessionId: string) => {
         const commit = vi.fn();
         freshResumeCommits.push(commit);
-        return commit;
+        return { isCurrent: () => true, complete: commit };
       }),
       handleUnexpectedExit: vi.fn(),
       freshResumeCommits,
@@ -407,9 +407,24 @@ vi.mock('./platform/linux/migrateTrackedSessionsOutOfDaemonServiceCgroup', () =>
   migrateTrackedSessionProcessesOutOfDaemonServiceCgroup: cgroupMigrationCapture.migrateTrackedSessionProcessesOutOfDaemonServiceCgroup,
 }));
 
-vi.mock('./processSupervision/sessionRunnerRespawn', () => ({
-  createSessionRunnerRespawnManager: sessionRespawnManagerCapture.createSessionRunnerRespawnManager,
-}));
+vi.mock('./processSupervision/sessionRunnerRespawn', async importOriginal => {
+  const actual = await importOriginal<typeof import('./processSupervision/sessionRunnerRespawn')>();
+  return {
+    ...actual,
+    createSessionRunnerRespawnManager: (params: Parameters<typeof actual.createSessionRunnerRespawnManager>[0]) => {
+      const owner = actual.createSessionRunnerRespawnManager(params);
+      const captured = sessionRespawnManagerCapture.createSessionRunnerRespawnManager(params);
+      captured.markStopRequested.mockImplementation(owner.markStopRequested);
+      captured.prepareFreshExplicitResumeAdmission.mockImplementation((sessionId: string) => {
+        const admission = owner.prepareFreshExplicitResumeAdmission(sessionId);
+        const commit = vi.fn(admission.complete);
+        captured.freshResumeCommits.push(commit);
+        return { ...admission, complete: commit };
+      });
+      return { ...owner, ...captured };
+    },
+  };
+});
 
 vi.mock('./platform/windows/windowsSessionConsoleMode', () => ({
   resolveWindowsRemoteSessionConsoleMode: resolveWindowsRemoteSessionConsoleModeMock,
@@ -533,10 +548,6 @@ vi.mock('./lifecycle/heartbeat', () => ({
   startDaemonHeartbeatLoop: vi.fn(() => setInterval(() => {}, 60_000)),
 }));
 
-vi.mock('@/projectPath', () => ({
-  projectPath: vi.fn(() => '/tmp/project'),
-}));
-
 vi.mock('@/integrations/tmux', () => ({
   selectPreferredTmuxSessionName: vi.fn(),
   TmuxUtilities: {},
@@ -645,7 +656,11 @@ async function waitForSpawnSession(): Promise<NonNullable<ReturnType<typeof harn
     if (spawnSession) return spawnSession;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error('Expected spawnSession to be registered');
+  const fatalLog = loggerDebug.mock.calls.find(([message]) =>
+    typeof message === 'string' && message.includes('[FATAL]'));
+  throw new Error(fatalLog
+    ? `Expected spawnSession to be registered; daemon startup failed: ${JSON.stringify(fatalLog[1])}`
+    : 'Expected spawnSession to be registered');
 }
 
 async function waitForStopSession(): Promise<NonNullable<ReturnType<typeof harness.getStopSession>>> {
