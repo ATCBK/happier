@@ -9,7 +9,6 @@ import * as zMini from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { normalizeAccountSettingsServerSelection } from '@/sync/domains/settings/parse/accountSettingsServerSelectionNormalization';
-import { SessionSplitCanvasLayoutsSchema } from '@/sync/domains/session/sessionSplitCanvasPersistence';
 
 const NewSessionAgentPickerViewV1BackendSchema = z.object({
     kind: z.literal('backend'),
@@ -82,12 +81,6 @@ export const ServerSelectionGroupSchema = z.object({
  * be emitted by account-settings writers.
  */
 const localAccountSettingInputs = {
-    sessionSplitCanvasLayoutsV1: {
-        schema: SessionSplitCanvasLayoutsSchema,
-        default: {},
-        description: 'Session split geometry on this device, scoped to the Account and Home',
-        storageScope: 'local',
-    },
     machineAdministrationTargetsLocalV1: {
         schema: MachineAdministrationTargetsV1Schema,
         default: {},
@@ -155,7 +148,6 @@ export const LOCAL_ACCOUNT_SETTING_DEFINITIONS: ReturnType<typeof defineSettingD
 export const LOCAL_ACCOUNT_SETTING_ARTIFACTS: ReturnType<typeof buildSettingArtifacts<typeof LOCAL_ACCOUNT_SETTING_DEFINITIONS>> = buildSettingArtifacts(LOCAL_ACCOUNT_SETTING_DEFINITIONS);
 
 export const LOCAL_ACCOUNT_SETTING_KEYS = [
-    'sessionSplitCanvasLayoutsV1',
     'machineAdministrationTargetsLocalV1',
     'lastUsedAgent',
     'lastUsedBackendTarget',
@@ -186,7 +178,6 @@ export function parseLocalAccountSettings(input: unknown): LocalAccountSettings 
         : {};
     const definitions = LOCAL_ACCOUNT_SETTING_DEFINITIONS;
     const parsed = {
-        sessionSplitCanvasLayoutsV1: parseLocalSetting(definitions.sessionSplitCanvasLayoutsV1, record.sessionSplitCanvasLayoutsV1),
         machineAdministrationTargetsLocalV1: parseLocalSetting(definitions.machineAdministrationTargetsLocalV1, record.machineAdministrationTargetsLocalV1),
         lastUsedAgent: parseLocalSetting(definitions.lastUsedAgent, record.lastUsedAgent),
         lastUsedBackendTarget: parseLocalSetting(definitions.lastUsedBackendTarget, record.lastUsedBackendTarget),

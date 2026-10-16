@@ -9353,11 +9353,7 @@ localTailscale: {
     failedToRenameSession: "セッション名の変更に失敗しました",
     failedToMarkSessionRead: "セッションを既読にできませんでした",
     failedToMarkSessionUnread: "セッションを未読にできませんでした",
-    sessionRenamed: "セッション名を変更しました",
-
-	    openInSplitRight: "右分割で開く",
-	    openInSplitDown: "下分割で開く",
-	    revealInCurrentSplit: "現在の分割で表示",},
+    sessionRenamed: "セッション名を変更しました",},
 
   components: {
     emptyMainScreen: {

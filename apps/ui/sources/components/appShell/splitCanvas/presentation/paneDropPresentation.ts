@@ -8,9 +8,8 @@ import type { SplitCanvasDropTarget } from '../model/splitCanvasTypes';
 
 /**
  * The words of a pane drop (DnD lab C2/C2s): what releasing over a pane or its tab strip does, said
- * on the carried card. The workspace and the Session canvas decide (`resolveWorkspaceEntityDrop`,
- * `resolveSessionCanvasEntityDrop`); this is the one place both say it, so a pane never words the
- * same outcome two ways. Pane zones keep only geometry; the outcome lives on the card.
+ * on the carried card. The workspace decides (`resolveWorkspaceEntityDrop`); this is the one place
+ * that says it, so a pane never words the same outcome two ways. Pane zones keep only geometry; the outcome lives on the card.
  */
 
 type Placement = SplitCanvasDropTarget['placement'];
@@ -25,19 +24,14 @@ export type PaneDropAdmission =
 
 const PANE_EFFECT_KINDS: Readonly<Record<string, PaneEffectKind>> = {
     'workspace.tabs.activate': 'goTo',
-    'session.canvas.tabs.activate': 'goTo',
     'workspace.tabs.open': 'open',
-    'session.canvas.tabs.open': 'open',
     'workspace.tabs.move': 'move',
     'workspace.tabs.reorder': 'move',
     'workspace.split': 'move',
-    'session.canvas.tabs.move': 'move',
-    'session.canvas.tabs.reorder': 'move',
 };
 
 const GONE_CODES: ReadonlySet<string> = new Set([
     'workspace_scope_unavailable', 'workspace_group_unavailable', 'workspace_tab_not_found',
-    'canvas_scope_changed', 'canvas_leaf_not_found', 'canvas_tab_not_found',
     'target-retired', 'source-retired',
 ]);
 
@@ -85,8 +79,6 @@ export type PaneDropScene = Readonly<{
     beforeTabId?: string | null;
     /** The pointer is in an edge band of a pane too narrow to split, so its centre took the drop. */
     declinedSplit?: boolean;
-    /** A pane that renders Sessions only (the Session canvas). */
-    sessionsOnly?: boolean;
     /** Where an open tab lives and what it is called. */
     locateTab: (tabId: string) => Readonly<{ paneId: string; title: string }> | null;
 }>;
@@ -149,8 +141,6 @@ function describeAllowed(effect: Omit<AllowedEffect, 'preview'>, kind: PaneEffec
 function refusalMessage(code: string, scene: PaneDropScene): string {
     if (GONE_CODES.has(code)) return t('entityDragDrop.reasons.gone');
     switch (code) {
-        case 'canvas_kind_unsupported': return scene.sessionsOnly ? t('entityDragDrop.pane.sessionsOnly') : t('entityDragDrop.reasons.generic');
-        case 'session_workspace_unavailable': return t('entityDragDrop.pane.otherWorkspace');
         case 'admission-unavailable': return t('entityDragDrop.reasons.unavailable');
         default: return t('entityDragDrop.reasons.generic');
     }

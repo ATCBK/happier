@@ -71,7 +71,6 @@ export function stripReadOnlyAccountSettingsDelta<T extends object>(delta: T): T
 
 export function stripLocalOnlyAccountSettings(settings: Partial<Settings>): Partial<Settings> {
     const {
-        sessionSplitCanvasLayoutsV1: _sessionSplitCanvasLayoutsV1,
         machineAdministrationTargetsLocalV1: _machineAdministrationTargetsLocalV1,
         lastUsedAgent: _lastUsedAgent,
         lastUsedBackendTarget: _lastUsedBackendTarget,

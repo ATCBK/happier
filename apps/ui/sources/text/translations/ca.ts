@@ -8165,7 +8165,6 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
 
     sessionInfo: {
         stopSessionControlUnavailable: 'Happier no ha pogut arribar als controls de la sessió. Comprova que la màquina i el dimoni de la sessió estiguin en línia i torna-ho a provar.',
-        openInSplitRight: 'Obre en una divisió a la dreta', openInSplitDown: 'Obre en una divisió a sota', revealInCurrentSplit: 'Mostra a la divisió actual',
 	        // Used by Session Info screen (app/(app)/session/[id]/info.tsx)
 	        title: 'Informació de la sessió',
 	        killSession: 'Finalitza la sessió',

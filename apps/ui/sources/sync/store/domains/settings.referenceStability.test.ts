@@ -7,7 +7,6 @@ import { settingsDefaults, type Settings } from '@/sync/domains/settings/setting
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { loadAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
 import { clearPersistence } from '@/sync/domains/state/persistence';
-import { createInitialSessionSplitCanvasSnapshot } from '@/sync/domains/session/sessionSplitCanvasPersistence';
 
 const store = vi.hoisted(() => new Map<string, string>());
 
@@ -187,12 +186,11 @@ describe('createSettingsDomain settings projection reference stability', () => {
         expect(getState().settings.favoriteDirectories).toBe(favoritesBeforeLocalWrite);
     });
 
-    it('restores device layout and Administration memory only for their exact Account and Home', async () => {
+    it('restores device Administration memory only for their exact Account and Home', async () => {
         const { getState } = createTestStore();
         const targets = { agents: { serverIdentityId: 'srv_one', machineId: 'machine-a' } };
-        const layouts = { workspace: createInitialSessionSplitCanvasSnapshot({ sessionId: 'session-a', scope }) };
         await getState().activateSettingsScope(scope);
-        getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: targets, sessionSplitCanvasLayoutsV1: layouts });
+        getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: targets });
 
         for (const otherScope of [
             { ...scope, accountId: 'account-b' },
@@ -200,10 +198,8 @@ describe('createSettingsDomain settings projection reference stability', () => {
         ]) {
             await getState().activateSettingsScope(otherScope);
             expect(getState().settings.machineAdministrationTargetsLocalV1).toEqual({});
-            expect(getState().settings.sessionSplitCanvasLayoutsV1).toEqual({});
         }
         await getState().activateSettingsScope(scope);
         expect(getState().settings.machineAdministrationTargetsLocalV1).toEqual(targets);
-        expect(getState().settings.sessionSplitCanvasLayoutsV1).toEqual(layouts);
     });
 });

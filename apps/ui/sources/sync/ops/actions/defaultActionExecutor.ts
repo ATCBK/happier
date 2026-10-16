@@ -156,7 +156,6 @@ import type { SystemTaskRunner } from '@/components/systemTasks/types';
 import { createWidgetCatalogActionDepsV1 } from './widgetCatalogActionDeps';
 import { publishHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { captureMountedWorkspaceAction, invokeWorkspaceAction } from '@/components/appShell/workspace/workspaceActionRuntime';
-import { invokeSessionCanvasAction } from '@/components/sessions/canvas/sessionSplitCanvasRuntime';
 import { invokeWorkflowAuthoringAction } from './workflowAuthoringAction';
 import { openSessionAuthoringDraft } from './sessionAuthoringOpenAction';
 import { invokeSessionListOrganizationAction } from '@/components/sessions/shell/drag/sessionListOrganizationAction';
@@ -621,7 +620,6 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   /** Optional Session human-discussion family port bound by a mounted surface. */
   sessionDiscussionAction?: NonNullable<ActionExecutorDeps['sessionDiscussionAction']>;
   /** Exact mounted canvas for local pane interactions; external callers use the focused publication. */
-  sessionCanvasAction?: NonNullable<ActionExecutorDeps['sessionCanvasAction']>;
   /**
    * The Home family port, bound by the caller to the exact Home and Account.
    * Without it, the shared executor rejects Home and Teams actions as unsupported.
@@ -1486,7 +1484,6 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     } : {}),
 
     workspaceAction: invokeWorkspaceAction,
-    sessionCanvasAction: opts?.sessionCanvasAction ?? invokeSessionCanvasAction,
     workflowAuthoringAction: invokeWorkflowAuthoringAction,
     sessionOrganizationMove: async request => {
       if (!accountContext) return { status: 'unavailable' as const };

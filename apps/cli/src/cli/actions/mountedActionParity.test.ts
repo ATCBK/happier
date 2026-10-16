@@ -8,8 +8,6 @@ import { compileActionCliFields, listCompiledActionCliCommands } from './compile
 import { composeActionCliInput, parseActionCliCommandInput, parseActionCliInput } from './parseCommandInput';
 
 const scope = { serverId: 'home-a', accountId: 'account-a' };
-const canvas = { scope, canvasKey: 'canvas-a' };
-const tab = { ...canvas, tabId: 'tab-a' };
 const composer = { scope, ref: { kind: 'newSession', instanceId: 'composer-a' } };
 const position = { anchorId: null, placement: 'before' };
 const cases = [
@@ -24,13 +22,6 @@ const cases = [
     result: { status: 'appended', sessionId: 'session-a', createdAtMs: 10 } },
   { id: 'session.draft.delete', input: { draftId: '00000000-0000-4000-8000-000000000001' }, result: { status: 'deleted' } },
   { id: 'session.draft.directory.set', input: { ref: composer.ref, directory: { kind: 'path', path: '/checkout' } }, result: { status: 'applied' } },
-  { id: 'session.canvas.tabs.list', input: canvas, result: { status: 'listed', focusedLeafId: null, maximizedLeafId: null, leaves: [], tabs: [] } },
-  { id: 'session.canvas.tabs.open', input: { ...canvas, sessionId: 'session-a', leafId: 'leaf-a' }, result: { status: 'applied' } },
-  { id: 'session.canvas.tabs.activate', input: tab, result: { status: 'applied' } },
-  { id: 'session.canvas.tabs.close', input: tab, result: { status: 'applied' } },
-  { id: 'session.canvas.tabs.move', input: { ...tab, targetLeafId: 'leaf-b' }, result: { status: 'applied' } },
-  { id: 'session.canvas.tabs.reorder', input: { ...tab, beforeTabId: null }, result: { status: 'applied' } },
-  { id: 'session.canvas.tabs.pin', input: { ...tab, pinned: true }, result: { status: 'applied' } },
   { id: 'session.organization.move', input: { scope, sourceRowId: 'session-a', sourceKind: 'leaf', instructionKind: 'move-to-root', targetRowId: null, containerId: null, parentRowId: null, depth: null, edge: null }, result: { status: 'applied' } },
   { id: 'session.pending.reorder', input: { scope, sourceId: 'pending-a', position, sessionId: 'session-a', recipient: null }, result: { status: 'applied' } },
   { id: 'todos.reorder', input: { scope, sourceId: 'todo-a', position }, result: { status: 'applied' } },

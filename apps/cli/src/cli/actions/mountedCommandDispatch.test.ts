@@ -27,8 +27,8 @@ const credentials = { token: `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
   sub: 'account-a', session: 'stored-session-a', tokenEpoch: 7,
   provenance: { v: 1, kind: 'account', authority: 'present_user' },
 })}.signature`, encryption: null, credentialProvenance: 'stored_session' } as const;
-const input = { scope: { serverId: 'home-a', accountId: 'account-a' }, canvasKey: 'canvas-a' };
-const listed = { status: 'listed', focusedLeafId: null, maximizedLeafId: null, leaves: [], tabs: [] };
+const input = { scope: { serverId: 'home-a', accountId: 'account-a' }, sourceId: 'todo-a', position: { anchorId: 'todo-b', placement: 'before' } };
+const listed = { status: 'applied' };
 
 afterEach(() => { daemonPost.mockReset(); process.exitCode = 0; });
 
@@ -103,7 +103,7 @@ describe('compiled mounted-client CLI command daemon ingress', () => {
         surface: 'cli', authority: 'present_user', actionRequestId: request.actionRequestId,
       });
     });
-    const command = listCompiledActionCliCommands().find(row => row.actionId === 'session.canvas.tabs.list')!;
+    const command = listCompiledActionCliCommands().find(row => row.actionId === 'todos.reorder')!;
     const output = captureConsoleJsonOutput();
     try {
       await runCompiledActionCliCommand({ command,

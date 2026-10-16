@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useDestinationParams, useDestinationFocus, useDestinationVisibility, useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { SessionSplitCanvasScreen } from '@/components/sessions/canvas/SessionSplitCanvasScreen';
+import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { TranscriptSameSessionHandoffProvider } from '@/components/sessions/transcript/viewport/lifecycle/transcriptSameSessionHandoff';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
@@ -235,15 +235,17 @@ export function SessionDestinationBody() {
                     />
                 )
                 : (
-                    <SessionSplitCanvasScreen
-                        sessionId={sessionId}
+                    // A split is the workspace's: this tab is one Session, and its tabs live in the title bar.
+                    <SessionView
+                        id={sessionId}
                         routeServerId={routeServerId.trim() || undefined}
+                        routeHydrationState={routeHydrationState}
                         jumpToSeq={jumpToSeq}
                         paneUrlState={paneUrlState ?? undefined}
                         initialAttachmentDrafts={recoverableAttachmentDrafts}
-                        routeHydrationState={routeHydrationState}
-                        surfaceFocused={focused}
-                        surfaceVisible={visible}
+                        surfaceFocusedOverride={focused}
+                        surfaceVisibleOverride={visible}
+                        routeAnchorOverride={focused && visible}
                     />
                 )}
         </TranscriptSameSessionHandoffProvider>

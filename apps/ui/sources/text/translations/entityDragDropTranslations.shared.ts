@@ -114,8 +114,6 @@ export const en = {
         alreadyHere: 'Already here',
         leaveIt: 'Release to leave it where it is',
         cantOpenHere: 'Can’t open it here',
-        sessionsOnly: 'This pane shows sessions only',
-        otherWorkspace: 'It isn’t part of this workspace',
     },
 };
 

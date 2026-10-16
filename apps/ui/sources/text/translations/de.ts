@@ -8984,12 +8984,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         failedToRenameSession: 'Die Session ließ sich nicht umbenennen',
         failedToMarkSessionRead: 'Die Session ließ sich nicht als gelesen markieren',
         failedToMarkSessionUnread: 'Die Session ließ sich nicht als ungelesen markieren',
-        sessionRenamed: 'Session erfolgreich umbenannt',
-
-
-	        openInSplitRight: 'Rechts im Split öffnen',
-	        openInSplitDown: 'Unten im Split öffnen',
-	        revealInCurrentSplit: 'Im aktuellen Split zeigen',},
+        sessionRenamed: 'Session erfolgreich umbenannt',},
 
     workspacePresentation: {
         homeFolder: 'Home-Ordner',

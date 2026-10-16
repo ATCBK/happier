@@ -7706,11 +7706,7 @@ const ruValues = {
     failedToRenameSession: "Не удалось переименовать сессию",
     failedToMarkSessionRead: "Не удалось отметить сессию как прочитанную",
     failedToMarkSessionUnread: "Не удалось отметить сессию как непрочитанную",
-    sessionRenamed: "Сессия успешно переименована",
-
-	    openInSplitRight: "Открыть в разделении справа",
-	    openInSplitDown: "Открыть в разделении снизу",
-	    revealInCurrentSplit: "Показать в текущем разделении",},
+    sessionRenamed: "Сессия успешно переименована",},
 
   components: {
     emptyMainScreen: {

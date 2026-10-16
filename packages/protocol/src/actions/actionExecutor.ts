@@ -81,7 +81,6 @@ import { isWorkspaceActionId } from './workspaceActionFamily.js';
 import { isFilesystemActionId } from './filesystemActionFamily.js';
 import { isProjectActionIdV1 } from './projectActionIdsV1.js';
 import { OpenProjectInputV1Schema, OpenProjectResultV1Schema } from '../projects/openProjectV1.js';
-import { isSessionCanvasActionId } from './sessionCanvasActionFamily.js';
 import { isSessionTerminalActionId } from './sessionTerminalActionFamily.js';
 import { SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS } from './sessionAgentTransitionActionFamily.js';
 import { SessionAgentTransitionRequestV1Schema } from '../sessions/agentTransition.js';
@@ -7313,11 +7312,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (isProjectDefinitionActionId(actionId)) {
           if (!deps.projectDefinitionAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
           return completeActionResult(await deps.projectDefinitionAction({ actionId, input: parsed.data, context: ctx }));
-        }
-
-        if (isSessionCanvasActionId(actionId)) {
-          if (!deps.sessionCanvasAction) return { ok: true, result: { status: 'unavailable' } };
-          return completeActionResult(await deps.sessionCanvasAction({ actionId, input: parsed.data, ...(ctx.signal ? { signal: ctx.signal } : {}) }));
         }
 
         if (actionId === 'workflow.trigger.test') {

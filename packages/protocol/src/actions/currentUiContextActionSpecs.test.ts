@@ -135,23 +135,6 @@ describe('current UI context host ActionSpecs', () => {
     expect(await headless.execute('todos.reorder', input, context)).toEqual({ ok: true, result: { status: 'unavailable' } });
     expect(await executor.execute('todos.reorder', { ...input, orderedIds: ['source'] }, context)).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
   });
-  it('exposes qualified Session canvas tabs only through the mounted client owner', async () => {
-    const scope = { serverId: 'home-a', accountId: 'account-a' };
-    for (const actionId of ['session.canvas.tabs.open', 'session.canvas.tabs.activate', 'session.canvas.tabs.close', 'session.canvas.tabs.move', 'session.canvas.tabs.reorder', 'session.canvas.tabs.pin', 'session.canvas.tabs.list'] as const) {
-      const spec = getActionSpec(actionId);
-      expect(ActionIdSchema.safeParse(actionId).success).toBe(true);
-      expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
-      expect(spec.outputSchema?.safeParse({ status: 'unavailable' }).success).toBe(true);
-    }
-    const open = getActionSpec('session.canvas.tabs.open');
-    const input = { scope, canvasKey: 'workspace-a', sessionId: 's1', leafId: 'leaf-a', placement: 'center', beforeTabId: 'anchor' };
-    expect(open.inputSchema.safeParse(input).success).toBe(true);
-    expect(open.inputSchema.safeParse({ ...input, scope: { ...scope, token: 'secret' } }).success).toBe(false);
-    expect(open.inputSchema.safeParse({ ...input, availableSizePx: 99999 }).success).toBe(false);
-    const headless = createActionExecutor({ isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
-    expect(await headless.execute('session.canvas.tabs.open', input, { surface: 'agent', authority: 'account_automation' })).toEqual({ ok: true, result: { status: 'unavailable' } });
-  });
   it('exposes exact pending and undone-todo semantic reorder without replacement membership', () => {
     for (const actionId of ['session.pending.reorder', 'todos.reorder']) {
       const spec = getActionSpec(actionId as never);

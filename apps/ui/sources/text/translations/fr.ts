@@ -8889,11 +8889,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     failedToRenameSession: "Échec du renommage de la session",
     failedToMarkSessionRead: "Échec du marquage de la session comme lue",
     failedToMarkSessionUnread: "Échec du marquage de la session comme non lue",
-    sessionRenamed: "Session renommée",
-
-	    openInSplitRight: "Ouvrir dans un split à droite",
-	    openInSplitDown: "Ouvrir dans un split en bas",
-	    revealInCurrentSplit: "Afficher dans le split actuel",},
+    sessionRenamed: "Session renommée",},
 
   components: {
     emptyMainScreen: {

@@ -8882,11 +8882,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     failedToRenameSession: "Nie udało się zmienić nazwy sesji",
     failedToMarkSessionRead: "Nie udało się oznaczyć sesji jako przeczytanej",
     failedToMarkSessionUnread: "Nie udało się oznaczyć sesji jako nieprzeczytanej",
-    sessionRenamed: "Pomyślnie zmieniono nazwę sesji",
-
-	    openInSplitRight: "Otwórz w podziale po prawej",
-	    openInSplitDown: "Otwórz w podziale poniżej",
-	    revealInCurrentSplit: "Pokaż w bieżącym podziale",},
+    sessionRenamed: "Pomyślnie zmieniono nazwę sesji",},
 
   components: {
     emptyMainScreen: {

@@ -9046,11 +9046,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     failedToRenameSession: "Error al renombrar la sesión",
     failedToMarkSessionRead: "Error al marcar la sesión como leída",
     failedToMarkSessionUnread: "Error al marcar la sesión como no leída",
-    sessionRenamed: "Sesión renombrada exitosamente",
-
-	    openInSplitRight: "Abrir en división a la derecha",
-	    openInSplitDown: "Abrir en división abajo",
-	    revealInCurrentSplit: "Mostrar en la división actual",},
+    sessionRenamed: "Sesión renombrada exitosamente",},
 
   components: {
     emptyMainScreen: {

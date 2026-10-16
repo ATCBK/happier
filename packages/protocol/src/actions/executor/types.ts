@@ -109,7 +109,6 @@ import type {
 import type { HomeDomainActionIdV1 } from '../homeDomainActionFamily.js';
 import type { WorkspaceActionId } from '../workspaceActionFamily.js';
 import type { OpenProjectInputV1, OpenProjectResultV1 } from '../../projects/openProjectV1.js';
-import type { SessionCanvasActionId } from '../sessionCanvasActionFamily.js';
 import type { SessionTerminalActionId } from '../sessionTerminalActionFamily.js';
 import type { SessionAgentTransitionRequestV1, SessionAgentTransitionSelectionV1 } from '../../sessions/agentTransition.js';
 import type { ConnectedServiceConfigurationActionIdV1 } from '../../connect/configurationActionsV1.js';
@@ -1297,7 +1296,6 @@ export type ActionExecutorDeps = Readonly<{
   projectDefinitionAction?: (args: Readonly<{ actionId: ProjectDefinitionActionId; input: unknown; context: ActionExecutorContext }>) => Promise<unknown>;
   /** Authenticated Machine materialization; result publication belongs to the Project row owner. */
   projectsOpen?: (input: OpenProjectInputV1, context: ActionExecutorContext) => Promise<OpenProjectResultV1 | ActionApprovalRequestCreatedResult | ActionExecuteFailure>;
-  sessionCanvasAction?: (args: Readonly<{ actionId: SessionCanvasActionId; input: unknown; signal?: AbortSignal }>) => Promise<unknown>;
   workflowAuthoringAction?: (args: Readonly<{ actionId: WorkflowAuthoringActionId; input: unknown; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionOrganizationMove?: (args: Readonly<{ input: unknown; signal?: AbortSignal }>) => Promise<unknown>;
   /** Authenticated Account HTTP mutation; rail admission uses current Session metadata in the host. */

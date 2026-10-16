@@ -11,13 +11,13 @@ const hydrateSessionSpy = vi.hoisted(() => vi.fn((sessionId: string, reason: str
     sessionId,
     serverId: options?.serverId,
 })));
-const sessionSplitCanvasScreenSpy = vi.hoisted(() => vi.fn((props: {
-    sessionId: string;
+const sessionViewSpy = vi.hoisted(() => vi.fn((props: {
+    id: string;
     routeServerId?: string;
     jumpToSeq?: number | null;
     paneUrlState?: unknown;
     initialAttachmentDrafts?: readonly unknown[] | null;
-}) => React.createElement('SessionSplitCanvasScreen', props)));
+}) => React.createElement('SessionView', props)));
 
 const routerMock = createExpoRouterMock({
     params: {
@@ -70,18 +70,8 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
-vi.mock('@/components/sessions/canvas/SessionSplitCanvasScreen', () => ({
-    SessionSplitCanvasScreen: (props: {
-        sessionId: string;
-        routeServerId?: string;
-        jumpToSeq?: number | null;
-        paneUrlState?: unknown;
-        initialAttachmentDrafts?: readonly unknown[] | null;
-    }) => sessionSplitCanvasScreenSpy(props),
-}));
-
 vi.mock('@/components/sessions/shell/SessionView', () => ({
-    SessionView: (props: { id: string }) => React.createElement('SessionView', props),
+    SessionView: (props: { id: string }) => sessionViewSpy(props),
 }));
 
 vi.mock('@/components/workspaceCockpit/session/SessionCockpitShell', () => ({
@@ -123,14 +113,14 @@ vi.mock('@/utils/sessions/tempDataStore', () => ({
 describe('session index route', () => {
     beforeEach(() => {
         hydrateSessionSpy.mockClear();
-        sessionSplitCanvasScreenSpy.mockClear();
+        sessionViewSpy.mockClear();
     });
 
     afterEach(() => {
         standardCleanup();
     });
 
-    it('normalizes route params before hydrating and passes the full session route boundary through the session split canvas screen', async () => {
+    it('normalizes route params before hydrating and passes the full session route boundary to the Session view', async () => {
         const { default: SessionRoute } = await import('@/app/(app)/session/[id]/index');
 
         await renderScreen(<SessionRoute />);
@@ -140,9 +130,9 @@ describe('session index route', () => {
             'SessionRoute.ensureSessionVisible gen=1',
             { serverId: 'server-1' },
         );
-        expect(sessionSplitCanvasScreenSpy).toHaveBeenCalledWith(
+        expect(sessionViewSpy).toHaveBeenCalledWith(
             expect.objectContaining({
-                sessionId: 's1',
+                id: 's1',
                 routeServerId: 'server-1',
                 jumpToSeq: 42,
                 paneUrlState: {

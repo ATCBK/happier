@@ -128,7 +128,6 @@ import { SCM_GIT_ACTION_SPECS } from './scmGitActionSpecs.js';
 import { WORKSPACE_ACTION_SPECS, WORKSPACE_ACTION_INPUT_SCHEMAS, WORKSPACE_ACTION_OUTPUT_SCHEMAS, type WorkspaceActionId } from './workspaceActionFamily.js';
 import { PROJECT_DEFINITION_ACTION_SPECS, PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS, PROJECT_DEFINITION_ACTION_OUTPUT_SCHEMAS, type ProjectDefinitionActionId } from './projectDefinitionActionFamily.js';
 import { PROJECT_ACTION_SPECS_V1, PROJECT_ACTION_INPUT_SCHEMAS_V1, PROJECT_ACTION_OUTPUT_SCHEMAS_V1, type ProjectActionIdV1 } from './projectActionFamily.js';
-import { SESSION_CANVAS_ACTION_SPECS, SESSION_CANVAS_ACTION_INPUT_SCHEMAS, SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS, type SessionCanvasActionId } from './sessionCanvasActionFamily.js';
 import { SESSION_TERMINAL_ACTION_SPECS, SESSION_TERMINAL_ACTION_INPUT_SCHEMAS, SESSION_TERMINAL_ACTION_OUTPUT_SCHEMAS, type SessionTerminalActionId } from './sessionTerminalActionFamily.js';
 import { SESSION_AGENT_TRANSITION_ACTION_SPECS, SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS,
   SESSION_AGENT_TRANSITION_ACTION_OUTPUT_SCHEMAS, type SessionAgentTransitionActionId } from './sessionAgentTransitionActionFamily.js';
@@ -4925,7 +4924,6 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING = Object.freeze(defineAc
   ...WORKFLOW_EFFECT_ACTION_SPECS_V1,
   ...WORKSPACE_ACTION_SPECS,
   ...PROJECT_DEFINITION_ACTION_SPECS,
-  ...SESSION_CANVAS_ACTION_SPECS,
   ...WORKFLOW_AUTHORING_ACTION_SPECS,
   ...WORKFLOW_DIAGNOSTIC_ACTION_SPECS,
   ...COMPOSER_INGRESS_ACTION_SPECS,
@@ -12820,7 +12818,7 @@ type NonRuntimeActionSpecDefinition<TSpec> = TSpec extends Readonly<{
   // These families have exact per-ID schema definitions below. Their generic
   // row factories must not reintroduce widened schema unions into the catalog.
   ? TActionId extends RuntimeActionIdV1 | SessionTerminalActionId | SessionAgentTransitionActionId | MachineTerminalActionId | WorkspaceActionId | ProjectDefinitionActionId
-    | SessionCanvasActionId | WidgetInstanceActionIdV1 | WidgetDefinitionActionIdV1 | WidgetLayoutFragmentActionIdV1
+    | WidgetInstanceActionIdV1 | WidgetDefinitionActionIdV1 | WidgetLayoutFragmentActionIdV1
     | ArtifactFolderActionIdV1 | ProfileActionIdV1 | ProviderActionIdV1 | RemoteHostActionIdV1 | HomeRuntimeActionIdV1 | ProjectActionIdV1 | WorkflowEffectActionIdV1 | UsageSourceActionId
     ? never
     : TSpec
@@ -13212,9 +13210,6 @@ export type CanonicalActionSpecDefinition =
   | (typeof COMPOSER_INGRESS_ACTION_SPECS)[number]
   | (typeof WORKFLOW_AUTHORING_ACTION_SPECS)[number]
   | (typeof WORKFLOW_DIAGNOSTIC_ACTION_SPECS)[number]
-  | { [Id in SessionCanvasActionId]: CanonicalActionSchemaDefinition<Id,
-      (typeof SESSION_CANVAS_ACTION_INPUT_SCHEMAS)[Id], (typeof SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS)[Id]>
-    }[SessionCanvasActionId]
   | { [Id in NotificationConfigurationActionId]: CanonicalActionSchemaDefinition<Id,
       (typeof NotificationConfigurationActionInputSchemas)[Id], (typeof NotificationConfigurationActionOutputSchemas)[Id]>
     }[NotificationConfigurationActionId]

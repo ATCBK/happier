@@ -9169,11 +9169,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     failedToRenameSession: "Falha ao renomear sessão",
     failedToMarkSessionRead: "Falha ao marcar sessão como lida",
     failedToMarkSessionUnread: "Falha ao marcar sessão como não lida",
-    sessionRenamed: "Sessão renomeada com sucesso",
-
-	    openInSplitRight: "Abrir em divisão à direita",
-	    openInSplitDown: "Abrir em divisão abaixo",
-	    revealInCurrentSplit: "Mostrar na divisão atual",},
+    sessionRenamed: "Sessão renomeada com sucesso",},
 
   components: {
     emptyMainScreen: {

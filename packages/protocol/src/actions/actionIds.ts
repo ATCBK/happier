@@ -42,7 +42,6 @@ import { ARTIFACT_ACTION_IDS_V1 } from '../artifacts/artifactActionIdsV1.js';
 import { WORKSPACE_ACTION_IDS } from './workspaceActionFamily.js';
 import { PROJECT_ACTION_IDS_V1 } from './projectActionIdsV1.js';
 import { PROJECT_DEFINITION_ACTION_IDS } from './projectDefinitionActionFamily.js';
-import { SESSION_CANVAS_ACTION_IDS } from './sessionCanvasActionIds.js';
 import { CONNECTED_SERVICE_CONFIGURATION_ACTION_IDS_V1 } from '../connect/configurationActionIdsV1.js';
 import { SETTINGS_DECLARATION_ACTION_IDS_V1 } from './settingsDeclarationActionFamily.js';
 import { APP_SHELL_ACTION_IDS } from './appShellActionFamily.js';
@@ -131,7 +130,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   capture_viewing: ['capture.view'],
   session_terminals: SESSION_TERMINAL_ACTION_IDS,
   session_agent_transition: SESSION_AGENT_TRANSITION_ACTION_IDS,
-  workspace_layout: [...WORKSPACE_ACTION_IDS, ...SESSION_CANVAS_ACTION_IDS],
+  workspace_layout: WORKSPACE_ACTION_IDS,
   session_organization_move: ['session.organization.move', 'session.organization.pin.set'],
   composer_ingress: ['composer.transaction.apply', 'composer.attachments.pick', 'repository.upload.pick'],
   list_reorder: ['session.pending.reorder', 'todos.reorder'],

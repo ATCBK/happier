@@ -1,7 +1,7 @@
 /** A tab carried over its own pane leaves its placement unchanged. */
 export const PANE_DROP_UNCHANGED_CODES: ReadonlySet<string> = new Set([
     'already_here', 'workspace_tab_already_here',
-    'workspace_tab_cannot_split_own_pane', 'canvas_tab_cannot_split_own_pane',
+    'workspace_tab_cannot_split_own_pane',
 ]);
 
 /** The carried widget is over its own place. */

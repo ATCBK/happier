@@ -44,11 +44,11 @@ describe('declared entity drag/drop contributions', () => {
     for (const declaration of [{ ...source, id: 'Invalid' }, { ...source, referenceSchema: { $ref: 'https://example.com/schema' } }, { ...source, callback: 'foreign' }]) {
       expect(PluginContributesV2Schema.safeParse({ dragSources: [declaration] }).success).toBe(false);
     }
-    for (const declaration of [{ ...target, acceptedKinds: ['plugin:invalid/issue'] }, { ...target, acceptedKinds: ['plugin'] }, { ...target, actions: [{ kind: 'host', actionId: 'session.handoff.commit' }] }, { ...target, actions: [{ kind: 'host', actionId: 'session.canvas.tabs.unknown' }] }]) {
+    for (const declaration of [{ ...target, acceptedKinds: ['plugin:invalid/issue'] }, { ...target, acceptedKinds: ['plugin'] }, { ...target, actions: [{ kind: 'host', actionId: 'session.handoff.commit' }] }, { ...target, actions: [{ kind: 'host', actionId: 'workspace.tabs.unknown' }] }]) {
       expect(PluginContributesV2Schema.safeParse({ dropTargets: [declaration] }).success).toBe(false);
     }
     expect(PluginContributesV2Schema.safeParse({ dropTargets: [{ ...target,
-      actions: [{ kind: 'host', actionId: 'session.canvas.tabs.open' }],
+      actions: [{ kind: 'host', actionId: 'workspace.tabs.open' }],
     }] }).success).toBe(true);
   });
 

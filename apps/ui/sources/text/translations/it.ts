@@ -9268,11 +9268,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     failedToRenameSession: "Impossibile rinominare la sessione",
     failedToMarkSessionRead: "Impossibile segnare la sessione come letta",
     failedToMarkSessionUnread: "Impossibile segnare la sessione come non letta",
-    sessionRenamed: "Sessione rinominata con successo",
-
-	    openInSplitRight: "Apri in riquadro a destra",
-	    openInSplitDown: "Apri in riquadro in basso",
-	    revealInCurrentSplit: "Mostra nel riquadro corrente",},
+    sessionRenamed: "Sessione rinominata con successo",},
 
   components: {
     emptyMainScreen: {

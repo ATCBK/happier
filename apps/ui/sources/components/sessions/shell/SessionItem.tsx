@@ -80,14 +80,12 @@ import { resolveSessionRowInteractionPolicy } from './row/resolveSessionRowInter
 import { SESSION_LIST_SHEET_INSET_PX } from './sessionListStyles';
 import { resolveSessionItemTagCollections } from './sessionTagUtils';
 import { planSessionTagDisplay } from './sessionTagPlacement';
-import { useSessionSplitCanvasRowActionsForScope } from '@/components/sessions/canvas/useSessionSplitCanvasRowActions';
 import { EntityDragGrip } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
 import { GlassSurface, useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurface';
 import { useGlassMaterialColorResolver } from '@/components/ui/glass/useGlassSurfaceColor';
 import { useSessionListOrganizeMode } from './organize/SessionListOrganizeMode';
 import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
-import { resolveSessionSplitCanvasScope } from '@/sync/domains/session/sessionSplitCanvasScope';
 import type { SessionListRowViewModel } from './sessionListRowViewModels';
 import type { SessionListGuardState } from '@/sync/domains/session/listing/sessionListRenderable';
 import { GuardCountdown } from '@/components/machines/guard/GuardCountdown';
@@ -110,11 +108,6 @@ import { useOptionalSessionListSelectionRow } from './selection/SessionListSelec
 import { resolveSessionListSelectionPointerAction } from './selection/sessionListSelectionPointer';
 import { useSessionRowActionMenu } from './row/actionMenu/useSessionRowActionMenu';
 import { formatSessionAttentionReminderDateTime } from './row/actionMenu/sessionAttentionReminderAction';
-import {
-    SESSION_ROW_ACTION_OPEN_SPLIT_DOWN_ID,
-    SESSION_ROW_ACTION_OPEN_SPLIT_RIGHT_ID,
-    SESSION_ROW_ACTION_REVEAL_IN_CURRENT_SPLIT_ID,
-} from './row/actionMenu/sessionRowActionMenuTypes';
 import {
     buildSessionDebugInformation,
     isSessionDebugInformationEnabled,
@@ -805,15 +798,6 @@ const SessionItemContent = React.memo(
             sessionId: resolvedSession.id,
             serverId: serverId ?? null,
         }));
-        const splitCanvasScope = React.useMemo(() => {
-            return resolveSessionSplitCanvasScope(resolveWorkspaceTargetForSession(sessionId), {
-                routeServerId: serverId ?? null,
-            });
-        }, [serverId, sessionId]);
-        const splitCanvasRowActions = useSessionSplitCanvasRowActionsForScope({
-            sessionId: resolvedSession.id,
-            scope: splitCanvasScope,
-        });
         const swipeableRef = React.useRef<Swipeable | null>(null);
         const contextMenuAnchorRef = React.useRef<View>(null);
         // The row's picture: an accepted Pin to rail travels from here (lab `b-rail` signature move).
@@ -995,30 +979,6 @@ const SessionItemContent = React.memo(
             if (e && typeof e.preventDefault === 'function') e.preventDefault();
         }, []);
 
-        const splitCanvasMenuItems = React.useMemo((): DropdownMenuItem[] => {
-            if (splitCanvasRowActions.mode === 'open') {
-                return [
-                    {
-                        id: SESSION_ROW_ACTION_OPEN_SPLIT_RIGHT_ID,
-                        title: t('sessionInfo.openInSplitRight'),
-                        icon: <Icon name="arrow-right" size={16} color={rowActionIconColor} />,
-                    },
-                    {
-                        id: SESSION_ROW_ACTION_OPEN_SPLIT_DOWN_ID,
-                        title: t('sessionInfo.openInSplitDown'),
-                        icon: <Icon name="arrow-down" size={16} color={rowActionIconColor} />,
-                    },
-                ];
-            }
-            if (splitCanvasRowActions.mode === 'reveal') {
-                return [{
-                    id: SESSION_ROW_ACTION_REVEAL_IN_CURRENT_SPLIT_ID,
-                    title: t('sessionInfo.revealInCurrentSplit'),
-                    icon: <Icon name="crosshair" size={16} color={rowActionIconColor} />,
-                }];
-            }
-            return [];
-        }, [rowActionIconColor, splitCanvasRowActions.mode]);
         const copyDebugMenuItems = React.useMemo((): DropdownMenuItem[] => {
             if (!devModeEnabled) return [];
             return [createCopySessionDebugInformationMenuItem({ iconColor: rowActionIconColor })];
@@ -1110,25 +1070,10 @@ const SessionItemContent = React.memo(
             }];
         }, [dragEnabled, organize.active, organize.available, rowActionIconColor]);
         const leadingMenuItems = React.useMemo(
-            () => [...workspaceOpen.items, ...draftMenuItems, ...copyDebugMenuItems, ...forkMenuItems, ...splitCanvasMenuItems, ...organizeMenuItems],
-            [copyDebugMenuItems, draftMenuItems, forkMenuItems, organizeMenuItems, splitCanvasMenuItems, workspaceOpen.items],
+            () => [...workspaceOpen.items, ...draftMenuItems, ...copyDebugMenuItems, ...forkMenuItems, ...organizeMenuItems],
+            [copyDebugMenuItems, draftMenuItems, forkMenuItems, organizeMenuItems, workspaceOpen.items],
         );
 
-        const handleSelectSplitCanvasMenuItem = React.useCallback((itemId: string): boolean => {
-            switch (itemId) {
-                case SESSION_ROW_ACTION_OPEN_SPLIT_RIGHT_ID:
-                    splitCanvasRowActions.openInSplitRight();
-                    return true;
-                case SESSION_ROW_ACTION_OPEN_SPLIT_DOWN_ID:
-                    splitCanvasRowActions.openInSplitDown();
-                    return true;
-                case SESSION_ROW_ACTION_REVEAL_IN_CURRENT_SPLIT_ID:
-                    splitCanvasRowActions.revealInSplit();
-                    return true;
-                default:
-                    return false;
-            }
-        }, [splitCanvasRowActions]);
         const handleSelectLeadingMenuItem = React.useCallback(async (itemId: string): Promise<boolean> => {
             if (workspaceOpen.select(itemId)) return true;
             if (itemId === SESSION_ROW_ORGANIZE_LIST_MENU_ITEM_ID) {
@@ -1150,8 +1095,8 @@ const SessionItemContent = React.memo(
                 openForkFlow();
                 return true;
             }
-            return handleSelectSplitCanvasMenuItem(itemId);
-        }, [confirmDeleteDraft, copyFeedback, handleSelectSplitCanvasMenuItem, openForkFlow, organize, resolvedSession.id, resolveSessionDebugInformation, workspaceOpen]);
+            return false;
+        }, [confirmDeleteDraft, copyFeedback, openForkFlow, organize, resolvedSession.id, resolveSessionDebugInformation, workspaceOpen]);
 
         const handleEnterSelectionMode = React.useCallback(() => {
             if (!resolvedSelectionKey) return;

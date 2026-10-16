@@ -19,7 +19,6 @@ export { SessionOrganizationMoveInputSchema, SessionOrganizationMoveOutputSchema
   type SessionOrganizationMoveInput, type SessionOrganizationMoveOutput, type SessionOrganizationPinSetInput } from './sessionOrganizationMoveAction.js';
 export { UiFindInputSchema } from './findActionSpecs.js';
 export { WORKSPACE_ACTION_IDS, WORKSPACE_ACTION_INPUT_SCHEMAS, WORKSPACE_ACTION_OUTPUT_SCHEMAS, isWorkspaceActionId, type WorkspaceActionId, type WorkspaceTabsListOutput, type WorkspaceClosedTabsListOutput } from './workspaceActionFamily.js';
-export { SESSION_CANVAS_ACTION_IDS, SESSION_CANVAS_ACTION_INPUT_SCHEMAS, SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS, isSessionCanvasActionId, type SessionCanvasActionId, type SessionCanvasActionOutcome } from './sessionCanvasActionFamily.js';
 export * from './scopeActionFamily.js';
 export * from './diagnosticsActionFamily.js';
 export * from './specs/homeHub.js';

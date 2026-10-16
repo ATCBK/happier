@@ -8699,11 +8699,7 @@ const zhHansValues = {
     failedToRenameSession: "重命名会话失败",
     failedToMarkSessionRead: "将会话标为已读失败",
     failedToMarkSessionUnread: "将会话标为未读失败",
-    sessionRenamed: "会话重命名成功",
-
-	    openInSplitRight: "在右侧分栏中打开",
-	    openInSplitDown: "在下方分栏中打开",
-	    revealInCurrentSplit: "在当前分栏中显示",},
+    sessionRenamed: "会话重命名成功",},
 
   components: {
     emptyMainScreen: {

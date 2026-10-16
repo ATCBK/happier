@@ -10816,10 +10816,6 @@ const enSessionInfo = {
   failedToMarkSessionRead: 'Failed to mark session as read',
   failedToMarkSessionUnread: 'Failed to mark session as unread',
   sessionRenamed: 'Session renamed successfully',
-
-  openInSplitRight: 'Open in split right',
-  openInSplitDown: 'Open in split down',
-  revealInCurrentSplit: 'Reveal in current split',
 };
 
 const enWorkspacePresentation = {

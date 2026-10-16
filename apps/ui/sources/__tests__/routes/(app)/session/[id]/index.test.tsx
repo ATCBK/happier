@@ -234,7 +234,7 @@ describe('session route index', () => {
         expect(screen.findAllByType('SessionView')).toHaveLength(1);
         const [hydratedSessionId, hydrateTag] = hydrateSessionForRouteSpy.mock.calls.at(-1) ?? [];
         expect(hydratedSessionId).toBe('session-1');
-        expect(String(hydrateTag)).toBe('SessionCanvasLeaf.ensureSessionVisible');
+        expect(String(hydrateTag)).toBe('SessionRoute.ensureSessionVisible gen=1');
     });
 
     it('shows a loading spinner while hydration is pending and the session is not cached', async () => {
@@ -341,7 +341,7 @@ describe('session route index', () => {
 
         expect(hydrateSessionForRouteSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
         const latestTag = hydrateSessionForRouteSpy.mock.calls.at(-1)?.[1] ?? '';
-        expect(String(latestTag)).toBe('SessionCanvasLeaf.ensureSessionVisible');
+        expect(String(latestTag)).toBe('SessionRoute.ensureSessionVisible gen=2');
     });
 
     it('renders the session cockpit shell on phone when cockpit mode is enabled by default', async () => {
