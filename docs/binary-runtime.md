@@ -140,6 +140,16 @@ after repair; successful installation alone never grants permission or input.
 `daemon/computer/driver/nativeTransport.ts` launches that installed absolute executable
 directly in embedded MCP mode; no system Node, package manager or second launcher is involved.
 X11 display/authentication/session variables are forwarded only on Linux, not macOS.
+On Linux, run the daemon in the intended X11 desktop session, with its `DISPLAY`
+and any required `XAUTHORITY` already set. A headless host needs an explicitly
+started X11 desktop, such as an operator-owned Xvfb fixture; installing the driver
+does not create one. The daemon captures its default display when constructing
+the Computer routes, so exporting `DISPLAY` in a later CLI does not update an
+already-running daemon. The operator must reload that daemon with the intended
+desktop environment. Callers that supply `computer.targets.list.displayId` can
+inspect that exact X11 display without changing the default; the selected target
+retains the same explicit display identity. Happier does not select an unrelated
+display merely because its socket exists.
 The same driver validates window/primary-desktop PNG dimensions and retained capture
 geometry. Its viewer process cannot evict the model process's one-shot action binding.
 Unknown input completion quarantines the source without replay. Explicit target
