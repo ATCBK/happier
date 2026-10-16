@@ -15,6 +15,7 @@ import type { ActionExecutorDeps, ActionExecutorContext, ActionExecuteResult, Pl
 import { isRuntimeActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { isAgentStartActionV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { AGENT_START_REFUSAL_CODES_V1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
+import { readRetainedReviewFindings } from '@/agent/reviews/normalize/readRetainedReviewFindings';
 
 import type { SimulatorPreviewRoutes } from '@/daemon/devices/simulator/previewRoutes.types';
 import type { BrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
@@ -310,10 +311,12 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
     if (!run || !runState) return null;
     const hasLatestToolResult = Object.prototype.hasOwnProperty.call(runState, 'latestToolResult');
     const structuredMeta = includeStructured ? params.manager.getStructuredMeta(runId) : null;
+    const reviewFindings = includeStructured ? readRetainedReviewFindings(runState) : null;
     return {
       run,
       ...(hasLatestToolResult ? { latestToolResult: params.manager.getLatestToolResult(runId) } : {}),
       ...(structuredMeta !== null ? { structuredMeta } : {}),
+      ...(reviewFindings !== null ? { reviewFindings } : {}),
     };
   }
 

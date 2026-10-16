@@ -186,7 +186,7 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
       reviewNarration: { reviewFindings: [{ ...finding, runRef: { ...finding.runRef, runId: 'other-run' } }] } } });
     expect(await rpc.executionRunGet!(sessionId, { runId: 'run-1', includeStructured: true })).not.toHaveProperty('reviewFindings');
   });
-  it('prepares a findings-first detached review with walkthrough output using its repository capture', async () => {
+  it('delivers attached Review JSON guidance and prepares a findings-first detached review using the same runtime fixture', async () => {
     const runtime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: directory, controller: pluginReloadController,
       runtimeOptions: { pluginIds: ['happier.scm.backend.git'] } });
     try {
@@ -196,7 +196,9 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
       writeFileSync(join(directory, 'code.ts'), 'export const enabled = false;\n');
       execFileSync('git', ['-C', directory, 'add', 'code.ts']);
       execFileSync('git', ['-C', directory, 'commit', '-m', 'fixture'], { stdio: 'ignore' });
-      writeFileSync(join(directory, 'code.ts'), 'export const enabled = true;\n');
+      // An added line has an unambiguous after-side location. A replacement
+      // at line one would correctly remain unmapped without a side anchor.
+      writeFileSync(join(directory, 'code.ts'), 'export const enabled = false;\nexport const additional = true;\n');
       const captured = await captureScmComparison({ cwd: directory, source: { kind: 'workingTree' } });
       const prepared = await ReviewProfile.prepareStartParams!({ cwd: directory, sessionId: null, request: {
         intent: 'review', instructions: 'Review.', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only',
@@ -227,7 +229,7 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
         emit!({ kind: 'turn-complete', sessionId: 'session-parent', sequence: ++sequence, emittedAtMs: sequence, turnId });
       };
       finishTurn(sent.mock.calls[0]![0], JSON.stringify({ summary: 'A changed condition', findings: [
-        { id: 'f1', title: 'Changed condition', category: 'correctness', severity: 'high', summary: 'Check the changed condition', filePath: 'code.ts', startLine: 1 },
+        { id: 'f1', title: 'Changed condition', category: 'correctness', severity: 'high', summary: 'Check the changed condition', filePath: 'code.ts', startLine: 2 },
       ] }));
       await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(2));
       finishTurn(sent.mock.calls[1]![0], JSON.stringify({ walkthrough: { title: 'Condition update', intro: 'One changed condition',
@@ -243,13 +245,33 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
       const observed = ExecutionRunGetResponseSchema.parse(await rpc.executionRunGet!(null, { runId: started.runId, includeStructured: true }));
       expect(observed).toMatchObject({ structuredMeta: { kind: 'scm_diff_summary.v1' },
         reviewFindings: { runRef: { runId: started.runId }, findings: [{ id: 'f1' }] } });
-      expect(await harness.manager.applyAction(started.runId, { actionId: 'review.explain_findings', input: {
+      const explanation = await harness.manager.applyAction(started.runId, { actionId: 'review.explain_findings', input: {
         reviewRunIds: [started.runId], cwd: directory, resultId: input.resultId, expectedRevision: saved.result.revision,
         findingIds: [{ runId: started.runId, findingId: 'f1' }],
-      } })).toMatchObject({ ok: true, result: { refinement: { input: { stopIds: ['condition'] } } } });
+      } });
+      expect(explanation, JSON.stringify(explanation)).toMatchObject({ ok: true, result: { refinement: { input: { stopIds: ['condition'] } } } });
       expect(harness.runs.size).toBe(1);
       expect(harness.runs.get(started.runId)?.sessionId).toBeNull();
       expect(harness.enqueueSessionUserMessageWithDisposition).not.toHaveBeenCalled();
+      // Exercise attached Pending after the exact repository comparison has
+      // published, so the attached Run's activity files cannot enter that diff.
+      const attachedSent = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' as const }));
+      nativeOpen.mockImplementation(async () => ({ watch() { return { dispose() {} }; }, send: attachedSent, async dispose() {} }));
+      const attached = createHarness();
+      await attached.manager.start({ sessionId: 'session-1', cwd: directory, intent: 'review',
+        resolvedRole: resolveExecutionRunRoleV1({ roleId: 'reviewer', accountRoleOverrides: { status: 'ready', overrides: {} } }),
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+        instructions: 'Inspect the changed condition.' });
+      await attached.firstEnqueuedInput;
+      const pending = attached.enqueueSessionUserMessageWithDisposition.mock.calls[0]![0];
+      await vi.waitFor(() => expect(attached.consume({ role: 'user', content: { type: 'text', text: pending.text },
+        localId: pending.localId, authorAccountId: 'account-1', inputAdmissionReceipt: null, pendingProviderAction: 'send' })).toBe(true));
+      await vi.waitFor(() => expect(attachedSent).toHaveBeenCalledOnce());
+      const text = attachedSent.mock.calls[0]![0].input.text;
+      expect(text).toContain('Inspect the changed condition.');
+      expect(text).toContain('"findings": Array<');
+      expect(text).toContain('"overviewMarkdown": string');
     } finally { await runtime.dispose(); }
   });
   it.each(['continued_review', 'seeded_narrator'] as const)('admits a detached %s walkthrough from exact captured evidence through native Run input custody', async mode => {
@@ -316,6 +338,9 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
     } })).toMatchObject({ ok: false, errorCode: 'review_context_unavailable' });
     const privateResult = await scmDiffSummaryResultStore.create({ cwd: directory, sessionId: 'private-session', output: {
       success: true, sourceKey: captured.comparison.id, comparison: captured.comparison, metadata: captured.metadata,
+      requestedOutputs: ['walkthrough'], outputs: { walkthrough: { state: 'pending' } },
+      analysis: { suppliedChangeRefs: captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.id)),
+        analysedChangeRefs: [], remainingChangeRefs: captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.id)) },
     } });
     expect(await harness.manager.applyAction('run-1', { actionId: 'review.explain_findings', input: {
       reviewRunIds: ['run-1'], cwd: directory, resultId: privateResult.resultId, expectedRevision: privateResult.revision,
@@ -352,6 +377,7 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
     const input = { reviewRunIds: ['run-1'], cwd: directory, resultId: saved.resultId, expectedRevision: saved.revision,
       findingIds: [{ runId: 'run-1', findingId: 'f1' }], instructions: 'Keep this human request unchanged.' };
     const privateSource = await scmDiffSummaryResultStore.create({ cwd: directory, ...sessionScope, output: {
+      ...saved.output,
       success: true, sourceKey: comparison.id, comparison: { ...comparison, source: { kind: 'session', sessionId: 'private-session' } },
       metadata: { source: { kind: 'session', sessionId: 'private-session' }, sourceKey: comparison.id },
     } });

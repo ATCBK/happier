@@ -66,10 +66,12 @@ describe('structured analysis Run admission', () => {
     } finally { await voiceAgentManager.dispose(); }
   });
   it.each([
-    ['scm_diff_summary', 'freeform-not-in-native-catalog', false],
-    ['scm_diff_summary', 'offered-native-model', true],
-    ['review', 'freeform-not-in-native-catalog', false],
-  ] as const)('admits %s model %s only when the native catalog establishes JSON support (%s)', async (intent, modelId, allowed) => {
+    ['scm_diff_summary', 'freeform-not-in-native-catalog', false, false],
+    ['scm_diff_summary', 'offered-native-model', true, false],
+    ['review', 'freeform-not-in-native-catalog', false, true],
+    ['review', 'freeform-not-in-native-catalog', false, false],
+    ['review', 'offered-native-model', true, false],
+  ] as const)('admits %s model %s only when the native catalog establishes JSON support (%s; walkthrough: %s)', async (intent, modelId, allowed, walkthrough) => {
     const selectedModelId = allowed ? getAgentStaticModels('claude', { catalogOnly: true })[0]?.id : modelId;
     if (allowed && !selectedModelId) throw new Error('The native Claude offered-model catalog is unavailable');
     const runs = new Map<string, ExecutionRunState>();
@@ -81,7 +83,7 @@ describe('structured analysis Run admission', () => {
       const result = startExecutionRun({
         params: {
           sessionId: 'parent-session', intent,
-          ...(intent === 'review' ? { intentInput: { outputs: ['walkthrough'] } } : {}),
+          ...(walkthrough ? { intentInput: { outputs: ['walkthrough'] } } : {}),
           ...(reviewer?.ok ? { resolvedRole: reviewer.selection } : {}),
           backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
           modelId: selectedModelId,

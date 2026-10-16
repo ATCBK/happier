@@ -40,6 +40,7 @@ import { OperationUpdateRequiredV1Schema } from '../../compat/operationUpdateReq
 import { ExecutionRunOutputObservationSchema } from '../../reviews/reviewNarration.js';
 import { ProviderAgentTargetKeySchema } from '../../providers/ids.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
+import { ReviewFindingsV2Schema } from '../../messages/structured/reviewFindingsV2.js';
 
 /** A refusal offers choices, never credential material or permission to use a route. */
 export const ExecutionRunChildChoiceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -246,6 +247,7 @@ export const ExecutionRunGetResponseSchema = lazyZodSchema(() => z.looseObject({
   run: ExecutionRunPublicStateSchema,
   latestToolResult: z.optional(z.unknown()),
   structuredMeta: z.optional(z.looseObject({ kind: z.string(), payload: z.unknown() })),
+  reviewFindings: z.optional(ReviewFindingsV2Schema),
 }));
 export type ExecutionRunGetResponse = z.infer<typeof ExecutionRunGetResponseSchema>;
 

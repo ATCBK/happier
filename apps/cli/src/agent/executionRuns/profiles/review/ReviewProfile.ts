@@ -77,7 +77,7 @@ export const ReviewProfile: ExecutionRunIntentProfile = {
     ? ScmDiffSummaryProfile.onRetainedInputAdmitted!(params) : Promise.resolve(null),
   buildInitialInputContext: (params) => {
     const narration = readReviewNarration(params.start.intentInput);
-    if (!narration) return '';
+    if (!narration) return ReviewProfile.buildPrompt({ ...params.start, instructions: '' });
     return ScmDiffSummaryProfile.buildInitialInputContext!(params);
   },
   onTurnComplete: async (params) => {

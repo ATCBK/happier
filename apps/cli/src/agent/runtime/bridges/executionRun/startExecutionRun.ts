@@ -190,9 +190,7 @@ function assertPreparedReviewRunStartAllowed(params: ExecutionRunManagerStartPar
 }
 
 async function assertStructuredAnalysisModelAllowed(params: ExecutionRunManagerStartParams): Promise<void> {
-  const outputs = readRecord(params.intentInput)?.outputs;
-  if (params.intent !== 'scm_diff_summary'
-    && !(params.intent === 'review' && Array.isArray(outputs) && outputs.includes('walkthrough'))) return;
+  if (params.intent !== 'scm_diff_summary' && params.intent !== 'review') return;
   try {
     await assertExecutionRunStructuredOutputModelAllowed(params);
   } catch (error) {

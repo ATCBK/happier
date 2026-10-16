@@ -40,13 +40,19 @@ describe('ReviewProfile', () => {
           after: { startLine: 1, lineCount: 1 }, position: 0,
         }],
       }] } });
-    const prompt = ReviewProfile.buildPrompt({ sessionId: 'session', runId: 'run', callId: 'call', sidechainId: 'call',
+    const start: ExecutionRunProfileStartParams = { sessionId: 'session', runId: 'run', callId: 'call', sidechainId: 'call',
       intent: 'review', backendId: 'claude', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', startedAtMs: 1,
-      instructions: 'Review the captured changes.', intentInput: { comparison, outputs: ['walkthrough'] } });
+      instructions: 'Review the captured changes.', intentInput: { comparison, outputs: ['walkthrough'] } };
+    const prompt = ReviewProfile.buildPrompt(start);
     expect(prompt).toContain('"alias":"c1"');
     expect(prompt).toContain('+new');
     expect(prompt).not.toContain('HOST-REVIEW-OCCURRENCE');
+    // Attached Runs deliver the admitted input through Pending rather than buildPrompt.
+    // Their host context must carry the same output contract and captured evidence.
+    const retainedContext = ReviewProfile.buildInitialInputContext?.({ start });
+    expect(retainedContext).toBe(ReviewProfile.buildPrompt({ ...start, instructions: '' }));
+    expect(retainedContext).toContain('"findings"');
   });
   it.each(['', 'Findings are published.\n'])('does not stream unfinished walkthrough JSON after %j', (prefix) => {
     expect(ReviewProfile.computeSidechainStreamText?.({ fullText: `${prefix}{"walkthrough":{"title":"Reading` })).toBe(prefix.trimEnd());
