@@ -1058,7 +1058,11 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         profileStore: {
           read: async (profileId, signal) => {
             accountContext.assertCurrent();
-            const { catalog } = await readProfileCatalogProjectionInContext(accountContext, signal);
+            // Publication keeps private runtime attachments intact. Their migration
+            // and historical maintenance belong to the scoped catalog loader.
+            const { catalog } = await readProfileCatalogProjectionInContext(accountContext, signal, {
+              migrateSkills: false, deferCleanup: true,
+            });
             accountContext.assertCurrent();
             if (catalog.status !== 'ready' || catalog.source !== 'destination') {
               throw Object.assign(new Error('profile_catalog_unavailable'), { code: 'profile_catalog_unavailable' });
