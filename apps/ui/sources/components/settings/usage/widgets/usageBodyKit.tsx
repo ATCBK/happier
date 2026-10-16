@@ -36,6 +36,7 @@ import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountR
 import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
+import { useUsageDisclosureCommand } from './usageMountedControls';
 
 /** What every Usage body receives from the one dispatcher: admitted facts, never a fetch handle. */
 export type UsageBodyProps = Readonly<{
@@ -630,7 +631,8 @@ export function useSettledBodyHeightFloor(settled: boolean, shapeKey: string): R
 }
 
 /** The one Show all · N / Show less control under a led list (Breakdowns, Session value). */
-export function UsageShowAllRows(props: Readonly<{ total: number; complete?: boolean; expanded: boolean; onToggle: () => void; testID: string }>) {
+export function UsageShowAllRows(props: Readonly<{ label: string; total: number; complete?: boolean; expanded: boolean; onToggle: () => void; testID: string }>) {
+  useUsageDisclosureCommand(props.label, props.expanded, props.onToggle);
   return (
     <View style={showAllStyles.action}>
       <RoundButton size="small" display="inverted" testID={props.testID}

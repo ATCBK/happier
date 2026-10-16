@@ -213,7 +213,8 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
                 }
               : {})}
           />
-          {long ? <UsageShowAllRows total={block.rows.length} complete={block.truncated === 0} expanded={lead.hidden === 0}
+          {long ? <UsageShowAllRows label={`${t(`usage.widgets.${props.id}`)}: ${t(DIMENSION_TITLE[block.dimension])}`}
+            total={block.rows.length} complete={block.truncated === 0} expanded={lead.hidden === 0}
             testID={`${props.testID}.${block.dimension}.more`}
             onToggle={() => setExpanded(current => current.includes(block.dimension)
               ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} /> : null}

@@ -23,6 +23,8 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { useCurrentUiContextLocalCommands } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
+import { useUsageChartDetails } from './usageMountedControls';
 import { usageSignatureAccent } from '../usageAccent';
 import {
   leadingUsageRows,
@@ -206,6 +208,17 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
       })),
     [paced, nameOf, nowMs],
   );
+  const selectWindow = React.useCallback((key: string): boolean => {
+    if (!paced.some(entry => entry.window.key === key)) return false;
+    setPickerOpen(false);
+    setPickedKey(key);
+    return true;
+  }, [paced]);
+  useCurrentUiContextLocalCommands(!list && paced.length > 1 ? pickerItems.map(item => ({
+    key: item.id, title: `${t(`usage.widgets.${props.id}`)}: ${t('usage.board.plans.windowPicker')}: ${item.title}`,
+    invoke: () => selectWindow(item.id),
+  })) : []);
+  const details = useUsageChartDetails(t(`usage.widgets.${props.id}`), !list && Boolean(focus?.window.pace));
   // Beside other widgets the body is a list of meters. Until every account has answered once it holds the
   // list's room (the rows its accounts are expected to report, the pace alert and the notes under them), so
   // reads fill the room instead of growing the page under the reader; a re-read after that never reserves.
@@ -311,7 +324,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
           </Text>
         ) : null}
         {lead.rows.length < rows.length || expanded ? (
-          <UsageShowAllRows testID={`${props.testID}.showAll`} total={rows.length} expanded={expanded}
+          <UsageShowAllRows label={t(`usage.widgets.${props.id}`)} testID={`${props.testID}.showAll`} total={rows.length} expanded={expanded}
             onToggle={() => setExpanded((value) => !value)} />
         ) : null}
         {unreported.length ? (
@@ -344,10 +357,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
               selectedId={focus.window.key}
               matchTriggerWidth={false}
               items={pickerItems}
-              onSelect={(id) => {
-                setPickerOpen(false);
-                setPickedKey(id);
-              }}
+              onSelect={selectWindow}
               trigger={({ toggle, open }) => (
                 <HappierPressable
                   testID={`${props.testID}.windowPicker.trigger`}
@@ -380,6 +390,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
             testID={`${props.testID}.headline`}
           />
           <BurnUpChart
+            {...details}
             testID={`${props.testID}.burnUp`}
             theme={chartTheme}
             size={tile ? 'tile' : 'full'}
@@ -436,7 +447,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
               nowMs={nowMs}
               color={accent}
               basis={stacked ? '47%' : '31%'}
-              onPick={setPickedKey}
+              onPick={selectWindow}
               testID={`${props.testID}.multiple.${entry.account.accountId}.${entry.window.meterId}`}
             />
           ))}

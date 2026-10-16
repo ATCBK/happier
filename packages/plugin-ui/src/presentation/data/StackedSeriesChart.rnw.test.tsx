@@ -27,6 +27,30 @@ function animates(element: Element): boolean {
 }
 
 describe('neutral series dataset', () => {
+  it.each(['web', 'android'] as const)('lets the caller control exact-value Details on %s without a competing disclosure state', async platform => {
+    const onValuesExpandedChange = vi.fn();
+    const render = (valuesExpanded: boolean) => <HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+      <StackedSeriesChart theme={theme} label="Sales" width={160} viewportHeight={36}
+        series={series} variant="bar" size="full" testID="controlled-details"
+        valuesExpanded={valuesExpanded} onValuesExpandedChange={onValuesExpandedChange} />
+    </HappierUiPlatformProvider>;
+    const mount = mountThroughReactNativeWeb(render(true));
+    try {
+      expect(find(mount.container, 'controlled-details-values')?.textContent).toContain('0.00004');
+      expect(find(mount.container, 'controlled-details-values-toggle').getAttribute('aria-expanded')).toBe('true');
+      act(() => find(mount.container, 'controlled-details-values-toggle').click());
+      expect(onValuesExpandedChange).toHaveBeenLastCalledWith(false);
+      expect(find(mount.container, 'controlled-details-values')).toBeTruthy();
+      await mount.render(render(false));
+      expect(find(mount.container, 'controlled-details-values')).toBeNull();
+      expect(find(mount.container, 'controlled-details-values-toggle').getAttribute('aria-expanded')).toBe('false');
+      act(() => find(mount.container, 'controlled-details-values-toggle').click());
+      expect(onValuesExpandedChange).toHaveBeenLastCalledWith(true);
+      expect(find(mount.container, 'controlled-details-values')).toBeNull();
+      await mount.render(render(true));
+      expect(find(mount.container, 'controlled-details-values')?.textContent).toContain('0.00004');
+    } finally { mount.unmount(); }
+  });
   it('draws an observed upper edge on the area scale without stacking it onto the mean or filling it', () => {
     const input = [
       { id: 'mean', label: 'Mean', fillOpacity: 0.2, points: [10, 10, null, 10, 10].map((y, x) => ({ id: String(x), x, y })) },

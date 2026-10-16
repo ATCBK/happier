@@ -278,6 +278,12 @@ geometry and formatting. `showAxis`, `showLegend`, `showGrid`, `showScaleValues`
 visible context. Provide localized `summary`, `unknownLabel`, `valuesLabel`
 and `valuesCollapseLabel` where needed; `testID` identifies the chart.
 
+Full charts offer a Details control for exact values. Pass `valuesExpanded`
+and `onValuesExpandedChange(expanded)` to control that disclosure from your
+own UI or agent command. A press requests the next value through the callback;
+the chart changes only when you supply the updated prop. Omit `valuesExpanded`
+to keep the chart's own initially collapsed disclosure state.
+
 `bands` uses `StackedSeriesBand` (`id`, `lowerSeriesId`, `upperSeriesId`, optional
 `color`/`opacity`) to shade caller-produced line bounds. `reference` is a
 labelled value; `threshold` adds a labelled warning/error level. `mirrored`

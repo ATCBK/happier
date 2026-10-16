@@ -14,6 +14,7 @@ import { usageOtherColor, usageSeriesColor } from '../usageAccent';
 import { formatUsageCalendarDate, resolveUsageShownCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
 import { usageCostKindPhrase, usagePageCostTrend } from '../usageCostPresentation';
 import { useUsageDrill } from '../usageDrill';
+import { useUsageChartDetails } from './usageMountedControls';
 import {
   usageMixSeries,
   usageVolumeSeries,
@@ -138,6 +139,8 @@ export function UsageFlowWidget(props: UsageBodyProps) {
     ...(drillable ? { choice } : {}),
     testID: `${props.testID}.lens`,
   });
+  const hasChart = series.length > 0 && (cost || sourceSeries.length > 0 || mix?.hasData === true);
+  const details = useUsageChartDetails(t(`usage.widgets.${props.id}`), hasChart);
   if ((series.length === 0 || (!cost && !sourceSeries.length && !mix?.hasData)) && isUsageReadOutstanding(props.slice, ['accounting']))
     return <UsageBodyReading testID={`${props.testID}.loading`} />;
   if (series.length === 0 || (!cost && !sourceSeries.length && !mix?.hasData))
@@ -155,6 +158,7 @@ export function UsageFlowWidget(props: UsageBodyProps) {
   return (
     <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.flow`}>
       <StackedSeriesChart
+        {...details}
         testID={`${props.testID}.chart`}
         theme={chartTheme}
         label={cost ? t('usage.cost') : t('usage.tokens')}

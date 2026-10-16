@@ -1230,6 +1230,12 @@ The development public `@happier-dev/plugin-ui/presentation` palette also expose
 
 In 0.3 development source, declarative charts declare `rows` and typed `x`, `series` (string) and `value` (number) fields over neutral long rows. `style: 'bar'` stacks bars, `'area'` stacks ribbons, and `'line'` draws independent lines. Each x/series pair is one observation; duplicate pairs are rejected, and an absent observation stays missing rather than becoming zero. The existing `style: 'bar' | 'line'` with `x`/`y` remains accepted as N=1. Both paths render through public `StackedSeriesChart`; `Chart`/`HappierDataChart` only adapt one series. Resource schemas must declare the displayed paths and types. Snapshots retain only those displayed x/series/value scalars (or legacy x/y), with no Resource reference, hidden output, expressions, scripts, remote URLs or arbitrary chart options. The labelled chart, bucket controls and exact-value table use the same values as native charts; full charts offer their table through the host-localized Details control unless the caller supplies its own wording. Existing occurrence, Resource, literal-content and audience admission still apply.
 
+Native callers can control the same exact-values disclosure with
+`valuesExpanded` and `onValuesExpandedChange(expanded)`. The shared chart emits
+the requested next state and renders the supplied value; without the prop it
+retains its own initially collapsed state. Host UI and mounted agent commands
+can therefore share one caller-owned disclosure without a second chart path.
+
 In development source, `StackedSeriesChart` line appearance and `BurnUpChart` can fill a band between two caller-supplied series on the same scale. Missing, non-finite or inverted bounds break the fill; an isolated point has no area. Bounds retain their exact values in the chart's accessible readout and table. The caller supplies any range meaning and sample-count disclosure; the renderer does not infer confidence or forecast facts.
 
 Bar charts also accept caller-selected `bucketShading` by semantic bucket id and labelled `barRanges` comparison outlines on the observed scale. Missing buckets and non-finite, inverted or out-of-scale bounds have no outline. An all-unknown bar slot has an explicit gap mark, while a known zero retains its original value; neither shading nor an outline adds an observation or changes the exact-value table. Reference levels and comparison bounds retain exact numbers in the accessible chart label.

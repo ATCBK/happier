@@ -159,6 +159,7 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
             />
             {tools.length > toolLead.rows.length || toolsExpanded ? (
               <UsageShowAllRows
+                label={`${t(`usage.widgets.${props.id}`)}: ${t('usage.board.howYouWork.waitedFor')}`}
                 testID={`${props.testID}.tools.more`}
                 total={tools.length}
                 expanded={toolsExpanded}

@@ -16,6 +16,7 @@ import { usageOtherColor, usageSignatureAccent } from '../usageAccent';
 import { formatUsageCalendarDate, resolveUsageShownCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
 import { usageCostKindPhrase, usagePageCostTrend } from '../usageCostPresentation';
 import { useUsageDrill } from '../usageDrill';
+import { useUsageChartDetails } from './usageMountedControls';
 import {
   fillUsageMixCalendar,
   fillUsageTrendCalendar,
@@ -213,6 +214,7 @@ export function UsageDailyWidget(props: UsageBodyProps) {
   // read answers, and the legend says it then. The chart's own label (for assistive technology) names the split.
   useWidgetFrameBodyCaption(measure);
   const caption = byAgent ? `${metric === 'cost' ? t('usage.cost') : t('usage.tokens')} ${t('usage.board.page.byAgent')} · ${usagePeriodPhrase(props.query)}` : measure;
+  const details = useUsageChartDetails(t(`usage.widgets.${props.id}`), Boolean(view && count > 0));
   if (!view || count === 0) {
     const noUsage = <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
     const narrow = presentation?.size !== 'small' && presentation?.size !== 'wide'
@@ -230,6 +232,7 @@ export function UsageDailyWidget(props: UsageBodyProps) {
   return (
     <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.daily`}>
       <StackedSeriesChart
+        {...details}
         testID={`${props.testID}.chart`}
         theme={chartTheme}
         label={caption}

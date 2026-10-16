@@ -54,6 +54,10 @@ export type StackedSeriesChartProps = Readonly<{
   summary?: string;
   valuesLabel?: string;
   valuesCollapseLabel?: string;
+  /** Controlled exact-values disclosure; omit to retain the chart's initially collapsed state. */
+  valuesExpanded?: boolean;
+  /** Requests the next disclosure state; controlled callers supply the updated valuesExpanded prop. */
+  onValuesExpandedChange?: (expanded: boolean) => void;
   reducedMotion?: boolean;
   /** One linear step on a received sample; the host supplies cadence and visibility, never a chart timer. */
   liveMotion?: Readonly<{ sampleKey: string | number; stepPx: number; durationMs: number; active?: boolean }>;
@@ -232,7 +236,8 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
   const text = useHappierDataTextStyles(props.theme);
   const [measuredWidth, setWidth] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [valuesExpanded, setValuesExpanded] = useState(false);
+  const [uncontrolledValuesExpanded, setUncontrolledValuesExpanded] = useState(false);
+  const valuesExpanded = props.valuesExpanded ?? uncontrolledValuesExpanded;
   const accessibility = useOptionalHappierUiAccessibility();
   const localization = useOptionalHappierUiLocalization();
   const nativeTarget = useHappierNativeMinimumInteractiveTargetSize();
@@ -270,7 +275,11 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
   const toggleInLegend = showLegend && !props.summary;
   const valuesToggle = valuesLabel ? <HappierPressable testID={props.testID ? `${props.testID}-values-toggle` : undefined}
     accessibilityLabel={valuesExpanded ? props.valuesCollapseLabel ?? valuesLabel : valuesLabel}
-    expanded={valuesExpanded} onPress={() => setValuesExpanded((value) => !value)}
+    expanded={valuesExpanded} onPress={() => {
+      const expanded = !valuesExpanded;
+      if (props.valuesExpanded === undefined) setUncontrolledValuesExpanded(expanded);
+      props.onValuesExpandedChange?.(expanded);
+    }}
     style={toggleInLegend ? { marginLeft: 'auto' } : { alignSelf: 'flex-end', marginTop: HAPPIER_DATA_METRICS.blockGapPx }}>
     <HappierText style={text.captionStrong}>{valuesExpanded ? props.valuesCollapseLabel ?? valuesLabel : valuesLabel}</HappierText>
   </HappierPressable> : null;

@@ -33,6 +33,7 @@ import {
   UsageBodyReading,
 } from '../usageBodyKit';
 import { useUsageWidgetPageHasCoverageDetail } from '../usageWidgetBatch';
+import { useUsageDisclosureCommand } from '../usageMountedControls';
 import type { UsagePlanAccount, UsagePlanWindow } from './usagePlansModel';
 import type { UsagePlanAccountName } from './useUsagePlans';
 
@@ -500,6 +501,8 @@ export function UsagePlanDisclosure(
   const text = usePlanText();
   const reducedMotion = useReducedMotionPreference();
   const [expanded, setExpanded] = React.useState(false);
+  const toggle = () => setExpanded(value => !value);
+  useUsageDisclosureCommand(props.title, expanded, toggle);
   return (
     <ExpandableItem
       testID={props.testID}

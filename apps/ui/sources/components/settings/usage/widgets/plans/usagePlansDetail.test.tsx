@@ -826,6 +826,7 @@ it('charts the picked window in the same chart, labels the empirical range with 
   expect(range).toContain('60%');
   expect(range).toContain('90%');
   expect(range).toContain('7');
+  expect(screen.findByTestId('proj.multiple.work.session')).toBeNull();
   await screen.pressByTestIdAsync('proj.reported-header');
   expect(screen.findByTestId('proj.multiple.work.session')).toBeTruthy();
   expect(screen.findByTestId('proj.pastCycles.row.0')).toBeNull();
