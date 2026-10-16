@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_DRAG_GRIP_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -126,6 +127,8 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
     card: BoardCard;
     /** The enclosing status group already states this fact; accessibility keeps the exact word. */
     showStatusWord?: boolean;
+    /** The card carries its grip in its top corner: the title row ends before it. */
+    gripped?: boolean;
 }>) {
     const { theme } = useUnistyles();
     const { card } = props;
@@ -144,7 +147,7 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
         : describeBody(card.body, nowMs, shownWord);
     return (
         <View style={[styles.content, resolveBoardCardAction(card) ? styles.contentAboveAction : null]}>
-            <View style={styles.titleRow}>
+            <View style={[styles.titleRow, props.gripped ? styles.titleRowGripped : null]}>
                 <View style={styles.mark}><Icon name={KIND_ICON[card.ref.kind]} size={16} color={theme.colors.text.secondary} /></View>
                 {/* A grouped card sits in a narrow column: its name may take a second line rather than truncate. */}
                 <Text numberOfLines={grouped ? 2 : 1} style={[styles.title, unavailable ? styles.quiet : null]}>{card.title}</Text>
@@ -199,11 +202,18 @@ export const BoardCardView = React.memo(function BoardCardView(props: Readonly<{
     /** A carry owns interaction without changing the card's measured footprint. */
     actionsDisabled?: boolean;
     renderTarget?: (content: React.ReactNode) => React.ReactNode;
+    /**
+     * The Canvas grip. It sits inside the card's top corner, level with the title, as a widget card keeps
+     * its grip in its header: a sibling of the open target, never a control inside the card's button.
+     */
+    grip?: React.ReactNode;
 }>) {
-    const content = <BoardCardContent card={props.card} showStatusWord={props.showStatusWord} />;
+    const gripped = props.grip !== undefined && props.grip !== null;
+    const content = <BoardCardContent card={props.card} showStatusWord={props.showStatusWord} gripped={gripped} />;
     return <BoardCardFrame card={props.card} lifted={props.lifted}>
         {props.renderTarget ? props.renderTarget(content) : content}
         <BoardCardActionButton card={props.card} onAction={props.onAction} disabled={props.actionsDisabled} />
+        {gripped ? <View style={styles.grip}>{props.grip}</View> : null}
     </BoardCardFrame>;
 });
 
@@ -230,6 +240,14 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: theme.space.s8,
+    },
+    // Clears the grip (its box, a small gap, at the grip's inset rather than the content's).
+    titleRowGripped: { paddingRight: HAPPIER_DRAG_GRIP_METRICS.pointer.box + theme.space.s4 + theme.space.s8 - theme.space.s16 },
+    // Level with the title's first line, a little inside the card's corner.
+    grip: {
+        position: 'absolute',
+        top: theme.space.s12 + (Typography.variant('label', 'semiBold').lineHeight - HAPPIER_DRAG_GRIP_METRICS.pointer.box) / 2,
+        right: theme.space.s8,
     },
     mark: {
         height: Typography.variant('label', 'semiBold').lineHeight,

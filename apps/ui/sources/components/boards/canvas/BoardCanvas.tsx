@@ -375,7 +375,7 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
         <Animated.View style={[dragStyle, state.active ? styles.dragging : null]}>
             {member.kind === 'work' ? <View style={styles.cardFrame}>
                 {/* The card's open target and its action are siblings inside one frame, never a button in a button. */}
-                <BoardCardView card={member.card} lifted={lifted} onAction={props.onAction} actionsDisabled={state.active}
+                <BoardCardView card={member.card} lifted={lifted} onAction={props.onAction} actionsDisabled={state.active} grip={grip}
                     renderTarget={content => <Pressable ref={ref} testID={'board-canvas-card:' + member.key} accessibilityRole="button"
                         style={[styles.cardBody, { paddingBottom: gridInset }]} onFocus={() => { setFocused(true); props.onFocused(member.key); }} onBlur={() => setFocused(false)}
                         accessibilityLabel={member.title + ', ' + spoken} accessibilityHint={t('entityDragDrop.keyboard.hintsA11y')}
@@ -383,8 +383,6 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
                         onPress={() => { if (!state.active) props.onOpen(member.card); }} {...keyboardProps}>
                         {content}
                     </Pressable>} />
-                {/* The handle rides in the gutter beside the card: it never narrows the card, so columns keep one even gap. */}
-                <View style={styles.cardGrip}>{grip}</View>
             </View> : <View testID={'board-canvas-widget:' + member.key}>
                 <CanvasWidgetBody widget={member.widget} span={span} left={paddingPx + (props.position?.x ?? 0)} width={width}
                     verticalDemand={props.verticalDemand} horizontalDemand={props.horizontalDemand}
@@ -471,7 +469,6 @@ const styles = StyleSheet.create(theme => ({
     scroll: { flex: 1 }, scrollContent: { flexGrow: 1 }, content: { position: 'relative' },
     placed: { position: 'absolute' }, dragging: { zIndex: 10 },
     cardFrame: { position: 'relative' }, cardBody: { alignSelf: 'stretch' },
-    cardGrip: { position: 'absolute', left: '100%', top: 0, bottom: 0, justifyContent: 'center' },
     snapFeedback: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
     // Guides are dashed hairlines in the focus ink: alignment help that reads as a hint, not as content.
     guideX: { position: 'absolute', top: 0, bottom: 0, width: 0, borderLeftWidth: 1, borderStyle: 'dashed', borderColor: theme.colors.border.focus },
