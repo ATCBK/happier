@@ -14,7 +14,7 @@ import {
 } from './teamJoinTarget';
 import { TeamAuthEntrySurface } from '@/components/teams/entry/TeamAuthEntrySurface';
 import type { TeamAuthEntrySelection } from '@/components/teams/entry/TeamAuthEntrySurface';
-import { UnauthenticatedSplitShell } from '@/components/onboarding/unauthShell';
+import { TeamEntryShell } from '@/components/teams/entry/TeamEntryShell';
 import { projectTeamAuthSelection } from '@/components/teams/entry/teamAuthAction';
 import { teamSignInReturnPath } from '@/components/teams/entry/teamSignInHome';
 import { HomeAuthenticationFlow } from '@/components/account/auth/HomeAuthenticationFlow';
@@ -56,19 +56,7 @@ function TeamJoinStateShell(props: Readonly<{
     stepId: string;
     onBack: () => void;
 }>) {
-    return (
-        <UnauthenticatedSplitShell
-            testID="team-join-shell"
-            stepId={props.stepId}
-            isWelcomeStep={false}
-            allowMobileBrandHero={false}
-            onOpenRelayCustomFlow={() => {}}
-            onBrandHeroGetStarted={() => {}}
-            onBack={props.onBack}
-        >
-            {props.children}
-        </UnauthenticatedSplitShell>
-    );
+    return <TeamEntryShell testID="team-join-shell" stepId={props.stepId} onBack={props.onBack}>{props.children}</TeamEntryShell>;
 }
 
 /**

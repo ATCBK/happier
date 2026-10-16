@@ -65,7 +65,9 @@ export function resolveTeamViewState(snapshot: TeamSnapshot | null | undefined):
         address: snapshot.address,
         team: snapshot.data,
         refreshing: snapshot.status === 'refreshing' || snapshot.status === 'loading',
-        stale: snapshot.stale,
+        // Invalidation withdraws mutation authority before revalidation, but is not a failed
+        // read. Only an actual failed refresh warrants the last-known-data warning.
+        stale: snapshot.stale && snapshot.error !== null,
         lastObservedAt: snapshot.lastObservedAt,
         mutationsAvailable: !snapshot.stale && snapshot.reachability === 'reachable',
         archived: snapshot.data.archivedAt !== null,

@@ -113,6 +113,7 @@ describe('TeamInvitationCreateScreen', () => {
         screen.pressByTestId('team-invite-role:guest');
         await screen.pressByTestIdAsync('team-invite-submit');
         await waitForTestId(screen, 'team-invite-copy-link');
+        expect((await import('@/modal')).Modal.confirm).not.toHaveBeenCalled();
         await screen.pressByTestIdAsync('team-invite-another');
         expect(screen.getTextContent()).not.toContain('first-bearer');
         expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-invite-copy-link');

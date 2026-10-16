@@ -36,7 +36,7 @@ import {
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { isAuthoritativeScopedSnapshotRefusalKind } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { getPreferredLanguage, t } from '@/text';
-import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { formatCalendarDate } from '@/utils/datetime/cachedIntlFormatters';
 
 import { TeamSection } from '../TeamSection';
 import type { TeamSectionContext } from '../teamSectionContext';
@@ -546,7 +546,7 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
                     {
                         key: 'joined',
                         text: t('teams.members.joined', {
-                            when: formatWithCachedDateTimeFormatter(new Date(membership.joinedAt), getPreferredLanguage(), { dateStyle: 'medium' }),
+                            when: formatCalendarDate(membership.joinedAt, getPreferredLanguage()),
                         }),
                     },
                     ...(managedBy ? [{ key: 'managed', testID: 'team-member-managed-by', text: managedBy }] : []),

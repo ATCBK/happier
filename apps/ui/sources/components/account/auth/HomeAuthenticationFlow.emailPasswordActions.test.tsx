@@ -35,7 +35,7 @@ async function renderEntry(
         recommendedProvisionMode?: 'plain' | 'e2ee';
         passwordReset?: 'email';
     }>[],
-    options: Readonly<{ mailboxProven?: boolean; admission?: NativeAccountAdmissionV1 }> = {},
+    options: Readonly<{ mailboxProven?: boolean; admission?: NativeAccountAdmissionV1; openChosenAction?: boolean }> = {},
 ) {
     const fixture = createDirectoryHttpFixture();
     const capabilities = projectAuthEntryMethodCapabilities({
@@ -53,6 +53,7 @@ async function renderEntry(
             {...(options.admission ? { nativeAdmission: options.admission } : options.mailboxProven
                 ? { nativeAdmission: { kind: 'native_email_verification' as const, token: 'V'.repeat(43) } }
                 : {})}
+            {...(options.openChosenAction ? { openChosenAction: true } : {})}
             actions={capabilities.authenticationActions} returnTo="/" onAuthenticated={vi.fn()} onBack={vi.fn()} />
     </AuthProvider>);
     return screen;
@@ -202,4 +203,16 @@ it('keeps an addressed invitation and the password draft while the person correc
     ]);
     expect(rendered.findByTestId('email-password-email-error')).toBeNull();
     expect(rendered.findByTestId('email-password-password-error')).not.toBeNull();
+});
+
+it('shows the form'+"'"+'s own Back link on the method chooser flow but not when the step already has one', async () => {
+    const chooser = await renderEntry([{ action: 'login', mode: 'either' }]);
+    await chooser.pressByTestIdAsync('home-auth-email_password-login-either');
+    expect(chooser.findByTestId('email-password-back')).not.toBeNull();
+    await chooser.unmount();
+    screen = undefined;
+
+    const chosen = await renderEntry([{ action: 'login', mode: 'either' }], { openChosenAction: true });
+    expect(chosen.findByTestId('email-password-submit')).not.toBeNull();
+    expect(chosen.findByTestId('email-password-back')).toBeNull();
 });

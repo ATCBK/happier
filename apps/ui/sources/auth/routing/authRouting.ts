@@ -1,5 +1,21 @@
 import { isDevRouteEnabled } from './devRoutePolicy';
 
+/**
+ * The two public Team entries a person opens from a link: an invitation (`/join/:token`) and the
+ * Team's own sign-in (`/teams/:teamId/sign-in`). Only these exact leaves; other Team surfaces stay private.
+ */
+export function isTeamEntryRoute(segments: readonly string[]): boolean {
+  const normalized = segments.filter(
+    (s) => !(s.startsWith('(') && s.endsWith(')')),
+  );
+  if (normalized[0] === 'join') return normalized.length === 2;
+  return (
+    normalized[0] === 'teams' &&
+    normalized.length === 3 &&
+    normalized[2] === 'sign-in'
+  );
+}
+
 export function isPublicRouteForUnauthenticated(segments: string[]): boolean {
   // expo-router includes route groups like "(app)" in segments.
   const normalized = segments.filter(
@@ -40,13 +56,7 @@ export function isPublicRouteForUnauthenticated(segments: string[]): boolean {
   // Team invitations and the Team-scoped authentication entry must remain
   // reachable before a Home Account exists. Keep ordinary Team surfaces
   // private: only the exact entry leaf is an unauthenticated destination.
-  if (first === 'join' && normalized.length === 2) return true;
-  if (
-    first === 'teams' &&
-    normalized.length === 3 &&
-    normalized[2] === 'sign-in'
-  )
-    return true;
+  if (isTeamEntryRoute(segments)) return true;
   // The account service's sign-in returns to `/homes/sign-in` before this device is signed in to a
   // Home; only that exact leaf is public (Add a Home and the Homes page stay private).
   if (

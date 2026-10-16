@@ -168,6 +168,7 @@ describe('TeamJoinedCard', () => {
     expect(home.nameRequests).toEqual([{ name: 'Ada Lovelace' }]);
     expect(events).toEqual(['save', 'open']);
     expect(storage.getState().profile.name).toBe('Ada Lovelace');
+    expect((await import('@/modal')).Modal.confirm).not.toHaveBeenCalled();
   }, 40_000);
 
   it('opens without saving when the field is left empty', async () => {

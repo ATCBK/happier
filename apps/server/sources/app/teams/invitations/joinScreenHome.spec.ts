@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { resolveJoinScreenHomeHosting, resolveTeamJoinLinkTarget } from './joinScreenHome';
+import { resolveJoinScreenHomeDisplayName, resolveJoinScreenHomeHosting, resolveTeamJoinLinkTarget } from './joinScreenHome';
+
+describe('resolveJoinScreenHomeDisplayName', () => {
+  it('names the Home by the name it published, and by its configured host only while it has none', () => {
+    const canonical = { HAPPIER_CANONICAL_SERVER_URL: 'https://home.example.test' };
+    expect(resolveJoinScreenHomeDisplayName({ ...canonical, HAPPIER_HOME_DISPLAY_NAME: ' Northwind Studio ' })).toBe('Northwind Studio');
+    expect(resolveJoinScreenHomeDisplayName({ ...canonical, HAPPIER_HOME_DISPLAY_NAME: '  ' })).toBe('home.example.test');
+    expect(resolveJoinScreenHomeDisplayName(canonical)).toBe('home.example.test');
+    expect(resolveJoinScreenHomeDisplayName({})).toBeNull();
+  });
+});
 
 describe('resolveJoinScreenHomeHosting', () => {
   it('discloses the runtime purpose a joiner has to know, and nothing it cannot substantiate', () => {

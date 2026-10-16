@@ -77,6 +77,11 @@ export type EmailPasswordAuthPanelProps = Readonly<{
     onAuthenticated: (outcome: EmailPasswordAuthOutcome) => void | EmailPasswordAuthenticationCompletion | Promise<void | EmailPasswordAuthenticationCompletion>;
     /** Leaves this controller for the surrounding auth-entry surface. */
     onBack?: () => void;
+    /**
+     * Draw the Back link. A surrounding step that already carries its own way back sets this false;
+     * `onBack` still serves the flows that leave the surface (recovery key).
+     */
+    showBackAction?: boolean;
 }>;
 
 type PanelView =
@@ -394,7 +399,7 @@ export const EmailPasswordAuthPanel = React.memo(function EmailPasswordAuthPanel
         </Text>
     ) : null;
 
-    const backAction = props.onBack ? (
+    const backAction = props.onBack && props.showBackAction !== false ? (
         <WelcomeActionCard
             testID="email-password-back"
             presentation="link"

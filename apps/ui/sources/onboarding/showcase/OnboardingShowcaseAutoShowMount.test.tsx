@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 
 type ShowcaseModalProps = Readonly<{
     onComplete?: () => void;
@@ -34,6 +35,10 @@ const modalState = vi.hoisted(() => ({
     }),
     hide: vi.fn(),
 }));
+
+const routeState = vi.hoisted(() => ({ segments: [] as string[] }));
+
+vi.mock('expo-router', () => createExpoRouterMock({ segments: () => routeState.segments }).module);
 
 vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => authState,
@@ -71,6 +76,7 @@ describe('OnboardingShowcaseAutoShowMount', () => {
         clearShowcaseSeenVersion();
         authState.isAuthenticated = false;
         authState.credentials = null;
+        routeState.segments = [];
         releaseNotesState.lastSeenReleaseId = null;
         modalState.activeCount = 0;
         modalState.lastConfig = null;
@@ -147,6 +153,23 @@ describe('OnboardingShowcaseAutoShowMount', () => {
         expect(modalState.show).not.toHaveBeenCalled();
         expect(getShowcaseSeenVersion()).toBe(ONBOARDING_SHOWCASE_MANIFEST.showcaseVersion);
         expect(releaseNotesState.lastSeenReleaseId).toBeNull();
+    });
+
+    it.each([
+        ['an invitation', ['(app)', 'join', '[token]']],
+        ['a Team sign-in', ['(app)', 'teams', '[teamId]', 'sign-in']],
+    ])('waits while %s is open, then shows once the person leaves it', async (_name, segments) => {
+        routeState.segments = segments;
+        const { OnboardingShowcaseAutoShowMount } = await import('./OnboardingShowcaseAutoShowMount');
+        const screen = await renderScreen(<OnboardingShowcaseAutoShowMount />);
+
+        await vi.advanceTimersByTimeAsync(300);
+        expect(modalState.show).not.toHaveBeenCalled();
+
+        routeState.segments = ['(app)', 'index'];
+        await screen.update(<OnboardingShowcaseAutoShowMount />);
+        await vi.advanceTimersByTimeAsync(300);
+        expect(modalState.show).toHaveBeenCalledTimes(1);
     });
 
     it('waits until another top-level modal is gone', async () => {

@@ -34,6 +34,7 @@ const MEMBER_GET_PATH = '/v1/teams/members/get';
 const MEMBER_GROUPS_PATH = '/v1/teams/members/groups/list';
 const MEMBER_ROLE_SET_PATH = '/v1/teams/members/role/set';
 const MEMBER_SUSPEND_PATH = '/v1/teams/members/suspend';
+const MEMBER_REMOVE_PATH = '/v1/teams/members/remove';
 const MANAGEMENT_SET_PATH = '/v1/teams/members/management/set';
 const DIRECTORY_SOURCES_PATH = '/v1/teams/team-1/directory-sources';
 const ARTIFACT_CREATE_PATH = '/v1/artifacts';
@@ -126,6 +127,35 @@ afterEach(() => {
 });
 
 describe('TeamMemberDetailScreen management source', () => {
+    it('removes a member only after one designed confirmation and preserves a declined removal', async () => {
+        const serverId = await addHome(teamSummaryFixture({
+            capabilities: teamCapabilitiesFixture({ manageMembers: true, manageOwners: true }),
+        }));
+        harness.answer(serverId, MEMBER_GET_PATH, {
+            body: teamMembershipFixture({ capabilities: { ...NO_MEMBER_CAPABILITIES, remove: true } }),
+        });
+        harness.answer(serverId, MEMBER_REMOVE_PATH, {
+            body: { status: 'removed', membershipId: 'membership-1' },
+        });
+        const screen = await renderDetail(serverId);
+        await waitForTestId(screen, 'team-member-remove');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValueOnce(false);
+        await screen.pressByTestIdAsync('team-member-remove');
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(harness.requestsFor(MEMBER_REMOVE_PATH)).toHaveLength(0);
+
+        await screen.pressByTestIdAsync('team-member-remove');
+        await vi.waitFor(() => expect(harness.requestsFor(MEMBER_REMOVE_PATH)).toHaveLength(1));
+        // One declined review and one accepted review, with no generic dialog.
+        expect(Modal.confirm).toHaveBeenCalledTimes(2);
+        expect(Modal.confirm).toHaveBeenLastCalledWith(
+            expect.stringContaining('teams.members.removal.title'), expect.any(String),
+            expect.objectContaining({ destructive: true }),
+        );
+        expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(0);
+    });
+
     it('opens the exact identity connection that owns a JIT-managed lifetime', async () => {
         const serverId = await addHome(teamSummaryFixture({
             capabilities: teamCapabilitiesFixture({ manageMembers: true, manageAuthentication: true }),

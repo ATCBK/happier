@@ -239,10 +239,10 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                         invitationId: row.id,
                         // An approved revocation is the
                         // same revocation, so it is
-                        // reported and re-read here
+                        // announced and re-read here
                         // rather than left unmentioned.
                         onApprovalSucceeded: () => {
-                            publishNotice(t('teams.invitations.stateRevoked'));
+                            announceAccessibilityMessage(t('teams.invitations.stateRevoked'));
                             void invitations.reload();
                         },
                         onApprovalFailed: () =>
@@ -265,7 +265,10 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                     // below shows what the Home holds.
                     publishNotice(teamMutationFailureLabel(outcome.failure));
                 } else {
-                    publishNotice(t('teams.invitations.stateRevoked'));
+                    // The row leaving Waiting for Finished is the visible confirmation; a
+                    // notice would sit in the Waiting description long after it stopped
+                    // being news. Only assistive technology needs the outcome said.
+                    announceAccessibilityMessage(t('teams.invitations.stateRevoked'));
                 }
                 void invitations.reload();
                 return;
@@ -356,10 +359,11 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                             teamName: context.team.name,
                             homeName: context.homeName,
                         })}
-                        primaryAction={canManage && context.canMutate && !(invitations.status === 'ready' && invitations.rows.length === 0) ? {
+                        primaryAction={canManage && !context.archived && !(invitations.status === 'ready' && invitations.rows.length === 0) ? {
                             title: t('homeGovernance.invite.action'),
                             testID: 'team-invitations-create',
-                            onPress: () => presentHomeInvitePeople({ serverId: context.address.serverId, teamId: context.address.teamId }),
+                            disabled: !context.canMutate,
+                            onPress: () => { presentHomeInvitePeople({ serverId: context.address.serverId, teamId: context.address.teamId }); },
                         } : undefined}
                     />
                     {props.header}
@@ -412,10 +416,10 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                             action={context.canMutate ? {
                                 label: t('homeGovernance.invite.action'),
                                 testID: 'team-invitations-create',
-                                onPress: () => presentHomeInvitePeople({
+                                onPress: () => { presentHomeInvitePeople({
                                     serverId: context.address.serverId,
                                     teamId: context.address.teamId,
-                                }),
+                                }); },
                             } : undefined}
                         />
                     ) : null}

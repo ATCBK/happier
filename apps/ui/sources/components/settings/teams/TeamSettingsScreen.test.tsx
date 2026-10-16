@@ -736,6 +736,8 @@ describe('TeamSettingsScreen', () => {
 
         const screen = await renderSettings(serverId);
         await waitForTestId(screen, 'team-settings-archive');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
         // The row opens a confirmation; the final confirm button owns the
         // destructive emphasis.
         const archiveRow = screen.findAll((node) => (
@@ -755,6 +757,7 @@ describe('TeamSettingsScreen', () => {
         // The shared default recognizes UI + present-user dispatch, so the
         // modal-confirmed action reaches the Home once without an Artifact.
         expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(0);
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
         expect(routerBack).toHaveBeenCalled();
     });
 

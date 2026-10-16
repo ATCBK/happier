@@ -8,7 +8,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { teamRoleLabel } from '@/components/settings/teams/teamLabels';
 import { getPreferredLanguage, t } from '@/text';
-import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { formatCalendarDate } from '@/utils/datetime/cachedIntlFormatters';
 
 import { presentTeamsDisabledOnHome } from '@/components/teams/entry/teamAuthenticationFailure';
 
@@ -142,8 +142,8 @@ export const TeamInvitationPreviewDetails = React.memo(function TeamInvitationPr
             <PreviewLine
                 testID="team-join-preview-history"
                 text={preview.historyAccess === 'all_existing'
-                    ? t('teams.history.allExisting')
-                    : t('teams.history.fromMembership')}
+                    ? t('teams.join.historyAllExisting')
+                    : t('teams.join.historyFromJoining')}
             />
             {preview.role === 'guest' ? (
                 <PreviewLine
@@ -166,13 +166,13 @@ export const TeamInvitationPreviewDetails = React.memo(function TeamInvitationPr
             {preview.recipientEmailMask !== null ? (
                 <PreviewLine
                     testID="team-join-preview-recipient"
-                    text={t('teams.invitations.maskedRecipient', { email: preview.recipientEmailMask })}
+                    text={t('teams.join.sentTo', { email: preview.recipientEmailMask })}
                 />
             ) : null}
             <PreviewLine
                 testID="team-join-preview-expiry"
-                text={t('teams.invitations.expires', {
-                    when: formatWithCachedDateTimeFormatter(new Date(preview.expiresAt), getPreferredLanguage()),
+                text={t('teams.join.expiresOn', {
+                    when: formatCalendarDate(preview.expiresAt, getPreferredLanguage()),
                 })}
             />
             {state.refreshing ? (

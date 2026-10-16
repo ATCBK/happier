@@ -26,6 +26,8 @@ import {
     openAccountSecurityForHome,
 } from '@/components/settings/account/openAccountSecurityForHome';
 
+const homeActionTestId = ({ method, action }: HomeAuthenticationAction): string => `home-auth-${method.id}-${action.id}-${action.mode}`;
+
 export function HomeAuthenticationFlow(props: Readonly<{
     target: HomeTargetInput;
     actions: readonly HomeAuthenticationAction[];
@@ -46,8 +48,10 @@ export function HomeAuthenticationFlow(props: Readonly<{
     signal?: AbortSignal;
     /**
      * The caller's own page already chose this single action. A method with a
-     * form opens it directly, and leaving the form leaves the flow, so the
-     * person is never asked to pick the same method twice.
+     * form opens it directly and a one-tap method runs on arrival, so the
+     * person is never asked to pick the same method twice. Leaving the form
+     * leaves the flow. The step that chose it owns the way back, so the flow
+     * draws no Back control of its own.
      */
     openChosenAction?: boolean;
     onAuthenticated: (authenticatedHome: Readonly<{
@@ -102,6 +106,41 @@ export function HomeAuthenticationFlow(props: Readonly<{
         },
     }), [cancellation.signal, pendingActionId]);
 
+    // The one method-card -> action decision: a method with a form opens it, anything else runs now.
+    const runHomeAction = async (homeAction: HomeAuthenticationAction): Promise<void> => {
+        const { execution } = homeAction;
+        const request = toRequest(homeAction);
+        if (execution.kind === 'key_entry') {
+            setKeyRequest(request);
+            return;
+        }
+        if (execution.kind === 'email_password') {
+            setPasswordRequest(request);
+            return;
+        }
+        await executeHomeAuthentication({
+            request,
+            loginWithCredentials: auth.loginWithCredentials,
+            returnTo: props.returnTo,
+            transport: props.transport,
+            keyChallengeV2Available: props.keyChallengeV2Available,
+            accountContinuation: props.accountContinuation,
+            teamAdmission: props.teamAdmission,
+            signal: cancellation.signal,
+            onAuthenticated: props.onAuthenticated,
+            onExternalAuthStarted: props.onExternalAuthStarted,
+        });
+    };
+    // A chosen one-tap action is already the person's decision, so it runs on arrival through
+    // the same admission as its card. The card stays as the retry if the run does not finish.
+    const arrivalRunRef = React.useRef(false);
+    React.useEffect(() => {
+        if (!chosenAction || keyRequest || passwordRequest || arrivalRunRef.current) return;
+        arrivalRunRef.current = true;
+        void admission.run(homeActionTestId(chosenAction), () => runHomeAction(chosenAction));
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- arrival runs once for the chosen action
+    }, []);
+
     const leave = () => { abortRef.current.abort(); props.onBack(); };
 
     if (arrival.state.kind !== 'idle') {
@@ -128,8 +167,10 @@ export function HomeAuthenticationFlow(props: Readonly<{
                 if (cancellation.signal.aborted) return;
                 await props.onAuthenticated({ homeServerIdentityId: resolvedTarget.serverIdentityId, credentials });
             }} onSuccess={() => {}} />
-            <WelcomeActionCard testID="home-auth-key-back" title={t('common.back')} iconName="arrow-left" escape
-                onPress={() => chosenAction ? leave() : setKeyRequest(null)} />
+            {chosenAction ? null : (
+                <WelcomeActionCard testID="home-auth-key-back" title={t('common.back')} iconName="arrow-left" escape
+                    onPress={() => setKeyRequest(null)} />
+            )}
         </WelcomeActionList>;
     }
 
@@ -181,44 +222,26 @@ export function HomeAuthenticationFlow(props: Readonly<{
                     });
                 }}
                 onBack={() => chosenAction ? leave() : setPasswordRequest(null)}
+                // The caller's step already carries the way back, so the form adds none of its own.
+                showBackAction={chosenAction === null}
             />
         </WelcomeActionList>;
     }
 
     return <WelcomeActionList admission={admission}>
         {props.actions.map((homeAction) => {
-            const { method, action, execution } = homeAction;
-            const request = toRequest(homeAction);
+            const { method, execution } = homeAction;
             const providerName = method.presentation?.displayName ?? getAuthProvider(method.id)?.displayName ?? method.id;
-            const testID = `home-auth-${method.id}-${action.id}-${action.mode}`;
+            const testID = homeActionTestId(homeAction);
             const presentation = describeHomeAuthenticationAction({ execution, providerName });
             // A chosen action is the one thing this step is for.
             return <WelcomeActionCard key={testID} testID={testID} title={presentation.title} primary={chosenAction !== null}
                 subtitle={presentation.description} iconName={presentation.iconName} accentColor={method.presentation?.connectButtonColor}
-                onPress={async () => {
-                    if (execution.kind === 'key_entry') {
-                        setKeyRequest(request);
-                        return;
-                    }
-                    if (execution.kind === 'email_password') {
-                        setPasswordRequest(request);
-                        return;
-                    }
-                    await executeHomeAuthentication({
-                        request,
-                        loginWithCredentials: auth.loginWithCredentials,
-                        returnTo: props.returnTo,
-                        transport: props.transport,
-                        keyChallengeV2Available: props.keyChallengeV2Available,
-                        accountContinuation: props.accountContinuation,
-                        teamAdmission: props.teamAdmission,
-                        signal: cancellation.signal,
-                        onAuthenticated: props.onAuthenticated,
-                        onExternalAuthStarted: props.onExternalAuthStarted,
-                    });
-                }} />;
+                onPress={() => runHomeAction(homeAction)} />;
         })}
-        <WelcomeActionCard testID="home-auth-back" title={t('common.back')} iconName="arrow-left" escape
-            onPress={() => { abortRef.current.abort(); props.onBack(); }} />
+        {chosenAction ? null : (
+            <WelcomeActionCard testID="home-auth-back" title={t('common.back')} iconName="arrow-left" escape
+                onPress={() => { abortRef.current.abort(); props.onBack(); }} />
+        )}
     </WelcomeActionList>;
 }

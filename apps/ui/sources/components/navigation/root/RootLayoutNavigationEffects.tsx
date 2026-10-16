@@ -21,6 +21,7 @@ import { useNotificationResponseRouting } from '@/activity/notifications/runtime
 import { desktopHostKind, invokeDesktopHost, isDesktopHost } from '@/utils/platform/desktopHost';
 import { resolveRoutineServerSelectionScope } from '@/sync/domains/server/selection/serverSelectionScope';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol/crypto/publicShareCapabilityUrl';
 
 /**
  * Owns every navigation/auth-driven side effect from the app root layout.
@@ -161,9 +162,13 @@ export function RootLayoutNavigationEffects(): React.ReactElement | null {
         return (
             <View
                 testID="debug-router-pathname"
+                // A QA probe, not content: never announced, and never carrying a capability link's bearer.
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                aria-hidden
                 style={{ position: 'absolute', top: 0, left: 0, width: 1, height: 1, overflow: 'hidden', opacity: 0, pointerEvents: 'none' }}
             >
-                <Text>{pathname}</Text>
+                <Text>{redactPublicShareCapabilityUrl(pathname)}</Text>
             </View>
         );
     }

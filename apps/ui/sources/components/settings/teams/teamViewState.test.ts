@@ -71,6 +71,11 @@ describe('resolveTeamViewState', () => {
         expect(state.kind === 'ready' && state.mutationsAvailable).toBe(false);
     });
 
+    it('keeps routine revalidation quiet until a refresh actually fails', () => {
+        const state = resolveTeamViewState(snapshot({ status: 'refreshing', stale: true }));
+        expect(state).toMatchObject({ kind: 'ready', refreshing: true, stale: false, mutationsAvailable: false });
+    });
+
     it('reports an unavailable Team without a retry for a settled refusal', () => {
         const denied = resolveTeamViewState(snapshot({
             status: 'error',

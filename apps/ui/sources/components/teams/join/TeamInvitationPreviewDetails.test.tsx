@@ -86,7 +86,9 @@ describe('TeamInvitationPreviewDetails', () => {
         const rendered = await renderScreen(
             <TeamInvitationPreviewDetails state={{ kind: 'ready', preview: activePreview() }} />,
         );
-        const expected = new Intl.DateTimeFormat('de').format(new Date(Date.UTC(2030, 0, 1)));
+        // The Invitations page's calendar-date style: day and short month, with the year outside the current one.
+        const expected = new Intl.DateTimeFormat('de', { day: 'numeric', month: 'short', year: 'numeric' })
+            .format(new Date(Date.UTC(2030, 0, 1)));
         expect(rendered.getTextContent()).toContain(expected);
     });
 });

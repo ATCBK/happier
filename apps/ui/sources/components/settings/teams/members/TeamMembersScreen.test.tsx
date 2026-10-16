@@ -174,7 +174,7 @@ describe('TeamMembersScreen', () => {
         expect(ids.includes('team-members-status:membership-1')).toBe(status === 'suspended');
     });
 
-    it('formats the joined date in the selected app language', async () => {
+    it('formats the joined date in the selected app language, as the short date Invitations use', async () => {
         languageMock.current = 'de';
         const joinedAt = Date.parse('2025-02-03T12:00:00Z');
         const serverId = await addHome(teamSummaryFixture({ viewerRole: 'member', capabilities: teamCapabilitiesFixture({}) }));
@@ -185,7 +185,7 @@ describe('TeamMembersScreen', () => {
         const screen = await renderMembers(serverId);
         await waitForTestId(screen, 'team-members-row:membership-1');
         expect(screen.getTextContent())
-            .toContain(new Intl.DateTimeFormat('de', { dateStyle: 'medium' }).format(joinedAt));
+            .toContain(new Intl.DateTimeFormat('de', { day: 'numeric', month: 'short', year: 'numeric' }).format(joinedAt));
     });
     it('renders a large roster as stable chunks in the canonical virtualized list', async () => {
         // Search box, filter group, then the member chunks.

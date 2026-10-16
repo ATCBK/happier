@@ -20,7 +20,7 @@ import { StatusPill } from '@/components/ui/status/StatusPill';
 import { useTeamMembersRoster } from '@/hooks/teams/useTeamMembersRoster';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { getPreferredLanguage, t } from '@/text';
-import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { formatCalendarDate } from '@/utils/datetime/cachedIntlFormatters';
 
 import { TeamSection } from '../TeamSection';
 import type { TeamSectionContext } from '../teamSectionContext';
@@ -232,7 +232,7 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
                                 testID={`team-members-row:${membership.id}`}
                                 title={person.name}
                                 subtitle={teamMemberRowSubtitle(membership, person, t('teams.members.joined', {
-                                    when: formatWithCachedDateTimeFormatter(new Date(membership.joinedAt), getPreferredLanguage(), { dateStyle: 'medium' }),
+                                    when: formatCalendarDate(membership.joinedAt, getPreferredLanguage()),
                                 }))}
                                 leftElement={(
                                     <Avatar

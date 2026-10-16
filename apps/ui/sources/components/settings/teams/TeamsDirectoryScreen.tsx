@@ -3,6 +3,7 @@ import { Redirect, useLocalSearchParams, useNavigation, useRouter } from '@/comp
 import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
@@ -12,6 +13,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
 import { teamAddressKey } from '@/sync/domains/teams/teamAddress';
@@ -287,7 +289,7 @@ function useTeamsDirectoryRows(input: Readonly<{
     return React.useMemo<readonly TeamsDirectoryVirtualizedRow[]>(() => {
         const result: TeamsDirectoryVirtualizedRow[] = [];
         const add = (key: string, render: () => React.ReactElement) => result.push({ key, render });
-        const addTeamChunks = (keyPrefix: string, title: string, list: readonly TeamsDirectoryRow[]) => {
+        const addTeamChunks = (keyPrefix: string, title: string | undefined, list: readonly TeamsDirectoryRow[]) => {
             for (let start = 0; start < list.length; start += TEAM_DIRECTORY_CHUNK_SIZE) {
                 const chunk = list.slice(start, start + TEAM_DIRECTORY_CHUNK_SIZE);
                 const first = start === 0;
@@ -337,7 +339,8 @@ function useTeamsDirectoryRows(input: Readonly<{
         if (active.kind === 'empty') {
             add('empty', () => <TeamsEmptyState collection={collection} onCreate={createTeam} />);
         } else {
-            addTeamChunks('active', t('teams.title'), visibleActiveRows);
+            // The page header already says "Teams"; only the archived list needs a title of its own.
+            addTeamChunks('active', undefined, visibleActiveRows);
             if (active.rows.length > 0 && visibleActiveRows.length === 0) {
                 add('search-empty', () => (
                     <ItemGroup>
@@ -368,14 +371,18 @@ function useTeamsDirectoryRows(input: Readonly<{
 
         if (sourceHint === null && collection.offerArchived) {
             add('toggle-archived', () => (
-                <ItemGroup>
-                    <Item
-                        testID="teams-directory-toggle-archived"
-                        title={showArchived ? t('teams.directory.hideArchived') : t('teams.directory.showArchived')}
-                        accessibilityExpanded={showArchived}
-                        onPress={toggleArchived}
-                        showChevron={false}
-                    />
+                // A quiet button under the list, as on a Team's Groups and the Home's Teams, not a row among the Teams.
+                <ItemGroup surface="none">
+                    <SectionButtonRow>
+                        <RoundButton
+                            testID="teams-directory-toggle-archived"
+                            size="small"
+                            display="inverted"
+                            title={showArchived ? t('teams.directory.hideArchived') : t('teams.directory.showArchived')}
+                            expanded={showArchived}
+                            onPress={toggleArchived}
+                        />
+                    </SectionButtonRow>
                 </ItemGroup>
             ));
         }

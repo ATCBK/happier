@@ -196,6 +196,18 @@ describe('TeamAuthenticationSettingsScreen', () => {
         expect(executeDirectoryMock).not.toHaveBeenCalled();
     });
 
+    it('tells a read-only member what each fact means, as the same sections do for the managers', async () => {
+        teamContextMock.manageAuthentication = false;
+        teamContextMock.directoryMembership = null;
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
+        const text = screen.getTextContent();
+        expect(text).toContain('teams.authentication.policy.admissionHelp');
+        expect(text).toContain('teams.authentication.policy.acceptedHelp');
+        expect(text).toContain('teams.authentication.directory.overviewSubtitle');
+        expect(screen.findAllByTestId('team-authentication-fact-accepted')[0]?.props.subtitle)
+            .toBe('teams.authentication.policy.acceptedInheritConsequence');
+    });
+
     it('uses the translated canonical provider-kind label when the catalog has no display name', async () => {
         identityStateMock.current.eligibleProviders[0]!.displayName = null;
         const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });

@@ -133,7 +133,7 @@ const TeamOverviewHeader = React.memo(function TeamOverviewHeader(
   }>,
 ) {
   const { team, address, homeName } = props.context;
-  const invite = canInvite(props.context) && resolveTeamSetupSteps(team) === null;
+  const invite = team.capabilities.manageInvitations && !props.context.archived && resolveTeamSetupSteps(team) === null;
   return (
     <PageHeader
       testID="team-overview-identity"
@@ -172,6 +172,7 @@ const TeamOverviewHeader = React.memo(function TeamOverviewHeader(
           ? {
               title: t('homeGovernance.invite.action'),
               testID: 'team-overview-invite',
+              disabled: !props.context.canMutate,
               onPress: () => openInvite(props.context),
             }
           : undefined

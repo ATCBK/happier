@@ -2,12 +2,9 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { UnauthenticatedSplitShell } from '@/components/onboarding/unauthShell';
-
 import type { TeamAuthEntrySelection } from './TeamAuthEntrySurface';
 import { TeamEntryIdentity } from './TeamEntryIdentity';
-
-const NOOP = () => {};
+import { TeamEntryShell } from './TeamEntryShell';
 
 /**
  * The sign-in step a person reaches by choosing a method on a Team entry page.
@@ -21,14 +18,9 @@ export function TeamAuthenticationStep(props: Readonly<{
 }>) {
     const { selection } = props;
     return (
-        <UnauthenticatedSplitShell
+        <TeamEntryShell
             testID="team-auth-step-shell"
             stepId={`team-auth-step:${selection.action.methodId}:${selection.action.action}`}
-            isWelcomeStep={false}
-            showMobileWordmark
-            allowMobileBrandHero={false}
-            onOpenRelayCustomFlow={NOOP}
-            onBrandHeroGetStarted={NOOP}
             onBack={props.onBack}
         >
             <View style={styles.content}>
@@ -40,7 +32,7 @@ export function TeamAuthenticationStep(props: Readonly<{
                 />
                 {props.children}
             </View>
-        </UnauthenticatedSplitShell>
+        </TeamEntryShell>
     );
 }
 

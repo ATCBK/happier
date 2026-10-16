@@ -755,7 +755,10 @@ const AuthenticationFacts = React.memo(function AuthenticationFacts(
         title={t('teams.denied.authentication', { team: context.team.name })}
         description={askTeamManagersText(names)}
       />
-      <ItemGroup title={t('teams.authentication.policy.admissionSection')}>
+      <ItemGroup
+        title={t('teams.authentication.policy.admissionSection')}
+        description={t('teams.authentication.policy.admissionHelp')}
+      >
         <Item
           testID="team-authentication-fact-admission"
           title={teamAdmissionModeLabel(context.team.policy.admissionMode)}
@@ -765,17 +768,27 @@ const AuthenticationFacts = React.memo(function AuthenticationFacts(
           subtitleLines={0}
         />
       </ItemGroup>
-      <ItemGroup title={t('teams.authentication.policy.acceptedSection')}>
+      <ItemGroup
+        title={t('teams.authentication.policy.acceptedSection')}
+        description={t('teams.authentication.policy.acceptedHelp')}
+      >
         <Item
           testID="team-authentication-fact-accepted"
           title={teamAcceptedSignInSummary(context.team.policy)}
+          subtitle={context.team.policy.authenticationPolicyStatus !== 'repair_required'
+            && context.team.policy.authenticationPolicy?.mode !== 'restricted'
+            ? t('teams.authentication.policy.acceptedInheritConsequence', { home: context.homeName })
+            : undefined}
           mode="info"
           showChevron={false}
           subtitleLines={0}
         />
       </ItemGroup>
       <SettingAnchor setting={TEAM_AUTHENTICATION_SETTINGS.settings.directory}>
-        <ItemGroup title={t('teams.authentication.directory.section')}>
+        <ItemGroup
+          title={t('teams.authentication.directory.section')}
+          description={t('teams.authentication.directory.overviewSubtitle')}
+        >
           <Item
             testID="team-authentication-fact-directory"
             title={context.team.directoryMembership?.providerDisplayName ?? (

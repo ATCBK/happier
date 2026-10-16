@@ -1,6 +1,8 @@
+import { useSegments } from 'expo-router';
 import * as React from 'react';
 
 import { useAuth } from '@/auth/context/AuthContext';
+import { isTeamEntryRoute } from '@/auth/routing/authRouting';
 import { getCurrentReleaseId } from '@/changelog/releaseNotes/manifestRuntime';
 import { setLastSeenReleaseId } from '@/changelog/releaseNotes/storage';
 import { OnboardingShowcaseStorySurface } from '@/components/onboarding/showcase';
@@ -20,6 +22,9 @@ export function OnboardingShowcaseAutoShowMount(): null {
     const showcase = useOnboardingShowcaseState();
     const modal = useModal();
     const modalStackActive = modal.state.modals.length > 0;
+    // Somebody who opened a Team invitation or Team sign-in came to join that Team: the tour waits
+    // for them to leave it rather than covering it.
+    const teamEntryActive = isTeamEntryRoute(useSegments());
     const ranRef = React.useRef(false);
 
     React.useEffect(() => {
@@ -29,7 +34,7 @@ export function OnboardingShowcaseAutoShowMount(): null {
             showcase.markSeen();
             return;
         }
-        if (modalStackActive) return;
+        if (modalStackActive || teamEntryActive) return;
 
         const timer = setTimeout(() => {
             if (ranRef.current) return;
@@ -65,7 +70,7 @@ export function OnboardingShowcaseAutoShowMount(): null {
         }, 250);
 
         return () => clearTimeout(timer);
-    }, [auth.isAuthenticated, modalStackActive, showcase]);
+    }, [auth.isAuthenticated, modalStackActive, showcase, teamEntryActive]);
 
     return null;
 }

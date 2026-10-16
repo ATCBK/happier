@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamInvitationRowFixture, teamSummaryFixture } from '@/dev/testkit';
+import { collectRenderedTestIds, createDeferred, renderScreen, standardCleanup, teamCapabilitiesFixture, teamInvitationRowFixture, teamSummaryFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
@@ -234,6 +234,36 @@ describe('TeamInvitationsScreen', () => {
         expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
     });
 
+    it('retains the invitation action and avoids a stale warning while a woken Team is revalidated', async () => {
+        const serverId = await addManagedHome();
+        harness.answer(serverId, INVITATIONS_LIST_PATH, { body: {
+            items: [teamInvitationRowFixture()], nextCursor: null, emailDelivery: 'available', linkDelivery: 'available',
+        } });
+        const screen = await renderInvitations(serverId);
+        await waitForTestId(screen, 'team-invitations-create');
+        const held = createDeferred<void>();
+        harness.answer(serverId, TEAM_GET_PATH, { status: 503, respondAfter: held.promise });
+        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        const { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } = await import('@happier-dev/protocol/changes');
+        const { getTeamSnapshot } = await import('@/sync/store/teams/teamsSnapshots');
+        try {
+            await act(async () => publishHomeAccountChange(serverId, [TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1]));
+            await vi.waitFor(() => expect(getTeamSnapshot({ serverId, accountId: 'account-ada' }, { serverId, teamId: 'team-1' })?.status).toBe('refreshing'));
+            expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-stale');
+            expect(screen.findByTestId('team-invitations-create')?.props.disabled).toBe(true);
+        } finally {
+            await act(async () => held.resolve());
+        }
+        await waitForTestId(screen, 'team-stale');
+        harness.answer(serverId, TEAM_GET_PATH, { body: teamSummaryFixture({
+            capabilities: teamCapabilitiesFixture({ manageInvitations: true }),
+        }) });
+        const { refreshTeam } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+        await act(async () => refreshTeam({ serverId, accountId: 'account-ada' }, { serverId, teamId: 'team-1' }));
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-stale');
+        expect(screen.findByTestId('team-invitations-create')?.props.disabled).toBe(false);
+    });
+
     it('opens only one row action while the first choice is still pending', async () => {
         let releaseChoice = (): void => {};
         modalBoundary.wait = new Promise<void>((resolve) => { releaseChoice = resolve; });
@@ -283,6 +313,39 @@ describe('TeamInvitationsScreen', () => {
             title: 'teams.invitations.revokeTitle',
             body: 'teams.invitations.revokeBody',
         }]);
+    });
+
+    it('keeps the Waiting description once a revoke has moved its row to Finished', async () => {
+        modalChoice.press = 'teams.invitations.revoke';
+        const serverId = await addManagedHome();
+        const listAnswer = (items: ReturnType<typeof teamInvitationRowFixture>[]) => ({
+            body: { items, nextCursor: null, emailDelivery: 'available', linkDelivery: 'available' },
+        });
+        harness.answer(serverId, INVITATIONS_LIST_PATH, listAnswer([
+            teamInvitationRowFixture({ id: 'invitation-1' }),
+            teamInvitationRowFixture({ id: 'invitation-2' }),
+        ]));
+        harness.answer(serverId, INVITATION_REVOKE_PATH, {
+            body: teamInvitationRowFixture({ id: 'invitation-1', state: 'revoked' }),
+        });
+
+        const screen = await renderInvitations(serverId);
+        await waitForTestId(screen, 'team-invitations-row:invitation-1');
+        harness.answer(serverId, INVITATIONS_LIST_PATH, listAnswer([
+            teamInvitationRowFixture({ id: 'invitation-1', state: 'revoked' }),
+            teamInvitationRowFixture({ id: 'invitation-2' }),
+        ]));
+        await screen.pressByTestIdAsync('team-invitations-row:invitation-1');
+
+        await vi.waitFor(() => expect(harness.requestsFor(INVITATION_REVOKE_PATH)).toHaveLength(1));
+        // The row moving to Finished is the confirmation; the Waiting section must still describe
+        // what is waiting rather than carry the revoke outcome.
+        await vi.waitFor(() => {
+            const keyExtractor = virtualizedBoundary.props?.keyExtractor as (item: unknown) => string;
+            const data = virtualizedBoundary.props?.data as readonly unknown[];
+            expect(data.map(keyExtractor)).toEqual(['waiting:invitation-2', 'finished:invitation-1']);
+        });
+        expect(screen.getTextContent()).toContain('teams.invitations.waitingDescription');
     });
 
     it('leaves the invitation live when the revoke confirmation is declined', async () => {

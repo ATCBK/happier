@@ -13,7 +13,7 @@ import { useGlassSurfaceColor } from '@/components/ui/glass/useGlassSurfaceColor
 import { PluginUiScrollActivityProvider } from '@happier-dev/plugin-ui/advanced';
 import { createScrollViewNearViewportTracker } from '@/components/widgets/nearViewport';
 import { RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
-import { useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { PageFrame } from '@/components/ui/layout/PageFrame';
 
 const BASE_CONTENT_PADDING_BOTTOM = Platform.select({ ios: 34, default: 16 }) ?? 16;
@@ -50,6 +50,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     contentContainer: {
         paddingBottom: Platform.select({ ios: 34, default: 16 }),
         paddingTop: 0,
+    },
+    // A card modal's body has no padding of its own and its sections add none (`ItemGroup`, contained),
+    // so a grouped list owns the card's gutter: the header's text edge, which a sheet and a bare button
+    // row (which bleeds by its row inset into that gutter) both sit on.
+    containedGroupedGutter: {
+        paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
     },
 }));
 
@@ -135,6 +141,7 @@ export const ItemList = React.memo(React.forwardRef<ScrollView, ItemListProps>((
         contentContainerStyle: [
             styles.contentContainer,
             presentation === 'page' ? { paddingBottom: 0 } : null,
+            contained && presentation === 'grouped' ? styles.containedGroupedGutter : null,
             containerStyle,
             bottomChromeHeight > 0 ? { paddingBottom: (presentation === 'page' ? 0 : BASE_CONTENT_PADDING_BOTTOM) + bottomChromeHeight } : null,
         ],

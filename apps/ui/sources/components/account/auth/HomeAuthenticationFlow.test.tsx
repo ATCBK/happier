@@ -79,6 +79,94 @@ describe('HomeAuthenticationFlow', () => {
         expect(screen.findByTestId('home-auth-key_challenge-login-keyed')).toBeTruthy();
     });
 
+    it('opens a chosen key form directly, leaving the step\'s own back as the only way out', async () => {
+        const screen = await renderScreen(<AuthProvider initialCredentials={null}>
+            <HomeAuthenticationFlow
+                target={{
+                    kind: 'descriptor',
+                    authority: 'account_directory',
+                    descriptor: {
+                        v: 1,
+                        homeServerIdentityId: 'srv_home',
+                        canonicalServerUrl: 'https://home.example.test',
+                        revision: 1,
+                        endpoints: [{ kind: 'https', url: 'https://home.example.test' }],
+                    },
+                }}
+                actions={[keyAction]}
+                openChosenAction
+                returnTo="/setup/wizard"
+                onAuthenticated={vi.fn()}
+                onBack={vi.fn()}
+            />
+        </AuthProvider>);
+
+        expect(screen.findByTestId('home-auth-key_challenge-login-keyed')).toBeNull();
+        expect(screen.findByTestId('home-auth-key-back')).toBeNull();
+    });
+
+    it('runs a chosen one-tap action on arrival, so the person\'s one tap is the only tap', async () => {
+        executeHomeAuthenticationMock.mockReset();
+        const generatedKeyAction: HomeAuthenticationAction = {
+            method: { id: 'key_challenge', enabledActions: [{ id: 'provision', mode: 'keyed' }] },
+            action: { id: 'provision', mode: 'keyed' },
+            execution: { kind: 'generated_key' },
+        };
+        const screen = await renderScreen(<AuthProvider initialCredentials={null}>
+            <HomeAuthenticationFlow
+                target={{
+                    kind: 'descriptor',
+                    authority: 'account_directory',
+                    descriptor: {
+                        v: 1,
+                        homeServerIdentityId: 'srv_home',
+                        canonicalServerUrl: 'https://home.example.test',
+                        revision: 1,
+                        endpoints: [{ kind: 'https', url: 'https://home.example.test' }],
+                    },
+                }}
+                actions={[generatedKeyAction]}
+                openChosenAction
+                returnTo="/teams/team-1/sign-in?serverId=srv_home"
+                onAuthenticated={vi.fn()}
+                onBack={vi.fn()}
+            />
+        </AuthProvider>);
+
+        expect(executeHomeAuthenticationMock).toHaveBeenCalledTimes(1);
+        expect(executeHomeAuthenticationMock).toHaveBeenCalledWith(expect.objectContaining({
+            request: expect.objectContaining({ execution: { kind: 'generated_key' } }),
+        }));
+        // No Back card beside the step's own back, and the card stays as the retry if the run did not finish.
+        expect(screen.findByTestId('home-auth-back')).toBeNull();
+        expect(screen.findByTestId('home-auth-key_challenge-provision-keyed')).toBeTruthy();
+    });
+
+    it('does not run any action on arrival when the caller did not choose one', async () => {
+        executeHomeAuthenticationMock.mockReset();
+        await renderScreen(<AuthProvider initialCredentials={null}>
+            <HomeAuthenticationFlow
+                target={{
+                    kind: 'descriptor',
+                    authority: 'account_directory',
+                    descriptor: {
+                        v: 1,
+                        homeServerIdentityId: 'srv_home',
+                        canonicalServerUrl: 'https://home.example.test',
+                        revision: 1,
+                        endpoints: [{ kind: 'https', url: 'https://home.example.test' }],
+                    },
+                }}
+                actions={[oauthAction]}
+                returnTo="/teams/team-1/sign-in?serverId=srv_home"
+                onAuthenticated={vi.fn()}
+                onBack={vi.fn()}
+            />
+        </AuthProvider>);
+
+        expect(executeHomeAuthenticationMock).not.toHaveBeenCalled();
+    });
+
     it('forwards explicit Team admission context to the shared authentication executor', async () => {
         executeHomeAuthenticationMock.mockReset();
         const screen = await renderScreen(<AuthProvider initialCredentials={null}>

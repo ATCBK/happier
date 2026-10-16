@@ -537,6 +537,8 @@ describe('TeamGroupDetailScreen', () => {
     });
 
     it('asks about removing this person from this Group, not about archiving the Group', async () => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
         // The confirmed operation is `teams.groups.members.remove` for one
         // Account. The archive copy promises retained membership and a
         // restoration that this operation does not have, and it names neither
@@ -563,6 +565,7 @@ describe('TeamGroupDetailScreen', () => {
             expect(harness.requestsFor(GROUP_MEMBER_REMOVE_PATH)).toHaveLength(1);
         });
         const confirmCall = modalConfirm.spy?.mock.calls.at(-1) ?? [];
+        expect(modalConfirm.spy).toHaveBeenCalledTimes(1);
         const title = String(confirmCall[0] ?? '');
         const body = String(confirmCall[1] ?? '');
         expect(title).toContain('removeMemberTitle');

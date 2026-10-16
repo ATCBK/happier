@@ -41,6 +41,7 @@ import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from './pageListMetrics'
 import { SectionItemDensityProvider, useResolvedItemDensity, type ResolvedItemDensity } from './useResolvedItemDensity';
 import { ITEM_ROW_PADDING_HORIZONTAL } from './itemDensityMetrics';
 import { SectionLeadingColumnProvider } from './sectionLeadingColumn';
+import { BareRowBleedContext } from './bareRowBleed';
 import {
     HappierItemGroupBehavior,
     HappierItemGroupSelectionContext,
@@ -571,10 +572,12 @@ export const ItemGroup = React.memo<ItemGroupProps>((props) => {
         density,
     } = props;
     const resolvedAccessibilityLabel = accessibilityLabel ?? (typeof title === 'string' ? title : undefined);
-    // Bare rows in a contained grouped scope (a widget body) bleed by their own padding: their marks and titles
-    // keep the column's edge (the frame header's mark), while the press fill reaches into the frame's padding.
-    const rowPaddingPx = ITEM_ROW_PADDING_HORIZONTAL[useResolvedItemDensity(density)];
-    const bleedRows = contained && !isPage && surface === 'none';
+    // Bare rows in a contained scope (a widget body or flow, grouped or page) bleed by their own padding: their
+    // marks and titles keep the column's edge (the frame header's mark, a flow's Name and section titles), while
+    // the press fill and dividers reach into the column's padding.
+    const groupedRowPaddingPx = ITEM_ROW_PADDING_HORIZONTAL[useResolvedItemDensity(density)];
+    const rowPaddingPx = isPage ? PAGE_LIST_METRICS.rowPaddingHorizontalPx : groupedRowPaddingPx;
+    const bleedRows = contained && surface === 'none';
     const resolvedContainerStyle = contained
         ? [styles.containedContent, bleedRows ? { marginHorizontal: -rowPaddingPx } : null, containerStyle]
         : containerStyle;
@@ -641,6 +644,7 @@ export const ItemGroup = React.memo<ItemGroupProps>((props) => {
                     rows register with it (see `sectionLeadingColumn.tsx`). */}
                 <SectionLeadingColumnProvider>
                 <SectionItemDensityProvider value={density}>
+                <BareRowBleedContext.Provider value={bleedRows ? rowPaddingPx : 0}>
                     <HappierItemGroupBehavior
                         accessibilityRole={accessibilityRole}
                         accessibilityLabel={resolvedAccessibilityLabel}
@@ -679,12 +683,14 @@ export const ItemGroup = React.memo<ItemGroupProps>((props) => {
                     >
                         {children}
                     </HappierItemGroupBehavior>
+                </BareRowBleedContext.Provider>
                 </SectionItemDensityProvider>
                 </SectionLeadingColumnProvider>
 
                 {/* Footer (grouped presentation only; a page reads it as the section description) */}
                 {!isPage && description && (
-                    <View style={styles.footer}>
+                    // A contained footer sits on the rows' text edge, one row inset in from the card.
+                    <View style={[styles.footer, contained ? { paddingHorizontal: rowPaddingPx } : null]}>
                         <Text style={styles.footerText}>
                             {description}
                         </Text>

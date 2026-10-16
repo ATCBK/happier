@@ -39,13 +39,15 @@ export function resolveJoinScreenStorageMode(
 /**
  * The Home's published name.
  *
- * Until the Homes presentation projection publishes one, the canonical address
- * this Home was configured with is the only name it actually owns; its host is
- * what a person recognizes on a join screen. An unconfigured Home publishes
- * nothing, and the join screen says nothing rather than borrowing the
- * application origin's identity.
+ * The name its owner gave it (the same one its features publish as `homePresentation`) leads. Until
+ * it has one, the canonical address this Home was configured with is the only name it actually
+ * owns; its host is what a person recognizes on a join screen. An unconfigured Home publishes
+ * nothing, and the join screen says nothing rather than borrowing the application origin's
+ * identity.
  */
 export function resolveJoinScreenHomeDisplayName(env: NodeJS.ProcessEnv): string | null {
+    const named = env.HAPPIER_HOME_DISPLAY_NAME?.trim();
+    if (named) return named;
     const canonical = resolveConfiguredCanonicalServerUrl(env);
     if (!canonical) return null;
     try {
