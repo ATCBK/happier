@@ -13,13 +13,13 @@ const SessionContinueWithReplayCompatIngressSchema = z
     z.object({
       directory: z.string().min(1),
       agent: z.string().min(1).optional(),
-      backendTarget: z.preprocess(normalizeBackendTargetRefV2InputToV2, BackendTargetRefV2Schema.optional()),
+      backendTarget: z.preprocess(normalizeBackendTargetRefV2InputToV2, z.optional(BackendTargetRefV2Schema)),
       approvedNewDirectoryCreation: z.boolean().optional(),
       permissionMode: z.string().optional(),
       permissionModeUpdatedAt: z.number().finite().optional(),
       modelId: z.string().optional(),
       modelUpdatedAt: z.number().finite().optional(),
-      modelSelection: SessionModelSelectionV1Schema.optional(),
+      modelSelection: z.optional(SessionModelSelectionV1Schema),
       replay: SessionContinueWithReplayRequestSchema,
     }).passthrough(),
   )
