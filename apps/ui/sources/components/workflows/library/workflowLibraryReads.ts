@@ -601,7 +601,7 @@ export function useWorkflowRunWindow(windowId: WorkflowRunListWindowId, options:
 
     const retry = React.useCallback(() => { void refreshRunWindow(windowId, true); }, [windowId]);
     const loadMore = React.useCallback(() => { void loadMoreRunWindow(windowId); }, [windowId]);
-    return {
+    return React.useMemo(() => ({
         serverId: enabled && owned && status.knownAt !== null ? scope?.serverId ?? null : null,
         status: !enabled ? 'loaded' : scopeKey === null ? 'failed' : owned ? status.status : 'loading',
         failure: owned ? status.failure : null,
@@ -613,7 +613,7 @@ export function useWorkflowRunWindow(windowId: WorkflowRunListWindowId, options:
         loadMoreFailed: owned && status.loadMoreFailed,
         retry,
         loadMore,
-    };
+    }), [enabled, hasNextCursor, loadMore, owned, retry, rows, runIds, scope?.serverId, scopeKey, status]);
 }
 
 /** Test seam: forget module read state between cases (the Run store is reset by its own owner). */

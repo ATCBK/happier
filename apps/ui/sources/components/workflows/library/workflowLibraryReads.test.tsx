@@ -331,7 +331,10 @@ describe('Workflow Run windows through real Account storage', () => {
         expect(home.requestsFor(route)[0]?.input).toMatchObject({ request: { targetSessionId: 'bot-session', states: ['queued', 'claimed', 'running', 'pause_requested', 'paused', 'interrupted'] } });
         await act(async () => pending.resolve()); await waitLoaded(first);
         expect(first.getCurrent().runIds).toEqual(['writes-here']); expect(second.getCurrent().runIds).toBe(first.getCurrent().runIds);
-        expect(storage.getState().workflowRunsById['writes-here']?.summary?.origin).toEqual(summary.origin);
+        expect(first.getCurrent().rows[0]?.summary?.origin).toEqual(summary.origin);
+        const windowSnapshot = first.getCurrent();
+        await first.rerender();
+        expect(first.getCurrent()).toBe(windowSnapshot);
         const ids = first.getCurrent().runIds; const before = renders;
         await act(async () => storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run('unrelated'))]));
         expect(first.getCurrent().runIds).toBe(ids); expect(renders).toBe(before);
