@@ -22,10 +22,13 @@ fn needs_nvidia_explicit_sync_workaround(
     nvidia_driver_loaded: bool,
     wayland_display: Option<&OsStr>,
     wayland_socket: Option<&OsStr>,
+    default_wayland_socket_present: bool,
     gdk_backend: Option<&OsStr>,
 ) -> bool {
-    let wayland_reachable =
-        wayland_display.is_some_and(|display| !display.is_empty()) || wayland_socket.is_some();
+    let wayland_reachable = match wayland_display {
+        Some(display) => !display.is_empty(),
+        None => default_wayland_socket_present,
+    } || wayland_socket.is_some();
     // GDK_BACKEND is a priority list; GDK may fall back to any entry, so only a list that leaves
     // Wayland out entirely rules it out.
     let gdk_may_use_wayland = gdk_backend
@@ -38,6 +41,15 @@ fn needs_nvidia_explicit_sync_workaround(
     user_value.is_none() && nvidia_driver_loaded && wayland_reachable && gdk_may_use_wayland
 }
 
+/// libwayland connects to `$XDG_RUNTIME_DIR/wayland-0` when `WAYLAND_DISPLAY` is unset, and GDK
+/// tries Wayland first, so a session launched without `WAYLAND_DISPLAY` still lands on Wayland.
+fn default_wayland_socket_present() -> bool {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .is_some_and(|runtime_dir| Path::new(&runtime_dir).join("wayland-0").exists())
+}
+
+/// Sets `__NV_DISABLE_EXPLICIT_SYNC=1` when the workaround above applies. Call it before Tauri
+/// creates the GTK app, while the process has no other threads that could read the environment.
 pub fn apply_before_gtk_init() {
     let user_value = std::env::var_os(NVIDIA_EXPLICIT_SYNC_VAR);
     let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
@@ -48,6 +60,7 @@ pub fn apply_before_gtk_init() {
         Path::new(NVIDIA_DRIVER_VERSION_PATH).exists(),
         wayland_display.as_deref(),
         wayland_socket.as_deref(),
+        default_wayland_socket_present(),
         gdk_backend.as_deref(),
     ) {
         std::env::set_var(NVIDIA_EXPLICIT_SYNC_VAR, "1");
@@ -64,6 +77,7 @@ mod tests {
         nvidia: bool,
         wayland_display: Option<&'a str>,
         wayland_socket: Option<&'a str>,
+        default_socket: bool,
         gdk_backend: Option<&'a str>,
     }
 
@@ -72,6 +86,7 @@ mod tests {
         nvidia: true,
         wayland_display: Some("wayland-0"),
         wayland_socket: None,
+        default_socket: false,
         gdk_backend: None,
     };
 
@@ -81,6 +96,7 @@ mod tests {
             case.nvidia,
             case.wayland_display.map(OsStr::new),
             case.wayland_socket.map(OsStr::new),
+            case.default_socket,
             case.gdk_backend.map(OsStr::new),
         )
     }
@@ -104,6 +120,15 @@ mod tests {
         assert!(needs(Case {
             wayland_display: None,
             wayland_socket: Some("3"),
+            ..NVIDIA_WAYLAND
+        }));
+    }
+
+    #[test]
+    fn applies_when_wayland_is_only_the_default_socket() {
+        assert!(needs(Case {
+            wayland_display: None,
+            default_socket: true,
             ..NVIDIA_WAYLAND
         }));
     }
@@ -135,8 +160,10 @@ mod tests {
             wayland_display: None,
             ..NVIDIA_WAYLAND
         }));
+        // libwayland only falls back to wayland-0 when WAYLAND_DISPLAY is unset, not empty.
         assert!(!needs(Case {
             wayland_display: Some(""),
+            default_socket: true,
             ..NVIDIA_WAYLAND
         }));
         for backend in ["x11", "broadway"] {
