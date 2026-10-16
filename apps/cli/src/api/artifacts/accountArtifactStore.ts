@@ -1,5 +1,4 @@
 import axios from 'axios';
-import { z } from 'zod/mini';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1 } from '@happier-dev/transfers';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -255,7 +254,7 @@ function parseStoredArtifact(raw: unknown): StoredArtifact | null {
     ...readStoredAccess(value) };
 }
 
-const artifactAuthorityProjectionSchema = z.pick(ArtifactAccessRecipientCensusResponseV1Schema, { ownerAccountId: true, access: true, encryptionMode: true });
+const artifactAuthorityProjectionSchema = ArtifactAccessRecipientCensusResponseV1Schema.pick({ ownerAccountId: true, access: true, encryptionMode: true });
 
 function readStoredAccess(value: Record<string, unknown>): Pick<StoredArtifact, 'ownerAccountId' | 'access' | 'encryptionMode'> {
   const projection = artifactAuthorityProjectionSchema
