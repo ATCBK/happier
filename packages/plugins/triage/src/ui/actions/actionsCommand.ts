@@ -220,6 +220,11 @@ export function triageUpdateActionInputV1(
   return { v: 1, kind: 'update', actionId, expectedRevision, ...draftWire(draft) };
 }
 
+/** Put the shipped catalog back: the Account's own catalog is deleted at the revision it was read at. */
+export function triageResetActionsInputV1(expectedRevision: string): TriageAdministerActionInputV1 {
+  return { v: 1, kind: 'reset', expectedRevision };
+}
+
 export function triageDeleteActionInputV1(
   actionId: string,
   expectedRevision: string,

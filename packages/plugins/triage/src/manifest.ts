@@ -552,8 +552,8 @@ function createTriagePlugin() {
         run: createTriageReadActionsActionHandler(),
       },
       [TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1]: {
-        title: 'Add, change, remove or reorder an action',
-        description: 'Creates, renames, disables, reconfigures, removes or reorders one configured action.',
+        title: 'Add, change, remove, reorder or restore actions',
+        description: 'Creates, renames, disables, reconfigures, removes or reorders one configured action, or restores the shipped defaults.',
         surfaces: ['ui', 'agent', 'mcp', 'cli'],
         placementBindings: [],
         // It writes durable Account state, and the exact inverse is one press
@@ -561,7 +561,7 @@ function createTriagePlugin() {
         dangerLevel: 'writesLocal',
         confirmation: {
           title: 'Apply this configured-action change?',
-          body: 'This adds, changes, removes, enables, disables, or reorders an entry action in this Happier Account.',
+          body: 'This adds, changes, removes, enables, disables, reorders, or restores the default entry actions in this Happier Account.',
           confirmLabel: 'Apply change',
         },
         inputSchema: TriageAdministerActionInputV1Schema,

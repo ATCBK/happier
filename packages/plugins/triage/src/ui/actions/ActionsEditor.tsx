@@ -2,13 +2,14 @@ import * as React from 'react';
 import {
   Button,
   EmptyState,
-  Heading,
+  Item,
+  ItemGroup,
   Row,
   ScrollArea,
   Select,
+  Spinner,
   Stack,
   Status,
-  Text,
   TextField,
   Toggle,
   usePluginTranslation,
@@ -20,6 +21,7 @@ import {
   triageDeleteActionInputV1,
   triageMovedActionOrderV1,
   triageReorderActionsInputV1,
+  triageResetActionsInputV1,
   triageUpdateActionInputV1,
   type TriageActionEditorDraftV1,
 } from './actionsCommand.js';
@@ -261,6 +263,11 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
    */
   const busy = actions.busy || actions.unavailableReason !== null || actions.revision === null;
   const blocker = draft === null ? null : triageActionDraftBlockerV1(draft);
+  const restoreTitle = translate('plugins.triage.surface.actions.restore', 'Restore defaults');
+  const restoreDescription = translate(
+    'plugins.triage.surface.actions.restoreDescription',
+    'Brings back the built-in actions as they shipped and removes the ones you added.',
+  );
   const draftRevisionStale = target === null
     ? false
     : isTriageActionDraftRevisionStaleV1(target.baseRevision, actions.revision);
@@ -282,221 +289,287 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
       style={TRIAGE_ACTIONS_EDITOR_SCROLL_STYLE_V1}
     >
     <Stack gap="small">
-      <Row gap="small" align="center">
-        <Heading
-          level={2}
-          valueKey="plugins.triage.surface.actions.title"
-          value="Actions"
-        />
-        <Button
-          titleKey="plugins.triage.surface.actions.add"
-          title="Add an action"
-          variant="primary"
-          disabled={busy}
-          onPress={() => {
-            if (actions.revision === null) return;
-            setTarget({ kind: 'create', baseRevision: actions.revision });
-            setDraft(newTriageActionDraftV1());
-          }}
-        />
-        {props.onClose === undefined ? null : (
-          <Button
-            titleKey="plugins.triage.surface.actions.close"
-            title="Done"
-            variant="secondary"
-            onPress={props.onClose}
-          />
+      <ItemGroup
+        title={translate('plugins.triage.surface.actions.title', 'Actions')}
+        description={translate(
+          'plugins.triage.surface.actions.description',
+          'What you can start from an entry. Turn one off to stop offering it.',
         )}
-      </Row>
-
-      {actions.unavailableReason === null ? null : (
-        <Row gap="small" align="center">
-          <Status tone="warning" label={actions.unavailableReason} />
-          <Button
-            titleKey="plugins.triage.surface.actions.retry"
-            title="Retry"
-            variant="secondary"
-            onPress={actions.retry}
+        action={(
+          <Row gap="small" align="center">
+            <Button
+              titleKey="plugins.triage.surface.actions.add"
+              title="Add an action"
+              variant="primary"
+              disabled={busy}
+              onPress={() => {
+                if (actions.revision === null) return;
+                setTarget({ kind: 'create', baseRevision: actions.revision });
+                setDraft(newTriageActionDraftV1());
+              }}
+            />
+            {props.onClose === undefined ? null : (
+              <Button
+                titleKey="plugins.triage.surface.actions.close"
+                title="Done"
+                variant="secondary"
+                onPress={props.onClose}
+              />
+            )}
+          </Row>
+        )}
+      >
+        {actions.unavailableReason !== null ? (
+          <Item
+            title={actions.unavailableReason}
+            accessory={(
+              <Button
+                titleKey="plugins.triage.surface.actions.retry"
+                title="Retry"
+                variant="secondary"
+                onPress={actions.retry}
+              />
+            )}
+            accessoryOutsidePressable
+            accessoryWraps
           />
-        </Row>
-      )}
+        ) : !actions.loaded ? (
+          <Item
+            title={translate('plugins.triage.surface.actions.loading', 'Loading actions…')}
+            accessory={<Spinner size="small" accessibilityLabel={translate('plugins.triage.surface.actions.loading', 'Loading actions…')} />}
+          />
+        ) : actions.read.kind === 'unreadable' ? (
+          <Item
+            title={translate(
+              'plugins.triage.surface.actions.unreadable',
+              'These actions were written by a newer version of Happier, so they were left untouched.',
+            )}
+          />
+        ) : (
+          <>
+            {actions.actions.map((action, index) => (
+              <TriageActionRow
+                key={action.actionId}
+                action={action}
+                busy={busy}
+                first={index === 0}
+                last={index === actions.actions.length - 1}
+                onEdit={() => {
+                  if (actions.revision === null) return;
+                  setTarget({
+                    kind: 'update',
+                    actionId: action.actionId,
+                    baseRevision: actions.revision,
+                  });
+                  setDraft(triageActionDraftV1(action));
+                }}
+                onToggle={(enabled) => {
+                  if (actions.revision === null) return;
+                  void actions.administer(triageUpdateActionInputV1(
+                    action.actionId,
+                    { ...triageActionDraftV1(action), enabled },
+                    actions.revision,
+                  ));
+                }}
+                onDelete={() => {
+                  if (actions.revision === null) return;
+                  void actions.administer(
+                    triageDeleteActionInputV1(action.actionId, actions.revision),
+                  );
+                }}
+                onMove={(direction) => { void move(action.actionId, direction); }}
+              />
+            ))}
+            {actions.actions.length === 0 ? (
+              <EmptyState
+                titleKey="plugins.triage.surface.actions.empty.title"
+                title="No actions"
+                descriptionKey="plugins.triage.surface.actions.empty.description"
+                description="Nothing can be started from an entry until you add an action here."
+              />
+            ) : null}
+            <Item
+              title={restoreTitle}
+              subtitle={restoreDescription}
+              accessoryOutsidePressable
+              accessoryWraps
+              accessory={(
+                <Button
+                  titleKey="plugins.triage.surface.actions.restoreAction"
+                  title="Restore"
+                  variant="secondary"
+                  disabled={busy || actions.read.kind === 'absent'}
+                  onPress={() => {
+                    if (actions.revision === null) return;
+                    void actions.administer(triageResetActionsInputV1(actions.revision));
+                  }}
+                />
+              )}
+            />
+          </>
+        )}
+      </ItemGroup>
+
       {actions.notice === null ? null : (
         <Status
           tone={actions.notice.tone}
           label={actions.notice.message}
         />
       )}
-      {actions.loaded && actions.read.kind === 'unreadable' ? (
-        <Status
-          tone="warning"
-          labelKey="plugins.triage.surface.actions.unreadable"
-          label="These actions were written by a newer version of Happier, so they were left untouched."
-        />
-      ) : null}
-
-      {actions.actions.length === 0 ? (
-        <EmptyState
-          titleKey="plugins.triage.surface.actions.empty.title"
-          title="No actions"
-          descriptionKey="plugins.triage.surface.actions.empty.description"
-          description="Nothing can be started from an entry until you add an action here."
-        />
-      ) : (
-        <Stack gap="small">
-          {actions.actions.map((action, index) => (
-            <TriageActionRow
-              key={action.actionId}
-              action={action}
-              busy={busy}
-              first={index === 0}
-              last={index === actions.actions.length - 1}
-              onEdit={() => {
-                if (actions.revision === null) return;
-                setTarget({
-                  kind: 'update',
-                  actionId: action.actionId,
-                  baseRevision: actions.revision,
-                });
-                setDraft(triageActionDraftV1(action));
-              }}
-              onDelete={() => {
-                if (actions.revision === null) return;
-                void actions.administer(
-                  triageDeleteActionInputV1(action.actionId, actions.revision),
-                );
-              }}
-              onMove={(direction) => { void move(action.actionId, direction); }}
-            />
-          ))}
-        </Stack>
-      )}
 
       {draft === null || target === null ? null : (
         <Stack gap="small">
-          <Heading
-            level={3}
-            valueKey={target.kind === 'create'
-              ? 'plugins.triage.surface.actions.form.create'
-              : 'plugins.triage.surface.actions.form.update'}
-            value={target.kind === 'create' ? 'New action' : 'Edit action'}
-          />
-          <TextField
-            labelKey="plugins.triage.surface.actions.field.label"
-            label="Name"
-            value={draft.label}
-            onChange={(label) => { setDraft({ ...draft, label }); }}
-          />
-          <Toggle
-            label={translate('plugins.triage.surface.actions.field.enabled', 'Offer this action')}
-            value={draft.enabled}
-            onChange={(enabled) => { setDraft({ ...draft, enabled }); }}
-          />
-          <Select
-            label={translate('plugins.triage.surface.actions.field.appliesTo', 'Offer it on')}
-            multiple
-            options={options(TRIAGE_EDITOR_SUBJECTS_V1, SUBJECT_LABELS, translate)}
-            value={[...draft.appliesTo]}
-            onChange={(value) => { setDraft(withTriageAppliesToV1(draft, stringList(value))); }}
-          />
-          <Select
-            label={translate('plugins.triage.surface.actions.field.workspaceMode', 'It needs')}
-            options={options(TRIAGE_EDITOR_WORKSPACE_MODES_V1, WORKSPACE_LABELS, translate)}
-            value={draft.workspaceMode}
-            onChange={(value) => {
-              const mode = firstString(value);
-              if (mode === null) return;
-              const admitted = TRIAGE_EDITOR_WORKSPACE_MODES_V1
-                .find((candidate) => candidate === mode);
-              if (admitted === undefined) return;
-              setDraft({ ...draft, workspaceMode: admitted });
-            }}
-          />
-          <Select
-            label={translate('plugins.triage.surface.actions.field.arm', 'Pressing it')}
-            options={options(TRIAGE_EDITOR_TARGET_KINDS_V1, TARGET_LABELS, translate)}
-            value={draft.target.kind}
-            onChange={(value) => {
-              const kind = firstString(value);
-              const admitted = TRIAGE_EDITOR_TARGET_KINDS_V1
-                .find((candidate) => candidate === kind);
-              if (admitted === undefined) return;
-              setDraft(withTriageActionTargetKindV1(draft, admitted));
-            }}
-          />
-          {/*
-            * A PICKER first, because the record stores `LaunchProfileV2.id` —
-            * an opaque stable identity nobody can type — so asking a person to
-            * type one makes the member unwritable in practice.
-            *
-            * And a field BESIDE it whenever the picker cannot be authoritative.
-            * The picker is only an authoring path while the catalog answers;
-            * when it does not, a picker alone is no path at all, and this
-            * member was left unwritable through every surface. The field is the
-            * fallback, never the primary way in.
-            */}
-          <Select
-            label={translate(
-              'plugins.triage.surface.actions.field.profileId',
-              'Launch profile',
-            )}
-            options={profileOptions}
-            value={draft.profileId ?? ''}
-            onChange={(value) => {
-              setDraft(withTriageProfileIdV1(draft, firstString(value) ?? ''));
-            }}
-          />
-          {profiles.coverage === 'complete' || profiles.pending ? null : (
-            <TextField
-              labelKey="plugins.triage.surface.actions.field.profileIdRaw"
-              label="Launch profile id (your profiles could not be listed)"
-              value={draft.profileId ?? ''}
-              onChange={(profileId) => {
-                setDraft(withTriageProfileIdV1(draft, profileId));
-              }}
+          <ItemGroup
+            title={target.kind === 'create'
+              ? translate('plugins.triage.surface.actions.form.create', 'New action')
+              : translate('plugins.triage.surface.actions.form.update', 'Edit action')}
+          >
+            <FieldRow title={translate('plugins.triage.surface.actions.field.label', 'Name')}>
+              <TextField
+                labelKey="plugins.triage.surface.actions.field.label"
+                label="Name"
+                value={draft.label}
+                onChange={(label) => { setDraft({ ...draft, label }); }}
+              />
+            </FieldRow>
+            <Item
+              title={translate('plugins.triage.surface.actions.field.enabled', 'Offer this action')}
+              accessoryOutsidePressable
+              accessory={(
+                <Toggle
+                  label={translate('plugins.triage.surface.actions.field.enabled', 'Offer this action')}
+                  value={draft.enabled}
+                  onChange={(enabled) => { setDraft({ ...draft, enabled }); }}
+                />
+              )}
             />
-          )}
-          {/*
-            * The prompt is offered on BOTH arms, because both answer the same
-            * question: an agent action sends it, and `review.start` takes it as
-            * its required `instructions`. It is a PICKER rather than a text
-            * field because the record stores the Library's stable id, which
-            * nobody can type — a field here would make a correct reference
-            * unwritable and leave the member configured-looking and inert.
-            */}
-          <Select
-            label={translate('plugins.triage.surface.actions.field.prompt', 'Prompt')}
-            options={promptOptions}
-            value={draft.target.promptInvocationId ?? ''}
-            onChange={(value) => {
-              setDraft(withTriagePromptTokenV1(draft, firstString(value) ?? ''));
-            }}
-          />
-          {!promptAllowsArgs || draft.target.promptInvocationId === null ? null : (
-            <TextField
-              labelKey="plugins.triage.surface.actions.field.promptArgs"
-              label="Prompt arguments"
-              value={draft.target.promptArgsText ?? ''}
-              onChange={(promptArgsText) => {
-                setDraft(withTriagePromptArgsTextV1(draft, promptArgsText));
-              }}
-            />
-          )}
-          {draft.target.kind !== 'agent' ? null : (
-            <Stack gap="small">
+            <FieldRow title={translate('plugins.triage.surface.actions.field.appliesTo', 'Offer it on')}>
               <Select
-                label={translate('plugins.triage.surface.actions.field.delivery', 'Then')}
-                options={options(TRIAGE_EDITOR_DELIVERIES_V1, DELIVERY_LABELS, translate)}
-                value={draft.target.delivery}
+                presentation="field"
+                label={translate('plugins.triage.surface.actions.field.appliesTo', 'Offer it on')}
+                multiple
+                options={options(TRIAGE_EDITOR_SUBJECTS_V1, SUBJECT_LABELS, translate)}
+                value={[...draft.appliesTo]}
+                onChange={(value) => { setDraft(withTriageAppliesToV1(draft, stringList(value))); }}
+              />
+            </FieldRow>
+            <FieldRow title={translate('plugins.triage.surface.actions.field.workspaceMode', 'It needs')}>
+              <Select
+                presentation="field"
+                label={translate('plugins.triage.surface.actions.field.workspaceMode', 'It needs')}
+                options={options(TRIAGE_EDITOR_WORKSPACE_MODES_V1, WORKSPACE_LABELS, translate)}
+                value={draft.workspaceMode}
                 onChange={(value) => {
-                  const delivery = firstString(value);
-                  const admitted = TRIAGE_EDITOR_DELIVERIES_V1
-                    .find((candidate) => candidate === delivery);
+                  const mode = firstString(value);
+                  if (mode === null) return;
+                  const admitted = TRIAGE_EDITOR_WORKSPACE_MODES_V1
+                    .find((candidate) => candidate === mode);
                   if (admitted === undefined) return;
-                  setDraft(withTriageDeliveryV1(draft, admitted));
+                  setDraft({ ...draft, workspaceMode: admitted });
                 }}
               />
-            </Stack>
-          )}
+            </FieldRow>
+            <FieldRow title={translate('plugins.triage.surface.actions.field.arm', 'Pressing it')}>
+              <Select
+                presentation="field"
+                label={translate('plugins.triage.surface.actions.field.arm', 'Pressing it')}
+                options={options(TRIAGE_EDITOR_TARGET_KINDS_V1, TARGET_LABELS, translate)}
+                value={draft.target.kind}
+                onChange={(value) => {
+                  const kind = firstString(value);
+                  const admitted = TRIAGE_EDITOR_TARGET_KINDS_V1
+                    .find((candidate) => candidate === kind);
+                  if (admitted === undefined) return;
+                  setDraft(withTriageActionTargetKindV1(draft, admitted));
+                }}
+              />
+            </FieldRow>
+            {/*
+              * A PICKER first, because the record stores `LaunchProfileV2.id` —
+              * an opaque stable identity nobody can type — so asking a person to
+              * type one makes the member unwritable in practice.
+              *
+              * And a field BESIDE it whenever the picker cannot be authoritative.
+              * The picker is only an authoring path while the catalog answers;
+              * when it does not, a picker alone is no path at all, and this
+              * member was left unwritable through every surface. The field is the
+              * fallback, never the primary way in.
+              */}
+            <FieldRow title={translate('plugins.triage.surface.actions.field.profileId', 'Launch profile')}>
+              <Select
+                presentation="field"
+                label={translate('plugins.triage.surface.actions.field.profileId', 'Launch profile')}
+                options={profileOptions}
+                value={draft.profileId ?? ''}
+                onChange={(value) => {
+                  setDraft(withTriageProfileIdV1(draft, firstString(value) ?? ''));
+                }}
+              />
+            </FieldRow>
+            {profiles.coverage === 'complete' || profiles.pending ? null : (
+              <FieldRow title={translate(
+                'plugins.triage.surface.actions.field.profileIdRaw',
+                'Launch profile id (your profiles could not be listed)',
+              )}>
+                <TextField
+                  labelKey="plugins.triage.surface.actions.field.profileIdRaw"
+                  label="Launch profile id (your profiles could not be listed)"
+                  value={draft.profileId ?? ''}
+                  onChange={(profileId) => {
+                    setDraft(withTriageProfileIdV1(draft, profileId));
+                  }}
+                />
+              </FieldRow>
+            )}
+            {/*
+              * The prompt is offered on BOTH arms, because both answer the same
+              * question: an agent action sends it, and `review.start` takes it as
+              * its required `instructions`. It is a PICKER rather than a text
+              * field because the record stores the Library's stable id, which
+              * nobody can type — a field here would make a correct reference
+              * unwritable and leave the member configured-looking and inert.
+              */}
+            <FieldRow title={translate('plugins.triage.surface.actions.field.prompt', 'Prompt')}>
+              <Select
+                presentation="field"
+                label={translate('plugins.triage.surface.actions.field.prompt', 'Prompt')}
+                options={promptOptions}
+                value={draft.target.promptInvocationId ?? ''}
+                onChange={(value) => {
+                  setDraft(withTriagePromptTokenV1(draft, firstString(value) ?? ''));
+                }}
+              />
+            </FieldRow>
+            {!promptAllowsArgs || draft.target.promptInvocationId === null ? null : (
+              <FieldRow title={translate('plugins.triage.surface.actions.field.promptArgs', 'Prompt arguments')}>
+                <TextField
+                  labelKey="plugins.triage.surface.actions.field.promptArgs"
+                  label="Prompt arguments"
+                  value={draft.target.promptArgsText ?? ''}
+                  onChange={(promptArgsText) => {
+                    setDraft(withTriagePromptArgsTextV1(draft, promptArgsText));
+                  }}
+                />
+              </FieldRow>
+            )}
+            {draft.target.kind !== 'agent' ? null : (
+              <FieldRow title={translate('plugins.triage.surface.actions.field.delivery', 'Then')}>
+                <Select
+                  presentation="field"
+                  label={translate('plugins.triage.surface.actions.field.delivery', 'Then')}
+                  options={options(TRIAGE_EDITOR_DELIVERIES_V1, DELIVERY_LABELS, translate)}
+                  value={draft.target.delivery}
+                  onChange={(value) => {
+                    const delivery = firstString(value);
+                    const admitted = TRIAGE_EDITOR_DELIVERIES_V1
+                      .find((candidate) => candidate === delivery);
+                    if (admitted === undefined) return;
+                    setDraft(withTriageDeliveryV1(draft, admitted));
+                  }}
+                />
+              </FieldRow>
+            )}
+          </ItemGroup>
           {blocker === null ? null : (
             <Status
               tone="muted"
@@ -574,60 +647,93 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
   );
 }
 
+/** One labelled field of the editor: the row names it, the field sits at its trailing edge (beneath on phones). */
+function FieldRow(props: Readonly<{ title: string; children: React.ReactNode }>): React.ReactElement {
+  return (
+    <Item
+      title={props.title}
+      fieldAccessory
+      accessoryOutsidePressable
+      accessory={props.children}
+    />
+  );
+}
+
 type TriageActionRowProps = Readonly<{
   action: TriageActionV1;
   busy: boolean;
   first: boolean;
   last: boolean;
   onEdit: () => void;
+  onToggle: (enabled: boolean) => void;
   onDelete: () => void;
   onMove: (direction: 'up' | 'down') => void;
 }>;
 
+/**
+ * One action, one decision: whether it is offered. The row says what pressing it does and where it
+ * shows up; opening the row configures it, and the rarer moves live in its menu.
+ */
 function TriageActionRow(props: TriageActionRowProps): React.ReactElement {
   const { action, busy } = props;
+  const translate = usePluginTranslation();
   // The same resolution the pressed control uses: a still-shipped label
   // translates and a renamed one shows the person's own words, so the editor
   // and the control can never disagree about what an action is called.
   const titleKey = readTriageActionTitleKeyV1(action);
+  const title = titleKey === null ? action.label : translate(titleKey, action.label);
+  const arm = TARGET_LABELS[action.target.kind];
+  const subtitle = [
+    arm === undefined ? action.target.kind : translate(arm.key, arm.text),
+    action.appliesTo
+      .map((subject) => {
+        const label = SUBJECT_LABELS[subject];
+        return label === undefined ? subject : translate(label.key, label.text);
+      })
+      .join(', '),
+  ].join(' · ');
   return (
-    <Row gap="small" align="center">
-      <Text {...(titleKey === null ? {} : { valueKey: titleKey })} value={action.label} />
-      {action.enabled ? null : (
-        <Status
-          tone="muted"
-          labelKey="plugins.triage.surface.actions.disabled"
-          label="Not offered"
+    <Item
+      title={title}
+      subtitle={subtitle}
+      onPress={props.onEdit}
+      disabled={busy}
+      accessory={(
+        <Toggle
+          label={title}
+          value={action.enabled}
+          disabled={busy}
+          onChange={props.onToggle}
         />
       )}
-      <Button
-        titleKey="plugins.triage.surface.actions.moveUp"
-        title="Move up"
-        variant="secondary"
-        disabled={busy || props.first}
-        onPress={() => { props.onMove('up'); }}
-      />
-      <Button
-        titleKey="plugins.triage.surface.actions.moveDown"
-        title="Move down"
-        variant="secondary"
-        disabled={busy || props.last}
-        onPress={() => { props.onMove('down'); }}
-      />
-      <Button
-        titleKey="plugins.triage.surface.actions.edit"
-        title="Configure"
-        variant="secondary"
-        disabled={busy}
-        onPress={props.onEdit}
-      />
-      <Button
-        titleKey="plugins.triage.surface.actions.remove"
-        title="Remove"
-        variant="secondary"
-        disabled={busy}
-        onPress={props.onDelete}
-      />
-    </Row>
+      accessoryOutsidePressable
+      secondaryActions={[
+        {
+          id: 'up',
+          label: translate('plugins.triage.surface.actions.moveUp', 'Move up'),
+          disabled: busy || props.first,
+        },
+        {
+          id: 'down',
+          label: translate('plugins.triage.surface.actions.moveDown', 'Move down'),
+          disabled: busy || props.last,
+        },
+        {
+          id: 'remove',
+          label: translate('plugins.triage.surface.actions.remove', 'Remove'),
+          destructive: true,
+          disabled: busy,
+        },
+      ]}
+      secondaryActionAccessibilityLabel={translate(
+        'plugins.triage.surface.row.moreActions',
+        'More actions for {title}',
+        { title },
+      )}
+      onSecondaryAction={(id) => {
+        if (id === 'up' || id === 'down') props.onMove(id);
+        else if (id === 'remove') props.onDelete();
+      }}
+    />
   );
 }
