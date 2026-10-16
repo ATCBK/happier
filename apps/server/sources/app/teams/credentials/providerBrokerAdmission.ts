@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { PROVIDER_BROKER_ROUTE_AUDIENCE_V1, ProviderBrokerOpenRequestV1Schema, ProviderBrokerRequestAdmissionV1Schema, SignedProviderBrokerRouteGrantV1Schema, type ProviderBrokerAdmissionFailureCodeV1, type ProviderBrokerOpenRequestV1, type ProviderBrokerOpenResponseV1, type ProviderBrokerRequestAdmissionV1, type SignedProviderBrokerRouteGrantV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
@@ -733,7 +734,7 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         return failure('resource_unavailable');
     }
     const source = TeamCredentialSourceBindingV1Schema.safeParse(rawSource);
-    const policy = TeamCredentialRequestPolicyV1Schema.nullable().safeParse(rawPolicy);
+    const policy = z.nullable(TeamCredentialRequestPolicyV1Schema).safeParse(rawPolicy);
     if (!source.success || !policy.success) return failure('resource_unavailable');
     // The Runner's reviewed selection remains bound to its original request.
     // Established refreshes recheck current policy above without advancing

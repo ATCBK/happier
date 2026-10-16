@@ -2558,8 +2558,8 @@ describe('Team credential Provider broker admission', () => {
                     expectedCredentialRevision: 1,
                     proof: {
                         challengeId: challenge.challengeId,
-                        publicKey: privacyKit.encodeBase64(new Uint8Array(requesterSigning.publicKey)),
-                        signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+                        publicKey: encodePasswordCredentialFieldV1(new Uint8Array(requesterSigning.publicKey)),
+                        signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                             createPasswordMutationChallengeSigningInputV1(challenge),
                             requesterSigning.secretKey,
                         ))),
