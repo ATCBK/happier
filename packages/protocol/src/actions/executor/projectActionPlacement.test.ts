@@ -36,13 +36,44 @@ function sourceReads(manifest?: ProjectManifestV1, workerStatus?: unknown, manag
       machineId: 'worker', priorityTier: 0 } };
     throw new Error(`Unexpected placement read: ${actionId}`);
   };
-  return { reads, place: (selection: { kind: 'native'; source: typeof native } | { kind: 'named'; name: string },
+  return { reads, executeCanonicalAction, place: (selection: { kind: 'native'; source: typeof native } | { kind: 'named'; name: string },
     choice?: ProjectExecutionChoiceV1, context: Parameters<typeof resolveProjectActionMachineV1>[0]['context'] = {}) =>
     resolveProjectActionMachineV1({ actionId: 'projects.script.run', input: { workspace, selection, ...(choice ? { choice } : {}) },
       context, ...(managed ? { homeId: 'home' } : {}), executeCanonicalAction, createRequestKey: () => 'request' }) };
 }
 
 describe('Project Action declaration placement ceiling', () => {
+  it('starts independent SOURCE and preference reads together before resolving placement', async () => {
+    const h = sourceReads({ version: 1, scripts: { check: { execution: 'portable', source: native } } });
+    let releaseInspection!: () => void;
+    const inspectionReady = new Promise<void>(resolve => { releaseInspection = resolve; });
+    const pending = resolveProjectActionMachineV1({ actionId: 'projects.script.run',
+      input: { workspace, selection: { kind: 'named', name: 'check' } }, context: {}, createRequestKey: () => 'request',
+      executeCanonicalAction: async (actionId, input) => {
+        const response = h.executeCanonicalAction(actionId, input);
+        if (actionId === 'projects.inspect') await inspectionReady;
+        return await response;
+      } });
+    try {
+      // Home preferences are independent of SOURCE bytes. Holding the real
+      // remote inspection response must not delay issuing that Home read.
+      expect(h.reads).toContain('projects.worker.preferences.get');
+    } finally { releaseInspection(); }
+    expect(await pending).toEqual({ ok: true, machineId: 'worker' });
+  });
+  it.each([true, false])('preserves SOURCE refusal precedence over an early preference rejection (source fails=%s)', async sourceFails => {
+    const h = sourceReads({ version: 1, scripts: { check: { execution: 'portable', source: native } } });
+    const error = new Error('Home unavailable');
+    const pending = resolveProjectActionMachineV1({ actionId: 'projects.script.run',
+      input: { workspace, selection: { kind: 'named', name: 'check' } }, context: {}, createRequestKey: () => 'request',
+      executeCanonicalAction: async (actionId, input) => {
+        if (actionId === 'projects.worker.preferences.get') throw error;
+        if (actionId === 'projects.inspect' && sourceFails) return { ok: false, errorCode: 'source_unavailable', error: 'source_unavailable' };
+        return await h.executeCanonicalAction(actionId, input);
+      } });
+    if (sourceFails) expect(await pending).toMatchObject({ ok: false, errorCode: 'source_unavailable' });
+    else await expect(pending).rejects.toBe(error);
+  });
   it.each(['asleep', 'starting'] as const)('addresses an exact %s managed target before guest status, leaving wake and admission to the original finite root', async state => {
     const launch = { provider: { pluginId: 'custom.compute', localId: 'native' }, schemaVersion: 1, name: 'Worker', choices: {} };
     const managed: ManagedMachineV1 = { id: 'managed', homeId: 'home', custodianAccountId: 'account', launch,
