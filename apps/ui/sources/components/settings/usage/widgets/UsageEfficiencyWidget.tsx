@@ -147,7 +147,9 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
                     meaning: perMtokComparison.delta <= 0 ? ('good' as const) : ('bad' as const),
                   },
                 }
-              : {})}
+              : isUsageReadOutstanding(props.slice, ['comparison'])
+                ? { comparisonRoom: { value: '▼ 100%', label: t('usage.board.page.vsBefore') } }
+                : {})}
           />
         </View>
         <View style={styles.cell}>

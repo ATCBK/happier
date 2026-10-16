@@ -110,6 +110,7 @@ function UsageQueryWidgetBody(
   // widgets below it do not move when the facts arrive; every other body holds three list rows.
   const presentation = useWidgetPresentation();
   const readingShape = props.id === 'usage_period_summary' ? { kind: 'summary' as const }
+    : props.id === 'usage_capacity' ? { kind: 'capacity' as const }
     : props.id === 'usage_coach' && isUsageCoachStrip(presentation) ? { kind: 'strip' as const } : undefined;
   if (!query)
     return (

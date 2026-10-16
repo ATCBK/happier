@@ -23,6 +23,12 @@ export type HappierDataMetricProps = Readonly<{
   unit?: string;
   comparison?: HappierDataMetricComparison;
   /**
+   * `stat` size, while a comparison is still being read: its text, invisible and hidden from assistive
+   * technology, so the line's room is held and the comparison's arrival moves nothing below it.
+   * Ignored once `comparison` is given.
+   */
+  comparisonRoom?: Readonly<{ value: string; label: string }>;
+  /**
    * `hero` is the one number a widget is about (the period's total); `stat` is one of a row of
    * labelled facts; `default` keeps the original metric node.
    */
@@ -175,6 +181,25 @@ export function HappierDataMetric(props: HappierDataMetricProps) {
         <HappierText style={text.caption}>{props.comparison.label}</HappierText>
       ) : null}
       {size !== 'hero' ? comparison : null}
+      {size === 'stat' && !props.comparison && props.comparisonRoom ? (
+        <View
+          aria-hidden
+          importantForAccessibility="no-hide-descendants"
+          testID={props.testID ? `${props.testID}-comparison-room` : undefined}
+          style={{
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            alignItems: 'baseline',
+            columnGap: HAPPIER_DATA_METRICS.comparisonGapPx,
+            opacity: 0,
+          }}
+        >
+          <HappierText style={text.captionStrong} tabularNumbers>
+            {props.comparisonRoom.value}
+          </HappierText>
+          <HappierText style={text.caption}>{props.comparisonRoom.label}</HappierText>
+        </View>
+      ) : null}
       {props.caption ? (
         <HappierText style={text.caption} numberOfLines={2}>
           {props.caption}

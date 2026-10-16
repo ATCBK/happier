@@ -9,6 +9,7 @@ import { createHostApiStub, createSurfaceContext } from '../../surfaceFixture.te
 import type { HappierLayoutChangeEvent } from '../portableTypes.js';
 import { HappierDataChart } from './Chart.js';
 import { HappierDataRows } from './DataRows.js';
+import { HappierDataMetric } from './Metric.js';
 
 const query = (root: HTMLElement, testID: string) => root.querySelector<HTMLElement>(`[data-testid="${testID}"]`);
 
@@ -196,6 +197,26 @@ describe('public data nodes through React Native Web', () => {
     );
     try {
       expect(query(mount.container, 'metric-value')!.textContent).toBe('1\u00a0h 54\u00a0min');
+    } finally {
+      mount.unmount();
+    }
+  });
+
+  it('holds a pending comparison\'s room invisibly, and drops the hold once the comparison arrives', async () => {
+    const theme = createSurfaceContext().theme;
+    const element = (comparison?: { value: string; label: string; meaning: 'good' }) => (
+      <HappierDataMetric testID="metric" theme={theme} size="stat" label="Per million tokens" value={0.43}
+        comparisonRoom={{ value: '▼ 100%', label: 'vs before' }} {...(comparison ? { comparison } : {})} />
+    );
+    const mount = mountThroughReactNativeWeb(element());
+    try {
+      const room = query(mount.container, 'metric-comparison-room')!;
+      expect(room.textContent).toBe('▼ 100%vs before');
+      expect(getComputedStyle(room).opacity).toBe('0');
+      expect(room.closest('[aria-hidden="true"]')).toBe(room);
+      expect(query(mount.container, 'metric')!.getAttribute('aria-label')).toBe('Per million tokens: 0.43');
+      await mount.render(element({ value: '▼ 57%', label: 'vs before', meaning: 'good' }));
+      expect(query(mount.container, 'metric-comparison-room')).toBeNull();
     } finally {
       mount.unmount();
     }

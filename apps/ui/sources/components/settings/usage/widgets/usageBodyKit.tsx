@@ -16,8 +16,9 @@ import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { USAGE_METER_METRICS } from '@/components/settings/connectedServices/usage/UsageMeterRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
-import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FRESHNESS_LINE_METRICS, HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import {
   buildUsageAnalyticsViewModel,
   type UsageAnalyticsViewModel,
@@ -123,6 +124,12 @@ export function useUsageAnalyticsView(
  * A supported, visible result for a fact this query cannot answer yet. It says what is missing and
  * why; it never draws zero.
  */
+/** A skeleton bar centred in the line it stands for, so a body's skeleton holds its settled rows' heights. */
+function SkeletonLine(props: Readonly<React.ComponentProps<typeof HappierSkeletonBlock> & { slotHeight: number }>) {
+  const { slotHeight, ...block } = props;
+  return <View style={{ height: slotHeight, justifyContent: 'center' }}><HappierSkeletonBlock {...block} /></View>;
+}
+
 /**
  * A first read that has not answered yet holds the body's room with the shared skeleton, in the shape of
  * what lands (a figure, its meter, a caption line); it never reads as "none" (lab kitstates "Loading ·
@@ -134,12 +141,16 @@ export function UsageBodyReading(props: Readonly<{
    * The body's known shape, so the room it will fill is held from the first frame: `meters` rows of a
    * name, a bar and a caption (a list of allowance windows), or the `mix` of four figures over a strip.
    */
-  shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }> | Readonly<{ kind: 'summary' }> | Readonly<{ kind: 'strip' }>;
+  shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }> | Readonly<{ kind: 'summary' }> | Readonly<{ kind: 'strip' }> | Readonly<{ kind: 'capacity' }>;
 }>) {
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
   const color = theme.colors.surface.pressedOverlay;
   const shape = props.shape;
+  // A body narrower than this (a phone) wraps the cost figure's caption onto a second line.
+  const bodyWidth = useWidgetPresentation()?.geometry?.width;
+  const narrow = bodyWidth !== undefined && bodyWidth < NARROW_BODY_PX;
+  const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
   if (shape?.kind === 'meters') {
     return (
       <View testID={props.testID} style={readingStyles.meters}>
@@ -154,19 +165,48 @@ export function UsageBodyReading(props: Readonly<{
     );
   }
   if (shape?.kind === 'mix') {
+    // Each figure holds its settled rows (label, figure, captions; the cost figure also its comparison line).
+    const lines = (count: number) => <View>{Array.from({ length: count }, (_, line) => <SkeletonLine key={line} color={color} width={line === 0 ? '70%' : '40%'} height={10} radius={4} reducedMotion={reducedMotion} slotHeight={14} />)}</View>;
     return (
       <View testID={props.testID} style={readingStyles.mix}>
         <View style={readingStyles.mixFigures}>
           {[0, 1, 2, 3].map((index) => (
             <View key={index} style={readingStyles.mixFigure}>
-              <HappierSkeletonBlock color={color} width="50%" height={10} radius={4} reducedMotion={reducedMotion} />
-              <HappierSkeletonBlock color={color} width="38%" height={22} radius={6} reducedMotion={reducedMotion} />
-              <HappierSkeletonBlock color={color} width="70%" height={10} radius={4} reducedMotion={reducedMotion} />
+              <SkeletonLine color={color} width="50%" height={10} radius={4} reducedMotion={reducedMotion} slotHeight={14} />
+              <SkeletonLine color={color} width="38%" height={22} radius={6} reducedMotion={reducedMotion} slotHeight={28} />
+              {index === 1 ? <SkeletonLine color={color} width="46%" height={10} radius={4} reducedMotion={reducedMotion} slotHeight={14} /> : null}
+              {lines(index === 1 && narrow ? 2 : 1)}
             </View>
           ))}
         </View>
-        <HappierSkeletonBlock color={color} width="100%" height={14} radius={5} reducedMotion={reducedMotion} />
-        <HappierSkeletonBlock color={color} width="60%" height={10} radius={4} reducedMotion={reducedMotion} />
+        <View style={readingStyles.mixStrip}>
+          <HappierSkeletonBlock color={color} width="100%" height={14} radius={5} reducedMotion={reducedMotion} />
+          <HappierSkeletonBlock color={color} width="60%" height={10} radius={4} reducedMotion={reducedMotion} />
+        </View>
+      </View>
+    );
+  }
+  if (shape?.kind === 'capacity') {
+    // Capacity's settled rows, so its first read does not grow into them: the headline's figure and line, a
+    // row of account cells (name, meter, figure), one pool line and, on a host without the Sources detail,
+    // the freshness line's room.
+    return (
+      <View testID={props.testID} style={readingStyles.capacity}>
+        <View style={readingStyles.capacityHero}>
+          <SkeletonLine color={color} width={84} height={35} radius={8} reducedMotion={reducedMotion} slotHeight={50} />
+          <SkeletonLine color={color} width="44%" height={10} radius={4} reducedMotion={reducedMotion} slotHeight={16} />
+        </View>
+        <View style={readingStyles.capacityCells}>
+          {[0, 1, 2].map((index) => (
+            <View key={index} style={readingStyles.capacityCell}>
+              <HappierSkeletonBlock color={color} width="100%" height={6} radius={3} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="62%" height={12} radius={4} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="38%" height={10} radius={4} reducedMotion={reducedMotion} />
+            </View>
+          ))}
+        </View>
+        <SkeletonLine color={color} width="36%" height={12} radius={4} reducedMotion={reducedMotion} slotHeight={20} />
+        {pageHasDetail ? null : <View style={{ minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx }} />}
       </View>
     );
   }
@@ -185,19 +225,23 @@ export function UsageBodyReading(props: Readonly<{
     );
   }
   if (shape?.kind === 'summary') {
+    // The same rows as the settled summary: the figure's line, its comparison line, and three figures of
+    // label, figure and caption (the money figure's caption takes two lines in a narrow body).
     return (
       <View testID={props.testID} style={readingStyles.summary}>
         <View style={readingStyles.summaryHero}>
-          <HappierSkeletonBlock color={color} width="30%" height={10} radius={4} reducedMotion={reducedMotion} />
-          <HappierSkeletonBlock color={color} width="34%" height={34} radius={8} reducedMotion={reducedMotion} />
-          <HappierSkeletonBlock color={color} width="52%" height={12} radius={4} reducedMotion={reducedMotion} />
+          <SkeletonLine color={color} width="34%" height={34} radius={8} reducedMotion={reducedMotion} slotHeight={50} />
+          <SkeletonLine color={color} width="52%" height={10} radius={4} reducedMotion={reducedMotion} slotHeight={14} />
         </View>
         <View style={readingStyles.summaryStats}>
           {[0, 1, 2].map((index) => (
-            <View key={index} style={readingStyles.summaryStat}>
-              <HappierSkeletonBlock color={color} width="40%" height={10} radius={4} reducedMotion={reducedMotion} />
-              <HappierSkeletonBlock color={color} width="62%" height={22} radius={6} reducedMotion={reducedMotion} />
-              <HappierSkeletonBlock color={color} width="84%" height={12} radius={4} reducedMotion={reducedMotion} />
+            <View key={index} style={index === 0 ? readingStyles.summaryStatLead : readingStyles.summaryStat}>
+              <SkeletonLine color={color} width="40%" height={10} radius={4} reducedMotion={reducedMotion} slotHeight={14} />
+              <SkeletonLine color={color} width="62%" height={22} radius={6} reducedMotion={reducedMotion} slotHeight={28} />
+              <View>
+                <SkeletonLine color={color} width="84%" height={10} radius={4} reducedMotion={reducedMotion} slotHeight={14} />
+                {index === 0 && narrow ? <SkeletonLine color={color} width="50%" height={10} radius={4} reducedMotion={reducedMotion} slotHeight={14} /> : null}
+              </View>
             </View>
           ))}
         </View>
@@ -213,23 +257,32 @@ export function UsageBodyReading(props: Readonly<{
   );
 }
 
-const SETTLED_SUMMARY_BODY_PX = 152;
+/** Below this body width the cost figure's caption ("estimated where not reported") wraps to two lines. */
+const NARROW_BODY_PX = 360;
 /** The Coach's Overview strip with its findings in (one row of three columns) measures this tall. */
 export const SETTLED_COACH_STRIP_BODY_PX = 118;
 const readingStyles = StyleSheet.create(() => ({
   body: { gap: 12, paddingVertical: 4 },
   meters: { gap: USAGE_METER_METRICS.rowGapPx, paddingVertical: 4 },
   meter: { gap: 8 },
-  mix: { gap: 18, paddingVertical: 4 },
+  mix: { gap: 18 },
+  // The token mix's strip and its legend line, as the settled body draws them.
+  mixStrip: { height: 40, gap: 14 },
   // The Efficiency card's four figures wrap two-up exactly as the figures themselves do (UsageEfficiencyWidget).
   mixFigures: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
-  mixFigure: { flexGrow: 1, flexBasis: '40%', minWidth: 120, gap: 8 },
-  // The Period summary's settled body (a hero, its line, three captioned figures) measures this tall.
-  summary: { minHeight: SETTLED_SUMMARY_BODY_PX, gap: 20 },
-  summaryHero: { gap: 8 },
+  mixFigure: { flexGrow: 1, flexBasis: '40%', minWidth: 120, gap: 2 },
+  // The Period summary's settled rows: a hero line, its comparison line, and three captioned figures.
+  summary: { gap: 20 },
+  summaryHero: { gap: 2 },
   // The same wrap as the figures themselves (UsagePeriodSummaryWidget), so a narrow card holds two rows too.
   summaryStats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
-  summaryStat: { flexGrow: 1, flexBasis: 120, minWidth: 0, gap: 8 },
+  summaryStat: { flexGrow: 1, flexBasis: 100, minWidth: 0, gap: 2 },
+  summaryStatLead: { flexGrow: 2, flexBasis: 168, minWidth: 0, gap: 2 },
+  // The Capacity body's gap, and the cells row's settled height (measured on Home: figure 70, cells 104, pool line 20).
+  capacity: { gap: 18 },
+  capacityHero: { gap: 4 },
+  capacityCells: { height: 104, flexDirection: 'row', columnGap: 12 },
+  capacityCell: { flex: 1, minWidth: 0, gap: 12, justifyContent: 'center' },
   strip: { minHeight: SETTLED_COACH_STRIP_BODY_PX, flexDirection: 'row', columnGap: 36, paddingVertical: 4 },
   stripColumn: { flex: 1, gap: 10 },
 }));

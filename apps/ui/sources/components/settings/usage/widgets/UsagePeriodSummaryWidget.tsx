@@ -195,9 +195,11 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
 const UNKNOWN_VALUE = '—';
 
 const styles = StyleSheet.create((theme) => ({
-  subline: {  ...Typography.variant('body'),  color: theme.colors.text.secondary },
+  // The line under the figure sits where the comparison's label sits once it lands (same role, colour and
+  // gap as HappierDataMetric's), so the comparison's arrival replaces this line without moving what is below.
+  subline: { ...Typography.variant('micro'), color: theme.colors.text.tertiary },
   body: { gap: theme.space.s20 },
-  hero: { gap: theme.space.s4 },
+  hero: { gap: 2 },
   stats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s24, rowGap: theme.space.s16 },
   stat: { flexGrow: 1, flexBasis: 100, minWidth: 0 },
   // The money cell carries the longest caption ("reported where known, otherwise estimated"): it takes
