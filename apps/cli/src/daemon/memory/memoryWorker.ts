@@ -1224,7 +1224,9 @@ export async function startMemoryWorker(params: Readonly<{
             }
             if (archivedExclusionPending) await applyArchivedEligibility(signal);
             await refreshInventory({ signal });
-            await resolveDocumentSearchScope({ type: 'global' }, signal);
+            // Document search/status and explicit refresh already admit current
+            // attachments on demand. Transcript inventory must not prepare every
+            // Session's prompts again when no document consumer is waiting.
             signal.throwIfAborted();
             if (reportsInventory && workerStatus.currentPhase === 'inventory') {
               workerStatus = { ...workerStatus, state: 'idle', currentPhase: null };

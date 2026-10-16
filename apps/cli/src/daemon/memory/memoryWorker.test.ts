@@ -349,6 +349,76 @@ describe('memoryWorker', () => {
     }
   });
 
+  it('admits documents on demand rather than on unchanged background inventory ticks', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    vi.doMock('@/configuration', async () => {
+      const actual = await vi.importActual<typeof import('@/configuration')>('@/configuration');
+      return { ...actual, configuration: { ...actual.configuration, isDaemonProcess: true } };
+    });
+    const { accountSettingsParse } = await import('@happier-dev/protocol');
+    const { emptyPromptLibraryRecordV1 } = await import('@happier-dev/protocol/prompts/library/promptLibraryCatalogV1');
+    const { PromptLibraryCatalogKeyV1Schema } = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
+    const { resolveAccountSettingsScopeKey } = await import('@/settings/accountSettings/accountSettingsScopeKey');
+    const { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`, encryption: null };
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+      scopeKey: resolveAccountSettingsScopeKey(credentials), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+    let inventoryReads = 0;
+    let promptReads = 0;
+    const axios = (await import('axios')).default;
+    vi.mocked(axios.get).mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (path === '/v2/sessions') {
+        inventoryReads += 1;
+        return { status: 200, data: { sessions: [], hasNext: false, nextCursor: null } };
+      }
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (path === '/v1/account/entity-rows/prompt-library') {
+        promptReads += 1;
+        return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
+          key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) },
+        })) } };
+      }
+      throw new Error(`Unexpected idle Memory HTTP path: ${path}`);
+    });
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'new_only', worker: {
+      inventoryRefreshIntervalMs: 5_000, tickIntervalMs: 500, maxSessionsPerTick: 1, sessionListPageLimit: 10,
+    } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const { logger } = await import('@/ui/logger');
+    const diagnostics = vi.spyOn(logger, 'infoFile');
+    const worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
+    try {
+      const initialInventoryReads = inventoryReads;
+      await vi.advanceTimersByTimeAsync(15_000);
+      // Await the actual inventory transport: the concurrent work tick can
+      // report idle while an inventory is still awaiting catalog/FS work.
+      await vi.waitFor(() => expect(inventoryReads).toBeGreaterThan(initialInventoryReads));
+      expect(promptReads, 'No document consumer requested admission during idle inventory').toBe(0);
+      expect(await worker.resolveDocumentSearchScope!({ type: 'global' })).toMatchObject({ state: 'ready', eligibleDocuments: [] });
+      expect(promptReads).toBeGreaterThan(0);
+      const admittedReads = promptReads;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(promptReads).toBe(admittedReads);
+      await worker.ensureUpToDate();
+      expect(promptReads).toBeGreaterThan(admittedReads);
+      await worker.stop();
+      // Draining the actual loops closes the false-green race where a timer
+      // starts admission but has not yet reached its catalog HTTP read.
+      const admissions = diagnostics.mock.calls.filter(([message]) => message === '[memoryDocuments] Admission started');
+      expect(admissions, 'Only the requested scope and explicit refresh may admit documents').toHaveLength(2);
+    } finally {
+      await worker.stop();
+      resetActiveAccountSettingsSnapshotForTests();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([false, true])('exposes the worker while cold inference initializes (disable while pending: %s)', async (disableWhilePending) => {
     let finishInitialization = () => {};
     let initializationStarted = () => {};
