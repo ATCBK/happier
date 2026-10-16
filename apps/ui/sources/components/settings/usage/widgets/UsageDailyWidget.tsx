@@ -38,16 +38,12 @@ import {
   type UsageBodyProps,
   UsageBodyNoUsage,
   isUsageReadOutstanding,
+  resolveUsageChartChromePx,
+  USAGE_CHART_FRAME_PX,
 } from './usageBodyKit';
 
-/** Room the peak figure, axis, legend and a one-line coverage note take around the plot in a sized frame. */
-const CHROME_PX = 84;
-/**
- * Below this width the legend's "Show all" and the coverage note each wrap onto a second line (a Board
- * rail is ~315 px wide), which the plot has to leave room for or the last line is cut by the frame.
- */
-const NARROW_FRAME_PX = 420;
-const NARROW_CHROME_PX = 52;
+const CHROME_PX = USAGE_CHART_FRAME_PX.chrome;
+const NARROW_FRAME_PX = USAGE_CHART_FRAME_PX.narrowFrame;
 /** What a settled Daily body measures in a narrow frame (a phone: the 140 px plot, its axis and legend), held while it reads. */
 const SETTLED_NARROW_BODY_PX = 184;
 
@@ -224,7 +220,7 @@ export function UsageDailyWidget(props: UsageBodyProps) {
       : noUsage;
   }
   const compact = presentation?.size === 'small' || presentation?.size === 'wide';
-  const chromePx = CHROME_PX + ((presentation?.geometry?.width ?? NARROW_FRAME_PX) < NARROW_FRAME_PX ? NARROW_CHROME_PX : 0);
+  const chromePx = resolveUsageChartChromePx(presentation?.geometry?.width);
   const height = compact ? Math.max(1, (presentation?.geometry?.height ?? 96) - CHROME_PX / 2) : Math.max(
     phone ? 140 : 120,
     (presentation?.geometry?.height ?? 260) - chromePx,

@@ -289,6 +289,19 @@ const readingStyles = StyleSheet.create(() => ({
 }));
 
 /** True while every read a body depends on is still outstanding (pending or not yet loaded). */
+/**
+ * The room a sized usage chart's frame keeps around its plot: the peak figure, the axis, the legend
+ * and a one-line coverage note. Below `narrowFramePx` (a Board's Medium card, a rail) the legend's
+ * "Show all" and the coverage note each wrap onto a second line, which the plot leaves room for, so the
+ * note is never cut by the frame. Daily usage and Usage flow share the anatomy and this one rule.
+ */
+export const USAGE_CHART_FRAME_PX = Object.freeze({ chrome: 84, narrowFrame: 420, narrowChrome: 52 });
+
+export function resolveUsageChartChromePx(frameWidth: number | undefined): number {
+  const width = frameWidth ?? USAGE_CHART_FRAME_PX.narrowFrame;
+  return USAGE_CHART_FRAME_PX.chrome + (width < USAGE_CHART_FRAME_PX.narrowFrame ? USAGE_CHART_FRAME_PX.narrowChrome : 0);
+}
+
 export function isUsageReadOutstanding(slice: UsageQueryResultSlice, sources: readonly string[]): boolean {
   const gaps = readUsageCoverageGaps(slice, sources);
   return gaps.length > 0 && gaps.every(gap => gap.status === 'pending' || gap.status === 'not_loaded');

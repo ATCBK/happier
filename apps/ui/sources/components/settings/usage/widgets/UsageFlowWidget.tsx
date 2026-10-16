@@ -38,9 +38,8 @@ import {
   type UsageBodyProps,
   isUsageReadOutstanding,
   UsageBodyReading,
+  resolveUsageChartChromePx,
 } from './usageBodyKit';
-
-const CHROME_PX = 72;
 
 /**
  * "Tokens over time": the period's flow stacked by Agent, or by model when the widget's own
@@ -151,9 +150,10 @@ export function UsageFlowWidget(props: UsageBodyProps) {
         reason={t('usage.board.page.flowEmptyReason')}
       />
     );
+  // The plot takes what the frame leaves after its chrome (wrapped legend and coverage note included).
   const height = Math.max(
     120,
-    Math.min(260, (presentation?.geometry?.height ?? 220) - CHROME_PX),
+    Math.min(260, (presentation?.geometry?.height ?? 220) - resolveUsageChartChromePx(presentation?.geometry?.width)),
   );
   return (
     <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.flow`}>
