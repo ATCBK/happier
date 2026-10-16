@@ -48,6 +48,20 @@ async function extractTarFixture(params: Readonly<{ archivePath: string }>): Pro
 describe('installRemoteFirstPartyComponent', () => {
   afterEach(() => { vi.unstubAllEnvs(); });
 
+  it('keeps the finite disk-full promotion refusal without disclosing remote stderr', async () => {
+    const fixture = await createPayloadRootFixture();
+    try {
+      await expect(installRemoteFirstPartyComponentPayload({ componentId: 'happier-cli' }, {
+        resolveRemoteReleaseTarget: async () => ({ os: 'linux', arch: 'x64' }),
+        runRemoteText: async ({ remoteCommand }) => remoteCommand.includes('tar -xf')
+          ? { status: 2, stdout: '', stderr: 'tar: private-path: Cannot write: No space left on device' }
+          : { status: 0, stdout: 'current=\nprevious=\n', stderr: '' },
+        copyLocalDirectoryToRemote: async () => {},
+        preparePayload: async () => ({ componentId: 'happier-cli', channel: 'stable', versionId: '1.2.3', payloadRoot: fixture.payloadRoot, source: null, cleanup: async () => {} }),
+      })).rejects.toMatchObject({ code: 'remote_storage_full', message: expect.not.stringContaining('private-path') });
+    } finally { await fixture.cleanup(); }
+  });
+
   it('uses the CLI operator payload even when remote self-download was requested', async () => {
     if (process.platform === 'win32') return;
     const home = await mkdtemp(join(tmpdir(), 'happier-source-payload-home-'));

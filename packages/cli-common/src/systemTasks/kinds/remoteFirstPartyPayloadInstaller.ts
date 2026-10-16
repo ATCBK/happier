@@ -234,7 +234,12 @@ export async function installRemoteFirstPartyComponentPayload(
         ].join('; '),
         ...(params.signal ? { signal: params.signal } : {}),
       });
-      if (promotionResult.status !== 0) throw new Error('Remote payload promotion failed.');
+      if (promotionResult.status !== 0) {
+        if (/No space left on device|ENOSPC/u.test(promotionResult.stderr)) {
+          throw new SystemTaskExecutionError('remote_storage_full', 'The remote machine does not have enough free disk space to install Happier.');
+        }
+        throw new Error('Remote payload promotion failed.');
+      }
     } finally {
       await scpReadyPayload.cleanup();
     }
