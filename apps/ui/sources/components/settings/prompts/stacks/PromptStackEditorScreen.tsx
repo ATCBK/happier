@@ -170,9 +170,10 @@ export const PromptStackEditorScreen = React.memo(
         ) : null}
         {!stack.hasLoadedEntries || stack.status !== 'ready' || stack.stale ? (
           stack.hasLoadedEntries ? (
-            <SurfaceFreshnessLine testID="promptStack.freshness"
-              busy={stack.status === 'loading'}
-              reason={t(stack.status === 'loading' ? 'common.loading' : 'common.error')} />
+            // A layer being read again keeps what it shows (no strip over it); only a failed read says so.
+            stack.status === 'loading' ? null : (
+              <SurfaceFreshnessLine testID="promptStack.freshness" reason={t('common.error')} />
+            )
           ) : (
             <SurfaceStateCard testID="promptStack.readState"
               kind={stack.status === 'loading' ? 'loading' : 'unavailable'}

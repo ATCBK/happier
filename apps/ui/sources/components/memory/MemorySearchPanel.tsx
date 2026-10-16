@@ -8,14 +8,15 @@ import {
 } from '@happier-dev/protocol/memory/memorySearch';
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon } from '@/components/ui/icons/Icon';
 import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
 import { Item } from '@/components/ui/lists/Item';
-import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SessionListIdentity, useSessionListIdentityDisplay } from '@/components/sessions/shell/SessionListIdentity';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
 import { queryRanges } from '@/components/ui/text/queryRanges';
 import { Text } from '@/components/ui/text/Text';
@@ -23,8 +24,10 @@ import { Typography } from '@/constants/Typography';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { searchDaemonMemory } from '@/sync/domains/memory/searchDaemonMemory';
 import { useMemorySearchProvider } from '@/sync/domains/memory/useMemorySearchProvider';
-import { useActiveServerAccountScope, useSessionSelector } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useSession } from '@/sync/store/hooks';
 import { t } from '@/text';
+import { stripMarkdown } from '@/utils/sessions/messageUtils';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -63,6 +66,8 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
     const target = provider.queryAvailable ? provider.daemonTarget : null;
     const [query, setQuery] = React.useState('');
     const [results, setResults] = React.useState<Results | null>(null);
+    const [attempt, setAttempt] = React.useState(0);
+    const retry = React.useCallback(() => setAttempt((current) => current + 1), []);
     const normalized = query.trim();
     const accountId = accountScope?.accountId ?? null;
     const machineId = target?.machineId ?? null;
@@ -105,7 +110,7 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
             clearTimeout(timer);
             controller.abort();
         };
-    }, [accountId, machineId, normalized, targetServerId]);
+    }, [accountId, attempt, machineId, normalized, targetServerId]);
 
     const openDocument = React.useCallback((hit: MemoryDocumentSearchHitV1) => {
         router.push(memoryDocumentSearchHitHref(hit) as never);
@@ -132,15 +137,14 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
                 />
             </View>
             {target === null ? (
-                <SurfaceFreshnessLine testID={`${testID}.unavailable`} tone="warning" reason={t('memoryContext.memory.searchUnavailable')} />
+                <SearchNotice testID={`${testID}.unavailable`} kind="warning" title={t('memoryContext.memory.searchUnavailable')} />
             ) : results?.status === 'failed' ? (
-                <SurfaceFreshnessLine testID={`${testID}.failed`} tone="warning" reason={t('memoryContext.memory.offline')} />
+                <SearchNotice testID={`${testID}.failed`} kind="error" title={t('memoryContext.memory.offline')} onRetry={retry} />
             ) : null}
             {results?.documentsCoverage && results.documentsCoverage.state !== 'ready' ? (
-                <SurfaceFreshnessLine testID={`${testID}.documentsCoverage`}
-                    busy={results.documentsCoverage.state === 'pending'}
-                    tone={results.documentsCoverage.state === 'unavailable' ? 'warning' : 'neutral'}
-                    reason={results.documentsCoverage.state === 'pending'
+                <SearchNotice testID={`${testID}.documentsCoverage`}
+                    kind={results.documentsCoverage.state === 'pending' ? 'loading' : 'warning'}
+                    title={results.documentsCoverage.state === 'pending'
                         ? `${t('memoryContext.memory.remembered')} · ${t('common.loading')}`
                         : t('memoryContext.memory.documentSearchUnavailable')} />
             ) : null}
@@ -191,6 +195,26 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
     );
 });
 
+/** One quiet state line inside the section's gutters: what is wrong, and Retry when asking again can help. */
+function SearchNotice(props: Readonly<{ testID: string; kind: 'loading' | 'warning' | 'error'; title: string; onRetry?: () => void }>) {
+    const styles = stylesheet;
+    return (
+        <View style={styles.notice}>
+            <SurfaceStateCard
+                testID={props.testID}
+                size="line"
+                kind={props.kind}
+                title={props.title}
+                action={props.onRetry ? { label: t('common.retry'), onPress: props.onRetry } : undefined}
+            />
+        </View>
+    );
+}
+
+/**
+ * A past-session hit (lab `c-mem S`): the Session's own mark, its title and the date, then one line of
+ * its text with the match marked. The excerpt is plain text; indexed transcript chunks carry markdown.
+ */
 const SessionHitRow = React.memo(function SessionHitRow(props: Readonly<{
     testID: string;
     hit: MemorySearchHitV1;
@@ -199,20 +223,37 @@ const SessionHitRow = React.memo(function SessionHitRow(props: Readonly<{
     onOpen: (hit: MemorySearchHitV1) => void;
 }>) {
     const styles = stylesheet;
+    const { theme } = useUnistyles();
     const { hit, onOpen } = props;
-    // Row-local: the hit's own Session title only.
-    const name = useSessionSelector(hit.sessionId, props.serverId, (session) => (session ? getSessionName(session, props.serverId) : null));
+    const session = useSession(hit.sessionId, props.serverId);
+    const identityDisplay = useSessionListIdentityDisplay();
+    const name = session ? getSessionName(session, props.serverId) : null;
+    const excerpt = React.useMemo(() => stripMarkdown(hit.summary), [hit.summary]);
+    const excerptText = (
+        <Text numberOfLines={1} style={name ? styles.hitExcerpt : styles.hitTitle}>
+            <FindHighlightedText text={excerpt} ranges={queryRanges(excerpt, props.query)} />
+        </Text>
+    );
     return (
         <Item
             testID={props.testID}
-            icon={<Icon name="chat-circle" />}
-            title={name ?? hit.summary}
-            // The excerpt carries the match; the Session's name is its title when it is loaded here.
-            subtitle={name ? (
-                <Text numberOfLines={2} style={styles.hitExcerpt}>
-                    <FindHighlightedText text={hit.summary} ranges={queryRanges(hit.summary, props.query)} />
-                </Text>
+            leftElement={session && identityDisplay !== 'none' ? (
+                <SessionListIdentity
+                    session={session}
+                    display={identityDisplay}
+                    serverId={props.serverId}
+                    color={theme.colors.text.secondary}
+                    avatarSize={16}
+                    agentLogoSize={14}
+                    connected
+                />
             ) : undefined}
+            icon={session && identityDisplay !== 'none' ? undefined : <Icon name="chat-circle" />}
+            // A Session this client has not loaded has no name to show: its excerpt is the title.
+            title={name ?? excerptText}
+            accessibilityLabel={name ?? excerpt}
+            subtitle={name ? excerptText : undefined}
+            subtitleLines={1}
             detail={formatMemoryDate(hit.createdAtToMs)}
             showChevron={false}
             onPress={() => onOpen(hit)}
@@ -238,6 +279,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     hitExcerpt: {
         ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
+    },
+    notice: {
+        paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
     },
     hint: {
         ...Typography.default(),

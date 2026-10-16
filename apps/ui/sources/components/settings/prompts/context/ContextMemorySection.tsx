@@ -76,6 +76,8 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
         <ItemGroup
             title={props.title}
             description={props.description}
+            // Search and + are a quiet icon cluster: they stay on the title line on a phone (lab `c-ctx` Ap).
+            actionLayout="trailing"
             action={(
                 <View style={styles.actions}>
                     <IconButton

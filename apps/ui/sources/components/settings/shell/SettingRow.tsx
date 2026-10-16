@@ -9,8 +9,10 @@ import { Item, type ItemProps } from '@/components/ui/lists/Item';
 import { usePopoverScrollSourceRef } from '@/components/ui/popover';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
-import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
+import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { ItemRevealContext } from '@/components/ui/lists/ItemRevealContext';
+import { useItemGroupRowPosition } from '@/components/ui/lists/ItemGroupRowPosition';
+import { getItemGroupRowCornerRadii } from '@/components/ui/lists/itemGroupRowCorners';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { SETTING_ANCHOR_QUERY_PARAM, type SettingRef, type SettingsSectionRef } from '@/components/settings/catalog/settingDeclarations';
 
@@ -116,17 +118,24 @@ function useSettingReveal(active: boolean, delayMs: number) {
     return { hostRef, highlight };
 }
 
+/**
+ * A soft tint that follows the sheet's own corners: a row marks itself with the radius its position
+ * in the sheet gives it (first and last rows are concentric with the sheet), a section with the
+ * sheet radius. It carries no border: it pulses and settles back to nothing.
+ */
 function RevealOverlay(props: Readonly<{ highlight: Animated.Value; testID: string; shape?: 'row' | 'section' }>) {
     const { theme } = useUnistyles();
+    const rowPosition = useItemGroupRowPosition();
     return (
         <Animated.View
             testID={props.testID}
             pointerEvents="none"
             style={[
                 StyleSheet.absoluteFill,
-                styles.highlight,
-                props.shape === 'section' ? styles.sectionHighlight : null,
-                { borderColor: theme.colors.state.info.border, backgroundColor: theme.colors.state.info.background, opacity: props.highlight },
+                props.shape === 'section'
+                    ? styles.sectionHighlight
+                    : getItemGroupRowCornerRadii({ hasBackground: true, position: rowPosition, radius: GROUPED_SURFACE_RADIUS_PX }),
+                { backgroundColor: theme.colors.state.info.background, opacity: props.highlight },
             ]}
         />
     );
@@ -280,9 +289,6 @@ export const SettingSection = React.memo(function SettingSection(props: Readonly
 const styles = StyleSheet.create(() => ({
     host: {
         position: 'relative',
-    },
-    highlight: {
-        borderWidth: 1.5,
     },
     sectionWrapper: {
         alignItems: 'center',

@@ -64,7 +64,7 @@ describe('Prompt stack authoritative readiness', () => {
         expect(screen.findByTestId('promptStack.readState')).toBeNull();
         await act(async () => { beginProfileCatalogLoad(scope); });
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
-        expect(screen.findByTestId('promptStack.freshness')).not.toBeNull();
+        expect(screen.findByTestId('promptStack.freshness')).toBeNull();
         await act(async () => { applyProfileCatalogSnapshot(scope, { status: 'unavailable', reason: 'unauthorized' }, true); });
         expect(screen.findByTestId('promptStack.empty')).toBeNull();
         expect(screen.findByTestId('promptStack.readState')).not.toBeNull();
@@ -94,7 +94,7 @@ describe('Prompt stack authoritative readiness', () => {
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
         await act(async () => { beginProfileCatalogLoad(scope); });
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
-        expect(screen.findByTestId('promptStack.freshness')).not.toBeNull();
+        expect(screen.findByTestId('promptStack.freshness')).toBeNull();
         await act(async () => {
             applyProfileCatalogSnapshot(scope, { ...inventory, status: 'partial', records: [{ revision: 4,
                 record: { v: 1, id: profile.id, definition: { kind: 'artifact', artifactId: resource.artifactId },
@@ -175,7 +175,7 @@ describe('Prompt stack authoritative readiness', () => {
 
         await act(async () => { beginPromptLibraryCatalogLoad(scope); });
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
-        expect(screen.findByTestId('promptStack.freshness')).not.toBeNull();
+        expect(screen.findByTestId('promptStack.freshness')).toBeNull();
         await act(async () => {
             applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'unavailable', reason: 'forbidden' },
                 rawSettings: {}, sourceSettingsVersion: 7 }, true);

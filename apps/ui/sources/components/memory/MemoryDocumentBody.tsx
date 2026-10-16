@@ -1,4 +1,4 @@
-import { HappierDisclosure, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HappierDisclosure, HappierSkeletonBlock, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { HappierMemoryFactRow, type HappierMemoryFactRowHost } from '@happier-dev/plugin-ui/components';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
@@ -8,7 +8,8 @@ import {
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import * as React from 'react';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { StyleSheet } from 'react-native-unistyles';
+import { View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -21,6 +22,8 @@ import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { motionTokens } from '@/components/ui/motion';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -40,6 +43,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { memoryDocumentHref } from './memoryDocumentRoutes';
 import type { MemoryDocumentSource } from './useMemoryDocument';
+import type { MemoryDocumentSummary } from '@/sync/domains/memory/fetchDaemonMemoryStatus';
 import { useMemoryDocumentSummary } from './useMemoryDocumentSummary';
 import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 
@@ -148,6 +152,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   props: MemoryDocumentBodyProps,
 ) {
   const styles = stylesheet;
+  const { theme } = useUnistyles();
   const { source, serverId, testID, onComposingChange, onCreatedMemory } = props;
   const router = useRouter();
   const view = source.view;
@@ -156,11 +161,19 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const readSummary = useMemoryDocumentSummary({ source, serverId,
     scope: props.preparationScope, preparationBasis: props.preparationBasis,
     enabled: topic === null });
-  const summary = source.status === 'ready' && !source.stale
-    ? readSummary : { state: 'unavailable' as const };
-  const countLabel = (count: number | undefined) => count === undefined
-    ? t(summary.state === 'pending' ? 'common.loading' : 'common.unavailable')
-    : t('memoryContext.memory.factCount', { count });
+  // Counts that are being read again keep their last-known values for this document; a first read
+  // reserves the one line instead of printing "Loading…" for each count.
+  const fresh = source.status === 'ready' && !source.stale;
+  const countsKey = view ? JSON.stringify(view.ref) : null;
+  const lastKnownCounts = React.useRef<Readonly<{ key: string; summary: MemoryDocumentSummary }> | null>(null);
+  React.useEffect(() => {
+    if (countsKey !== null && fresh && readSummary.state === 'ready') lastKnownCounts.current = { key: countsKey, summary: readSummary };
+  }, [countsKey, fresh, readSummary]);
+  const summary: MemoryDocumentSummary = !fresh ? { state: 'unavailable' }
+    : readSummary.state === 'pending' && lastKnownCounts.current?.key === countsKey
+      ? lastKnownCounts.current.summary
+      : readSummary;
+  const countLabel = (count: number) => t('memoryContext.memory.factCount', { count });
   const archive = topic?.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1;
   const writable = !props.readOnly && !archive;
   const [busy, setBusy] = React.useState(false);
@@ -481,31 +494,44 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         />
       ) : null}
       {view ? (
-        <Item
-          testID={`${testID}.summary`}
-          mode="info"
-          density="compact"
-          showChevron={false}
-          showDivider={false}
-          title={
-            <Text style={styles.summary}>
-              {topic ? null : `${t('memoryContext.memory.alwaysRemembered')} `}
-              {/* Only a known count takes the value weight; "Loading" and "Unavailable" stay quiet words. */}
-              <Text style={topic || summary.state === 'ready' ? styles.summaryValue : undefined}>
-                {topic ? t('memoryContext.memory.factCount', { count: facts.length })
-                  : countLabel(summary.state === 'ready' ? summary.loadedFactCount : undefined)}
+        summary.state === 'unavailable' && fresh && !topic ? (
+          <SurfaceStateCard
+            testID={`${testID}.summaryUnavailable`}
+            size="line"
+            kind="error"
+            title={t('memoryContext.memory.countsUnavailable')}
+            action={{ label: t('common.retry'), onPress: () => fireAndForget(refresh(), { tag: 'MemoryDocumentBody.retrySummary' }) }}
+          />
+        ) : (
+          <Item
+            testID={`${testID}.summary`}
+            mode="info"
+            density="compact"
+            showChevron={false}
+            showDivider={false}
+            title={topic || summary.state === 'ready' ? (
+              <Text style={styles.summary}>
+                {topic ? null : `${t('memoryContext.memory.alwaysRemembered')} `}
+                <Text style={styles.summaryValue}>
+                  {topic ? countLabel(facts.length)
+                    // Unknown is not zero: a count the machine does not report keeps its slot as a dash.
+                    : summary.state === 'ready' && summary.loadedFactCount !== undefined ? countLabel(summary.loadedFactCount) : '—'}
+                </Text>
+                {!topic && summary.state === 'ready' ? (
+                  <>
+                    {` · ${t('memoryContext.memory.searchable')} `}
+                    <Text style={styles.summaryValue}>{countLabel(summary.indexedFactCount)}</Text>
+                  </>
+                ) : null}
               </Text>
-              {!topic ? (
-                <>
-                  {` · ${t('memoryContext.memory.searchable')} `}
-                  <Text style={summary.state === 'ready' ? styles.summaryValue : undefined}>
-                    {countLabel(summary.state === 'ready' ? summary.indexedFactCount : undefined)}
-                  </Text>
-                </>
-              ) : null}
-            </Text>
-          }
-        />
+            ) : (
+              // One reserved line the height of the summary, so the counts land without moving the facts.
+              <View style={styles.summarySkeleton}>
+                <HappierSkeletonBlock width={216} height={8} radius={4} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
+              </View>
+            )}
+          />
+        )
       ) : null}
       {props.composing && !editingId && writable && (target || canCreate) ? draftForm : null}
       {editingId && view && !rows.some(({ fact }) => fact.id === editingId) ? draftForm : null}
@@ -577,7 +603,16 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           onPress={() => openTopic(entry.title)}
         />
       ))}
-      {!view && status === 'none' ? (
+      {!view && status === 'loading' ? (
+        // The sheet keeps its place while the document is read: the facts' rows are reserved, not a late strip.
+        <ItemLoadStateRows
+          testID={`${testID}.loading`}
+          state={{ kind: 'loading' }}
+          rows={3}
+          lines={2}
+          accessibilityLabel={t('common.loading')}
+        />
+      ) : !view && status === 'none' ? (
         props.composing && writable && canCreate ? null : props.renderEmpty ? props.renderEmpty({ testID: `${testID}.none`, text: props.emptyText }) : (
           <Item
             testID={`${testID}.none`}
@@ -805,6 +840,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.secondary,
     fontVariant: ['tabular-nums'],
+  },
+  summarySkeleton: {
+    // The summary line's own height, so the counts replace the bar without moving the facts below.
+    justifyContent: 'center',
+    height: happierPageTextMetrics('meta').lineHeight,
   },
   summaryValue: {
     ...Typography.default('semiBold'),

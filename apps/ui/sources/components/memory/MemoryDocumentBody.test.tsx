@@ -228,8 +228,22 @@ it('shows unavailable preparation rather than fabricating counts from the open i
         topics: [{ title: 'detail', summary: 'More facts', facts: [fact('three', 'Three')] }] });
     const screen = await renderDocument(ref);
     const rendered = screen.getTextContent();
-    expect(rendered).toContain('common.unavailable');
+    expect(rendered).toContain('memoryContext.memory.countsUnavailable');
+    expect(rendered).not.toContain('common.unavailable');
     expect(rendered).not.toContain('2 facts');
+    await screen.unmount();
+});
+
+it('reserves one summary line while the counts are read instead of printing Loading for each count', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'One')], topics: [] });
+    selectSummaryDaemon(serverId, 'srv_memory_body');
+    machineRpc.mockReturnValue(new Promise(() => {}));
+    const screen = await renderDocument(ref);
+    await settled(() => expect(machineRpc).toHaveBeenCalled());
+    const rendered = screen.getTextContent();
+    expect(rendered).not.toContain('common.loading');
+    expect(rendered).not.toContain('countsUnavailable');
+    expect(rendered).not.toContain('memoryContext.memory.alwaysRemembered');
     await screen.unmount();
 });
 
