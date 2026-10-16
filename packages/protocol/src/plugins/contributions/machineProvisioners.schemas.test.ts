@@ -16,6 +16,7 @@ import { prepareMachineProvisionerStoredSchemas } from './machineProvisionerStor
 import * as provisioners from './machineProvisioners.js';
 import { RetentionCapabilitiesV1Schema } from '../../machines/managed/providerFactsV1.js';
 import { PluginManifestV2Schema } from '../manifest/v2.js';
+import { compilePluginJsonSchema } from '../actions/jsonSchemaValidation.js';
 
 function nativeDurationManifest() {
   const timeout = defineProtocolNumber({
@@ -505,6 +506,23 @@ describe('public machine provisioner role schemas', () => {
         machineId: 'invented',
       }).success,
     ).toBe(false);
+  });
+  it('admits binary native bootstrap payloads through executable and portable role schemas', () => {
+    const native = defineProtocolObject({ name: defineProtocolString() }, { policy: 'closed' });
+    const roles = defineMachineProvisionerSchemas({ launch: native, resource: native });
+    // A release archive crosses this boundary as one file, not a small control message.
+    const bytesBase64 = Buffer.alloc(8 * 1024 * 1024, 0xa5).toString('base64');
+    const request = { resource: { name: 'guest' }, guestPath: '/tmp/happier.tar.gz', bytesBase64 };
+    expect(roles.putFileInput.safeParse(request).success).toBe(true);
+    expect(compilePluginJsonSchema(roles.putFileInput.jsonSchema)(request)).toBe(true);
+    const exec = { resource: request.resource, argv: ['cat'], inputBase64: bytesBase64 };
+    expect(roles.execInput.safeParse(exec).success).toBe(true);
+    expect(compilePluginJsonSchema(roles.execInput.jsonSchema)(exec)).toBe(true);
+    for (const invalid of ['A', 'AAA', 'A===', 'AA=A', 'AA==\n', 'AA-_']) {
+      const malformed = { ...request, bytesBase64: invalid };
+      expect(roles.putFileInput.safeParse(malformed).success).toBe(false);
+      expect(compilePluginJsonSchema(roles.putFileInput.jsonSchema)(malformed)).toBe(false);
+    }
   });
   it('accepts an explicit native bootstrap credential without publishing private material', () => {
     const native = defineProtocolObject({}, { policy: 'closed' });

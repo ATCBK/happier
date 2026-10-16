@@ -399,7 +399,10 @@ export function defineMachineProvisionerReconciliationSchemas<LI, LO, RI, RO, NI
 const closedRole = { policy: 'closed' } as const;
 const roleString = defineProtocolString({ minLength: 1 });
 const roleBoolean = defineProtocolUnion([defineProtocolLiteral(true), defineProtocolLiteral(false)]);
-const roleBase64 = defineProtocolString({ pattern: '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$' });
+const roleBase64Character = '[A-Za-z0-9+/]';
+// Unroll each fixed-width group: a nested {4} repetition exhausts V8's regexp
+// stack on release archives. The final assertion also rejects a trailing newline.
+const roleBase64 = defineProtocolString({ pattern: `^(?:${roleBase64Character.repeat(4)})*(?:${roleBase64Character.repeat(2)}==|${roleBase64Character.repeat(3)}=)?$(?![\\s\\S])` });
 const roleRef = PluginContributionIdentityV1Schema;
 /** Read-only exact cleanup evidence; retryable is native idempotency evidence,
  * never independent admission to replay an effect. */
