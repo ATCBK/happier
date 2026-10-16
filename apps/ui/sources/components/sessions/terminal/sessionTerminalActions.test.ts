@@ -8,7 +8,8 @@ import { machineTerminalEnsure, machineTerminalRestart } from '@/sync/ops/machin
 import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
 import { createSessionTerminalLeafHandles } from './strip/sessionTerminalLeafHandles';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { readCurrentProjectAccountRows } from '@/sync/store/domains/projectAccountRows';
 import { storage } from '@/sync/domains/state/storage';
 import { buildProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 import { buildProjectTerminalKey } from '@/components/projects/detail/projectTerminalScope';
@@ -46,15 +47,17 @@ describe('mounted terminal Actions', () => {
         } finally { retire(); machineRpc.mockReset(); }
     });
     it('opens and closes requester-owned Project members at their exact accepted roots without a Session', async () => {
-        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-actions.test', accountId: 'bob',
-            settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.close': ['ui'] } } } }],
-            route: request => request.path === '/v1/machines'
-                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })]) : undefined });
-        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-        const serverId = home.homes.project!.id;
+        const serverId = 'srv_project_terminal';
         const first = { id: 'accepted', serverId, machineId: 'machine', rootPath: '/accepted', projectKey: 'project', createdAtMs: 1 };
         const second = { ...first, id: 'worktree', rootPath: '/worktree' };
-        applyProjectAccountRowsFixture(storage, { workspaceRefs: [first, second] });
+        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-actions.test', accountId: 'bob',
+            serverIdentityId: serverId,
+            settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.close': ['ui'] } } } }],
+            route: request => request.path === '/v1/machines'
+                ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })])
+                : request.path === '/v1/account/project-rows/list'
+                    ? Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs: [first, second] })) : undefined });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const scopeId = buildProjectPaneScopeId(first.id, serverId, 'destination');
         const workspace = { serverId, workspaceId: first.id, machineId: first.machineId, rootPath: first.rootPath };
         const nextWorkspace = { ...workspace, workspaceId: second.id, rootPath: second.rootPath };
@@ -62,6 +65,12 @@ describe('mounted terminal Actions', () => {
         const retire = registerSessionTerminalWorkspaceOwner({ getState: () => state, dispatch: action => { state = appPaneReduce(state, action); } });
         const retireMeasurement = registerSessionTerminalSplitMeasurements(scopeId, () => ({ availableWidthPx: 1000, minimumTerminalWidthPx: 320 }));
         try {
+            // Home restoration starts Settings sync; wait for its real policy
+            // projection before invoking the waived Close instead of opening a dialog.
+            await expect.poll(() => storage.getState().settings.actionsSettingsV1?.approvalWaivedSurfaces?.['machines.terminal.close'])
+                .toEqual(['ui']);
+            await expect.poll(() => readCurrentProjectAccountRows(storage.getState()))
+                .toMatchObject({ status: 'ready', workspaceRefs: [first, second] });
             const unchanged = state;
             expect(await invokeSessionTerminalAction({ actionId: 'session.terminals.list', input: { scopeId } }))
                 .toMatchObject({ ok: true, workspace: { tabs: [], activeTabId: null } });
@@ -80,7 +89,8 @@ describe('mounted terminal Actions', () => {
                 running = false;
                 return { ok: true };
             });
-            expect(await invokeSessionTerminalAction({ actionId: 'session.terminals.close', input: { scopeId, terminalId: opened.terminalId } })).toEqual({ ok: true });
+            const closed = await invokeSessionTerminalAction({ actionId: 'session.terminals.close', input: { scopeId, terminalId: opened.terminalId } });
+            expect(closed, JSON.stringify({ closed, requests: home.requests, machineCalls: machineRpc.mock.calls })).toEqual({ ok: true });
             expect(running).toBe(false);
             const beforeRetirement = state;
             storage.getState().activateProfileScope({ serverId, accountId: 'cara' });

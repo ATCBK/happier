@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import type { SessionTerminalMemberV1 } from '@happier-dev/protocol/terminal';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import { awaitPendingMachineTerminalCreation, machineTerminalClose, machineTerminalList } from '@/sync/ops/machineTerminal';
@@ -106,7 +107,7 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
                     const result = await execute('machines.terminal.list', { serverId, machineId: identity.machineId,
                         ...(queryWorkspace ? { workspace: queryWorkspace } : {}) }, actionContext());
                     if (!result.ok) return failed(result.errorCode ?? result.error);
-                    const parsed = DaemonTerminalListResponseV1Schema.nullable().safeParse(result.result);
+                    const parsed = z.nullable(DaemonTerminalListResponseV1Schema).safeParse(result.result);
                     if (!parsed.success) return failed('terminal_invalid_response');
                     lists.set(censusKey, parsed.data);
                 } else lists.set(censusKey, await machineTerminalList(identity.machineId, {
