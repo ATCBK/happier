@@ -25,10 +25,15 @@ import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machin
 import { createConnectedServiceCredentialApi } from '@/api/client/connectedServiceCredentialApi';
 import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { createRequesterSessionControlRuntimeFixture } from '@/daemon/testkit/requesterSessionControlRuntimeFixture';
+import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
+import { join } from 'node:path';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn() }));
 // Only authenticated HTTP/storage is substituted: codecs, approval transitions and Artifact CAS remain real.
 vi.mock('axios', () => ({ default: http }));
+// The listener is an OS boundary; daemon startup and its executor composition remain real.
+vi.mock('@/daemon/controlServer', () => ({ startDaemonControlServer: async () => ({ port: 44322, stop: async () => {} }) }));
 
 const request = { serverId: 'home', sessionId: 'session', machineId: 'machine', purpose: 'Sign in',
   sourceId: 'source', target: { kind: 'window', displayId: 'display', pid: 1, windowId: 2 },
@@ -39,7 +44,7 @@ const request = { serverId: 'home', sessionId: 'session', machineId: 'machine', 
 afterEach(resetActiveAccountSettingsSnapshotForTests);
 
 describe('confidential continuation Artifact custody', () => {
-  it.each(['credential fallback', 'installed Machine owner'] as const)('consumes %s registration with isolated stored credentials and real Home/Session currentness', async registrationKind => {
+  it.each(['credential fallback', 'installed Machine owner', 'daemon startup owner'] as const)('consumes %s registration with isolated stored credentials and real Home/Session currentness', async registrationKind => {
     const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_TOKEN',
       'HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE', 'HAPPIER_ACCOUNT_SETTINGS_MODE', 'HAPPIER_ACTIONS_SETTINGS_V1']);
     try {
@@ -70,8 +75,11 @@ describe('confidential continuation Artifact custody', () => {
         await createActionExecutor({ approvalsCreate: async ({ request }) => {
           created = request; return { artifactId: 'approval' };
         }, isActionApprovalRequired: () => false }).execute('computer.secret.fill', reviewedRequest, {
-          surface: 'agent', authority: 'account_automation', serverId, serverIdentityId: 'srv_private_approval',
+          surface: registrationKind === 'daemon startup owner' ? 'ui' : 'agent',
+          authority: registrationKind === 'daemon startup owner' ? 'present_user' : 'account_automation', serverId, serverIdentityId: 'srv_private_approval',
           defaultSessionId: sessionId, defaultSessionMachineId: 'machine', runtimeAccountId: 'alice',
+          ...(registrationKind === 'daemon startup owner'
+            ? { externalActionTarget: { kind: 'machine' as const, machineId: 'machine' } } : {}),
           actionRequestId: 'request', actionCaller: { kind: 'host' },
         });
         const approval = ApprovalRequestV2Schema.parse(created);
@@ -88,6 +96,7 @@ describe('confidential continuation Artifact custody', () => {
           throw new Error('Unexpected Home fetch boundary');
         });
         http.get.mockImplementation(async (url: string) => {
+          if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'alice' } };
           if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
           if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: currentness };
           if (url.includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session } };
@@ -127,6 +136,15 @@ describe('confidential continuation Artifact custody', () => {
               return { status: 'filled', code: 'filled' };
             }, finish: async () => {} }),
         });
+        const startup = registrationKind === 'daemon startup owner'
+          ? await createRequesterSessionControlRuntimeFixture({ happyHomeDir: homeDir,
+            activeServerDir: configuration.activeServerDir, serverId, serverHttpBaseUrl: endpoint,
+            machineId: 'machine', custodianAccountId: 'alice', credentials,
+            connectedServicesMaterializationBaseDir: join(homeDir, 'connected-services'),
+            registry: new ConnectedServiceRuntimeRegistry(), trackedSessions: new Map(), getRequester: () => null,
+            resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+            startup: { resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine', serverIdentityId: 'srv_private_approval' }) } })
+          : undefined;
         const uninstall = installDaemonMachineAdmissionTransport({ serverId,
           transport: async () => { throw new Error('Session input is not part of confidential delivery'); }, confidentialSecretFill: trustedProducer });
         let machineRegistration: ReturnType<typeof registerMachineRpcHandlers> | undefined;
@@ -134,8 +152,9 @@ describe('confidential continuation Artifact custody', () => {
           const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {},
             authorizeRequest: input => authorizeMachineRpcRequest(input, { machineId: 'machine', resolveCustodianAccountId: async () => 'alice',
               resolveInstallationId: () => 'installation', verifyMachineAdmission: async () => true }) });
-          if (registrationKind === 'installed Machine owner') {
-            const executor = createCliActionExecutorFromCredentials({ credentials, serverId,
+          if (startup && !startup.runtime.externalActionIngressOwner) throw new Error('Daemon startup did not produce its real Action ingress');
+          if (registrationKind !== 'credential fallback') {
+            const executor = startup?.runtime.externalActionIngressOwner?.executor ?? createCliActionExecutorFromCredentials({ credentials, serverId,
               serverIdentityId: 'srv_private_approval', serverApiUrl: endpoint, machineId: 'machine',
               pluginActionExecutionOwner: 'current_process',
               actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({}), getAccountSettings: () => settings },
@@ -150,19 +169,19 @@ describe('confidential continuation Artifact custody', () => {
                 verifyExecutionAuthorization: async () => true, resolveTarget: async ({ target }) => target ?? null,
               } } });
           } else registerApprovalRpcHandlers({ rpcHandlerManager: rpc });
-          expect(await rpc.handleRequest({ method: `machine:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`,
+          const settlement = await rpc.handleRequest({ method: `machine:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`,
             callerAuthority: 'present_user', machineAdmission: { actorAccountId: 'alice', custodianAccountId: 'alice',
               machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
             params: { v: 1, artifactId: 'approval', requestId: 'request', actionId: 'computer.secret.fill', request: reviewedRequest,
-              choice: { kind: 'once', value }, accountEncryptionMode: 'plain', submit: false } }))
-            .toEqual({ status: 'filled', code: 'filled' });
+              choice: { kind: 'once', value }, accountEncryptionMode: 'plain', submit: false } });
+          expect(settlement).toEqual({ status: 'filled', code: 'filled' });
           expect(effects).toBe(1);
           const stored = await createCliApprovalsArtifactStore({ credentials, getAccountEncryptionMode: async () => 'plain' })
             .approvalsGet({ artifactId: 'approval', serverId });
           expect(JSON.stringify(stored)).not.toContain(value);
           expect(stored?.actionArgs).toEqual(reviewedRequest);
           expect(ApprovalRequestV2Schema.parse(stored).executionOriginV1).toEqual(approval.executionOriginV1);
-        } finally { await machineRegistration?.dispose(); uninstall(); }
+        } finally { await machineRegistration?.dispose(); uninstall(); await startup?.dispose(); }
       });
     } finally { vi.unstubAllGlobals(); env.restore(); reloadConfiguration(); }
   });
