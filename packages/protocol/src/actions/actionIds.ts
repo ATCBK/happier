@@ -194,6 +194,9 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   machine_resources: MACHINE_RESOURCES_ACTION_IDS,
   machine_guard: MACHINE_GUARD_ACTION_IDS,
   session_access: [
+    'session.access.candidates.inspect',
+    'session.access.principals.resolve',
+    'session.access.accounts.search',
     'session.access.grants.list',
     'session.access.grant.set',
     'session.access.grant.remove',

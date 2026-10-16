@@ -47,7 +47,8 @@ export function useArtifactOperations(artifact: DecryptedArtifact, onDeleted: ()
             const current = artifact.bodyVersion === undefined ? await sync.fetchArtifactWithBody(artifact.id) : artifact;
             if (!client || !current || current.bodyVersion === undefined) throw new Error('artifact_content_unavailable');
             const outcome = await client.deleteArtifact({ artifactId: artifact.id,
-                expectedRevision: { headerVersion: current.headerVersion, bodyVersion: current.bodyVersion } });
+                expectedRevision: { headerVersion: current.headerVersion, bodyVersion: current.bodyVersion } },
+                { presentUserConfirmation: { actionId: 'artifact.delete' } });
             if ('approvalId' in outcome) {
                 if (scope) router.push(`/inbox/approvals/${encodeURIComponent(outcome.approvalId)}?serverId=${encodeURIComponent(scope.serverId)}` as never);
                 return;

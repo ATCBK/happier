@@ -62,6 +62,7 @@ type HomeDomainActionRowInput<
    * public API and trusted-plugin exposure remain independently derived.
    */
   agent?: boolean;
+  mcp?: boolean;
   inputHints?: PreNormalizedActionSpec['inputHints'];
   projectObservationInput?: PreNormalizedActionSpec['projectObservationInput'];
   projectObservationOutput?: PreNormalizedActionSpec['projectObservationOutput'];
@@ -109,7 +110,7 @@ export function homeDomainActionRow<
     },
     ...(spec.sdkMethod ? { bindings: { sdkMethod: spec.sdkMethod } } : {}),
     placements: [],
-    surfaces: { ui: true, voice: false, agent: spec.agent ?? true, mcp: false, cli: true, rpc: false },
+    surfaces: { ui: true, voice: false, agent: spec.agent ?? true, mcp: spec.mcp ?? false, cli: true, rpc: false },
     sideEffectClass: spec.sideEffectClass,
     inputHints: spec.inputHints ?? { fields: [] },
     inputSchema: spec.inputSchema,

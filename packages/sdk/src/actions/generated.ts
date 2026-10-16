@@ -533,12 +533,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "session.connected_services_auth.set",
   "session.context.update",
   "session.delete",
-  "session.discussion.archive",
-  "session.discussion.create",
   "session.discussion.post",
-  "session.discussion.read_state.set",
-  "session.discussion.rename",
-  "session.discussion.restore",
   "session.draft.append",
   "session.draft.delete",
   "session.draft.directory.set",
@@ -649,6 +644,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "teams.credentials.limits.delete",
   "teams.credentials.limits.upsert",
   "teams.credentials.update",
+  "teams.directory.sources.remove",
   "teams.externalGroupBindings.remove",
   "teams.externalGroupBindings.set",
   "teams.groups.archive",
@@ -2167,6 +2163,12 @@ export type GeneratedActions = Readonly<{
   }> ;
   readonly session: Readonly<{
     readonly access: Readonly<{
+      readonly accounts: Readonly<{
+        readonly search: (input: PublicActionInputById["session.access.accounts.search"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.accounts.search">>;
+      }> ;
+      readonly candidates: Readonly<{
+        readonly inspect: (input: PublicActionInputById["session.access.candidates.inspect"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.candidates.inspect">>;
+      }> ;
       readonly context: Readonly<{
         readonly set: (input: PublicActionInputById["session.access.context.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.context.set">>;
       }> ;
@@ -2176,6 +2178,9 @@ export type GeneratedActions = Readonly<{
       }> ;
       readonly grants: Readonly<{
         readonly list: (input: PublicActionInputById["session.access.grants.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.grants.list">>;
+      }> ;
+      readonly principals: Readonly<{
+        readonly resolve: (input: PublicActionInputById["session.access.principals.resolve"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.principals.resolve">>;
       }> ;
     }> ;
     readonly activity: Readonly<{
@@ -2236,17 +2241,10 @@ export type GeneratedActions = Readonly<{
     readonly continueWithReplay: (input: PublicActionInputById["session.continue_with_replay"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.continue_with_replay">>;
     readonly delete: (input: PublicActionInputById["session.delete"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.delete">>;
     readonly discussion: Readonly<{
-      readonly archive: (input: PublicActionInputById["session.discussion.archive"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.archive">>;
-      readonly create: (input: PublicActionInputById["session.discussion.create"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.create">>;
       readonly get: (input: PublicActionInputById["session.discussion.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.get">>;
       readonly list: (input: PublicActionInputById["session.discussion.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.list">>;
       readonly post: (input: PublicActionInputById["session.discussion.post"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.post">>;
       readonly read: (input: PublicActionInputById["session.discussion.read"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.read">>;
-      readonly readState: Readonly<{
-        readonly set: (input: PublicActionInputById["session.discussion.read_state.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.read_state.set">>;
-      }> ;
-      readonly rename: (input: PublicActionInputById["session.discussion.rename"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.rename">>;
-      readonly restore: (input: PublicActionInputById["session.discussion.restore"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.discussion.restore">>;
     }> ;
     readonly draft: Readonly<{
       readonly append: (input: PublicActionInputById["session.draft.append"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.draft.append">>;
@@ -2644,6 +2642,10 @@ export type GeneratedActions = Readonly<{
       readonly sources: Readonly<{
         readonly get: (input: PublicActionInputById["teams.directory.sources.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"teams.directory.sources.get">>;
         readonly list: (input: PublicActionInputById["teams.directory.sources.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"teams.directory.sources.list">>;
+        readonly remove: Readonly<{
+          readonly execute: (input: PublicActionInputById["teams.directory.sources.remove"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"teams.directory.sources.remove">>;
+          readonly preview: (input: PublicActionInputById["teams.directory.sources.remove.preview"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"teams.directory.sources.remove.preview">>;
+        }> ;
       }> ;
       readonly sourceSetup: Readonly<{
         readonly list: (input: PublicActionInputById["teams.directory.sourceSetup.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"teams.directory.sourceSetup.list">>;
@@ -4411,6 +4413,12 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
     },
     session: {
       access: {
+        accounts: {
+          search: (input: PublicActionInputById["session.access.accounts.search"], options?: ActionExecutionOptions) => execute("session.access.accounts.search", input, options),
+        },
+        candidates: {
+          inspect: (input: PublicActionInputById["session.access.candidates.inspect"], options?: ActionExecutionOptions) => execute("session.access.candidates.inspect", input, options),
+        },
         context: {
           set: (input: PublicActionInputById["session.access.context.set"], options?: ActionExecutionOptions) => execute("session.access.context.set", input, options),
         },
@@ -4420,6 +4428,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         },
         grants: {
           list: (input: PublicActionInputById["session.access.grants.list"], options?: ActionExecutionOptions) => execute("session.access.grants.list", input, options),
+        },
+        principals: {
+          resolve: (input: PublicActionInputById["session.access.principals.resolve"], options?: ActionExecutionOptions) => execute("session.access.principals.resolve", input, options),
         },
       },
       activity: {
@@ -4480,17 +4491,10 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       continueWithReplay: (input: PublicActionInputById["session.continue_with_replay"], options?: ActionExecutionOptions) => execute("session.continue_with_replay", input, options),
       delete: (input: PublicActionInputById["session.delete"], options?: ActionExecutionOptions) => execute("session.delete", input, options),
       discussion: {
-        archive: (input: PublicActionInputById["session.discussion.archive"], options?: ActionExecutionOptions) => execute("session.discussion.archive", input, options),
-        create: (input: PublicActionInputById["session.discussion.create"], options?: ActionExecutionOptions) => execute("session.discussion.create", input, options),
         get: (input: PublicActionInputById["session.discussion.get"], options?: ActionExecutionOptions) => execute("session.discussion.get", input, options),
         list: (input: PublicActionInputById["session.discussion.list"], options?: ActionExecutionOptions) => execute("session.discussion.list", input, options),
         post: (input: PublicActionInputById["session.discussion.post"], options?: ActionExecutionOptions) => execute("session.discussion.post", input, options),
         read: (input: PublicActionInputById["session.discussion.read"], options?: ActionExecutionOptions) => execute("session.discussion.read", input, options),
-        readState: {
-          set: (input: PublicActionInputById["session.discussion.read_state.set"], options?: ActionExecutionOptions) => execute("session.discussion.read_state.set", input, options),
-        },
-        rename: (input: PublicActionInputById["session.discussion.rename"], options?: ActionExecutionOptions) => execute("session.discussion.rename", input, options),
-        restore: (input: PublicActionInputById["session.discussion.restore"], options?: ActionExecutionOptions) => execute("session.discussion.restore", input, options),
       },
       draft: {
         append: (input: PublicActionInputById["session.draft.append"], options?: ActionExecutionOptions) => execute("session.draft.append", input, options),
@@ -4888,6 +4892,10 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         sources: {
           get: (input: PublicActionInputById["teams.directory.sources.get"], options?: ActionExecutionOptions) => execute("teams.directory.sources.get", input, options),
           list: (input: PublicActionInputById["teams.directory.sources.list"], options?: ActionExecutionOptions) => execute("teams.directory.sources.list", input, options),
+          remove: {
+            execute: (input: PublicActionInputById["teams.directory.sources.remove"], options?: ActionExecutionOptions) => execute("teams.directory.sources.remove", input, options),
+            preview: (input: PublicActionInputById["teams.directory.sources.remove.preview"], options?: ActionExecutionOptions) => execute("teams.directory.sources.remove.preview", input, options),
+          },
         },
         sourceSetup: {
           list: (input: PublicActionInputById["teams.directory.sourceSetup.list"], options?: ActionExecutionOptions) => execute("teams.directory.sourceSetup.list", input, options),

@@ -15,6 +15,8 @@ import {
 import { ActionIdSchema } from './actionIds.js';
 import { getActionSpec, PUBLIC_ACTION_IDS, SIGNED_ROOT_ACTION_IDS } from './actionSpecs.js';
 import { bindHomeDomainActionHttpRequestV1 } from './homeDomainActionFamily.js';
+import { resolveCredentialActionAdmissionV1 } from './decisionAuthority.js';
+import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 
 describe('Team directory Action contracts', () => {
   it('registers each operation through its exact REST transport and domain codecs', () => {
@@ -29,13 +31,13 @@ describe('Team directory Action contracts', () => {
       expect(spec.outputSchema).toBe(TEAM_DIRECTORY_ACTION_OUTPUT_SCHEMAS_V1[id]);
       const isRead = spec.sideEffectClass === 'read';
       const isRemoval = id === 'teams.directory.sources.remove' || id === 'teams.directory.sources.remove.preview';
-      expect(spec.requiredAuthority).toBe(isRead && !isRemoval ? 'account_automation' : 'present_user');
+      expect(spec.requiredAuthority).toBe(isRead || isRemoval ? 'account_automation' : 'present_user');
       expect(spec.surfaces).toMatchObject({
         ui: true,
         cli: true,
         agent: true,
         mcp: !isRead || isRemoval,
-        api: isRead && !isRemoval,
+        api: isRead || isRemoval,
       });
     }
   });
@@ -53,16 +55,16 @@ describe('Team directory Action contracts', () => {
     }
   });
 
-  it('makes removal preview and mutation requestable under the same present-user Action contract', () => {
-    expect(PUBLIC_ACTION_IDS).not.toContain('teams.directory.sources.remove');
+  it('admits removal preview and deferred mutation to API automation without widening sibling mutations', () => {
+    expect(PUBLIC_ACTION_IDS).toContain('teams.directory.sources.remove');
     expect(SIGNED_ROOT_ACTION_IDS).toContain('teams.directory.sources.remove');
-    expect(PUBLIC_ACTION_IDS).not.toContain('teams.directory.sources.remove.preview');
+    expect(PUBLIC_ACTION_IDS).toContain('teams.directory.sources.remove.preview');
     expect(getActionSpec('teams.directory.sources.remove.preview').surfaces)
-      .toMatchObject({ ui: true, cli: true, agent: true, mcp: true, api: false, plugin: true });
+      .toMatchObject({ ui: true, cli: true, agent: true, mcp: true, api: true, plugin: true });
     expect(getActionSpec('teams.directory.sources.remove').bindings?.sdkMethod)
       .toBe('teams.directory.sources.remove.execute');
     expect(getActionSpec('teams.directory.sources.remove')).toMatchObject({
-      requiredAuthority: 'present_user',
+      requiredAuthority: 'account_automation',
       safety: 'danger',
       sideEffectClass: 'danger',
       approval: { result: 'required', flow: 'deferred' },
@@ -71,10 +73,19 @@ describe('Team directory Action contracts', () => {
         cli: true,
         agent: true,
         mcp: true,
-        api: false,
+        api: true,
         plugin: true,
       },
     });
+    for (const id of TEAM_DIRECTORY_ACTION_IDS_V1) {
+      const spec = getActionSpec(id);
+      if (spec.sideEffectClass === 'read') continue;
+      const isRemoval = id === 'teams.directory.sources.remove';
+      expect(resolveCredentialActionAdmissionV1({
+        spec, authority: 'account_automation', grant: API_TOKEN_FULL_GRANT_V1,
+        surface: 'api', hasExternalCredential: true,
+      }), id).toEqual(isRemoval ? { ok: true } : { ok: false, errorCode: 'present_user_required' });
+    }
   });
 
   it('binds Action inputs to the REST path, query, and body once', () => {

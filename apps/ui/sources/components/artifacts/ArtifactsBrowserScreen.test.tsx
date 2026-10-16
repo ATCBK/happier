@@ -174,9 +174,10 @@ describe('Artifacts browser row operations', () => {
         await act(async () => { await menu.props.onSecondaryAction('delete'); });
         expect(served.requests.filter(request => request.method === 'DELETE')).toEqual([]);
         expect(getStorage().getState().artifacts[artifact.id]).toBeDefined();
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(true);
         await act(async () => { await menu.props.onSecondaryAction('delete'); });
         await flushHookEffects();
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
         expect(served.requests.find(request => request.method === 'DELETE')?.path)
             .toBe('/v1/artifacts/document/revision/1/2');
         expect(getStorage().getState().artifacts[artifact.id]).toBeUndefined();
@@ -205,18 +206,21 @@ describe('Artifacts browser row operations', () => {
     it('opens a policy-required delete approval without claiming or executing deletion', async () => {
         const artifact = artifactFixture('approval-document');
         const persisted = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: 'plain' });
-        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-row-approval.test', accountId: 'owner' }],
+        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+            'artifact.delete': { approvalRequiredSurfaces: ['ui'] },
+        } });
+        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-row-approval.test',
+            accountId: 'owner', settings: { actionsSettingsV1 } }],
             route: request => request.path === `/v1/artifacts/${artifact.id}` && request.method === 'GET'
                 ? Response.json({ ...artifact, ownerAccountId: 'owner', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                     header: encodePlainArtifactStoredContent(artifact.header), body: encodePlainArtifactStoredContent({ body: artifact.body }) })
                 : persisted.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined });
         disposeHome = served.dispose;
         getStorage().getState().addArtifact(artifact);
-        getStorage().setState(state => ({ settings: { ...state.settings,
-            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'artifact.delete': { approvalRequiredSurfaces: ['ui'] } } }) } }));
         const screen = await renderRows([artifact]);
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValueOnce(true);
         await act(async () => { await rowMenu(screen, artifact.id).props.onSecondaryAction('delete'); });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
         const approval = persisted.list().find(row => row.id !== artifact.id);
         expect(approval).toBeDefined();
         expect(ApprovalRequestSchema.parse(JSON.parse(persisted.readPlainBody(approval!.id)!)))

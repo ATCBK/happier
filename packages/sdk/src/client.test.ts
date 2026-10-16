@@ -1773,7 +1773,7 @@ describe('Happier SDK client', () => {
     ]);
   });
 
-  it('publishes identity removal previews without exposing present-user directory removal to automation', async () => {
+  it('publishes identity previews and exact directory removal preview/execute methods', async () => {
     const calls: Array<{ actionId: string; input: unknown }> = [];
     const fetch = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
       const actionId = decodeURIComponent(new URL(String(url)).pathname.split('/').at(-1) ?? '');
@@ -1790,7 +1790,12 @@ describe('Happier SDK client', () => {
     await callsTransport(client.actions.teams.identity.connections.remove.preview({
       v: 1, teamId: 'team-1', connectionId: 'connection-1', expectedRevision: 1,
     }));
-    expect(client.actions.teams.directory.sources).not.toHaveProperty('remove');
+    const directorySource = { v: 1 as const, teamId: 'team-1', sourceId: 'source-1' };
+    await callsTransport(client.actions.teams.directory.sources.remove.preview(directorySource));
+    await callsTransport(client.actions.teams.directory.sources.remove.execute(directorySource));
+    for (const sibling of ['create', 'sync', 'pause', 'resume']) {
+      expect(client.actions.teams.directory.sources).not.toHaveProperty(sibling);
+    }
 
     expect(calls).toEqual([
       { actionId: 'identity.providers.remove.preview', input: {
@@ -1799,6 +1804,8 @@ describe('Happier SDK client', () => {
       { actionId: 'teams.identity.connections.remove.preview', input: {
         v: 1, teamId: 'team-1', connectionId: 'connection-1', expectedRevision: 1,
       } },
+      { actionId: 'teams.directory.sources.remove.preview', input: directorySource },
+      { actionId: 'teams.directory.sources.remove', input: directorySource },
     ]);
     await client.close();
   });

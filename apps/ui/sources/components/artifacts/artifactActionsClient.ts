@@ -4,7 +4,7 @@ import { ArtifactActionOutputSchemasV1, type ArtifactActionInputV1, type Artifac
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getStorage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { createFrontDoorActionExecute, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 /**
  * The Artifacts surfaces reach document writes, history, restore and storage through the canonical `artifact.*`
@@ -45,8 +45,10 @@ export function readArtifactActionFailure(result: unknown): ArtifactActionFailur
 }
 
 export function createArtifactActionsClient(scope: ServerAccountScope, execute = createFrontDoorActionExecute()) {
-    const dispatch = (actionId: SurfaceActionId, input: unknown) => execute(actionId, input, {
+    const dispatch = (actionId: SurfaceActionId, input: unknown, operation?: Pick<UiActionOperation, 'presentUserConfirmation'>) => execute(actionId, input, {
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
+        ...(operation?.presentUserConfirmation ? { authority: 'present_user', actionCaller: { kind: 'host' },
+            presentUserConfirmation: operation.presentUserConfirmation } as const : {}),
     }).catch(() => null);
     const readOutcome = <Id extends SurfaceActionId>(actionId: Id, result: Awaited<ReturnType<typeof dispatch>>): ArtifactActionOutcome<ArtifactActionResultV1<Id>> => {
         if (!result) return { ok: false, failure: { code: 'artifact_action_failed' } };
@@ -59,8 +61,9 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
     const run = async <Id extends SurfaceActionId>(actionId: Id, input: unknown): Promise<ArtifactActionOutcome<ArtifactActionResultV1<Id>>> => {
         return readOutcome(actionId, await dispatch(actionId, input));
     };
-    const runMutation = async <Id extends SurfaceMutationActionId>(actionId: Id, input: unknown) => {
-        const result = await dispatch(actionId, input);
+    const runMutation = async <Id extends SurfaceMutationActionId>(actionId: Id, input: unknown,
+        operation?: Pick<UiActionOperation, 'presentUserConfirmation'>) => {
+        const result = await dispatch(actionId, input, operation);
         const pending = result?.ok ? ActionApprovalRequestCreatedResultSchema.safeParse(result.result) : null;
         return pending?.success
             ? { approvalId: pending.data.artifactId } as const
@@ -73,8 +76,9 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
         listRevisions: (artifactId: string) => run('artifact.revisions.list', { artifactId }),
         restoreRevision: (input: Readonly<{ artifactId: string; bodyVersion: number; expectedRevision: Readonly<{ headerVersion: number; bodyVersion: number }> }>) =>
             runMutation('artifact.revisions.restore', input),
-        deleteArtifact: (input: Readonly<{ artifactId: string; expectedRevision: Readonly<{ headerVersion: number; bodyVersion: number }> }>) =>
-            runMutation('artifact.delete', input),
+        deleteArtifact: (input: Readonly<{ artifactId: string; expectedRevision: Readonly<{ headerVersion: number; bodyVersion: number }> }>,
+            operation?: Pick<UiActionOperation, 'presentUserConfirmation'>) =>
+            runMutation('artifact.delete', input, operation),
     };
 }
 

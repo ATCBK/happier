@@ -1,10 +1,54 @@
 import { describe, expect, it } from 'vitest';
-import { ActionIdSchema } from './actionIds.js';
+import { ActionIdSchema, isSessionAccessActionId } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
+import { PluginInvocableActionIdSchema } from './pluginActionSurface.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { SessionAccessCandidatesInspectRequestV1Schema, ResolveSessionAccessPrincipalsRequestV1Schema } from '../sessions/access/sessionAccessOperationsV1.js';
+import { UsersSearchQueryV1Schema } from '../social/friends.js';
 import { projectSessionPublicLinkActionResultV1, projectSessionPublicLinkCreateActionResultV1 } from '../sessions/access/sessionAccessActionsV1.js';
 import { bindSessionAccessActionHttpRequestV1 } from './sessionAccessActionFamily.js';
 
 describe('Session access Action contracts', () => {
+  it('exposes sharing discovery reads to agents and plugins through the existing server contracts', () => {
+    const reads = [
+      { id: 'session.access.candidates.inspect', input: { v: 1, sessionId: 'session-1', subjects: [{ kind: 'account', accountId: 'recipient' }] },
+        path: '/v2/sessions/access-candidates/inspect', schema: SessionAccessCandidatesInspectRequestV1Schema },
+      { id: 'session.access.principals.resolve', input: { v: 1, subjects: [], creationTeamId: 'team-1' },
+        path: '/v1/session-access/principals/resolve', schema: ResolveSessionAccessPrincipalsRequestV1Schema },
+    ];
+    for (const read of reads) {
+      const id = ActionIdSchema.parse(read.id);
+      expect(isSessionAccessActionId(id)).toBe(true);
+      expect(PluginInvocableActionIdSchema.safeParse(id).success).toBe(true);
+      const spec = getActionSpec(id);
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
+      expect(spec).toMatchObject({ safety: 'safe', sideEffectClass: 'read', executionPlacement: 'account', requiredAuthority: 'account_automation' });
+      expect(resolveActionApprovalRouting({ actionId: id, spec, input: read.input,
+        context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(false);
+      if (!isSessionAccessActionId(id)) throw new Error('Missing sharing read family');
+      const request = bindSessionAccessActionHttpRequestV1(id, read.input);
+      expect(request).toEqual({ method: 'POST', path: read.path, body: read.input });
+      expect(read.schema.parse(request.body)).toEqual(read.input);
+      expect(spec.inputSchema.safeParse({ ...read.input, uncheckedAuthority: true }).success).toBe(false);
+    }
+  });
+
+  it('binds ordinary recipient search to collaboration discovery without permitting management or social scope', () => {
+    const id = ActionIdSchema.parse('session.access.accounts.search');
+    expect(isSessionAccessActionId(id)).toBe(true);
+    expect(PluginInvocableActionIdSchema.safeParse(id).success).toBe(true);
+    const spec = getActionSpec(id);
+    const input = { query: 'a & b', purpose: 'collaboration', cursor: 'opaque-cursor' };
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
+    expect(spec).toMatchObject({ safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation' });
+    if (!isSessionAccessActionId(id)) throw new Error('Missing sharing search family');
+    const request = bindSessionAccessActionHttpRequestV1(id, input);
+    expect(request).toEqual({ method: 'GET', path: '/v1/user/search?query=a+%26+b&cursor=opaque-cursor&purpose=collaboration', body: undefined });
+    expect(UsersSearchQueryV1Schema.parse(Object.fromEntries(new URL(request.path, 'https://home.example').searchParams))).toEqual(input);
+    for (const invalid of [{ query: 'a' }, { ...input, purpose: 'social' }, { ...input, scope: { kind: 'home' } }]) {
+      expect(spec.inputSchema.safeParse(invalid).success).toBe(false);
+    }
+  });
   it('creates current Session publications only through the generalized owner, never the legacy token writer', () => {
     expect(bindSessionAccessActionHttpRequestV1('session.public_link.create', {
       sessionId: 's/id', maxUses: 3, isConsentRequired: true,

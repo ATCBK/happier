@@ -45,6 +45,8 @@ export const HOME_RUNTIME_ACTION_SPECS_V1 = HOME_RUNTIME_ACTION_IDS_V1.map((id):
   const danger = !read && !presentation.has(id);
   return {
     id, approval: { result: 'required' }, title: titles[id], description: 'Use the addressed Home or answering client’s existing runtime and SystemTask owner.',
+    ...(id === 'home.runtime.restart' || id === 'relay.runtime.restart'
+      ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
     safety: danger ? 'danger' : 'safe', sideEffectClass: read ? 'read' : danger ? 'danger' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: id === 'home.runtime.restart' ? 'machine' : 'client',
     placements: [], surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: id === 'home.runtime.restart', rpc: false },

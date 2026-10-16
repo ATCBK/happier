@@ -34,6 +34,7 @@ import { PERSONAL_SAVED_SECRET_ACTION_SPECS_V1 } from './specs/personalSavedSecr
 import { AgentsAcpBackendsInstallFromRegistryInputV1Schema, AgentsAcpBackendsInstallFromRegistryOutputV1Schema } from '../acp/catalog/registry/registryInstallActionV1.js';
 import { CAPABILITY_RULES_ACTION_SPECS_V1 } from './specs/capabilityRules.js';
 import { SESSION_CAPABILITIES_ACTION_SPECS_V1 } from './specs/sessionCapabilities.js';
+import { SESSION_ACCESS_DISCOVERY_ACTION_SPECS_V1 } from './specs/sessionAccessDiscovery.js';
 import { SKILL_ACTION_SPECS_V1 } from './specs/skills.js';
 import { MCP_SERVER_ACTION_INPUT_SCHEMAS_V1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1, type McpServerActionIdV1 } from '../mcp/servers/serverActionsV1.js';
 import { PROVIDER_ACTION_SPECS_V1 } from './specs/providers.js';
@@ -4868,6 +4869,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   | (typeof PERSONAL_SAVED_SECRET_ACTION_SPECS_V1)[number]
   | (typeof CAPABILITY_RULES_ACTION_SPECS_V1)[number]
   | (typeof SESSION_CAPABILITIES_ACTION_SPECS_V1)[number]
+  | (typeof SESSION_ACCESS_DISCOVERY_ACTION_SPECS_V1)[number]
   | (typeof SKILL_ACTION_SPECS_V1)[number]
   | (typeof PROVIDER_ACTION_SPECS_V1)[number]
   | (typeof REMOTE_HOST_ACTION_SPECS_V1)[number]
@@ -4907,6 +4909,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   ...PERSONAL_SAVED_SECRET_ACTION_SPECS_V1,
   ...CAPABILITY_RULES_ACTION_SPECS_V1,
   ...SESSION_CAPABILITIES_ACTION_SPECS_V1,
+  ...SESSION_ACCESS_DISCOVERY_ACTION_SPECS_V1,
   ...SKILL_ACTION_SPECS_V1,
   ...PROVIDER_ACTION_SPECS_V1,
   ...REMOTE_HOST_ACTION_SPECS_V1,
@@ -8689,13 +8692,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   },
   {
     id: 'session.discussion.create', approval: {result: 'optional',flow: 'deferred'},
+    requiredAuthority: 'present_user',
     title: 'Start a Session discussion',
-    description: 'Start one human discussion with its title and first message in a single atomic write. Agent and MCP management surfaces remain disabled.',
+    description: 'Start one human discussion with its title and first message in a single atomic write. Agent and MCP callers request present-user approval.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
     serverTransport: { method: 'POST', path: SESSION_DISCUSSION_HTTP_PATHS_V1.collection },
-    surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: true, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Start a discussion',
       fields: [
@@ -8736,13 +8740,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   },
   {
     id: 'session.discussion.rename', approval: {result: 'optional',flow: 'deferred'},
+    requiredAuthority: 'present_user',
     title: 'Rename a discussion',
     description: 'Change one human discussion’s title. It does not reorder the discussion or touch its messages.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
     serverTransport: { method: 'PATCH', path: SESSION_DISCUSSION_HTTP_PATHS_V1.discussion },
-    surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: true, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Rename a discussion',
       fields: [
@@ -8757,13 +8762,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   },
   {
     id: 'session.discussion.archive', approval: {result: 'optional',flow: 'deferred'},
+    requiredAuthority: 'present_user',
     title: 'Archive a discussion',
     description: 'Archive one human discussion. It stays readable and restorable; new posts and title changes stop.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
     serverTransport: { method: 'POST', path: SESSION_DISCUSSION_HTTP_PATHS_V1.archive },
-    surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: true, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Archive a discussion',
       fields: [
@@ -8777,13 +8783,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   },
   {
     id: 'session.discussion.restore', approval: {result: 'optional',flow: 'deferred'},
+    requiredAuthority: 'present_user',
     title: 'Restore a discussion',
     description: 'Restore one archived human discussion so it accepts posts again.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
     serverTransport: { method: 'POST', path: SESSION_DISCUSSION_HTTP_PATHS_V1.restore },
-    surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: true, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Restore a discussion',
       fields: [
@@ -8797,13 +8804,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   },
   {
     id: 'session.discussion.read_state.set', approval: {result: 'optional',flow: 'deferred'},
+    requiredAuthority: 'present_user',
     title: 'Mark a discussion read',
-    description: 'Advance the caller’s own private read position in a discussion. Agent and MCP callers cannot acknowledge a person’s read position.',
+    description: 'Advance the executing Account’s own private read position in a discussion. Agent and MCP callers request present-user approval.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
     serverTransport: { method: 'PUT', path: SESSION_DISCUSSION_HTTP_PATHS_V1.read },
-    surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: true, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Mark a discussion read',
       fields: [
@@ -9308,7 +9316,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'POST', path: '/v2/sessions/access-context/set' },
   },
   {
-    id: 'session.reports_to.set', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.reports_to.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     title: 'Set Session lead',
     safety: 'danger',
     requiredAuthority: 'account_automation',
@@ -9329,7 +9337,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'POST', path: '/v1/sessions/:sessionId/reports-to' },
   },
   {
-    id: 'session.responsibility.set', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'optional',flow: 'deferred'},
+    id: 'session.responsibility.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     title: 'Assign Session to someone',
     safety: 'danger',
     requiredAuthority: 'account_automation',

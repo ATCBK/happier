@@ -36,6 +36,81 @@ const sessionSpawnInput = {
 } as const;
 
 describe('createActionExecutor (durable plugin approval caller provenance)', () => {
+  it.each(['agent', 'mcp'] as const)('admits %s discussion read-state as a present-user request and replays the exact private cursor', async surface => {
+    let stored: ApprovalRequest | null = null;
+    const executed: Array<{ authority: ActionExecutorContext['authority']; input: unknown }> = [];
+    const executor = createActionExecutor({
+      // Artifact persistence and the Session HTTP adapter are the boundaries;
+      // catalog admission, approval routing and replay remain real.
+      approvalsCreate: async ({ request }) => {
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { artifactId: 'discussion-read-approval' };
+      },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => {
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+      sessionDiscussionAction: async ({ input, context }) => {
+        executed.push({ authority: context.authority, input });
+        return { v: 1, serverId: 'home-1', sessionId: 'session-1',
+          cursor: { discussionId: 'discussion-1', lastReadSeq: 7, didChange: true } };
+      },
+    });
+    const input = { sessionId: 'session-1', discussionId: 'discussion-1', lastReadSeq: 7 };
+    expect(await executor.execute('session.discussion.read_state.set', input, {
+      surface, authority: 'account_automation', serverId: 'home-1', runtimeAccountId: 'account-1',
+      defaultSessionId: 'session-1', defaultSessionMachineId: 'machine-1', actionRequestId: 'discussion-read-request',
+    })).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'discussion-read-approval' } });
+    expect(executed).toEqual([]);
+    expect(stored).toMatchObject({ actionId: 'session.discussion.read_state.set', actionArgs: input });
+    const decision = await executor.execute('approval.request.decide', {
+      artifactId: 'discussion-read-approval', decision: 'approve',
+    }, { surface: 'ui', authority: 'present_user', serverId: 'home-1', runtimeAccountId: 'account-1' });
+    expect(decision, JSON.stringify(decision))
+      .toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true,
+        result: { cursor: { discussionId: 'discussion-1', lastReadSeq: 7, didChange: true } } } } });
+    expect(executed).toEqual([{ authority: 'present_user', input }]);
+  });
+
+  it.each(['api', 'cli', 'agent'] as const)('retains %s invocation custody for Account Plugin Settings without changing the storage target', surface => {
+    const actionId = 'plugins.settings.set' as const;
+    const input = { pluginId: 'happier.agent.claude', localId: 'claudeUnifiedTerminalEnabled',
+      scope: { kind: 'account' }, target: { kind: 'account' }, value: true, expectedRevision: '7' };
+    const grant = ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: [], ids: [actionId] },
+      targets: { sessions: [], machines: ['machine-1'] }, approve: false, origins: [], models: null, permissionModes: null, create: null });
+    const authorization: ExternalActionExecutionAuthorizationV1 = { v: 1, token: 'signed-invocation', binding: {
+      serverIdentityId: 'home-1', accountId: 'account-1', principalId: 'account-1',
+      credentialId: '00000000-0000-4000-8000-000000000001', machineId: 'machine-1',
+      custodianAccountId: 'account-1', installationId: 'installation-1', actionId, requestId: 'settings-request',
+      requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine-1' }, grant,
+    } };
+    const { principalId: _principalId, credentialId: _credentialId, grant: _grant, ...accountBinding } = authorization.binding;
+    const context: ActionExecutorContext = surface !== 'agent' ? {
+      surface, authority: 'account_automation', serverId: 'profile-1', actionRequestId: 'settings-request',
+      ...(surface === 'api' ? { externalActionCredential: { accountId: 'account-1', principalId: 'account-1',
+        credentialId: authorization.binding.credentialId, grant } } : { runtimeAccountId: 'account-1' }),
+      externalActionExecutionAuthorization: surface === 'api' ? authorization : {
+        ...authorization, binding: { ...accountBinding, authentication: { kind: 'terminal', tokenEpoch: 1 } },
+      },
+      externalActionTarget: authorization.binding.target,
+      signExternalActionApprovalInput: () => 'a'.repeat(86),
+    } : {
+      surface: 'agent', authority: 'account_automation', serverId: 'profile-1', actionRequestId: 'settings-request',
+      defaultSessionId: 'session-1', defaultSessionMachineId: 'machine-1',
+      actionCaller: { kind: 'session', sessionId: 'session-1', starterDepth: 0, turnDepth: 0 },
+    };
+    const origin = buildApprovalExecutionOriginV1({ actionId, input, context,
+      targetSessionId: surface === 'agent' ? 'session-1' : null });
+    expect(origin).toMatchObject({ machineId: 'machine-1', actionId });
+    expect(ApprovalExecutionOriginV1Schema.safeParse(origin).success).toBe(true);
+    const accountOnly = buildApprovalExecutionOriginV1({ actionId, input, targetSessionId: null,
+      context: { surface: 'ui', authority: 'present_user', serverId: 'profile-1', actionRequestId: 'account-only' },
+    });
+    expect(accountOnly).toMatchObject({ actionId, serverId: 'profile-1' });
+    expect(accountOnly?.machineId).toBeUndefined();
+  });
   it.each([false, true])('captures input-dependent Provider machine placement without turning Account configuration into machine work (reviewed=%s)', reviewed => {
     const input = {
       action: 'createContribution' as const, connectionId: 'pc_reviewed', contributionKey: 'example.provider/source',

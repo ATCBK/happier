@@ -44,6 +44,11 @@ describe('isApprovalRequiredByActionsSettings', () => {
     'session.access.grant.set',
     'session.access.grant.remove',
     'session.access.context.set',
+    'session.reports_to.set',
+    'session.responsibility.set',
+    'home.runtime.restart',
+    'relay.runtime.restart',
+    'remote_hosts.relay.restart',
     'session.public_link.remove',
     'session.public_link.create',
     'artifact.public_link.create',
@@ -271,7 +276,7 @@ describe('isApprovalRequiredByActionsSettings', () => {
     }).required).toBe(true);
   });
 
-  it('FA-4 distinguishes reversible credential edits from new audience disclosure', () => {
+  it('admits reversible credential policy edits after the editor owns material-disclosure review', () => {
     const audience = { allMembersDeliveryMode: null, groupGrants: [], memberGrants: [] };
     const create = { teamId: 'team-1', resourceId: 'resource-1', displayName: 'Shared',
       source: { v: 1, kind: 'provider_connection', connectionId: 'connection-1',
@@ -285,14 +290,14 @@ describe('isApprovalRequiredByActionsSettings', () => {
       requestPolicy: null, ...audience, usageLimitDelta: { upserts: [], deleteIds: [] } };
     const cases = [
       ['teams.credentials.create', create, false],
-      ['teams.credentials.create', { ...create, allMembersDeliveryMode: 'direct' }, true],
-      ['teams.credentials.create', { ...create, memberGrants: [{ teamMembershipId: 'member-1', deliveryMode: 'brokered' }] }, true],
+      ['teams.credentials.create', { ...create, allMembersDeliveryMode: 'direct' }, false],
+      ['teams.credentials.create', { ...create, memberGrants: [{ teamMembershipId: 'member-1', deliveryMode: 'brokered' }] }, false],
       ['teams.credentials.update', { ...ref, displayName: 'Renamed', enabled: false }, false],
       ['teams.credentials.update', { ...ref, replacement }, false],
-      ['teams.credentials.update', { ...ref, replacement: { ...replacement, allMembersDeliveryMode: 'brokered' } }, true],
-      ['teams.credentials.update', { ...ref, disclosureCeiling: 'direct_allowed' }, true],
+      ['teams.credentials.update', { ...ref, replacement: { ...replacement, allMembersDeliveryMode: 'brokered' } }, false],
+      ['teams.credentials.update', { ...ref, disclosureCeiling: 'direct_allowed' }, false],
       ['teams.credentials.audience.set', { ...ref, ...audience }, false],
-      ['teams.credentials.audience.set', { ...ref, ...audience, groupGrants: [{ teamGroupId: 'group-1', deliveryMode: 'direct' }] }, true],
+      ['teams.credentials.audience.set', { ...ref, ...audience, groupGrants: [{ teamGroupId: 'group-1', deliveryMode: 'direct' }] }, false],
     ] as const;
     for (const [actionId, input, required] of cases) {
       const spec = getActionSpec(actionId);
@@ -1075,22 +1080,20 @@ describe('isApprovalRequiredByActionsSettings', () => {
     expect(isApprovalRequiredByActionsSettings(actionId, required, completed)).toBe(true);
   });
 
-  // teams-lane-04/11-responsible-assignment.md:340 — assignment confirmation is
-  // required by default and waivable in the canonical Actions policy; the mounted
-  // picker has no direct confirmation host, so the present-user UI default must
-  // not be suppressed for it.
-  it('requires assignment confirmation by default on the present-user UI and honors a ui waiver', () => {
+  // The 2026-10-15 owner ruling makes reversible present-user UI edits direct;
+  // explicit Ask-first and the Agent floor still use the shared policy.
+  it('admits assignment directly for the present user while retaining the Agent floor', () => {
     const actionId = 'session.responsibility.set' as const;
     const context = { surface: 'ui', authority: 'present_user' } as const;
-    expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, context)).toBe(true);
+    expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, context)).toBe(false);
     expect(resolveActionApprovalRouting({
       actionId,
       spec: getActionSpec(actionId),
       settings: EMPTY_SETTINGS,
       context,
-    })).toMatchObject({ required: true, flow: 'deferred' });
+    })).toMatchObject({ required: false, flow: 'deferred' });
     // An unwired host applies the same default.
-    expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), context }).required).toBe(true);
+    expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), context }).required).toBe(false);
 
     const waived = normalizeActionsSettingsV1({
       v: 1,

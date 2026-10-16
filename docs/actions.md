@@ -18,6 +18,13 @@ This includes refresh, retry and paging through that same read owner. It does
 not permit a raw write or effect through the read transport. Public pre-auth
 reads and signed-out draft bootstrap retain their existing authority boundaries.
 
+In 0.3 development, Session sharing discovery follows that rule through
+`session.access.candidates.inspect`, `session.access.principals.resolve` and
+`session.access.accounts.search`. These safe reads reuse the server's candidate
+policy, principal-label/creation-decision and collaboration-search owners. An
+inspection is advisory: the grant writer still checks current authority and
+policy when access changes.
+
 In 0.3 development, `approval.request.list` exposes the Inbox queue's metadata
 read to UI, Agent, MCP and CLI callers. Use `happier actions invoke
 approval.request.list --input-json '{"status":"open"}' --json`, or MCP's
@@ -62,6 +69,15 @@ original-root ingress consumes supported execution placements. Home cannot open
 encrypted operands: the receiving daemon still resolves the exact placement
 from schema-admitted input. Native-purpose metadata selects the existing strict
 transport checks; it does not grant authority or relax their target binding.
+
+Present-user Session responsibility and lead assignment, Home restart, local
+runtime restart and remote-host relay restart use the direct UI default because
+they are reversible. Public-link creation also uses that default. Document
+deletion forwards exact `presentUserConfirmation` after the artifact surface's
+designed consequence review; its generic default still applies without that
+review. Prompt-library deletion and document-link revocation use the executor's
+single canonical confirmation. Settings → Actions can require approval on each
+Action and surface in either case; Agent and automation defaults are unchanged.
 
 For original Account and terminal Session Actions, an outer Machine target selects the daemon
 that opens the encrypted input. The existing input reconciliation then resolves the Session target,
@@ -416,6 +432,13 @@ reconcile and verified-selection workflow to Home-qualified Actions. Directory
 sync remains a Team workflow. An Admin Portal link is sensitive live delivery,
 not an ordinary public member sign-in URL.
 
+Directory-source removal has an exact API/SDK automation exception. Its separate
+preview is a read; execution remains dangerous and follows deferred approval,
+original-principal replay and current Team/source authorization. The generated
+SDK exposes `actions.teams.directory.sources.remove.preview(...)` and
+`actions.teams.directory.sources.remove.execute(...)`. Sibling directory
+mutations retain their declared present-user authority.
+
 Managed GitHub App setup shares one Home/Team-owned registration path: manual
 configuration or manifest-assisted setup, revision-checked updates and key
 rotation, installation verification and removal. Keys remain write-only.
@@ -430,6 +453,11 @@ aggregate direct-access readiness and pending counts; internal credential census
 recipient bindings and envelopes remain with their encryption/delivery hosts.
 It is separate from encrypted membership-history preparation. External-key
 creation and invitation creation/reissue retain one-time human live delivery.
+Credential metadata, broker policy and audience saves use the direct
+present-user UI default. The credential editor's draft owner still reviews
+actual direct material disclosure and disclosure-ceiling widening before
+accepting that draft. The Action does not infer disclosure from a nonempty
+audience or reconstruct its previous audience.
 
 `teams.members.history.preparation.get` observes recipient readiness and
 actionable work through the existing encryption host. Its aggregate exception
@@ -1019,8 +1047,10 @@ flow. Other callers observe the terminal task result within the same client
 dispatch, so a desktop-local task id is never treated as a portable task handle.
 Losing that observation returns an explicit unknown outcome; cancelling the
 observer does not cancel the admitted task. Connected-Machine Home restart uses
-the Machine's existing SystemTask start/wait capability instead. Runtime writes
-retain dangerous-Action confirmation; OS file opening uses that same policy
+the Machine's existing SystemTask start/wait capability instead. Home, local
+runtime and remote-host relay restarts are direct for a present user's UI press;
+explicit Ask-first and automation retain the canonical approval policy. Other
+runtime writes retain their declared confirmation; OS file opening uses that same policy
 because the native port can launch files, while picker and reveal remain safe
 presentation operations. Relay configuration keeps credential input in live-only
 approval custody. Its mounted author publishes the existing pending notice when
@@ -3400,9 +3430,10 @@ admission separate from approval-decision authority.
 `session.user_action.answer` is conversational
 input: tokens need the Action grant, rather than `approve`. Other automation
 callers outside those host Agent/MCP decision paths still need present-user
-authority for these rows. The caller's
-discussion operations are automation rows with Agent/MCP exposure off. Read-state
-operations also admit Agent and MCP callers.
+authority for these rows. Discussion create, rename, archive, restore and private
+read-state writes are Agent/MCP-requestable present-user Actions. They use the
+same deferred approval and replay owner as other present-user Session intents;
+waiving approval cannot grant automation present-user execution authority.
 
 In 0.3 development, Agent, MCP and trusted-plugin calls can request present-user
 mutations, including

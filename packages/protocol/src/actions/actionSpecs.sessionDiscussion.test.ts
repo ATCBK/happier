@@ -25,6 +25,7 @@ import {
   SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1,
 } from '../sessions/discussions/actions.js';
 import { SESSION_DISCUSSION_HTTP_PATHS_V1 } from '../sessions/discussions/api.js';
+import { canRequestPresentUserApprovalForActionInputV1, resolveCredentialActionAdmissionV1 } from './decisionAuthority.js';
 
 const READ_ACTION_IDS = [
   'session.discussion.list',
@@ -62,7 +63,9 @@ describe('Session discussion Action catalog rows', () => {
       const spec = getActionSpec(actionId);
       expect(spec.inputSchema, actionId).toBe(SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1[actionId]);
       expect(spec.outputSchema, actionId).toBe(SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1[actionId]);
-      expect(spec.requiredAuthority, actionId).toBe('account_automation');
+      expect(spec.requiredAuthority, actionId).toBe(
+        MANAGEMENT_ACTION_IDS.some(id => id === actionId) ? 'present_user' : 'account_automation',
+      );
       // Discussions live on the Session's own Home and resolve through that owner.
       expect(spec.executionPlacement, actionId).toBe('session');
       expect(spec.contextualDefaults, actionId).toEqual({ sessionId: 'current_session' });
@@ -72,7 +75,7 @@ describe('Session discussion Action catalog rows', () => {
     }
   });
 
-  it('exposes management to API callers while keeping Agent and MCP management disabled', () => {
+  it('exposes management to Agent and MCP through present-user approval', () => {
     for (const actionId of READ_ACTION_IDS) {
       const spec = getActionSpec(actionId);
       expect(spec.surfaces.agent, actionId).toBe(true);
@@ -91,15 +94,24 @@ describe('Session discussion Action catalog rows', () => {
 
     for (const actionId of MANAGEMENT_ACTION_IDS) {
       const spec = getActionSpec(actionId);
-      expect(spec.surfaces.agent, actionId).toBe(false);
-      expect(spec.surfaces.mcp, actionId).toBe(false);
+      expect(spec.surfaces.agent, actionId).toBe(true);
+      expect(spec.surfaces.mcp, actionId).toBe(true);
       expect(spec.surfaces.ui, actionId).toBe(true);
       expect(spec.surfaces.cli, actionId).toBe(true);
-      expect(spec.requiredAuthority, actionId).toBe('account_automation');
-      expect(spec.surfaces.api, actionId).toBe(true);
+      expect(spec.requiredAuthority, actionId).toBe('present_user');
+      expect(canRequestPresentUserApprovalForActionInputV1(spec), actionId).toBe(true);
+      for (const surface of ['agent', 'mcp'] as const) {
+        expect(resolveCredentialActionAdmissionV1({ spec, authority: 'account_automation', grant: null, surface }), actionId)
+          .toEqual({ ok: true });
+        expect(isApprovalRequiredByActionsSettings(actionId, ActionsSettingsV1Schema.parse({ v: 1 }),
+          { surface, authority: 'account_automation' }), actionId).toBe(true);
+      }
+      expect(resolveCredentialActionAdmissionV1({ spec, authority: 'account_automation', grant: null,
+        surface: 'api', hasExternalCredential: true }), actionId)
+        .toEqual({ ok: false, errorCode: 'present_user_required' });
       expect(spec.surfaces.plugin, actionId).toBe(true);
-      expect(PUBLIC_ACTION_IDS, actionId).toContain(actionId);
-      expect(PublicActionIdSchema.safeParse(actionId).success, actionId).toBe(true);
+      expect(PUBLIC_ACTION_IDS, actionId).not.toContain(actionId);
+      expect(PublicActionIdSchema.safeParse(actionId).success, actionId).toBe(false);
     }
   });
 

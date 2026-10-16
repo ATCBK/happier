@@ -94,7 +94,10 @@ describe('prompt deletion catalog mutation', () => {
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (path === '/v2/account/settings') {
                     if (init?.method === 'POST') settingsWrites += 1;
-                    return Response.json({ content: { t: 'plain', v: outcome === 'legacy-source' ? { profiles: [] } : {} }, version: 7 });
+                    return Response.json({ content: { t: 'plain', v: {
+                        ...(outcome === 'legacy-source' ? { profiles: [] } : {}),
+                        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'artifact.delete': ['ui'] } },
+                    } }, version: 7 });
                 }
                 if (path === '/v1/account/entity-rows/prompt-library') return Response.json({ status: 'listed',
                     rows: [...rows.map(row => ({ key: row.record.key, revision: row.revision, content: { t: 'plain', v: row.record } })),
@@ -135,6 +138,7 @@ describe('prompt deletion catalog mutation', () => {
         const hook = await renderHook(() => usePromptLibraryEntryActions());
         let removed: boolean | undefined;
         await act(async () => { removed = await hook.getCurrent().remove('doc-1'); });
+        expect(deleteConfirmation).not.toHaveBeenCalled();
         expect(artifactBoundary.read('doc-1')).toBeNull();
         expect(removed).toBe(true);
         expect(rows).toEqual(originalRows);
