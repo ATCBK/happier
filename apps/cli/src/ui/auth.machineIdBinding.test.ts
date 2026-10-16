@@ -1,15 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
-vi.mock('node:crypto', async (importActual) => {
-  const actual = await importActual<typeof import('node:crypto')>();
-  return {
-    ...actual,
-    randomUUID: vi.fn(() => '00000000-0000-0000-0000-000000000001'),
-  };
-});
+import { reloadConfiguration } from '@/configuration';
+import { ensureMachineIdInSettings } from './auth';
 
 describe('ensureMachineIdInSettings', () => {
   const previousHomeDir = process.env.HAPPIER_HOME_DIR;
@@ -20,7 +14,7 @@ describe('ensureMachineIdInSettings', () => {
     else process.env.HAPPIER_HOME_DIR = previousHomeDir;
     if (previousActiveServerId === undefined) delete process.env.HAPPIER_ACTIVE_SERVER_ID;
     else process.env.HAPPIER_ACTIVE_SERVER_ID = previousActiveServerId;
-    vi.resetModules();
+    reloadConfiguration();
   });
 
   it('returns the existing per-server machine id when present', async () => {
@@ -56,8 +50,7 @@ describe('ensureMachineIdInSettings', () => {
         'utf8',
       );
 
-      vi.resetModules();
-      const { ensureMachineIdInSettings } = await import('./auth');
+      reloadConfiguration();
       const result = await ensureMachineIdInSettings();
       expect(result.machineId).toBe('machine-existing');
 
@@ -101,13 +94,13 @@ describe('ensureMachineIdInSettings', () => {
         'utf8',
       );
 
-      vi.resetModules();
-      const { ensureMachineIdInSettings } = await import('./auth');
+      reloadConfiguration();
       const result = await ensureMachineIdInSettings();
-      expect(result.machineId).toBe('00000000-0000-0000-0000-000000000001');
+      expect(result.machineId).toMatch(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u);
 
       const raw = JSON.parse(readFileSync(settingsPath, 'utf8'));
-      expect(raw.machineIdByServerId.cloud).toBe('00000000-0000-0000-0000-000000000001');
+      expect(raw.machineIdByServerId.cloud).toBe(result.machineId);
+      expect((await ensureMachineIdInSettings()).machineId).toBe(result.machineId);
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
@@ -146,17 +139,13 @@ describe('ensureMachineIdInSettings', () => {
         'utf8',
       );
 
-      vi.resetModules();
-
-      const crypto = await import('node:crypto');
-      vi.mocked(crypto.randomUUID).mockImplementationOnce(() => '00000000-0000-0000-0000-000000000002');
-
-      const { ensureMachineIdInSettings } = await import('./auth');
+      reloadConfiguration();
       const result = await ensureMachineIdInSettings({ forceNew: true });
-      expect(result.machineId).toBe('00000000-0000-0000-0000-000000000002');
+      expect(result.machineId).not.toBe('machine-acct-a');
+      expect(result.machineId).toMatch(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u);
 
       const raw = JSON.parse(readFileSync(settingsPath, 'utf8'));
-      expect(raw.machineIdByServerId.cloud).toBe('00000000-0000-0000-0000-000000000002');
+      expect(raw.machineIdByServerId.cloud).toBe(result.machineId);
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
