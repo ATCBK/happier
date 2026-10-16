@@ -23,10 +23,11 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     const incomplete = result => Object.assign(new Error('Process-tree termination could not be verified'), {
         code: 'plugin_exec_termination_incomplete', result,
     });
-    async function census(containment, targetPid) {
+    async function census(containment, targetPid, identityOnly = false) {
         try {
             const snapshot = await readProcessCensus({ freshness: 'fresh', scope: 'all',
-                ...(targetPid === undefined ? {} : { pids: [targetPid], fields: [], includeAncestors: true }),
+                ...(identityOnly || targetPid !== undefined ? { fields: [] } : {}),
+                ...(targetPid === undefined ? {} : { pids: [targetPid], includeAncestors: true }),
                 ...(containment?.kind === 'windows_job' ? { verifiedJobNames: [containment.name] } : {}) });
             if (snapshot.status !== 'ok' || new Set(snapshot.rows.map(row => row.pid)).size !== snapshot.rows.length) return null;
             if (containment?.kind === 'windows_job') {
@@ -47,7 +48,9 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
         return null;
     }
     async function captureTargets(root) {
-        const table = await census();
+        // Capture retains native identities and ancestry only. Commands, credentials,
+        // containment and metrics are demanded separately by their actual consumers.
+        const table = await census(undefined, undefined, true);
         if (!table) return { status: 'unavailable', reason: 'census_unavailable' };
         const row = table.index.byPid.get(root.pid);
         if (!present(row)) return { status: 'refused', reason: 'root_missing' };

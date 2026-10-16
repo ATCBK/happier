@@ -14,7 +14,7 @@ import { createProcessTreeTerminator, type ProcessTreeTerminationInput } from '.
 const moduleOwner = createRequire(import.meta.url)(resolveCliRuntimeAssetPath('scripts', 'process_tree.cjs')) as {
     createProcessTreeOwner(adapters: Record<string, unknown>): {
         terminateProcessTree(root: { pid: number; start?: ProcessCensusRow['start']; exitCode?: number }, options?: { graceMs: number; ownedProcessGroup?: boolean }): Promise<unknown>;
-        captureTargets(root: { pid: number }): Promise<{ status: string; capturedTargets: readonly { pid: number; start: ProcessCensusRow['start'] }[] }>;
+        captureTargets(root: { pid: number; start?: ProcessCensusRow['start'] }): Promise<{ status: string; capturedTargets: readonly { pid: number; start: ProcessCensusRow['start'] }[] }>;
         terminateTargets(input: ProcessTreeTerminationInput): Promise<{ status: string; outcomes: readonly { pid: number; outcome: string }[]; capturedTargets?: readonly { pid: number; start: ProcessCensusRow['start'] }[] }>;
     };
 };
@@ -48,6 +48,27 @@ function fixture(rows: Map<number, { parent: number; start: number; group?: numb
 afterEach(() => vi.restoreAllMocks());
 
 describe('process-tree generation safety', () => {
+    it('captures exact subtree identities without reading command, environment, containment or metrics fields', async () => {
+        const rows = new Map([[process.pid, { parent: 1, start: 10 }],
+            [4100, { parent: 1, start: 20 }], [4101, { parent: 4100, start: 30 }],
+            [5100, { parent: 1, start: 40 }]]);
+        const reads: string[] = [];
+        const owner = fixture(rows, {}, false, path => { reads.push(path); });
+        expect(await owner.captureTargets({ pid: 4100 })).toMatchObject({ status: 'ok', capturedTargets: [
+            { pid: 4100, start: { startTimeMs: 200, native: 'linux-proc:20' } },
+            { pid: 4101, start: { startTimeMs: 300, native: 'linux-proc:30' } },
+        ] });
+        expect(reads.filter(path => !path.endsWith('/stat') && !path.endsWith('/status'))).toEqual([]);
+        expect(await owner.captureTargets({ pid: 9999 })).toMatchObject({ status: 'refused' });
+        expect(await owner.captureTargets({ pid: process.pid })).toMatchObject({ status: 'refused' });
+        expect(await owner.captureTargets({ pid: 4100, start: { startTimeMs: 199 } }))
+            .toMatchObject({ status: 'refused', reason: 'identity_changed' });
+        const unreadable = fixture(new Map([[process.pid, { parent: 1, start: 10 }],
+            [4100, { parent: 1, start: 20 }], [4101, { parent: 4100, start: 30, unreadableStatus: true }]]));
+        expect(await unreadable.captureTargets({ pid: 4100 }))
+            .toMatchObject({ status: 'refused', reason: 'descendant_identity_unavailable' });
+    });
+
     it.skipIf(process.platform === 'win32')('gracefully ends a real many-member tree with exact checks while unrelated peers survive', async () => {
         const source = 'process.send("ready"); process.on("SIGTERM", () => setTimeout(() => process.exit(0), 50)); setInterval(() => {}, 1000);';
         const parent = spawnInlineNodeTestProcess(`
