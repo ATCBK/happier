@@ -30,11 +30,11 @@ function fieldKey(field: Pick<ActionInputFieldHint, 'optionsSourceId' | 'inputTy
 
 /** Account choices do not release their demand when a sibling's serving relay changes. */
 function useInputOptionsReadGroup(reads: readonly InputOptionsRead[], enabled: boolean, refresh: string | undefined,
-    accountLifetime: ServerAccountScopeLifetime | null | undefined) {
+    accountLifetime: ServerAccountScopeLifetime | null | undefined, retentionOwner: object | undefined) {
     const identity = JSON.stringify(reads.map(read => read.key));
     // The read key already contains its complete admitted request and Account revision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const retainedReads = React.useMemo(() => reads, [identity, accountLifetime]);
+    const retainedReads = React.useMemo(() => reads, [identity, accountLifetime, retentionOwner, refresh]);
     const activeReads = enabled ? retainedReads : NO_READS;
     const refreshKey = React.useRef(refresh);
     refreshKey.current = refresh;
@@ -44,7 +44,7 @@ function useInputOptionsReadGroup(reads: readonly InputOptionsRead[], enabled: b
     }, [activeReads]);
     const retainedSnapshot = React.useRef<readonly InputFieldOptionsState[]>([]);
     const getSnapshot = React.useCallback(() => {
-        const states = activeReads.map(read => readInputFieldOptionsState(read.key));
+        const states = activeReads.map(read => readInputFieldOptionsState(read));
         if (states.length === retainedSnapshot.current.length && states.every((state, index) => state === retainedSnapshot.current[index])) {
             return retainedSnapshot.current;
         }
@@ -69,6 +69,8 @@ export function useInputFieldOptions(params: Readonly<{
     refreshKey?: string;
     /** Explicit routed Account custody; null is unavailable, never ambient fallback. */
     accountLifetime?: (ServerAccountScopeLifetime & Partial<Pick<ServerCredentialAccountScopeBinding, 'revision'>>) | null;
+    /** Canonical immutable placement, never a draft or component-local object. */
+    retentionOwner?: object;
 }>) {
     const scope = useActiveServerAccountScope(params.serverId ?? undefined);
     const accountScope = params.accountLifetime === undefined ? scope : params.accountLifetime?.scope;
@@ -102,15 +104,16 @@ export function useInputFieldOptions(params: Readonly<{
                 ...(accountScope?.accountId ? { runtimeAccountId: accountScope.accountId } : {}),
                 ...(params.sessionId ? { defaultSessionId: params.sessionId } : {}) };
             const key = JSON.stringify([input, context, params.accountLifetime?.revision]);
-            reads.set(key, { key, input, context, ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }) });
+            reads.set(key, { key, input, context, ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }),
+                ...(params.retentionOwner ? { retention: { owner: params.retentionOwner, field: request.field.path, refreshKey: params.refreshKey } } : {}) });
             keys.set(fieldKey(request.field, request), key);
             defaultContexts.set(JSON.stringify([request.field.path, request.field.optionsSourceId, request.field.inputType]), request);
         }
         return { reads: [...reads.values()], keys, defaultContexts };
-    }, [signature, params.accountLifetime]);
+    }, [signature, params.accountLifetime, params.retentionOwner, params.refreshKey]);
     const enabled = params.enabled && (params.accountLifetime === undefined || params.accountLifetime?.isCurrent() === true);
-    const accountReads = useInputOptionsReadGroup(reads.filter(read => !read.context.externalActionTarget), enabled, params.refreshKey, params.accountLifetime);
-    const machineReads = useInputOptionsReadGroup(reads.filter(read => read.context.externalActionTarget), enabled, params.refreshKey, params.accountLifetime);
+    const accountReads = useInputOptionsReadGroup(reads.filter(read => !read.context.externalActionTarget), enabled, params.refreshKey, params.accountLifetime, params.retentionOwner);
+    const machineReads = useInputOptionsReadGroup(reads.filter(read => read.context.externalActionTarget), enabled, params.refreshKey, params.accountLifetime, params.retentionOwner);
     const activeReads = enabled ? reads : NO_READS;
     const snapshot = React.useMemo(() => {
         const states = new Map<string, InputFieldOptionsState>();

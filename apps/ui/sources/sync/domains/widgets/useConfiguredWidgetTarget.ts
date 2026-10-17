@@ -35,11 +35,12 @@ type ConfiguredWidgetTargetOptions = Readonly<{
 }>;
 
 export function useConfiguredWidgetTarget(input: ConfiguredWidgetTargetOptions): ConfiguredWidgetTargetResolution {
+    const retentionOwner = input.instance;
     input = { ...input, instance: inheritWidgetGroupViewerBindingsV1(input.instance, input.groupBindings, input.descriptor.inputs?.fields ?? []) };
-    return withWidgetInputRepairOutcome(useConfiguredWidgetTargetFacts(input), { instance: input.instance, descriptor: input.descriptor });
+    return withWidgetInputRepairOutcome(useConfiguredWidgetTargetFacts(input, retentionOwner), { instance: input.instance, descriptor: input.descriptor });
 }
 
-function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): ConfiguredWidgetTargetResolution {
+function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, retentionOwner: WidgetInstanceV1): ConfiguredWidgetTargetResolution {
     const providedContext = composeWidgetGroupContextV1({ providedContext: input.providedContext, groupBindings: input.groupBindings });
     const targetDeclaration = readWidgetInputTargetV1(input.descriptor);
     const sessionPath = targetDeclaration.kind === 'session' ? targetDeclaration.path : undefined;
@@ -137,7 +138,11 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
         serverId: input.scope.serverId,
         machineId: targetDeclaration.kind === 'session' ? selectedRuntime.machineId : input.appRuntime.machineId,
         sessionId: requested?.sessionId,
-        refreshKey: JSON.stringify(candidate?.inputs),
+        accountLifetime: executableRuntime.accountLifetime,
+        retentionOwner,
+        // A replacement serving type is a different choice authority even when
+        // the saved field and its value still have the same request identity.
+        refreshKey: JSON.stringify([candidate?.inputs, fields.map(field => readInputType(field))]),
         // Exact native refs need discovery only when their consuming field declares it.
         requests: fields.filter(field => readInputFieldOptionsConstraint(field, readInputType(field),
             input.instance.bindings[field.path]?.kind === 'viewer', {
@@ -192,7 +197,7 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
             if (state.status !== 'ready') {
                 if (state.status === 'loading') return { status: 'loading', reasonCode: 'widget_input_options_loading' };
                 const reasonCode = state.errorCode ?? 'widget_input_options_loading';
-                return { status: 'unavailable', reasonCode, fields: [{ path: field.path, status: 'unavailable', reasonCode }] };
+                return { status: 'unavailable', reasonCode, fields: [{ path: field.path, status: 'unavailable', reasonCode }], retry: optionReads.retry };
             }
             options = state.options;
         }

@@ -110,6 +110,16 @@ function NativeSessionOptionsProbe(props: Readonly<{ serverId: string }>) {
     </View>;
 }
 
+function NativePeriodOptionsProbe(props: Readonly<{ serverId: string; observe(state: InputFieldOptionsState): void }>) {
+    const definition = { kind: 'builtin' as const, id: 'usage_flow' };
+    const options = useInputFieldOptions({ serverId: props.serverId, enabled: true,
+        requests: [{ field: periodField, consumer: { kind: 'widget', surface: { serverId: props.serverId,
+            accountId: 'viewer', owner: { kind: 'home' } }, definition }, draftInput: { period: { relative: '30days' } } }] });
+    const state = options.state(periodField);
+    props.observe(state);
+    return null;
+}
+
 async function createTypedWorkflow(serverId: string, accountId: string, definitionId = '00000000-0000-4000-8000-000000000051', mixed = false) {
     const home = getServerProfileById(serverId);
     if (!home?.serverIdentityId) throw new Error('Expected the options Home identity');
@@ -142,6 +152,38 @@ function reply(label: string) {
 }
 
 describe('qualified input field options scope', () => {
+    it('keeps admitted native choices ready when responsive composition replaces the last reader, and withdraws them on Account retirement', async () => {
+        const serverId = await harness.addHome({ name: 'Responsive Home', serverUrl: 'https://responsive-options.example',
+            accountId: 'viewer', currentAccount: true });
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://responsive-options.example', accountId: 'viewer', request: harness.request });
+        installHomeGovernanceBoundaries(harness);
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        setRuntimeFetch(harness.request);
+        const states: InputFieldOptionsState[] = [];
+        const body = (key: string) => <NativePeriodOptionsProbe key={key} serverId={serverId} observe={state => states.push(state)} />;
+        const screen = await renderScreen(body('desktop'));
+        try {
+            await waitForHomeGovernance(() => expect(states.at(-1)?.status).toBe('ready'));
+            const ready = states.at(-1)!;
+            for (const size of ['phone', 'desktop']) {
+                const before = states.length;
+                await screen.update(body(size));
+                await flushHookEffects({ cycles: 10 });
+                expect(states.slice(before).map(state => state.status)).not.toContain('loading');
+                expect(states.at(-1)?.options).toBe(ready.options);
+            }
+            await screen.update(<></>);
+            await flushHookEffects({ cycles: 2 });
+            const beforeRemount = states.length;
+            await screen.update(body('later-navigation'));
+            await waitForHomeGovernance(() => expect(states.at(-1)?.status).toBe('ready'));
+            expect(states.slice(beforeRemount).map(state => state.status)).toContain('loading');
+            const remounted = states.at(-1)!;
+            await act(async () => { await connection.dispose(); });
+            await screen.update(body('retired'));
+            expect(states.at(-1)?.options).not.toBe(remounted.options);
+        } finally { await screen.unmount(); await connection.dispose(); }
+    });
     it('retains host choices while a refused plugin sibling changes fallback relay', async () => {
         const serverId = await harness.addHome({ name: 'Mixed inputs', serverUrl: 'https://mixed-options.example', serverIdentityId: 'srv_mixed_options', accountId: 'viewer', currentAccount: true });
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');

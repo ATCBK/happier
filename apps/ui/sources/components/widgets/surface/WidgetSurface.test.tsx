@@ -45,6 +45,9 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { resolveUiAccountActionFallbackMachineId } from '@/sync/ops/actions/accountActionDeps';
 import { recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
+import { createWorkBoardAccountStore } from '@/components/boards/model/workBoardAccountStore';
+import { useBoardWidgets } from '@/components/boards/model/useBoardContent';
 
 // Statically imported surface consumers reach Sync; install its external Socket boundary before that graph loads.
 vi.mock('socket.io-client', async importOriginal =>
@@ -359,6 +362,86 @@ it('consumes a live U5 widget in the generic Session surface through ordinary us
         await React.act(async () => { await connection.dispose(); disconnected = true; });
         await vi.waitFor(() => expect(shownValues()).not.toContain(30));
     } finally { await screen.unmount(); if (!disconnected) await connection.dispose(); invalidateUsageQueryResources(); }
+});
+
+it('retains exact WorkBoard option admission across delayed responsive remounts and withdraws it on Account retirement', async () => {
+    const disposeActionLoader = await installRealActionExecutorModuleLoader();
+    const http = createHomeHubArtifactHttpBoundary('viewer');
+    const board = createWorkBoardV1({ id: 'responsive-board', name: 'Launch week' });
+    const boardHttp = createLayoutArtifactHttpBoundary('viewer', { artifactId: board.id, kind: 'work-board.v1',
+        defaultLayout: board, parseLayout: value => WorkBoardV1Schema.parse(value), buildHeader: buildWorkBoardArtifactHeaderV1 });
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://responsive-board-options.test', accountId: 'viewer',
+        request: (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/machines') return Promise.resolve(Response.json({ machines: [] }));
+            if (path.startsWith(`/v1/artifacts/${board.id}`)) return boardHttp.request(url, init);
+            return http.request(url, init);
+        } });
+    const account = getActiveServerAccountScope();
+    if (!account) throw new Error('Expected the restored WorkBoard viewer');
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    const scope: WidgetSurfaceRefV1 = { ...account, owner: { kind: 'workBoard', boardId: board.id } };
+    const definition = { kind: 'builtin', id: 'usage_flow' } as const;
+    let descriptor = readWidgetDescriptor(null, definition)!;
+    const query = normalizeUsageQuery({ period: { relative: '30days' }, metric: 'tokens', breakdown: [] });
+    const instance: WidgetInstanceV1 = { v: 1, id: 'daily', definition,
+        bindings: Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path,
+            field.path === 'period' ? { kind: 'context', slot: 'period' }
+                : { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }])) };
+    const storedBoard = WorkBoardV1Schema.parse({ ...board, widgets: [{ kind: 'widget', ref: { surface: scope, instanceId: instance.id }, instance, size: 'medium' }] });
+    boardHttp.seed(storedBoard);
+    const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [storedBoard] });
+    const store = createWorkBoardAccountStore(persistence.transport, () => lifetime?.isCurrent() === true);
+    await store.refresh();
+    const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'current' as const,
+        interactionEnabled: true, machineId: null, serverId: account.serverId, platform: 'web' as const, accountLifetime: lifetime };
+    const observed: ConfiguredWidgetTargetResolution[] = [];
+    const instances: WidgetInstanceV1[] = [];
+    let period = StrictJsonValueSchema.parse(query.period);
+    function Probe() {
+        // Both BoardCanvas and BoardByStatus receive this canonical placement unchanged.
+        const widgets = useBoardWidgets(store.getDisplayedBoard(board.id)!);
+        const instance = widgets[0]!.instance;
+        instances.push(instance);
+        const resolution = useConfiguredWidgetTarget({ scope, instance, descriptor, providedContext: { period: [period] }, appRuntime: runtime });
+        observed.push(resolution);
+        return null;
+    }
+    const screen = await renderScreen(<Probe key="desktop" />);
+    let disconnected = false;
+    try {
+        await vi.waitFor(() => expect(observed.at(-1)?.status).toBe('ready'));
+        for (const layout of ['phone', 'desktop']) {
+            // Canvas has no body subscriber until its new measured span exists.
+            await screen.update(<></>);
+            await flushHookEffects({ cycles: 2 });
+            const before = observed.length;
+            await screen.update(<Probe key={layout} />);
+            await flushHookEffects({ cycles: 2 });
+            expect(observed.slice(before).map(state => state.status)).not.toContain('loading');
+            expect(instances.at(-1)).toBe(instances[0]);
+        }
+        await screen.update(<></>);
+        await flushHookEffects({ cycles: 2 });
+        period = { relative: '7days' };
+        const beforeChangedInput = observed.length;
+        await screen.update(<Probe key="changed-context" />);
+        expect(observed.slice(beforeChangedInput).map(state => state.status)).toContain('loading');
+        await vi.waitFor(() => expect(observed.at(-1)?.status).toBe('ready'));
+        await screen.update(<></>);
+        await flushHookEffects({ cycles: 2 });
+        descriptor = { ...descriptor, inputs: { ...descriptor.inputs!, fields: descriptor.inputs!.fields.map(field =>
+            field.path === 'period' ? { ...field, title: 'Reporting period' } : field) } };
+        const beforeChangedDeclaration = observed.length;
+        await screen.update(<Probe key="changed-declaration" />);
+        expect(observed.slice(beforeChangedDeclaration).map(state => state.status)).toContain('loading');
+        await vi.waitFor(() => expect(observed.at(-1)?.status).toBe('ready'));
+        await screen.update(<></>);
+        await flushHookEffects({ cycles: 2 });
+        await React.act(async () => { await connection.dispose(); disconnected = true; });
+        await screen.update(<Probe key="retired" />);
+        expect(observed.at(-1)?.status).not.toBe('ready');
+    } finally { await screen.unmount(); store.retire(); if (!disconnected) await connection.dispose(); disposeActionLoader(); }
 });
 
 it('keeps an input-options read pending, then preserves the canonical terminal refusal', async () => {
