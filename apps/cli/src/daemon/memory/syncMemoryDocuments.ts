@@ -9,7 +9,7 @@ import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/
 import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { prepareSessionPromptStackInputs } from '@/agent/prompting/coding/sessionPromptStack';
 import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { readRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadata, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionInventoryPage } from '@/daemon/sessions/sessionInventoryVisibility';
@@ -68,7 +68,7 @@ export async function syncMemoryDocuments(params: Readonly<{
   try {
     params.signal?.throwIfAborted();
     assertAccount();
-    const accountMode = (await fetchAccountEncryptionCurrentness({ token: params.credentials.token, signal: params.signal })).mode;
+    const accountMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal: params.signal })).mode;
     nextPhase('session_inventory');
     const sessions = new Map<string, RawSessionRecord>();
     if (params.scope.type === 'session') {

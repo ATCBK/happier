@@ -5,7 +5,7 @@ import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
 import type { MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
 import type { MemoryIndexSourceStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
 import type { AgentExternalSessionsTranscriptPage } from '@happier-dev/plugin-sdk/sessions/external';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { readRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
 
 import type { StoredCredentials } from '@/persistence';
 import { DEFAULT_MEMORY_SETTINGS, readMemorySettingsFromDisk, type MemorySettingsV1 } from '@/settings/memorySettings';
@@ -492,7 +492,7 @@ export async function startMemoryWorker(params: Readonly<{
    * while paging, so no branch can inventory a scope the settings exclude.
    */
   const refreshInventory = async (options?: Readonly<{ apply?: boolean; signal?: AbortSignal }>): Promise<MemoryInventoryRefresh> => {
-    const accountEncryptionMode = (await fetchAccountEncryptionCurrentness({ token: params.credentials.token, signal: options?.signal })).mode;
+    const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal: options?.signal })).mode;
     const excludedScopeSessionIds = new Set<string>();
     const refresh = await refreshMemoryInventoryOnce({
       backfillPolicy: settings.backfillPolicy,
@@ -645,7 +645,7 @@ export async function startMemoryWorker(params: Readonly<{
         limit: settings.worker.sessionListPageLimit,
         ...(signal ? { signal } : {}),
       }).then(async page => {
-        const accountEncryptionMode = (await fetchAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
+        const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
         return { ...page, sessions: page.sessions.filter(session => isMemorySessionOnMachine({ session,
           machineId: params.machineId, credentials: params.credentials, accountEncryptionMode })) };
       }),
@@ -1417,7 +1417,7 @@ export async function startMemoryWorker(params: Readonly<{
       sessionId: _sessionId,
       ...(signal ? { signal } : {}),
     });
-    const accountEncryptionMode = (await fetchAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
+    const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
     const eligibility = session && isMemorySessionOnMachine({ session, machineId: params.machineId,
       credentials: params.credentials, accountEncryptionMode })
       ? resolveMemoryInventorySessionEligibility({
