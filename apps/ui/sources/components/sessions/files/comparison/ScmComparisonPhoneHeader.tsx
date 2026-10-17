@@ -10,18 +10,9 @@ import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropd
 import { resolveSessionScmReviewViewLabel, type SessionScmReviewView } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { t } from '@/text';
 import { ScmComparisonScopePicker, type ScmComparisonScopePickerProps } from './ScmComparisonScopePicker';
+import { scmComparisonMenuSectionItems, selectScmComparisonMenuItem, type ScmComparisonMenuSection } from './ScmComparisonMoreMenu';
 
-/**
- * A view's own part of the comparison menu (Find, the diff's display choices). Its rows are ordinary menu
- * rows, so choosing one closes the menu like every other choice.
- */
-export type ScmComparisonMenuSection = Readonly<{
-    id: string;
-    /** Heads the section ("Display"); the comparison's own actions lead the menu untitled. */
-    title?: string;
-    items: readonly DropdownMenuItem[];
-    onSelect: (itemId: string) => void;
-}>;
+export type { ScmComparisonMenuSection } from './ScmComparisonMoreMenu';
 
 /** Phone comparison navigation: the standard header, with the same scope and actions as the wide bar. */
 export function ScmComparisonPhoneHeader(props: Readonly<{
@@ -46,8 +37,7 @@ export function ScmComparisonPhoneHeader(props: Readonly<{
     const sections = props.sections ?? [];
     const untitled = sections.filter((section) => !section.title);
     const titled = sections.filter((section) => section.title);
-    const sectionItems = (section: ScmComparisonMenuSection, category: string): DropdownMenuItem[] => section.items.map((item) => (
-        { ...item, id: `section:${section.id}:${item.id}`, category }));
+    const sectionItems = scmComparisonMenuSectionItems;
     const items: DropdownMenuItem[] = [
         ...untitled.flatMap((section) => sectionItems(section, '')),
         { id: 'start-review', testID: 'scm-comparison-start-review', title: t('scmComparison.startReview'), category: '',
@@ -73,9 +63,8 @@ export function ScmComparisonPhoneHeader(props: Readonly<{
             footer={props.extraActions ? <View style={styles.extraActions}>{props.extraActions}</View> : undefined}
             onSelect={(id) => {
                 const view = props.views.find((candidate) => id === `view:${candidate}`);
-                const section = sections.find((candidate) => id.startsWith(`section:${candidate.id}:`));
-                if (section) section.onSelect(id.slice(`section:${section.id}:`.length));
-                else if (view) props.onSelectView(view);
+                if (selectScmComparisonMenuItem(sections, id)) return;
+                if (view) props.onSelectView(view);
                 else if (id === 'start-review' && !props.reviewDisabled) props.onStartReview();
                 else if (id === 'propose-commits') props.onProposeCommits?.();
             }}

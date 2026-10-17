@@ -214,6 +214,20 @@ describe('one changed-file truth', () => {
         ]);
     });
 
+    it('orders changed paths naturally, so group-2 comes before group-10', () => {
+        const numbered: ScmWorkingSnapshot = {
+            ...snapshot,
+            entries: ['changes/group-10/entry-181.ts', 'changes/group-2/entry-021.ts', 'changes/group-1/entry-020.ts', 'changes/group-1/entry-3.ts']
+                .map((path) => entry(path, 'untracked', { included: false, pending: true })),
+        };
+        expect(selectScmChangedFiles(numbered).map((file) => file.fullPath)).toEqual([
+            'changes/group-1/entry-3.ts',
+            'changes/group-1/entry-020.ts',
+            'changes/group-2/entry-021.ts',
+            'changes/group-10/entry-181.ts',
+        ]);
+    });
+
     it('gives the aggregate status (badge, tooltip, headers) the same count as the list', () => {
         expect(snapshotToScmStatus(snapshot).changedFileCount).toBe(selectScmChangedFiles(snapshot).length);
         expect(snapshotToScmStatus(snapshot).changedFileCount).toBe(3);

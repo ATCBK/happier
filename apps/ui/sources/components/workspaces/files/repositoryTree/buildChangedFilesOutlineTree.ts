@@ -1,5 +1,5 @@
 import type { LazyDirectoryTreeNode } from '@/hooks/ui/filesystem/lazyDirectoryTreeTypes';
-import type { ScmFileStatus } from '@/scm/scmStatusFiles';
+import { compareScmPaths, type ScmFileStatus } from '@/scm/scmStatusFiles';
 
 export type ChangedFilesOutlineNode =
     | {
@@ -15,14 +15,10 @@ export type ChangedFilesOutlineNode =
           file: ScmFileStatus;
       };
 
-function compareNamesCaseInsensitive(a: string, b: string): number {
-    return a.localeCompare(b, undefined, { sensitivity: 'base' });
-}
-
 function sortNodes(nodes: ChangedFilesOutlineNode[]): ChangedFilesOutlineNode[] {
     return [...nodes].sort((a, b) => {
         if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1;
-        return compareNamesCaseInsensitive(a.name, b.name);
+        return compareScmPaths(a.name, b.name);
     });
 }
 

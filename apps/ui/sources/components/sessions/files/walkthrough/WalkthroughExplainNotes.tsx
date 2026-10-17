@@ -27,8 +27,8 @@ function firstSentence(markdown: string): string {
 
 /**
  * Files' Explain for one file (lab WT8-F2): the walkthrough's own stops beside the hunks they explain, in
- * file order, with the person's marks. A hunk two stops explain shows both, the second smaller; a hunk
- * no stop explains says so. No second store: this projects the same {@link WalkthroughReading}.
+ * file order, with the person's marks. A stop's note is written out once, at its first hunk; later files
+ * and a hunk's second stop carry its title only. A hunk no stop explains says so. No second store: this projects the same {@link WalkthroughReading}.
  */
 export const WalkthroughExplainNotes = React.memo(function WalkthroughExplainNotes(props: Readonly<{
     reading: WalkthroughReading;
@@ -64,7 +64,7 @@ export const WalkthroughExplainNotes = React.memo(function WalkthroughExplainNot
                     );
                 }
                 return (
-                    <View key={note.key} style={[styles.note, index > 0 ? styles.noteDivided : null]}>
+                    <View key={note.key} style={[styles.note, index > 0 ? styles.noteDivided : null, note.secondary && index === notes.length - 1 ? styles.noteTitleOnly : null]}>
                         <View style={styles.noteHeader}>
                             <WalkthroughStopNumber number={stop.number} reviewed={stop.reviewed} />
                             <Text style={[styles.noteTitle, note.secondary ? styles.noteTitleSecondary : null]}>{stop.title}</Text>
@@ -121,6 +121,8 @@ const styles = StyleSheet.create((theme) => ({
     column: { paddingHorizontal: theme.space.s16 },
     inline: { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s6, gap: theme.space.s2, backgroundColor: theme.colors.surface.inset },
     note: { paddingBottom: 14 },
+    // A title-only note (a stop already explained above, or a hunk's second stop) leaves no blank tail under one-line code.
+    noteTitleOnly: { paddingBottom: theme.space.s4 },
     noteDivided: { paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
     noteHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8 },
     noteTitle: { flex: 1, ...Typography.variant('label', 'semiBold'),  color: theme.colors.text.primary,  },

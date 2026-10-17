@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { ReviewCommentsSessionSurface } from '@/components/reviews/ReviewCommentsSessionSurface';
-import { ReviewCommentsHeaderButton } from '@/components/reviews/ReviewCommentsHeaderButton';
+import { ReviewCommentsHeaderButton, useReviewCommentsMenuSection } from '@/components/reviews/ReviewCommentsHeaderButton';
 import { buildReviewCommentsHeaderLabels } from '@/components/reviews/sessionSurfaceLabels';
 import { buildWorkspaceChangedFilesData } from '@/hooks/workspaces/scm/buildWorkspaceChangedFilesData';
 import { useWorkspaceScmSnapshotController } from '@/hooks/workspaces/scm/useWorkspaceScmSnapshotController';
@@ -171,11 +171,15 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
         [activeReviewFileKey, presented],
     );
     const reviewCommentsEnabled = useFeatureEnabled('files.reviewComments') === true;
-    // Review comments open from the comparison bar (one line of chrome); their panel opens under it.
+    // Review comments open from the Files menu (the bar's ⋯ or the phone menu); while some are unresolved,
+    // or the panel is open, the bar also carries them as one action. Their panel opens under the bar.
     const [commentsOpen, setCommentsOpen] = React.useState(false);
     const [commentsCount, setCommentsCount] = React.useState<number | null>(null);
     const commentsLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), []);
     const scmWriteEnabled = useFeatureEnabled('scm.writeOperations') === true;
+    const toggleComments = React.useCallback(() => setCommentsOpen((open) => !open), []);
+    const commentsMenuSection = useReviewCommentsMenuSection({ enabled: reviewCommentsEnabled, labels: commentsLabels,
+        unresolvedCount: commentsCount, expanded: commentsOpen, onToggle: toggleComments, testID: 'workspace-review-comments-menu' });
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(scope);
     const reviewDraftHandlers = useWorkspaceReviewCommentDraftHandlers(scope);
     const { snapshot, loading, error, refresh } = useWorkspaceScmSnapshotController(scope);
@@ -403,7 +407,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                     permissionGrantError={pluginPermissionGrants.state.error}
                     onRefreshPermissionGrants={() => { void pluginPermissionGrants.refresh(); }}
                     header="external"
-                    open={commentsOpen}
+                    open={view === 'files' && commentsOpen}
                     onUnresolvedCountChange={setCommentsCount}
                     testID="workspace-review-comments"
                 />
@@ -413,8 +417,9 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                 contextKey={JSON.stringify([props.serverId, props.machineId, props.rootPath])}>
             <WorkspaceScmReviewBody activeReviewFile={activeReviewFile} comparison={comparison} view={view} scopeLabel={scopeLabel} scopeDetail={scopeDetail}
                 hostSwitch={props.hostSwitch}
-                barActions={reviewCommentsEnabled ? <ReviewCommentsHeaderButton compact labels={commentsLabels} unresolvedCount={commentsCount}
-                    expanded={commentsOpen} onPress={() => setCommentsOpen(open => !open)} testID="workspace-review-comments-trigger" /> : null}
+                barMenuSection={commentsMenuSection}
+                barActions={reviewCommentsEnabled && (commentsOpen || (commentsCount ?? 0) > 0) ? <ReviewCommentsHeaderButton compact labels={commentsLabels} unresolvedCount={commentsCount}
+                    expanded={commentsOpen} onPress={toggleComments} testID="workspace-review-comments-trigger" /> : null}
                 views={pendingComparison ? ['files', 'walkthrough', 'commits'] : ['files', 'walkthrough']}
                 commitsCount={commitPlan?.outputs?.commitPlan?.value?.groups.length ?? null}
                 onStartReview={startReview} reviewDisabled={reviewDisabled}

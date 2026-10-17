@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, standardCleanup } from '@/dev/testkit';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
@@ -128,7 +129,8 @@ describe('WorkspaceScmReviewDetailsView', () => {
             machineId="m1" serverId={fixture.home.id} rootPath="/other" evidenceSessionId="s1" comparison={{ kind: 'session' }} />);
         await flushHookEffects({ cycles: 10 });
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([]);
-        expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(true);
+        expect(screen.findHostByTestId('source-control-unavailable')).toBeTruthy();
+        expect(screen.findHostByTestId('scm-comparison-start-review')).toBeNull();
     });
     it('does not borrow a same-id Session carrier from another Home', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
@@ -138,7 +140,8 @@ describe('WorkspaceScmReviewDetailsView', () => {
             machineId="m1" serverId={fixture.home.id} rootPath="/repo" evidenceSessionId="s1" comparison={{ kind: 'session' }} />);
         await flushHookEffects({ cycles: 10 });
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([]);
-        expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(true);
+        expect(screen.findHostByTestId('source-control-unavailable')).toBeTruthy();
+        expect(screen.findHostByTestId('scm-comparison-start-review')).toBeNull();
     });
     it('keeps the shared comparison toolbar while the first checkout snapshot is loading', async () => {
         const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
@@ -200,18 +203,35 @@ describe('WorkspaceScmReviewDetailsView', () => {
         expect(screen.findHostByTestId('scm-comparison-explain-with-agent')).toBeNull();
         expect(screen.getTextContent()).not.toContain(t('scmComparison.fileCount', { count: 0 }));
     });
-    it('opens review comments from the comparison bar instead of a row above it', async () => {
+    it('opens review comments from the Files menu instead of a row above the bar', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
             request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries: CHANGED_ENTRIES }) } : undefined });
         fixture.storage.setState({ sessions: {} });
         fixture.storage.getState().applySettingsLocal({ featureToggles: { 'files.reviewComments': true } });
         const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:wr"
             machineId="m1" serverId={fixture.home.id} rootPath="/repo" />);
-        await vi.waitFor(() => expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeTruthy());
-        // No disclosure row of its own until opened; the panel opens under the bar.
+        const { ChangedFilesReview } = await import('@/components/workspaces/scm/review/ChangedFilesReview');
+        const commentsRow = () => (screen.tree.root.findByType(ChangedFilesReview).props as React.ComponentProps<typeof ChangedFilesReview>)
+            .comparisonChrome?.menuSections?.find((section) => section.id === 'review-comments');
+        await vi.waitFor(() => expect(commentsRow()?.items.map((item) => item.testID)).toEqual(['workspace-review-comments-menu']));
+        // Nothing unresolved: no disclosure row of its own and no bar action until opened.
         expect(screen.findHostByTestId('workspace-review-comments')).toBeNull();
-        await screen.pressByTestIdAsync('workspace-review-comments-trigger');
+        expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeNull();
+        await act(async () => { commentsRow()?.onSelect('toggle'); });
         await vi.waitFor(() => expect(screen.findHostByTestId('workspace-review-comments')).toBeTruthy());
+        // Open, the bar carries the disclosure so the panel closes where it is.
+        expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeTruthy();
         expect(screen.findHostByTestId('workspace-review-comments-header')).toBeNull();
+        for (const view of ['walkthrough', 'commits'] as const) {
+            await screen.update(fixture.wrap(<WorkspaceScmReviewDetailsView scopeId="project:wr"
+                machineId="m1" serverId={fixture.home.id} rootPath="/repo" view={view} />));
+            expect(screen.findHostByTestId('workspace-review-comments')).toBeNull();
+            expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeNull();
+        }
+        await screen.update(fixture.wrap(<WorkspaceScmReviewDetailsView scopeId="project:wr"
+            machineId="m1" serverId={fixture.home.id} rootPath="/repo" view="files" />));
+        expect(screen.findHostByTestId('workspace-review-comments')).toBeTruthy();
+        await screen.pressByTestIdAsync('workspace-review-comments-trigger');
+        expect(screen.findHostByTestId('workspace-review-comments')).toBeNull();
     });
 });

@@ -124,6 +124,8 @@ type ChangedFilesReviewProps = {
         /** Drawn from Review's own coverage, so the scope's count and the header's count are one number. */
         renderBarLeading: (coverage: ChangedFilesReviewCoverage) => React.ReactNode;
         barTrailing?: React.ReactNode;
+        /** The caller's rows, leading the bar's ⋯ menu before Review's display choices. */
+        menuSections?: readonly ScmComparisonMenuSection[];
         /** Narrow screens recompose the same toolbar into their standard navigation header. */
         renderBar?: (coverage: ChangedFilesReviewCoverage, displayActions: React.ReactNode, sections?: readonly ScmComparisonMenuSection[]) => React.ReactNode;
         renderHeader: (coverage: ChangedFilesReviewCoverage) => React.ReactNode;
@@ -1063,7 +1065,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     const renderFileTrailingActions = props.renderFileTrailingActions;
 
     const detailsHeader = props.detailsHeader ?? null;
-    const showIndex = detailsHeader !== null && !tooLarge && reviewListFiles.length > 0;
+    // A large change needs its file list most: diffs open on demand past maxFiles, but every file stays listed.
+    const showIndex = detailsHeader !== null && reviewListFiles.length > 0;
     // Only the index reads these, so a review drawn without it keeps a stable list header.
     const indexFiles = showIndex ? reviewListFiles : NO_INDEX_FILES;
     const indexDrafts = showIndex ? props.reviewCommentDrafts : undefined;
@@ -1413,7 +1416,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     // The comparison bar holds only the lab's controls (WT8): the scope, its actions and a ⋯ with Review's
     // display choices; moving between files and changes is J / K / N (hinted in the rail).
     const comparisonDisplayActions = <><ChangedFilesReviewFindButton surfaceId={findSurfaceId} /><ChangedFilesReviewMoreMenu diffArea={diffArea} availableDiffAreas={diffConfig.availableModes}
-        diffAreaLabels={diffAreaLabels} onDiffArea={setDiffArea} /></>;
+        diffAreaLabels={diffAreaLabels} onDiffArea={setDiffArea} leadingSections={comparisonChrome?.menuSections} /></>;
     const comparisonKeyboardShortcuts = <ChangedFilesReviewKeyboardShortcuts enabled={props.activeReviewFile?.presented !== false}
         paths={navigationPaths} activePath={activeReviewPath} onFocusPath={focusFile} diffStateSource={diffStateSource} onFocusLine={focusLine} />;
     // A phone has one comparison menu: Find and the display choices are rows of it, not a row of buttons in it.

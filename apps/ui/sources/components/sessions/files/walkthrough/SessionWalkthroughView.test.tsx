@@ -133,6 +133,17 @@ const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
 const { renderHook } = await import('@/dev/testkit');
 const { standardCleanup } = await import('@/dev/testkit/cleanup/standardCleanup');
 const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+const { ScmComparisonMoreMenu } = await import('@/components/sessions/files/comparison/ScmComparisonMoreMenu');
+type MenuSections = Parameters<typeof ScmComparisonMoreMenu>[0]['sections'];
+/** The bar as the review destination draws it: the view's own actions, then its menu rows behind `⋯`. */
+const barWithMenu = (actions: React.ReactNode, sections?: MenuSections) => <>{actions}{sections ? <ScmComparisonMoreMenu sections={sections} /> : null}</>;
+/** Chooses a saved-result operation from the bar's menu, the way a person does. */
+async function chooseFromMenu(screen: Awaited<ReturnType<typeof renderScreen>>, testID: string) {
+    const menu = screen.root.find((node) => node.type === DropdownMenu && node.props.testID === 'scm-comparison-more-menu');
+    const row = (menu.props.items as Array<{ id: string; testID?: string }>).find((item) => item.testID === testID);
+    if (!row) throw new Error(`${testID} is not offered`);
+    await act(async () => { await menu.props.onSelect(row.id); });
+}
 const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
 const { getStorage } = await import('@/sync/domains/state/storage');
@@ -221,7 +232,7 @@ async function createHome(serverUrl: string, settings?: Readonly<Record<string, 
     return home;
 }
 
-async function mount(comparison: SessionScmReviewComparison, sessionId: string, storedModel = '', renderBar: (actions: React.ReactNode) => React.ReactNode = (actions) => actions, authenticated = true,
+async function mount(comparison: SessionScmReviewComparison, sessionId: string, storedModel = '', renderBar: (actions: React.ReactNode, sections?: MenuSections) => React.ReactNode = barWithMenu, authenticated = true,
     automaticTarget?: Parameters<typeof createScmDiffSummaryModelCatalogHttpBoundary>[0]['automaticTarget']) {
     const settings = { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
         'scm.diffSummary.modelProfileOverride': storedModel };
@@ -327,7 +338,7 @@ describe('SessionWalkthroughView retained offline reading through real Account m
             const bound = useWorkspaceScmDiffSummaryBinding({ machineId: machine.id, rootPath: '/native/repo', serverId: home.id,
                 comparison: { kind: 'workingTree' }, output: 'walkthrough' });
             return <ScmWalkthroughView bound={bound} displayMachineId={machine.id} serverId={home.id} comparison={{ kind: 'workingTree' }}
-                scopeLabel="Workspace" layout="wide" renderBar={actions => actions} onShowFiles={() => {}} onOpenFile={() => {}} />;
+                scopeLabel="Workspace" layout="wide" renderBar={barWithMenu} onShowFiles={() => {}} onOpenFile={() => {}} />;
         }
         if (expiry) {
             vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
@@ -363,7 +374,7 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('Native completion'));
         const discussed = createDeferred<void>();
         boundary.nativeRunBarrier = () => discussed.promise;
-        await screen.pressByTestIdAsync('walkthrough-saved-discuss');
+        await chooseFromMenu(screen, 'walkthrough-saved-discuss');
         await act(async () => screen.changeTextByTestId('walkthrough-saved-message', 'Why this approach?'));
         await screen.pressByTestIdAsync('walkthrough-saved-discuss-send');
         await vi.waitFor(() => expect(boundary.calls).toContainEqual(expect.objectContaining({
@@ -443,13 +454,13 @@ describe('SessionWalkthroughView retained offline reading through real Account m
             const bound = useWorkspaceScmDiffSummaryBinding({ machineId: machine.id, rootPath, serverId: home.id,
                 comparison: { kind: 'workingTree' }, output: 'walkthrough' });
             return <ScmWalkthroughView bound={bound} displayMachineId={machine.id} serverId={home.id} comparison={{ kind: 'workingTree' }}
-                scopeLabel="Workspace" layout="wide" renderBar={(actions) => actions} onShowFiles={() => {}} onOpenFile={() => {}} />;
+                scopeLabel="Workspace" layout="wide" renderBar={barWithMenu} onShowFiles={() => {}} onOpenFile={() => {}} />;
         }
         const screen = await renderScreen(<Workspace rootPath="/workspace/exact" />, {
             wrapper: ({ children }) => <InjectedAuthProvider credentials={accountCredentials}>{children}</InjectedAuthProvider>,
         });
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('Workspace saved reading'));
-        await screen.pressByTestIdAsync('walkthrough-saved-edit');
+        await chooseFromMenu(screen, 'walkthrough-saved-edit');
         await act(async () => screen.findByTestId('walkthrough-saved-title')!.props.onChangeText('My workspace title'));
         await screen.pressByTestIdAsync('walkthrough-saved-title-save');
         await vi.waitFor(() => expect(boundary.savedResult?.revision).toBe(2));
@@ -459,6 +470,9 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         expect(boundary.calls.filter(call => call.method.startsWith('scm.diffSummary.')).every(call => call.authorization === undefined)).toBe(true);
         const savedState = Object.values(getScmDiffSummaryState().entriesByKey).find((entry) => entry.savedResult?.resultId === 'workspace-saved');
         expect(savedState).toMatchObject({ sessionId: null, machineId: machine.id, input: { cwd: '/workspace/exact' } });
+        await act(async () => getStorage().setState({ machines: {}, machineListByServerId: { [home.id]: [] } }));
+        expect(screen.getTextContent()).toContain('My workspace title');
+        expect(Boolean(screen.findHostByTestId('walkthrough-notice-offline'))).toBe(false);
         await screen.update(<Workspace rootPath="/workspace/other" />);
         expect(screen.getTextContent()).not.toContain('My workspace title');
         expect(boundary.calls.filter((call) => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT)).toEqual([
@@ -468,7 +482,7 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         ]);
     });
     it('labels retained code from its observation and disables personal marks when the owning machine goes offline', async () => {
-        const { screen, offline, writes, observedAtMs } = await mountWithAccountMarks('offline-marks');
+        const { screen, home, offline, writes, observedAtMs } = await mountWithAccountMarks('offline-marks');
         await screen.pressByTestIdAsync('walkthrough-mark-retained');
         await vi.waitFor(() => expect(writes(), screen.getTextContent()).toBe(1));
         // The operations owner captures its observation clock at creation.
@@ -491,6 +505,9 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         });
         // This is the observed retained read, not a manufactured fresh clock on loss of reachability.
         expect(Object.values(getScmDiffSummaryState().entriesByKey).find(value => value.sessionId === 'offline-marks')?.observedAtMs).toBe(observedAtMs);
+        await act(async () => getStorage().setState({ machines: {}, machineListByServerId: { [home.id]: [] } }));
+        expect(screen.getTextContent()).toContain('Retained reading');
+        expect(Boolean(screen.findHostByTestId('walkthrough-notice-offline'))).toBe(false);
     }, 120_000);
 
     it('does not admit fresh machine evidence on activity while offline, and rereads the current revision on reconnect', async () => {
@@ -826,6 +843,8 @@ describe('SessionWalkthroughView START through real generation and model owners'
         await vi.waitFor(() => expect(projection()?.savedResult?.revision).toBe(2));
         expect(screen.getTextContent()).toContain('Earlier reading');
         expect(screen.findByTestId('walkthrough-undo')).toBeNull();
+        // With nothing left to undo the band has nothing to offer; the reading's own provenance marks carry the history.
+        expect(screen.findByTestId('walkthrough-notice-update')).toBeNull();
         expect([...boundary.calls, ...boundary.sessionCalls]).toEqual(expect.arrayContaining([expect.objectContaining({
             method: RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_UNDO,
             payload: { cwd: '/repo/exact', resultId: 'pending-result', expectedRevision: 1 },

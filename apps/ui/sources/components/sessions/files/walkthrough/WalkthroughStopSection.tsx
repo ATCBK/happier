@@ -43,6 +43,20 @@ export function resolveWalkthroughImportanceLabel(stop: Pick<WalkthroughStop, 'n
     return null;
 }
 
+/**
+ * The rows the hunk card's highlighted diff draws, so its reserved body is exactly the code it will hold: every
+ * code line, plus one separator row for each hunk that follows unmodified lines. Raw `@@` headers are never drawn.
+ */
+function reservedDiffRows(unifiedDiff: string): number {
+    let rows = 0;
+    for (const line of buildCodeLinesFromUnifiedDiff({ unifiedDiff })) {
+        // The "\ No newline at end of file" marker is not a line the highlighted diff draws.
+        if (!line.renderIsHeaderLine) { if (!(line.renderPrefixText === '' && (line.renderCodeText ?? '').startsWith('\\'))) rows += 1; }
+        else if (/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)/.exec(line.renderCodeText ?? '')?.slice(1).some((start) => Number(start) > 1)) rows += 1;
+    }
+    return rows;
+}
+
 /** One file's exact hunks for a stop, as a quiet card: path, range, counts and the shared diff renderer. */
 export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props: Readonly<{
     file: WalkthroughStopFile;
@@ -51,7 +65,7 @@ export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props
 }>) {
     const { theme } = useUnistyles();
     const file = props.file;
-    const rows = React.useMemo(() => file.unifiedDiff ? buildCodeLinesFromUnifiedDiff({ unifiedDiff: file.unifiedDiff }).length : 0, [file.unifiedDiff]);
+    const rows = React.useMemo(() => file.unifiedDiff ? reservedDiffRows(file.unifiedDiff) : 0, [file.unifiedDiff]);
     const reservedHeight = rows * CODE_LINE_BASE_HEIGHT;
     // Web code typography follows the canonical font-scale variable; native rows use the same base metric.
     const bodyStyle = Platform.OS === 'web'
