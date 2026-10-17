@@ -244,7 +244,7 @@ describe('useMachineSelectionListModel', () => {
             expect(handlers.selectSpy).toHaveBeenCalled();
         } finally { await rendered.unmount(); }
     });
-    it.each(['session', 'finite'] as const)('keeps %s managed recipe selection separate from published artifacts and exact machines', async purpose => {
+    it.each(['session', 'finite', 'service-start'] as const)('keeps %s managed recipe selection separate from published artifacts and exact machines', async purpose => {
         const fixture = createFixture();
         const handlers = makeHandlers();
         const selection = { kind: 'preset', homeId: 'server-a', id: 'recipe', revision: 3 } as const;
