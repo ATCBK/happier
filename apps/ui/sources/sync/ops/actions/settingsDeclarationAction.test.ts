@@ -190,7 +190,7 @@ describe('Home atmosphere settings declarations', () => {
     it('discovers and edits every Home control while rebasing nested edits over sibling changes', async () => {
         const owner = createOwner(undefined, false, true, settingsDefaults, undefined, settings => ({
             ...settings, homeAtmosphere: { ...settings.homeAtmosphere, moments: { ...settings.homeAtmosphere.moments, welcome: false } },
-        }));
+        }), undefined, undefined, undefined, {});
         const choices = [
             ['atmosphereSource', 'picture'], ['atmospherePlanetPlacement', 'rise'], ['atmospherePlanetStyle', 'rich'],
             ['atmospherePlanetDigits', false], ['atmospherePictureRef', { kind: 'builtin', id: 'calm-sea' }],
@@ -211,9 +211,15 @@ describe('Home atmosphere settings declarations', () => {
             picture: { ref: { kind: 'builtin', id: 'calm-sea' }, layout: 'wallpaper' }, behindSessions: true,
             moments: { send: false, loading: true },
         });
+        expect(await owner.action({ actionId: 'settings.reset', input: {
+            anchor: 'appearance.atmospherePlanetDigits', expected: { value: false },
+        } })).toEqual({ anchor: 'appearance.atmospherePlanetDigits', value: true });
+        expect(await owner.action({ actionId: 'settings.reset', input: {
+            anchor: 'appearance.atmospherePlanetDigits', expected: { value: false },
+        } })).toMatchObject({ errorCode: 'account_settings_mutation_conflict' });
         expect(await owner.action({ actionId: 'settings.reset', input: { anchor: 'appearance.atmospherePlanetStyle' } }))
             .toEqual({ anchor: 'appearance.atmospherePlanetStyle', value: 'balanced' });
-        expect(owner.account().homeAtmosphere.planet).toEqual({ placement: 'rise', style: 'balanced', digits: false });
+        expect(owner.account().homeAtmosphere.planet).toEqual({ placement: 'rise', style: 'balanced', digits: true });
     });
 
     it('stores only per-picture differences and resets through the same canonical mutation', async () => {
@@ -452,7 +458,12 @@ function createOwner(host: { os: 'web' | 'ios'; desktop: boolean } = { os: 'web'
         } },
         readAccountSettings: async () => { lifetime?.onReadAccount?.(); return account; },
         writeAccountSettings: async (delta) => { account = applySettings(account, delta); },
-        mutateAccountSettings: async (mutate) => { account = settingsParse(mutate(rebase ? rebase(account) : account)); },
+        mutateAccountSettings: async (mutate, options) => {
+            const before = account;
+            account = settingsParse(mutate(rebase ? rebase(account) : account));
+            if (options?.observeOutcome) return { status: 'applied' as const, settingsVersion: 2, value: undefined,
+                ...(options.capture ? { captured: options.capture({ before, applied: account, beforeVersion: 1 }) } : {}) };
+        },
         readLocalSettings: () => local,
         writeLocalSettings: (delta) => { local = applyLocalSettings(local, delta); },
         automationSettings,

@@ -28,12 +28,21 @@ export function captureSettingMutationV1(raw: Readonly<Record<string, unknown>>,
 
 /** Bound declarations, rather than receipt authors, decide which Account keys may be restored. */
 export function restoreSettingMutationV1(raw: Readonly<Record<string, unknown>>, mutation: AccountSettingMutationV1,
-    receipt: SettingsDeclarationMutationReversalV1 | Readonly<{ kind: 'reset'; expected: SettingsDeclarationResetExpectedV1 }>):
+    receipt: SettingsDeclarationMutationReversalV1 | Readonly<{ kind: 'reset'; expected: SettingsDeclarationResetExpectedV1 }>,
+    readDeclarationValue?: (raw: Readonly<Record<string, unknown>>) => unknown):
     | Readonly<{ status: 'prepared'; mutation: AccountSettingMutationV1 }>
     | Readonly<{ status: 'invalid' | 'conflict' }> {
     const first = mutation.operations.length === 1 ? mutation.operations[0] : undefined;
     const reset = 'expected' in receipt ? applyAccountSettingMutationV1(raw, mutation) : undefined;
     if (reset?.status === 'invalid') return { status: 'invalid' };
+    if ('expected' in receipt && !('changes' in receipt.expected) && readDeclarationValue) {
+        if (!first) return { status: 'invalid' };
+        const current = readRawSettingValue({ value: readDeclarationValue(raw) }, 'value');
+        if (!current || listSecretStringCarrierPathsV1(current).length > 0) return { status: 'invalid' };
+        return sameStrictJsonValue(current, receipt.expected)
+            ? { status: 'prepared', mutation }
+            : { status: 'conflict' };
+    }
     const changes = 'expected' in receipt
         ? ('changes' in receipt.expected ? receipt.expected.changes
             : first ? [{ key: first.key, applied: receipt.expected }] : []).map(change => ({ ...change,

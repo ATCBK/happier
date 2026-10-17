@@ -191,6 +191,24 @@ describe('CLI declared Account settings', () => {
     expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['concurrent'], 'scm.diffSummary.enabled': false } });
   });
 
+  it('conditionally resets a nested declaration leaf without comparing its enclosing storage object', async () => {
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'settings-account' })).toString('base64url')}.signature`;
+    const homeAtmosphere = accountSettingsParse({}).homeAtmosphere;
+    const anchor = 'appearance.atmospherePlanetDigits';
+    content = { t: 'plain', v: { favoriteMachines: ['neighbor'], homeAtmosphere: {
+      ...homeAtmosphere, planet: { ...homeAtmosphere.planet, digits: false },
+    } } };
+    const context = { ...user, presentUserConfirmation: { actionId: 'settings.reset' as const } };
+    expect(await executor(token).execute('settings.reset', { anchor, expected: { value: false } }, context))
+      .toMatchObject({ ok: true, result: { anchor, value: true } });
+    expect(content).toMatchObject({ t: 'plain', v: { favoriteMachines: ['neighbor'],
+      homeAtmosphere: { planet: { digits: true } },
+    } });
+
+    expect(await executor(token).execute('settings.reset', { anchor, expected: { value: false } }, context))
+      .toMatchObject({ ok: false, errorCode: 'account_settings_conflict' });
+  });
+
   it('isolates provider state through the consent owner without requiring catalog evidence or replacing configuration', async () => {
     const sharing = accountSettingsParse({}).connectedServicesProviderStateSharingSettingsV1;
     content = { t: 'plain', v: { favoriteMachines: ['neighbor'], connectedServicesProviderStateSharingSettingsV1: {

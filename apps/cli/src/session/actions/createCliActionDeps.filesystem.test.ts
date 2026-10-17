@@ -44,6 +44,8 @@ import { createDirectTransferServerLifecycle } from '@/machines/transfer/directT
 import { createPreparedFilesystemTransferActionExecutor, projectPreparedFilesystemActionResult } from '@/machines/transfer/createPreparedFilesystemTransferActionExecutor';
 import { createPreparedFilesystemTransferClient } from '@/machines/transfer/preparedFilesystemTransferClient';
 import { createActionOperationRpcHandlers } from '@/daemon/actionOperations/actionOperationRpcHandlers';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 
 const copySocketBoundary = vi.hoisted(() => ({ create: vi.fn() }));
 const nativeProcessBoundary = vi.hoisted(() => ({
@@ -82,6 +84,89 @@ function createReviewedFilesystemExecutor(
 }
 
 describe('exact-machine filesystem Actions', () => {
+  it('carries the Agent Session Machine through approval replay to the real filesystem owner', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-agent-filesystem-owner-'));
+    const rootPath = join(directory, '.dev', 'worktree', 'accepted');
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'daemon-owner' })).toString('base64url')}.signature`;
+    const client = new ApiMachineClient(token, { id: 'machine-test', encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+    const ownerSettings = createActionSettingsProvider({ accountSettings: accountSettingsParse({ actionsSettingsV1: {
+      v: 1, actions: {}, approvalWaivedSurfaces: { 'daemon.filesystem.writeFile': ['rpc'] },
+    } }) });
+    const owner = createCliActionExecutor({ token, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'home', pluginActionExecutionOwner: 'current_process', actionsSettingsProvider: ownerSettings,
+      filesystemActionExecute: client.createFilesystemActionExecutor('home') });
+    bindCurrentFilesystemOwner(client, owner);
+    const manager = new RpcHandlerManager({ scopePrefix: 'machine-test', localMachineId: 'machine-test', encryptionMode: 'plain',
+      authorizeRequest: request => authorizeMachineRpcRequest(request, {
+        machineId: 'machine-test', resolveCustodianAccountId: async () => 'daemon-owner',
+        resolveInstallationId: () => 'installation', verifyMachineAdmission: async () => true,
+      }) });
+    const registration = registerFileSystemHandlers(manager, directory, { mutationMachineId: 'machine-test',
+      actionExecutor: { execute: (actionId, input, context) => owner.execute(actionId, input, {
+        ...context, serverId: 'home', externalActionTarget: { kind: 'machine', machineId: 'machine-test' },
+      }) } });
+    let request: ApprovalRequest | null = null;
+    let invokes = 0;
+    const callerSettings = createActionSettingsProvider({ accountSettings: accountSettingsParse({ actionsSettingsV1: {
+      v: 1, actions: { 'daemon.filesystem.writeFile': { approvalRequiredSurfaces: ['agent'] } },
+    } }) });
+    const caller = createActionExecutor({ ...createCliActionDeps({ token, sessionId: 'session-test', mode: 'plain', ctx: null,
+      serverId: 'home', pluginActionExecutionOwner: 'current_process', actionsSettingsProvider: callerSettings,
+      machineActionDirectTargetTransport: { machineId: 'machine-test', invoke: (method, params) => {
+        invokes += 1;
+        return manager.handleRequest({ method: `machine-test:${method}`, params,
+          callerAuthority: 'account_automation', machineAdmission: { actorAccountId: 'daemon-owner',
+            custodianAccountId: 'daemon-owner', machineId: 'machine-test', installationId: 'installation',
+            role: 'use', encryptionMode: 'plain' } });
+      } },
+    }),
+    approvalsCreate: async ({ request: value }) => { request = value; return { artifactId: 'filesystem-approval' }; },
+    approvalsGet: async () => request,
+    approvalsUpdate: async ({ request: value }) => { request = value; return { ok: true as const }; },
+    isApprovalExecutionOriginCurrent: async () => true,
+    });
+    const bridge = (machineId?: string) => createActionToolExecutorBridge({ surface: 'agent',
+      ...(machineId ? { defaultSessionMachineId: machineId } : {}), actionsSettings: callerSettings.getActionsSettings(),
+      executor: { execute: (actionId, input, context) => caller.execute(actionId, input, {
+        ...context, serverId: 'home', runtimeAccountId: 'daemon-owner', actionCaller: { kind: 'host' },
+      }) } });
+    try {
+      const sourcePath = join(directory, 'source');
+      await mkdir(sourcePath);
+      childProcess.execFileSync('git', ['init', sourcePath], { stdio: 'ignore' });
+      childProcess.execFileSync('git', ['-C', sourcePath, '-c', 'user.name=Filesystem test', '-c', 'user.email=filesystem@example.test',
+        'commit', '--allow-empty', '-m', 'Initial'], { stdio: 'ignore' });
+      childProcess.execFileSync('git', ['-C', sourcePath, 'worktree', 'add', '--detach', rootPath], { stdio: 'ignore' });
+      await writeFile(join(rootPath, 'README'), 'agent-readable');
+
+      expect(await bridge('machine-test').executeActionByToolName('action_execute', {
+        actionId: 'daemon.filesystem.readFile', input: { rootPath, path: 'README' },
+      }, 'session-test', { actionRequestId: 'agent-read' })).toEqual({ ok: true, result: {
+        success: true, content: Buffer.from('agent-readable').toString('base64'),
+      } });
+      expect(await bridge('machine-test').executeActionByToolName('action_execute', {
+        actionId: 'daemon.filesystem.writeFile', input: { rootPath, path: 'approved', content: Buffer.from('approved').toString('base64') },
+      }, 'session-test', { actionRequestId: 'agent-write' })).toMatchObject({ ok: true, result: {
+        kind: 'approval_request_created', artifactId: 'filesystem-approval',
+      } });
+      await expect(stat(join(rootPath, 'approved'))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await caller.execute('approval.request.decide', { artifactId: 'filesystem-approval', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'daemon-owner',
+        actionCaller: { kind: 'host' }, presentUserConfirmation: { actionId: 'approval.request.decide' },
+      })).toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(await readFile(join(rootPath, 'approved'), 'utf8')).toBe('approved');
+
+      const beforeMiswire = invokes;
+      expect(await bridge().executeActionByToolName('action_execute', {
+        actionId: 'daemon.filesystem.readFile', input: { rootPath, path: 'README' },
+      }, 'session-test', { actionRequestId: 'agent-miswire' })).toMatchObject({ ok: false, errorCode: 'machine_not_selected' });
+      expect(invokes).toBe(beforeMiswire);
+    } finally {
+      await registration.dispose(); await client.shutdown(); await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('reads an admitted worktree and refuses outside paths through CLI deps and the full Machine filesystem owner', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-rooted-action-owner-'));
     const rootPath = join(directory, '.dev', 'worktree', 'accepted');

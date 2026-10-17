@@ -505,7 +505,14 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                         throwIfAborted(context?.signal);
                         if (!isCurrent()) throw new RejectedSettingMutation();
                         const mutation = mutationFor(raw);
-                        const restore = reversal?.kind === 'restore' || reversal?.kind === 'reset' ? restoreSettingMutationV1(raw, mutation, reversal) : undefined;
+                        const restore = reversal?.kind === 'restore' || reversal?.kind === 'reset'
+                            ? restoreSettingMutationV1(raw, mutation, reversal, currentRaw => {
+                                const settings = settingsParse(currentRaw);
+                                return 'key' in binding
+                                    ? binding.invertBoolean ? !settings[binding.key] : settings[binding.key]
+                                    : binding.read(settings);
+                            })
+                            : undefined;
                         if (restore?.status === 'conflict') throw new ConditionalSettingConflict();
                         if (restore?.status === 'invalid') throw new RejectedSettingMutation();
                         const next = applyAccountSettingMutationV1(raw, restore?.status === 'prepared' ? restore.mutation : mutation);

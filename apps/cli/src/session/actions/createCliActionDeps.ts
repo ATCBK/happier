@@ -6123,14 +6123,18 @@ export function createCliActionDeps(params: Readonly<{
       const custodyFailure = resolveFilesystemTransferCustodyFailure(actionId, context);
       if (custodyFailure) return custodyFailure;
       const target = context.externalActionTarget;
-      if (target?.kind !== 'machine' || !target.machineId) {
+      const machineId = target === undefined
+        ? context.defaultSessionMachineId?.trim()
+        : target.kind === 'machine'
+          ? target.machineId.trim()
+          : '';
+      if (!machineId) {
         return { ok: false, errorCode: 'machine_not_selected', error: 'machine_not_selected' };
       }
-      const machineId = target.machineId;
       if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
-      if (!await isMachineActionServerScopeCurrent({ serverId: context.serverId, machineId: target.machineId, context, signal: context.signal })) {
+      if (!await isMachineActionServerScopeCurrent({ serverId: context.serverId, machineId, context, signal: context.signal })) {
         return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
       }
       const method = getActionSpec(actionId).bindings?.rpcMethod;

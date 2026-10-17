@@ -43,7 +43,7 @@ export async function executeCliSettingMutationReversal(params: Readonly<{
       const restore = async (raw: Readonly<Record<string, unknown>>) => {
         await assertCurrent();
         const mutation = await params.prepareMutation(raw);
-        const restored = restoreSettingMutationV1(raw, mutation, reversal);
+        const restored = restoreSettingMutationV1(raw, mutation, reversal, params.readValue);
         if (restored.status !== 'prepared') throw new SettingReversalRefused(restored.status === 'conflict' ? 'account_settings_conflict' : 'invalid_setting_value');
         return restored.mutation;
       };
