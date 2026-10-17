@@ -10,12 +10,16 @@ import type { Virtualizer as PierreVirtualizer } from '@pierre/diffs';
 const setupSpy = vi.fn();
 const cleanUpSpy = vi.fn();
 const constructorSpy = vi.fn();
+const connectSpy = vi.fn();
+const disconnectSpy = vi.fn();
 
 vi.mock('@pierre/diffs', () => {
     class Virtualizer {
         constructor() { constructorSpy(); }
         setup = setupSpy;
         cleanUp = cleanUpSpy;
+        connect(container: unknown, instance: unknown) { connectSpy(container, instance); return () => this.disconnect(container); }
+        disconnect(container: unknown) { disconnectSpy(container); }
     }
     return { Virtualizer };
 });
@@ -101,6 +105,60 @@ function instrumentScrollElement(
 }
 
 describe('PierreScrollRootVirtualizerProvider (web)', () => {
+    it('forgets real Pierre diffs cleaned up by direct disconnect before a root rebind', async () => {
+        const { Virtualizer, VirtualizedFileDiff } = await vi.importActual<typeof import('@pierre/diffs')>('@pierre/diffs');
+        const { PierreScrollRootVirtualizerProvider, usePierreScrollRootVirtualizer } = await import('./PierreScrollRootVirtualizerProvider.web');
+        const observe = vi.fn();
+        const unobserve = vi.fn();
+        // DOM observers and animation frames are the browser boundary; Pierre's lifecycle stays real.
+        vi.stubGlobal('IntersectionObserver', class { observe = observe; unobserve = unobserve; disconnect() {} });
+        vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+        const frames: FrameRequestCallback[] = [];
+        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+        const virtualizer = new Virtualizer();
+        const connect = vi.spyOn(virtualizer, 'connect');
+        const retired = new VirtualizedFileDiff({}, virtualizer);
+        const retained = new VirtualizedFileDiff({}, virtualizer);
+        const retiredContainer = document.createElement('div');
+        const retainedContainer = document.createElement('div');
+        for (const node of [retiredContainer, retainedContainer]) {
+            vi.spyOn(node, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 20_000, 0, 0));
+        }
+        function Demand() {
+            usePierreScrollRootVirtualizer(() => virtualizer);
+            React.useEffect(() => {
+                const input = { oldFile: { name: 'a.ts', contents: 'before\n' }, newFile: { name: 'a.ts', contents: 'after\n' } };
+                retired.render({ ...input, fileContainer: retiredContainer });
+                retained.render({ ...input, fileContainer: retainedContainer });
+                return () => { retired.cleanUp(); retained.cleanUp(); };
+            }, []);
+            return null;
+        }
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        let scroller: HTMLDivElement | null = null;
+        try {
+            await act(async () => root.render(<PierreScrollRootVirtualizerProvider><Demand /><div ref={node => {
+                if (!node) return;
+                scroller = node;
+                node.style.overflowY = 'auto';
+                defineSizeProperty(node, 'clientHeight', 120);
+                defineSizeProperty(node, 'scrollHeight', 120);
+            }} /></PierreScrollRootVirtualizerProvider>));
+            expect(observe).toHaveBeenCalledWith(retiredContainer);
+            retired.cleanUp(); // beta.13 ignores connect's returned disposer and calls disconnect itself.
+            expect(unobserve).toHaveBeenCalledWith(retiredContainer);
+            connect.mockClear();
+            defineSizeProperty(scroller!, 'scrollHeight', 580);
+            await act(async () => { for (const frame of frames.splice(0)) frame(0); });
+            expect(connect.mock.calls.map(([node]) => node)).toEqual([retainedContainer]);
+        } finally {
+            await act(async () => root.unmount());
+            container.remove();
+            vi.unstubAllGlobals();
+        }
+    });
     it('keeps a diff list mounted without activating Pierre before a renderer needs it', async () => {
         vi.resetModules();
         setupSpy.mockClear();
@@ -434,6 +492,84 @@ describe('PierreScrollRootVirtualizerProvider (web)', () => {
         await act(async () => {
             root.unmount();
         });
+    });
+
+    it('keeps diffs connected while still on the document fallback when it rebinds to the nested root', async () => {
+        // A diff that mounts before the list's scroller exists connects on the document binding; rebinding
+        // clears Pierre's observers, so without a reconnect that diff never learns it is visible (blank).
+        vi.resetModules();
+        setupSpy.mockClear();
+        cleanUpSpy.mockClear();
+        connectSpy.mockClear();
+        (globalThis as any).IntersectionObserver = class {};
+        (globalThis as any).ResizeObserver = class {};
+        const { PierreScrollRootVirtualizerProvider, usePierreScrollRootVirtualizer } = await import('./PierreScrollRootVirtualizerProvider.web');
+        const { Virtualizer } = await import('@pierre/diffs');
+        const early = document.createElement('div');
+        const subscriber = { id: 'early-diff' };
+        let disconnectEarly: (() => void) | null = null;
+        function EarlyDiff() {
+            const instance = usePierreScrollRootVirtualizer(() => new Virtualizer());
+            React.useEffect(() => {
+                disconnectEarly = instance ? instance.connect(early, subscriber as never) : null;
+                return () => disconnectEarly?.();
+            }, [instance]);
+            return null;
+        }
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        let scrollRoot: HTMLDivElement | null = null;
+        await act(async () => {
+            root.render(<PierreScrollRootVirtualizerProvider><EarlyDiff /><div ref={(node) => {
+                if (!node || node === scrollRoot) return;
+                scrollRoot = node;
+                node.style.overflowY = 'auto';
+                defineSizeProperty(node, 'clientHeight', 120);
+                defineSizeProperty(node, 'scrollHeight', 120);
+            }} /></PierreScrollRootVirtualizerProvider>);
+        });
+        expect(setupSpy.mock.calls[0]?.[0]).toBe(document);
+        expect(connectSpy).toHaveBeenCalledTimes(1);
+        defineSizeProperty(scrollRoot!, 'scrollHeight', 580);
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+        expect(setupSpy.mock.calls.at(-1)?.[0]).toBe(scrollRoot);
+        // Reconnected after the last setup, with the same subscriber.
+        expect(connectSpy).toHaveBeenCalledTimes(2);
+        expect(connectSpy.mock.calls.at(-1)).toEqual([early, subscriber]);
+        expect(connectSpy.mock.invocationCallOrder.at(-1)!).toBeGreaterThan(setupSpy.mock.invocationCallOrder.at(-1)!);
+        await act(async () => { root.unmount(); });
+    });
+
+    it('connects diffs that mounted before the first bind once it binds', async () => {
+        // Leaf diffs connect in their own effects, before the provider's first bind; Pierre queues them,
+        // and the bind must not drop that queue.
+        vi.resetModules();
+        setupSpy.mockClear();
+        cleanUpSpy.mockClear();
+        connectSpy.mockClear();
+        (globalThis as any).IntersectionObserver = class {};
+        (globalThis as any).ResizeObserver = class {};
+        const { PierreScrollRootVirtualizerProvider, usePierreScrollRootVirtualizer } = await import('./PierreScrollRootVirtualizerProvider.web');
+        const { Virtualizer } = await import('@pierre/diffs');
+        const leaf = document.createElement('div');
+        const subscriber = { id: 'leaf-diff' };
+        function Leaf(props: Readonly<{ instance: PierreVirtualizer | undefined }>) {
+            React.useEffect(() => props.instance?.connect(leaf, subscriber as never), [props.instance]);
+            return null;
+        }
+        function Diff() {
+            const instance = usePierreScrollRootVirtualizer(() => new Virtualizer());
+            return <Leaf instance={instance} />;
+        }
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => { root.render(<PierreScrollRootVirtualizerProvider><Diff /></PierreScrollRootVirtualizerProvider>); });
+        expect(setupSpy).toHaveBeenCalled();
+        expect(connectSpy.mock.calls.at(-1)).toEqual([leaf, subscriber]);
+        expect(connectSpy.mock.invocationCallOrder.at(-1)!).toBeGreaterThan(setupSpy.mock.invocationCallOrder.at(-1)!);
+        await act(async () => { root.unmount(); });
     });
 
     it('stays on the document fallback rather than adopting an ancestor while the nested root is not yet scrollable', async () => {
