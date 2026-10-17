@@ -180,6 +180,16 @@ export function createLimaProvider<TResult extends LimaCommandResult>(executor: 
       // selection, credentials and Home enrollment remain host-owned.
       return { kind: 'native' as const, transport: { contributionRef, schemaVersion: 1 } };
     },
+    async reconcile(target: Readonly<{ launch: LimaLaunch }> | Readonly<{ resource: LimaResource }>) {
+      const expected = 'launch' in target ? expectedResource(LimaLaunchSchema.parse(target.launch)) : target.resource;
+      try {
+        const { resource, native } = await inspectExact(expected);
+        if (!native) return { kind: 'pending' as const, nativeOperationRef: { contributionRef, schemaVersion: 1, value: resource } };
+        return { kind: 'bound' as const, resource: { contributionRef, schemaVersion: 1, value: resource } };
+      } catch (error) {
+        return { kind: 'unknown' as const, recovery: { reference: `${expected.store}/${expected.instance}`, reason: refusalCode(error) } };
+      }
+    },
     async inspect(resource: LimaResource) {
       try {
         const { native } = await inspectExact(resource);

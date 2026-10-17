@@ -158,6 +158,14 @@ export async function readManagedMachineInTx(tx: Tx, input: Readonly<{ homeId: s
     return row;
 }
 
+/** Fence every projection this retained row can invalidate before reading Account authority. */
+export async function acquireManagedMachinePublicationLocksInTx(tx: Tx, row: StoredManagedMachine, nextControllerMachineId?: string): Promise<void> {
+    const machineIds = [...new Set([row.controllerMachineId, row.enrolledMachineId, nextControllerMachineId]
+        .filter((id): id is string => typeof id === 'string'))];
+    const audiences = await Promise.all(machineIds.map(machineId => resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId)));
+    await acquireAccountChangePublicationLocksInTx(tx, audiences.flat(), { includeSingleAccount: true });
+}
+
 /** The existing unique enrollment association is the ordinary Machine fact owner. */
 export async function readMachineDevcontainerChildInTx(tx: Tx, machineId: string): Promise<DevcontainerChildProjectionV1 | null> {
     const row = await readCurrentMachineManagedEnrollmentInTx(tx, machineId);
@@ -234,8 +242,9 @@ function readStoredManagedDevcontainerChild(row: StoredManagedMachine): Devconta
 export async function requireCurrentManagedMachineInTx(tx: Tx, input: Readonly<{
     homeId: string; managedId: string; expectedIntentRevision: number; requestId: string;
     controller: { machineId: string; installationId: string };
-}>, options: Readonly<{ requestAuthority?: "creation" | "intent"; allowCanceledResourceReport?: boolean; allowInactiveCurrentIntent?: boolean }> = {}): Promise<StoredManagedMachine> {
+}>, options: Readonly<{ requestAuthority?: "creation" | "intent"; allowCanceledResourceReport?: boolean; allowInactiveCurrentIntent?: boolean; lockPublication?: boolean }> = {}): Promise<StoredManagedMachine> {
     const row = await readManagedMachineInTx(tx, input);
+    if (options.lockPublication) await acquireManagedMachinePublicationLocksInTx(tx, row);
     await requireManagedControllerInTx(tx, { ...input, custodianAccountId: row.custodianAccountId });
     if (row.controllerMachineId !== input.controller.machineId || row.controllerInstallationId !== input.controller.installationId) {
         throw new ManagedMachineError("controller_retired");

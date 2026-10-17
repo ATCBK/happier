@@ -10,6 +10,7 @@ import { listMachineCandidatesInTx, resolveEffectiveMachineRoleInTx } from "@/ap
 import {
     ManagedMachineError, readManagedMachineInTx, projectManagedMachineInTx,
     invalidateManagedMachineInTx, projectManagedMachine, readManagedLaunchSnapshot, sameManagedInput, type StoredManagedMachine,
+    acquireManagedMachinePublicationLocksInTx,
 } from "./managedRows";
 
 type ManagedResourceDependencyTarget =
@@ -113,8 +114,9 @@ export async function listManagedMachines(params: Readonly<{ actorAccountId: str
 export async function cancelManagedCreation(params: Readonly<{ actorAccountId: string; input: ManagedMachineActionInputV1<"machines.managed.cancel"> }>) {
     const input = ManagedCancelInputV1Schema.parse(params.input);
     return await inTx(async tx => {
-        await requireHome(tx, input.homeId);
         const row = await readManagedMachineInTx(tx, input);
+        await acquireManagedMachinePublicationLocksInTx(tx, row);
+        await requireHome(tx, input.homeId);
         await requireManagedMachineAccessInTx(tx, row, params.actorAccountId, true);
         if (row.intentRevision !== input.expectedIntentRevision) throw new ManagedMachineError("intent_changed");
         if (row.creationState !== "active") return { machine: await projectManagedMachineInTx(tx, row) };

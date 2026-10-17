@@ -7,8 +7,7 @@ import { type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protoc
 import { MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { isMachineRetentionPolicySupportedV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
-import { resolveCurrentMachineRecipientAccountIdsInTx, resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
 import { validateManagedRecipeInTx } from "./machinePresetService";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 import { createSavedSecretResourceInTx } from "@/app/account/savedSecrets/savedSecretResourceService";
@@ -32,16 +31,17 @@ import {
     type StoredManagedMachine,
     readManagedAdmissionState, readManagedCurrentRequestId,
     readManagedJsonEqualityOperand,
+    acquireManagedMachinePublicationLocksInTx,
 } from "./managedRows";
 
-/** A declared, retained native handle can identify partial cleanup before resource binding. */
-async function hasPendingManagedCleanupTargetInTx(tx: Tx, row: StoredManagedMachine): Promise<boolean> {
-    if (row.allocation !== 'may-exist' || row.resource !== null || row.nativeOperationRef === null) return false;
+/** Declared reconciliation can recover partial cleanup; native submission still requires its concrete target. */
+async function hasPendingManagedCleanupTargetInTx(tx: Tx, row: StoredManagedMachine, allowCorrelation = false): Promise<boolean> {
+    if (row.allocation !== 'may-exist' || row.resource !== null) return false;
     const launch = readManagedLaunchSnapshot(row.launch);
     const declaration = await resolveManagedDeclarationInTx(tx, { homeId: row.homeId, custodianAccountId: row.custodianAccountId,
         controller: { machineId: row.controllerMachineId, installationId: row.controllerInstallationId }, provider: launch.provider });
     if (!declaration?.reconciliation || declaration.schemaVersion !== launch.schemaVersion) return false;
-    return projectManagedMachine(row, declaration).nativeOperationRef !== undefined;
+    return row.nativeOperationRef === null ? allowCorrelation : projectManagedMachine(row, declaration).nativeOperationRef !== undefined;
 }
 
 /** Policy execution consumes committed row intent, guest drain or an accepted origin, never caller ids alone. */
@@ -113,6 +113,7 @@ async function readOrAdmitManagedPolicy(params: Readonly<{ custodianAccountId: s
     const input = ManagedPolicyAdmissionInputV1Schema.parse(params.input);
     return inTx(async tx => {
         const row = await readManagedMachineInTx(tx, input);
+        if (admit) await acquireManagedMachinePublicationLocksInTx(tx, row);
         if (row.custodianAccountId !== params.custodianAccountId || row.controllerMachineId !== input.controller.machineId
             || row.controllerInstallationId !== input.controller.installationId) throw new ManagedMachineError('permission_denied');
         await requireManagedControllerInTx(tx, { ...input, custodianAccountId: params.custodianAccountId });
@@ -167,6 +168,8 @@ export async function admitManagedControl(params: Readonly<{
         const input = request.input;
         const row = await readManagedMachineInTx(tx, { homeId: input.homeId,
             managedId: 'managedMachineId' in input ? input.managedMachineId : input.managedId });
+        await acquireManagedMachinePublicationLocksInTx(tx, row,
+            request.action === 'machines.managed.controller.update' ? request.input.controller.machineId : undefined);
         if (row.custodianAccountId !== params.custodianAccountId
             || await resolveEffectiveMachineRoleInTx(tx, { actorAccountId: params.actorAccountId, machineId: row.controllerMachineId }) !== "manage") throw new ManagedMachineError("permission_denied");
         const controller = { machineId: row.controllerMachineId, installationId: row.controllerInstallationId };
@@ -189,7 +192,7 @@ export async function admitManagedControl(params: Readonly<{
             data.cleanup = { disposition: "unavailable", reason: "manual_responsibility" };
         } else {
             const pendingCleanup = request.action === 'machines.managed.delete' && request.input.when === 'now'
-                && await hasPendingManagedCleanupTargetInTx(tx, row);
+                && await hasPendingManagedCleanupTargetInTx(tx, row, true);
             const canceledCleanup = request.action === 'machines.managed.delete' && request.input.when === 'now'
                 && row.creationState === 'canceled' && row.archivedAt === null
                 && row.desired === 'delete' && row.desiredWhen === 'now';
@@ -242,7 +245,7 @@ export async function admitManagedControl(params: Readonly<{
 export async function submitManagedIntent(input: ManagedControllerCurrentnessV1) {
     const canonical = ManagedControllerCurrentnessV1Schema.parse(input);
     return await inTx(async tx => {
-        const row = await requireCurrentManagedMachineInTx(tx, canonical, { allowInactiveCurrentIntent: true });
+        const row = await requireCurrentManagedMachineInTx(tx, canonical, { allowInactiveCurrentIntent: true, lockPublication: true });
         const pendingCleanup = row.archivedAt === null && row.desired === 'delete' && row.desiredWhen === 'now'
             && await hasPendingManagedCleanupTargetInTx(tx, row);
         if (!(row.allocation === "bound" && row.resource) && !pendingCleanup) throw new ManagedMachineError("resource_mismatch");
@@ -271,6 +274,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
     const canonical = ManagedControllerIntentReportV1Schema.parse(input);
     return await inTx(async tx => {
         const row = await readManagedMachineInTx(tx, canonical);
+        await acquireManagedMachinePublicationLocksInTx(tx, row);
         const admitted = readManagedAdmissionState(row.admittedInput);
         const pending = admitted.submittedEffect;
         if (!pending || pending.homeId !== canonical.homeId || pending.managedId !== canonical.managedId
@@ -380,7 +384,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
 export async function submitManagedAcquire(input: ManagedControllerSubmitInputV1) {
     const canonical = ManagedControllerSubmitInputV1Schema.parse(input);
     return await inTx(async (tx) => {
-        const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: 'creation' });
+        const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: 'creation', lockPublication: true });
         const launch = readManagedLaunchSnapshot(row.launch);
         const credentials = launch.credentials ?? [];
         const captured = canonical.credentials ?? [];
@@ -405,12 +409,8 @@ export async function submitManagedAcquire(input: ManagedControllerSubmitInputV1
 export async function reportManagedAcquire(input: ManagedControllerReportV1, options: Readonly<{ requestAuthority?: 'creation' | 'intent' }> = {}) {
     const canonical = ManagedControllerReportV1Schema.parse(input);
     return await inTx(async (tx) => {
-        // A native allocation already exists. Fence the same publication audience
-        // before currentness/declaration reads, as acquisition admission does.
-        await acquireAccountChangePublicationLocksInTx(tx,
-            await resolveCurrentMachineRecipientAccountIdsInTx(tx, canonical.controller.machineId),
-            { includeSingleAccount: true });
         const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: options.requestAuthority ?? 'creation',
+            lockPublication: true,
             allowCanceledResourceReport: (canonical.result.kind === "bound" || canonical.result.kind === "pending") && options.requestAuthority !== 'intent',
             allowInactiveCurrentIntent: options.requestAuthority === 'intent' });
         const launch = readManagedLaunchSnapshot(row.launch);
@@ -461,7 +461,7 @@ export async function reportManagedAcquire(input: ManagedControllerReportV1, opt
 export async function createManagedBootstrapCredential(input: ManagedBootstrapCredentialCreateV1) {
     const canonical = ManagedBootstrapCredentialCreateV1Schema.parse(input);
     return await inTx(async (tx) => {
-        const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: 'creation' });
+        const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: 'creation', lockPublication: true });
         if (row.bootstrapCredentialRef !== null) return { machine: await projectManagedMachineInTx(tx, row) };
         // Acquire the owning row's database write lock before creating a secret.
         // Concurrent callers then reuse the winning reference, never orphan a key.

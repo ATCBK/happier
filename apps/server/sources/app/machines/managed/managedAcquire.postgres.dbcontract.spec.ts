@@ -11,7 +11,7 @@ import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { createReleaseLessDeclarationV1 } from '@/app/plugins/availability/currentDeclaration';
 import { admitManagedAcquire } from './managedAcquire';
 import { createMachinePreset } from './machinePresetService';
-import { reportManagedAcquire, submitManagedAcquire } from './managedMutations';
+import { admitManagedControl, reportManagedAcquire, reportManagedIntent, submitManagedAcquire, submitManagedIntent } from './managedMutations';
 
 describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('managed admission under PostgreSQL Account contention', () => {
     beforeAll(async () => {
@@ -30,6 +30,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
         { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'admit' },
         { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report' },
         { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'report' },
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'submit' },
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'control' },
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'intent-submit' },
+        { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'intent-report' },
     ] as const)('$phase $selectionKind survives an unrelated $publicationAccount publication', async ({ selectionKind, publicationAccount, phase }) => {
         const homeId = `srv_${'a'.repeat(32)}`;
         vi.stubEnv('HAPPIER_SERVER_IDENTITY_ID', homeId);
@@ -85,10 +89,21 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
                 ? { selection: { kind: 'one-off', homeId, controller, launch: launchSnapshot, retention, wakeOnAcceptedMessage: true } }
                 : { selection: { kind: 'preset', homeId, id: presetId, revision: 0 }, controller, retention, wakeOnAcceptedMessage: true } },
         };
-        const allocated = phase === 'report' ? await admitManagedAcquire(request) : undefined;
+        const allocated = phase !== 'admit' ? await admitManagedAcquire(request) : undefined;
         const correlation = allocated ? { homeId, managedId: allocated.machine.id, controller,
             requestId: request.input.requestId, expectedIntentRevision: 0 } : undefined;
-        if (correlation) await submitManagedAcquire(correlation);
+        const resource = { contributionRef: launchSnapshot.provider, schemaVersion: 1, value: { id: 'native-created-before-report' } };
+        if (correlation && phase !== 'submit') await submitManagedAcquire(correlation);
+        if (correlation && ['control', 'intent-submit', 'intent-report'].includes(phase)) {
+            await reportManagedAcquire({ ...correlation, result: { kind: 'bound', resource } });
+        }
+        const control = correlation ? { actorAccountId: account.id, custodianAccountId: account.id, input: {
+            action: 'machines.managed.delete' as const, requestId: randomUUID(), input: { homeId, managedId: correlation.managedId,
+                when: 'now' as const, expectedRevision: 0, intent: 'delete' as const, reviewedDependencies: true },
+        } } : undefined;
+        if (control && ['intent-submit', 'intent-report'].includes(phase)) await admitManagedControl(control);
+        const intentCorrelation = correlation && control ? { ...correlation, expectedIntentRevision: 1, requestId: control.input.requestId } : undefined;
+        if (intentCorrelation && phase === 'intent-report') await submitManagedIntent(intentCorrelation);
         const { seq: initialSeq } = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
         const viewerSeq = viewer ? (await db.account.findUniqueOrThrow({ where: { id: viewer.id }, select: { seq: true } })).seq : 0;
         const originalTransaction = db.$transaction;
@@ -103,7 +118,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
                     const machines = new Proxy(tx.managedMachine, {
                         get(owner, property, receiver) {
                             const method: unknown = Reflect.get(owner, property, receiver);
-                            if (property !== (phase === 'report' ? 'updateMany' : 'create') || typeof method !== 'function') return method;
+                            if (property !== (phase === 'admit' ? 'create' : 'updateMany') || typeof method !== 'function') return method;
                             return async (...values: unknown[]) => {
                                 let ready!: (pid: number) => void;
                                 const started = new Promise<number>(resolve => { ready = resolve; });
@@ -133,12 +148,17 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
             },
         });
         try {
-            const admitted = correlation ? await reportManagedAcquire({ ...correlation, result: { kind: 'bound', resource: {
-                contributionRef: launchSnapshot.provider, schemaVersion: 1, value: { id: 'native-created-before-report' },
-            } } }) : await admitManagedAcquire(request);
+            const admitted = phase === 'report' && correlation ? await reportManagedAcquire({ ...correlation, result: { kind: 'bound', resource } })
+                : phase === 'submit' && correlation ? await submitManagedAcquire(correlation)
+                : phase === 'control' && control ? await admitManagedControl(control)
+                : phase === 'intent-submit' && intentCorrelation ? await submitManagedIntent(intentCorrelation)
+                : phase === 'intent-report' && intentCorrelation ? await reportManagedIntent({ ...intentCorrelation,
+                    result: { kind: 'confirmed' }, observation: { observedAt: Date.now(), availability: 'absent' } })
+                : await admitManagedAcquire(request);
             await writer;
             expect(admitted).toMatchObject({ machine: { retention, wakeOnAcceptedMessage: true,
-                ...(correlation ? { allocation: 'bound', resource: { value: { id: 'native-created-before-report' } } } : {}) } });
+                ...(phase === 'report' ? { allocation: 'bound', resource: { value: { id: 'native-created-before-report' } } } : {}),
+                ...(phase === 'intent-report' ? { allocation: 'confirmed-absent' } : {}) } });
             expect(await db.managedMachine.count({ where: { custodianAccountId: account.id } })).toBe(1);
             db.$transaction = originalTransaction;
             expect(await admitManagedAcquire(request)).toMatchObject({ replayed: true, machine: { id: admitted.machine.id } });

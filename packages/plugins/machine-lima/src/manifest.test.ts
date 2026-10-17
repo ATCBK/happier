@@ -45,6 +45,27 @@ async function activatedAction(id: string, exec: Pick<ExecService, 'run'>, ready
 }
 
 describe('activated public Lima actions', () => {
+  it('recovers the exact reviewed guest without a native effect and refuses a foreign name', async () => {
+    const launch = { ...resource, memoryGiB: 4, diskGiB: 20 };
+    const { memoryBytes: _memory, diskBytes: _disk, ...choices } = launch;
+    let observed: typeof native | null = native;
+    const reads: string[][] = [];
+    const exec: Pick<ExecService, 'run'> = { run: async request => {
+      reads.push([...(request.args ?? [])]);
+      return processResult(new TextEncoder().encode(observed ? JSON.stringify(observed) : ''));
+    } };
+    const { handler, context } = await activatedAction('reconcile', exec);
+    const input = { correlation: { managedId: 'own-row', requestId: 'own-remove', launch: choices } };
+    expect(await handler(input, context)).toMatchObject({ kind: 'bound', resource: { value: resource } });
+    observed = { ...native, name: 'another-row' };
+    expect(await handler(input, context)).toMatchObject({ kind: 'unknown', recovery: { reason: 'LIMA_IDENTITY_MISMATCH' } });
+    observed = null;
+    const recovered = await handler(input, context);
+    expect(recovered).toMatchObject({ kind: 'pending', nativeOperationRef: { value: resource } });
+    const destroy = await activatedAction('destroy', exec);
+    expect(await destroy.handler({ nativeOperation: resource }, destroy.context)).toEqual({ kind: 'confirmed' });
+    expect(reads.every(args => args[0] === 'list')).toBe(true);
+  });
   it('admits the full cold manifest through canonical SDK manifest validation', () => {
     expect(parsePluginManifest(LIMA_PLUGIN.manifest)).toMatchObject({ ok: true });
   });

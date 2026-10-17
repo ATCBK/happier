@@ -1010,18 +1010,22 @@ describe("managed acquisition durable authority", () => {
         const pendingCorrelation = { ...correlation, managedId: pending.machine.id, requestId: pendingRequest.input.requestId };
         await submitManagedAcquire(pendingCorrelation);
         const nativeOperationRef = { contributionRef: resource.contributionRef, schemaVersion: 1, value: { request: 'submitted-request', region: 'reviewed-region' } };
-        for (const cancellation of [false, true]) {
-            const cleanupRequest = { ...request, input: { ...request.input, requestId: `partial-cleanup-${cancellation}` } };
+        for (const { cancellation, retainsIdentity } of [
+            { cancellation: false, retainsIdentity: true }, { cancellation: true, retainsIdentity: true },
+            { cancellation: false, retainsIdentity: false },
+        ]) {
+            const cleanupRequest = { ...request, input: { ...request.input, requestId: `partial-cleanup-${cancellation}-${retainsIdentity}` } };
             const partial = await admitManagedAcquire(cleanupRequest);
             const original = { ...correlation, managedId: partial.machine.id, requestId: cleanupRequest.input.requestId };
             await submitManagedAcquire(original);
-            await reportManagedAcquire({ ...original, result: { kind: 'pending', nativeOperationRef } });
+            if (retainsIdentity) await reportManagedAcquire({ ...original, result: { kind: 'pending', nativeOperationRef } });
             const cleanup = cancellation
                 ? await cancelManagedCreation({ actorAccountId: account.id, input: { homeId, managedId: partial.machine.id, expectedIntentRevision: 0 } })
                 : await admitManagedControl({ ...control, input: { action: 'machines.managed.delete', requestId: 'delete-partial', input: {
                     homeId, managedId: partial.machine.id, when: 'now', expectedRevision: 0, intent: 'delete', reviewedDependencies: true,
                 } } });
-            expect(cleanup.machine).toMatchObject({ allocation: 'may-exist', desired: 'delete', nativeOperationRef });
+            expect(cleanup.machine).toMatchObject({ allocation: 'may-exist', desired: 'delete',
+                ...(retainsIdentity ? { nativeOperationRef } : {}) });
             expect(cleanup.machine.resource).toBeUndefined();
             const cleanupCorrelation = { ...original, expectedIntentRevision: 1,
                 requestId: cancellation ? original.requestId : 'delete-partial' };
@@ -1054,9 +1058,16 @@ describe("managed acquisition durable authority", () => {
             }
             const currentCleanup = admittedCleanup ? { ...cleanupCorrelation, expectedIntentRevision: admittedCleanup.machine.intentRevision,
                 requestId: admittedCleanup.requestId } : cleanupCorrelation;
+            if (!retainsIdentity) {
+                // Remove first runs the provisioner's existing correlation read.
+                // Only that exact admitted report may bind the recovered identity.
+                await expect(reportManagedAcquire({ ...currentCleanup, managedId: pending.machine.id,
+                    result: { kind: 'bound', resource } }, { requestAuthority: 'intent' })).rejects.toMatchObject({ code: 'request_conflict' });
+                await reportManagedAcquire({ ...currentCleanup, result: { kind: 'bound', resource } }, { requestAuthority: 'intent' });
+            }
             expect(await submitManagedIntent(currentCleanup)).toMatchObject({ submitted: true });
             expect(await reportManagedIntent({ ...currentCleanup, result: { kind: 'unknown' } })).toMatchObject({
-                machine: { allocation: 'may-exist', nativeOperationRef, cleanup: { disposition: 'pending' }, submittedNativeEffect: { intent: 'delete' } },
+                machine: { allocation: retainsIdentity ? 'may-exist' : 'bound', ...(retainsIdentity ? { nativeOperationRef } : {}), cleanup: { disposition: 'pending' }, submittedNativeEffect: { intent: 'delete' } },
             });
             const settledCleanup = await reportManagedIntent({ ...currentCleanup, result: { kind: 'confirmed' }, observation: {
                 observedAt: 900, availability: 'absent',
