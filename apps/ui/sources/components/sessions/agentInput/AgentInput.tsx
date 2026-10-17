@@ -3529,12 +3529,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onDragOver={composerDropZoneHandlers.onDragOver}
                     onDrop={composerDropZoneHandlers.onDrop}
                 >
-                {composerRef && composerDropScope ? <ComposerEntityDropTarget
-                    id={composerDropTargetId} scope={composerDropScope} refValue={composerRef}
-                    bounds={composerDropBounds} presented={props.surfacePresented !== false}
-                    editable={dictationEditable && !controlsOnly} kinds={props.autocompleteKinds}
-                    referenceHost={props.composerReferenceHost} fileScope={props.composerFileScope}
-                    /> : null}
                 <GlassSurface
                     testID="agent-input-material-surface"
                     {...panelMaterialProps}
@@ -3972,6 +3966,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         </View>
                     )}
                 </GlassSurface>
+                {/* After the panel, so its drop outline paints over the panel's own fill (it is the target's one visible mark). */}
+                {composerRef && composerDropScope ? <ComposerEntityDropTarget
+                    id={composerDropTargetId} scope={composerDropScope} refValue={composerRef}
+                    bounds={composerDropBounds} presented={props.surfacePresented !== false}
+                    editable={dictationEditable && !controlsOnly} kinds={props.autocompleteKinds}
+                    referenceHost={props.composerReferenceHost} fileScope={props.composerFileScope}
+                    /> : null}
                 </WebDropTargetView>
             </View>
             </View>

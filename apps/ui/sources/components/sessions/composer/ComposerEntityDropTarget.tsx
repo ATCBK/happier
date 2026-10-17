@@ -116,6 +116,6 @@ export function ComposerEntityDropTarget(props: Readonly<{
     const snapshot = useEntityDropTargetState(runtime, props.id);
     return snapshot?.phase === 'carrying' && snapshot.admission?.status === 'allowed'
         // The outline takes the composer's own corner, so it lies exactly on the panel.
-        ? <TreeDropOutline visual={{ kind: 'outline', targetId: props.id }} testID="composer-entity-drop-outline" radius={theme.parts.composer.radius}
+        ? <TreeDropOutline visual={{ kind: 'outline', targetId: props.id }} testID="composer-entity-drop-outline" radius={theme.parts.composer.radius} weight="container"
             style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, pointerEvents: 'none' }} /> : null;
 }
