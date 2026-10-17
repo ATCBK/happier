@@ -102,9 +102,10 @@ export function getActionSettingsTargetPreferenceSelected(params: Readonly<{
     targetId: ActionSettingsTargetId;
     target?: ActionSettingsTargetDefinition;
 }>): boolean {
+    // Selection is a hot read path. Its typed callers already crossed the settings
+    // normalization boundary, so reparsing here multiplies full-document work by every target.
     const target = resolveActionSettingsTargetDefinition(params);
-    const entry = normalizeActionsSettings(params.settings);
-    const actionEntry = entry.actions[params.actionId];
+    const actionEntry = params.settings.actions[params.actionId];
 
     if (target.kind === 'placement') {
         if (isActionSettingsOptInPlacement(target.placement)) {
@@ -122,8 +123,7 @@ export function getActionSettingsTargetSelected(params: Readonly<{
     targetId: ActionSettingsTargetId;
     target?: ActionSettingsTargetDefinition;
 }>): boolean {
-    const entry = normalizeActionsSettings(params.settings);
-    if (entry.actions[params.actionId]?.enabled === false) {
+    if (params.settings.actions[params.actionId]?.enabled === false) {
         return false;
     }
 
