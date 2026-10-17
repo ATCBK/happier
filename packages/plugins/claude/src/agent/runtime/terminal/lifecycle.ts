@@ -29,6 +29,7 @@ export type ClaudeTerminalHookEvent = Readonly<{
 }>;
 
 export type ClaudeTerminalTranscriptEvent =
+    | Readonly<{ agentId: string; kind: 'local_command_completed'; turnId?: string | null }>
     | Readonly<{
         agentId: string;
         kind: 'user_prompt';
@@ -184,8 +185,8 @@ export function mapClaudeTranscriptEventToTerminalLifecycleObservation(
         };
     }
 
-    if (event.kind === 'assistant_stop') {
-        return event.stopReason === 'end_turn'
+    if (event.kind === 'assistant_stop' || event.kind === 'local_command_completed') {
+        return event.kind === 'local_command_completed' || event.stopReason === 'end_turn'
             ? {
                 type: 'completion_candidate',
                 agentId: event.agentId,

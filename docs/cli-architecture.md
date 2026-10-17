@@ -3501,6 +3501,14 @@ control; recovered-host admission never creates or replaces that server. Claude'
 runtime lives in `packages/plugins/claude/src/agent/runtime/terminal/unified` and
 uses the host's terminal service, composer parsing, and prompt-submission
 verification. Successful terminal writes are not Agent acceptance acknowledgements.
+In development source, Claude normal and shell prompts share one active-input
+selection and wrapped-text reader. Shell input can verify an authorized `!` request,
+but cannot make the terminal ready for an ordinary message or bypass a blocking dialog.
+The Claude-native semantic classifier reconstructs exact shell-request identity while
+preserving visible shell input/output. The ordered source reader admits acceptance;
+a linked native no-query caveat and output parent produce the existing completion
+candidate. Other shell output retains the provider lifecycle. Live local-completion
+evidence stays binding-owned until output arrives, independently of echo-retention windows.
 In current development source, the shared submission verifier observes staging and
 consumption under the native Session scope's cancellation signal, separately from
 bounded terminal write/capture commands. Slow Agent redraws do not exhaust a

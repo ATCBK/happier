@@ -1294,3 +1294,67 @@ describe('parseClaudeScreenState — plain contextual suggestion with cursor pro
     expect(state.userDraftPresent).toBe(true);
   });
 });
+
+describe('parseClaudeScreenState — bash mode prompt (2.1.301)', () => {
+  const RULE = '────────────────────────────────────────────────';
+  const FOOTER = '  ! for shell mode';
+  const STAGED = ['', RULE, '!  echo hi', RULE, FOOTER].join('\n');
+  const EMPTY = ['', RULE, '! Try "fix typecheck errors"', RULE, FOOTER].join('\n');
+
+  it('exposes the command staged after a pasted "! cmd" as shellComposerContent', () => {
+    expect(parseClaudeScreenState(STAGED).shellComposerContent).toBe('echo hi');
+  });
+
+  it('never reads the "! for shell mode" footer hint as the prompt line', () => {
+    const state = parseClaudeScreenState(EMPTY);
+    expect(state.shellComposerContent).toBe('Try "fix typecheck errors"');
+    expect(state.shellComposerContent).not.toBe('for shell mode');
+  });
+
+  it('reads the bottom bash-mode prompt line, not an earlier "!" line', () => {
+    const state = parseClaudeScreenState([
+      '! earlier line in the scrollback',
+      RULE,
+      '!  git status',
+      RULE,
+      FOOTER,
+    ].join('\n'));
+    expect(state.shellComposerContent).toBe('git status');
+  });
+
+  it('is not a message composer: no readiness, control window or steering on a bash-mode prompt', () => {
+    for (const screen of [STAGED, EMPTY]) {
+      for (const context of [undefined, { cursor: { x: 2, y: 2 } }]) {
+        const state = parseClaudeScreenState(screen, context);
+        expect(state.composerContent).toBeNull();
+        expect(isClaudeScreenReadyForInput(state)).toBe(false);
+        expect(isSafeWindowForSlashControl(state)).toBe(false);
+        expect(isSafeWindowForModeCycle(state)).toBe(false);
+        expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('no_interactive_composer');
+      }
+    }
+  });
+
+  it('leaves normal mode untouched: a "!" line without the bash-mode footer is not a prompt', () => {
+    const normal = parseClaudeScreenState([
+      '! warning: not a prompt',
+      RULE,
+      '❯ a real draft',
+      RULE,
+      '  ⏵⏵ bypass permissions on',
+    ].join('\n'));
+    expect(normal.composerContent).toBe('a real draft');
+    expect(normal.shellComposerContent).toBeNull();
+    expect(parseClaudeScreenState('! warning: not a prompt').shellComposerContent).toBeNull();
+  });
+
+  it('selects one active input instead of retaining an older empty message composer', () => {
+    const state = parseClaudeScreenState(['❯ ', RULE, STAGED].join('\n'));
+    expect(state.composerContent).toBeNull();
+    expect(state.shellComposerContent).toBe('echo hi');
+    expect(isClaudeScreenReadyForInput(state)).toBe(false);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isSafeWindowForModeCycle(state)).toBe(false);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('no_interactive_composer');
+  });
+});

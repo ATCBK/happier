@@ -1447,3 +1447,27 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
   });
 
 });
+
+
+describe('native shell delivery', () => {
+  it.each([false, true])('accepts shell input and completes only a linked no-query episode (localOnly=%s)', async (localOnly) => {
+    const { mapClaudeUnifiedTranscriptLifecyclePayload } = await import('./lifecycleEvents.js');
+    const { ctx, publisher } = await createBoundPublisher();
+    const observe = async (uuid: string, parentUuid: string | null, content: string, isMeta = false) => {
+      await publisher.observeSourceTranscript({ providerSessionId: 'claude-session-1', sourceId: `source:${uuid}`, row: {
+        type: 'user', uuid, parentUuid, promptId: 'shell-prompt', sessionId: 'claude-session-1', isMeta, message: { role: 'user', content },
+      } });
+    };
+    if (localOnly) await observe('caveat', null, '<local-command-caveat>Local only</local-command-caveat>', true);
+    await observe('input', localOnly ? 'caveat' : null, '<bash-input> echo hi</bash-input>');
+    const observations = () => ctx.agentRuntime.sessionHooks.publishProviderTranscript.mock.calls.map(([payload]) => mapClaudeUnifiedTranscriptLifecyclePayload(payload, 'happy-session-1')).filter(Boolean);
+    expect(observations()).toEqual([expect.objectContaining({ type: 'prompt_submitted', promptText: '! echo hi' })]);
+    await observe('foreign-output', 'other-input', '<bash-stdout>other</bash-stdout><bash-stderr></bash-stderr>');
+    expect(observations()).toHaveLength(1);
+    await observe('output', 'input', '<bash-stdout>hi</bash-stdout><bash-stderr></bash-stderr>');
+    await observe('output', 'input', '<bash-stdout>hi</bash-stdout><bash-stderr></bash-stderr>');
+    expect(observations().filter(event => event?.type === 'completion_candidate')).toHaveLength(localOnly ? 1 : 0);
+    await observe('next-input', 'output', 'next ordinary prompt');
+    expect(observations().at(-1)).toMatchObject({ type: 'prompt_submitted', promptText: 'next ordinary prompt' });
+  });
+});

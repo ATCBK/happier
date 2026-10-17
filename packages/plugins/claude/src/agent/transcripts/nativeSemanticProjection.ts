@@ -13,6 +13,7 @@ import type { RawJSONLines } from './rawJsonLines.js';
 import { normalizeClaudeToolUseNamesInRawJsonLines } from './toolUseNames.js';
 import {
   isClaudeInternalTranscriptMessage,
+  isClaudeLocalCommandCaveatTranscriptMessage,
   readClaudeVisibleCompactSummaryText,
   readClaudeVisibleLocalCommandOutputText,
   readClaudeVisibleSlashCommandText,
@@ -55,6 +56,9 @@ export type ClaudeNativeTranscriptContentPart =
     }>;
 
 export type ClaudeNativeTranscriptLifecycleMeaning =
+  | Readonly<{ kind: 'shell_input'; text: string }>
+  | Readonly<{ kind: 'shell_output' }>
+  | Readonly<{ kind: 'local_command_caveat' }>
   | Readonly<{ kind: 'none' }>
   | Readonly<{ kind: 'text'; text: string }>
   | Readonly<{ kind: 'stop_hook_feedback' }>
@@ -406,6 +410,13 @@ export function classifyClaudeNativeTranscriptRow(
     });
   }
 
+  if (row.isMeta === true && isClaudeLocalCommandCaveatTranscriptMessage(row)) {
+    return {
+      ...createBaseClassification({ rawObject, rawType, row, visibility: 'hidden', messageRole: 'event', content: { kind: 'none' } }),
+      lifecycle: { kind: 'local_command_caveat' },
+    };
+  }
+
   if (isClaudeInternalTranscriptMessage(row)) {
     return createBaseClassification({
       rawObject,
@@ -469,6 +480,11 @@ export function classifyClaudeNativeTranscriptRow(
       ? { ...base, lifecycle: { kind: 'stop_hook_feedback' } }
       : base;
   }
+  // Claude Code 2.1.302: bash input retains the bytes after the leading `!`.
+  // Keep display content intact; only lifecycle identity unwraps the native envelope.
+  const shellInput = /^<bash-input>([\s\S]*)<\/bash-input>$/u.exec(text.trim());
+  if (shellInput) return { ...base, lifecycle: { kind: 'shell_input', text: `!${shellInput[1]}` } };
+  if (/^<bash-(?:stdout|stderr)>/u.test(text.trim())) return { ...base, lifecycle: { kind: 'shell_output' } };
   return { ...base, lifecycle: { kind: 'text', text } };
 }
 

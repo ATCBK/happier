@@ -185,6 +185,14 @@ function readTranscriptObservation(
     });
   }
 
+  if (kind === 'local_command_completed') {
+    return mapClaudeTranscriptEventToTerminalLifecycleObservation({
+      agentId: CLAUDE_UNIFIED_TERMINAL_PROVIDER_ID,
+      kind,
+      turnId: readString(payload.turnId) ?? readString(nested.turnId),
+    });
+  }
+
   if (kind === 'assistant_stop') {
     return mapClaudeTranscriptEventToTerminalLifecycleObservation({
       agentId: CLAUDE_UNIFIED_TERMINAL_PROVIDER_ID,

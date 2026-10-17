@@ -75,6 +75,8 @@ type TranscriptBinding = Readonly<{
   providerSessionId: string;
   transcriptPath: string;
   queuedCommandEvidence: NativeQueuedCommandEvidenceState;
+  localCommandCaveatUuids: Set<string>;
+  localShellInputUuids: Set<string>;
   observedSourceIds: Set<string>;
   taskNotificationProjector: ReturnType<typeof createClaudeTaskNotificationToolResultProjector>;
   sourceReplay: 'historical' | 'fresh';
@@ -404,7 +406,7 @@ export function projectClaudeTranscriptRowToProviderPayload(params: Readonly<{
     });
   }
 
-  if (classification.lifecycle.kind === 'text') {
+  if (classification.lifecycle.kind === 'text' || classification.lifecycle.kind === 'shell_input') {
     return withOptionalTurnId(normalizedRow, {
       ...base,
       kind: 'text',
@@ -570,6 +572,30 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
       if (fact.subtype === 'task_notification' || projectedTaskResult) {
         activeBinding.observedSourceIds.add(input.sourceId);
         return;
+      }
+    }
+    const classification = classifyClaudeNativeTranscriptRow(row);
+    if (!classification.sidechain && classification.lifecycle.kind === 'local_command_caveat') {
+      const uuid = readString(row.uuid);
+      if (uuid) activeBinding.localCommandCaveatUuids.add(uuid);
+    }
+    if (!classification.sidechain && classification.lifecycle.kind === 'shell_input') {
+      const uuid = readString(row.uuid);
+      const parentUuid = readString(row.parentUuid);
+      // The no-query caveat is the native input's exact parent. Without it, shell output
+      // may be followed by inference and must retain the ordinary provider lifecycle.
+      if (uuid && parentUuid && activeBinding.localCommandCaveatUuids.delete(parentUuid)) {
+        activeBinding.localShellInputUuids.add(uuid);
+      }
+    }
+    if (!classification.sidechain && classification.lifecycle.kind === 'shell_output') {
+      const parentUuid = readString(row.parentUuid);
+      if (parentUuid && activeBinding.localShellInputUuids.has(parentUuid)) {
+        await emitPayload(withOptionalTurnId(row, {
+          ...createBasePayload({ providerSessionId: activeBinding.providerSessionId, row }),
+          kind: 'local_command_completed',
+        }));
+        activeBinding.localShellInputUuids.delete(parentUuid);
       }
     }
     const payload = projectClaudeTranscriptRowToProviderPayload({
@@ -741,6 +767,8 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
       providerSessionId: trustedProviderSessionId,
       transcriptPath,
       queuedCommandEvidence: createNativeQueuedCommandEvidenceState(),
+      localCommandCaveatUuids: new Set(),
+      localShellInputUuids: new Set(),
       observedSourceIds: new Set<string>(),
       taskNotificationProjector: createClaudeTaskNotificationToolResultProjector(),
       sourceReplay: input.initialResumeCatchUp || trustedProviderSessionId === params.historicalProviderSessionId

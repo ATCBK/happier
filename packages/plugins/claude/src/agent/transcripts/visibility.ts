@@ -34,13 +34,16 @@ export function isClaudeCompactHookLocalCommandStdout(value: unknown): boolean {
     return /\b(?:PreCompact|PostCompact)\b/u.test(stripClaudeAnsiControlSequences(trimmed));
 }
 
-export function isClaudeLocalCommandTranscriptMessage(value: RawJSONLines): boolean {
+export function isClaudeLocalCommandCaveatTranscriptMessage(value: RawJSONLines): boolean {
     if (value.type !== 'user') return false;
     const text = readClaudeTranscriptMessageText(value);
     if (!text) return false;
     const trimmed = text.trim();
-    if (trimmed.startsWith('<local-command-caveat>')) return true;
-    return isClaudeSlashCommandTranscriptRow(value);
+    return trimmed.startsWith('<local-command-caveat>');
+}
+
+export function isClaudeLocalCommandTranscriptMessage(value: RawJSONLines): boolean {
+    return isClaudeLocalCommandCaveatTranscriptMessage(value) || isClaudeSlashCommandTranscriptRow(value);
 }
 
 /**
