@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildBackendTargetKey } from '@happier-dev/protocol';
+import { createTestAcpRuntime } from '@/testkit/backends/acpRuntime';
+import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBackend';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { runPermissionModePromptLoop } from './runPermissionModePromptLoop';
+import { createPermissionModeQueueState } from './createPermissionModeQueueState';
 
 import { runStandardAcpProvider, type StandardAcpProviderConfig, type StandardAcpProviderRunOptions } from './runStandardAcpProvider';
 
@@ -1140,6 +1146,105 @@ describe('runStandardAcpProvider', () => {
     expect(harness.session.close).toHaveBeenCalled();
     expect(harness.metrics.cleanupCalls).toBe(1);
   });
+
+  it.each(['completed', 'failed'] as const)(
+    'resumes queued input immediately after %s Stop cancellation without polling',
+    async (cancelOutcome) => {
+      // Only the provider transport and Session API are faked; the runtime, permissions,
+      // input consumer, queue and prompt loop execute their real production paths.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const harness = createHarness();
+      const session = createMutableApiSessionClientFixture({
+        metadata: createTestMetadata({ path: '/tmp/workspace', permissionMode: 'default' }),
+        overrides: {
+          ...harness.session,
+          onUserMessage: () => undefined,
+          shouldAttemptPendingMaterialization: () => false,
+          waitForMetadataUpdate: (signal) => new Promise<boolean>((resolve) => {
+            if (signal?.aborted) resolve(false);
+            else signal?.addEventListener('abort', () => resolve(false), { once: true });
+          }),
+          waitForPendingEligibilityUpdate: (signal) => new Promise<boolean>((resolve) => {
+            if (signal?.aborted) resolve(false);
+            else signal?.addEventListener('abort', () => resolve(false), { once: true });
+          }),
+        },
+      });
+      harness.deps.initializeBackendRunSessionFn = async () => ({
+        session, reconnectionHandle: null, reportedSessionId: session.sessionId, attachedToExistingSession: false,
+      });
+      delete harness.deps.createProviderEnforcedPermissionHandlerFn;
+      let queueState: ReturnType<typeof createPermissionModeQueueState>;
+      harness.deps.createPermissionModeQueueStateFn = (params: Parameters<typeof createPermissionModeQueueState>[0]) => {
+        queueState = createPermissionModeQueueState(params);
+        queueState.messageQueue.push({ text: 'first prompt', localId: 'local-first' }, { permissionMode: 'default' });
+        return queueState;
+      };
+      let completeResponse!: () => void;
+      const response = new Promise<void>((resolve) => { completeResponse = resolve; });
+      let releaseCancel!: () => void;
+      const cancellation = new Promise<void>((resolve) => { releaseCancel = resolve; });
+      let notifyCancelStarted!: () => void;
+      const cancelStarted = new Promise<void>((resolve) => { notifyCancelStarted = resolve; });
+      let notifyFirstSent!: () => void;
+      const firstSent = new Promise<void>((resolve) => { notifyFirstSent = resolve; });
+      let completed = false;
+      const sent: string[] = [];
+      const backend = createFakeAcpRuntimeBackend({
+        sendPrompt: async (_sessionId, prompt) => { sent.push(prompt); notifyFirstSent(); },
+        waitForResponseComplete: async () => { if (sent.length === 1) await response; },
+        cancel: async () => {
+          notifyCancelStarted();
+          // ACP cancellation can release the turn before the transport cancellation settles.
+          completeResponse();
+          await cancellation;
+          if (cancelOutcome === 'failed') throw new Error('Provider cancel failed');
+        },
+      });
+      harness.config.deliversSystemPromptAtSpawn = true;
+      harness.config.createRuntime = (params: Parameters<StandardAcpProviderConfig['createRuntime']>[0]) =>
+        createTestAcpRuntime({
+          provider: 'qwen', directory: params.directory, session: params.session,
+          messageBuffer: params.messageBuffer, mcpServers: {}, permissionHandler: params.permissionHandler,
+          onThinkingChange: params.setThinking, ensureBackend: async () => backend,
+        });
+      harness.deps.runPermissionModePromptLoopFn = (params: Parameters<typeof runPermissionModePromptLoop>[0]) =>
+        runPermissionModePromptLoop({
+          ...params,
+          shouldExit: () => completed || params.shouldExit(),
+          sendReady: () => { if (sent.length === 2) completed = true; },
+        });
+      const tick = async () => { await new Promise<void>((resolve) => setImmediate(resolve)); };
+      const run = runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+      let abort: Promise<unknown> | undefined;
+      try {
+        await Promise.race([firstSent, run.then(() => { throw new Error('Runner exited before first prompt'); })]);
+        expect(sent).toEqual(['first prompt']);
+        abort = Promise.resolve(harness.handlers.get('abort')?.());
+        await cancelStarted;
+        const repeatedAbort = Promise.resolve(harness.handlers.get('abort')?.());
+        queueState!.messageQueue.push({ text: 'after Stop', localId: 'local-after-stop' }, { permissionMode: 'default' });
+        for (let i = 0; i < 10; i++) await tick();
+        expect(sent).toEqual(['first prompt']);
+        expect(queueState!.messageQueue.size()).toBe(1);
+        releaseCancel();
+        await Promise.all([abort, repeatedAbort]);
+        // No timeout is advanced: recovery must follow cancellation completion itself.
+        for (let i = 0; i < 100 && !completed; i++) await tick();
+        expect(sent).toEqual(['first prompt', 'after Stop']);
+        expect(completed).toBe(true);
+        await run;
+      } finally {
+        completed = true;
+        releaseCancel();
+        completeResponse();
+        await abort;
+        await vi.runAllTimersAsync();
+        await run;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('awaits explicit Stop cancellation before API close and backend disposal', async () => {
     const harness = createHarness();

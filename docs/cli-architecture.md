@@ -1263,6 +1263,13 @@ the consumer's construction callback; an explicit null disables it for that wait
 Metadata notifications reconcile controls without granting Pending eligibility or
 starting another message-materialization pass.
 
+In the development CLI, the standard provider runner owns the pending Stop
+operation and signal replacement. Its prompt loop joins that operation before
+waiting for another input, so an interrupted turn can unwind while provider
+cancellation finishes without repeatedly reading an aborted signal. Gemini's
+runner applies the same rule through its own Stop lifecycle. Neither path uses
+a retry interval to infer cancellation completion.
+
 OpenCode's existing options publisher also refreshes model and mode inventories on
 same-directory catalog update events and connection catch-up. A successful empty
 inventory withdraws its choices; a failed discovery retains the last published

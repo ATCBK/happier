@@ -18,23 +18,12 @@ import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
 import { configuration } from '@/configuration';
 import { isAgentNativeResumeIdentityMismatchError } from '@/session/agentTransition/agentNativeReturn';
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers';
-import { delay } from '@/utils/time';
 import { readPendingLocalId } from '@happier-dev/protocol';
 import { readNewestSessionModelsMetadataStateV1 } from '@happier-dev/agents';
 import {
   resolveProviderPromptFailureDeliveryReason,
   type ProviderPromptWithMeta,
 } from '@/agent/runtime/providerPromptSubmission';
-
-/**
- * `waitForNextInput` answers `null` immediately while the abort signal it was handed is already
- * aborted. The host replaces that signal only after its abort handler finishes (which awaits the
- * provider's cancel), so for that window every wake is an instant `null`. Yielding for a macrotask
- * between empty wakes keeps timers and I/O (including that cancel) running instead of starving
- * them behind a loop that only ever awaits resolved promises. A loop that is already exiting
- * does not wait.
- */
-const PROMPT_LOOP_EMPTY_WAKE_RETRY_MS = 250;
 
 type PromptRuntime = {
   beginTurn: () => void;
@@ -131,6 +120,7 @@ export async function runPermissionModePromptLoop(opts: {
   messageBuffer: MessageBuffer;
   shouldExit: () => boolean;
   getAbortSignal: () => AbortSignal;
+  waitForPendingAbort?: () => Promise<void> | null;
   keepAlive: () => void;
   setThinking: (value: boolean) => void;
   sendReady: (context?: ReadyNotificationTurnContext) => void;
@@ -358,6 +348,13 @@ export async function runPermissionModePromptLoop(opts: {
   }
 
   while (!opts.shouldExit()) {
+    // The runner owns replacement of the input signal after provider cancellation.
+    // Join that operation before another input wait instead of retrying an aborted signal.
+    const pendingAbort = opts.waitForPendingAbort?.();
+    if (pendingAbort) {
+      await pendingAbort;
+      if (opts.shouldExit()) break;
+    }
     let message: QueuedPermissionModeMessage | null = pending;
     pending = null;
 
@@ -376,10 +373,7 @@ export async function runPermissionModePromptLoop(opts: {
           }
         },
       });
-      if (!next) {
-        if (!opts.shouldExit()) await delay(PROMPT_LOOP_EMPTY_WAKE_RETRY_MS);
-        continue;
-      }
+      if (!next) continue;
       message = {
         message: next.message,
         mode: next.mode,
