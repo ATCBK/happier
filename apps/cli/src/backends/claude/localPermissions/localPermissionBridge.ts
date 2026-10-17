@@ -4,9 +4,9 @@ import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/sess
 import { randomUUID } from 'node:crypto';
 import { open as openFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { clonePlainObjectToNullProto, cloneStringKeyedRecordToNullProto } from '@/api/session/agentStateRecords';
+import { cloneStringKeyedRecordToNullProto } from '@/api/session/agentStateRecords';
 import { resolveAgentRequestKind } from '@/agent/permissions/requestKind';
-import { AgentStateRequestStore, hasPermissionResponseClaimV1 } from '@/agent/permissions/agentStateRequestStore';
+import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import { createPermissionRequestCoordinator } from '@/agent/permissions/permissionRequestCoordinator';
 import type { PermissionRequestCoordinatorStore } from '@/agent/permissions/permissionRequestCoordinator';
 
@@ -163,16 +163,10 @@ export class ClaudeLocalPermissionBridge {
     }
 
     private retireStaleSourceOwnedRequests(): void {
-        const requests = this.session.client.getAgentStateSnapshot?.()?.requests ?? {};
-        for (const [requestId, request] of Object.entries(requests)) {
-            if (!isClaudeLocalPermissionBridgeAgentStateRequest(request)) continue;
-            if (this.requestStore.isOutstandingRequestClaimed(requestId)) continue;
-            void this.requestStore.completeRequest({
-                requestId,
-                status: 'canceled',
-                reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
-            }).catch(() => logger.infoFile('[claude-local-permissions] Stale request retirement admission failed'));
-        }
+        this.requestStore.cancelAllRequests({
+            reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
+            shouldCancel: isClaudeLocalPermissionBridgeAgentStateRequest,
+        });
     }
 
     dispose(): void {
@@ -190,6 +184,17 @@ export class ClaudeLocalPermissionBridge {
         }
         this.localWaiterTimeouts.clear();
 
+        const requests = this.session.client.getAgentStateSnapshot?.()?.requests ?? {};
+        const stateOnlyRequestIds = Object.keys(requests).filter((requestId) => (
+            this.permissionCoordinator.getResponseContext(requestId)?.correlation === 'agent_state'
+        ));
+        if (stateOnlyRequestIds.length > 0) {
+            this.requestStore.cancelAllRequests({
+                reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
+                requestIds: stateOnlyRequestIds,
+                shouldCancel: isClaudeLocalPermissionBridgeAgentStateRequest,
+            });
+        }
         const settlements = [...this.pendingRequests.values()].map(async (pending) => {
             const context = this.permissionCoordinator.getResponseContext(pending.id);
             if (!context) return;

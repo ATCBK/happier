@@ -129,6 +129,24 @@ describe('ClaudeLocalPermissionBridge', () => {
     expect(client.agentState.requests.other_owner_question).toBeDefined();
   });
 
+  it('retires source-only requests added after activation when disposed', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('session-local-disposal-orphan');
+    const bridge = new ClaudeLocalPermissionBridge(session);
+    bridge.activate();
+    await vi.advanceTimersByTimeAsync(0);
+    const request = { tool: 'Bash', arguments: {}, createdAt: 1 };
+    const claimed = { ...request, source: CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+      permissionResponseClaimV1: { owner: 'other-runtime' } };
+    client.agentState.requests = {
+      orphan: { ...request, source: CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE },
+      background: request, claimed,
+    };
+    bridge.dispose();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.agentState.completedRequests.orphan).toMatchObject({ status: 'canceled' });
+    expect(client.agentState.requests).toEqual({ background: request, claimed });
+  });
+
   it('leaves a source-owned opaque claimed request outstanding through activation and disposal', async () => {
     const { session, client } = createPermissionHandlerSessionStub('session-claimed-replacement-cleanup');
     const opaqueClaim = { malformed: ['future', { owner: true }] };

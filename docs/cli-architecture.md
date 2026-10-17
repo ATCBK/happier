@@ -1705,12 +1705,36 @@ and response side effects advance only after the existing Agent-state write
 acknowledges request completion. A failed write reaches the RPC caller while the
 request remains retryable and independent pending requests remain intact. Requests
 present only in Agent state keep their existing behavior without caching a provider
-decision. Native and automatic decisions retain their non-blocking reconciliation
-paths and are outside this acknowledgement guarantee.
+decision. Native responses durably admit exact settlement before provider progress;
+UI responses additionally wait for the server acknowledgement. Automatic decisions
+without an outstanding request publish history without blocking provider progress.
 
 Metadata and Agent-state retries use the current managed socket on every attempt.
 Reconnection can therefore finish the same operation within its existing retry
 budget.
+
+Actual pending permission settlements use the Session's existing durable mutation
+journal before provider progress. Automatic history first uses the normal
+acknowledged Agent-state write; if that fails, the same journal retains its exact
+completion delta. These entries are encrypted with the canonical account machine
+encryption context even for plaintext sessions. The journal retries through the
+existing current-version Agent-state updater. It preserves unrelated requests,
+replacement occurrences, response claims, and already committed automatic outcomes.
+Claude abort/reset/disposal also retires source-owned persisted requests that have
+no local provider waiter; local bridge and unified dialog requests retain their
+separate ownership scopes. Coordinator-owned requests settle through their existing
+waiter lifecycle, while state-only requests use the same durable request store.
+Automatic history can replay only while its request remains absent, including on
+the first write after a version conflict.
+
+This is runtime-owned recovery: reconstructing an ApiSessionClient for the same
+session resumes admitted settlements after a process restart. Closing drains local
+admission before closing the journal. A permanently offline runtime can leave an
+admitted entry pending until that session resumes; daemon-terminal custody does not
+assume permission authority. Failed automatic writes report
+`session_permission_completion_deferred` after durable admission, and admission
+failure reports `session_permission_completion_retention_failed` in the normal
+file log. Neither record contains request contents.
 
 Terminal Agent-state update failures report `session_agent_state_update_failed` in the
 normal file log, including when a best-effort caller absorbs the error. This

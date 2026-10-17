@@ -1,3 +1,4 @@
+import type { AgentStateWriteOptions } from '@/api/session/sessionWritesBestEffort';
 import type {
   DeferredSessionBufferEntry,
   DeferredSessionBufferDropReason,
@@ -62,7 +63,7 @@ export type DeferredApiSessionTarget = Readonly<{
     meta?: Record<string, unknown>;
   }>) => Promise<SessionUserMessageEnqueueResult>;
   updateMetadata: (updater: (metadata: Metadata) => Metadata) => void | Promise<void>;
-  updateAgentState: (updater: (state: AgentState) => AgentState) => void | Promise<void>;
+  updateAgentState: (updater: (state: AgentState) => AgentState, options?: AgentStateWriteOptions) => void | Promise<void>;
   updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState, requireAck?: boolean) => Promise<void>;
   getRuntimeActivitySnapshotPublisher?: () => SessionRuntimeActivitySnapshotPublisher | null;
   keepAlive: (thinking: boolean, mode: 'local' | 'remote') => void;
@@ -462,10 +463,10 @@ export class DeferredApiSessionClient {
     return deferred.promise;
   }
 
-  updateAgentState(_updater: (state: AgentState) => AgentState): void | Promise<void> {
+  updateAgentState(_updater: (state: AgentState) => AgentState, options?: AgentStateWriteOptions): void | Promise<void> {
     const target = this.target;
     if (target && !this.flushInFlight) {
-      return target.updateAgentState(_updater);
+      return target.updateAgentState(_updater, options);
     }
 
     const deferred = createDeferredPromise<void>();
@@ -476,7 +477,7 @@ export class DeferredApiSessionClient {
 
     this.pushBufferedCall(
       async (t) => {
-        await Promise.resolve(t.updateAgentState(_updater));
+        await Promise.resolve(t.updateAgentState(_updater, options));
         deferred.resolve();
       },
       { hint: 'updateAgentState' },

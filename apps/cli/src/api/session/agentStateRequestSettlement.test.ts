@@ -3,6 +3,27 @@ import type { AgentState } from '@/api/types';
 import { applyAgentStateRequestSettlement, buildAgentStateRequestSettlement } from './agentStateRequestSettlement';
 
 describe('exact AgentState request settlement', () => {
+    it('does not replay automatic history when a same-identity request appeared after capture', () => {
+        const request = { tool: 'Write', arguments: { path: 'automatic' }, createdAt: 1 };
+        const intent = buildAgentStateRequestSettlement({}, {
+            completedRequests: { automatic: { ...request, completedAt: 2, status: 'approved' } },
+        }, { automaticHistory: true });
+        const current: AgentState = { requests: { automatic: request } };
+        expect(applyAgentStateRequestSettlement(current, intent)).toEqual(current);
+    });
+
+    it('preserves an existing terminal outcome while recovering other automatic history', () => {
+        const request = { tool: 'Write', arguments: {}, createdAt: 1 };
+        const completed = { ...request, completedAt: 10, status: 'approved' as const };
+        const intent = buildAgentStateRequestSettlement({}, {
+            completedRequests: { decided: completed, automatic: completed },
+        }, { automaticHistory: true });
+        const authoritative = { ...request, completedAt: 9, status: 'denied' as const };
+        const current: AgentState = { completedRequests: { decided: authoritative } };
+        expect(applyAgentStateRequestSettlement(current, intent).completedRequests).toEqual({
+            decided: authoritative, automatic: completed,
+        });
+    });
     const foreground = { tool: 'Write', arguments: { path: 'foreground' }, createdAt: 10 };
     const background = { tool: 'Write', arguments: { path: 'background' }, createdAt: 11 };
     const original: AgentState = { requests: { foreground, background } };

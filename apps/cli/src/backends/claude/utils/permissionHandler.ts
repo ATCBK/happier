@@ -33,7 +33,6 @@ import {
 import { applyAllowedToolsToAllowlist, applyUpdatedPermissionsToAllowlist, seedAllowlistFromCompletedRequests } from '@/agent/permissions/applyPermissionAllowlistUpdates';
 import {
     AgentStateRequestStore,
-    hasPermissionResponseClaimV1,
     type AgentStateOutstandingRequest,
 } from '@/agent/permissions/agentStateRequestStore';
 import {
@@ -945,6 +944,20 @@ export class PermissionHandler {
             decision?: 'abort';
         },
     ): void {
+        // Resumed Agent-state requests have no coordinator waiter. Retire that
+        // source-owned subset through the same exact, durable settlement owner.
+        const requests = this.session.client.getAgentStateSnapshot?.()?.requests ?? {};
+        const stateOnlyRequestIds = Object.keys(requests).filter((requestId) => (
+            this.permissionCoordinator.getResponseContext(requestId)?.correlation === 'agent_state'
+        ));
+        if (stateOnlyRequestIds.length > 0) {
+            this.agentStateRequestStore.cancelAllRequests({
+                reason: _opts?.completedReason ?? reason,
+                decision: _opts?.decision ?? 'abort',
+                requestIds: stateOnlyRequestIds,
+                shouldCancel: (request) => !isRequestOwnedOutsideRemotePermissionHandler(request),
+            });
+        }
         void this.permissionCoordinator.cancelAll(reason).then(() => {
             this.pendingRequestMetadata.clear();
         }).catch(() => logger.infoFile('[Claude] Cancellation request settlement admission failed'));

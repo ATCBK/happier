@@ -1,5 +1,5 @@
 import type { AgentState } from '@/api/types';
-import { updateAgentStateBestEffort } from '@/api/session/sessionWritesBestEffort';
+import { updateAgentStateBestEffort, type AgentStateWriteOptions } from '@/api/session/sessionWritesBestEffort';
 import { resolveAgentRequestKind } from '@/agent/permissions/requestKind';
 import {
     applyAgentStateRequestPushNotifiedAt,
@@ -65,7 +65,7 @@ export type AgentStateOutstandingRequest = Readonly<{
 
 type SessionLike = Readonly<{
     sessionId: string;
-    updateAgentState: (updater: (state: AgentState) => AgentState) => Promise<void> | void;
+    updateAgentState: (updater: (state: AgentState) => AgentState, options?: AgentStateWriteOptions) => Promise<void> | void;
     updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState, requireAck?: boolean) => Promise<void>;
     getAgentStateSnapshot?: () => AgentState | null | undefined;
     getMetadataSnapshot?: () => unknown;
@@ -327,7 +327,9 @@ export class AgentStateRequestStore {
         let recordedCompletion = false;
         return Promise.resolve(this.session.updateAgentState(
             (currentState) => {
-                if (hasPermissionResponseClaimV1(currentState.requests?.[params.requestId])) {
+                // Automatic history has no outstanding request authority. Existing requests settle
+                // through completeRequest's exact occurrence and claim checks instead.
+                if (currentState.requests?.[params.requestId] !== undefined) {
                     return currentState;
                 }
                 const completedRequests = cloneStringKeyedRecordToNullProto<AgentStateCompletedEntry>(currentState.completedRequests);
@@ -359,6 +361,7 @@ export class AgentStateRequestStore {
                 recordedCompletion = true;
                 return { ...currentState, completedRequests } satisfies AgentState;
             },
+            { retainPermissionCompletionsOnFailure: true },
         )).then(() => {
             if (recordedCompletion) {
                 this.markPermissionRequestCompletedBestEffort(params.requestId);
@@ -368,9 +371,13 @@ export class AgentStateRequestStore {
         });
     }
 
-    cancelAllRequests(params: Readonly<{ reason: string; decision?: string; requestIds?: readonly string[] }>): void {
+    cancelAllRequests(params: Readonly<{
+        reason: string; decision?: string; requestIds?: readonly string[];
+        shouldCancel?: (request: AgentStateRequestEntry) => boolean;
+    }>): void {
         const selected = new Map(Object.entries(this.session.getAgentStateSnapshot?.()?.requests ?? {})
-            .filter(([id]) => !params.requestIds || params.requestIds.includes(id)));
+            .filter(([id, request]) => (!params.requestIds || params.requestIds.includes(id))
+                && (!params.shouldCancel || params.shouldCancel(request))));
         void this.settleRequests(
             (currentState) => {
                 const pendingRequests = cloneStringKeyedRecordToNullProto(currentState.requests);

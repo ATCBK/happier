@@ -18,19 +18,25 @@ export const AgentStateRequestSettlementSchema = z.object({
         requestId: z.string().min(1),
         completed: completedRequestSchema,
         removeRequest: z.boolean(),
+        requestAbsent: z.literal(true).optional(),
     }).strict()),
 }).strict();
 
 export type AgentStateRequestSettlement = z.infer<typeof AgentStateRequestSettlementSchema>;
 
 /** Capture exact completions, never a stale session snapshot or an executable updater. */
-export function buildAgentStateRequestSettlement(current: AgentState, updated: AgentState): AgentStateRequestSettlement {
+export function buildAgentStateRequestSettlement(
+    current: AgentState,
+    updated: AgentState,
+    options?: Readonly<{ automaticHistory?: boolean }>,
+): AgentStateRequestSettlement {
     return AgentStateRequestSettlementSchema.parse({
         v: 1,
         entries: Object.entries(updated.completedRequests ?? {}).flatMap(([requestId, completed]) => (
             deepEqual(current.completedRequests?.[requestId], completed) ? [] : [{
                 requestId, completed,
                 removeRequest: updated.requests?.[requestId] === undefined,
+                ...(options?.automaticHistory ? { requestAbsent: true } : {}),
             }]
         )),
     });
@@ -40,17 +46,21 @@ export function buildAgentStateRequestSettlement(current: AgentState, updated: A
 export function applyAgentStateRequestSettlement(current: AgentState, settlement: AgentStateRequestSettlement): AgentState {
     const requests = cloneStringKeyedRecordToNullProto(current.requests);
     const completedRequests = cloneStringKeyedRecordToNullProto(current.completedRequests);
+    let didChange = false;
     for (const entry of settlement.entries) {
         const request = requests[entry.requestId];
+        if (entry.requestAbsent && request !== undefined) continue;
         if (hasPermissionResponseClaimV1(request)) continue;
         if (request && !isSameAgentStateRequestOccurrence(request, entry.completed)) continue;
         const previousCompletion = completedRequests[entry.requestId];
+        if (entry.requestAbsent && previousCompletion !== undefined) continue;
         if (previousCompletion && previousCompletion.createdAt > entry.completed.createdAt) continue;
         if (previousCompletion && previousCompletion.completedAt > entry.completed.completedAt) continue;
         if (deepEqual(previousCompletion, entry.completed)) continue;
         if (entry.removeRequest) delete requests[entry.requestId];
         // The encrypted local boundary is parsed above before projecting into the existing wire type.
         completedRequests[entry.requestId] = entry.completed as CompletedRequest;
+        didChange = true;
     }
-    return { ...current, requests, completedRequests };
+    return didChange ? { ...current, requests, completedRequests } : current;
 }

@@ -1,4 +1,4 @@
-import type { Message } from '@/sync/domains/messages/messageTypes';
+import { readStoredSessionMessagesReadProjectionFromStateLike } from '@/sync/domains/messages/readStoredSessionMessages';
 import {
     deriveSessionListAttentionState,
     deriveSessionListMeaningfulActivityAt,
@@ -91,19 +91,6 @@ function readPendingBlockedCount(snapshot: Partial<SessionListRowStateSnapshot>,
     return 0;
 }
 
-function listCommittedMessages(snapshot: Partial<SessionListRowStateSnapshot>): readonly Message[] {
-    const messages = snapshot.messages;
-    if (!messages) return [];
-    const ids = messages.messageIdsOldestFirst;
-    if (!Array.isArray(ids) || ids.length === 0) return [];
-    const out: Message[] = [];
-    for (const messageId of ids) {
-        const message = messages.messagesById[messageId];
-        if (message) out.push(message);
-    }
-    return out;
-}
-
 function resolveLatestCommittedMessageCreatedAt(snapshot: Partial<SessionListRowStateSnapshot>): number | null {
     const messages = snapshot.messages;
     const ids = messages?.messageIdsOldestFirst;
@@ -188,7 +175,7 @@ function resolveHasUnreadMessages(
     session: SessionStatusSource,
 ): boolean {
     const readableSeq = resolveSessionReadableSeq({
-        messages: listCommittedMessages(snapshot),
+        messagesProjection: readStoredSessionMessagesReadProjectionFromStateLike(snapshot.messages),
         sessionSeq: session.seq,
         latestReadyEventSeq:
             snapshot.messages?.latestReadyEventSeq

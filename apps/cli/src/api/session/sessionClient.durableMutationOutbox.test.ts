@@ -202,6 +202,58 @@ const taskCompleteMessage = { type: 'task_complete', id: 'turn-1' } satisfies AC
 const reusableUnknownTurnId = ['primary', 'runtime'].join('-') + ':s1:unknown';
 
 describe('ApiSessionClient durable mutation outbox', () => {
+  it.each(['before-handler', 'ack'] as const)('journals automatic history after a %s failure and replays it after same-session reconstruction', async (failure) => {
+    const { writeCredentialsLegacy } = await import('@/persistence');
+    await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });
+    let online = false;
+    let serverState: AgentState = { requests: {} };
+    let serverVersion = 0;
+    const automatic = { tool: 'Write', arguments: { path: 'private-automatic' }, createdAt: 1, completedAt: 2, status: 'approved' as const };
+    const makeSocket = () => createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+      if (event === 'ping') return { v: 1 };
+      if (event !== 'update-state') return { ok: true };
+      if (!online) return { result: 'error' };
+      const request = payload as { expectedVersion: number; agentState: string };
+      if (request.expectedVersion !== serverVersion) return {
+        result: 'version-mismatch', version: serverVersion, agentState: JSON.stringify(serverState),
+      };
+      serverState = JSON.parse(request.agentState);
+      return { result: 'success', version: ++serverVersion, agentState: request.agentState };
+    } });
+    const connectionReady = createDeferred<void>();
+    if (failure === 'before-handler') {
+      useRealSupervisor = true;
+      sessionConnectionGate = connectionReady.promise;
+      vi.stubEnv('HAPPIER_SESSION_SOCKET_CONNECT_TIMEOUT_MS', '5');
+    }
+    sessionSocketStub = makeSocket();
+    sessionSocketStub.connected = failure !== 'before-handler';
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const first = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-auto-history', agentState: serverState }));
+    try {
+      await expect(first.updateAgentState((state) => ({ ...state, completedRequests: { automatic } }), {
+        retainPermissionCompletionsOnFailure: true,
+      })).rejects.toThrow();
+      expect(await readPersistedOutboxMutations('s-auto-history'))
+        .toEqual([expect.objectContaining({ kind: 'agent_state_request_settlement' })]);
+    } finally {
+      connectionReady.resolve();
+      await first.close();
+    }
+    useRealSupervisor = false;
+    sessionConnectionGate = null;
+    online = true;
+    sessionSocketStub = makeSocket();
+    const restarted = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-auto-history', agentState: serverState }));
+    try {
+      await expect.poll(() => serverState.completedRequests?.automatic).toEqual(automatic);
+      await expect.poll(async () => await readPersistedOutboxMutations('s-auto-history')).toEqual([]);
+    } finally {
+      await restarted.close();
+    }
+  });
+
   it('fails request settlement admission without credentials and drains cancellation custody during close', async () => {
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { result: 'error' } });
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
@@ -298,7 +350,12 @@ describe('ApiSessionClient durable mutation outbox', () => {
   });
 
   afterEach(async () => {
+    // The file logger owns a buffered writer outside the client lifecycle. Drain
+    // its timer before removing the test's home, so it cannot recreate the folder.
+    const { logger } = await import('@/ui/logger');
+    logger.flushSync();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     process.env.HAPPIER_HOME_DIR = originalHappyHomeDir;
     if (tempHomeDir) {
       await rm(tempHomeDir, { recursive: true, force: true });

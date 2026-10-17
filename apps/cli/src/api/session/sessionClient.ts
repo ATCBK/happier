@@ -290,7 +290,7 @@ import {
 import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
-import { updateAgentStateBestEffort, updateMetadataBestEffort } from './sessionWritesBestEffort';
+import { updateAgentStateBestEffort, updateMetadataBestEffort, type AgentStateWriteOptions } from './sessionWritesBestEffort';
 import { readCliClientUpgradeRequired } from '@/api/clientCompatibility/cliClientCompatibility';
 import { normalizeAgentPromptPayload } from '@/agent/core/AgentPromptPayload';
 import type {
@@ -5742,31 +5742,67 @@ export class ApiSessionClient extends EventEmitter {
      * Update session agent state
      * @param handler - Handler function that returns the updated agent state
      */
-    updateAgentState(handler: (metadata: AgentState) => AgentState): Promise<void> {
+    updateAgentState(handler: (state: AgentState) => AgentState, options?: AgentStateWriteOptions): Promise<void> {
         logger.debugLargeJson('Updating agent state', this.agentState);
-        return this.agentStateLock.inLock(async () => {
-            await this.waitForSessionSocketOnlineForAckWrite('update-state');
-            await updateSessionAgentStateWithAck({
-                socket: this.socket,
-                getSocket: () => this.socket,
-                sessionId: this.sessionId,
-                sessionEncryptionMode: this.sessionEncryptionMode,
-                encryptionKey: this.encryptionKey,
-                encryptionVariant: this.encryptionVariant,
-                getAgentState: () => this.agentState,
-                setAgentState: (agentState) => {
-                    this.agentState = agentState;
-                },
-                getAgentStateVersion: () => this.agentStateVersion,
-                setAgentStateVersion: (version) => {
-                    this.agentStateVersion = version;
-                },
-                syncSessionSnapshotFromServer: async () => {
-                    await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
-                },
-                handler,
-            });
+        const update = this.agentStateLock.inLock(async () => {
+            let captured: ReturnType<typeof buildAgentStateRequestSettlement> = { v: 1, entries: [] };
+            let handlerInvoked = false;
+            const capture = (state: AgentState) => {
+                handlerInvoked = true;
+                const updated = handler(state);
+                if (options?.retainPermissionCompletionsOnFailure) {
+                    captured = buildAgentStateRequestSettlement(state, updated, { automaticHistory: true });
+                }
+                return updated;
+            };
+            try {
+                await this.waitForSessionSocketOnlineForAckWrite('update-state');
+                await updateSessionAgentStateWithAck({
+                    socket: this.socket,
+                    getSocket: () => this.socket,
+                    sessionId: this.sessionId,
+                    sessionEncryptionMode: this.sessionEncryptionMode,
+                    encryptionKey: this.encryptionKey,
+                    encryptionVariant: this.encryptionVariant,
+                    getAgentState: () => this.agentState,
+                    setAgentState: (agentState) => { this.agentState = agentState; },
+                    getAgentStateVersion: () => this.agentStateVersion,
+                    setAgentStateVersion: (version) => { this.agentStateVersion = version; },
+                    syncSessionSnapshotFromServer: async () => {
+                        await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
+                    },
+                    handler: capture,
+                });
+            } catch (error) {
+                if (options?.retainPermissionCompletionsOnFailure) {
+                    try {
+                        // Offline admission can fail before the acknowledged updater calls its
+                        // handler. The same lock still owns this snapshot and exact history delta.
+                        if (!handlerInvoked) capture(this.agentState ?? {});
+                        if (captured.entries.length > 0) {
+                            await this.enqueueAgentStateRequestSettlement(captured, false);
+                            logger.infoFile('[API] session_permission_completion_deferred', {
+                                sessionId: this.sessionId, operation: 'update-state',
+                            });
+                        }
+                    } catch (retentionError) {
+                        logger.infoFile('[API] session_permission_completion_retention_failed', {
+                            sessionId: this.sessionId, operation: 'journal-agent-state-completion',
+                        });
+                        throw retentionError;
+                    }
+                }
+                throw error;
+            }
         });
+        if (options?.retainPermissionCompletionsOnFailure) {
+            // The caller still observes the normal write failure. Close drains the
+            // retention attempt, whose failure is reported above in the default log.
+            const tracked = update.catch(() => undefined);
+            this.pendingDurableSessionWrites.add(tracked);
+            void tracked.then(() => this.pendingDurableSessionWrites.delete(tracked));
+        }
+        return update;
     }
 
     /** Durable exact request completion; publication and unrelated state updates retain their owner. */
@@ -5788,6 +5824,13 @@ export class ApiSessionClient extends EventEmitter {
             const state = this.agentState ?? {};
             return buildAgentStateRequestSettlement(state, handler(state));
         });
+        await this.enqueueAgentStateRequestSettlement(settlement, requireAck);
+    }
+
+    private async enqueueAgentStateRequestSettlement(
+        settlement: ReturnType<typeof buildAgentStateRequestSettlement>,
+        requireAck: boolean,
+    ): Promise<void> {
         if (settlement.entries.length === 0) return;
         const credentials = await readCredentials();
         if (!credentials) throw new Error('Request settlement admission requires account credentials');
