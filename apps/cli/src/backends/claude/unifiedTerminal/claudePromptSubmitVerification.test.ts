@@ -336,5 +336,40 @@ describe('createClaudePromptSubmitVerificationPolicy', () => {
         screenText: bashScreen('! Try "fix typecheck errors"'),
       })).toBe(false);
     });
+
+    it('rejects historical shell input when the active composer contains a foreign draft', () => {
+      const screenText = [
+        bashScreen('! echo hi'),
+        '❯ a different current user draft',
+        '  with a second paragraph',
+        RULE,
+        '  ? for shortcuts',
+      ].join('\n');
+      expect(() => createClaudePromptSubmitVerificationPolicy().isPromptStagedBeforeSubmit({
+        promptText: '! echo hi', screenText,
+      })).toThrow('Claude composer changed');
+    });
+
+    it('verifies the complete visible shell draft including wrapped continuation lines', () => {
+      const policy = createClaudePromptSubmitVerificationPolicy();
+      const screenText = [RULE, '! echo hi', '  && echo another-command', RULE, FOOTER].join('\n');
+      expect(policy.isPromptStagedBeforeSubmit({ promptText: '! echo hi', screenText })).toBe(false);
+      expect(policy.isPromptStagedBeforeSubmit({
+        promptText: '! echo hi && echo another-command', screenText,
+      })).toBe(true);
+    });
+
+    it('requires an authorized shell request before accepting shell input', () => {
+      expect(createClaudePromptSubmitVerificationPolicy().isPromptStagedBeforeSubmit({
+        promptText: 'echo hi', screenText: bashScreen('! echo hi'),
+      })).toBe(false);
+    });
+
+    it('does not submit historical shell input while a permission dialog owns the terminal', () => {
+      const screenText = [bashScreen('! echo hi'), 'Do you want to proceed?', '❯ 1. Yes', '  2. No'].join('\n');
+      expect(createClaudePromptSubmitVerificationPolicy().isPromptStagedBeforeSubmit({
+        promptText: '! echo hi', screenText,
+      })).toBe(false);
+    });
   });
 });

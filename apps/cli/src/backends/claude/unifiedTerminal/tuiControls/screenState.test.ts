@@ -1550,4 +1550,14 @@ describe('parseClaudeScreenState — bash mode prompt (2.1.301)', () => {
     expect(normal.shellComposerContent).toBeNull();
     expect(parseClaudeScreenState('! warning: not a prompt').shellComposerContent).toBeNull();
   });
+
+  it('selects one active input instead of retaining an older empty message composer', () => {
+    const state = parseClaudeScreenState(['❯ ', RULE, STAGED].join('\n'));
+    expect(state.composerContent).toBeNull();
+    expect(state.shellComposerContent).toBe('echo hi');
+    expect(isClaudeScreenReadyForInput(state)).toBe(false);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isSafeWindowForModeCycle(state)).toBe(false);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('no_interactive_composer');
+  });
 });
