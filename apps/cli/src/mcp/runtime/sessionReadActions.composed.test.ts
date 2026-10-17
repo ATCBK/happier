@@ -4,7 +4,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { accountSettingsParse, SessionListQueryV1Schema, SessionListQueryResponseV1Schema } from '@happier-dev/protocol';
+import { accountSettingsParse, normalizeActionsSettingsV1, SessionListQueryV1Schema, SessionListQueryResponseV1Schema } from '@happier-dev/protocol';
+import { SessionForkRpcParamsSchema } from '@happier-dev/protocol/sessions/fork';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import * as machineRpc from '@/session/transport/rpc/machineRpc';
+import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRuntimeActionSettingsProvider';
 import { configuration } from '@/configuration';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createHappierMcpServer } from '@/mcp/createHappierMcpServer';
@@ -28,8 +32,10 @@ vi.mock('@/daemon/controlClient', async importOriginal => ({
 }));
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-it.each(['session.status.get', 'session.messages.recent.get'] as const)(
-  'reads two children through the real Session MCP envelope and credentialed executor: %s', async actionId => {
+it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 'session.archive',
+  'session.unarchive', 'session.fork', 'session.open'] as const)(
+  'executes through the real Session MCP envelope and credentialed owner: %s', async actionId => {
+  const read = actionId === 'session.status.get' || actionId === 'session.messages.recent.get';
   const sessionId = 'c123456789012345678901230';
   const children = ['c123456789012345678901231', 'c123456789012345678901232'];
   const serverId = 'session-read-home';
@@ -38,11 +44,12 @@ it.each(['session.status.get', 'session.messages.recent.get'] as const)(
   const settings = accountSettingsParse({});
   const startContext = resolveCliAgentStartContextV1({ sessionId, machineId: 'read-machine', directory: '/workspace',
     backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, metadata: {},
-    starterDepth: 0, turnDepth: 0, callerPermissionMode: 'read-only', settings, roles: {} });
+    starterDepth: 0, turnDepth: 0, callerPermissionMode: read ? 'read-only' : 'default', settings, roles: {} });
   if (!startContext) throw new Error('Missing canonical caller context fixture');
   const members = new Set(children);
   const row = (id: string) => ({ ...createSessionNotificationContextFixture(id), encryptionMode: 'plain' as const,
-    metadata: '{}', active: true, reportsTo: { sessionId } });
+    metadata: JSON.stringify({ machineId: 'read-machine', path: '/workspace' }), active: read || actionId === 'session.open',
+    reportsTo: { sessionId } });
   const command = 'node /runtime/.runner-snapshots/session-read/dist/index.mjs';
   const runner = { pid: process.pid, processStartTimeMs: 23346,
     processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:session-read' };
@@ -66,7 +73,7 @@ it.each(['session.status.get', 'session.messages.recent.get'] as const)(
     httpReads.push(pathname);
     if (pathname === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
     if (pathname === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
-    const target = children.find(id => pathname === `/v2/sessions/${id}`);
+    const target = [sessionId, ...children].find(id => pathname === `/v2/sessions/${id}`);
     if (target) return { status: 200, data: { session: row(target) } };
     const transcript = children.find(id => pathname === `/v1/sessions/${id}/messages`);
     if (transcript) return { status: 200, data: { messages: [{ id: `message-${transcript}`, seq: 1,
@@ -77,6 +84,10 @@ it.each(['session.status.get', 'session.messages.recent.get'] as const)(
     throw new Error(`Unexpected Session read: ${pathname}`);
   });
   vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    const pathname = new URL(String(url)).pathname;
+    if (pathname === `/v2/sessions/${sessionId}/archive` || pathname === `/v2/sessions/${sessionId}/unarchive`) {
+      return { status: 200, data: { success: true, archivedAt: pathname.endsWith('/unarchive') ? null : 123 } };
+    }
     queryRequests.push({ url: String(url), body });
     expect(new URL(String(url)).pathname).toBe('/v2/sessions/query');
     const query = SessionListQueryV1Schema.parse(body);
@@ -91,8 +102,22 @@ it.each(['session.status.get', 'session.messages.recent.get'] as const)(
     }
     return { status: 200, data: response.data };
   });
+  // Machine RPC is a process/network boundary. Its strict fork input is read
+  // by the real receiving schema; an inactive stop is confirmed by the Home row.
+  const stop = vi.spyOn(machineRpc, 'callMachineRpc').mockResolvedValue({ status: 'not_found' });
+  const machineRequests: unknown[] = [];
+  let approvalRequired = false;
   const daemon = createCliActionExecutor({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
-    serverId, serverHttpBaseUrl, pluginActionExecutionOwner: 'current_process' });
+    serverId, serverHttpBaseUrl, pluginActionExecutionOwner: 'current_process',
+    actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
+      ...(approvalRequired ? { actions: { [actionId]: { approvalRequiredSurfaces: ['agent'] } } } : {}) }) },
+    machineActionDirectTargetTransport: { machineId: 'read-machine', invoke: async (method, request) => {
+      expect(method).toBe(RPC_METHODS.SESSION_FORK);
+      const parsed = SessionForkRpcParamsSchema.parse(request);
+      machineRequests.push(parsed);
+      return { ok: true, childSessionId: children[0] };
+    } },
+  });
   const forwarded: string[] = [];
   vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
     if (!init?.body) { boundaryFailures.push(`Unexpected fetch: ${String(_url)}`); throw new Error('Unexpected bodyless fetch'); }
@@ -104,7 +129,7 @@ it.each(['session.status.get', 'session.messages.recent.get'] as const)(
     forwarded.push(operation.actionId);
     const outcome = await daemon.execute(operation.actionId, operation.input, { surface: 'agent',
       authority: 'account_automation', defaultSessionId: sessionId, actionCaller: operation.witness.agentStartCaller,
-      agentStartContext: startContext });
+      serverId, agentStartContext: startContext, actionRequestId: operation.requestId });
     return Response.json({ ok: true, result: { kind: 'action.execution', requestId: operation.requestId, outcome } });
   });
   const witness = { turnId: 'read-turn', inputId: 'read-input', userMessageSeq: 1, userMessageSeqs: [1],
@@ -116,46 +141,71 @@ it.each(['session.status.get', 'session.messages.recent.get'] as const)(
     updateMetadata() {}, getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0,
     getActiveTurnAdmissionWitness: () => admissionAvailable ? witness : null,
     getActiveTurnPermissionWitness: () => ({ ...witness,
-      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' } }),
-  }, { authorityScope: 'session' });
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: read ? 'read-only' : 'default' } }),
+  }, { authorityScope: 'session',
+    actionsSettingsProvider: createScopedRuntimeActionSettingsProvider(normalizeActionsSettingsV1({ v: 1 })) });
   const client = new Client({ name: 'session-read', version: '1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
     await runtime.mcp.connect(serverTransport);
     await client.connect(clientTransport);
-    for (const child of children) {
+    for (const child of read ? children : [sessionId]) {
       const result = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
-        arguments: { actionId, input: { sessionId: child } } }));
+        arguments: { actionId, input: { sessionId: child,
+          ...(actionId === 'session.open' ? { intent: 'resume', serverId } : {}) } } }));
       const content = result.content.find(block => block.type === 'text');
       if (content?.type !== 'text') throw new Error('Missing MCP Action result');
       const value: unknown = JSON.parse(content.text);
       expect(result.isError, JSON.stringify({ content, forwarded, httpReads, queryRequests, boundaryFailures })).not.toBe(true);
       expect(value).toMatchObject(actionId === 'session.status.get'
         ? { ok: true, session: { id: child }, awareness: { sessionId: child } }
-        : { ok: true, sessionId: child, items: [{ kind: 'user_message', text: `Ready ${child}` }] });
+        : actionId === 'session.messages.recent.get'
+          ? { ok: true, sessionId: child, items: [{ kind: 'user_message', text: `Ready ${child}` }] }
+          : actionId === 'session.fork' ? { ok: true, childSessionId: children[0] }
+          : actionId === 'session.open' ? { ok: true, status: 'opened', sessionId: child }
+          : actionId === 'session.stop' ? { ok: true, sessionId: child,
+            stopOutcome: { status: 'already_stopped', reason: 'no_runtime_session_inactive' } }
+          : { ok: true, sessionId: child, archivedAt: actionId === 'session.archive' ? 123 : null });
     }
-    expect(forwarded).toEqual(children.map(() => actionId));
+    expect(forwarded).toEqual((read ? children : [sessionId]).map(() => actionId));
+    if (actionId === 'session.fork') expect(machineRequests).toMatchObject([{ parentSessionId: sessionId, forkPoint: { type: 'latest' } }]);
+    if (actionId === 'session.stop') expect(stop).toHaveBeenCalledWith(expect.objectContaining({
+      method: RPC_METHODS.STOP_SESSION, request: { sessionId }, authorization: { kind: 'session.write', sessionId },
+    }));
     if (actionId === 'session.messages.recent.get') {
       for (const child of children) expect(httpReads).toContain(`/v1/sessions/${child}/messages`);
     }
-    // Captured caller facts do not keep read authority after the Home removes
-    // the child from the led subtree. The real query must be consulted again.
-    members.delete(children[0]!);
+    // Captured facts do not keep read authority after relationship loss;
+    // lifecycle mutations remain current-Session-only even for led children.
+    if (read) members.delete(children[0]!);
     httpReads.length = 0;
     const refused = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
-      arguments: { actionId, input: { sessionId: children[0] } } }));
+      arguments: { actionId, input: { sessionId: children[0],
+        ...(actionId === 'session.open' ? { intent: 'resume', serverId } : {}) } } }));
     const refusal = refused.content.find(block => block.type === 'text');
     expect(refused.isError).toBe(true);
     expect(refusal?.type === 'text' ? JSON.parse(refusal.text) : null).toMatchObject({ errorCode: 'unsupported_action' });
     expect(httpReads).not.toContain(`/v2/sessions/${children[0]}`);
+    if (!read) {
+      // Forwarding cannot turn a configured Ask-first Action into a direct
+      // effect. This host has no approval Artifact owner, so it must refuse.
+      approvalRequired = true;
+      const effectsBefore = { stop: stop.mock.calls.length, fork: machineRequests.length, posts: vi.mocked(axios.post).mock.calls.length };
+      const denied = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
+        arguments: { actionId, input: { sessionId, ...(actionId === 'session.open' ? { intent: 'resume', serverId } : {}) } } }));
+      expect(denied.isError, JSON.stringify(denied.content)).toBe(true);
+      expect({ stop: stop.mock.calls.length, fork: machineRequests.length, posts: vi.mocked(axios.post).mock.calls.length }).toEqual(effectsBefore);
+    }
     admissionAvailable = false;
     const forwardedBefore = [...forwarded];
     const unbound = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
-      arguments: { actionId, input: { sessionId: children[1] } } }));
+      arguments: { actionId, input: { sessionId: read ? children[1] : sessionId,
+        ...(actionId === 'session.open' ? { intent: 'resume', serverId } : {}) } } }));
     const unavailable = unbound.content.find(block => block.type === 'text');
     expect(unbound.isError).toBe(true);
     expect(unavailable?.type === 'text' ? JSON.parse(unavailable.text) : null).toMatchObject({ errorCode: 'target_unavailable' });
     expect(forwarded).toEqual(forwardedBefore);
+    expect(boundaryFailures).toEqual([]);
   } finally {
     await client.close();
     await runtime.mcp.close();
