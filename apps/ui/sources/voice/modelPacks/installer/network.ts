@@ -31,8 +31,8 @@ export async function raceWithAbort<T>(signal: AbortSignal, promises: Array<Prom
 
 export function createTimeoutPromise(timeoutMs: number): Promise<never> {
   return new Promise((_, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
-    (timer as any)?.unref?.();
+    const timer: unknown = setTimeout(() => reject(new Error('timeout')), timeoutMs);
+    if (typeof timer === 'object' && timer !== null && 'unref' in timer && typeof timer.unref === 'function') timer.unref();
   });
 }
 
@@ -59,7 +59,7 @@ function rewriteGithubReleaseManifestFileUrls(manifest: ModelPackManifest, manif
   if (releases !== 'releases' || download !== 'download') return manifest;
 
   const base = `${url.origin}/${owner}/${repo}/releases/download/${tag}/`;
-  const version = typeof (manifest as any)?.buildId === 'string' && (manifest as any).buildId.trim() ? (manifest as any).buildId.trim() : null;
+  const version = manifest.buildId?.trim() || null;
 
   // Only the release location is rewritten; the asset name comes from the manifest's own URL because
   // GitHub sanitizes uploaded asset names (e.g. `!` becomes `.`), so it cannot be re-derived from `path`.

@@ -95,7 +95,7 @@ export function useNativeModelPackState(params: {
   }, [refreshInstallState]);
 
   const prepareModel = React.useCallback(async () => {
-    if (!params.packId || modelStatus === 'downloading') return;
+    if (!params.packId || modelStatus === 'downloading' || prepareAbortRef.current) return;
     if (isStt && !params.manifestUrl) {
       await Modal.alert(
         t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
@@ -147,8 +147,10 @@ export function useNativeModelPackState(params: {
         isStt ? t('settingsVoice.local.localNeuralStt.alerts.downloadFailedBody', { message }) : message,
       );
     } finally {
-      prepareAbortRef.current = null;
-      setDownloadProgress(null);
+      if (prepareAbortRef.current === abortController) {
+        prepareAbortRef.current = null;
+        setDownloadProgress(null);
+      }
     }
   }, [copy, isStt, modelStatus, params.manifestUrl, networkTimeoutMs, params.packId, refreshInstallState]);
 
@@ -164,26 +166,38 @@ export function useNativeModelPackState(params: {
 
   const clearAssets = React.useCallback(() => {
     fireAndForget((async () => {
-      if (!params.packId || modelStatus === 'downloading') return;
-      const partialBytes = readPartialDownloadBytes(installSummary);
-      const confirmed = partialBytes > 0
-        ? await confirmDiscardPartialDownload(partialBytes)
-        : await Modal.confirm(
-          t(copy.removeTitle),
-          t(copy.removeBody),
-          { confirmText: t(copy.removeButton), ...(isStt ? { destructive: true } : {}) },
-        );
-      if (!confirmed) return;
-      await removeModelPack({ packId: params.packId });
-      setModelStatus('idle');
-      setDownloadProgress(null);
-      await refreshInstallState();
+      if (!params.packId || modelStatus === 'downloading' || prepareAbortRef.current) return;
+      const abortController = new AbortController();
+      prepareAbortRef.current = abortController;
+      try {
+        const partialBytes = readPartialDownloadBytes(installSummary);
+        const confirmed = partialBytes > 0
+          ? await confirmDiscardPartialDownload(partialBytes)
+          : await Modal.confirm(
+            t(copy.removeTitle),
+            t(copy.removeBody),
+            { confirmText: t(copy.removeButton), ...(isStt ? { destructive: true } : {}) },
+          );
+        if (!confirmed) return;
+        try {
+          await removeModelPack({ packId: params.packId });
+        } finally {
+          // Removing the live pack can succeed before staged-file cleanup fails.
+          setModelStatus('idle');
+          setDownloadProgress(null);
+          await refreshInstallState();
+        }
+      } catch (error) {
+        await Modal.alert(t('common.error'), error instanceof Error ? error.message : String(error));
+      } finally {
+        if (prepareAbortRef.current === abortController) prepareAbortRef.current = null;
+      }
     })(), { tag: 'useNativeModelPackState.confirm.clearAssets' });
   }, [copy, installSummary, isStt, modelStatus, params.packId, refreshInstallState]);
 
   const checkForUpdates = React.useCallback(() => {
     fireAndForget((async () => {
-      if (!params.packId || modelStatus === 'downloading') return;
+      if (!params.packId || modelStatus === 'downloading' || prepareAbortRef.current) return;
       if (!params.manifestUrl) {
         await Modal.alert(
           t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
@@ -193,6 +207,7 @@ export function useNativeModelPackState(params: {
       }
 
       const abortController = new AbortController();
+      prepareAbortRef.current = abortController;
       try {
         const status = await checkModelPackUpdateAvailable({
           packId: params.packId,
@@ -229,8 +244,6 @@ export function useNativeModelPackState(params: {
 
         setModelStatus('downloading');
         setDownloadProgress(null);
-        prepareAbortRef.current = abortController;
-
         await ensureModelPackInstalled({
           packId: params.packId,
           mode: 'download_if_missing',
@@ -258,8 +271,10 @@ export function useNativeModelPackState(params: {
         setModelStatus('idle');
         await refreshInstallState();
       } finally {
-        prepareAbortRef.current = null;
-        setDownloadProgress(null);
+        if (prepareAbortRef.current === abortController) {
+          prepareAbortRef.current = null;
+          setDownloadProgress(null);
+        }
       }
     })(), { tag: 'useNativeModelPackState.checkForUpdates' });
   }, [copy, modelStatus, params.manifestUrl, networkTimeoutMs, params.packId, refreshInstallState]);

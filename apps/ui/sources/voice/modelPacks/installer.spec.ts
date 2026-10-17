@@ -39,7 +39,13 @@ function createFs(files = new Map<string, Uint8Array>(), options: {
       if (contained.length === 0 && !directories.has(this.uri)) return null;
       return contained.reduce((acc, [, data]) => acc + data.length, 0);
     }
-    create() { directories.add(this.uri); }
+    create() {
+      for (let parent = this.uri; parent.length > 'file://'.length;
+        parent = parent.slice(0, parent.lastIndexOf('/'))) {
+        if (files.has(parent)) throw new Error('directory_path_is_file');
+      }
+      directories.add(this.uri);
+    }
     delete() {
       for (const dir of directories) if (dir === this.uri || dir.startsWith(`${this.uri}/`)) directories.delete(dir);
       for (const key of files.keys()) if (key.startsWith(`${this.uri}/`)) files.delete(key);
@@ -110,6 +116,7 @@ function useNativeDownloads(fs: ReturnType<typeof createFs>, data: (url: string)
     async downloadAsync() {
       requested.push(url);
       await transfer.inFlight?.(url);
+      if (new fs.Directory(destination).exists) throw new Error('download_destination_is_directory');
       fs.files.set(destination, new Uint8Array(data(url)));
       const written = transfer.writtenBytes?.(url);
       if (written !== undefined) onProgress?.({ totalBytesWritten: written, totalBytesExpectedToWrite: written });
@@ -452,6 +459,52 @@ describe('modelPacks installer (native)', () => {
     }
 
     const updateOptions = { ...installOptions, updatePolicy: 'manual_update_if_available' as const };
+
+    it.each([
+      ['data', 'data/model.bin'],
+      ['data/model.bin', 'data'],
+    ])('recovers reusable staging when a failed update changes %s into %s', async (previousPath, nextPath) => {
+      const fs = createFs();
+      const original = new Uint8Array([1]);
+      const installed = await installedPack(fs, [{ path: 'original.bin', bytes: original }]);
+      const next = new Uint8Array([2]);
+      const kept = new Uint8Array([3]);
+      const nextHash = await sha256Hex(next);
+      const keptHash = await sha256Hex(kept);
+      const filesFor = (path: string): ModelPackManifest['files'] => [
+        { path, url: `https://example.com/${path}`, sha256: nextHash, sizeBytes: 1 },
+        { path: 'keep.bin', url: 'https://example.com/keep.bin', sha256: keptHash, sizeBytes: 1 },
+        { path: 'fail.bin', url: 'https://example.com/fail.bin', sha256: nextHash, sizeBytes: 1 },
+      ];
+      useNativeDownloads(fs, (url) => url.endsWith('keep.bin') ? kept : next, [], {
+        status: (url) => url.endsWith('fail.bin') ? 404 : 200,
+        inFlight: async (url) => {
+          if (url.endsWith('fail.bin')) await new Promise((resolve) => setTimeout(resolve, 20));
+        },
+      });
+      await expect(ensureModelPackInstalled({ ...updateOptions, signal: new AbortController().signal }, {
+        fs, fetch: fetchManifest(manifest(filesFor(previousPath), 'v2')),
+      })).rejects.toThrow('model_pack_download_failed:404');
+
+      const staging = 'file:///docs/happier/voice/modelPackUpdates/example';
+      expect(fs.files.get(`${staging}/${previousPath}`)).toEqual(next);
+      expect(fs.files.get(`${staging}/keep.bin`)).toEqual(kept);
+      expect(fs.files.get(`${PACK_URI}/original.bin`)).toEqual(original);
+      expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest).toEqual(installed);
+
+      const requested: string[] = [];
+      useNativeDownloads(fs, (url) => url.endsWith('keep.bin') ? kept : next, requested);
+      await ensureModelPackInstalled({ ...updateOptions, signal: new AbortController().signal }, {
+        fs, fetch: fetchManifest(manifest(filesFor(nextPath), 'v3')),
+      });
+
+      expect(requested).not.toContain('https://example.com/keep.bin');
+      expect(fs.files.get(`${PACK_URI}/${nextPath}`)).toEqual(next);
+      expect(fs.files.get(`${PACK_URI}/keep.bin`)).toEqual(kept);
+      expect(fs.files.has(`${PACK_URI}/${previousPath}`)).toBe(false);
+      expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest.version).toBe('v3');
+      expect(new fs.Directory(staging).exists).toBe(false);
+    });
 
     it('downloads only changed files and removes files the new build dropped', async () => {
       const fs = createFs();

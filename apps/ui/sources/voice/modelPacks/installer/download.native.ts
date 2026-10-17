@@ -1,11 +1,10 @@
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
-import type { File as ExpoFile } from 'expo-file-system';
 import { Platform } from 'react-native';
 
 import type { ModelPackManifest } from '@/voice/modelPacks/manifest';
 
-import type { InstallerFs, ModelPackDownloadProgress, Progress } from './types';
+import type { InstallerDirectory, InstallerFile, InstallerFs, ModelPackDownloadProgress, Progress } from './types';
 import { getPackFile } from './paths';
 import { cacheBustUrl, throwIfAborted } from './network';
 
@@ -55,7 +54,7 @@ async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   throwIfAborted(signal);
 }
 
-async function sha256FileHex(file: Pick<ExpoFile, 'open'>, signal: AbortSignal): Promise<string> {
+async function sha256FileHex(file: Pick<InstallerFile, 'open'>, signal: AbortSignal): Promise<string> {
   const hash = sha256.create();
   const handle = file.open();
   try {
@@ -163,7 +162,7 @@ async function downloadWithRetry(opts: {
 async function downloadAndVerifyFile(opts: {
   downloader: NativeDownloader;
   fs: InstallerFs;
-  rootDir: any;
+  rootDir: Pick<InstallerDirectory, 'uri'>;
   entry: ModelPackManifest['files'][number];
   signal: AbortSignal;
   onProgress?: (p: Progress) => void;
@@ -212,7 +211,7 @@ async function downloadAndVerifyFile(opts: {
 
 export async function downloadManifestFiles(opts: {
   fs: InstallerFs;
-  rootDir: any;
+  rootDir: Pick<InstallerDirectory, 'uri'>;
   manifest: ModelPackManifest;
   signal: AbortSignal;
   onProgress?: (p: ModelPackDownloadProgress) => void;

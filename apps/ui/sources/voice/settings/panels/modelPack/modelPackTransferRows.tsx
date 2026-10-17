@@ -105,6 +105,6 @@ export function confirmDiscardPartialDownload(partialBytes: number): Promise<boo
     return Modal.confirm(
         t('settingsVoice.local.modelPackDownload.discardConfirmTitle'),
         t('settingsVoice.local.modelPackDownload.discardConfirmBody', { size: formatByteSize(partialBytes) }),
-        { confirmText: t('common.discard'), destructive: true },
+        { confirmText: t('common.delete'), destructive: true },
     );
 }

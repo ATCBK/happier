@@ -12,7 +12,7 @@ import {
   getPackUpdateDir,
   normalizePackId,
 } from './installer/paths';
-import type { InstallMode, InstallerFs, InstallerOverrides, ModelPackDownloadProgress, UpdatePolicy } from './installer/types';
+import type { InstallMode, InstallerDirectory, InstallerFs, InstallerOverrides, ModelPackDownloadProgress, UpdatePolicy } from './installer/types';
 
 export type { ModelPackDownloadProgress } from './installer/types';
 
@@ -96,9 +96,6 @@ async function applyPackUpdate(opts: {
   for (const f of changed) {
     const target = getPackFile(opts.fs, opts.rootDir, f.path, { createParents: true });
     if (target.exists) target.delete();
-    // Deleting a dropped directory's files leaves the folder itself in the way.
-    const emptiedDir = new opts.fs.Directory(target.uri);
-    if (emptiedDir.exists) emptiedDir.delete();
     getPackFile(opts.fs, stagingDir, f.path).move(target);
   }
   removePackUpdateDir(opts.fs, opts.id);
@@ -239,7 +236,7 @@ export async function checkModelPackUpdateAvailable(
   };
 }
 
-function directoryBytes(dir: Pick<ExpoDirectory, 'size'>): number {
+function directoryBytes(dir: Pick<InstallerDirectory, 'size'>): number {
   try {
     // expo-file-system sums contained files recursively and reports null for a missing directory.
     const size: unknown = dir.size;

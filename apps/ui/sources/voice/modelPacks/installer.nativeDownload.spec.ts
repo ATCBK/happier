@@ -73,6 +73,14 @@ async function createHarness(options: { status?: number; pending?: boolean; fail
     delete() { files.delete(this.uri); }
     write(value: string) { files.set(this.uri, new TextEncoder().encode(value)); }
     async text() { return new TextDecoder().decode(files.get(this.uri)); }
+    move(destination: { uri: string }) {
+      const bytes = files.get(this.uri);
+      if (!bytes) throw new Error('move_source_missing');
+      if (files.has(destination.uri) || new Directory(destination.uri).exists) throw new Error('move_destination_exists');
+      files.delete(this.uri);
+      files.set(destination.uri, bytes);
+      this.uri = destination.uri;
+    }
     open() {
       let offset = 0;
       const fileUri = this.uri;

@@ -1,129 +1,163 @@
-import React from 'react';
-import { act, ReactTestRenderer } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
-import { installLocalTtsCommonModuleMocks } from '../localTts/localTtsTestHelpers';
+import { act } from 'react-test-renderer';
+import { describe, expect, it, vi } from 'vitest';
 
+import { createDeferred, renderHook } from '@/dev/testkit';
+import {
+  modelPackDevice as boundary,
+  modelPackManifest,
+  seedInstalledPack,
+  useModelPackDeviceBoundary,
+  voiceFilesRoot as root,
+} from './modelPackSettings.testHarness';
+import { useNativeModelPackState } from './useNativeModelPackState.native';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const packId = 'cancellation-test';
+const input = { role: 'stt' as const, packId, manifestUrl: 'https://example.test/manifest.json' };
+useModelPackDeviceBoundary();
 
-const modalAlertSpy = vi.fn();
-const prepareKokoroTtsSpy = vi.fn();
-const getModelPackInstallSummarySpy = vi.fn();
-const checkModelPackUpdateAvailableSpy = vi.fn();
-const ensureModelPackInstalledSpy = vi.fn();
-
-installLocalTtsCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            confirmResult: true,
-            spies: {
-                alert: modalAlertSpy,
-            },
-        }).module;
-    },
-});
-
-vi.mock('@/voice/kokoro/runtime/synthesizeKokoroWav', () => ({
-  prepareKokoroTts: (...args: any[]) => prepareKokoroTtsSpy(...args),
-}));
-
-vi.mock('@/voice/modelPacks/installer.native', () => ({
-  checkModelPackUpdateAvailable: (...args: any[]) => checkModelPackUpdateAvailableSpy(...args),
-  ensureModelPackInstalled: (...args: any[]) => ensureModelPackInstalledSpy(...args),
-  getModelPackInstallSummary: (...args: any[]) => getModelPackInstallSummarySpy(...args),
-  removeModelPack: vi.fn(),
-}));
-
-function createHarness(
-  useHook: typeof import('./useNativeModelPackState.native').useNativeModelPackState,
-  role: 'stt' | 'tts' = 'tts',
-) {
-  return function Harness(props: { packId: string; manifestUrl: string | null; networkTimeoutMs: number }) {
-    const state = useHook({ ...props, role });
-    return React.createElement('Harness', {
-      onPrepare: state.prepareModel, onCancel: state.cancelPrepare, onCheckForUpdates: state.checkForUpdates,
-      modelStatus: state.modelStatus,
-    });
-  };
-}
-
-describe('useNativeModelPackState (native)', () => {
-  beforeEach(() => {
-    modalAlertSpy.mockClear();
-    prepareKokoroTtsSpy.mockClear();
-    getModelPackInstallSummarySpy.mockClear();
-    getModelPackInstallSummarySpy.mockResolvedValue({ installed: false, packDirUri: 'file:///packs', manifest: null });
+describe('useNativeModelPackState through device boundaries', () => {
+  it('refreshes installed state and reports failure when staging deletion fails after removing the live pack', async () => {
+    seedInstalledPack(packId, 'stt');
+    const staging = `${root}/modelPackUpdates/${packId}`;
+    boundary.files.set(`${staging}/partial.bin`, new Uint8Array(3));
+    boundary.failDeleteUri = staging;
+    const hook = await renderHook(useNativeModelPackState, { initialProps: input });
+    expect(hook.getCurrent().installed).toBe(true);
+    await act(async () => { hook.getCurrent().clearAssets(); });
+    await vi.waitFor(() => expect(hook.getCurrent().installed).toBe(false));
+    expect(hook.getCurrent().modelStatus).toBe('idle');
+    expect(hook.getCurrent().installSummary?.partialBytes).toBe(3);
+    expect(boundary.alert.mock.calls.some(call => String(call[1]).includes('storage_delete_failed'))).toBe(true);
+    expect(boundary.files.has(`${root}/modelPacks/${packId}/pack.json`)).toBe(false);
   });
 
-  it('surfaces prepare errors via Modal.alert', async () => {
-    prepareKokoroTtsSpy.mockRejectedValueOnce(new Error('kokoro_native_module_unavailable'));
-
-    const { useNativeModelPackState } = await import('./useNativeModelPackState.native');
-    const Harness = createHarness(useNativeModelPackState);
-
-    let tree!: ReactTestRenderer;
-    tree = (await renderScreen(React.createElement(Harness, { packId: 'dummy-pack', manifestUrl: null, networkTimeoutMs: 1000 }))).tree;
-    await act(async () => {});
-
-    const node = tree.findByType('Harness');
+  it.each(['prepare', 'update'] as const)('admits only one %s operation from the same rendered callback', async operation => {
+    if (operation === 'update') seedInstalledPack(packId, 'stt');
+    const release = createDeferred<void>();
+    boundary.fetch.mockImplementation(async () => {
+      await release.promise;
+      return operation === 'update'
+        ? Response.json(modelPackManifest(packId, 'stt', 'a'.repeat(64)))
+        : new Response(null, { status: 503 });
+    });
+    const hook = await renderHook(useNativeModelPackState, { initialProps: input });
     await act(async () => {
-      invokeTestInstanceHandler(await node, 'onPrepare', );
+      const invoke = operation === 'prepare' ? hook.getCurrent().prepareModel : hook.getCurrent().checkForUpdates;
+      const operations = [invoke(), invoke()];
+      release.resolve();
+      await Promise.all(operations);
+      await new Promise(resolve => setTimeout(resolve, 0));
     });
-
-    expect(modalAlertSpy).toHaveBeenCalled();
-    expect(String(modalAlertSpy.mock.calls[0]?.[1] ?? '')).toContain('kokoro_native_module_unavailable');
+    expect(boundary.fetch).toHaveBeenCalledTimes(1);
+    expect(boundary.alert).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['stt', 'tts'] as const)('reports the still-installed %s pack as ready after a failed update', async (role) => {
-    const installedSummary = { installed: true, packDirUri: 'file:///packs', manifest: null };
-    getModelPackInstallSummarySpy.mockResolvedValue(installedSummary);
-    checkModelPackUpdateAvailableSpy.mockResolvedValueOnce({
-      installed: true, updateAvailable: true, installedManifest: null, remoteManifest: null,
+  it('keeps preparation out of a pending deletion confirmation', async () => {
+    boundary.files.set(`${root}/modelPacks/${packId}/saved.bin`, new Uint8Array(3));
+    boundary.fetch.mockResolvedValue(new Response(null, { status: 503 }));
+    let confirmation: Parameters<typeof boundary.alert>[2];
+    boundary.alert.mockImplementation((_title, _message, buttons) => {
+      if (buttons) confirmation = buttons;
     });
-    ensureModelPackInstalledSpy.mockRejectedValueOnce(new Error('model_pack_download_failed:503'));
-
-    const { useNativeModelPackState } = await import('./useNativeModelPackState.native');
-    const Harness = createHarness(useNativeModelPackState, role);
-    const tree = (await renderScreen(React.createElement(Harness, {
-      packId: 'dummy-pack', manifestUrl: 'https://example.com/manifest.json', networkTimeoutMs: 1000,
-    }))).tree;
-    await act(async () => {});
-    expect(tree.findByType('Harness').props.modelStatus).toBe('ready');
-
+    const hook = await renderHook(useNativeModelPackState, { initialProps: input });
     await act(async () => {
-      invokeTestInstanceHandler(tree.findByType('Harness'), 'onCheckForUpdates');
+      hook.getCurrent().clearAssets();
+      await hook.getCurrent().prepareModel();
     });
-    await act(async () => {});
-
-    expect(String(modalAlertSpy.mock.calls.at(-1)?.[0] ?? '')).toContain('updateFailed');
-    expect(tree.findByType('Harness').props.modelStatus).toBe('ready');
+    try {
+      expect(boundary.fetch).not.toHaveBeenCalled();
+      expect(boundary.files.has(`${root}/modelPacks/${packId}/saved.bin`)).toBe(true);
+    } finally {
+      await act(async () => { confirmation?.find(button => button.style === 'cancel')?.onPress?.(); });
+    }
   });
 
-  it('leaves the downloading state when a download is cancelled so it can be retried', async () => {
-    prepareKokoroTtsSpy.mockImplementationOnce((opts: { signal: AbortSignal }) => new Promise((_, reject) => {
-      opts.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  it('reports a manifest preparation failure through the real installer', async () => {
+    boundary.fetch.mockResolvedValue(new Response(null, { status: 503 }));
+    const hook = await renderHook(useNativeModelPackState, { initialProps: input });
+    await act(async () => { await hook.getCurrent().prepareModel(); });
+    expect(hook.getCurrent().modelStatus).toBe('error');
+    expect(hook.getCurrent().installed).toBe(false);
+    expect(boundary.alert.mock.calls.some(call =>
+      String(call[1]).includes('model_pack_manifest_download_failed:503'))).toBe(true);
+  });
+
+  it('cancels a resumed preparation, refreshes saved bytes, and permits retry', async () => {
+    boundary.files.set(`${root}/modelPacks/${packId}/model.bin`, new Uint8Array([1, 2, 3]));
+    const requested = createDeferred<void>();
+    boundary.fetch.mockImplementation((_url, options) => new Promise<Response>((_resolve, reject) => {
+      const signal = options?.signal;
+      if (!signal) throw new Error('Expected installer cancellation signal');
+      requested.resolve();
+      signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
     }));
+    const hook = await renderHook(useNativeModelPackState, { initialProps: input });
+    expect(hook.getCurrent().installSummary?.partialBytes).toBe(3);
+    let operation!: Promise<void>;
+    await act(async () => { operation = hook.getCurrent().prepareModel(); await requested.promise; });
+    expect(hook.getCurrent().modelStatus).toBe('downloading');
+    await act(async () => { hook.getCurrent().cancelPrepare(); await operation; });
+    expect(hook.getCurrent().modelStatus).toBe('idle');
+    expect(hook.getCurrent().downloadProgress).toBeNull();
+    expect(hook.getCurrent().installSummary?.partialBytes).toBe(0);
+    expect(boundary.files.size).toBe(0);
+    expect(boundary.alert).not.toHaveBeenCalled();
+    boundary.fetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    await act(async () => { await hook.getCurrent().prepareModel(); });
+    expect(hook.getCurrent().modelStatus).toBe('error');
+  });
 
-    const { useNativeModelPackState } = await import('./useNativeModelPackState.native');
-    const Harness = createHarness(useNativeModelPackState);
-    const tree = (await renderScreen(React.createElement(Harness, {
-      packId: 'dummy-pack', manifestUrl: 'https://example.com/manifest.json', networkTimeoutMs: 1000,
-    }))).tree;
-    await act(async () => {});
+  it.each(['stt', 'tts'] as const)('keeps the installed %s pack ready when an admitted update fails', async role => {
+    seedInstalledPack(packId, role);
+    boundary.fetch.mockResolvedValueOnce(Response.json(modelPackManifest(packId, role)));
+    const admitted = createDeferred<void>();
+    boundary.fetch.mockImplementation(async () => { admitted.resolve(); throw new Error('network_offline'); });
+    const hook = await renderHook(useNativeModelPackState, { initialProps: { ...input, role, networkTimeoutMs: 1000 } });
+    expect(hook.getCurrent().modelStatus).toBe('ready');
+    await act(async () => { hook.getCurrent().checkForUpdates(); await admitted.promise; });
+    await vi.waitFor(() => expect(hook.getCurrent().modelStatus).toBe('ready'));
+    expect(hook.getCurrent().installed).toBe(true);
+    expect(boundary.alert.mock.calls.some(call => String(call[1]).includes('network_offline'))).toBe(true);
+    expect(boundary.files.has(`${root}/modelPacks/${packId}/pack.json`)).toBe(true);
+  });
 
+  it.each(['prepare', 'update'] as const)('reports storage failure while cancelling %s and refreshes disk state', async operation => {
+    const installed = operation === 'update';
+    const partialFile = installed
+      ? `${root}/modelPackUpdates/${packId}/model.bin`
+      : `${root}/modelPacks/${packId}/model.bin`;
+    boundary.files.set(partialFile, new Uint8Array([1, 2, 3]));
+    if (installed) {
+      boundary.files.set(`${root}/modelPacks/${packId}/pack.json`,
+        new TextEncoder().encode(JSON.stringify({ manifest: modelPackManifest(packId, 'stt', 'a'.repeat(64)) })));
+      boundary.files.set(`${root}/modelPacks/${packId}/model.bin`, new Uint8Array([9, 9, 9]));
+      boundary.fetch.mockResolvedValueOnce(Response.json(modelPackManifest(packId, 'stt', 'b'.repeat(64))));
+    }
+    const requested = createDeferred<void>();
+    boundary.fetch.mockImplementation((_url, options) => new Promise<Response>((_resolve, reject) => {
+      const signal = options?.signal;
+      if (!signal) throw new Error('Expected installer cancellation signal');
+      requested.resolve();
+      signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const hook = await renderHook(useNativeModelPackState, { initialProps: {
+      role: 'stt' as const, packId, manifestUrl: 'https://example.test/manifest.json',
+    } });
     await act(async () => {
-      invokeTestInstanceHandler(tree.findByType('Harness'), 'onPrepare');
+      if (installed) hook.getCurrent().checkForUpdates();
+      else void hook.getCurrent().prepareModel();
+      await requested.promise;
     });
-    expect(tree.findByType('Harness').props.modelStatus).toBe('downloading');
-
-    await act(async () => {
-      invokeTestInstanceHandler(tree.findByType('Harness'), 'onCancel');
-    });
-    await act(async () => {});
-
-    expect(tree.findByType('Harness').props.modelStatus).toBe('idle');
-    expect(modalAlertSpy).not.toHaveBeenCalled();
+    expect(hook.getCurrent().modelStatus).toBe('downloading');
+    // The retained-byte count must be refreshed after the cleanup failure.
+    boundary.files.set(partialFile, new Uint8Array([1, 2, 3, 4]));
+    boundary.failDelete = true;
+    await act(async () => { hook.getCurrent().cancelPrepare(); });
+    await vi.waitFor(() => expect(boundary.alert.mock.calls.some(call =>
+      String(call[1]).includes('storage_delete_failed'))).toBe(true));
+    expect(hook.getCurrent().installed).toBe(installed);
+    expect(hook.getCurrent().installSummary?.partialBytes).toBe(installed ? 0 : 4);
+    expect(hook.getCurrent().modelStatus).toBe(installed ? 'ready' : 'error');
+    expect(boundary.files.has(partialFile)).toBe(true);
   });
 });

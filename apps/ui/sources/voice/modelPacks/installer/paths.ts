@@ -1,6 +1,6 @@
 import type { ModelPackManifest } from '@/voice/modelPacks/manifest';
 
-import type { InstallerFs } from './types';
+import type { InstallerDirectory, InstallerFile, InstallerFs } from './types';
 
 export function filePathParts(path: string): string[] {
   const raw = path.trim();
@@ -24,29 +24,43 @@ export function normalizePackId(packId: string | null): string {
   return packId && packId.trim().length > 0 ? packId.trim() : 'default';
 }
 
-export function getPackRootDir(fs: InstallerFs, packId: string): any {
-  return new fs.Directory(fs.Paths.document, 'happier', 'voice', 'modelPacks', packId);
+function documentUri(fs: InstallerFs): string {
+  return typeof fs.Paths.document === 'string' ? fs.Paths.document : fs.Paths.document.uri;
+}
+
+export function getPackRootDir(fs: InstallerFs, packId: string): InstallerDirectory {
+  return new fs.Directory(documentUri(fs), 'happier', 'voice', 'modelPacks', packId);
 }
 
 // Updates stage changed files outside the pack so the installed pack stays usable until the swap.
-export function getPackUpdateDir(fs: InstallerFs, packId: string): any {
-  return new fs.Directory(fs.Paths.document, 'happier', 'voice', 'modelPackUpdates', packId);
+export function getPackUpdateDir(fs: InstallerFs, packId: string): InstallerDirectory {
+  return new fs.Directory(documentUri(fs), 'happier', 'voice', 'modelPackUpdates', packId);
 }
 
-export function getPackFile(fs: InstallerFs, rootDir: any, path: string, opts: { createParents?: boolean } = {}): any {
+export function getPackFile(
+  fs: InstallerFs, rootDir: Pick<InstallerDirectory, 'uri'>, path: string, opts: { createParents?: boolean } = {},
+): InstallerFile {
   const parts = filePathParts(path);
   let dir = rootDir;
   for (const p of parts.slice(0, -1)) {
-    dir = new fs.Directory(dir, p);
+    const nextDir = new fs.Directory(dir.uri, p);
+    if (opts.createParents) {
+      // Failed updates retain reusable files, but a later build may change this path's shape.
+      const conflictingFile = new fs.File(nextDir.uri);
+      if (conflictingFile.exists) conflictingFile.delete();
+    }
+    dir = nextDir;
   }
   if (opts.createParents) {
-    dir.create({ intermediates: true, idempotent: true });
+    new fs.Directory(dir.uri).create({ intermediates: true, idempotent: true });
+    const conflictingDirectory = new fs.Directory(dir.uri, parts[parts.length - 1]!);
+    if (conflictingDirectory.exists) conflictingDirectory.delete();
   }
-  return new fs.File(dir, parts[parts.length - 1]!);
+  return new fs.File(dir.uri, parts[parts.length - 1]!);
 }
 
-export function getMetaFile(fs: InstallerFs, rootDir: any): any {
-  return new fs.File(rootDir, 'pack.json');
+export function getMetaFile(fs: InstallerFs, rootDir: Pick<InstallerDirectory, 'uri'>): InstallerFile {
+  return new fs.File(rootDir.uri, 'pack.json');
 }
 
 export function assertManifestPathsSafe(manifest: ModelPackManifest): void {
