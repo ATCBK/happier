@@ -12,6 +12,8 @@ import { activeReviewFileKeyForSession } from '@/components/workspaces/scm/revie
 import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments/useReviewComposerHandoff';
 import { useReviewAskComposer } from '@/components/sessions/reviews/comments/useReviewAskComposer';
 import { ReviewCommentsSessionSurface } from '@/components/reviews/ReviewCommentsSessionSurface';
+import { ReviewCommentsHeaderButton, useReviewCommentsMenuSection } from '@/components/reviews/ReviewCommentsHeaderButton';
+import { buildReviewCommentsHeaderLabels } from '@/components/reviews/sessionSurfaceLabels';
 import { ChangedFilesReview } from '@/components/workspaces/scm/review/ChangedFilesReview';
 import {
   WorkspaceScmReviewBody,
@@ -251,6 +253,14 @@ const SessionWorkingScmReviewDetailsView = React.memo(
     const reviewCommentsEnabled =
       useFeatureEnabled('files.reviewComments') === true &&
       Boolean(reviewScope);
+    // Review comments open from the Files menu (the bar's ⋯ or the phone menu); while some are unresolved,
+    // or the panel is open, the bar also carries them as one action. Their panel opens under the bar.
+    const [commentsOpen, setCommentsOpen] = React.useState(false);
+    const [commentsCount, setCommentsCount] = React.useState<number | null>(null);
+    const commentsLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), []);
+    const toggleComments = React.useCallback(() => setCommentsOpen((open) => !open), []);
+    const commentsMenuSection = useReviewCommentsMenuSection({ enabled: reviewCommentsEnabled, labels: commentsLabels,
+        unresolvedCount: commentsCount, expanded: commentsOpen, onToggle: toggleComments, testID: 'review-comments-session-menu' });
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(reviewScope);
     const reviewDraftHandlers =
       useWorkspaceReviewCommentDraftHandlers(reviewScope);
@@ -976,7 +986,9 @@ const SessionWorkingScmReviewDetailsView = React.memo(
               onRefreshPermissionGrants={() => {
                 void pluginPermissionGrants.refresh();
               }}
-              defaultPanelOpen={false}
+              header="external"
+              open={commentsOpen}
+              onUnresolvedCountChange={setCommentsCount}
               testID="review-comments-session"
             />
           ) : null}
@@ -1072,6 +1084,9 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         onStartReview={openReviewLauncher}
         reviewDisabled={!machineReachable}
         reviewDisabledReason={reviewDisabledReason}
+        barMenuSection={commentsMenuSection}
+                barActions={reviewCommentsEnabled && (commentsOpen || (commentsCount ?? 0) > 0) ? <ReviewCommentsHeaderButton compact labels={commentsLabels} unresolvedCount={commentsCount}
+          expanded={commentsOpen} onPress={toggleComments} testID="review-comments-session-trigger" /> : null}
         renderFiles={renderFiles}
         renderWalkthrough={({ layout, renderBar, onShowFiles }) => (
           <SessionWalkthroughView

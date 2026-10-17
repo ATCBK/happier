@@ -99,6 +99,8 @@ function scrollTop() { return (pane.scopeState?.details.tabState[tabKey] as { sc
 describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
     it('creates a Session-scoped comment without a counter and lists it from the Project workspace scope', async () => {
         enableReviewComments();
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
         const { ReviewCommentsSessionSurface } = await import('@/components/reviews/ReviewCommentsSessionSurface');
         const screen = await render();
         const surfaceProps = screen.tree.root.findByType(ReviewCommentsSessionSurface).props as React.ComponentProps<typeof ReviewCommentsSessionSurface>;
@@ -108,7 +110,9 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
             body: 'Visible from the Project host.', clientMutationId: 'session-create',
         });
         const createRequest = homeRequests.find(request => request.path === '/v1/reviews/comments' && request.method === 'POST');
+        expect(createRequest).toBeDefined();
         expect(createRequest?.body).not.toHaveProperty('projectId');
+        expect(response).toMatchObject({ comment: { body: 'Visible from the Project host.' } });
         expect(response).not.toHaveProperty('comment.projectId');
         const projectPanel = await fixture.render(<ReviewCommentsSessionSurface
             workspaceId="wr_stable" workspace={surfaceProps.workspace} execute={surfaceProps.execute}
@@ -117,6 +121,22 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
         const listRequest = homeRequests.filter(request => request.path === '/v1/reviews/comments' && request.method === 'GET').at(-1);
         expect(listRequest?.url.searchParams.get('projectId')).toBeNull();
         expect(JSON.parse(listRequest?.url.searchParams.get('workspace') ?? 'null')).toEqual({ machineId: 'm1', path: '/tmp/repo' });
+    });
+
+    it('refuses a Session comment write when confirmation is declined', async () => {
+        enableReviewComments();
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockResolvedValueOnce(false);
+        const { ReviewCommentsSessionSurface } = await import('@/components/reviews/ReviewCommentsSessionSurface');
+        const screen = await render();
+        const surface = screen.tree.root.findByType(ReviewCommentsSessionSurface).props as React.ComponentProps<typeof ReviewCommentsSessionSurface>;
+        await expect(surface.execute('reviews.comments.create', {
+            workspace: surface.workspace, sessionId: surface.sessionId,
+            anchor: { kind: 'file', filePath: 'src/a.ts' }, snapshot: { kind: 'none', capturedAt: 1 },
+            body: 'Do not persist this declined comment.', clientMutationId: 'session-declined',
+        })).rejects.toMatchObject({ code: 'approval_canceled' });
+        expect(homeRequests.filter(request => request.path === '/v1/reviews/comments' && request.method === 'POST')).toEqual([]);
+        expect(servedReviewComments).toEqual([]);
     });
 
     it('finds a Project grant after counter reassignment and refuses another checkout or a missing ref', async () => {
@@ -139,7 +159,15 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
         const { ReviewCommentsSessionSurface } = await import('@/components/reviews/ReviewCommentsSessionSurface');
         const screen = await render();
         expect(screen.tree.root.findByType(ReviewCommentsSessionSurface).props.permissionGrantError).toBeNull();
-        await screen.pressByTestIdAsync('review-comments-session-header');
+        // With nothing unresolved, review comments are a row of the Files menu: no band above the bar, no bar action.
+        expect(screen.findHostByTestId('review-comments-session-header')).toBeNull();
+        expect(screen.findHostByTestId('review-comments-session-trigger')).toBeNull();
+        const commentsRow = (await reviewProps(screen)).comparisonChrome?.menuSections?.find((section) => section.id === 'review-comments');
+        expect(commentsRow?.items.map((item) => item.testID)).toEqual(['review-comments-session-menu']);
+        await act(async () => { commentsRow?.onSelect('toggle'); });
+        await screen.update(0);
+        // Open, the bar carries the disclosure so the panel can be closed where it was opened from.
+        expect(screen.findHostByTestId('review-comments-session-trigger')).not.toBeNull();
         expect(screen.findHostByTestId('review-comments-session-direct-write-grant-grant-project')).not.toBeNull();
         expect(homeRequests.find(request => request.path === '/v1/plugins/permissions/grants/list')?.body).toMatchObject({
             targetScope: { kind: 'project', projectId: 'wr_stable' },
@@ -220,7 +248,7 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
         expect(Boolean(project)).toBe(hasProject);
         expect(surface).not.toHaveProperty('projectId');
         expect(surface).toEqual(expect.objectContaining({ scope: { serverId: fixture.home.id, accountId: 'alice' }, workspace: { machineId: 'm1', path: '/tmp/repo' }, sessionId: 's1',
-            directWriteGrants: [], pendingDirectWriteGrantRequests: [], defaultPanelOpen: false, testID: 'review-comments-session', execute: expect.any(Function) }));
+            directWriteGrants: [], pendingDirectWriteGrantRequests: [], header: 'external', open: false, testID: 'review-comments-session', execute: expect.any(Function) }));
         expect(screen.getTextContent()).not.toContain('Durable session review comment.');
         await expect(surface.execute('reviews.comments.list', { workspace: surface.workspace, includeHistory: true })).resolves.toEqual({
             items: [expect.objectContaining({ body: 'Durable session review comment.' })], cursor: null,
