@@ -5578,7 +5578,8 @@ export class ApiSessionClient extends EventEmitter {
         return this.metadataLock.inLock(async () => {
             await this.waitForSessionSocketOnlineForAckWrite('update-metadata');
             await updateSessionMetadataWithAck({
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 sessionEncryptionMode: this.sessionEncryptionMode,
                 encryptionKey: this.encryptionKey,
@@ -5605,7 +5606,8 @@ export class ApiSessionClient extends EventEmitter {
         return this.metadataLock.inLock(async () => {
             await this.waitForSessionSocketOnlineForAckWrite('update-metadata');
             return await updateSessionMetadataWithAckResult({
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 sessionEncryptionMode: this.sessionEncryptionMode,
                 encryptionKey: this.encryptionKey,
@@ -5730,7 +5732,8 @@ export class ApiSessionClient extends EventEmitter {
         return this.agentStateLock.inLock(async () => {
             await this.waitForSessionSocketOnlineForAckWrite('update-state');
             await updateSessionAgentStateWithAck({
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 sessionEncryptionMode: this.sessionEncryptionMode,
                 encryptionKey: this.encryptionKey,
