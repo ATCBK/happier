@@ -418,7 +418,7 @@ describe("session publisher presence on SQLite", () => {
             latestTurnId: turnId,
             latestTurnStatus: "cancelled",
         });
-        expect(closed.badgeAttentionChanged).toBe(true);
+        expect(closed.badgeAttentionChanged).toBe(false);
         // Only fanout is replaced; the real publisher close transaction feeds the real publisher.
         const updates = vi.spyOn(eventRouter, "emitUpdate").mockImplementation(() => {});
         try {
@@ -432,11 +432,10 @@ describe("session publisher presence on SQLite", () => {
             );
             expect(terminalUpdates).toHaveLength(seeded.participantIds.length);
             for (const [update] of terminalUpdates) {
-                expect(UpdateBodySchema.parse(update.payload.body)).toMatchObject({
-                    pendingPermissionRequestCount: 0,
-                    pendingUserActionRequestCount: 0,
-                    pendingRequestObservedAt: null,
-                });
+                const body = UpdateBodySchema.parse(update.payload.body);
+                expect(body).not.toHaveProperty("pendingPermissionRequestCount");
+                expect(body).not.toHaveProperty("pendingUserActionRequestCount");
+                expect(body).not.toHaveProperty("pendingRequestObservedAt");
             }
         } finally {
             updates.mockRestore();

@@ -14,7 +14,7 @@ import type {
     ReassertSessionLatestTurnStatusResult,
 } from "@/app/session/sessionWriteService";
 
-function resolveSessionTurnUpdateSkipSenderConnection(connection?: ClientConnection): ClientConnection | undefined {
+export function resolveSessionTurnUpdateSkipSenderConnection(connection?: ClientConnection): ClientConnection | undefined {
     if (!connection) return undefined;
     return connection.connectionType === "user-scoped" ? undefined : connection;
 }
@@ -38,7 +38,6 @@ export async function publishSessionTurnMutationUpdate(params: {
                     latestTurnStatus: params.result.latestTurnStatus,
                     latestTurnStatusObservedAt: params.result.latestTurnStatusObservedAt,
                     lastRuntimeIssue: params.result.lastRuntimeIssue,
-                    ...('pendingRequestProjection' in params.result ? params.result.pendingRequestProjection : {}),
                     ...('rollbackEligibleTurnStarts' in params.result
                         && params.result.rollbackEligibleTurnStarts !== undefined
                         ? { rollbackEligibleTurnStarts: params.result.rollbackEligibleTurnStarts }

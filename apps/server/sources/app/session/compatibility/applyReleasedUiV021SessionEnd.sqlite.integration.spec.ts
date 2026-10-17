@@ -71,7 +71,13 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
             // The canonical fake replaces only the Socket.IO network endpoint.
             socket: socket as unknown as Socket,
         };
+        const observer = createAuthenticatedFakeSocket({ id: "observer-socket" });
+        const observerConnection: ClientConnection = {
+            ...connection,
+            socket: observer as unknown as Socket,
+        };
         eventRouter.addConnection(owner.id, connection);
+        eventRouter.addConnection(owner.id, observerConnection);
         const updates = vi.spyOn(eventRouter, "emitUpdate");
         try {
             await expect(applyReleasedUiV021SessionEnd({
@@ -106,9 +112,9 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
                 },
             })).resolves.toEqual({
                 active: false,
-                pendingPermissionRequestCount: 0,
-                pendingUserActionRequestCount: 0,
-                pendingRequestObservedAt: null,
+                pendingPermissionRequestCount: 2,
+                pendingUserActionRequestCount: 1,
+                pendingRequestObservedAt: new Date(1_500),
                 lastActiveAt: new Date(2_000),
                 latestTurnStatus: "cancelled",
                 runtimeActivityState: "unknown",
@@ -116,17 +122,20 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
                 runtimeActivityRevision: BigInt(2),
             });
             await Promise.all(updates.mock.results.map(result => result.type === "return" ? result.value : undefined));
+            const observerUpdates = observer.emit.mock.calls
+                .filter(([event, payload]) => event === "update" && payload.body?.latestTurnStatus === "cancelled");
+            expect(observerUpdates).toHaveLength(1);
             const terminalUpdates = socket.emit.mock.calls
                 .filter(([event, payload]) => event === "update" && payload.body?.latestTurnStatus === "cancelled");
             expect(terminalUpdates).toHaveLength(1);
-            expect(UpdateBodySchema.parse(terminalUpdates[0]![1].body)).toMatchObject({
-                pendingPermissionRequestCount: 0,
-                pendingUserActionRequestCount: 0,
-                pendingRequestObservedAt: null,
-            });
+            const body = UpdateBodySchema.parse(terminalUpdates[0]![1].body);
+            expect(body).not.toHaveProperty("pendingPermissionRequestCount");
+            expect(body).not.toHaveProperty("pendingUserActionRequestCount");
+            expect(body).not.toHaveProperty("pendingRequestObservedAt");
         } finally {
             updates.mockRestore();
             eventRouter.removeConnection(owner.id, connection);
+            eventRouter.removeConnection(owner.id, observerConnection);
         }
     });
 });

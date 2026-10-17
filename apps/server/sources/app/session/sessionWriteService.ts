@@ -2246,14 +2246,13 @@ export async function updateSessionRuntimeActivityProjection(params: {
     }, { isolationLevel: "Serializable" /* Publisher admission is read before the Activity writer acquires the Account fence. */ });
 }
 
-/** Shared by legacy Agent-state and tuple CAS writers; terminal settlement wins. */
+/** Normalize the session-wide request summary from its Agent-state owner. */
 function normalizePendingRequestActivitySummary(
     summary: Readonly<{
         pendingPermissionRequestCount?: number;
         pendingUserActionRequestCount?: number;
         pendingRequestNewestCreatedAt?: number | null;
     }>,
-    latestTurnStatus: unknown,
 ) {
     const count = (value: number | undefined) =>
         typeof value === "number" && Number.isFinite(value)
@@ -2266,14 +2265,13 @@ function normalizePendingRequestActivitySummary(
         && Number.isFinite(summary.pendingRequestNewestCreatedAt)
         ? Math.max(0, Math.floor(summary.pendingRequestNewestCreatedAt))
         : null;
-    const terminal = isTerminalPrimaryTurnStatus(parseStoredPrimaryTurnStatus(latestTurnStatus));
     return {
         ...(permissionCount !== undefined
-            ? { pendingPermissionRequestCount: terminal ? 0 : permissionCount } : {}),
+            ? { pendingPermissionRequestCount: permissionCount } : {}),
         ...(userActionCount !== undefined
-            ? { pendingUserActionRequestCount: terminal ? 0 : userActionCount } : {}),
+            ? { pendingUserActionRequestCount: userActionCount } : {}),
         ...(hasCounts ? { pendingRequestObservedAt:
-            !terminal && (permissionCount ?? 0) + (userActionCount ?? 0) > 0
+            (permissionCount ?? 0) + (userActionCount ?? 0) > 0
                 ? new Date(newestCreatedAt ?? Date.now()) : null,
         } : {}),
     };
@@ -2388,16 +2386,10 @@ export async function updateSessionAgentState(params: {
                 };
             }
 
-            // Canonical turn settlement zeroes this projection because a
-            // finished turn has no request awaiting the user. An Agent-state
-            // write that was formed before that settlement and serialized
-            // after it still carries the pre-terminal snapshot, so the terminal
-            // decision wins here too rather than relighting attention for a
-            // turn that is over.
             const parentTurnIsTerminal = isTerminalPrimaryTurnStatus(
                 parseStoredPrimaryTurnStatus(session.latestTurnStatus),
             );
-            const pendingSummary = normalizePendingRequestActivitySummary(params, session.latestTurnStatus);
+            const pendingSummary = normalizePendingRequestActivitySummary(params);
             const settledPendingPermissionRequestCount = pendingSummary.pendingPermissionRequestCount;
             const settledPendingUserActionRequestCount = pendingSummary.pendingUserActionRequestCount;
             const settledPendingRequestObservedAt = pendingSummary.pendingRequestObservedAt instanceof Date
@@ -2548,12 +2540,6 @@ export type ApplySessionTurnMutationNoOpReason =
     | "stale-in-progress"
     | "no-current-turn";
 
-export type TerminalTurnPendingRequestProjection = Readonly<{
-    pendingPermissionRequestCount: 0;
-    pendingUserActionRequestCount: 0;
-    pendingRequestObservedAt: null;
-}>;
-
 export type ApplySessionTurnMutationResult =
     | {
         ok: true;
@@ -2567,7 +2553,6 @@ export type ApplySessionTurnMutationResult =
         recipientCursors: RecipientCursor[];
         badgeAttentionChanged: boolean;
         rollbackEligibleTurnStarts?: number[];
-        pendingRequestProjection?: TerminalTurnPendingRequestProjection;
       }
     | {
         ok: false;
@@ -3053,7 +3038,6 @@ function createSessionTurnAppliedResult(params: {
     recipientCursors: RecipientCursor[];
     badgeAttentionChanged: boolean;
     rollbackEligibleTurnStarts?: number[];
-    pendingRequestProjection?: TerminalTurnPendingRequestProjection;
 }): Extract<ApplySessionTurnMutationResult, { ok: true }> {
     return {
         ok: true,
@@ -3067,9 +3051,6 @@ function createSessionTurnAppliedResult(params: {
         badgeAttentionChanged: params.badgeAttentionChanged,
         ...(params.rollbackEligibleTurnStarts !== undefined
             ? { rollbackEligibleTurnStarts: params.rollbackEligibleTurnStarts }
-            : {}),
-        ...(params.pendingRequestProjection
-            ? { pendingRequestProjection: params.pendingRequestProjection }
             : {}),
     };
 }
@@ -3602,18 +3583,10 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
         const nextLatestTurnId = params.turnMutation.action === "begin" ? targetTurnId : session.latestTurnId ?? targetTurnId;
         const shouldMaterialize = nextLatestTurnId === targetTurnId
             && (params.turnMutation.action === "begin" || params.turnMutation.action === "touch_active" || terminalStatus !== null);
-        const terminalPendingRequestProjection: TerminalTurnPendingRequestProjection | undefined = terminalStatus !== null
-            ? {
-                pendingPermissionRequestCount: 0,
-                pendingUserActionRequestCount: 0,
-                pendingRequestObservedAt: null,
-            }
-            : undefined;
         const nextActivityInputs = {
             ...toSessionActivityBadgeInputs(session),
             ...(shouldMaterialize ? { latestTurnStatus: appliedTurn.status } : {}),
             ...(shouldMaterialize ? { lastRuntimeIssue: appliedTurn.lastRuntimeIssueJson ?? null } : {}),
-            ...(shouldMaterialize ? terminalPendingRequestProjection : {}),
         };
         if (shouldMaterialize) {
             await tx.session.update({
@@ -3627,7 +3600,6 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
                         latestTurnStatus: appliedTurn.status,
                         latestTurnStatusObservedAt: observedAt,
                     }),
-                    ...terminalPendingRequestProjection,
                 },
             });
         }
@@ -3654,9 +3626,6 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
             turn: appliedTurn,
             receipt,
             ...(!shouldMaterialize ? { state: materializedSessionTurnState(session) } : {}),
-            ...(shouldMaterialize && terminalPendingRequestProjection
-                ? { pendingRequestProjection: terminalPendingRequestProjection }
-                : {}),
             recipientCursors,
             badgeAttentionChanged,
             ...(rollbackEligibleTurnStarts !== undefined ? { rollbackEligibleTurnStarts } : {}),
@@ -4860,7 +4829,7 @@ export async function updateSessionMetadataEnvelopeTupleInTx(
                 ownerMetadata: nextOwnerMetadata,
                 agentState: nextAgentState,
                 agentStateVersion: nextAgentStateVersion,
-                ...normalizePendingRequestActivitySummary(params.activitySummaryV1 ?? {}, current.latestTurnStatus),
+                ...normalizePendingRequestActivitySummary(params.activitySummaryV1 ?? {}),
             },
         });
         if (updated.count !== 1) {
@@ -5109,7 +5078,7 @@ export async function updateSessionMetadataEnvelopeTupleInTx(
             agentState: params.agentState.ciphertext,
             agentStateVersion: nextAgentStateVersion,
             ...normalizePendingRequestActivitySummary(
-                params.mode === "owner" ? params.activitySummaryV1 ?? {} : {}, current.latestTurnStatus,
+                params.mode === "owner" ? params.activitySummaryV1 ?? {} : {},
             ),
         }
         : {

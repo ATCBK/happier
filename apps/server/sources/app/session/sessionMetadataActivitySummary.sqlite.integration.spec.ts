@@ -112,7 +112,42 @@ describe("Session metadata tuple pending summary (SQLite)", () => {
         expect((await current.readViewer())?.attention.reasons).toEqual(expect.arrayContaining(["permission_required", "user_action_required"]));
     });
 
-    it("does not relight terminal-turn attention from a delayed tuple summary", async () => {
+    it.each([0, 1])("preserves background requests after foreground completion (layout %s)", async (layout) => {
+        const current = await seed(layout);
+        const turnId = randomUUID();
+        const backgroundState = JSON.stringify({ requests: {
+            background: { tool: "Bash", arguments: {}, createdAt: 100, sidechainId: "background-agent" },
+            question: { tool: "AskUserQuestion", arguments: {}, kind: "user_action", createdAt: 100, sidechainId: "background-agent" },
+        } });
+        const write = (version: number, summary: typeof pendingSummary | typeof settledSummary) => {
+            const ciphertext = summary === settledSummary ? "{}" : backgroundState;
+            return layout === 0
+                ? updateSessionAgentState({ actorUserId: current.account.id, sessionId: current.session.id,
+                    expectedVersion: version, agentStateCiphertext: ciphertext, ...summary })
+                : updateSessionMetadataEnvelopeTuple({ ...current.ownerPatch(version),
+                    agentState: { ciphertext, expectedVersion: version }, activitySummaryV1: summary });
+        };
+        expect(await applySessionTurnMutation({ actorUserId: current.account.id, authentication,
+            mutation: { v: 1, sessionId: current.session.id, turnId, action: "begin", mutationId: randomUUID(), observedAt: 50,
+                initiator: "user", workDepth: 0 } })).toMatchObject({ ok: true, didApply: true });
+        expect(await write(0, pendingSummary)).toMatchObject({ ok: true });
+        expect(await applySessionTurnMutation({ actorUserId: current.account.id, authentication,
+            mutation: { v: 1, sessionId: current.session.id, turnId, action: "complete", mutationId: randomUUID(), observedAt: 200 } }))
+            .toMatchObject({ ok: true, didApply: true });
+        expect(await current.readSummary()).toEqual({
+            pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1, pendingRequestObservedAt: new Date(100),
+        });
+        // Foreground turn status does not own the session-wide request summary.
+        expect(await write(1, pendingSummary)).toMatchObject({ ok: true });
+        expect(await current.readSummary()).toEqual({
+            pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1, pendingRequestObservedAt: new Date(100),
+        });
+        expect((await current.readViewer())?.attention.reasons).toEqual(expect.arrayContaining(["permission_required", "user_action_required"]));
+        expect(await write(2, settledSummary)).toMatchObject({ ok: true });
+        expect(await current.readSummary()).toEqual({ pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null });
+    });
+
+    it("accepts authoritative pending requests while the foreground turn is terminal", async () => {
         const current = await seed();
         const turnId = randomUUID();
         expect(await applySessionTurnMutation({ actorUserId: current.account.id, authentication,
@@ -125,7 +160,7 @@ describe("Session metadata tuple pending summary (SQLite)", () => {
             mutation: { v: 1, sessionId: current.session.id, turnId, action: "complete", mutationId: randomUUID(), observedAt: 200 } }))
             .toMatchObject({ ok: true, didApply: true });
         expect(await updateSessionMetadataEnvelopeTuple({ ...current.ownerPatch(1), activitySummaryV1: pendingSummary })).toMatchObject({ ok: true });
-        expect(await current.readSummary()).toEqual({ pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null });
-        expect((await current.readViewer())?.attention.reasons).not.toEqual(expect.arrayContaining(["permission_required", "user_action_required"]));
+        expect(await current.readSummary()).toEqual({ pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1, pendingRequestObservedAt: new Date(100) });
+        expect((await current.readViewer())?.attention.reasons).toEqual(expect.arrayContaining(["permission_required", "user_action_required"]));
     });
 });

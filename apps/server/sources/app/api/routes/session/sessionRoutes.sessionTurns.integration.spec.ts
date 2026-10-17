@@ -155,7 +155,7 @@ describe("sessionRoutes session turns (integration)", () => {
         });
     });
 
-    it("publishes committed pending request clears through the terminal HTTP mutation", async () => {
+    it("preserves request-owned pending counts through the terminal HTTP mutation", async () => {
         const account = await db.account.create({
             data: { publicKey: "pk-session-turn-pending-clear", encryptionMode: "plain" },
         });
@@ -188,22 +188,21 @@ describe("sessionRoutes session turns (integration)", () => {
                 });
                 expect(response.statusCode).toBe(200);
                 expect(response.json()).toMatchObject({ success: true, applied: true });
-                // Persistence must settle before publication; a publisher-only clear is insufficient.
+                // A terminal foreground turn cannot settle Session-wide request authority.
                 await expect(db.session.findUniqueOrThrow({
                     where: { id: session.id },
                     select: { pendingPermissionRequestCount: true, pendingUserActionRequestCount: true, pendingRequestObservedAt: true },
                 })).resolves.toEqual({
-                    pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null,
+                    pendingPermissionRequestCount: 2, pendingUserActionRequestCount: 1, pendingRequestObservedAt: new Date(150),
                 });
                 const terminalUpdates = updates.mock.calls.filter(([update]) =>
                     update.payload.body.t === "update-session" && update.payload.body.latestTurnStatus === "cancelled",
                 );
                 expect(terminalUpdates).toHaveLength(1);
-                expect(UpdateBodySchema.parse(terminalUpdates[0]![0].payload.body)).toMatchObject({
-                    pendingPermissionRequestCount: 0,
-                    pendingUserActionRequestCount: 0,
-                    pendingRequestObservedAt: null,
-                });
+                const body = UpdateBodySchema.parse(terminalUpdates[0]![0].payload.body);
+                expect(body).not.toHaveProperty("pendingPermissionRequestCount");
+                expect(body).not.toHaveProperty("pendingUserActionRequestCount");
+                expect(body).not.toHaveProperty("pendingRequestObservedAt");
             });
         } finally {
             updates.mockRestore();

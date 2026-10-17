@@ -33,16 +33,13 @@ authorized Session facts and content-opening results into its pure projector. Th
 projection is not persisted and does not own unread state, following, personal
 attention, or notification decisions.
 
-An applied terminal lifecycle mutation for the latest turn clears
-`pendingPermissionRequestCount`, `pendingUserActionRequestCount`, and
-`pendingRequestObservedAt` in the same transaction as the turn projection.
-Turn updates, publisher-close fanout, and released-UI Stop include those committed
-zero counts and null timestamp in their recipient updates. Transcript-anchor,
-Agent-turn-id, and rollback updates preserve request projections because they do
-not settle the current turn. The existing Agent-state and metadata-tuple writers
-also normalize positive pending summaries to zero while the parent turn remains
-terminal; a later turn can publish its own pending requests. These are current
-0.3 development source semantics, not a release availability claim.
+Pending permission and user-action counts are session-wide projections of the
+acknowledged Agent state. Its legacy and metadata-tuple writers normalize and
+publish those counts, including explicit clears when requests settle. Foreground
+turn completion, publisher close, and released-UI Stop preserve them: a background
+Agent or an occurrence-scoped question can still await an answer after the latest
+turn ends. Turn status and Runtime Activity keep their separate lifecycle owners.
+These are current 0.3 development source semantics, not a release availability claim.
 
 The `session.list` Action keeps its default summary response. An explicit
 `view: 'awareness'` request requires a response carrying both `view: 'awareness'`

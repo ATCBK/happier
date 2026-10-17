@@ -18,7 +18,6 @@ import {
     writeSessionRuntimeActivityProjectionInTx,
     type SessionRuntimeActivityProjectionUpdate,
     type SessionRuntimeActivityProjectionInTxResult,
-    type TerminalTurnPendingRequestProjection,
     applyLatestSessionTurnEndInTx,
 } from "@/app/session/sessionWriteService";
 import {
@@ -75,7 +74,6 @@ export type CloseSessionPublisherResult =
         recipientCursors: readonly SessionRecipientCursor[];
         badgeAttentionChanged: boolean;
         projection?: SessionRuntimeActivityProjectionUpdate;
-        pendingRequestProjection?: TerminalTurnPendingRequestProjection;
         turnProjection?: Readonly<{
             latestTurnId: string | null;
             latestTurnStatus: PrimaryTurnStatusV1 | null;
@@ -690,9 +688,6 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                     { ...session, active: false },
                 ),
             ...(activity.status === "applied" ? { projection: activity.projection } : {}),
-            ...(turnResult?.ok && turnResult.pendingRequestProjection
-                ? { pendingRequestProjection: turnResult.pendingRequestProjection }
-                : {}),
             ...(turnResult?.ok && turnResult.didApply
                 ? {
                     turnProjection: {
