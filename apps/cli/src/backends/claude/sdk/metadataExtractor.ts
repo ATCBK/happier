@@ -25,6 +25,8 @@ export type { SDKMetadata } from './metadataCache'
  */
 export async function extractSDKMetadata(options?: Readonly<{ claudeCodeIncludeInNativeHistory?: boolean }>): Promise<SDKMetadata> {
     const abortController = new AbortController()
+    // A captured init inventory remains valid when abort or iterator teardown rejects.
+    const metadata: SDKMetadata = {}
 
     try {
         logger.debug('[metadataExtractor] Starting SDK metadata extraction')
@@ -56,7 +58,6 @@ export async function extractSDKMetadata(options?: Readonly<{ claudeCodeIncludeI
             if (message.type === 'system' && message.subtype === 'init') {
                 const systemMessage = message as SDKSystemMessage
 
-                const metadata: SDKMetadata = {}
                 if (Array.isArray(systemMessage.tools)) metadata.tools = systemMessage.tools
                 if (Array.isArray(systemMessage.slash_commands)) metadata.slashCommands = systemMessage.slash_commands
 
@@ -74,16 +75,16 @@ export async function extractSDKMetadata(options?: Readonly<{ claudeCodeIncludeI
         }
 
         logger.debug('[metadataExtractor] No init message received from SDK')
-        return {}
+        return metadata
 
     } catch (error) {
         // Check if it's an abort error (expected)
         if (error instanceof Error && error.name === 'AbortError') {
             logger.debug('[metadataExtractor] SDK query aborted after capturing metadata')
-            return {}
+            return metadata
         }
         logger.debug('[metadataExtractor] Error extracting SDK metadata:', error)
-        return {}
+        return metadata
     }
 }
 

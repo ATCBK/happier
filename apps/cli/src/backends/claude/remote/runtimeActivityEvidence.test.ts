@@ -4,12 +4,25 @@ import { createClaudeProviderRuntimeActivityAdapter } from '@/backends/claude/pr
 import type { SessionRuntimeActivityContribution } from '@/session/runtimeActivity/types';
 import {
   createClaudeRuntimeActivityEvidence,
+  handleClaudeRuntimeActivityLoss,
   observeClaudeProviderTaskRuntimeActivityHook,
   observeClaudeProviderTaskRuntimeActivityRow,
   reconcileClaudeRuntimeActivity,
 } from './runtimeActivityEvidence';
 
 describe('Claude runtime Activity evidence', () => {
+  it('settles the provider task inventory on process exit even without a runtime contribution binding', () => {
+    const evidence = createClaudeRuntimeActivityEvidence();
+    evidence.providerActivityLedger.apply({ type: 'started', sessionId: 's1', taskId: 'background-task' });
+    const params = { evidence, logger: { debug: vi.fn() }, logPrefix: '[unbound-runtime]' };
+
+    handleClaudeRuntimeActivityLoss({ ...params, reason: 'observer-lost' });
+    expect(evidence.providerActivityLedger.hasActiveProviderTasks()).toBe(true);
+
+    handleClaudeRuntimeActivityLoss({ ...params, reason: 'process-exited', providerStopped: true });
+    expect(evidence.providerActivityLedger.hasActiveProviderTasks()).toBe(false);
+  });
+
   it('keeps a native SDK background child active after its launcher completes without requiring a launch hook', async () => {
     const reports: SessionRuntimeActivityContribution[] = [];
     const evidence = createClaudeRuntimeActivityEvidence();
