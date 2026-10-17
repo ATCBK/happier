@@ -9,8 +9,8 @@ import { isServerApiRequestPath } from "./serverApiPath";
 import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol/crypto/publicShareCapabilityUrl';
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
 import { InactiveAccountError } from "@/app/auth/accountStatus";
-import { readSharedQaSchemaMismatchDiagnostic } from '@/storage/prismaErrors';
-import { isTransactionConflictExhaustedError } from '@/storage/inTx';
+import { isPrismaErrorCode, readSharedQaSchemaMismatchDiagnostic } from '@/storage/prismaErrors';
+import { isTransactionAcquisitionUnavailableError, isTransactionConflictExhaustedError } from '@/storage/inTx';
 
 function sendGlobalErrorResponse(
     reply: FastifyReply,
@@ -38,6 +38,9 @@ export function enableErrorHandlers(app: Fastify) {
         }
         if (isTransactionConflictExhaustedError(error)) {
             return sendGlobalErrorResponse(reply, 503, { error: error.code, statusCode: 503 });
+        }
+        if (isPrismaErrorCode(error, 'P2024') || isTransactionAcquisitionUnavailableError(error)) {
+            return sendGlobalErrorResponse(reply, 503, { error: 'database_connection_unavailable', statusCode: 503 });
         }
         const method = request.method;
         const url = redactHttpRequestUrlForLog(request.url);

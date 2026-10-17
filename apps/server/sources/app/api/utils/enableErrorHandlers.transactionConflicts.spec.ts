@@ -34,14 +34,33 @@ describe('HTTP transaction conflict projection', () => {
         }
     });
 
-    it('does not turn an unclassified driver failure into a certain rollback response', async () => {
+    it.each(['P2034', 'P2028'])('does not classify an unqualified %s driver failure as rollback or acquisition exhaustion', async code => {
         const app = Fastify({ logger: false });
         enableErrorHandlers(app as Parameters<typeof enableErrorHandlers>[0]);
-        app.post('/unclassified-write', async () => { throw Object.assign(new Error('unknown outcome'), { code: 'P2034' }); });
+        app.post('/unclassified-write', async () => { throw Object.assign(new Error('unknown outcome'), { code }); });
         try {
             const response = await app.inject({ method: 'POST', url: '/unclassified-write' });
             expect(response.statusCode).toBe(500);
             expect(response.json().error).toBe('Internal Server Error');
+        } finally {
+            await app.close();
+        }
+    });
+
+    it('projects transaction acquisition exhaustion on a managed list read as typed unavailable', async () => {
+        vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        transaction.mockRejectedValue(Object.assign(new Error('private acquisition detail'), {
+            code: 'P2028', meta: { error: 'Unable to start a transaction in the given time.' },
+        }));
+        const app = Fastify({ logger: false });
+        enableErrorHandlers(app as Parameters<typeof enableErrorHandlers>[0]);
+        app.post('/v1/machines/managed/actions/list', async () => inTx(async () => ({ machines: [] })));
+        try {
+            const response = await app.inject({ method: 'POST', url: '/v1/machines/managed/actions/list' });
+            expect(response.statusCode).toBe(503);
+            expect(response.json()).toEqual({ error: 'database_connection_unavailable', statusCode: 503 });
+            expect(response.body).not.toContain('private');
         } finally {
             await app.close();
         }

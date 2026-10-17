@@ -37,7 +37,6 @@ describe('enableErrorHandlers', () => {
     it.each([
         { marker: undefined, code: 'P2021' },
         { marker: '   ', code: 'P2022' },
-        { marker: 'dev-test', code: 'P2024' },
     ])('keeps an ordinary database failure opaque (%j)', async ({ marker, code }) => {
         const envSnapshot = snapshotEnv();
         applyEnvValues({ HAPPIER_STACK_SHARED_DB_SOURCE_STACK: marker });
@@ -57,6 +56,27 @@ describe('enableErrorHandlers', () => {
         } finally {
             await app.close();
             restoreEnv(envSnapshot);
+        }
+    });
+
+    it('reports database pool exhaustion as a safe typed unavailable response', async () => {
+        const app = Fastify({ logger: false });
+        app.setSerializerCompiler(serializerCompiler);
+        const typed = app.withTypeProvider<ZodTypeProvider>();
+        enableErrorHandlers(typed as Parameters<typeof enableErrorHandlers>[0]);
+        typed.post('/v1/machines/managed/actions/list', {
+            schema: { response: { 500: z.object({ error: z.literal('Internal Server Error') }) } },
+        }, async () => {
+            // Substitute only the database failure, retaining the real HTTP error owner.
+            throw Object.assign(new Error('private connection string and SQL'), { code: 'P2024' });
+        });
+        try {
+            const response = await app.inject({ method: 'POST', url: '/v1/machines/managed/actions/list' });
+            expect(response.statusCode).toBe(503);
+            expect(response.json()).toEqual({ error: 'database_connection_unavailable', statusCode: 503 });
+            expect(response.body).not.toContain('private');
+        } finally {
+            await app.close();
         }
     });
 
