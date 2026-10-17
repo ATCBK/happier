@@ -15306,6 +15306,14 @@ export async function startDaemonSessionControlRuntime(
       return await currentApiMachine.observeActionExecution(request);
     },
   });
+  const externalActionIngressExecutor: ExternalActionIngressOwner['executor'] = {
+    execute: (...args) =>
+      createExternalActionExecutor(params.credentials).execute(...args),
+    replayApprovedApprovalRequest: (...args) =>
+      createExternalActionExecutor(params.credentials).replayApprovedApprovalRequest(...args),
+    continueConfidentialApprovalRequest: (...args) =>
+      createExternalActionExecutor(params.credentials).continueConfidentialApprovalRequest(...args),
+  };
   const externalActionIngressOwner: ExternalActionIngressOwner | undefined =
     externalActionAccountId &&
     externalActionTranscriptFollowLeaseRegistry &&
@@ -15412,7 +15420,10 @@ export async function startDaemonSessionControlRuntime(
             return { serverIdentityId: origin.serverIdentityId, material };
           },
           resolveTarget: externalActionTargetResolver,
-          executor: createExternalActionExecutor(params.credentials),
+          // The ingress owner is published before Machine sync attaches. Build
+          // its credentialed executor at the request boundary so every native
+          // adapter belongs to the current Machine lifecycle.
+          executor: externalActionIngressExecutor,
           ...(externalActionInstallationIdentity
             ? {
                 externalActionMachineRequestPrivateKey:
