@@ -1727,6 +1727,11 @@ completion delta. These entries are encrypted with the canonical account machine
 encryption context even for plaintext sessions. The journal retries through the
 existing current-version Agent-state updater. It preserves unrelated requests,
 replacement occurrences, response claims, and already committed automatic outcomes.
+An authenticated, decrypted settlement that fails schema validation is quarantined
+in the existing dead-letter file, preserving its encrypted bytes and allowing later
+mutations to proceed. Missing credentials or an undecryptable payload remain
+retryable so restoring the correct credentials can recover the entry. Both failures
+are reported in the normal file log without request contents.
 Claude abort/reset/disposal also retires source-owned persisted requests that have
 no local provider waiter; local bridge and unified dialog requests retain their
 separate ownership scopes. Coordinator-owned requests settle through their existing

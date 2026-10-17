@@ -198,10 +198,122 @@ function createDeferred<T>(): Readonly<{
   return { promise, resolve, reject };
 }
 
+async function seedEncryptedSettlementWithFollowingTurn(sessionId: string, value: unknown, key: Uint8Array) {
+  const { encrypt, encodeBase64 } = await import('@/api/encryption');
+  const { saveSessionMutationOutbox } = await import('./mutations/sessionMutationPersistence');
+  const { createSessionTurnMutation } = await import('./mutations/sessionMutationTypes');
+  const settlement = {
+    kind: 'agent_state_request_settlement',
+    mutationId: 'settlement',
+    payload: {
+      v: 1, source: 'agent_state_request_settlement', sessionId, mutationId: 'settlement',
+      content: { t: 'encrypted', c: encodeBase64(encrypt(key, 'legacy', value)) },
+    },
+    createdAt: 100, attempts: 0, nextAttemptAt: 0,
+  } as const;
+  const turn = createSessionTurnMutation({
+    sessionId, mutationId: 'following-turn', action: 'begin', turnId: 'turn', observedAt: 101,
+  });
+  await saveSessionMutationOutbox(await createRuntimePersistenceContext(sessionId), [settlement, {
+    kind: 'session_turn', mutationId: turn.mutationId, payload: turn,
+    createdAt: 101, attempts: 0, nextAttemptAt: 0,
+  }]);
+  return settlement;
+}
+
 const taskCompleteMessage = { type: 'task_complete', id: 'turn-1' } satisfies ACPMessageData;
 const reusableUnknownTurnId = ['primary', 'runtime'].join('-') + ':s1:unknown';
 
 describe('ApiSessionClient durable mutation outbox', () => {
+  it('quarantines an authenticated invalid settlement without blocking the following turn or replaying it after restart', async () => {
+    const { writeCredentialsLegacy } = await import('@/persistence');
+    const key = new Uint8Array(32).fill(7);
+    await writeCredentialsLegacy({ secret: key, token: 'tok' });
+    const sessionId = 's-invalid-settlement';
+    const mutation = await seedEncryptedSettlementWithFollowingTurn(sessionId, { privateInvalidPayload: 'secret' }, key);
+    const actions: string[] = [];
+    const makeSocket = () => createApiSessionSocketStub({ connected: true, emitWithAck: async (event) => {
+      if (event === 'session-turn-mutation') actions.push(event);
+      return { ok: true };
+    } });
+    sessionSocketStub = makeSocket();
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: sessionId }));
+    try {
+      await expect.poll(() => readPersistedOutboxMutations(sessionId)).toEqual([]);
+      expect(actions).toEqual(['session-turn-mutation']);
+      const context = await createRuntimePersistenceContext(sessionId);
+      const deadLetters = JSON.parse(await readFile(context.paths.deadLetterPath, 'utf8'));
+      expect(deadLetters.entries).toEqual([expect.objectContaining({
+        reason: 'permanent_invalid_payload',
+        queuedMutation: expect.objectContaining({ payload: mutation.payload }),
+      })]);
+      expect(JSON.stringify(deadLetters)).not.toContain('privateInvalidPayload');
+      expect(JSON.stringify(deadLetters)).not.toContain('secret');
+    } finally {
+      await client.close();
+    }
+    sessionSocketStub = makeSocket();
+    const restarted = new ApiSessionClient('tok', createPlainSessionFixture({ id: sessionId }));
+    try {
+      await restarted.flush();
+      expect(await readPersistedOutboxMutations(sessionId)).toEqual([]);
+      expect(actions).toEqual(['session-turn-mutation']);
+    } finally {
+      await restarted.close();
+    }
+  });
+
+  it('retains an undecryptable settlement and delivers it with the following turn after correct-key reconstruction', async () => {
+    const { writeCredentialsLegacy } = await import('@/persistence');
+    const key = new Uint8Array(32).fill(7);
+    await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(8), token: 'tok' });
+    const sessionId = 's-wrong-key-settlement';
+    const completed = { tool: 'Write', arguments: { path: 'private' }, createdAt: 1, completedAt: 2, status: 'canceled' };
+    const mutation = await seedEncryptedSettlementWithFollowingTurn(sessionId, {
+      v: 1, entries: [{ requestId: 'request', completed, removeRequest: true }],
+    }, key);
+    let state: AgentState = { requests: { request: { tool: 'Write', arguments: { path: 'private' }, createdAt: 1 } } };
+    const actions: string[] = [];
+    const makeSocket = () => createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+      if (event === 'update-state') {
+        const request = payload as { agentState: string };
+        state = JSON.parse(request.agentState);
+        return { result: 'success', version: 1, agentState: request.agentState };
+      }
+      if (event === 'session-turn-mutation') actions.push(event);
+      return { ok: true };
+    } });
+    sessionSocketStub = makeSocket();
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: sessionId, agentState: state }));
+    try {
+      await client.flush();
+      expect(await readPersistedOutboxMutations(sessionId)).toEqual([
+        expect.objectContaining({ payload: mutation.payload }),
+        expect.objectContaining({ kind: 'session_turn' }),
+      ]);
+      expect(actions).toEqual([]);
+      const context = await createRuntimePersistenceContext(sessionId);
+      await expect(readFile(context.paths.deadLetterPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await client.close();
+    }
+    await writeCredentialsLegacy({ secret: key, token: 'tok' });
+    sessionSocketStub = makeSocket();
+    const restarted = new ApiSessionClient('tok', createPlainSessionFixture({ id: sessionId, agentState: state }));
+    try {
+      await expect.poll(() => readPersistedOutboxMutations(sessionId)).toEqual([]);
+      expect(state.requests).toEqual({});
+      expect(state.completedRequests?.request).toEqual(completed);
+      expect(actions).toEqual(['session-turn-mutation']);
+    } finally {
+      await restarted.close();
+    }
+  });
+
   it('does not retain a pre-effect UI decision for later journal replay after acknowledgement failure', async () => {
     const { writeCredentialsLegacy } = await import('@/persistence');
     await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });

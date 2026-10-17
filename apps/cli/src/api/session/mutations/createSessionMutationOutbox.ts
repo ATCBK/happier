@@ -137,7 +137,7 @@ export type CreateSessionMutationOutboxParams = Readonly<{
     sessionId: string;
     getSocket: () => SessionMutationSocket;
     requestReconnect: (reason: string) => void;
-    deliverAgentStateRequestSettlement?: (mutation: AgentStateRequestSettlementMutationV1) => Promise<void>;
+    deliverAgentStateRequestSettlement?: (mutation: AgentStateRequestSettlementMutationV1) => Promise<SessionMutationDeliveryOutcome>;
 }>;
 
 export type CreateSessionMutationJournalParams = Readonly<{
@@ -148,7 +148,7 @@ export type CreateSessionMutationJournalParams = Readonly<{
     token: string;
     getSocket: () => SessionMutationSocket;
     requestReconnect: (reason: string) => void;
-    deliverAgentStateRequestSettlement?: (mutation: AgentStateRequestSettlementMutationV1) => Promise<void>;
+    deliverAgentStateRequestSettlement?: (mutation: AgentStateRequestSettlementMutationV1) => Promise<SessionMutationDeliveryOutcome>;
     deliverRuntimeActivitySnapshot?: (
         mutation: RuntimeActivitySnapshotMutationV1,
     ) => Promise<SessionMutationDeliveryOutcome>;
@@ -242,7 +242,7 @@ export function createSessionMutationJournal(params: CreateSessionMutationJourna
                 if (capable.size === 0) throw new Error('Request settlement delivery unavailable');
                 const handle = selectActiveOutboxHandle(capable);
                 if (!handle.deliverAgentStateRequestSettlement) throw new Error('Request settlement delivery unavailable');
-                await handle.deliverAgentStateRequestSettlement(mutation);
+                return await handle.deliverAgentStateRequestSettlement(mutation);
             },
             deliverRuntimeActivitySnapshot: async (mutation) => {
                 const candidateHandles = [...handles.values()].filter((handle) => (
@@ -752,8 +752,7 @@ function createSessionMutationOutboxInstance(params: CreateSessionMutationJourna
             if (!params.deliverAgentStateRequestSettlement) {
                 return { status: 'retryable', reason: 'request_settlement_delivery_unavailable' };
             }
-            await params.deliverAgentStateRequestSettlement(mutation.payload);
-            return { status: 'delivered', path: 'socket' };
+            return await params.deliverAgentStateRequestSettlement(mutation.payload);
         }
         if (mutation.kind === 'session_turn') {
             const result = await deliverSessionTurnMutation({

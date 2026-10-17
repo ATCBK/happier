@@ -1096,10 +1096,22 @@ export class ApiSessionClient extends EventEmitter {
                 const credentials = await readCredentials();
                 if (!credentials) throw new Error('Request settlement recovery requires account credentials');
                 const context = resolveMachineEncryptionContext(credentials);
-                const settlement = AgentStateRequestSettlementSchema.parse(decrypt(
+                const decrypted = decrypt(
                     context.encryptionKey, context.encryptionVariant, decodeBase64(mutation.content.c),
-                ));
-                await this.updateAgentState((state) => applyAgentStateRequestSettlement(state, settlement));
+                );
+                // The crypto boundary also returns null for a wrong key. Retain that
+                // ciphertext for recovery rather than permanently quarantining it.
+                if (decrypted === null) throw new Error('Request settlement recovery could not decrypt payload');
+                const settlement = AgentStateRequestSettlementSchema.safeParse(decrypted);
+                if (!settlement.success) {
+                    logger.infoFile('[API] Invalid durable request settlement payload', {
+                        sessionId: this.sessionId,
+                        mutationId: mutation.mutationId,
+                    });
+                    return { status: 'permanent_invalid_payload', reason: 'invalid_agent_state_request_settlement' };
+                }
+                await this.updateAgentState((state) => applyAgentStateRequestSettlement(state, settlement.data));
+                return { status: 'delivered', path: 'socket' };
             },
         });
         this.runtimeActivitySnapshotPublisher = createRuntimeActivitySnapshotSessionMutationPublisher({
