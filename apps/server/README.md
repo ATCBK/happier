@@ -83,7 +83,7 @@ The full flavor expects these env vars to be set:
     - `S3_REGION` (defaults to `us-east-1`)
     - `S3_ACCESS_KEY`
     - `S3_SECRET_KEY`
-    - Or, on AWS, leave both keys unset and provide `AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE` (for example EKS IRSA); the server then uses temporary STS credentials and refreshes them before they expire.
+    - In development builds containing web identity support, leave both keys unset and provide `AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE` (for example EKS IRSA); the server then uses temporary STS credentials and refreshes them before they expire.
 
 Optional (recommended for multi-core / multi-replica):
 

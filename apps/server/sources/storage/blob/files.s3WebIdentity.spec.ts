@@ -149,6 +149,7 @@ describe('storage/files (S3 credentials)', () => {
         const { initFilesS3FromEnv, loadFiles, writePublicFile, getPublicUrl } = await import('./files');
         await initFilesS3FromEnv(s3Env(webIdentityEnv));
         await loadFiles();
+        writeFileSync(tokenFile, 'rotated-service-account-jwt');
         await writePublicFile('avatars/a.png', new Uint8Array([1, 2, 3]));
         await writePublicFile('avatars/b.png', new Uint8Array([4, 5, 6]));
 
@@ -157,8 +158,11 @@ describe('storage/files (S3 credentials)', () => {
             expect(call.hostname).toBe('sts.us-gov-west-1.amazonaws.com');
             expect(call.query.get('Action')).toBe('AssumeRoleWithWebIdentity');
             expect(call.query.get('RoleArn')).toBe(webIdentityEnv.AWS_ROLE_ARN);
-            expect(call.query.get('WebIdentityToken')).toBe('projected-service-account-jwt');
         }
+        expect(stsCalls.map((call) => call.query.get('WebIdentityToken'))).toEqual([
+            'projected-service-account-jwt',
+            'rotated-service-account-jwt',
+        ]);
 
         expect(s3Requests.map((r) => `${r.method} ${r.url}`)).toEqual([
             'HEAD /bucket',
@@ -191,5 +195,46 @@ describe('storage/files (S3 credentials)', () => {
         expect(s3Requests).toHaveLength(1);
         expect(s3Requests[0].headers.authorization).toContain('Credential=static-access/');
         expect(s3Requests[0].headers['x-amz-security-token']).toBeUndefined();
+    });
+
+    it.each([
+        { S3_ACCESS_KEY: 'static-access', S3_SECRET_KEY: '', missing: 'S3_SECRET_KEY' },
+        { S3_ACCESS_KEY: '', S3_SECRET_KEY: 'static-secret', missing: 'S3_ACCESS_KEY' },
+    ])('rejects partial static credentials instead of assuming a role ($missing)', async ({ missing, ...keys }) => {
+        const webIdentityEnv = stubWebIdentityEnv();
+        vi.resetModules();
+        const { initFilesS3FromEnv } = await import('./files');
+
+        await expect(initFilesS3FromEnv(s3Env({ ...webIdentityEnv, ...keys }))).rejects.toThrow(missing);
+        expect(stsCalls).toHaveLength(0);
+        expect(s3Requests).toHaveLength(0);
+    });
+
+    it.each(['AWS_ROLE_ARN', 'AWS_WEB_IDENTITY_TOKEN_FILE'])('rejects incomplete web identity configuration (%s)', async (missing) => {
+        const webIdentityEnv = { ...stubWebIdentityEnv(), [missing]: '' };
+        vi.stubEnv(missing, '');
+        vi.resetModules();
+        const { initFilesS3FromEnv } = await import('./files');
+
+        await expect(initFilesS3FromEnv(s3Env(webIdentityEnv))).rejects.toThrow('S3_ACCESS_KEY');
+        expect(stsCalls).toHaveLength(0);
+        expect(s3Requests).toHaveLength(0);
+    });
+
+    it('fails a credential exchange without an unsigned S3 request and recovers on retry', async () => {
+        const webIdentityEnv = stubWebIdentityEnv();
+        vi.resetModules();
+        const { initFilesS3FromEnv, loadFiles } = await import('./files');
+        await initFilesS3FromEnv(s3Env(webIdentityEnv));
+
+        // An empty queue makes the STS boundary return HTTP 500.
+        await expect(loadFiles()).rejects.toThrow();
+        expect(s3Requests).toHaveLength(0);
+
+        stsQueue.push({ accessKeyId: 'ASIARECOVERED', secretAccessKey: 'recovered-secret', sessionToken: 'recovered-session', expiresInMs: 3_600_000 });
+        await expect(loadFiles()).resolves.toBeUndefined();
+        expect(s3Requests).toHaveLength(1);
+        expect(s3Requests[0].headers.authorization).toContain('Credential=ASIARECOVERED/');
+        expect(s3Requests[0].headers['x-amz-security-token']).toBe('recovered-session');
     });
 });
