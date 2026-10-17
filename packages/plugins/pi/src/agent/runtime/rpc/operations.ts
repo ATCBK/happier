@@ -557,7 +557,6 @@ function createRuntimeOperations(params: Readonly<{
   function publishProviderUserPromptText(text: string): void {
     params.publishRuntimeEvent({
       kind: 'transcript-message-committed',
-      sessionId: params.sessionId,
       emittedAtMs: Date.now(),
       messageId: buildProviderUserPromptLocalId(),
       role: 'user',
