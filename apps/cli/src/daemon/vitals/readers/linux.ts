@@ -166,7 +166,8 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
         const seen = new Set<string>();
         const result: Extract<MachineVitalsSampleV1['disk'], { reported: true }>['volumes'] = [];
         for (const mount of [...mounts].sort((a, b) => a.mount.length - b.mount.length)) {
-            if (seen.has(mount.device) || /^(?:proc|sysfs|devtmpfs|devpts|tmpfs|cgroup2?|securityfs|debugfs|tracefs|pstore|mqueue|hugetlbfs|configfs|fusectl|autofs|squashfs|nsfs|ramfs|rpc_pipefs|nfs4?|cifs|smb3)$/u.test(mount.kind)) continue;
+            if (seen.has(mount.device) || mount.options.split(',').includes('ro')
+                || /^(?:proc|sysfs|devtmpfs|devpts|tmpfs|cgroup2?|securityfs|debugfs|tracefs|pstore|mqueue|hugetlbfs|configfs|fusectl|autofs|squashfs|iso9660|udf|nsfs|ramfs|rpc_pipefs|nfs4?|cifs|smb3)$/u.test(mount.kind)) continue;
             if (mount.mount !== '/' && (!mount.source.startsWith('/dev/') || mount.mount.startsWith('/sys/') || mount.mount.startsWith('/proc/') || mount.mount.startsWith('/dev/'))) continue;
             try {
                 const stats = await statfs(at(mount.mount));

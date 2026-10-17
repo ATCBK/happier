@@ -2,6 +2,7 @@ import { chmod, mkdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MachineVitalsSampleV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
+import { deriveMachineVitalsAttentionV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsAttentionV1';
 
 import { createLinuxMachineVitalsReader } from './linux';
 import { createLinuxVitalsFixture } from './linux.testkit';
@@ -230,6 +231,33 @@ describe('Linux machine vitals reader', () => {
             { id: '8:2', mount: '/data', totalBytes: 409600, availableBytes: 81920 },
             { id: '8:3', mount: '/home/alice2', totalBytes: 409600, availableBytes: 81920 },
         ] });
+    });
+
+    it('excludes read-only and ISO mounts from capacity warnings without hiding a writable bind of the same device', async () => {
+        const f = await fixture();
+        await f.put('/proc/self/mountinfo', [
+            '1 0 8:1 / / rw - ext4 /dev/sda rw',
+            '2 1 11:0 / /mnt/lima-cidata ro - iso9660 /dev/sr0 ro',
+            '3 1 8:2 / /readonly ro - ext4 /dev/sdb rw',
+            '4 1 8:2 / /writable-data rw - ext4 /dev/sdb rw',
+            '5 1 8:3 / /superblock-readonly rw - ext4 /dev/sdc ro',
+            '6 1 0:1 / /pseudo rw - tmpfs tmpfs rw',
+            '7 1 11:1 / /iso rw - iso9660 /dev/sr1 rw',
+            '8 1 11:2 / /dvd rw - udf /dev/sr2 rw',
+        ].join('\n'));
+        const reader = createLinuxMachineVitalsReader({ root: f.root, homePath: '/writable-data/alice',
+            statfs: async (path) => ({ bsize: 4096, blocks: 1_000_000, bfree: path.endsWith('/writable-data') || path === f.root + '/' ? 800_000 : 0,
+                bavail: path.endsWith('/writable-data') || path === f.root + '/' ? 720_000 : 0, files: 50, ffree: 10 }),
+        });
+        const result = await reader.read(input(0));
+        expect(result.state).toBe('reporting');
+        if (result.state !== 'reporting') return;
+        const sample = MachineVitalsSampleV1Schema.parse(result.sample);
+        expect(sample.disk).toMatchObject({ reported: true, homeVolumeId: '8:2', volumes: [
+            { id: '8:1', mount: '/' }, { id: '8:2', mount: '/writable-data' },
+        ] });
+        expect(deriveMachineVitalsAttentionV1({ recent: [sample], previous: [], nearlyFull: { freeFraction: 0.1 } }))
+            .not.toEqual(expect.arrayContaining([expect.objectContaining({ metric: 'disk' })]));
     });
 
     it('reads files and ptys each tick but reads thermal/GPU/inotify only for Overview', async () => {
