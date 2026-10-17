@@ -17,6 +17,7 @@ import {
   deriveWorkspaceSyncEndpointId,
   encodeBrokerControlFrame,
   OPEN_REMOTE_DEADLINE_MS,
+  WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES,
   WORKSPACE_SYNC_BROKER_ATTACH_TTL_MS,
   type BrokerControlV1,
 } from './workspaceSyncBrokerProtocol';
@@ -417,10 +418,15 @@ describe('workspace sync broker authentication and attach rules', () => {
     socket.destroy();
   });
 
-  it('settles setup custody when external stream creation fails before close', async () => {
+  it.each([
+    { failure: new Error('peer unavailable'), reason: 'peer unavailable' },
+    { failure: new Error(`${'x'.repeat(WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES - 1)}é detail`),
+      reason: 'x'.repeat(WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES - 1) },
+    { failure: { transportState: 'unavailable' }, reason: 'external stream unavailable' },
+  ])('settles setup custody and preserves the error reason when external stream creation fails before close (case %#)', async ({ failure, reason }) => {
     const fixture = await useFixture(await startBroker({
       openExternalStream: async () => {
-        throw new Error('peer unavailable');
+        throw failure;
       },
     }));
     const { socket, wire } = await openAuthenticatedRawControl(fixture);
@@ -433,7 +439,7 @@ describe('workspace sync broker authentication and attach rules', () => {
     await expect(wire.waitFor(
       (frame) => frame.t === 'error' && frame.requestId === 'req-open-failure',
       'external open failure',
-    )).resolves.toMatchObject({ code: 'peer_unavailable' });
+    )).resolves.toMatchObject({ code: 'peer_unavailable', message: reason });
 
     await expect(fixture.broker.close()).resolves.toBeUndefined();
     socket.destroy();

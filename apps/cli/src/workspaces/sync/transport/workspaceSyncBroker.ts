@@ -24,6 +24,7 @@ import {
   type MutagenControlCommandV1,
   verifyBrokerProof,
   WORKSPACE_SYNC_BROKER_ATTACH_TTL_MS,
+  WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES,
   WORKSPACE_SYNC_BROKER_MAX_REQUEST_FRAME_BYTES,
 } from './workspaceSyncBrokerProtocol';
 
@@ -189,10 +190,16 @@ async function settleCleanup(work: readonly (Promise<void> | undefined)[]): Prom
 
 function typedError(error: unknown, fallback: BrokerTerminalErrorCode, message: string): BrokerProtocolError {
   if (error instanceof BrokerProtocolError) return error;
-  if (typeof error === 'object' && error !== null && 'code' in error && isBrokerTerminalErrorCode(error.code)) {
-    return new BrokerProtocolError(error.code, error instanceof Error ? error.message : message);
+  // Carrier/native and HTTP errors need not use broker codes. Keep their
+  // reason without serializing the error object or its private boundary data.
+  let reason = error instanceof Error && error.message ? error.message : message;
+  if (Buffer.byteLength(reason, 'utf8') > WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES) {
+    reason = new TextDecoder().decode(Buffer.from(reason, 'utf8').subarray(0, WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES), { stream: true });
   }
-  return new BrokerProtocolError(fallback, message);
+  if (typeof error === 'object' && error !== null && 'code' in error && isBrokerTerminalErrorCode(error.code)) {
+    return new BrokerProtocolError(error.code, reason);
+  }
+  return new BrokerProtocolError(fallback, reason);
 }
 
 function errorFromFrame(frame: Extract<BrokerControlV1, { t: 'error' }>): BrokerProtocolError {
