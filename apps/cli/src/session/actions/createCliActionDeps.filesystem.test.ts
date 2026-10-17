@@ -46,6 +46,8 @@ import { createPreparedFilesystemTransferClient } from '@/machines/transfer/prep
 import { createActionOperationRpcHandlers } from '@/daemon/actionOperations/actionOperationRpcHandlers';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { registerApprovalRpcHandlers } from '@/rpc/handlers/approvals';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const copySocketBoundary = vi.hoisted(() => ({ create: vi.fn() }));
 const nativeProcessBoundary = vi.hoisted(() => ({
@@ -151,9 +153,15 @@ describe('exact-machine filesystem Actions', () => {
         kind: 'approval_request_created', artifactId: 'filesystem-approval',
       } });
       await expect(stat(join(rootPath, 'approved'))).rejects.toMatchObject({ code: 'ENOENT' });
-      expect(await caller.execute('approval.request.decide', { artifactId: 'filesystem-approval', decision: 'approve' }, {
-        surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'daemon-owner',
-        actionCaller: { kind: 'host' }, presentUserConfirmation: { actionId: 'approval.request.decide' },
+      if (!request) throw new Error('Missing filesystem approval');
+      request = { ...request, status: 'approved', updatedAtMs: request.updatedAtMs + 1,
+        decision: { kind: 'approve', decidedAtMs: request.updatedAtMs + 1 } };
+      registerApprovalRpcHandlers({ rpcHandlerManager: manager, actionExecutor: caller });
+      expect(await manager.handleRequest({
+        method: `machine-test:${RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED}`,
+        params: { artifactId: 'filesystem-approval' }, callerAuthority: 'present_user',
+        machineAdmission: { actorAccountId: 'daemon-owner', custodianAccountId: 'daemon-owner',
+          machineId: 'machine-test', installationId: 'installation', role: 'use', encryptionMode: 'plain' },
       })).toMatchObject({ ok: true, result: { status: 'executed' } });
       expect(await readFile(join(rootPath, 'approved'), 'utf8')).toBe('approved');
 

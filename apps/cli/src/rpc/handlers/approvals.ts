@@ -82,8 +82,10 @@ export function registerApprovalRpcHandlers(params: Readonly<{
       if (!artifactId) {
         return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
       }
-      const executor = context?.callerInputAuthorization?.requesterAccountExecutor
-        ?? params.actionExecutor ?? await resolveProductionActionExecutor();
+      // This private route is selected only after the app has resolved the
+      // Artifact's exact daemon. Caller projection belongs to ordinary Account
+      // Action dispatch and cannot replace the daemon that owns replay custody.
+      const executor = params.actionExecutor ?? await resolveProductionActionExecutor();
       if (!executor.replayApprovedApprovalRequest) {
         return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:approvals' };
       }

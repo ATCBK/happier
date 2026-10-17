@@ -40,6 +40,7 @@ import { resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actio
 import { resolveExternalActionMachineTarget } from '../externalActions/reconcileExternalActionTarget';
 import { readManagedMachine } from '@/machines/managed/readManagedMachine';
 import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
+import { createClientActionReverseDispatcher } from '@/session/actions/clientActionReverseDispatch';
 
 import type {
   ApiMachineClient,
@@ -14837,6 +14838,7 @@ export async function startDaemonSessionControlRuntime(
         typeof createCliActionExecutorFromCredentials
       > = createCliActionExecutorFromCredentials({
         credentials,
+        clientActionExecute: createClientActionReverseDispatcher(() => params.getApiMachineForSessions()),
         // The native dependency is also needed when approval replay is the
         // enclosing invocation. Ordinary remote targets retain their transport.
         ...(apiMachineForSessions && (actionId !== 'machines.environment.apply' || (input && typeof input === 'object'
