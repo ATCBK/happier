@@ -187,20 +187,16 @@ export abstract class BasePermissionHandler {
 
         // If we were mid-permission when the session reference swapped (offline reconnect),
         // republish still-pending items into the new agentState and re-attempt push notifications.
-        for (const [id, pending] of this.pendingRequests.entries()) {
-            if (this.requestCoordinator.isRequestClaimed(id)) continue;
+        for (const id of this.pendingRequests.keys()) {
+            const context = this.requestCoordinator.getResponseContext(id);
+            if (!context) continue;
             if (!this.requestStore.hasOutstandingRequest(id)) {
-                this.requestStore.publishRequest({
-                    requestId: id,
-                    toolName: pending.toolName,
-                    toolInput: pending.input,
-                    createdAt: Date.now(),
-                });
+                this.requestStore.publishRequest(context);
             } else {
                 this.requestStore.notifyPermissionRequestPushBestEffort({
                     permissionId: id,
-                    toolName: pending.toolName,
-                    toolInput: pending.input,
+                    toolName: context.toolName,
+                    toolInput: context.toolInput,
                 });
             }
         }

@@ -270,6 +270,53 @@ describe('ApiSessionClient durable mutation outbox', () => {
     }
   });
 
+  it('answers a still-pending permission after reconnecting to a new real session client', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const states: AgentState[] = [{}, {}];
+    const versions = [0, 0];
+    let transportIndex = 0;
+    sessionSocketStubFactory = () => {
+      const index = transportIndex++;
+      return createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+        if (event !== 'update-state') return { ok: true };
+        const value = payload as { expectedVersion: number; agentState: string };
+        if (value.expectedVersion !== versions[index]) {
+          return { result: 'version-mismatch', version: versions[index], agentState: JSON.stringify(states[index]) };
+        }
+        states[index] = JSON.parse(value.agentState);
+        return { result: 'success', version: ++versions[index]!, agentState: value.agentState };
+      } });
+    };
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const { ProviderEnforcedPermissionHandler } = await import('@/agent/permissions/ProviderEnforcedPermissionHandler');
+    const { SESSION_RPC_METHODS } = await import('@happier-dev/protocol');
+    const oldClient = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-before-reconnect' }));
+    const newClient = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-after-reconnect' }));
+    const handler = new ProviderEnforcedPermissionHandler(oldClient, { logPrefix: '[ReconnectTest]' });
+    const input = { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] };
+    const pending = handler.handleToolCall('reconnect-question', 'AskUserQuestion', input);
+    void pending.catch(() => undefined);
+    try {
+      await expect.poll(() => states[0]?.requests?.['reconnect-question']).toBeDefined();
+      const original = states[0]!.requests!['reconnect-question'];
+      clock.mockReturnValue(2_000);
+      handler.updateSession(newClient);
+      await expect.poll(() => states[1]?.requests?.['reconnect-question']).toEqual(original);
+      await newClient.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_STRUCTURED_QUESTION_RESPOND_V1, {
+        id: 'reconnect-question', structuredAnswersV1: { 'Continue?': ['Yes'] },
+      });
+      await expect(pending).resolves.toMatchObject({ answers: { 'Continue?': ['Yes'] } });
+      expect(states[1]?.requests?.['reconnect-question']).toBeUndefined();
+      expect(states[1]?.completedRequests?.['reconnect-question']).toMatchObject({ createdAt: 1_000, status: 'approved' });
+    } finally {
+      clock.mockRestore();
+      await handler.abortPendingRequestsAndFlush('test cleanup');
+      await Promise.all([oldClient.close(), newClient.close()]);
+      await pending.catch(() => undefined);
+    }
+  });
+
   it('keeps a next-turn question routable across real reset journal admission', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'reset-account' })).toString('base64url')}.sig`;
     const { writeCredentialsLegacy } = await import('@/persistence');
