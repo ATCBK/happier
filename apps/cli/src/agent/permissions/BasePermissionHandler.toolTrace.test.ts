@@ -40,10 +40,7 @@ class TestPermissionHandler extends BasePermissionHandler {
     }
 
     request(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {
-        return new Promise<PermissionResult>((resolve, reject) => {
-            this.pendingRequests.set(toolCallId, { resolve, reject, toolName, input });
-            this.addPendingRequestToState(toolCallId, toolName, input);
-        });
+        return this.requestPermissionDecision(toolCallId, toolName, input);
     }
 }
 

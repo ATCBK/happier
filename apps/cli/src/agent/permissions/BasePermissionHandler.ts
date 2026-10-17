@@ -80,14 +80,11 @@ export interface PermissionResponse {
 }
 
 /**
- * Pending permission request stored while awaiting user response.
+ * Local routing and policy metadata; the coordinator owns request waiters.
  */
 export interface PendingRequest {
-    resolve: (value: PermissionResult) => void;
-    reject: (error: Error) => void;
     toolName: string;
     input: unknown;
-    coordinatorManaged?: boolean;
     resolveDecisionIfPolicyChanges?: () => PermissionResult | null;
 }
 
@@ -358,8 +355,8 @@ export abstract class BasePermissionHandler {
     }
 
     private async tryHandlePermissionRpc(response: SessionPermissionRpcPayload, requireLocalPending: boolean = false): Promise<boolean> {
-        const legacyPending = this.pendingRequests.get(response.id);
-        if (requireLocalPending && !legacyPending) return false;
+        const localPending = this.pendingRequests.get(response.id);
+        if (requireLocalPending && !localPending) return false;
         const hasStructuredAnswers = response.answers !== undefined || response.structuredAnswersV1 !== undefined;
         const candidateContext = hasStructuredAnswers
             ? null
@@ -367,7 +364,7 @@ export abstract class BasePermissionHandler {
         const requiresLocalQuestionOwner = hasStructuredAnswers
             || (candidateContext !== null && this.isStructuredQuestionContext(candidateContext));
         const context = requiresLocalQuestionOwner
-            ? this.requireLocallyOwnedStructuredResponseContext(response.id, legacyPending)
+            ? this.requireLocallyOwnedStructuredResponseContext(response.id, localPending)
             : candidateContext;
         if (!context) {
             logger.debug(
@@ -391,7 +388,7 @@ export abstract class BasePermissionHandler {
         return await this.handlePermissionResponseWithContext({
             response,
             context,
-            legacyPending,
+            localPending,
             structuredAnswers,
         });
     }
@@ -425,10 +422,10 @@ export abstract class BasePermissionHandler {
     private async handlePermissionResponseWithContext(params: Readonly<{
         response: PermissionResponse;
         context: PermissionRequestCoordinatorContext;
-        legacyPending: PendingRequest | undefined;
+        localPending: PendingRequest | undefined;
         structuredAnswers?: StructuredQuestionAnswersV1;
     }>): Promise<boolean> {
-        const { response, context, legacyPending, structuredAnswers } = params;
+        const { response, context, localPending, structuredAnswers } = params;
         const responseAllowedTools = response.allowedTools ?? response.allowTools;
         const updatedPermissions = response.updatedPermissions;
         const result = this.buildPermissionResult(response);
@@ -459,11 +456,6 @@ export abstract class BasePermissionHandler {
                         : `Permission ${response.approved ? 'approved' : 'denied'} for ${context.toolName}`,
             });
 
-            if (!legacyPending?.coordinatorManaged) {
-                this.pendingRequests.delete(response.id);
-                legacyPending?.resolve(result);
-            }
-
             if (response.approved) {
                 this.autoApproveNowAllowedPendingRequests(response.id);
             }
@@ -474,7 +466,7 @@ export abstract class BasePermissionHandler {
         });
         if (!completed && (structuredAnswers || context.status === 'live')) return false;
         if (completed) this.pendingRequests.delete(response.id);
-        if (!completed && !legacyPending) {
+        if (!completed && !localPending) {
             logger.debug(`${this.getLogPrefix()} Permission response did not complete any pending request`);
         }
         return true;
@@ -543,14 +535,7 @@ export abstract class BasePermissionHandler {
             this.pendingRequests.set(toolCallId, {
                 toolName,
                 input: normalizedInput,
-                coordinatorManaged: true,
                 resolveDecisionIfPolicyChanges,
-                resolve: (value) => {
-                    this.resolvePendingPermissionRequest(toolCallId, value);
-                },
-                reject: (error) => {
-                    this.rejectPendingPermissionRequest(toolCallId, error);
-                },
             });
         }
 
@@ -563,20 +548,6 @@ export abstract class BasePermissionHandler {
 
         return pending.finally(() => {
             this.pendingRequests.delete(toolCallId);
-        });
-    }
-
-    /**
-     * Add a pending request to the agent state.
-     */
-    protected addPendingRequestToState(toolCallId: string, toolName: string, input: unknown): void {
-        if (this.isPermissionRequestClaimed(toolCallId)) return;
-        this.recordPermissionRequestTrace(toolCallId, toolName, input);
-        this.requestStore.publishRequest({
-            requestId: toolCallId,
-            toolName,
-            toolInput: input,
-            createdAt: Date.now(),
         });
     }
 
@@ -605,11 +576,9 @@ export abstract class BasePermissionHandler {
         completedRequest?: PermissionRequestCoordinatorCompletedRequest,
     ): void {
         if (this.isPermissionRequestClaimed(requestId)) return;
-        const pending = this.pendingRequests.get(requestId);
         const context = this.requestCoordinator.getResponseContext(requestId);
         if (!context) {
             this.pendingRequests.delete(requestId);
-            pending?.resolve(result);
             return;
         }
 
@@ -622,11 +591,6 @@ export abstract class BasePermissionHandler {
                 decision: result.decision,
             },
         );
-    }
-
-    private rejectPendingPermissionRequest(requestId: string, error: Error): void {
-        this.pendingRequests.delete(requestId);
-        this.requestCoordinator.cancelRequest(requestId, error.message);
     }
 
     private completePendingPermissionRequest(
@@ -663,25 +627,19 @@ export abstract class BasePermissionHandler {
      * Reset state for new sessions.
      * This method is idempotent - safe to call multiple times.
      */
-    private async cancelPendingRequests(params: Readonly<{ reason: string; decision?: 'abort' }>): Promise<void> {
+    private async cancelPendingRequests(params: Readonly<{ reason: string }>): Promise<void> {
         const pendingSnapshot = Array.from(this.pendingRequests.entries());
         await this.requestCoordinator.cancelAll(params.reason);
         for (const [requestId, pending] of pendingSnapshot) {
             if (this.pendingRequests.get(requestId) === pending) {
                 this.pendingRequests.delete(requestId);
             }
-            if (pending.coordinatorManaged) continue;
-            try {
-                pending.reject(new Error(params.reason));
-            } catch (err) {
-                logger.debug(`${this.getLogPrefix()} Error rejecting legacy pending request:`, err);
-            }
         }
     }
 
     async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {
         try {
-            await this.cancelPendingRequests({ reason, decision: 'abort' });
+            await this.cancelPendingRequests({ reason });
         } catch (error) {
             // The coordinator retains the exact detached cancellation for retry.
             // A failed history write must not prevent the caller from stopping the provider.

@@ -42,12 +42,6 @@ class TestPermissionHandler extends BasePermissionHandler {
     return this.requestPermissionDecision(toolCallId, toolName, input);
   }
 
-  requestLegacyWithoutAgentState(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {
-    return new Promise<PermissionResult>((resolve, reject) => {
-      this.pendingRequests.set(toolCallId, { resolve, reject, toolName, input });
-    });
-  }
-
   isAllowed(toolName: string, input: unknown): boolean {
     return this.isAllowedForSession(toolName, input);
   }
@@ -232,22 +226,25 @@ describe('BasePermissionHandler allowlist', () => {
     expect(handler.isAllowed('bash', input)).toBe(false);
   });
 
-  it('ignores legacy pending responses that are not correlated with agentState', async () => {
+  it('answers a retained live request after its persisted pending projection is lost', async () => {
     const session = new FakeSession();
     const input = { command: ['bash', '-lc', 'echo hello'] };
     const handler = new TestPermissionHandler(session as any);
-    const pending = handler.requestLegacyWithoutAgentState('legacy-missing-state', 'bash', input);
+    const pending = handler.request('missing-state', 'bash', input);
+    const originalRequest = { ...session.agentState.requests['missing-state'] };
+    // The network/session snapshot can lose the pending projection while the coordinator still owns its waiter.
+    session.agentState.requests = {};
 
     const rpc = session.rpcHandlerManager.handlers.get('permission');
     expect(rpc).toBeDefined();
 
-    await rpc!({ id: 'legacy-missing-state', approved: true, decision: 'approved_for_session' });
+    await rpc!({ id: 'missing-state', approved: true, decision: 'approved_for_session' });
 
-    expect(handler.isAllowed('bash', input)).toBe(false);
-    expect(session.agentState.completedRequests['legacy-missing-state']).toBeUndefined();
-    expect(await settledState(pending)).toBe('pending');
-    handler.reset();
-    await expect(pending).rejects.toThrow('Session reset');
+    await expect(pending).resolves.toMatchObject({ decision: 'approved_for_session' });
+    expect(handler.isAllowed('bash', input)).toBe(true);
+    expect(session.agentState.completedRequests['missing-state']).toMatchObject({
+      ...originalRequest, status: 'approved', decision: 'approved_for_session',
+    });
   });
 
   it('remembers approved_for_session tool identifiers and clears them on reset', async () => {
