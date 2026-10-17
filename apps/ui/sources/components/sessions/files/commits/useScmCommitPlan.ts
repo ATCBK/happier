@@ -52,7 +52,8 @@ export function useScmCommitPlan(params: Readonly<{
         : null), [application, comparison, plan, supportedComparison]);
     const isGenerating = supportedComparison && (viewModel?.status === 'starting'
         || planOutput?.state === 'pending' || planOutput?.state === 'writing');
-    const phase: 'none' | 'writing' | 'ready' = proposal ? 'ready' : isGenerating ? 'writing' : 'none';
+    const phase = proposal ? 'ready' : isGenerating ? 'writing'
+        : supportedComparison && (bound.restoreState === 'restoring' || bound.restoreState === 'unavailable') ? bound.restoreState : 'none';
     const [busy, setBusy] = React.useState(false);
     const key = viewModel?.requestKey ?? null;
     // Progress timers belong to the foreground reader, not the machine Action's lifetime.

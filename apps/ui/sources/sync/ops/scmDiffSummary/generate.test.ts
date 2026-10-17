@@ -301,6 +301,15 @@ describe('SCM diff summary operations', () => {
         expect(refreshed.viewModel).toMatchObject({ status: 'succeeded', summaryMarkdown: 'Host summary', risks: ['No tests were run.'], latestRun: { status: 'running' } });
     });
 
+    it.each([pending, complete])('does not turn a Run observation refusal into a generation failure', async output => {
+        const ops = createScmDiffSummaryOperations({ generateSummary: async () => output,
+            getExecutionRun: async () => ({ ok: false, errorCode: 'RPC_METHOD_NOT_AVAILABLE', error: 'RPC method not available' }) });
+        const admitted = await ops.generateFromUserAction(params);
+        const refreshed = await ops.refreshRun({ key: admitted.key, sessionId: 'session_1', runId: 'run_1' });
+        expect(refreshed).toMatchObject({ ok: false, errorCode: 'RPC_METHOD_NOT_AVAILABLE' });
+        expect(refreshed.viewModel).toEqual(admitted.viewModel);
+    });
+
     it('retains authenticated comparison evidence when model admission fails', async () => {
         const failure = { ...pending, success: false, error: 'Model unavailable', errorCode: 'MODEL_UNAVAILABLE', outputs: { summary: { state: 'failed' } } } satisfies ScmDiffSummaryGenerateOutput;
         const ops = createScmDiffSummaryOperations({ generateSummary: async () => failure });

@@ -16,6 +16,7 @@ vi.mock('@/text', async () => {
 });
 
 const { ScmDiffSummaryFailureNotice } = await import('./ScmDiffSummaryFailureNotice');
+const { SCM_DIFF_SUMMARY_GENERIC_FAILURE } = await import('@/sync/domains/scm/diffSummary/state');
 
 const MODEL_UNAVAILABLE = { reason: 'modelUnavailable', messageKey: 'walkthrough.generationFailure.modelUnavailable',
     nextAction: 'chooseModel', nextActionKey: 'walkthrough.notice.chooseModel' } as const;
@@ -41,5 +42,15 @@ describe('ScmDiffSummaryFailureNotice', () => {
         expect(sentence.getTextContent()).toContain('walkthrough.generationFailure.reconnectMachine');
     });
 
+    it('uses only the typed failure and recovery instead of raw diagnostics or a model action', async () => {
+        const failure = { ...SCM_DIFF_SUMMARY_GENERIC_FAILURE, message: 'MODEL_UNAVAILABLE: no model could start' };
+        const screen = await renderScreen(<ScmDiffSummaryFailureNotice testID="proposal" failure={failure}
+            onChooseModel={() => {}} onRetry={() => {}} />);
+        expect(screen.getTextContent()).toContain('walkthrough.notice.failedGeneric');
+        expect(screen.getTextContent()).not.toContain(failure.message);
+        expect(screen.findByTestId('proposal-notice-failed-reason')).toBeNull();
+        expect(screen.findByTestId('proposal-choose-model')).toBeNull();
+        expect(screen.findByTestId('proposal-retry')).not.toBeNull();
+    });
 
 });

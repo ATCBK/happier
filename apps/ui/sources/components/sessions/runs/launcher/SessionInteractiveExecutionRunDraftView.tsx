@@ -16,7 +16,7 @@ import type { RoleRailItem } from '@/components/roles/rail/rolesRailTypes';
 import { useRoleRailItems } from '@/components/roles/rail/useRoleRailItems';
 import { useMachineCapabilitiesCache } from '@/hooks/server/useMachineCapabilitiesCache';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSessionExecutionRunLaunchability } from '@/hooks/session/useSessionExecutionRunLaunchability';
+import { SESSION_EXECUTION_RUN_LAUNCH_UNAVAILABLE_KEYS, useSessionExecutionRunLaunchability } from '@/hooks/session/useSessionExecutionRunLaunchability';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { createRepositoryComposerDocumentOwner } from '@/components/sessions/composer/repositoryComposerDocumentOwner';
 import {
@@ -103,11 +103,7 @@ export type ExecutionRunStartedPresentation = Readonly<{
     title: string | null;
 }>;
 
-const UNAVAILABLE_REASON_KEYS = {
-    notEnabled: 'sessionAgentActivity.roster.unavailable.notEnabled',
-    sessionInactive: 'sessionAgentActivity.roster.unavailable.sessionInactive',
-    externalRunnerInactive: 'sessionAgentActivity.roster.unavailable.externalRunnerInactive',
-} as const;
+const UNAVAILABLE_REASON_KEYS = SESSION_EXECUTION_RUN_LAUNCH_UNAVAILABLE_KEYS;
 
 /** A review's scope fields: the "Uncommitted · 4 files" chip asks these, Advanced asks the rest. */
 function isReviewScopeFieldPath(path: string): boolean {

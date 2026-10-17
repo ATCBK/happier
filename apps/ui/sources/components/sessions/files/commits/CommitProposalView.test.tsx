@@ -72,6 +72,13 @@ function menus(screen: Awaited<ReturnType<typeof renderScreen>>) {
 }
 
 describe('CommitProposalView (lab WT4-C1/C3/C4)', () => {
+    it.each(['restoring', 'unavailable'] as const)('does not offer a new proposal while saved data is %s', async phase => {
+        const screen = await renderScreen(<CommitProposalView proposal={null} phase={phase} branch="main" modelLabel={null}
+            layout="wide" actions={{}} start={{ onStart: vi.fn(), busy: false, disabled: false, reason: null }} />);
+        expect(Boolean(screen.findByTestId('commit-proposal-none'))).toBe(false);
+        expect(Boolean(screen.findByTestId('commit-proposal-start'))).toBe(false);
+        expect(Boolean(screen.findByTestId(`commit-proposal-${phase}`))).toBe(true);
+    });
     it.each(['wide', 'phone'] as const)('does not offer unverified hook content for Include (%s)', async (layout) => {
         const onIncludeHookChanges = vi.fn();
         const proposal = buildCommitProposal({ comparison: PENDING, plan: PLAN, application: application({

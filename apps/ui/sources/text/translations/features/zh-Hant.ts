@@ -12972,7 +12972,7 @@ return { walkthroughSettingsTranslations };
 })();
 
 const Domain_walkthroughStartTranslations = (() => {
-const walkthroughStartTranslations = { 'zh-Hant': { walkthroughStart: { start: '開始導讀', ended: '目前無法在此使用該對話。導讀仍然保留。', newConversation: '開始新對話', askSession: '詢問工作階段代理', unavailable: '連線至所屬機器並選擇支援結構化輸出的模型。', updated: '導讀已更新' } } };
+const walkthroughStartTranslations = { 'zh-Hant': { walkthroughStart: { machineOffline: '存放此程式碼的機器已離線。連線後即可開始。', chooseModel: '請選擇能回傳結構化輸出的摘要模型。', start: '開始導讀', ended: '目前無法在此使用該對話。導讀仍然保留。', newConversation: '開始新對話', askSession: '詢問工作階段代理', unavailable: '連線至所屬機器並選擇支援結構化輸出的模型。', updated: '導讀已更新' } } };
 
 return { walkthroughStartTranslations };
 })();

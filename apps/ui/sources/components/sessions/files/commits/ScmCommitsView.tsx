@@ -3,7 +3,7 @@ import { View } from 'react-native';
 
 import { ScmDiffSummaryFailureNotice } from '@/components/sessions/files/comparison/ScmDiffSummaryFailureNotice';
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
-import { ScmDiffSummaryStartOptions, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting, useSummaryModelChoice } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
+import { ScmDiffSummaryStartOptions, scmDiffSummaryPrerequisiteOf, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting, useSummaryModelChoice } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 import { t } from '@/text';
 
@@ -51,7 +51,7 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
             disabled: !ready,
             reason: null,
             options: <ScmDiffSummaryStartOptions {...scmDiffSummaryStartOptionsOf(bound, { testID: 'commit-proposal-start-options', modelTestID: 'commit-proposal-model-choice',
-                prerequisite: !ready ? t('walkthroughStart.unavailable') : null, onEnableExplain: openExplainSetting })} />,
+                prerequisite: scmDiffSummaryPrerequisiteOf(bound), onEnableExplain: openExplainSetting })} />,
         };
     }, [addToSaved, bound, canStart, openExplainSetting, plan.supportedComparison]);
     // The proposal's own Run and saved result: the offer says only that the proposal has an update, never that a commit landed.
@@ -78,6 +78,7 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
             <CommitProposalView
                 proposal={plan.proposal}
                 phase={plan.phase}
+                onRetryRestore={bound.retryRestore}
                 isGenerating={plan.isGenerating}
                 branch={props.branch}
                 modelLabel={plan.modelLabel}

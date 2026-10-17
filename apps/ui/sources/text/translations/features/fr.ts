@@ -13035,7 +13035,7 @@ return { walkthroughSettingsTranslations };
 })();
 
 const Domain_walkthroughStartTranslations = (() => {
-const walkthroughStartTranslations = { fr: { walkthroughStart: { start: 'Démarrer le parcours', ended: 'Cette conversation n’est pas disponible ici. Le parcours reste disponible.', newConversation: 'Démarrer une nouvelle conversation', askSession: 'Interroger l’agent de la session', unavailable: 'Connecte la machine et choisis un modèle produisant une sortie structurée.', updated: 'Parcours mis à jour' } } };
+const walkthroughStartTranslations = { fr: { walkthroughStart: { machineOffline: 'La machine qui contient ce code est hors ligne. Connecte-la pour commencer.', chooseModel: 'Choisis un modèle de résumé produisant une sortie structurée.', start: 'Démarrer le parcours', ended: 'Cette conversation n’est pas disponible ici. Le parcours reste disponible.', newConversation: 'Démarrer une nouvelle conversation', askSession: 'Interroger l’agent de la session', unavailable: 'Connecte la machine et choisis un modèle produisant une sortie structurée.', updated: 'Parcours mis à jour' } } };
 
 return { walkthroughStartTranslations };
 })();

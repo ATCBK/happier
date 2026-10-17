@@ -13014,7 +13014,7 @@ return { walkthroughSettingsTranslations };
 })();
 
 const Domain_walkthroughStartTranslations = (() => {
-const walkthroughStartTranslations = { ru: { walkthroughStart: { start: 'Начать разбор', ended: 'Этот разговор здесь недоступен. Разбор сохранён.', newConversation: 'Начать новый разговор', askSession: 'Спросить агента сессии', unavailable: 'Подключите машину и выберите модель со структурированным выводом.', updated: 'Разбор обновлён' } } };
+const walkthroughStartTranslations = { ru: { walkthroughStart: { machineOffline: 'Машина с этим кодом не в сети. Подключите её, чтобы начать.', chooseModel: 'Выберите модель сводки, которая возвращает структурированный вывод.', start: 'Начать разбор', ended: 'Этот разговор здесь недоступен. Разбор сохранён.', newConversation: 'Начать новый разговор', askSession: 'Спросить агента сессии', unavailable: 'Подключите машину и выберите модель со структурированным выводом.', updated: 'Разбор обновлён' } } };
 
 return { walkthroughStartTranslations };
 })();

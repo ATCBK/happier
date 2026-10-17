@@ -12972,7 +12972,7 @@ return { walkthroughSettingsTranslations };
 })();
 
 const Domain_walkthroughStartTranslations = (() => {
-const walkthroughStartTranslations = { 'zh-Hans': { walkthroughStart: { start: '开始导读', ended: '目前无法在此使用该对话。导读仍然保留。', newConversation: '开始新对话', askSession: '询问会话代理', unavailable: '连接所属机器并选择支持结构化输出的模型。', updated: '导读已更新' } } };
+const walkthroughStartTranslations = { 'zh-Hans': { walkthroughStart: { machineOffline: '存放此代码的机器已离线。连接后即可开始。', chooseModel: '请选择能返回结构化输出的摘要模型。', start: '开始导读', ended: '目前无法在此使用该对话。导读仍然保留。', newConversation: '开始新对话', askSession: '询问会话代理', unavailable: '连接所属机器并选择支持结构化输出的模型。', updated: '导读已更新' } } };
 
 return { walkthroughStartTranslations };
 })();

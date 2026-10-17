@@ -13002,7 +13002,7 @@ return { walkthroughSettingsTranslations };
 })();
 
 const Domain_walkthroughStartTranslations = (() => {
-const walkthroughStartTranslations = { pl: { walkthroughStart: { start: 'Rozpocznij omówienie', ended: 'Ta rozmowa nie jest tutaj dostępna. Omówienie pozostaje dostępne.', newConversation: 'Rozpocznij nową rozmowę', askSession: 'Zapytaj agenta sesji', unavailable: 'Połącz maszynę i wybierz model obsługujący dane strukturalne.', updated: 'Omówienie zaktualizowane' } } };
+const walkthroughStartTranslations = { pl: { walkthroughStart: { machineOffline: 'Maszyna z tym kodem jest offline. Połącz ją, aby zacząć.', chooseModel: 'Wybierz model podsumowań, który zwraca dane strukturalne.', start: 'Rozpocznij omówienie', ended: 'Ta rozmowa nie jest tutaj dostępna. Omówienie pozostaje dostępne.', newConversation: 'Rozpocznij nową rozmowę', askSession: 'Zapytaj agenta sesji', unavailable: 'Połącz maszynę i wybierz model obsługujący dane strukturalne.', updated: 'Omówienie zaktualizowane' } } };
 
 return { walkthroughStartTranslations };
 })();

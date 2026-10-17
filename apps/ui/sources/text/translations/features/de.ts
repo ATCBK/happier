@@ -12482,7 +12482,7 @@ return { walkthroughSettingsTranslations };
 })();
 
 const Domain_walkthroughStartTranslations = (() => {
-const walkthroughStartTranslations = { de: { walkthroughStart: { start: 'Rundgang starten', ended: 'Dieses Gespräch ist hier nicht verfügbar. Der Rundgang bleibt erhalten.', newConversation: 'Neues Gespräch starten', askSession: 'Den Sitzungsagenten fragen', unavailable: 'Verbinde den zugehörigen Rechner und wähle ein Modell für strukturierte Ausgabe.', updated: 'Rundgang aktualisiert' } } };
+const walkthroughStartTranslations = { de: { walkthroughStart: { machineOffline: 'Die Maschine mit diesem Code ist offline. Verbinde sie, um zu starten.', chooseModel: 'Wähle ein Zusammenfassungsmodell, das strukturierte Ausgaben liefern kann.', start: 'Rundgang starten', ended: 'Dieses Gespräch ist hier nicht verfügbar. Der Rundgang bleibt erhalten.', newConversation: 'Neues Gespräch starten', askSession: 'Den Sitzungsagenten fragen', unavailable: 'Verbinde den zugehörigen Rechner und wähle ein Modell für strukturierte Ausgabe.', updated: 'Rundgang aktualisiert' } } };
 
 return { walkthroughStartTranslations };
 })();

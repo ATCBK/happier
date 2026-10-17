@@ -520,28 +520,8 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
         if (!current()) return retired();
         const error = readOperationError(response);
         if (error) {
-            const entry = state.entriesByKey[params.key];
-            if (!entry) {
-                return {
-                    ok: false,
-                    key: params.key,
-                    error: error.error,
-                    ...(error.errorCode ? { errorCode: error.errorCode } : {}),
-                    state,
-                    viewModel: selectScmDiffSummaryViewModel(state, params.key),
-                };
-            }
-            setState(applyScmDiffSummaryEvent(state, {
-                type: 'request_failed',
-                key: params.key,
-                sessionId: entry.sessionId,
-                actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID,
-                input: entry.input,
-                error: error.error,
-                ...(error.errorCode ? { errorCode: error.errorCode } : {}),
-                failedAtMs: nowMs(),
-                intent: 'regenerate',
-            }));
+            // An observation refusal says nothing about generation or publication. In particular an
+            // ended Session may no longer serve Run RPCs while its machine's saved result remains readable.
             return {
                 ok: false,
                 key: params.key,
@@ -671,6 +651,6 @@ export const recordScmDiffSummaryCopyIntent = defaultOperations.recordCopyIntent
 export const getScmDiffSummaryState = defaultOperations.getState;
 export const subscribeScmDiffSummaryState = defaultOperations.subscribe;
 
-export function getScmDiffSummaryOperationState(state: ScmDiffSummaryState, key: string): ScmDiffSummaryViewModel {
-    return selectScmDiffSummaryViewModel(state, key);
+export function getScmDiffSummaryOperationState(state: ScmDiffSummaryState, key: string, output?: ScmDiffSummaryOutputKind): ScmDiffSummaryViewModel {
+    return selectScmDiffSummaryViewModel(state, key, output);
 }

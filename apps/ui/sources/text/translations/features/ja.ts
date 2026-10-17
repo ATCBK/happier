@@ -12976,7 +12976,7 @@ return { walkthroughSettingsTranslations };
 })();
 
 const Domain_walkthroughStartTranslations = (() => {
-const walkthroughStartTranslations = { ja: { walkthroughStart: { start: 'ウォークスルーを開始', ended: 'この会話はここでは利用できません。ウォークスルーは残ります。', newConversation: '新しい会話を開始', askSession: 'セッションのエージェントに質問', unavailable: '対象のマシンに接続し、構造化出力に対応したモデルを選んでください。', updated: 'ウォークスルーを更新しました' } } };
+const walkthroughStartTranslations = { ja: { walkthroughStart: { machineOffline: 'このコードがあるマシンはオフラインです。接続すると開始できます。', chooseModel: '構造化出力を返せる要約モデルを選んでください。', start: 'ウォークスルーを開始', ended: 'この会話はここでは利用できません。ウォークスルーは残ります。', newConversation: '新しい会話を開始', askSession: 'セッションのエージェントに質問', unavailable: '対象のマシンに接続し、構造化出力に対応したモデルを選んでください。', updated: 'ウォークスルーを更新しました' } } };
 
 return { walkthroughStartTranslations };
 })();

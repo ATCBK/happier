@@ -17,7 +17,7 @@ import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSession
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { resolveServerScopedMachineInventory, resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 
 type MachineTargetLikeState = SessionListLookupStateLike & Readonly<{
     sessions?: Record<string, {
@@ -403,6 +403,31 @@ export function resolveMachineControlTargetForSessionFromState(
         ...workspaceTarget,
         confidence: 'metadata_direct',
     };
+}
+
+/** A null control target can mean either hydration or a settled refusal to choose a Machine. */
+export function resolveMachineControlTargetStateForSessionFromState(
+    state: SessionMachineTargetState,
+    identity: SessionMachineTargetIdentity,
+): Readonly<{ status: 'ready' } & SessionMachineControlTarget>
+    | Readonly<{ status: 'loading' | 'unavailable' }> {
+    const target = resolveMachineControlTargetForSessionFromState(state, identity);
+    if (target) return { status: 'ready', ...target };
+    const input = readSessionTargetInputs(state, identity)[0];
+    if (!input) return { status: 'loading' };
+    const serverId = typeof identity === 'string' ? null : identity.serverId;
+    if (serverId) {
+        const inventory = resolveServerScopedMachineInventory({
+            serverId, activeServerId: getActiveServerSnapshot().serverId,
+            activeMachines: Object.values(state.machines ?? {}),
+            machineListByServerId: state.machineListByServerId ?? {},
+            machineListStatusByServerId: state.machineListStatusByServerId,
+        });
+        if (inventory.status === 'loading' || (inventory.machines === null && inventory.status === undefined)) {
+            return { status: 'loading' };
+        }
+    }
+    return { status: 'unavailable' };
 }
 
 /**

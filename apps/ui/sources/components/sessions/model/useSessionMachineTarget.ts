@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import {
     resolveMachineControlTargetForSessionFromState,
+    resolveMachineControlTargetStateForSessionFromState,
     resolveMachineTargetForSessionFromState,
     resolveDisplayIdentityForSessionFromState,
     type SessionMachineControlTarget,
@@ -46,4 +47,12 @@ export function useSessionMachineControlTarget(sessionId: string, serverId?: str
             ),
         ),
     );
+}
+
+export function useSessionMachineControlTargetState(sessionId: string, serverId?: string | null) {
+    const resolvedSessionId = normalizeSessionId(sessionId);
+    return getStorage()(useShallow((state) => resolveMachineControlTargetStateForSessionFromState(
+        state as SessionMachineTargetState,
+        serverId?.trim() ? { serverId: serverId.trim(), sessionId: resolvedSessionId } : resolvedSessionId,
+    )));
 }

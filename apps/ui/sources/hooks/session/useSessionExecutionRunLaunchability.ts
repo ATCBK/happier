@@ -28,6 +28,13 @@ export type SessionExecutionRunLaunchUnavailableReason =
     | 'sessionInactive'
     | 'externalRunnerInactive';
 
+/** The person's words for why agents can't start from this Session, except an offline Machine, which callers name. */
+export const SESSION_EXECUTION_RUN_LAUNCH_UNAVAILABLE_KEYS = {
+    notEnabled: 'sessionAgentActivity.roster.unavailable.notEnabled',
+    sessionInactive: 'sessionAgentActivity.roster.unavailable.sessionInactive',
+    externalRunnerInactive: 'sessionAgentActivity.roster.unavailable.externalRunnerInactive',
+} as const;
+
 export type UseSessionExecutionRunLaunchabilityResult = Readonly<{
     canLaunchExecutionRuns: boolean;
     canShowExecutionRunLauncher: boolean;

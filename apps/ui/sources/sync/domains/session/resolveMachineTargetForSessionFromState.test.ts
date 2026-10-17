@@ -5,6 +5,7 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 
 import {
     resolveMachineControlTargetForSessionFromState,
+    resolveMachineControlTargetStateForSessionFromState,
     resolveMachineTargetForSessionFromState,
 } from './resolveMachineTargetForSessionFromState';
 
@@ -18,6 +19,22 @@ function activeMachine(id: string, host: string) {
 }
 
 describe('resolveMachineTargetForSessionFromState', () => {
+    it('distinguishes target hydration from a settled ambiguous Home target', () => {
+        const target = { serverId: 'home-a', sessionId: 's1' };
+        const session = createSessionFixture({ id: 's1', serverId: 'home-a', active: false,
+            metadata: { path: '/repo', host: 'shared.local' } });
+        const machines = ['one', 'two'].map(id => createMachineFixture({ id, active: true,
+            metadata: { ...createMachineFixture().metadata!, host: 'shared.local' } }));
+        const state = { sessions: { s1: session }, machines: {}, machineListByServerId: { 'home-a': machines },
+            machineListStatusByServerId: { 'home-a': 'idle' as const } };
+        expect(resolveMachineControlTargetStateForSessionFromState({ ...state, sessions: {} }, target))
+            .toEqual({ status: 'loading' });
+        expect(resolveMachineControlTargetStateForSessionFromState({ ...state, machineListByServerId: {},
+            machineListStatusByServerId: { 'home-a': 'loading' } }, target)).toEqual({ status: 'loading' });
+        expect(resolveMachineControlTargetStateForSessionFromState(state, target)).toEqual({ status: 'unavailable' });
+        expect(resolveMachineControlTargetStateForSessionFromState({ ...state, machineListByServerId: { 'home-a': [machines[0]!] } }, target))
+            .toMatchObject({ status: 'ready', machineId: 'one', basePath: '/repo' });
+    });
     it('reads the exact Home projection when duplicate Session ids exist', () => {
         const row = (machineId: string, path: string) => ({
             id: 'same-session',

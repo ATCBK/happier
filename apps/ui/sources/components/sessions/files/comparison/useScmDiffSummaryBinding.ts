@@ -1,9 +1,10 @@
 import * as React from 'react';
+import type { SessionExecutionRunLaunchUnavailableReason } from '@/hooks/session/useSessionExecutionRunLaunchability';
 import type { ScmDiffSummaryOutputKind } from '@happier-dev/protocol';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { getStorage, useSetting } from '@/sync/domains/state/storage';
-import { useScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
+import { useScmWalkthroughState } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 import { resolveScmDiffSummaryModelSelection, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
 import { scmComparisonSourceOf } from '@/sync/domains/scm/diffSummary/selection';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -31,7 +32,8 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     machineReachable: boolean;
     canControl: boolean;
     canSend: boolean;
-    launch: Readonly<{ canLaunchExecutionRuns: boolean }>;
+    /** Why runs cannot launch from this host, when its launch owner says (a Session's launchability). */
+    launch: Readonly<{ canLaunchExecutionRuns: boolean; launchUnavailableReason?: SessionExecutionRunLaunchUnavailableReason | null }>;
     serverId?: string | null;
     /** Null while the view is not mounted in front; nothing is read or restored then. */
     comparison: SessionScmReviewComparison | null;
@@ -70,7 +72,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         if (!sessionId && isCurrent()) setInputObservation({ hostKey, ...observation });
     }, [sessionId, isCurrent, hostKey]);
     React.useEffect(() => { setStarting(false); setError(null); }, [hostKey]);
-    const viewModel = useScmWalkthrough(sessionId ? { sessionId } : { machineId: host.machineId!, cwd: machine?.basePath ?? '' }, comparison, output, serverId);
+    const { viewModel, restoreState, retryRestore, machineReachability } = useScmWalkthroughState(sessionId ? { sessionId } : { machineId: host.machineId!, cwd: machine?.basePath ?? '' }, comparison, output, serverId);
     const capturedComparison = viewModel?.comparison ?? null;
     const cwd = capturedComparison?.repository.rootPath ?? machine?.basePath ?? null;
     const operations = React.useMemo(() => scope ? createScmDiffSummaryResultOperations({ ...host,
@@ -78,7 +80,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         [isCurrent, onRunAdmitted, sessionId, host.machineId, scope?.serverId, scope?.accountId]);
 
     const onStart = React.useCallback(async (outputs: readonly ScmDiffSummaryOutputKind[] = [output]) => {
-        if (!isCurrent() || !scope || !cwd || !comparison || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return;
+        if (!isCurrent() || !scope || !cwd || !comparison || (!viewModel && restoreState !== 'ready') || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return;
         setStarting(true); setError(null);
         try {
             if (!sessionId && (comparison.kind === 'session' || comparison.kind === 'turnCheckpoint')) return;
@@ -93,7 +95,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         } catch (failure) {
             if (isCurrent()) setError(failure instanceof Error ? failure.message : t('walkthroughStart.unavailable'));
         } finally { if (isCurrent()) setStarting(false); }
-    }, [binding, isCurrent, scope?.serverId, scope?.accountId, cwd, comparison, sessionId, host.machineId, output, selected, modelAvailable, canSend, launch.canLaunchExecutionRuns, starting, model, Boolean(viewModel)]);
+    }, [binding, isCurrent, scope?.serverId, scope?.accountId, cwd, comparison, sessionId, host.machineId, output, selected, modelAvailable, canSend, launch.canLaunchExecutionRuns, starting, model, Boolean(viewModel), restoreState]);
 
     const key = viewModel?.requestKey;
     const resultId = viewModel?.resultId;
@@ -156,6 +158,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     return {
         host, serverId, comparison,
         binding, isCurrent, scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
+        restoreState, retryRestore, machineReachability,
         error, setError,
         /** The typed refusal or failure of the comparison's generation; never its diagnostic code or message. */
         generationFailure: viewModel?.error && !(viewModel.error.reason === 'disabled' && explainEnabled) ? viewModel.error : null,

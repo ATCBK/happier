@@ -13,12 +13,13 @@ export function useWorkspaceScmDiffSummaryBinding(params: Readonly<{
     comparison: SessionScmReviewComparison | null; output: ScmDiffSummaryOutputKind;
 }>) {
     const owner = useMachinePresenceSummary(params.serverId, params.machineId);
-    const machineKnown = owner.reachability !== 'unknown';
     const machineReachable = owner.reachability === 'reachable';
     const enabled = useFeatureEnabled('execution.runs', { scopeKind: 'spawn', serverId: params.serverId }) === true;
     const backends = useExecutionRunsBackendsForMachine({ machineId: params.machineId, serverId: params.serverId, enabled });
-    const machine = React.useMemo(() => machineKnown ? { machineId: params.machineId, basePath: params.rootPath } : null,
-        [machineKnown, params.machineId, params.rootPath]);
+    // The workspace already supplies its exact target. Presence controls writes/launching, not whether
+    // a saved-result reader can retain its checkout and attempt an authenticated read.
+    const machine = React.useMemo(() => ({ machineId: params.machineId, basePath: params.rootPath }),
+        [params.machineId, params.rootPath]);
     const launch = React.useMemo(() => ({ canLaunchExecutionRuns: enabled && machineReachable
         && resolveExecutionRunAvailableBackends(backends, 'scm_diff_summary').length > 0 }), [enabled, machineReachable, backends]);
     const comparison = params.comparison?.kind === 'session' || params.comparison?.kind === 'turnCheckpoint' ? null : params.comparison;

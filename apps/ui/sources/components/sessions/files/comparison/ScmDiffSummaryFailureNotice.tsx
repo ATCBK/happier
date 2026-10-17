@@ -13,7 +13,7 @@ import { describeScmDiffSummaryFailure } from './ScmDiffSummaryStartOptions';
 /**
  * A refused or failed generation beside a reading or proposal that is already on screen: the walkthrough notice
  * band, written from the same typed presentation the empty state uses ({@link describeScmDiffSummaryFailure}).
- * The native reason and code never reach this copy; they stay in the store entry's diagnostics.
+ * Native codes and reason strings remain diagnostic data; only typed presentation reaches this copy.
  */
 export function ScmDiffSummaryFailureNotice(props: Readonly<{
     failure: ScmDiffSummaryFailurePresentation;
@@ -31,7 +31,6 @@ export function ScmDiffSummaryFailureNotice(props: Readonly<{
     const link = chooseModel
         ? { testID: `${props.testID}-choose-model`, label: described.action!, onPress: chooseModel }
         : enableExplain ? { testID: `${props.testID}-enable-explain`, label: described.action!, onPress: enableExplain }
-        : failed && props.onChooseModel ? { testID: `${props.testID}-choose-model`, label: t('walkthrough.notice.chooseModel'), onPress: props.onChooseModel }
         : null;
     // A step with nothing to press (update the machine, reconnect it) is part of the sentence.
     const text = described.nextStep ? `${described.message} ${described.nextStep}` : described.message;

@@ -182,7 +182,7 @@ async function mountProposal(sessionId: string, saved = savedResult(1, 'unknown'
     return { latest, screen, visibility, home };
 }
 
-async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderProposal = false, renderWhilePending = false) {
+async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderProposal = false, renderWhilePending = false, machineKnown = true) {
     boundary.sessionId = '';
     boundary.saved = saved;
     const home = await addHome('workspace-commit-plan');
@@ -195,7 +195,7 @@ async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderP
         serverIdentityId: 'srv_workspace_commit_plan', accountId: 'commit-plan-account', machineId: machine.id,
         targets: [{ backendTarget, models: OFFERED_MODELS }] })).installOn(homes, home.id);
     getStorage().setState({ profileScope: { serverId: home.id, accountId: 'commit-plan-account' },
-        sessions: {}, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
+        sessions: {}, machines: machineKnown ? { [machine.id]: machine } : {}, machineListByServerId: { [home.id]: machineKnown ? [machine] : [] },
         settings: { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
             [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: profile.catalogId } });
     const latest: { current: ReturnType<typeof useSessionCommitPlan> | null } = { current: null };
@@ -295,6 +295,28 @@ describe('proposal discard Action policy', () => {
 });
 
 describe('exact workspace commit plans', () => {
+    it('restores the exact workspace proposal before its machine presence hydrates', async () => {
+        const saved = savedResult(1, 'complete');
+        const { latest, screen } = await mountWorkspaceProposal(saved, false, false, false);
+        expect(latest.current?.binding.machineReachable).toBe(false);
+        await vi.waitFor(() => expect(latest.current?.binding.viewModel?.resultId, proposalDiagnostic(latest.current)).toBe(saved.resultId));
+        expect(latest.current?.phase).toBe('ready');
+        await screen.unmount();
+    });
+    it('keeps the saved read explicitly restoring instead of advertising an empty proposal', async () => {
+        const read = createDeferred<unknown>();
+        boundary.read = () => read.promise;
+        const saved = savedResult(1, 'complete');
+        const { latest, screen } = await mountWorkspaceProposal(saved);
+        await vi.waitFor(() => expect(boundary.requests.some(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ)).toBe(true));
+        expect(latest.current?.binding.restoreState).toBe('restoring');
+        expect(latest.current?.phase).toBe('restoring');
+        await act(async () => { read.resolve({ success: true, result: saved }); });
+        await vi.waitFor(() => expect(latest.current?.phase).toBe('ready'));
+        expect(latest.current?.proposal?.outcome?.kind).toBe('complete');
+        await screen.unmount();
+    });
+
     it('keeps a previous saved proposal readable without treating its refresh as completion of a new admission', async () => {
         const initial = savedResult(1, 'complete');
         const saved = ScmDiffSummaryResultSchema.parse({ ...initial, application: undefined,
@@ -323,6 +345,8 @@ describe('exact workspace commit plans', () => {
         expect(latest.current?.error).toBeNull();
         expect(latest.current?.isGenerating).toBe(false);
         expect(screen.findByTestId('commit-group:g1')).toBeTruthy();
+        expect(Boolean(screen.findByTestId('commit-proposal-notice-failed-reason'))).toBe(false);
+        expect(screen.getTextContent()).not.toContain('Retry failed.');
     });
 
     it('shows a generation failure retained in a successfully admitted saved result', async () => {

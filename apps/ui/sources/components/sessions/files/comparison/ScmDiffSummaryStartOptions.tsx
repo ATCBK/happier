@@ -11,6 +11,7 @@ import { Typography } from '@/constants/Typography';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import type { ScmDiffSummaryFailurePresentation } from '@/sync/domains/scm/diffSummary/state';
 import { t } from '@/text';
+import { SESSION_EXECUTION_RUN_LAUNCH_UNAVAILABLE_KEYS } from '@/hooks/session/useSessionExecutionRunLaunchability';
 
 import type { useScmDiffSummaryBinding } from './useScmDiffSummaryBinding';
 
@@ -119,6 +120,21 @@ export function useSummaryModelChoice(modelChoices: Readonly<{ setOpen: (open: b
 export function useOpenExplainChangesSetting(): () => void {
     const router = useRouter();
     return React.useCallback(() => { router.push(SETTINGS_ROUTES.sourceControl as never); }, [router]);
+}
+
+/**
+ * Why a start (Start walkthrough, Propose commits) cannot run, as its one cause and next step: the Machine being away
+ * first, then what the host's launch owner says, then the model. Null when it can run. A cause with no clearer words
+ * keeps the general sentence.
+ */
+export function scmDiffSummaryPrerequisiteOf(bound: Pick<ReturnType<typeof useScmDiffSummaryBinding>, 'machineReachability' | 'modelAvailable' | 'canSend' | 'launch'>): string | null {
+    const reason = bound.launch.launchUnavailableReason ?? null;
+    if (bound.machineReachability === 'unreachable') return t('walkthroughStart.machineOffline');
+    // The launch owner can refuse unknown presence too; only confirmed absence means offline.
+    if (reason === 'machineOffline') return t('walkthroughStart.unavailable');
+    if (reason) return t(SESSION_EXECUTION_RUN_LAUNCH_UNAVAILABLE_KEYS[reason]);
+    if (!bound.modelAvailable) return t('walkthroughStart.chooseModel');
+    return bound.canSend && bound.launch.canLaunchExecutionRuns ? null : t('walkthroughStart.unavailable');
 }
 
 /** The options a binding gives its start action: its model, its typed failure and what else to say. */
