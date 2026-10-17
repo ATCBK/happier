@@ -126,6 +126,12 @@ Notes:
 - `HAPPIER_FEATURE_ENCRYPTION__DEFAULT_ACCOUNT_MODE` controls only the default for **keyed** accounts under `optional`; it does not gate keyless provisioning.
 - On `HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY=optional`, the client may offer a **choice** on first login (E2EE vs plaintext) when the provider is enabled for both keyed provisioning and keyless auto-provisioning.
 
+Keyless authentication does not supply keys for historical encrypted Machines.
+Development clients can use [plain Machine control](/self-hosting/encryption#plain-machine-control-development-only)
+when the server explicitly supports it; that format and token-only client support
+are unreleased. Converting encrypted Machine history still requires its genuine
+old keys.
+
 ### Token exchange for headless machines
 
 A machine that already holds a user's access token from your IdP can trade it for a Happier token on that user's account, with no browser and no pairing step. Dev-box platforms that keep a per-user IdP token in each workspace (for example a Coder external auth) use this to attach a new workspace to its owner's account.
@@ -184,7 +190,7 @@ The access token must be a JWT and must carry the `openid` scope, or `/userinfo`
 Limits:
 
 - The Happier token does not expire with the IdP token. Revocation works as for any other Happier token: disable the account or rely on offboarding checks.
-- The response carries only an API token, no content key. The CLI needs both to store a credential, and it has no command that consumes an exchanged token yet.
+- The response carries only an API token, no content key. Development-source CLI credentials can be token-only, but the CLI has no command that consumes an exchanged token yet. Historical encrypted content still requires its genuine old key.
 - Requests share the `oauthExternal.authParams` per-IP rate limit (see [Rate limits](/self-hosting/rate-limits)).
 
 ### Auto-redirect (OIDC-only deployments)
