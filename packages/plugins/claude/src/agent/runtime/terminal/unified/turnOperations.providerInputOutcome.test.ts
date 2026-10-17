@@ -51,8 +51,8 @@ describe('Claude Unified provider input outcomes', () => {
         row: { type: 'user', uuid: 'different-jsonl-uuid', promptId: 'native-prompt-first',
           sessionId: 'claude-evidence', isSidechain: false, message: { role: 'user', content: 'same prompt' } },
       });
+      runtime.beginTurnLifecycle();
       if (echoTiming === 'during injection') {
-        runtime.beginTurnLifecycle();
         terminalHost.service.injectUserPrompt.mockImplementationOnce(async (_handle, input) => {
           await emitDelayedEcho();
           return {

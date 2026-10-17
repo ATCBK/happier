@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/permissions/modeFromMetadata';
 import { isApprovalReviewerModelEligible } from './approvalReviewerEligibility';
@@ -56,6 +56,7 @@ import {
 } from './permissionRequestCoordinator';
 import {
     isPermissionRequestOwnedByPlugin,
+    isPermissionRequestOwnedByPluginTurn,
     normalizePermissionRequestOwner,
     type PermissionRequestOwner,
 } from './permissionRequestOwner';
@@ -84,10 +85,10 @@ type AgentStateRequestStoreBindableSession = Readonly<{
 
 export type PermissionRequestPushSender = PermissionRequestPushSenderFromSettings;
 
-const ApprovalReviewerAnswerSchema = z.object({
+const ApprovalReviewerAnswerSchema = z.strictObject({
     decision: z.enum(['allow_once', 'escalate']),
-    reason: z.string().optional(),
-}).strict();
+    reason: z.optional(z.string()),
+});
 
 /**
  * Permission response from the mobile app.
@@ -4020,9 +4021,11 @@ export abstract class BasePermissionHandler {
         completedRequest: PermissionRequestCoordinatorCompletedRequest,
     ): Promise<boolean> {
         const pending = this.pendingRequests.get(requestId);
-        await pending?.acknowledgeDecisionApplication?.(result);
         const completed = await this.requestCoordinator.completeResponse({
             context,
+            ...(pending?.acknowledgeDecisionApplication
+                ? { acknowledgeDecisionApplication: pending.acknowledgeDecisionApplication }
+                : {}),
             completion: {
                 result,
                 completedRequest,
@@ -4039,13 +4042,10 @@ export abstract class BasePermissionHandler {
         return completed;
     }
 
-    private async cancelPendingRequests(reason: string): Promise<void> {
-        const pendingSnapshot = Array.from(this.pendingRequests.entries());
-        await this.requestCoordinator.cancelAll(reason);
-
-        for (const [requestId, pending] of pendingSnapshot) {
-            if (this.pendingRequests.get(requestId) === pending) this.pendingRequests.delete(requestId);
-            if (pending.coordinatorManaged) continue;
+    private cancelUncoordinatedPendingRequests(requests: Iterable<readonly [string, PendingRequest]>, reason: string): void {
+        for (const [requestId, pending] of requests) {
+            if (pending.coordinatorManaged || this.pendingRequests.get(requestId) !== pending) continue;
+            this.pendingRequests.delete(requestId);
             try {
                 pending.reject(new Error(reason));
             } catch (err) {
@@ -4054,7 +4054,24 @@ export abstract class BasePermissionHandler {
         }
     }
 
+    private async cancelPendingRequests(reason: string): Promise<void> {
+        const pendingSnapshot = Array.from(this.pendingRequests.entries());
+        // Retire preparation before awaiting durable cancellation, so shared
+        // hydration cannot advance a cancelled request into publication.
+        this.cancelUncoordinatedPendingRequests(pendingSnapshot, reason);
+        await this.requestCoordinator.cancelAll(reason);
+        for (const [requestId, pending] of pendingSnapshot) {
+            if (this.pendingRequests.get(requestId) === pending) this.pendingRequests.delete(requestId);
+        }
+    }
+
     async cancelByPluginTurn(pluginId: string, turnId: string, reason: string): Promise<void> {
+        const pendingSnapshot = Array.from(this.pendingRequests.entries()).filter(([, pending]) => {
+            const requestTurnId = resolvePermissionRequestTurnId(pending.causalPermissionContext);
+            return isPermissionRequestOwnedByPluginTurn({ owner: pending.owner,
+                ...(requestTurnId ? { turnId: requestTurnId } : {}), lifetime: pending.causalPermissionContext?.lifetime }, pluginId, turnId);
+        });
+        this.cancelUncoordinatedPendingRequests(pendingSnapshot, reason);
         await this.requestCoordinator.cancelByPluginTurn(pluginId, turnId, reason);
     }
 
@@ -4065,16 +4082,8 @@ export abstract class BasePermissionHandler {
         const legacyPendingSnapshot = Array.from(this.pendingRequests.entries()).filter(
             ([, pending]) => !pending.coordinatorManaged && isPermissionRequestOwnedByPlugin(pending.owner, normalizedPluginId),
         );
+        this.cancelUncoordinatedPendingRequests(legacyPendingSnapshot, reason);
         await this.requestCoordinator.cancelByPlugin(normalizedPluginId, reason);
-
-        for (const [requestId, pending] of legacyPendingSnapshot) {
-            this.pendingRequests.delete(requestId);
-            try {
-                pending.reject(new Error(reason));
-            } catch (err) {
-                logger.debug(`${this.getLogPrefix()} Error rejecting legacy plugin-owned request:`, err);
-            }
-        }
     }
 
     async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {
@@ -4088,11 +4097,8 @@ export abstract class BasePermissionHandler {
 
     async abortPendingRequestAndFlush(requestId: string, reason: string = 'Aborted by user'): Promise<void> {
         const pending = this.pendingRequests.get(requestId);
+        if (pending) this.cancelUncoordinatedPendingRequests([[requestId, pending]], reason);
         await this.requestCoordinator.cancelRequests([requestId], reason);
-        if (pending && !pending.coordinatorManaged && this.pendingRequests.get(requestId) === pending) {
-            this.pendingRequests.delete(requestId);
-            pending.reject(new Error(reason));
-        }
         try {
             await this.session.flush?.();
         } catch (error) {
@@ -4164,7 +4170,7 @@ function matchesMediatedPermissionTurnId(
  * pending projections possible without turning arbitrary request input into
  * remote approval authority.
  */
-function resolvePermissionRequestOwner(params: Readonly<{
+export function resolvePermissionRequestOwner(params: Readonly<{
     owner?: PermissionRequestOwner | null;
     causalPermissionContext?: AcpPermissionCallContext;
 }>): PermissionRequestOwner | null {

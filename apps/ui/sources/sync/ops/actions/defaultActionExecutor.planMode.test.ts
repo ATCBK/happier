@@ -3,7 +3,9 @@ import 'fake-indexeddb/auto';
 import { ExecutionRunStartResponseSchema, SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema,
   SessionMetadataTuplePatchSuccessV1Schema, MACHINE_PLAIN_DATA_KEY_MARKER,
   SessionSpawnNewInputV2Schema, SessionOwnerMetadataEnvelopeV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol';
-import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonSessionGoalGetRequestV1Schema, DaemonSessionGoalSetRequestV2Schema,
+  DaemonSessionGoalClearRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -24,6 +26,12 @@ import { bindMachineAccessActionHttpRequestV1, normalizeActionsSettingsV1 } from
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock();
+});
+// These transport assertions exercise the request after the present user
+// accepts the real shared confirmation policy at its presentation boundary.
+vi.mock('@/modal', async () => {
+  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+  return createModalModuleMock({ confirmResult: true }).module;
 });
 import nacl from 'tweetnacl';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
@@ -49,7 +57,7 @@ installDisconnectedServerSocketBoundary((socket) => {
     }
     const request: SocketRpcRequestPayload = { method: payload.method, params: payload.params };
     outgoing.push(request);
-    return { ok: true, result: daemonAnswer(request) };
+    return { ok: true, result: await daemonAnswer(request) };
   });
 });
 const homes = createHomeGovernanceHarness();
@@ -150,6 +158,7 @@ describe('default Action executor mode and catalog contracts', () => {
     } });
     homes.answer(serverId, '/v1/actions/session.agent.transition', { select: body => {
       const authorized = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      if (authorized.envelope.v !== 1) throw new Error('Expected the plain transition fixture envelope');
       expect(authorized.machineId).toBe('machine-a');
       expect(openExternalActionRequesterAccountContextV1({ authorization: authorized.executionAuthorization,
         purpose: { kind: 'external_action' }, machineId: 'machine-a', installationId: 'switch-installation', serverIdentityId: 'srv_mode_home',
@@ -171,20 +180,26 @@ describe('default Action executor mode and catalog contracts', () => {
     expect(await execute('session.continuation.inspect', { sessionId: request.sessionId, selection }, context()))
       .toMatchObject({ ok: true, result: { status: 'answered', inspection: { type: 'available' } } });
     const switched = await execute('session.agent.transition', request, context());
-    expect(switched, JSON.stringify(homes.requests.map(({ path }) => path)))
+    expect(switched, JSON.stringify(switched))
       .toEqual({ ok: true, result: { type: 'rejected', code: 'unsupported_operation', sourceEffect: 'none' } });
     expect(outgoing.map(rpc => rpc.method)).toEqual([`machine-a:${RPC_METHODS.SESSION_CONTINUATION_INSPECT}`]);
     expect(transitionInput).toEqual(request);
     expect(storage.getState().sessions['switch-session']?.metadata?.flavor).toBe('claude');
   });
-  it('executes goal get, wake and clear through the selected Session daemon', async () => {
+  it.each([false, true])('executes goal get, wake and clear through the selected Session daemon (active: %s, no native controls)', async (active) => {
     installSession('goal-session', { path: '/repo', machineId: 'machine-a', flavor: 'codex', codexSessionId: 'native-thread' });
     const session = storage.getState().sessions['goal-session'];
-    storage.setState({ sessions: { ...storage.getState().sessions, 'goal-session': { ...session, active: false } },
+    storage.setState({ sessions: { ...storage.getState().sessions, 'goal-session': { ...session, active } },
       machines: { ...storage.getState().machines, 'machine-a': createMachineFixture({ id: 'machine-a',
         storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        metadata: { host: 'goal.test', daemonSessionGoalControlsSupported: true } }) } });
-    daemonAnswer = () => ({ workState: null });
+        metadata: { ...createMachineFixture().metadata!, host: 'goal.test', daemonSessionGoalControlsSupported: true } }) } });
+    daemonAnswer = request => {
+      const schema = request.method.endsWith(RPC_METHODS.DAEMON_SESSION_GOAL_GET) ? DaemonSessionGoalGetRequestV1Schema
+        : request.method.endsWith(RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR) ? DaemonSessionGoalClearRequestV1Schema
+          : DaemonSessionGoalSetRequestV2Schema;
+      expect(schema.parse(request.params)).toMatchObject({ sessionId: 'goal-session' });
+      return { workState: null };
+    };
     const executor = createDefaultActionExecutor();
     const goalGet = await executor.execute('session.goal.get', { sessionId: 'goal-session' }, context());
     expect(goalGet, JSON.stringify(goalGet))
@@ -199,6 +214,64 @@ describe('default Action executor mode and catalog contracts', () => {
     ]);
     expect(outgoing[1]?.params).toMatchObject({ sessionId: 'goal-session', objective: 'Finish the task',
       tokenBudget: null, resumeInactiveWithInitialGoal: true });
+  });
+  it('retains admitted Goal operations beyond the generic Machine RPC acknowledgement cutoff', async () => {
+    installSession('goal-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    storage.setState({ machines: { ...storage.getState().machines, 'machine-a': createMachineFixture({ id: 'machine-a',
+      storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+      metadata: { ...createMachineFixture().metadata!, daemonSessionGoalControlsSupported: true } }) } });
+    const executor = createDefaultActionExecutor();
+    vi.useFakeTimers();
+    try {
+      for (const actionId of ['session.goal.set', 'session.goal.get', 'session.goal.clear'] as const) {
+        let acknowledge!: (value: unknown) => void;
+        daemonAnswer = () => new Promise(resolve => { acknowledge = resolve; });
+        let settled = false;
+        const signal = new AbortController().signal;
+        const pending = executor.execute(actionId, { sessionId: 'goal-session',
+          ...(actionId === 'session.goal.set' ? { objective: 'Finish the task' } : {}) }, { ...context(), signal })
+          .then(result => { settled = true; return result; });
+        await vi.waitFor(() => expect(acknowledge).toBeTypeOf('function'));
+        // The daemon may still be preparing or publishing the native Goal.
+        // Its admitted receipt belongs to this operation, even after the
+        // transport's unqualified 30-second default would have elapsed.
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(settled, actionId).toBe(false);
+        acknowledge({ workState: null });
+        expect(await pending).toMatchObject({ ok: true, result: actionId === 'session.goal.get'
+          ? { workState: null } : { ok: true } });
+      }
+      let acknowledge!: (value: unknown) => void;
+      daemonAnswer = () => new Promise(resolve => { acknowledge = resolve; });
+      const abort = new AbortController();
+      const cancelled = executor.execute('session.goal.get', { sessionId: 'goal-session' }, { ...context(), signal: abort.signal });
+      await vi.waitFor(() => expect(acknowledge).toBeTypeOf('function'));
+      const cancellation = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+      abort.abort();
+      await cancellation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('retires a signal-free Goal Action wait with its captured Account', async () => {
+    installSession('goal-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    storage.setState({ machines: { ...storage.getState().machines, 'machine-a': createMachineFixture({ id: 'machine-a',
+      storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+      metadata: { ...createMachineFixture().metadata!, daemonSessionGoalControlsSupported: true } }) } });
+    let acknowledge!: (value: unknown) => void;
+    daemonAnswer = () => new Promise(resolve => { acknowledge = resolve; });
+    let settled = false;
+    const pending = createDefaultActionExecutor().execute('session.goal.get', { sessionId: 'goal-session' }, context())
+      .then(value => { settled = true; return value; }, error => { settled = true; return error; });
+    try {
+      await vi.waitFor(() => expect(acknowledge).toBeTypeOf('function'));
+      const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+      await disconnectActiveServerConnection();
+      await vi.waitFor(() => expect(settled, 'Account retirement must release its Goal wait').toBe(true));
+    } finally {
+      acknowledge?.({ workState: null });
+      await pending.catch(() => {});
+    }
   });
   it('preserves definitive API-token send outcomes at the transcript boundary', async () => {
     const read = installSession('external-send', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
@@ -298,21 +371,89 @@ describe('default Action executor mode and catalog contracts', () => {
         message: 'Session stop incomplete: destroy_failed',
       });
   });
+  it.each([true, false])('confirms an already-stopped Session through a fresh Home read after exact daemon absence (cached active=%s)', async (cachedActive) => {
+    const sessionId = 'stop-already-inactive';
+    const readRow = installSession(sessionId, { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const session = storage.getState().sessions[sessionId];
+    storage.setState({ sessions: { ...storage.getState().sessions, [sessionId]: { ...session, active: cachedActive } } });
+    let daemonStopReturned = false;
+    let freshReads = 0;
+    const answer = { select: () => {
+      if (daemonStopReturned) freshReads++;
+      return { body: { session: { ...readRow(), active: !daemonStopReturned } } };
+    } };
+    homes.answer(serverId, `/v2/sessions/${sessionId}`, answer);
+    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
+    daemonAnswer = (request) => {
+      if (request.method !== `machine-a:${RPC_METHODS.STOP_SESSION}`) throw new Error('No runner remains to stop');
+      daemonStopReturned = true;
+      return { status: 'not_found' };
+    };
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    await expect(executeSessionLifecycleAction('session.stop', sessionId, { serverId })).resolves.toEqual({ success: true });
+    expect(freshReads).toBeGreaterThan(0);
+    expect(outgoing.map(request => request.method)).toEqual([`machine-a:${RPC_METHODS.STOP_SESSION}`]);
+  });
+
+  it.each(['active', 'unknown', 'unavailable', 'ambiguous'] as const)('does not confirm an absent runtime from %s Home or transport evidence', async (evidence) => {
+    const sessionId = 'stop-unconfirmed';
+    const readRow = installSession(sessionId, { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const session = storage.getState().sessions[sessionId];
+    storage.setState({ sessions: { ...storage.getState().sessions, [sessionId]: { ...session, active: false } } });
+    let daemonStopReturned = false;
+    let confirmationReadFailed = false;
+    const answer = { select: () => {
+      if (daemonStopReturned && evidence === 'unavailable' && !confirmationReadFailed) {
+        confirmationReadFailed = true;
+        return { status: 500, body: { error: 'Session projection temporarily unavailable' } };
+      }
+      return { body: { session: { ...readRow(), active: evidence === 'unknown' && daemonStopReturned ? undefined : evidence !== 'ambiguous' } } };
+    } };
+    homes.answer(serverId, `/v2/sessions/${sessionId}`, answer);
+    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
+    daemonAnswer = (request) => {
+      if (request.method === `machine-a:${RPC_METHODS.STOP_SESSION}`) {
+        daemonStopReturned = true;
+        if (evidence === 'ambiguous') throw Object.assign(new Error('Stop acknowledgement lost'), { rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+      }
+      if (evidence === 'unavailable' && request.method === `${sessionId}:killSession`) return { status: 'requested' };
+      return { status: 'not_found' };
+    };
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const result = await executeSessionLifecycleAction('session.stop', sessionId, { serverId });
+    expect(result, JSON.stringify(result)).toMatchObject({ success: false,
+      ...(evidence === 'unavailable' ? { code: 'session_stop_requested' } : {}) });
+    if (evidence === 'unavailable') expect(outgoing.map(request => request.method)).toEqual([
+      `machine-a:${RPC_METHODS.STOP_SESSION}`, `${sessionId}:killSession`,
+    ]);
+    if (evidence === 'ambiguous') expect(outgoing.map(request => request.method)).toEqual([`machine-a:${RPC_METHODS.STOP_SESSION}`]);
+  });
+
+  it('retains an explicit Ask policy for Stop after removing UI-local confirmation', async () => {
+    installSession('stop-ask', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    installActionSettings({ 'session.stop': { approvalRequiredSurfaces: ['ui'] } });
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    await expect(executeSessionLifecycleAction('session.stop', 'stop-ask', { serverId }))
+      .resolves.toMatchObject({ success: false, code: 'approval_request_created' });
+    expect(outgoing).toEqual([]);
+  });
   it('retains next-prompt mode in the draft without invoking the immediate Action', async () => {
     const { applyPermissionModeSelection } = await import('@/sync/domains/permissions/permissionModeApply');
     const { getSessionDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
     await (await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage')).prepareSessionDraftPersistenceStorage();
     const read = installSession('mode-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const draftScope = storage.getState().settingsScope;
+    if (!draftScope) throw new Error('Expected the restored Account draft scope');
     await applyPermissionModeSelection({ sessionId: 'mode-session', serverId, mode: 'safe-yolo', applyTiming: 'next_prompt',
-      draftScope: { serverId, accountId: 'alice' },
+      draftScope,
       executeAction: createDefaultActionExecutor().execute });
     expect(storage.getState().sessions['mode-session']?.permissionMode).not.toBe('safe-yolo');
-    const retainedDraft = getSessionDraftSnapshot({ serverId, accountId: 'alice' }, { kind: 'session', sessionId: 'mode-session' });
+    const retainedDraft = getSessionDraftSnapshot(draftScope, { kind: 'session', sessionId: 'mode-session' });
     if (!retainedDraft || !('extensions' in retainedDraft.document)) throw new Error('Expected Session composer draft');
     expect(retainedDraft.document.extensions.happier?.nextPromptPermissionModeV1?.value).toBe('safe-yolo');
     expect(read().metadataVersion).toBe(1);
     await applyPermissionModeSelection({ sessionId: 'mode-session', serverId, mode: 'read-only', applyTiming: 'immediate',
-      draftScope: { serverId, accountId: 'alice' },
+      draftScope,
       executeAction: createDefaultActionExecutor().execute });
     expect(storage.getState().sessions['mode-session']?.permissionMode).toBe('read-only');
     expect(read().metadataVersion).toBeGreaterThan(1);
@@ -381,6 +522,24 @@ describe('default Action executor mode and catalog contracts', () => {
       currentUserId: 'alice', isConnected: true, isPinned: false }) })).rejects.toThrow();
     expect(deleted).toBe(false);
   });
+  it('executes an Info-confirmed Delete through the real Action front door without creating another approval', async () => {
+    const session = createSessionFixture({ id: 'confirmed-delete-session', serverId, active: false, archivedAt: 42 });
+    storage.setState({ sessions: { ...storage.getState().sessions, [session.id]: session } });
+    let deleteRequests = 0;
+    homes.answer(serverId, `/v1/sessions/${session.id}`, { select: () => {
+      deleteRequests += 1;
+      return { body: { success: true } };
+    } });
+    const { createSessionActionTarget } = await import('@/components/sessions/actions/sessionActionContext');
+    const { executeSessionAction } = await import('@/components/sessions/actions/sessionActionExecution');
+
+    await expect(executeSessionAction({
+      actionId: 'ui.session.delete',
+      target: createSessionActionTarget({ session, serverId, currentUserId: 'alice', isConnected: false, isPinned: false }),
+      context: { presentUserConfirmation: { actionId: 'session.delete' } },
+    })).resolves.toBeUndefined();
+    expect(deleteRequests).toBe(1);
+  });
   it('retains the Home delete conflict payload at the UI error boundary', async () => {
     const session = createSessionFixture({ id: 'conflict-session', serverId, active: false });
     storage.setState({ sessions: { ...storage.getState().sessions, [session.id]: session } });
@@ -425,8 +584,8 @@ describe('default Action executor mode and catalog contracts', () => {
     const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }) };
     serverId = await homes.addHome({ name: 'Mode Home', serverUrl: 'https://mode-actions.test', serverIdentityId: 'srv_mode_home', accountId: 'alice', credentials });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://mode-actions.test', accountId: 'alice', credentials, request: homes.request });
-    storage.getState().activateProfileScope({ serverId, accountId: 'alice' });
-    await storage.getState().activateSettingsScope({ serverId, accountId: 'alice' });
+    storage.getState().activateProfileScope({ serverId: connection.serverId, accountId: 'alice' });
+    await storage.getState().activateSettingsScope({ serverId: connection.serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     const machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' });
     const machine = createMachineFixture({ id: machineRow.id, activeAt: machineRow.activeAt });
@@ -503,8 +662,9 @@ describe('default Action executor mode and catalog contracts', () => {
   it('clears the terminal composer with the expected state at the Session RPC boundary', async () => {
     installSession('s1', { path: '/tmp/project', host: 'localhost', flavor: 'claude' });
     daemonAnswer = () => ({ ok: true, status: 'cleared', sessionId: 's1' });
-    expect(await createDefaultActionExecutor().execute('session.terminalComposer.clear',
-      { sessionId: 's1', expectedStateAtMs: 1234 }, context())).toMatchObject({ ok: true, result: { status: 'cleared', sessionId: 's1' } });
+    const result = await createDefaultActionExecutor().execute('session.terminalComposer.clear',
+      { sessionId: 's1', expectedStateAtMs: 1234 }, context());
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'cleared', sessionId: 's1' } });
     expect(outgoing).toContainEqual(expect.objectContaining({ method: `s1:${SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR}`,
       params: { sessionId: 's1', expectedStateAtMs: 1234 } }));
   });

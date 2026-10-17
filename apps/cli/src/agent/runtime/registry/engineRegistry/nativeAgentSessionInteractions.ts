@@ -26,7 +26,11 @@ import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/se
 import { createPluginInteractionsService } from '@/plugins/runtime/invocation/services/interactions';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import type { StoredCredentials } from '@/persistence';
-import { createPluginSessionsInventory } from '@/session/services/pluginSessionsInventory';
+import {
+    bindPluginSessionsSubagentObservation,
+    createPluginSessionsInventory,
+    readPluginSessionsSubagentObservation,
+} from '@/session/services/pluginSessionsInventory';
 import { createPluginSessionHandleCapabilitiesFactory } from '@/session/services/pluginSessionHandleCapabilities';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
 import { executePluginSessionMessageAction } from '@/session/services/executePluginSessionMessageAction';
@@ -281,7 +285,9 @@ async function presentBoundPermissionRequest(
                 ...(request.kind === 'approval' && request.allowedPersistenceScopes?.includes('session') !== true
                     ? { source: NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE }
                     : {}),
-                ...(permissionContext?.origin ? { origin: permissionContext.origin } : {}),
+                ...(request.kind === 'questions' && permissionContext?.lifetime === 'occurrence'
+                    ? { origin: 'host_occurrence_question' as const }
+                    : permissionContext?.origin ? { origin: permissionContext.origin } : {}),
                 ...(permissionContext?.lifetime ? { lifetime: permissionContext.lifetime } : {}),
                 ...(hasTurnId && permissionContext
                     ? { turnId: permissionContext.turnId }
@@ -497,6 +503,23 @@ export function createNativeAgentCurrentExecutionRunUiServices(
     });
 }
 
+/** Native Session custody owns live capabilities; invocation services retain external operations. */
+export function bindNativeAgentSessionServices(operationServices: PluginServices, sessionServices: PluginServices): PluginServices {
+    const sessions = Object.freeze({
+        ...sessionServices.sessions,
+        external: operationServices.sessions.external,
+    });
+    const subagentObservation = readPluginSessionsSubagentObservation(sessionServices.sessions);
+    if (subagentObservation) bindPluginSessionsSubagentObservation(sessions, subagentObservation);
+    return Object.freeze({
+        ...operationServices,
+        availability: (serviceId: PluginServiceId) => serviceId === 'sessions'
+            ? sessionServices.availability('sessions')
+            : operationServices.availability(serviceId),
+        sessions,
+    });
+}
+
 export function createNativeAgentSessionServices(params: NativeAgentSessionInteractionParams): PluginServices {
     const base = createUnavailablePluginServices();
     const permissionHandler = readPermissionHandler(params);
@@ -589,6 +612,9 @@ export function createNativeAgentSessionServices(params: NativeAgentSessionInter
                                         ...(permissionHandler ? { permissionHandler } : {}),
                                         interactions,
                                         readPermissionMode: params.readPermissionMode ?? (() => 'unavailable'),
+                                        ...(params.readActiveTurnAdmissionWitness
+                                            ? { readActiveTurnAdmissionWitness: params.readActiveTurnAdmissionWitness }
+                                            : {}),
                                         ...(params.media ? { media: params.media } : {}),
                                         ...(params.signal ? { signal: params.signal } : {}),
                                         isCurrent: params.isCurrent!,

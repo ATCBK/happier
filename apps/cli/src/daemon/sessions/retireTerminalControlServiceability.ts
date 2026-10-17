@@ -64,29 +64,60 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
     if (!rawSession) {
         throw new Error('terminal_control_serviceability_retirement_session_not_found');
     }
+    let retiredAttachmentId = params.attachmentId;
+    let projectionAlreadyAbsent = false;
     const updated = await updateSessionMetadataWithRetry({
         token: params.credentials.token,
         credentials: params.credentials,
         sessionId: params.sessionId,
         rawSession,
         currentness: params.currentness,
-        updater: (metadata) => {
+        updater: async (metadata) => {
+            retiredAttachmentId = params.attachmentId;
+            projectionAlreadyAbsent = false;
             if (!matchesExpectedRunner(metadata)) return metadata;
+            if (params.expectedRunner) {
+                const attachment = await readTerminalHostAttachmentState({
+                    happyHomeDir: configuration.happyHomeDir, sessionId: params.sessionId,
+                });
+                if (attachment.status !== 'absent' || isPidPresent(params.expectedRunner.pid)) {
+                    throw new Error('terminal_control_serviceability_retirement_runner_or_host_unresolved');
+                }
+                // Runner-bound retirement also clears that departed runner's
+                // historical host projection. A current descriptor or a newer
+                // metadata runner cannot lend authority to this mutation.
+                const terminal = metadata.terminal;
+                // A mode-only terminal descriptor already has no control projection.
+                // Retain the incumbent legacy path when terminal metadata is absent.
+                if (terminal && typeof terminal === 'object' && !Array.isArray(terminal)
+                    && !('controlServiceabilityV1' in terminal)) {
+                    projectionAlreadyAbsent = true;
+                    return metadata;
+                }
+                if (terminal && typeof terminal === 'object' && !Array.isArray(terminal)) {
+                    const serviceability = (terminal as Record<string, unknown>).controlServiceabilityV1;
+                    if (serviceability && typeof serviceability === 'object' && !Array.isArray(serviceability)) {
+                        const attachmentId = (serviceability as Record<string, unknown>).attachmentId;
+                        if (typeof attachmentId === 'string' && attachmentId.trim()) retiredAttachmentId = attachmentId;
+                    }
+                }
+            }
             return clearTerminalControlServiceabilityProjection({
                 metadata,
-                retiredAttachmentId: params.attachmentId,
+                retiredAttachmentId,
                 retiredAt: Date.now(),
                 terminalMode: params.terminalMode,
             });
         },
     });
     if (!matchesExpectedRunner(updated.metadata)) return 'superseded';
+    if (projectionAlreadyAbsent) return 'retired';
     const terminal = updated.metadata.terminal;
     if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return 'superseded';
     const serviceability = (terminal as Record<string, unknown>).controlServiceabilityV1;
     if (!serviceability || typeof serviceability !== 'object' || Array.isArray(serviceability)) return 'superseded';
     const projection = serviceability as Record<string, unknown>;
-    return projection.attachmentId === params.attachmentId && projection.retired === true
+    return projection.attachmentId === retiredAttachmentId && projection.retired === true
         ? 'retired'
         : 'superseded';
 }

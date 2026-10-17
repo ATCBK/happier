@@ -38,7 +38,23 @@ export type TerminalHostDispositionResult =
       reason: 'legacy_attachment' | 'attachment_mismatch' | 'missing_topology_proof' | 'disposition_in_progress' | 'destroy_failed' | 'retirement_failed' | 'descriptor_retirement_failed';
     }>;
 
-const activeDispositionClaims = new Set<string>();
+const activeDispositionClaims = new Map<string, Promise<TerminalHostDispositionResult>>();
+
+async function joinTerminalHostDisposition(
+  claimKey: string,
+  dispose: () => Promise<TerminalHostDispositionResult>,
+): Promise<TerminalHostDispositionResult> {
+  const active = activeDispositionClaims.get(claimKey);
+  if (active) return await active;
+  // Publish the joinable operation before any disposal or retirement callback runs.
+  const pending = Promise.resolve().then(dispose);
+  activeDispositionClaims.set(claimKey, pending);
+  try {
+    return await pending;
+  } finally {
+    activeDispositionClaims.delete(claimKey);
+  }
+}
 
 async function disposeRetiredTerminalSessionHookArtifacts(input: Readonly<{
   happyHomeDir: string;
@@ -98,6 +114,11 @@ export async function executeTerminalHostDisposition(input: Readonly<{
     attachmentInfo: ExactTerminalHostAttachmentInfo;
   }>) => Promise<void>;
 }>): Promise<TerminalHostDispositionResult> {
+  const claimKey = `${input.happyHomeDir}\u0000${input.sessionId}\u0000${input.expectedAttachmentId}`;
+  if (input.intent.kind !== 'preserve_host') {
+    const active = activeDispositionClaims.get(claimKey);
+    if (active) return await active;
+  }
   const readCurrent = async (): Promise<TerminalHostAttachmentInfo | null> => {
     const target = { happyHomeDir: input.happyHomeDir, sessionId: input.sessionId };
     if (input.readAttachmentState || !input.readAttachmentInfo) {
@@ -137,12 +158,7 @@ export async function executeTerminalHostDisposition(input: Readonly<{
     return { status: 'preserved', attachmentId: attachmentInfo.attachmentId };
   }
 
-  const claimKey = `${input.happyHomeDir}\u0000${input.sessionId}\u0000${attachmentInfo.attachmentId}`;
-  if (activeDispositionClaims.has(claimKey)) {
-    return { status: 'parked', reason: 'disposition_in_progress' };
-  }
-  activeDispositionClaims.add(claimKey);
-  try {
+  return await joinTerminalHostDisposition(claimKey, async () => {
     let current: TerminalHostAttachmentInfo | null;
     try {
       current = await readCurrent() ?? captured;
@@ -281,9 +297,7 @@ export async function executeTerminalHostDisposition(input: Readonly<{
       attachmentId: current.attachmentId,
     });
     return { status: 'destroyed', attachmentId: current.attachmentId };
-  } finally {
-    activeDispositionClaims.delete(claimKey);
-  }
+  });
 }
 
 export async function executeConfirmedDeadTerminalHostAttachmentRetirement(input: Readonly<{
@@ -320,11 +334,7 @@ export async function executeConfirmedDeadTerminalHostAttachmentRetirement(input
 
   const expected = input.expectedAttachmentInfo;
   const claimKey = `${input.happyHomeDir}\u0000${input.sessionId}\u0000legacy:${expected.updatedAt}`;
-  if (activeDispositionClaims.has(claimKey)) {
-    return { status: 'parked', reason: 'disposition_in_progress' };
-  }
-  activeDispositionClaims.add(claimKey);
-  try {
+  return await joinTerminalHostDisposition(claimKey, async () => {
     const removeAttachment = input.removeAttachmentInfo ?? removeTerminalHostAttachmentInfo;
     const removed = await removeAttachment({
       happyHomeDir: input.happyHomeDir,
@@ -338,7 +348,5 @@ export async function executeConfirmedDeadTerminalHostAttachmentRetirement(input
       attachmentId: null,
     });
     return { status: 'retired', attachmentId: null };
-  } finally {
-    activeDispositionClaims.delete(claimKey);
-  }
+  });
 }

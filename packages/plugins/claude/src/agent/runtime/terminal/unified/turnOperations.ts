@@ -1,6 +1,7 @@
 import { extractToolResultBlocksFromSdkMessage } from '../../remote/sdk/streamEvents.js';
 
 import { sleep } from '@happier-dev/plugin-sdk/async';
+import { prepareClaudeTerminalConfigHome } from '../configHome.js';
 import { buildClaudeMcpConfigArgs, materializeClaudeMcpConfigArgsForSpawn } from '../../../mcp/materializeConfigArgs.js';
 import type { Disposable, JsonValue } from '@happier-dev/plugin-sdk';
 import type {
@@ -99,8 +100,6 @@ import { createPersistedClaudeUnifiedOwnInjectedTextLog } from './ownInjectedTex
 import { classifyClaudeOwnComposerDraft } from './ownComposerDraftClassification.js';
 import {
   hasClaudeUnifiedVisibleDialog,
-  resolveClaudeUnifiedDialogBlockedReason,
-  type ClaudeUnifiedDialogBlockedReason,
 } from './tuiControls/dialogRegistry.js';
 import { createClaudePermissionHookHandler } from '../../shared/permissionHookHandler.js';
 import { createClaudeUnifiedPromptEchoSuppressor } from './promptEchoSuppression.js';
@@ -115,7 +114,7 @@ import {
   parseClaudeScreenState,
   resolveClaudeScreenInFlightSteerVeto,
 } from './screenState.js';
-import { createClaudeUnifiedProviderTranscriptPublisher, projectClaudeTranscriptRowToProviderPayload } from './providerTranscript.js';
+import { createClaudeUnifiedProviderTranscriptPublisher, isClaudeUnifiedPrimaryTranscriptRow, projectClaudeTranscriptRowToProviderPayload } from './providerTranscript.js';
 import {
   createClaudeUnifiedGoalRuntime,
   type ClaudeGoalCommandDelivery,
@@ -332,16 +331,8 @@ const DEFAULT_QUEUED_BANNER_CUSTODY_RETRY_DELAYS_MS = [
   3_000,
 ] as const;
 
-// Startup-readiness window: a live host that is still rendering may take longer than the
-// base window to show an interactive composer. SessionStart evidence (or a progressing
-// live screen) extends the wait up to the hard ceiling; a silent, unconfirmed host
-// fast-fails after the base window plus a short progress grace.
-const DEFAULT_STARTUP_READINESS_BASE_TIMEOUT_MS = 15_000;
-const DEFAULT_STARTUP_READINESS_EXTENDED_TIMEOUT_MS = 60_000;
-const DEFAULT_STARTUP_READINESS_PROGRESS_GRACE_MS = 8_000;
+// Demand-driven observation cadence, independent of the pending input's lifetime.
 const DEFAULT_STARTUP_READINESS_POLL_INTERVAL_MS = 1_000;
-const READINESS_DIAGNOSTIC_TAIL_MAX_LINES = 40;
-const READINESS_DIAGNOSTIC_TAIL_MAX_CHARS = 2_000;
 
 // user_draft starvation (incident 294-veto loop, lane X1): a leftover composer draft blocks
 // every injection/steer window. An OWN exact-match leftover on a non-generating screen is
@@ -368,14 +359,6 @@ const DEFAULT_ACTIVE_TURN_PROGRESS_INTERVAL_MS = 60_000;
 // tail is strictly bounded — it stops early once a dialog is surfaced/answered or the screen is clear,
 // and escalates ONCE at exhaustion (no infinite polling).
 const DEFAULT_DIALOG_TURN_END_PROBE_DELAYS_MS: readonly number[] = [0, 1_500, 5_000, 15_000, 30_000, 60_000];
-
-// A registry-recognized dialog that owns terminal input while a prompt is queued blocks delivery. The
-// dialog is routed to the resolver (published for a user decision) before deferring; if it stays
-// unresolved past this bounded window the block escalates ONCE (one-shot latch) and projects a durable
-// block via the existing `runtime_config_blocked` reason. Configurable, clamped to [1s, 5min].
-const DEFAULT_DIALOG_INJECTION_BLOCK_ESCALATION_MS = 15_000;
-const MIN_DIALOG_INJECTION_BLOCK_ESCALATION_MS = 1_000;
-const MAX_DIALOG_INJECTION_BLOCK_ESCALATION_MS = 300_000;
 
 function sanitizeTurnEndProbeDelaysMs(delays: readonly number[] | undefined): readonly number[] {
   const source = delays ?? DEFAULT_DIALOG_TURN_END_PROBE_DELAYS_MS;
@@ -421,10 +404,8 @@ export type ClaudeUnifiedTerminalTurnOperationsParams = Readonly<{
     transcriptPath: string;
   }> | null;
   launchIntent?: ClaudeUnifiedTerminalLaunchIntent;
+  /** Test seam for readiness observation cadence; readiness has no phase deadline. */
   startupReadiness?: Readonly<{
-    baseTimeoutMs?: number;
-    extendedTimeoutMs?: number;
-    progressGraceMs?: number;
     pollIntervalMs?: number;
   }>;
   staleTurnRecovery?: Readonly<{
@@ -444,12 +425,10 @@ export type ClaudeUnifiedTerminalTurnOperationsParams = Readonly<{
   workspaceTrustPolicy?: ClaudeUnifiedTerminalWorkspaceTrustPolicy | null | undefined;
   /**
    * Dialog-resolution tuning (test seam). `turnEndProbeDelaysMs` are the absolute offsets (from turn
-   * settle) of the bounded turn-end/idle dialog re-arm tail; `injectionBlockEscalationMs` is the
-   * one-shot escalation window for a registry-recognized dialog blocking prompt delivery.
+   * settle) of the turn-end/idle dialog re-arm tail.
    */
   dialogResolution?: Readonly<{
     turnEndProbeDelaysMs?: readonly number[];
-    injectionBlockEscalationMs?: number;
   }>;
   /** Native AgentRuntime work-state projection; omitting it preserves the legacy metadata owner. */
   publishGoalWorkState?: (snapshot: SessionWorkStateV1) => void;
@@ -733,16 +712,6 @@ function readErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function boundReadinessDiagnosticTail(text: string | null): string {
-  if (!text) return '';
-  const tail = text
-    .split('\n')
-    .slice(-READINESS_DIAGNOSTIC_TAIL_MAX_LINES)
-    .join('\n');
-  return tail.length > READINESS_DIAGNOSTIC_TAIL_MAX_CHARS
-    ? tail.slice(-READINESS_DIAGNOSTIC_TAIL_MAX_CHARS)
-    : tail;
-}
 
 function waitMs(ms: number): Promise<void> {
   const delay = Math.max(0, Math.trunc(ms));
@@ -876,6 +845,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
   }
   const providerTranscriptPublisher = createClaudeUnifiedProviderTranscriptPublisher({
     ctx: params.ctx,
+    onSourceFollowFailure: noteRequiredSourceHistoryLost,
     historicalProviderSessionId: params.launchIntent?.kind === 'resume_native'
       ? params.launchIntent.providerSessionId
       : params.knownProviderSession?.providerSessionId,
@@ -884,13 +854,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
       if (observation) await nativeRuntime.observeTerminalLifecycle(observation);
     },
     onObserveRow: async (row, observation) => {
-      const rowSessionId = readClaudeProviderIdentityValue(row.session_id)
-        ?? readClaudeProviderIdentityValue(row.sessionId);
-      if (
-        rowSessionId === observation.providerSessionId
-        && row.isSidechain !== true
-        && !isSidechainSessionHook(row)
-      ) {
+      if (isClaudeUnifiedPrimaryTranscriptRow(row, observation.providerSessionId)) {
         adoptProviderSessionId({
           providerSessionId: observation.providerSessionId,
           transcriptPath: observation.transcriptPath,
@@ -1189,10 +1153,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
       requestedResumeProviderSessionId
       && knownProviderSession.providerSessionId !== requestedResumeProviderSessionId
     ) return;
-    const bindResult = await providerTranscriptPublisher.bindKnownLiveTranscript(knownProviderSession).catch(error => {
-      noteRequiredSourceHistoryLost();
-      throw error;
-    });
+    const bindResult = await providerTranscriptPublisher.bindKnownLiveTranscript(knownProviderSession);
     knownProviderSessionBound = bindResult.status === 'bound' || bindResult.status === 'unchanged';
     if (
       bindResult.status === 'bound'
@@ -1234,23 +1195,14 @@ export function createClaudeUnifiedTerminalTurnOperations(
     return null;
   }
 
-  const startupReadinessConfig = (() => {
-    const base = Math.max(1, Math.trunc(params.startupReadiness?.baseTimeoutMs ?? DEFAULT_STARTUP_READINESS_BASE_TIMEOUT_MS));
-    return {
-      baseTimeoutMs: base,
-      extendedTimeoutMs: Math.max(base, Math.trunc(params.startupReadiness?.extendedTimeoutMs ?? DEFAULT_STARTUP_READINESS_EXTENDED_TIMEOUT_MS)),
-      progressGraceMs: Math.max(1, Math.trunc(params.startupReadiness?.progressGraceMs ?? DEFAULT_STARTUP_READINESS_PROGRESS_GRACE_MS)),
-      pollIntervalMs: Math.max(1, Math.trunc(params.startupReadiness?.pollIntervalMs ?? DEFAULT_STARTUP_READINESS_POLL_INTERVAL_MS)),
-    };
-  })();
-  let lastObservedPaneAlive: boolean | null = null;
-  let lastObservedScreenText: string | null = null;
-  let lastScreenProgressAtMs: number | null = null;
+  const startupReadinessPollIntervalMs = Math.max(1, Math.trunc(
+    params.startupReadiness?.pollIntervalMs ?? DEFAULT_STARTUP_READINESS_POLL_INTERVAL_MS,
+  ));
   let lastReadinessKind: 'writable' | 'writable_steer' | 'deferred' | 'failed' = 'deferred';
   let lastSteerVetoReason: string | null = null;
   let readinessWakeTimer: ReturnType<typeof setTimeout> | null = null;
+  let captureStyleBlockNoticeCustodied = false;
   const queuedBannerCustodyTimers = new Set<ReturnType<typeof setTimeout>>();
-  let readinessWaitStartedAtMs: number | null = null;
   const staleTurnRecoveryConfig = {
     windowMs: Math.max(1, Math.trunc(params.staleTurnRecovery?.windowMs ?? DEFAULT_STALE_TURN_RECOVERY_WINDOW_MS)),
     pollIntervalMs: Math.max(1, Math.trunc(params.staleTurnRecovery?.pollIntervalMs ?? DEFAULT_STALE_TURN_RECOVERY_POLL_INTERVAL_MS)),
@@ -1260,18 +1212,9 @@ export function createClaudeUnifiedTerminalTurnOperations(
   const dialogTurnEndProbeDelaysMs: readonly number[] = sanitizeTurnEndProbeDelaysMs(
     params.dialogResolution?.turnEndProbeDelaysMs,
   );
-  const dialogInjectionBlockEscalationMs = Math.min(
-    MAX_DIALOG_INJECTION_BLOCK_ESCALATION_MS,
-    Math.max(
-      MIN_DIALOG_INJECTION_BLOCK_ESCALATION_MS,
-      Math.trunc(params.dialogResolution?.injectionBlockEscalationMs ?? DEFAULT_DIALOG_INJECTION_BLOCK_ESCALATION_MS),
-    ),
-  );
   let turnEndDialogProbeTimer: ReturnType<typeof setTimeout> | null = null;
   let turnEndDialogProbeGeneration = 0;
   let turnEndDialogProbeEscalated = false;
-  let dialogInjectionBlockStartedAtMs: number | null = null;
-  let dialogInjectionBlockEscalated = false;
   let lastProviderActivityAtMs: number | null = null;
   let lastTurnProgressPublishedAtMs: number | null = null;
   const publishedLifecycleStartTurnIds = new Set<string>();
@@ -1675,8 +1618,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
           stopReadinessWake();
           return;
         }
-        readinessWaitStartedAtMs = Date.now();
-        lastScreenProgressAtMs = Date.now();
         ensureReadinessWake();
       },
     });
@@ -1957,6 +1898,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
     const sessionName = createClaudeUnifiedTerminalSessionName(params.happierSessionId);
     let handle: TerminalHostHandle;
     try {
+      await prepareClaudeTerminalConfigHome(params.launchEnv);
       startupInstructionsFile ??= params.startupInstructions
         ? materializeClaudeStartupInstructions(params.startupInstructions) : undefined;
       mcpConfigForSpawn ??= materializeClaudeMcpConfigArgsForSpawn(buildClaudeMcpConfigArgs(params.mcpServers), message => params.ctx.logger.warn(message));
@@ -1983,7 +1925,10 @@ export function createClaudeUnifiedTerminalTurnOperations(
                 effort: launchEffort,
                 ...(currentProviderModel ? { providerModel: currentProviderModel } : {}),
               }),
-              CLAUDE_TERMINAL_YOLO_ALLOW_FLAG,
+              // Merely enabling bypass in Claude's mode cycle triggers its native warning
+              // and relaxes interactive plan enforcement. Require an explicit bypass choice.
+              ...(mapToClaudePermissionMode(launchPermissionMode) === 'bypassPermissions'
+                ? [CLAUDE_TERMINAL_YOLO_ALLOW_FLAG] : []),
               ...buildClaudePermissionModeArgs(launchPermissionMode),
             ],
             interactionKind: 'interactive_terminal',
@@ -2088,7 +2033,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
           let bindResult: Awaited<ReturnType<typeof providerTranscriptPublisher.bindFromSessionHook>>;
           try { bindResult = await providerTranscriptPublisher.bindFromSessionHook(providerSessionId, payload); }
           catch (error) {
-            noteRequiredSourceHistoryLost();
             params.ctx.logger.warn('[ClaudeUnifiedTerminal] ordered source transcript baseline failed', { error });
             throw error;
           }
@@ -2167,9 +2111,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
               const bindResult = await providerTranscriptPublisher.bindKnownLiveTranscript({
                 providerSessionId: statuslineProviderSessionId,
                 transcriptPath: statuslineProviderTranscriptPath,
-              }).catch(error => {
-                noteRequiredSourceHistoryLost();
-                throw error;
               });
               if (
                 !state.providerSessionId
@@ -2717,12 +2658,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
     }
   }
 
-  function recordScreenProgress(screenText: string): void {
-    if (screenText !== lastObservedScreenText) {
-      lastObservedScreenText = screenText;
-      lastScreenProgressAtMs = Date.now();
-    }
-  }
 
   function resetUserDraftStarvation(): void {
     const hadEscalatedDraftBlocker = userDraftEscalated;
@@ -2847,7 +2782,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
       return null;
     });
     if (!liveness) {
-      lastObservedPaneAlive = null;
       lastReadinessKind = 'deferred';
       arbiter.observeReadiness({
         status: 'defer_liveness_uncertain',
@@ -2859,7 +2793,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
       });
       return;
     }
-    lastObservedPaneAlive = liveness.paneAlive === true;
     if (!liveness.paneAlive) {
       if (liveness.paneDead === true) {
         // Pane loss ends unresolved observation, without proving that the native provider stopped.
@@ -2914,11 +2847,9 @@ export function createClaudeUnifiedTerminalTurnOperations(
       // recognizes the real TUI composer shapes (boxed `│ > │`, the `❯` glyph, mode
       // markers) so a live rendered composer is never false-negatively deferred.
       let screen = parseClaudeScreenState(inputState.currentInput, { cursor: inputState.cursor });
-      recordScreenProgress(screen.text);
       // Claude refuses some launches before any session exists, printing one line and exiting.
       // Readiness can never arrive, and relaunching with the same arguments reproduces it, so
-      // terminalize now with the fix Claude named instead of deferring until the startup window
-      // expires and reporting a generic timeout.
+      // terminalize now with the fix Claude named instead of waiting for impossible readiness.
       const startupRefusal = classifyClaudeStartupRefusal({ text: screen.text });
       if (startupRefusal && !startupRefusal.retryable) {
         lastReadinessKind = 'failed';
@@ -2938,18 +2869,11 @@ export function createClaudeUnifiedTerminalTurnOperations(
         return;
       }
       // Resolve a recognized dialog (owner arbitration → publish) BEFORE composer-draft
-      // classification so an owned effort/model dialog is answered/published first. A registry-
-      // recognized dialog that blocks a queued prompt is tracked so a sustained block escalates once
-      // and projects a durable block instead of deferring forever.
-      const dialogBlockedReason = resolveClaudeUnifiedDialogBlockedReason(screen);
+      // classification so an owned effort/model dialog is answered/published first. A pending
+      // decision retains the input until the person answers or its occurrence is cancelled.
       const resumeChoiceResult = await maybeHandleStartupResumeChoiceDialog(handle, screen);
       if (resumeChoiceResult === 'waiting_for_user') {
         nativeResumeTurnBarrier?.observeStartupBlocked();
-      }
-      if (dialogBlockedReason !== null) {
-        noteDialogInjectionBlock(dialogBlockedReason);
-      } else {
-        resetDialogInjectionBlock();
       }
       if (resumeChoiceResult !== 'unhandled') {
         lastReadinessKind = 'deferred';
@@ -2986,11 +2910,11 @@ export function createClaudeUnifiedTerminalTurnOperations(
         const clearedScreen = await maybeClearOwnLeftoverDraft(handle, screen);
         if (clearedScreen) {
           screen = clearedScreen;
-          recordScreenProgress(screen.text);
         }
       }
       const captureStyleUnavailablePlaceholder =
         isClaudeComposerCaptureStyleUnavailablePlaceholderCandidate(inputState.currentInput, screen);
+      if (!captureStyleUnavailablePlaceholder) captureStyleBlockNoticeCustodied = false;
       if (!isClaudeScreenReadyForInput(screen)) {
         // Native generation is positive turn-start evidence even when lifecycle hooks were lost.
         // Reuse the terminal-origin lifecycle owner before deriving steer readiness and acceptance.
@@ -3046,6 +2970,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
             ...(handle.paneId ? { paneId: handle.paneId } : {}),
             liveness,
           });
+          rejectCurrentQueuedPromptBeforeProvider('provider_unavailable_before_acceptance');
           return;
         }
         if (isClaudeUsageLimitWaitBlockingComposerClear(screen) && isOwnLeftoverDraft(screen)) {
@@ -3076,6 +3001,16 @@ export function createClaudeUnifiedTerminalTurnOperations(
               ...(handle.paneId ? { paneId: handle.paneId } : {}),
               liveness,
             });
+            if (hasPromptDeliveryDemand() && !captureStyleBlockNoticeCustodied) {
+              await publishSessionEvent(createTerminalComposerDraftBlockedEvent('idle_draft_guard'), {
+                failureWarnMessage: '[ClaudeUnifiedTerminal] capture-style pending notice publish failed',
+              }).then(() => {
+                captureStyleBlockNoticeCustodied = true;
+              }, () => {
+                // Publication logged the failure; the existing readiness observation retries
+                // until durable custody is accepted or the pending input lifetime ends.
+              });
+            }
             return;
           }
           await noteUserDraftDeferral(screen);
@@ -3137,7 +3072,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
       clearTimeout(readinessWakeTimer);
       readinessWakeTimer = null;
     }
-    readinessWaitStartedAtMs = null;
   }
 
   function readinessWakeNeeded(): boolean {
@@ -3148,22 +3082,15 @@ export function createClaudeUnifiedTerminalTurnOperations(
       && (snapshot.headInputState === 'waiting_for_readiness' || snapshot.headInputState === 'queued');
   }
 
-  // Bounded startup-readiness wake: a deferred prompt re-polls the screen until it becomes
-  // interactive or the adaptive window expires. SessionStart is host-alive evidence that
-  // holds the wait through static stalls up to the hard ceiling; a live-but-unconfirmed
-  // host must keep progressing (screen output changing) past the base window; anything
-  // else fails fast after the base window. On expiry the prompt fails with a STRUCTURED
-  // runtime issue carrying sanitized diagnostics — never a silent hang or a generic fatal.
+  // Readiness belongs to the pending input/occurrence lifetime. Poll until the native
+  // composer is ready; caller cancellation, disposal and definitive terminal evidence
+  // settle that lifetime. Human confirmation and slow startup have no separate deadline.
   function ensureReadinessWake(): void {
     if (readinessWakeTimer || state.disposed) return;
     if (!readinessWakeNeeded()) return;
-    if (readinessWaitStartedAtMs === null) {
-      readinessWaitStartedAtMs = Date.now();
-      lastScreenProgressAtMs = Date.now();
-    }
     const delayMs = userDraftEscalated
-      ? Math.max(startupReadinessConfig.pollIntervalMs, USER_DRAFT_STARVATION_RECHECK_MS)
-      : startupReadinessConfig.pollIntervalMs;
+      ? Math.max(startupReadinessPollIntervalMs, USER_DRAFT_STARVATION_RECHECK_MS)
+      : startupReadinessPollIntervalMs;
     readinessWakeTimer = setTimeout(() => {
       readinessWakeTimer = null;
       void runReadinessWakeTick().catch((error: unknown) => {
@@ -3185,89 +3112,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
       stopReadinessWake();
       return;
     }
-    const startedAt = readinessWaitStartedAtMs ?? Date.now();
-    const elapsedMs = Date.now() - startedAt;
-    const sessionStartObserved = sessionStartObservedForReadiness;
-    const hostAlive = sessionStartObserved || lastObservedPaneAlive === true;
-    const screenStaticForMs = Date.now() - (lastScreenProgressAtMs ?? startedAt);
-    const timedOut = elapsedMs >= startupReadinessConfig.extendedTimeoutMs
-      || (elapsedMs >= startupReadinessConfig.baseTimeoutMs && !hostAlive)
-      || (
-        elapsedMs >= startupReadinessConfig.baseTimeoutMs
-        && !sessionStartObserved
-        && screenStaticForMs > startupReadinessConfig.progressGraceMs
-      );
-    if (!timedOut) {
-      ensureReadinessWake();
-      return;
-    }
-    await failStartupReadiness({ elapsedMs, hostAlive, sessionStartObserved });
-  }
-
-  async function failStartupReadiness(diagnostics: Readonly<{
-    elapsedMs: number;
-    hostAlive: boolean;
-    sessionStartObserved: boolean;
-  }>): Promise<void> {
-    const blocker = arbiter.snapshot().headDeliveryBlocker;
-    if (blocker?.reason === 'capture_style_unavailable') {
-      try {
-        await publishSessionEvent(createTerminalComposerDraftBlockedEvent('idle_draft_guard'), {
-          failureWarnMessage: '[ClaudeUnifiedTerminal] capture-style pending notice publish failed',
-        });
-      } catch (error) {
-        ensureReadinessWake();
-        throw error;
-      }
-      stopReadinessWake();
-      readinessWaitStartedAtMs = Date.now();
-      lastScreenProgressAtMs = Date.now();
-      ensureReadinessWake();
-      return;
-    }
-    stopReadinessWake();
-    if (blocker && rejectCurrentQueuedPromptBeforeProvider(blocker.reason)) {
-      return;
-    }
-    const handle = state.handle;
-    const lastScreenTail = boundReadinessDiagnosticTail(lastObservedScreenText);
-    arbiter.observeReadiness({
-      status: 'failed_terminal',
-      observedAt: Date.now(),
-      reason: 'startup_readiness_timeout',
-      ...(handle ? {
-        hostKind: handle.kind,
-        hostSessionName: handle.sessionName,
-        ...(handle.paneId ? { paneId: handle.paneId } : {}),
-      } : {}),
-      recoverable: false,
-    });
-    state.dispatchAttemptInFlight = false;
-    state.lastTurnFailure = recordClaudeUnifiedTurnFailure({
-      evidence: {
-        code: 'claude_unified_terminal_readiness_timeout',
-        message: 'Claude unified terminal did not become ready for input before the startup readiness window expired',
-        elapsedMs: diagnostics.elapsedMs,
-        hostAlive: diagnostics.hostAlive,
-        sessionStartObserved: diagnostics.sessionStartObserved,
-        lastScreenTail,
-      },
-      fallbackMessage: 'Claude unified terminal startup readiness timed out',
-      handlers,
-      logger: params.ctx.logger,
-      publishedFailureTurnIds,
-      sessionId: params.happierSessionId,
-      turnId: state.activeTurnId ?? createClaudeUnifiedTurnId(params.happierSessionId, state.promptNonce),
-      // Session-scoped failure: publish begin+fail so the session-turn lifecycle commits the
-      // failed turn instead of dropping a turn-failed it never saw begin (SILENT-F1 port).
-      allocateTurnWhenIdle: true,
-    });
-    params.ctx.logger.warn('[ClaudeUnifiedTerminal] startup readiness timed out', {
-      sessionId: params.happierSessionId,
-      ...diagnostics,
-      lastScreenTail,
-    });
-    settleTurnCompletionWaiters();
+    ensureReadinessWake();
   }
 
   function stopStaleTurnWake(): void {
@@ -3350,56 +3195,6 @@ export function createClaudeUnifiedTerminalTurnOperations(
     }
   }
 
-  // Lane 2 — injection-guard route-on-block. A registry-recognized dialog owning terminal input while
-  // a prompt is queued is routed to the resolver (published for a decision) BEFORE the injection
-  // defers (the resolve runs ahead of composer-draft classification in observeCurrentReadiness). If it
-  // stays unresolved past the bounded escalation window the block escalates ONCE and projects a
-  // durable block via the existing `runtime_config_blocked` reason — never a silent deferral loop.
-  function resetDialogInjectionBlock(): void {
-    const hadEscalatedDialogBlock = dialogInjectionBlockEscalated;
-    dialogInjectionBlockStartedAtMs = null;
-    dialogInjectionBlockEscalated = false;
-    if (
-      hadEscalatedDialogBlock
-      && pendingRuntimeConfigDeliveryBlocker !== 'runtime_config_blocked'
-    ) {
-      notifyPromptDeliveryBlockerCleared('runtime_config_blocked');
-    }
-  }
-
-  function noteDialogInjectionBlock(blockedReason: ClaudeUnifiedDialogBlockedReason): void {
-    if (!hasPromptDeliveryDemand()) {
-      resetDialogInjectionBlock();
-      return;
-    }
-    const nowMs = Date.now();
-    if (dialogInjectionBlockStartedAtMs === null) {
-      dialogInjectionBlockStartedAtMs = nowMs;
-      params.ctx.logger.debug('[ClaudeUnifiedTerminal] dialog owns terminal input; routing queued prompt to the dialog resolver', {
-        sessionId: params.happierSessionId,
-        blockedReason,
-      });
-    }
-    if (dialogInjectionBlockEscalated) return;
-    if (nowMs - dialogInjectionBlockStartedAtMs < dialogInjectionBlockEscalationMs) return;
-    dialogInjectionBlockEscalated = true;
-    const blockedForMs = nowMs - dialogInjectionBlockStartedAtMs;
-    params.ctx.logger.warn('[ClaudeUnifiedTerminal] dialog blocked prompt delivery beyond the escalation window', {
-      sessionId: params.happierSessionId,
-      blockedReason,
-      blockedForMs,
-    });
-    // Durable block projection for registry-recognized dialogs only (transient generation/queue/
-    // permission states never reach here — `resolveClaudeUnifiedDialogBlockedReason` gates it). Reuse
-    // the existing `runtime_config_blocked` reason rather than inventing a new status; when the
-    // session is idle the head prompt is rejected before provider (carrying that durable reason) so
-    // the UI stops pretending it was delivered instead of the prompt silently deferring behind the
-    // dialog. The reject carries the projection itself, so no persistent runtime-config latch is set
-    // (that latch would over-block the resend after the user answers the dialog).
-    if (!isCanonicalTurnActive()) {
-      rejectCurrentQueuedPromptBeforeProvider('runtime_config_blocked');
-    }
-  }
 
   // Lane 3 — turn-end/idle dialog probe. A self-rescheduling probe on ONE timer walks the bounded
   // backoff tail from turn settle. The generation guard invalidates any probe whose async shot is
@@ -3493,6 +3288,11 @@ export function createClaudeUnifiedTerminalTurnOperations(
     for (const key of Object.keys(update)) {
       const value = update[key];
       if (value === undefined) continue;
+      if (key === 'workspaceWrites') {
+        sawRecognizedDirective = true;
+        if (value !== launchWorkspaceWrites) return false;
+        continue;
+      }
       if (key === 'modelId') {
         const modelId = readNonEmptyString(value);
         if (modelId === null) continue;
@@ -4444,6 +4244,9 @@ export function createClaudeUnifiedTerminalTurnOperations(
       }
       if (observation.type === 'process_exited' && !state.disposed) {
         nativeResumeTurnBarrier?.observeTerminal();
+        // Definitive readiness failure already rejected the exact unwritten input.
+        // A later exit confirms host loss; it must not allocate an unrelated failed turn.
+        if (state.lastTurnFailure) return;
         // IDLE host death (SILENT-F1 port): the Claude process died between turns. Surface a
         // structured failed turn (allocated begin+fail) instead of staying silent. Turn state
         // is deliberately untouched — there is no in-flight turn to settle and the allocated

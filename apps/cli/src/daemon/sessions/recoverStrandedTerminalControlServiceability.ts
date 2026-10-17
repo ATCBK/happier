@@ -70,9 +70,9 @@ export async function recoverStrandedTerminalControlServiceability(params: Reado
     !serviceability
     || serviceability.v !== 1
     || !attachmentId
-    || (serviceability.state !== 'servable' && serviceability.state !== 'recoverable_unservable')
+    || (serviceability.retired !== true
+      && serviceability.state !== 'servable' && serviceability.state !== 'recoverable_unservable')
     || !terminal.mode
-    || (serviceability.retired === true && !expectedAttachmentId)
   ) return null;
   if (expectedAttachmentId && attachmentId !== expectedAttachmentId) {
     return incompleteStopSession('attachment_mismatch');

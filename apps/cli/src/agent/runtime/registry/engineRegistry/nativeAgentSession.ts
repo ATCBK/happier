@@ -1,5 +1,7 @@
 import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
+import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
 import { randomUUID } from 'node:crypto';
+import { AsyncLock } from '@/utils/lock';
 import { probeMcpStdioServerTools } from '@/mcp/servers/probeMcpStdioServerTools';
 import { isToolAllowedForSession } from '@/agent/permissions/permissionToolIdentifier';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
@@ -7,7 +9,9 @@ import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
-import { AgentLaunchEnvironmentV1Schema, AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { resolveNativeAgentLaunchEnvironment } from '@/agent/runtime/launchEnvironment';
+import { issueAgentNativeLaunchQualifierForHost } from '@/plugins/runtime/invocation/services/exec';
 import { AgentSessionStartupInstructionsV1Schema } from '@happier-dev/protocol/runtime/agentSessionStartupInstructionsV1';
 import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { AgentSessionStartupInstructionsV1 } from '@happier-dev/protocol/runtime';
@@ -57,7 +61,9 @@ import type {
     AgentSessionCatalogControl,
     AgentSessionControlContext,
     AgentSessionGoalControl,
+    AgentSessionGoalControlContext,
     AgentSessionGoalMutation,
+    AgentSessionGoalMutationResult,
     AgentSessionHookPluginDirCreateRequest,
     AgentSessionHookServerStartRequest,
     AgentSessionMcpLaunchConfig,
@@ -100,10 +106,7 @@ import {
     type HostCurrentSessionUiServices,
     type HostPluginServices,
 } from '@/agent/runtime/state/currentSessionUiTypes';
-import {
-    bindPluginSessionsSubagentObservation,
-    readPluginSessionsSubagentObservation,
-} from '@/session/services/pluginSessionsInventory';
+import { readPluginSessionsSubagentObservation } from '@/session/services/pluginSessionsInventory';
 import type { AgentRuntimeRegistrationLease } from '@/plugins/runtime/lifecycle/contributions/targetAgents';
 import type { PublicAcpHostLaunchResolver } from '@/agent/acp/runtime/publicSession/createPublicAcpSession';
 import {
@@ -172,6 +175,7 @@ import {
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveNativeAgentSessionStateSharingPolicy } from './stateSharingPolicy';
 import {
+    bindNativeAgentSessionServices,
     createNativeAgentCurrentSessionUiServices,
     createNativeAgentSessionServices,
     type NativeAgentSessionInteractionParams,
@@ -1399,6 +1403,9 @@ export async function resolveAgentSessionMcpLaunchConfigs(
     signal?: AbortSignal,
 ): Promise<Readonly<Record<string, AgentSessionMcpLaunchConfig>> | undefined> {
     if (toolPolicy.unlistedTools !== 'deny') return toAgentSessionMcpLaunchConfigs(mcpServers);
+    // No tool can pass the matcher, so no MCP process belongs in this launch.
+    // Probing unavailable, unlisted servers would make a no-tools recipe fail.
+    if (!toolPolicy.allowedTools?.length) return undefined;
     const catalogs = await Promise.all(Object.entries(mcpServers).map(async ([name, server]) => {
         const tools = await probeMcpStdioServerTools({
             signal,
@@ -1451,9 +1458,10 @@ function buildNativeAgentSessionOpenInputs(
             delete environmentValues[key];
         }
     }
-    const launchEnvironment = AgentLaunchEnvironmentV1Schema.parse({
-        values: environmentValues,
-        unset: (input.bootstrap.unsetEnvironmentVariables ?? []).filter(
+    const launchEnvironment = resolveNativeAgentLaunchEnvironment({
+        processEnv: process.env,
+        environmentVariables: environmentValues,
+        unsetEnvironmentVariables: (input.bootstrap.unsetEnvironmentVariables ?? []).filter(
             (key) => key !== HAPPIER_PROVIDER_BINDING_LAUNCH_MATERIALIZATION_V1_ENV_KEY
                 && !isHostOwnedToolTraceEnvironmentKey(key),
         ),
@@ -1494,8 +1502,10 @@ function buildNativeAgentSessionOpenInputs(
         },
         options,
     });
-    const runtimeDescriptorV1 =
-        readAgentSurfaceRuntimeDescriptorV1FromSessionMetadata(metadata);
+    // Open the same driver that admitted the launch/starting mode. Retained
+    // metadata can predate that selection or omit it entirely.
+    const runtimeDescriptorV1 = input.bootstrap.runtimeDescriptorV1
+        ?? readAgentSurfaceRuntimeDescriptorV1FromSessionMetadata(metadata);
     const connectedAccounts = buildOptions.sessionConnectedAccounts
         ? Object.freeze(buildOptions.sessionConnectedAccounts.map((selection) =>
             Object.freeze({
@@ -1963,7 +1973,7 @@ function createNativeAgentRuntimeEndedError(issue: SessionRuntimeIssueV1 | null)
     );
 }
 
-function readConfiguredExternalSessionProviderOps(
+export function readConfiguredExternalSessionProviderOps(
     value: BackendExecutionSurfaces['externalSession'] | undefined,
 ): PluginExternalSessionsProviderOps | null {
     if (!value
@@ -2470,6 +2480,9 @@ export function createNativeAgentSessionOperations(
         }>;
     };
     let turnCompletion: NativeTurnCompletion | null = null;
+    // New prompts and turn-neutral native controls share this dispatch boundary.
+    // A Goal queued during a turn must not race the next input out of Queue.
+    const inputDispatch = new AsyncLock();
     const ensureTurnCompletion = (): NativeTurnCompletion => {
         if (!turnCompletion || turnCompletion.settled) {
             turnCompletion = {
@@ -3085,6 +3098,25 @@ export function createNativeAgentSessionOperations(
     const activeControlUnavailable = (): boolean => disposeStarted
         || invariant.read().runtimeEnded
         || directFacets?.context.signal.aborted === true;
+    const runGoalMutation = (effect: (context: AgentSessionGoalControlContext) => Promise<AgentSessionGoalMutationResult>): Promise<AgentSessionGoalMutationResult> => inputDispatch.inLock(async () => {
+        // Join the incumbent host turn's completion, including its ordered
+        // publications. A failed turn can still leave a usable native Session.
+        const completion = turnCompletion;
+        if (completion && !completion.settled
+            && (invariant.read().activeTurnId !== null || readPendingNewTurnId() !== null)) {
+            await new Promise<void>(resolve => {
+                completion.waiters.add({ resolve, reject: () => resolve(), cancelDeadline: null });
+            });
+        }
+        if (activeControlUnavailable()) {
+            return { status: 'unavailable', diagnostic: { code: 'native_goal_control_unavailable' }, retryable: true };
+        }
+        const context = createControlContext('active');
+        return await effect(Object.freeze({
+            ...context,
+            goalSource: directFacets.context.workState.publisher(directFacets.capabilities.goals!.source),
+        }));
+    });
     const directHostControls: NativeAgentSessionDirectHostControls = directFacets
         ? Object.freeze({
             ...(directFacets.managedProviderRunServices ? { managedProviderRunServices: directFacets.managedProviderRunServices } : {}),
@@ -3338,14 +3370,7 @@ export function createNativeAgentSessionOperations(
                                 diagnostic: { code: 'native_goal_mutation_required' },
                             });
                         }
-                        const context = createControlContext('active');
-                        const goalContext = Object.freeze({
-                            ...context,
-                            goalSource: directFacets.context.workState.publisher(
-                                directFacets.capabilities.goals!.source,
-                            ),
-                        });
-                        const result = await directFacets.goals!.set(mutation, goalContext, { signal: context.signal });
+                        const result = await runGoalMutation(async context => directFacets.goals!.set(mutation, context, { signal: context.signal }));
                         return result.status === 'applied'
                             || result.status === 'unchanged'
                             || result.status === 'pending'
@@ -3360,14 +3385,7 @@ export function createNativeAgentSessionOperations(
                                 diagnostic: { code: 'native_goal_control_unavailable' },
                             });
                         }
-                        const context = createControlContext('active');
-                        const goalContext = Object.freeze({
-                            ...context,
-                            goalSource: directFacets.context.workState.publisher(
-                                directFacets.capabilities.goals!.source,
-                            ),
-                        });
-                        const result = await directFacets.goals!.clear(goalContext, { signal: context.signal });
+                        const result = await runGoalMutation(async context => directFacets.goals!.clear(context, { signal: context.signal }));
                         return result.status === 'applied'
                             || result.status === 'unchanged'
                             || result.status === 'pending'
@@ -3725,149 +3743,159 @@ export function createNativeAgentSessionOperations(
                 correlation.inputId,
                 pendingCorrelation,
             );
-            if (authorizeNewTurn && admissionAbortController) {
-                try {
-                    const admission =
-                        await authorizeNewTurn(
-                            createNativeAgentTurnAdmissionWitness(correlation),
-                            Object.freeze({
-                                signal: admissionAbortController.signal,
-                            }),
+            return await inputDispatch.inLock(async () => {
+                // Queue retirement and Stop must still find an input while a native
+                // Goal holds dispatch. Recheck custody before authorization/effects.
+                if (disposeStarted || invariant.read().runtimeEnded
+                    || inputCorrelations.get(correlation.inputId) !== pendingCorrelation) {
+                    throw admissionAbortController?.signal.reason
+                        ?? new Error('Native Agent runtime delivery was retired before dispatch');
+                }
+                ensureTurnCompletion();
+                if (authorizeNewTurn && admissionAbortController) {
+                    try {
+                        const admission =
+                            await authorizeNewTurn(
+                                createNativeAgentTurnAdmissionWitness(correlation),
+                                Object.freeze({
+                                    signal: admissionAbortController.signal,
+                                }),
+                            );
+                        admissionAbortController.signal.throwIfAborted();
+                    } catch (error) {
+                        if (
+                            classifyNativeAgentSessionEffectBoundaryError(error)
+                            === 'authority_unavailable_before_effect'
+                        ) {
+                            emitDeliveryOutcome({
+                                type: 'input-rejected-before-provider',
+                                localInputId: correlation.inputId,
+                                userMessageSeq: correlation.userMessageSeq,
+                                ...(correlation.userMessageSeqs
+                                    ? { userMessageSeqs: correlation.userMessageSeqs }
+                                    : {}),
+                                reason: 'provider_unavailable_before_acceptance',
+                                diagnostic: {
+                                    code: 'daemon_turn_admission_unavailable',
+                                    severity: 'error',
+                                },
+                                retryable: true,
+                                retireLocalCustodyAfterDurableBlock: true,
+                            });
+                        }
+                        if (
+                            inputCorrelations.get(correlation.inputId)
+                                === pendingCorrelation
+                        ) {
+                            inputCorrelations.delete(correlation.inputId);
+                        }
+                        settleUnstartedTurn();
+                        throw error;
+                    }
+                }
+                if (
+                    inputCorrelations.get(correlation.inputId)
+                        !== pendingCorrelation
+                ) {
+                    throw admissionAbortController?.signal.reason
+                        ?? new Error(
+                            'Native Agent runtime delivery was cancelled before admission',
                         );
-                    admissionAbortController.signal.throwIfAborted();
+                }
+                inputCorrelations.set(correlation.inputId, {
+                    ...correlation, requestAttribution: usagePublisher?.captureRequestAttribution?.(correlation.turnId),
+                });
+                activeTurnAdmissionWitness = createNativeAgentTurnAdmissionWitness(
+                    correlation,
+                );
+                const sendStartedAt = performance.now();
+                firstAssistantTextTiming = { turnId: correlation.turnId, localId: correlation.inputId,
+                    startedAt: sendStartedAt };
+                logger.infoFile('[NativeAgentSession] Turn phase', {
+                    phase: 'send_entered', sessionId: expectedSessionId,
+                    turnId: correlation.turnId, localId: correlation.inputId,
+                    durationMs: Math.round(sendStartedAt - preparationStartedAt),
+                });
+                let result: Awaited<ReturnType<AgentSessionRuntime['send']>>;
+                try {
+                    result = await session.send({
+                        inputIds: [correlation.inputId],
+                        input: {
+                            text: prompt,
+                            ...(structuredInput === undefined ? {} : { structuredInput }),
+                        },
+                        delivery: correlation.deliveryKind === 'steer'
+                            ? { kind: 'steer', turnId: correlation.turnId }
+                            : { kind: 'newTurn', turnId: correlation.turnId },
+                        ...(correlation.causalPermissionAuthority
+                            ? {
+                                causalPermissionAuthority:
+                                    copyCausalPermissionAuthorityForNativeRuntime(
+                                        correlation.causalPermissionAuthority,
+                                    ),
+                            }
+                            : {}),
+                    });
+                    logger.infoFile('[NativeAgentSession] Turn phase', {
+                        phase: 'send_returned', sessionId: expectedSessionId,
+                        turnId: correlation.turnId, localId: correlation.inputId, status: result.status,
+                        durationMs: Math.round(performance.now() - sendStartedAt),
+                    });
                 } catch (error) {
-                    if (
-                        classifyNativeAgentSessionEffectBoundaryError(error)
-                        === 'authority_unavailable_before_effect'
-                    ) {
+                    if (!acceptedInputIds.has(correlation.inputId) && !uncertainInputIds.has(correlation.inputId)) {
+                        uncertainInputIds.add(correlation.inputId);
+                        if (
+                            activeTurnAdmissionWitness?.inputId
+                            === correlation.inputId
+                        ) {
+                            activeTurnAdmissionWitness = null;
+                        }
                         emitDeliveryOutcome({
-                            type: 'input-rejected-before-provider',
+                            type: 'input-custody-unknown',
                             localInputId: correlation.inputId,
                             userMessageSeq: correlation.userMessageSeq,
-                            ...(correlation.userMessageSeqs
-                                ? { userMessageSeqs: correlation.userMessageSeqs }
-                                : {}),
-                            reason: 'provider_unavailable_before_acceptance',
-                            diagnostic: {
-                                code: 'daemon_turn_admission_unavailable',
+                            ...(correlation.userMessageSeqs ? { userMessageSeqs: correlation.userMessageSeqs } : {}),
+                            issue: {
+                                code: 'native_send_outcome_unknown',
                                 severity: 'error',
                             },
-                            retryable: true,
-                            retireLocalCustodyAfterDurableBlock: true,
                         });
                     }
-                    if (
-                        inputCorrelations.get(correlation.inputId)
-                            === pendingCorrelation
-                    ) {
-                        inputCorrelations.delete(correlation.inputId);
-                    }
-                    settleUnstartedTurn();
                     throw error;
                 }
-            }
-            if (
-                inputCorrelations.get(correlation.inputId)
-                    !== pendingCorrelation
-            ) {
-                throw admissionAbortController?.signal.reason
-                    ?? new Error(
-                        'Native Agent runtime delivery was cancelled before admission',
-                    );
-            }
-            inputCorrelations.set(correlation.inputId, {
-                ...correlation, requestAttribution: usagePublisher?.captureRequestAttribution?.(correlation.turnId),
-            });
-            activeTurnAdmissionWitness = createNativeAgentTurnAdmissionWitness(
-                correlation,
-            );
-            const sendStartedAt = performance.now();
-            firstAssistantTextTiming = { turnId: correlation.turnId, localId: correlation.inputId,
-                startedAt: sendStartedAt };
-            logger.infoFile('[NativeAgentSession] Turn phase', {
-                phase: 'send_entered', sessionId: expectedSessionId,
-                turnId: correlation.turnId, localId: correlation.inputId,
-                durationMs: Math.round(sendStartedAt - preparationStartedAt),
-            });
-            let result: Awaited<ReturnType<AgentSessionRuntime['send']>>;
-            try {
-                result = await session.send({
-                    inputIds: [correlation.inputId],
-                    input: {
-                        text: prompt,
-                        ...(structuredInput === undefined ? {} : { structuredInput }),
-                    },
-                    delivery: correlation.deliveryKind === 'steer'
-                        ? { kind: 'steer', turnId: correlation.turnId }
-                        : { kind: 'newTurn', turnId: correlation.turnId },
-                    ...(correlation.causalPermissionAuthority
-                        ? {
-                            causalPermissionAuthority:
-                                copyCausalPermissionAuthorityForNativeRuntime(
-                                    correlation.causalPermissionAuthority,
-                                ),
-                        }
-                        : {}),
-                });
-                logger.infoFile('[NativeAgentSession] Turn phase', {
-                    phase: 'send_returned', sessionId: expectedSessionId,
-                    turnId: correlation.turnId, localId: correlation.inputId, status: result.status,
-                    durationMs: Math.round(performance.now() - sendStartedAt),
-                });
-            } catch (error) {
-                if (!acceptedInputIds.has(correlation.inputId) && !uncertainInputIds.has(correlation.inputId)) {
-                    uncertainInputIds.add(correlation.inputId);
+                if (result.status !== 'admitted') {
+                    if (
+                        !acceptedInputIds.has(correlation.inputId)
+                        && !rejectedInputIds.has(correlation.inputId)
+                        && !uncertainInputIds.has(correlation.inputId)
+                    ) {
+                        rejectedInputIds.add(correlation.inputId);
+                        uncertainInputIds.delete(correlation.inputId);
+                        emitDeliveryOutcome({
+                            type: 'input-rejected',
+                            localInputId: correlation.inputId,
+                            userMessageSeq: correlation.userMessageSeq,
+                            ...(correlation.userMessageSeqs ? { userMessageSeqs: correlation.userMessageSeqs } : {}),
+                            diagnostic: result.diagnostic,
+                            retryable: result.retryable,
+                        });
+                        settleUnstartedTurn();
+                    }
+                }
+                if (result.status !== 'admitted') {
                     if (
                         activeTurnAdmissionWitness?.inputId
                         === correlation.inputId
                     ) {
                         activeTurnAdmissionWitness = null;
                     }
-                    emitDeliveryOutcome({
-                        type: 'input-custody-unknown',
-                        localInputId: correlation.inputId,
-                        userMessageSeq: correlation.userMessageSeq,
-                        ...(correlation.userMessageSeqs ? { userMessageSeqs: correlation.userMessageSeqs } : {}),
-                        issue: {
-                            code: 'native_send_outcome_unknown',
-                            severity: 'error',
-                        },
-                    });
+                    throw new Error(
+                        `Native Agent runtime rejected prompt with status '${result.status}': ${
+                            diagnosticMessage(result.diagnostic)
+                        }`,
+                    );
                 }
-                throw error;
-            }
-            if (result.status !== 'admitted') {
-                if (
-                    !acceptedInputIds.has(correlation.inputId)
-                    && !rejectedInputIds.has(correlation.inputId)
-                    && !uncertainInputIds.has(correlation.inputId)
-                ) {
-                    rejectedInputIds.add(correlation.inputId);
-                    uncertainInputIds.delete(correlation.inputId);
-                    emitDeliveryOutcome({
-                        type: 'input-rejected',
-                        localInputId: correlation.inputId,
-                        userMessageSeq: correlation.userMessageSeq,
-                        ...(correlation.userMessageSeqs ? { userMessageSeqs: correlation.userMessageSeqs } : {}),
-                        diagnostic: result.diagnostic,
-                        retryable: result.retryable,
-                    });
-                    settleUnstartedTurn();
-                }
-            }
-            if (result.status !== 'admitted') {
-                if (
-                    activeTurnAdmissionWitness?.inputId
-                    === correlation.inputId
-                ) {
-                    activeTurnAdmissionWitness = null;
-                }
-                throw new Error(
-                    `Native Agent runtime rejected prompt with status '${result.status}': ${
-                        diagnosticMessage(result.diagnostic)
-                    }`,
-                );
-            }
+            });
         },
         async steerInFlightTurn(message: string, meta?: RuntimeTurnPromptMeta): Promise<void> {
             const activeTurnId = invariant.read().activeTurnId ?? readPendingNewTurnId();
@@ -4045,25 +4073,42 @@ export function createNativeAgentSessionOperations(
             if (handler && !disposeStarted) ensureSubscription();
         },
         async updateSessionRuntimeConfig(update) {
+            const reportOutcome = (
+                outcome: RuntimeConfigUpdateOutcomeV1,
+                diagnosticCode?: string,
+                nativeStatus?: string,
+            ): RuntimeConfigUpdateOutcomeV1 => {
+                if (update.workspaceWrites !== undefined && outcome.status !== 'applied') {
+                    // Role preparation has a deliberately closed public refusal. Preserve
+                    // the native cause privately without its message or configuration values.
+                    logger.infoFile('[NativeAgentSession] Workspace policy preparation refused', {
+                        sessionId: expectedSessionId,
+                        workspaceWrites: update.workspaceWrites,
+                        status: nativeStatus ?? outcome.status,
+                        ...(diagnosticCode ? { diagnosticCode } : {}),
+                    });
+                }
+                return outcome;
+            };
             if (disposeStarted || invariant.read().runtimeEnded) {
-                return {
+                return reportOutcome({
                     status: 'failed',
-                    reason: 'Native Agent runtime is ended, disposing, or disposed',
-                };
+                    reason: 'native_agent_runtime_ended',
+                }, 'native_agent_runtime_ended');
             }
             if (directFacets.configuration.declared === false || !configuration) {
-                return {
+                return reportOutcome({
                     status: 'unsupported',
                     timing: 'not_applicable',
                     reason: 'native_agent_configuration_unsupported',
-                };
+                }, 'native_agent_configuration_unsupported');
             }
             const mcpToolPolicy = typeof update.permissionMode === 'string' ? directFacets.resolveMcpToolPolicy?.(update.permissionMode) : undefined;
             const nextConfiguration = applyNativeAgentConfigurationUpdate(configuration, {
                 ...update, ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
             }, directFacets.getWorkspaceWrites);
             if (nextConfiguration.snapshot.workspaceWrites === 'deny' && directFacets.capabilities.workspaceWrites !== 'deny') {
-                return { status: 'failed', reason: 'role_policy_unenforceable' };
+                return reportOutcome({ status: 'failed', reason: 'role_policy_unenforceable' }, 'role_policy_unenforceable');
             }
             const result = await directFacets.configuration.updateConfiguration(
                 nextConfiguration.request,
@@ -4071,7 +4116,7 @@ export function createNativeAgentSessionOperations(
             if (result.status === 'applied' || result.status === 'deferred') {
                 configuration = nextConfiguration.snapshot;
             }
-            return toHostConfigurationOutcome(result);
+            return reportOutcome(toHostConfigurationOutcome(result), 'diagnostic' in result ? result.diagnostic.code : undefined, result.status);
         },
         async cancelTurn() {
             if (disposeStarted || invariant.read().runtimeEnded) return;
@@ -4131,6 +4176,24 @@ export function createNativeAgentSessionOperations(
         async resetOrDisposeRuntime(reason) {
             disposeStarted = true;
             disposePromise ??= Promise.resolve().then(async () => {
+                // Native evidence is fenced as soon as retirement begins. Preserve
+                // exact unresolved custody before native cleanup can block or fail.
+                for (const correlation of inputCorrelations.values()) {
+                    if (acceptedInputIds.has(correlation.inputId)) continue;
+                    if (rejectedInputIds.has(correlation.inputId)) continue;
+                    if (uncertainInputIds.has(correlation.inputId)) continue;
+                    uncertainInputIds.add(correlation.inputId);
+                    emitDeliveryOutcome({
+                        type: 'input-custody-unknown',
+                        localInputId: correlation.inputId,
+                        userMessageSeq: correlation.userMessageSeq,
+                        ...(correlation.userMessageSeqs ? { userMessageSeqs: correlation.userMessageSeqs } : {}),
+                        issue: {
+                            code: 'native_runtime_disposed_with_input_in_flight',
+                            severity: 'warning',
+                        },
+                    });
+                }
                 try {
                     abortSessionScope?.();
                     try {
@@ -4141,21 +4204,6 @@ export function createNativeAgentSessionOperations(
                             : error;
                     }
                 } finally {
-                    for (const correlation of inputCorrelations.values()) {
-                        if (acceptedInputIds.has(correlation.inputId)) continue;
-                        if (rejectedInputIds.has(correlation.inputId)) continue;
-                        if (uncertainInputIds.has(correlation.inputId)) continue;
-                        emitDeliveryOutcome({
-                            type: 'input-custody-unknown',
-                            localInputId: correlation.inputId,
-                            userMessageSeq: correlation.userMessageSeq,
-                            ...(correlation.userMessageSeqs ? { userMessageSeqs: correlation.userMessageSeqs } : {}),
-                            issue: {
-                                code: 'native_runtime_disposed_with_input_in_flight',
-                                severity: 'warning',
-                            },
-                        });
-                    }
                     inputCorrelations.clear();
                     acceptedInputIds.clear();
                     rejectedInputIds.clear();
@@ -4410,6 +4458,18 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
     const contributionId = params.agent.identity?.localId ?? identity.agentId;
     let currentTerminalTranscriptFollowService: HostTerminalTranscriptFollowService | null = null;
     let runtimeExecutionSurfaces = params.executionSurfaces;
+    const prepareSessionSource = async (sessionId: string, signal: AbortSignal) => {
+        const lateEnvironment = await params.sessionInput.bootstrap.resolveLateEnvironment?.({ sessionId }) ?? null;
+        signal.throwIfAborted();
+        await params.prepareRuntimeSource?.({ sessionId, signal });
+        return lateEnvironment;
+    };
+    // Initial MCP materialization precedes native open. Keep that same startup
+    // admission's environment until open consumes it; recovery prepares afresh.
+    let initializedSource: Readonly<{
+        sessionId: string;
+        environment: Awaited<ReturnType<typeof prepareSessionSource>>;
+    }> | null = null;
     let plan = await createNativeAgentHostSessionRuntimePlan({
         backend: params.backend,
         agent: params.agent,
@@ -4518,11 +4578,16 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 readSessionProviderBindingMetadataV1(
                     hostRuntimeParams.metadata,
                 );
+            // A fresh daemon child has no early handoff to seed metadata.
+            // Its existing daemon producer must supply the exact binding after Session ACK.
             const useRunnerManagedProviderBinding =
                 selectedProviderConnectionId !== null
-                && authoritativeProviderBindingMetadata
-                    ?.runtimeBindingBasis?.deployment.kind
-                    === 'managedLocal';
+                && (authoritativeProviderBindingMetadata
+                    ?.runtimeBindingBasis?.deployment.kind === 'managedLocal'
+                    || (params.sessionInput.bootstrap.source === 'daemon'
+                        && authoritativeProviderBindingMetadata === null
+                        && hostRuntimeParams.providerBindingMaterialization === undefined
+                        && params.prepareManagedProviderBinding !== undefined));
             const cleanupLateProviderBindingMaterialization = () => {
                 const cleanup = lateProviderBindingMaterializationCleanup;
                 lateProviderBindingMaterializationCleanup = null;
@@ -4541,13 +4606,10 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 }
             };
             try {
-                const resolvedLateEnvironment = resolveLateEnvironment
-                    ? await resolveLateEnvironment({ sessionId })
-                    : null;
+                const prepared = initializedSource?.sessionId === sessionId ? initializedSource : null;
+                initializedSource = null;
+                const resolvedLateEnvironment = prepared ? prepared.environment : await prepareSessionSource(sessionId, signal);
                 recordOpenPhase('late_environment');
-                // Foreground late admission publishes the canonical authority. Claim it
-                // before resolving any startup contribution through the runner source.
-                await params.prepareRuntimeSource?.({ sessionId, signal });
                 recordOpenPhase('runtime_source');
                 assertGenerationCurrent();
                 if (canApplyNativeStartup
@@ -4570,14 +4632,15 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     hostRuntimeParams.providerBindingMaterialization,
                     hostRuntimeParams.getPermissionMode(),
                     hostRuntimeParams.getWorkspaceWrites,
-                    { allowPendingProviderBinding: resolveLateEnvironment !== undefined },
+                    { allowPendingProviderBinding: resolveLateEnvironment !== undefined
+                        || (useRunnerManagedProviderBinding && params.prepareManagedProviderBinding !== undefined) },
                 );
                 if (
                     selectedProviderConnectionId !== null
                     && (
-                        !authoritativeProviderBindingMetadata
-                        || authoritativeProviderBindingMetadata.connectionId
-                            !== selectedProviderConnectionId
+                        authoritativeProviderBindingMetadata
+                            ? authoritativeProviderBindingMetadata.connectionId !== selectedProviderConnectionId
+                            : !useRunnerManagedProviderBinding
                     )
                 ) {
                     throw new Error(
@@ -4776,6 +4839,10 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 let configuredConstructionFailed = false;
                 const lifecycle = await createLiveConfiguredPluginExternalSessionsAdapter({
                     agents: [params.agent],
+                    resolveCatalogEntry: async agentId => params.pluginMcpRuntimeRegistry
+                        ? await readRegistryCatalogHook(params.pluginMcpRuntimeRegistry, agentId, entry => entry)
+                        // Retained runners carry the executable entry from loadRetainedAgentRuntimeLeaf.
+                        : agentId === params.agent.id ? params.agent.catalogEntry ?? null : null,
                     activeServerDir: happierConfiguration.activeServerDir,
                     readAccount: async (): Promise<ConfiguredExternalSessionSourceAccountProjection> => (
                         readsConnectedProfiles
@@ -5253,34 +5320,14 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     readActiveTurnAdmissionWitness(),
             });
             const services = operationServices
-                ? (() => {
-                    const sessions = Object.freeze({
-                        ...sessionServices.sessions,
-                        external: operationServices.sessions.external,
-                    });
-                    const subagentObservation = readPluginSessionsSubagentObservation(
-                        sessionServices.sessions,
-                    );
-                    if (subagentObservation) {
-                        bindPluginSessionsSubagentObservation(sessions, subagentObservation);
-                    }
-                    return Object.freeze({
-                        ...operationServices,
-                        availability: (serviceId: Parameters<PluginServices['availability']>[0]) => (
-                            serviceId === 'sessions'
-                                ? sessionServices.availability('sessions')
-                                : operationServices.availability(serviceId)
-                        ),
-                        sessions,
-                    });
-                })()
+                ? bindNativeAgentSessionServices(operationServices, sessionServices)
                 : sessionServices;
             const terminalHostLaunchTransformerBinding =
                 sessionHostServices.terminalHost
-                && transformAgentChildLaunchEnvironment
                     ? installAgentChildLaunchEnvironmentTransformerForTerminalHost(
                         sessionHostServices.terminalHost,
-                        transformAgentChildLaunchEnvironment,
+                        transformAgentChildLaunchEnvironment ?? (environment => environment),
+                        { exec: services.exec, signal },
                     )
                     : null;
             const terminalHostScope = sessionHostServices.terminalHost
@@ -5393,12 +5440,13 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 agent: params.agent,
                 sourceEnvironment: openInputs.launchEnvironment.values,
             });
+            const nativeLaunch = issueAgentNativeLaunchQualifierForHost(services.exec);
             const context = composeNativeAgentSessionRuntimeContext({
                 identity,
                 contributionId,
                 invokedAtMs,
                 sessionId,
-                sessionServices: createNativeAgentSessionHostServices({
+                sessionServices: Object.freeze({ ...createNativeAgentSessionHostServices({
                     owners: sessionHostServices,
                     auth: currentSessionHandle.auth,
                     agentId: identity.agentId,
@@ -5425,6 +5473,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         if (!terminalTranscriptFollowService) {
                             throw new HostTerminalTranscriptFollowAdmissionError('plugin_external_follow_unavailable', 'bind');
                         }
+                        await hostRuntimeParams.waitForProviderSessionIdPublication?.(request.providerSessionId, signal);
                         const result = await terminalTranscriptFollowService.bindProviderSession({
                             agentId: identity.agentId,
                             providerSessionId: request.providerSessionId,
@@ -5438,9 +5487,8 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         void result.binding.failure.then((error) => {
                             if (!active) return;
                             logger.warn('[NativeAgentSession] source transcript follow failed', { error });
-                            ownedAbortController.abort(error);
                         });
-                        return { dispose: async () => {
+                        return { failure: result.binding.failure, dispose: async () => {
                             // Releasing an old provider binding may cancel a pending publication.
                             // Its late cancellation must not retire the still-current runtime.
                             active = false;
@@ -5452,7 +5500,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     readToolExecutionCapability: () => runtime?.toolExecution?.capability ?? null,
                     toolsDelivery: resolveAgentToolsDelivery(identity.agentId),
                     subagents: readAgentSessionSubagentObservationPublisher(services),
-                }),
+                }), nativeLaunch }),
                 signal,
                 services,
                 ui: createPluginInvocationPresentation({
@@ -5471,6 +5519,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         : {}),
                 }),
                 protocols: createPublicAcpRuntimeProtocols({
+                    nativeLaunch,
                     pluginId: identity.pluginId,
                     agentId: identity.agentId,
                     signal,
@@ -6149,6 +6198,29 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             }
         },
     });
+    if (params.prepareRuntimeSource) {
+        const previous = plan.config.lifecycleHooks;
+        plan = { ...plan, config: { ...plan.config, lifecycleHooks: {
+            ...previous,
+            onSessionInitialized: async input => {
+                await previous?.onSessionInitialized?.(input);
+                const signal = params.generationSignal
+                    ? AbortSignal.any([input.signal, params.generationSignal]) : input.signal;
+                try {
+                    const environment = await prepareSessionSource(input.session.sessionId, signal);
+                    signal.throwIfAborted();
+                    initializedSource = { sessionId: input.session.sessionId, environment };
+                    signal.addEventListener('abort', () => { initializedSource = null; }, { once: true });
+                } catch (error) {
+                    await params.retireRuntimeSource?.().catch(() => undefined);
+                    throw error;
+                }
+            },
+        } } };
+    }
+    if (params.prepareManagedProviderBinding) {
+        plan = { ...plan, config: { ...plan.config, providerBindingAdmission: 'runtime' } };
+    }
     if (plan.opts.startedBy === 'daemon' && plan.opts.existingSessionId
         && plan.opts.terminalRuntime?.mode === 'plain') {
         const selected = await params.executionSurfaces?.resolveTerminalPresentation?.({

@@ -2,12 +2,43 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import axios from 'axios';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { withConfiguredDaemonTestHome } from '../testkit/fakeDaemonLifecycle.testkit';
+import { writeTerminalHostAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { retireExactTerminalControlServiceability } from './retireTerminalControlServiceability';
 
 describe('retireExactTerminalControlServiceability', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it.each((['live-runner', 'present-host', 'unreadable-host', 'replacement-runner'] as const)
+        .flatMap(state => [true, false].map(hasProjection => ({ state, hasProjection }))))(
+        'does not retire hosted metadata without dead-runner and absent-host authority: $state, projection=$hasProjection', async ({ state, hasProjection }) => {
+        await withConfiguredDaemonTestHome({ prefix: 'retire-host-authority-' }, async ({ homeDir }) => {
+            const pid = state === 'live-runner' ? process.pid : 999_123_456;
+            const sessionId = 'session-retire-host';
+            if (state === 'present-host' || state === 'unreadable-host') {
+                await writeTerminalHostAttachmentInfo({ happyHomeDir: homeDir, sessionId, handle: {
+                    kind: 'tmux', sessionName: 'retained-host', attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' },
+                } });
+                if (state === 'unreadable-host') await writeFile(join(homeDir, 'terminal', 'sessions', `${sessionId}.host.json`), '{');
+            }
+            vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200, data: String(url).includes('/v2/sessions/')
+                ? { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadataLayoutVersion: 0,
+                    metadata: JSON.stringify({ path: homeDir, hostPid: state === 'replacement-runner' ? pid + 1 : pid,
+                        hostProcessStartTimeMs: 1, terminal: { mode: 'tmux', ...(hasProjection ? { controlServiceabilityV1: {
+                            v: 1, attachmentId: 'old-host', state: 'servable', observedAt: 1 } } : {}) } }) }) }
+                : { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } }));
+            const patch = vi.spyOn(axios, 'patch').mockRejectedValue(new Error('Unexpected metadata retirement'));
+            const retirement = retireExactTerminalControlServiceability({ credentials: { token: 'fixture', encryption: null },
+                sessionId, terminalMode: 'plain', expectedRunner: { pid, startTimeMs: 1 } });
+            if (state === 'replacement-runner') await expect(retirement).resolves.toBe('superseded');
+            else await expect(retirement).rejects.toThrow('terminal_control_serviceability_retirement_runner_or_host_unresolved');
+            expect(patch).not.toHaveBeenCalled();
+        });
     });
 
     it('refuses a terminal metadata CAS when requester admission is lost during Account currentness read', async () => {

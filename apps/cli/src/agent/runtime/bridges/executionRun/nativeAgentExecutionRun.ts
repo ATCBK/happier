@@ -1,5 +1,6 @@
 import { AgentExecutionRunEventSchema } from '@happier-dev/protocol/runtime/agentExecutionRunV1';
-import { AgentLaunchEnvironmentV1Schema, AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { resolveNativeAgentLaunchEnvironment } from '@/agent/runtime/launchEnvironment';
 import { HappierStructuredInputV1Schema } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { renderSessionInputContextPromptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
@@ -51,6 +52,7 @@ import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/
 import { resolveAgentContributionQualifiedId } from '@/plugins/projection/registry/agentRoutingIdentity';
 import { resolveNativeAgentSessionStateSharingPolicy } from '@/agent/runtime/registry/engineRegistry/stateSharingPolicy';
 import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
+import { issueAgentNativeLaunchQualifierForHost } from '@/plugins/runtime/invocation/services/exec';
 import {
     createNativeAgentSessionInteractionOperations,
     applyNativeAgentConfigurationUpdate,
@@ -79,7 +81,7 @@ import { resolveStructuredInputProviderDispatchContext } from '@/agent/runtime/t
 import { readConnectedServiceChildMemberLogContextFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { logger } from '@/ui/logger';
 import { publishSkillLaunchNotice } from '@/prompts/skills/runtime/publishRunnerSkillNotice';
-import { createExecutionRunCodedError, readExecutionRunRejectedStartDiagnostic, type ExecutionRunRejectedStartError } from './errors';
+import { createExecutionRunCodedError, readExecutionRunErrorCode, readExecutionRunRejectedStartDiagnostic, sanitizeExecutionRunError as sanitizeThrownError, type ExecutionRunRejectedStartError } from './errors';
 import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
@@ -128,6 +130,7 @@ type NativeAgentSessionContextLease = Readonly<{
 export type NativeAgentSessionContextLeaseFactory = ((params: Readonly<{
     services: PluginServices;
     signal: AbortSignal;
+    readSessionRuntime(): AgentSessionRuntime | null;
     readActiveTurnAdmissionWitness?: () => AgentInvocationTurnAdmissionWitness | null;
 }>) => Promise<NativeAgentSessionContextLease> | NativeAgentSessionContextLease) & Readonly<{
     bindInvocationServices?: (params: Readonly<{
@@ -471,6 +474,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
                     readMcpToolContext = () => ({ mcpServerIdentities: identities.mcpServerIdentities, catalog: capturedMcpAccount.readSnapshot()?.mcpServerCatalog ?? null });
                 } else if (activeScope && activeScope === snapshot.scopeKey && getActiveAccountSettingsSnapshot()?.mcpServerCatalog?.status === 'ready') {
                     readMcpToolContext = () => ({ mcpServerIdentities: identities.mcpServerIdentities,
+                        prepareCatalog: async () => params.resolveAccountSettingsSnapshot?.({ mcpServerCatalog: true, signal }),
                         catalog: getActiveAccountSettingsSnapshot()?.scopeKey === activeScope
                             && getActiveAccountSettingsSnapshotLifetimeToken() === activeLifetime
                             ? getActiveAccountSettingsSnapshot()?.mcpServerCatalog ?? null : null });
@@ -599,21 +603,6 @@ function diagnosticMessage(
     sanitize: (value: string) => string,
 ): string {
     return sanitize(diagnostic?.message ?? diagnostic?.code ?? 'Native Agent execution run failed');
-}
-
-function sanitizeThrownError(
-    error: unknown,
-    sanitize: (value: string) => string,
-): Error & { code?: string } {
-    if (!(error instanceof Error)) {
-        return new Error(sanitize(String(error)));
-    }
-    const sanitized = new Error(sanitize(error.message)) as Error & { code?: string };
-    sanitized.name = error.name;
-    if ('code' in error && typeof error.code === 'string') {
-        sanitized.code = error.code;
-    }
-    return sanitized;
 }
 
 function createDisposedError(): Error {
@@ -753,13 +742,11 @@ function resolveExecutionProfileReference(
 
 function buildLaunchEnvironment(
     options: CreateCliExecutionRunBackendParams,
-): AgentLaunchEnvironment | undefined {
-    if (options.isolation?.env === undefined && options.isolation?.unsetEnvKeys === undefined) {
-        return undefined;
-    }
-    return AgentLaunchEnvironmentV1Schema.parse({
-        values: options.isolation.env ?? {},
-        unset: options.isolation.unsetEnvKeys ?? [],
+): AgentLaunchEnvironment {
+    return resolveNativeAgentLaunchEnvironment({
+        processEnv: process.env,
+        environmentVariables: options.isolation?.env,
+        unsetEnvironmentVariables: options.isolation?.unsetEnvKeys,
     });
 }
 
@@ -790,6 +777,7 @@ function createNativeAgentInvocationContext(params: Readonly<{
     const services = interactions
         ? Object.freeze({ ...params.services, interactions })
         : params.services;
+    const nativeLaunch = issueAgentNativeLaunchQualifierForHost(services.exec);
     const base = Object.freeze({
         plugin: Object.freeze({ id: params.lease.pluginId, version: params.lease.pluginVersion }),
         contribution: Object.freeze({
@@ -815,6 +803,7 @@ function createNativeAgentInvocationContext(params: Readonly<{
             signal: params.signal,
             isCurrent: params.lease.isCurrent,
             services,
+            nativeLaunch,
             ...(params.currentSession
                 ? { interactions: params.currentSession.interactions }
                 : {}),
@@ -843,7 +832,7 @@ function createNativeAgentInvocationContext(params: Readonly<{
     return Object.freeze({
         ...base,
         scope: Object.freeze({ kind: 'execution_run' as const, executionRunId: params.runId }),
-        executionRun: Object.freeze({ id: params.runId, services: executionRunServices }),
+        executionRun: Object.freeze({ id: params.runId, services: Object.freeze({ ...executionRunServices, nativeLaunch }) }),
     });
 }
 
@@ -928,10 +917,13 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
     });
     void terminalPromise.catch(() => undefined);
 
-    function logProviderFailure(): void {
+    function logProviderFailure(phase: 'open' | 'send' | 'stop' | 'event', code: string): void {
         logger.warn('[EXECUTION RUN] provider failure', {
             runId,
             agentId: params.lease.agentId,
+            phase,
+            // Typed cause only: provider text/details may contain Account data or credentials.
+            code: sanitizeProviderDiagnosticText(code),
             selectedMembers: readConnectedServiceChildMemberLogContextFromEnv(launchEnvironment?.values ?? {}),
         });
     }
@@ -1076,14 +1068,14 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
         if (normalizedEvent.kind === 'run-failed' && openingInitialInput && !providerWorkObserved) {
             const rejection = readExecutionRunRejectedStartDiagnostic(normalizedEvent.diagnostic);
             if (rejection) {
-                logProviderFailure();
+                logProviderFailure('event', rejection.executionRunErrorCode);
                 rejectedStart = rejection;
                 terminal = true;
                 rejectTerminal(rejection);
                 return;
             }
         }
-        if (normalizedEvent.kind === 'run-failed') logProviderFailure();
+        if (normalizedEvent.kind === 'run-failed') logProviderFailure('event', normalizedEvent.diagnostic?.code ?? 'agent_execution_run_failed');
         if (normalizedEvent.kind === 'run-failed' && normalizedEvent.diagnostic && checkpointId
             // This typed ACP outcome is admission uncertainty, not an accepted
             // turn failure. Provider health facts cannot authorize continuation.
@@ -1145,18 +1137,13 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 ...(executionRunContextLease?.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: executionRunContextLease.mcpServersStrictMode } : {}),
                 ...(executionRunContextLease?.skills ? { skills: executionRunContextLease.skills } : {}),
             };
-            try {
-                if (params.executionRunContextV1) {
-                    if (!('executionRun' in context)) {
-                        throw new Error('Session-primary detached execution requires execution-run scope');
-                    }
-                    opened = await params.executionRunContextV1.open(admittedRequest, context);
-                } else {
-                    opened = await directExecutionRuns!.open(admittedRequest, context);
+            if (params.executionRunContextV1) {
+                if (!('executionRun' in context)) {
+                    throw new Error('Session-primary detached execution requires execution-run scope');
                 }
-            } catch (error) {
-                logProviderFailure();
-                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+                opened = await params.executionRunContextV1.open(admittedRequest, context);
+            } else {
+                opened = await directExecutionRuns!.open(admittedRequest, context);
             }
             try {
                 assertUsable();
@@ -1178,7 +1165,17 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 openingInitialInput = false;
             }
             return opened;
-        })();
+        })().catch((error: unknown) => {
+            // An open that failed cannot supply future terminal events. Settle
+            // the same completion fence observed by long-lived input custody.
+            // The explicit pre-start rejection retains its identity for pool recovery.
+            if (error === rejectedStart) throw error;
+            const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+            const code = readExecutionRunErrorCode(failure) ?? 'agent_execution_run_open_failed';
+            logProviderFailure('open', code);
+            failRuntime(failure.message, code);
+            throw failure;
+        });
         return await nativeRuntimePromise;
     }
 
@@ -1297,13 +1294,13 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                         : {}),
                 });
             } catch (error) {
-                logProviderFailure();
+                logProviderFailure('send', readExecutionRunErrorCode(error) ?? 'agent_execution_run_send_failed');
                 throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
             }
             if (result.status !== 'admitted') {
-                logProviderFailure();
                 const message = diagnosticMessage(result.diagnostic, sanitizeProviderDiagnosticText);
                 const code = result.diagnostic?.code ?? 'agent_execution_run_failed';
+                logProviderFailure('send', code);
                 failRuntime(message, code);
                 throw createExecutionRunCodedError(code, message);
             }
@@ -1330,7 +1327,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             try {
                 result = await opened.stop({ signal });
             } catch (error) {
-                logProviderFailure();
+                logProviderFailure('stop', readExecutionRunErrorCode(error) ?? 'agent_execution_run_stop_failed');
                 throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
             }
             if (result.status === 'unavailable' || result.status === 'unsupported') {
@@ -1412,9 +1409,11 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                 if (request.kind === 'fork') {
                     throw new Error('Host-derived Session execution runs do not support fork');
                 }
+                let sourceSession: AgentSessionRuntime | null = null;
                 const sessionContext = await params.createSessionContext({
                     services: executionContext.services,
                     signal: executionContext.signal,
+                    readSessionRuntime: () => sourceSession,
                 });
                 const readBoundaryError = (): Error | null => {
                     if (!params.lease.isCurrent()) {
@@ -1450,6 +1449,7 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                     });
                     const openNativeSession = async (sessionRequest: Extract<AgentSessionOpenRequest, { kind: 'create' | 'resume' }>) => {
                         const opened = await sessions.open(sessionRequest, runScopedContext);
+                        sourceSession = opened;
                         let boundaryError = readBoundaryError();
                         if (!boundaryError && opened.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
                             await publishSkillLaunchNotice(sessionContext.capabilityNoticeSession, sessionContext.skills);
@@ -1621,6 +1621,8 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
     let disposed = false;
     let turnOrdinal = 0;
     let pendingTurnTerminalSettlement: Promise<void> | null = null;
+    let pendingTurnInputId: string | null = null;
+    let pendingTurnAdmissionFailure: Error | null = null;
     let resumedProviderSessionId: string | null = null;
     let skillIndex: string | undefined;
 
@@ -1646,9 +1648,11 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
         openPromise = (async () => {
             const services = await servicesPromise;
             assertUsable();
+            let sourceSession: AgentSessionRuntime | null = null;
             const sessionContext = await params.createSessionContext({
                 services,
                 signal,
+                readSessionRuntime: () => sourceSession,
                 readActiveTurnAdmissionWitness: () => operations?.readActiveTurnAdmissionWitness?.() ?? null,
             });
             // Context acquisition can await plugin/daemon work. Re-check the
@@ -1686,6 +1690,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
             let opened: AgentSessionRuntime | null = null;
             try {
                 opened = await sessions.open(request, context);
+                sourceSession = opened;
                 assertUsable();
                 if (opened.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
                     await publishSkillLaunchNotice(sessionContext.capabilityNoticeSession, sessionContext.skills);
@@ -1697,6 +1702,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                         request,
                         openSession: async request => {
                             const resumed = await sessions.open(request, context);
+                            sourceSession = resumed;
                             try {
                                 assertUsable();
                                 if (resumed.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
@@ -1749,6 +1755,12 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 operations.setOnPromptDeliveryOutcome((evidence) => {
                     const outcome = normalizeHostProviderInputOutcome(evidence);
                     if (!outcome) return;
+                    if (outcome.localId === pendingTurnInputId && outcome.kind === 'rejected_before_effect') {
+                        pendingTurnAdmissionFailure = createExecutionRunCodedError(
+                            outcome.diagnostic.code,
+                            diagnosticMessage(outcome.diagnostic, sanitize),
+                        );
+                    }
                     for (const listener of inputOutcomeListeners) listener(outcome);
                 });
                 unsubscribeEvents = operations.subscribeRuntimeEvents((event) => {
@@ -1783,7 +1795,9 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 }
                 throw error;
             }
-        })();
+        })().catch(error => {
+            throw sanitizeThrownError(error, sanitize);
+        });
         return await openPromise;
     };
 
@@ -1795,6 +1809,10 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
         } catch (error) {
             completionError = error;
         }
+        // A native refusal never started a turn. The Session owner returns to
+        // idle, but this Run still owes its caller a failed operation/result.
+        completionError ??= pendingTurnAdmissionFailure;
+        pendingTurnInputId = null;
         const settlement = pendingTurnTerminalSettlement;
         if (settlement) {
             try {
@@ -1893,14 +1911,20 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 await open(options?.resumeRuntimeId);
                 if (options?.initialPrompt !== undefined) {
                     const turnId = `${runId}-turn-${++turnOrdinal}`;
+                    pendingTurnInputId = `${runId}-input-${turnOrdinal}`;
+                    pendingTurnAdmissionFailure = null;
                     operations!.beginTurnLifecycle();
-                    await operations!.sendTurnPrompt(withRunSkillIndex({ text: options.initialPrompt }, skillIndex).text, {
-                        turnId,
-                        localId: `${runId}-input-${turnOrdinal}`,
-                        ...(params.options.causalPermissionAuthority
-                            ? { causalPermissionAuthority: params.options.causalPermissionAuthority }
-                            : {}),
-                    });
+                    try {
+                        await operations!.sendTurnPrompt(withRunSkillIndex({ text: options.initialPrompt }, skillIndex).text, {
+                            turnId,
+                            localId: pendingTurnInputId,
+                            ...(params.options.causalPermissionAuthority
+                                ? { causalPermissionAuthority: params.options.causalPermissionAuthority }
+                                : {}),
+                        });
+                    } catch (error) {
+                        throw pendingTurnAdmissionFailure ?? error;
+                    }
                 }
                 return Object.freeze({ runtimeId: runId });
             })();
@@ -1928,17 +1952,23 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
             } catch (error) {
                 return rejectStructuredInputBeforeProviderEffect(error);
             }
+            pendingTurnInputId = localId;
+            pendingTurnAdmissionFailure = null;
             operations!.beginTurnLifecycle();
-            await operations!.sendTurnPrompt(withRunSkillIndex(resolvedInput, skillIndex).text, {
-                ...meta,
-                localId,
-                ...(resolvedInput.structuredInput === undefined ? {} : { structuredInput: resolvedInput.structuredInput }),
-                userMessageSeq,
-                ...(meta?.userMessageSeqs ? { userMessageSeqs: meta.userMessageSeqs } : {}),
-                ...(meta?.causalPermissionAuthority
-                    ? { causalPermissionAuthority: meta.causalPermissionAuthority }
-                    : {}),
-            });
+            try {
+                await operations!.sendTurnPrompt(withRunSkillIndex(resolvedInput, skillIndex).text, {
+                    ...meta,
+                    localId,
+                    ...(resolvedInput.structuredInput === undefined ? {} : { structuredInput: resolvedInput.structuredInput }),
+                    userMessageSeq,
+                    ...(meta?.userMessageSeqs ? { userMessageSeqs: meta.userMessageSeqs } : {}),
+                    ...(meta?.causalPermissionAuthority
+                        ? { causalPermissionAuthority: meta.causalPermissionAuthority }
+                        : {}),
+                });
+            } catch (error) {
+                throw pendingTurnAdmissionFailure ?? error;
+            }
             return { status: 'admitted' as const };
         },
         ...(params.sessionCapabilities.delivery.includes('steer') ? {

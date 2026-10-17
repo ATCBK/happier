@@ -6,6 +6,50 @@ import { readProcessCensus } from '@/processes/census/processCensus';
 import type { ProcessCensusDependencies } from '@/processes/census/processCensus';
 import type { HappierProcessRoot } from './ownership/types';
 import { spawnInlineNodeParentWithChild, waitForProcessExit } from '@/testkit/process/spawn';
+import { createStopSession } from '../sessions/stopSession';
+import { waitForTrackedRunnerProcessesExit } from '../sessions/waitForTrackedRunnerProcessesExit';
+import { listHappierProcessRoots } from './roots/listHappierProcessRoots';
+import { createLeftBehindPass } from './leftBehind/leftBehindPass';
+import type { TrackedSession } from '../types';
+
+it('keeps the Stop receipt incomplete when a captured child actually survives both signals', async () => {
+    const { parent, childPid } = await spawnInlineNodeParentWithChild();
+    const sessionId = 'surviving-remainder-stop';
+    const initial = await readProcessCensus({ freshness: 'fresh', scope: 'all' });
+    if (initial.status !== 'ok') throw new Error('Native census unavailable');
+    const root = initial.rows.find(row => row.pid === parent.pid)!;
+    const tracked: TrackedSession = { pid: root.pid, processStartTimeMs: root.start.startTimeMs,
+        happySessionId: sessionId, startedBy: 'daemon', childProcess: parent };
+    const sessions = new Map([[root.pid, tracked]]);
+    const runtime = createProcessOwnershipRuntime({ daemonScopeKey: '123456789abc',
+        listRoots: snapshot => listHappierProcessRoots({ snapshot, trackedSessions: sessions.values() }) });
+    const leftBehind = createLeftBehindPass({ processOwnershipRuntime: runtime });
+    const nativeKill = process.kill.bind(process);
+    // Genuine signal boundary: acknowledge signals to this exact child without
+    // delivering them. Native observations must still find the live generation.
+    const remainder = createEndOwnerRemainder({ processOwnershipRuntime: runtime, daemonScopeKey: '123456789abc',
+        firstPass: leftBehind.firstPass, systemBoundary: { kill: (pid, signal) => pid === childPid ? true : nativeKill(pid, signal) } });
+    try {
+        const captured = await remainder.capture({ kind: 'session', sessionId });
+        expect(captured?.ownership.some(row => row.pid === childPid && row.level === 'proven')).toBe(true);
+        const exited = once(parent, 'exit'); parent.kill('SIGKILL'); await exited;
+        // The exit observer uses this pre-exit capture to retain unmarked lineage.
+        tracked.ownerRemainderResult = await remainder.end({ kind: 'session', sessionId }, captured);
+        expect(tracked.ownerRemainderResult).toMatchObject({ status: 'incomplete',
+            outcomes: [{ pid: childPid, outcome: 'survived' }] });
+        expect(nativeKill(childPid, 0)).toBe(true);
+        const physicallyExited = async ({ trackedPids }: Readonly<{ trackedPids: readonly number[] }>) =>
+            await waitForTrackedRunnerProcessesExit({ runners: trackedPids.map(pid => ({ pid })), timeoutMs: 0, pollIntervalMs: 0 });
+        const stop = createStopSession({ pidToTrackedSession: sessions, ownerRemainder: remainder,
+            areTrackedRunnersExited: physicallyExited, waitForTrackedRunnersExit: physicallyExited });
+        await expect(stop(sessionId)).resolves.toMatchObject({ status: 'incomplete', reason: 'runner_signal_incomplete' });
+    } finally {
+        leftBehind.dispose();
+        parent.kill('SIGKILL');
+        try { nativeKill(childPid, 'SIGKILL'); } catch { /* Exact test-owned child only. */ }
+        await waitForProcessExit(childPid);
+    }
+});
 
 it('retains only a captured ended subtree while its shared daemon owner remains live', async () => {
     const { parent, childPid } = await spawnInlineNodeParentWithChild();
@@ -122,6 +166,66 @@ it('does not sweep a new live owner sharing the old physical fence', async () =>
     expect(result).toMatchObject({ status: 'complete', outcomes: [{ pid: 4101, outcome: 'ended' }] });
     expect(signals).toEqual([4101]);
     expect(rows.has(4100)).toBe(true);
+});
+
+it.each(['Z', 'S', 'exits_during_grace'] as const)('requires ownership after enrichment disappears only for still-live members (%s)', async (stateAfterSignal) => {
+    const owner = { kind: 'session', sessionId: 'exiting-remainder' } as const;
+    const scope = '123456789abc';
+    const rows = new Map([
+        [process.pid, { parent: 1, ticks: 10, state: 'S' }],
+        [4100, { parent: 1, ticks: 100, state: 'S' }],
+        [4101, { parent: 4100, ticks: 110, state: 'S' }],
+        [4102, { parent: 1, ticks: 120, state: 'S' }],
+    ]);
+    const enrichmentLost = new Set<number>();
+    const censusDependencies: ProcessCensusDependencies = { platform: 'linux', selfPid: process.pid, linuxBoundary: {
+        async readdir() { return [...rows.keys()].map(String); },
+        async readlink() { return '/fixture'; },
+        async readFile(path) {
+            const pid = Number(path.split('/')[2]);
+            const row = rows.get(pid);
+            if (!row) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+            if (path.endsWith('/status')) return 'Uid:\t1000\n';
+            if (path.endsWith('/stat')) return `${pid} (fixture) ${[row.state, String(row.parent), '5000', '1', '0', '0', ...Array(13).fill('0'), String(row.ticks), '0', '0'].join(' ')}`;
+            if (path.endsWith('/environ')) {
+                if (enrichmentLost.has(pid)) throw Object.assign(new Error('process enrichment unavailable'), { code: 'EACCES' });
+                return pid === process.pid ? '' : `HAPPIER_PROCESS_OWNER=v1.${scope}.session.${owner.sessionId}\0`;
+            }
+            return '';
+        },
+    } };
+    const root: HappierProcessRoot = { owner, pid: 4100, start: { startTimeMs: 1000 }, live: true,
+        ownerCreatedAtMs: 0, ownerCreatedStartTimeMs: 1000 };
+    let roots: readonly HappierProcessRoot[] = [root];
+    const runtime = createProcessOwnershipRuntime({ platform: 'linux', daemonScopeKey: scope,
+        censusDependencies, listRoots: () => roots });
+    const signals: number[] = [];
+    const remainder = createEndOwnerRemainder({ platform: 'linux', processOwnershipRuntime: runtime, daemonScopeKey: scope,
+        firstPass: () => {}, systemBoundary: { platform: 'linux', censusDependencies,
+            ...(stateAfterSignal === 'exits_during_grace' ? { wait: async () => { rows.delete(4102); } } : {}),
+            kill(pid) {
+                signals.push(pid);
+                if (pid === 4102) {
+                    rows.set(pid, { ...rows.get(pid)!, parent: 1, state: stateAfterSignal === 'exits_during_grace' ? 'S' : stateAfterSignal });
+                    enrichmentLost.add(pid);
+                } else rows.delete(pid);
+                return true;
+            },
+        } });
+    const captured = await remainder.capture(owner);
+    roots = [{ ...root, live: false }];
+    rows.delete(root.pid);
+    const result = await remainder.end(owner, captured);
+    if (stateAfterSignal !== 'S') {
+        expect(result).toMatchObject({ status: 'complete', outcomes: [
+            { pid: 4101, outcome: 'ended' }, { pid: 4102, outcome: 'ended' },
+        ] });
+    } else {
+        expect(result).toMatchObject({ status: 'incomplete', outcomes: expect.arrayContaining([
+            { pid: 4102, outcome: 'refused', reason: 'containment_authority_changed' },
+        ]) });
+    }
+    expect(signals.sort()).toEqual([4101, 4102]);
 });
 
 it('does not retire a resumed live owner generation while completing an older runner exit', async () => {

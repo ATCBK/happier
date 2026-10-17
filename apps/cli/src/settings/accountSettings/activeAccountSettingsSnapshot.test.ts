@@ -45,6 +45,18 @@ const configuredExternalSessionSourceRevisions = activeAccountSettingsSnapshot a
 }>;
 
 describe('active account settings snapshot publication', () => {
+  it.each([undefined, { status: 'loading' as const }])('retains privately prepared catalogs across an unchanged source observation (%j)', promptLibraryCatalog => {
+    const source = { ...snapshot({ scopeKey: 'session-source', version: 1, timing: 'after_runtime_idle' }), promptLibraryCatalog };
+    const admitted: PromptLibraryCatalogSnapshotV1 = { status: 'ready', rows: [], tombstones: [], diagnostics: [] };
+    const operation = { ...source, promptLibraryCatalog: admitted };
+    const next = { ...source, loadedAtMs: 2 };
+    expect(activeAccountSettingsSnapshot.preserveAccountCatalogsInSnapshot(operation, next, source).promptLibraryCatalog).toBe(admitted);
+    const withdrawn = { status: 'unavailable' as const, reason: 'forbidden' as const };
+    expect(activeAccountSettingsSnapshot.preserveAccountCatalogsInSnapshot(operation,
+      { ...next, promptLibraryCatalog: withdrawn }, source).promptLibraryCatalog).toBe(withdrawn);
+    expect(activeAccountSettingsSnapshot.preserveAccountCatalogsInSnapshot(operation,
+      { ...next, scopeKey: 'other-account' }, source).promptLibraryCatalog).toBe(promptLibraryCatalog);
+  });
     it('withdraws cached Provider authority before disclosure when Account decryption material is retired', () => {
         const base = snapshot({ scopeKey: 'scope-provider-keys', version: 4, timing: 'after_runtime_idle' });
         const providerConnectionsCatalog = { status: 'ready' as const, revision: 7, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
@@ -719,6 +731,42 @@ describe('active account settings snapshot publication', () => {
         expect(clearedAgain).toBe(cleared);
         expect(accountAReentered).toBeGreaterThan(cleared);
     });
+
+  it('keeps configured transcript sources current across an unrelated Account catalog hydration', () => {
+    const cached = { ...snapshot({ scopeKey: 'source-account', version: 4, timing: 'after_runtime_idle' }), source: 'cache' as const };
+    setActiveAccountSettingsSnapshot(cached);
+    const sourceRevision = configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot());
+    expect(activeAccountSettingsSnapshot.commitActiveProfileCatalog({
+      scopeKey: cached.scopeKey,
+      lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+      catalog: { status: 'ready', authority: 'inactive', control: null,
+        controlRevision: 'absent', records: [], diagnostics: [], referenceGuardRevision: 7 },
+    })).toBe(true);
+    expect(configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).toBe(sourceRevision);
+
+    const hydrated = getActiveAccountSettingsSnapshot()!;
+    setActiveAccountSettingsSnapshot({ ...hydrated, settingsVersion: 5,
+      settings: accountSettingsParse({ sessionPendingQueueDeliveryTiming: 'after_foreground_ready' }) });
+    expect(configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).not.toBe(sourceRevision);
+    clearActiveAccountSettingsSnapshot();
+    setActiveAccountSettingsSnapshot(hydrated);
+    expect(configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).not.toBe(sourceRevision);
+  });
+
+  it('invalidates configured sources when the initial version-zero settings read becomes available', () => {
+    const unavailable = { ...snapshot({ scopeKey: 'source-account', version: 0, timing: 'after_runtime_idle' }), source: 'none' as const };
+    setActiveAccountSettingsSnapshot(unavailable);
+    const sourceRevision = configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot());
+
+    expect(commitActiveAccountSettingsSnapshot({ ...unavailable, source: 'network', rawSettings: {}, loadedAtMs: 1 }).didCommit).toBe(true);
+    expect(configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).not.toBe(sourceRevision);
+  });
 
   it('publishes a Connected Services-only projection through the active source revision without changing Settings revision', () => {
     const active = snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' });

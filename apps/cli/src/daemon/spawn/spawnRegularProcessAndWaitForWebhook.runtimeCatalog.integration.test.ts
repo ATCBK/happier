@@ -20,6 +20,7 @@ import type { TrackedSession } from '../types';
 import { createPersistedTakeoverAdmissionWaiter } from './persistedTakeoverAdmission';
 import { withTakeoverAdmissionCommitRevalidation } from './spawnCommitRevalidation';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { procfsFileHandle } from '@/testkit/process/procfsFileHandle';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { readOrCreateDeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
 import { listSessionMarkers } from '../sessionRegistry';
@@ -537,17 +538,17 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
                   // Hold only the genuine procfs read; a replacement tracked
                   // object cannot inherit the earlier absent-presenter proof.
                   const fsBoundary = await import('node:fs/promises');
-                  const readFile = fs.readFile;
                   let readStarted = false;
                   let releaseRead = () => {};
                   const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
                   releaseHeldRead = releaseRead;
-                  const readSpy = vi.spyOn(fsBoundary, 'readFile').mockImplementation(async (...args) => {
-                    if (args[0] === `/proc/${pid}/stat` && !readStarted) {
+                  const readSpy = vi.spyOn(fsBoundary, 'open').mockImplementation(async (...args) => {
+                    if (args[0] !== `/proc/${pid}/stat`) return await fs.open(...args);
+                    return procfsFileHandle(await fs.readFile(args[0]), async () => {
+                      if (readStarted) return;
                       readStarted = true;
                       await readGate;
-                    }
-                    return await readFile(...args);
+                    });
                   });
                   const replacedStop = stop('session-1');
                   try {
@@ -733,7 +734,7 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
                   expectedAttachmentId: attachment.attachmentId });
                 await expect(Promise.resolve().then(() => resolveTrackedSessionTerminalHostExitCandidate({
                   tracked: finalExitTracked, pid, happyHomeDir: homeDir, attachmentInfo: null,
-                }))).rejects.toThrow(Error);
+                }))).resolves.toBeNull();
               }
             }
           } finally {

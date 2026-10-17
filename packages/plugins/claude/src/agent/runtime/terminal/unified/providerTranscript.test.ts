@@ -49,6 +49,7 @@ type ProviderTranscriptModule = Readonly<{
   createClaudeUnifiedProviderTranscriptPublisher(params: Readonly<{
     ctx: TestContext;
     sessionId: string;
+    historicalProviderSessionId?: string;
     onObserveRow?: (row: unknown, observation: Readonly<{ providerSessionId: string; historicalReplay: boolean; projectedTaskResult?: unknown }>) => void;
   }>): ProviderTranscriptPublisher;
 }>;
@@ -171,7 +172,9 @@ async function createBoundPublisher(options?: Readonly<{
     hook_event_name: 'SessionStart',
     session_id: providerSessionId,
     transcript_path: transcriptPath,
-    ...(options?.source ? { source: options.source } : {}),
+    // Projection cases start with admitted history. Fresh startup admission is
+    // exercised with the real identity writer in the composed CLI regression.
+    source: options?.source ?? 'resume',
   });
   expect(bindResult).toEqual({
     status: 'bound',
@@ -523,7 +526,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
     const resetBeforeConsumption = createEpisode();
     await emit(resetBeforeConsumption.enqueue, resetBeforeConsumption.remove);
     await publisher.bindFromSessionHook('claude-session-1', {
-      hook_event_name: 'SessionStart', transcript_path: '/tmp/rotated-session.jsonl', source: 'startup',
+      hook_event_name: 'SessionStart', transcript_path: '/tmp/rotated-session.jsonl', source: 'resume',
     });
     await emit(resetBeforeConsumption.consumption);
     expect(ctx.agentRuntime.sessionHooks.publishProviderTranscript).not.toHaveBeenCalled();
@@ -548,10 +551,10 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
     publishers.push(publisher);
     let bound = false;
     const binding = publisher.bindFromSessionHook('claude-session-1', {
-      hook_event_name: 'SessionStart', transcript_path: '/tmp/claude-session-1.jsonl', source: 'startup',
+      hook_event_name: 'SessionStart', transcript_path: '/tmp/claude-session-1.jsonl', source: 'resume',
     }).then(() => { bound = true; });
     await vi.waitFor(() => expect(ctx.agentRuntime.transcripts.followSource).toHaveBeenCalledWith({
-      providerSessionId: 'claude-session-1', replay: 'fresh',
+      providerSessionId: 'claude-session-1', replay: 'historical',
     }));
     expect(bound).toBe(false);
     const dispose = vi.fn(async () => undefined);
@@ -568,7 +571,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
     ctx.agentRuntime.transcripts.followSource.mockRejectedValueOnce(failure);
     const publisher = createClaudeUnifiedProviderTranscriptPublisher({ ctx, sessionId: 'happy-session-1' });
     publishers.push(publisher);
-    const hook = { hook_event_name: 'SessionStart', transcript_path: '/tmp/claude-session-1.jsonl', source: 'startup' };
+    const hook = { hook_event_name: 'SessionStart', transcript_path: '/tmp/claude-session-1.jsonl', source: 'resume' };
     await expect(publisher.bindFromSessionHook('claude-session-1', hook)).rejects.toBe(failure);
     await expect(publisher.bindFromSessionHook('claude-session-1', hook)).resolves.toMatchObject({ status: 'unchanged' });
     expect(ctx.agentRuntime.transcripts.followSource).toHaveBeenCalledTimes(2);
@@ -858,6 +861,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
 
     await expect(publisher.bindFromSessionHook('claude-session-1', {
       hook_event_name: 'SessionStart',
+      source: 'resume',
       session_id: 'claude-session-1',
       transcriptPath,
     })).resolves.toEqual({
@@ -878,6 +882,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
 
     await expect(publisher.bindFromSessionHook('claude-session-1', {
       hook_event_name: 'SessionStart',
+      source: 'resume',
       session_id: 'claude-session-1',
       transcriptPath,
     })).resolves.toEqual({
@@ -1014,6 +1019,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
     const ctx = createContext();
     const publisher = createClaudeUnifiedProviderTranscriptPublisher({
       ctx,
+      historicalProviderSessionId: 'claude-known-resume',
     });
     publishers.push(publisher);
 
@@ -1094,10 +1100,12 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
 
     const rotatedRow = {
       type: 'assistant',
+      sessionId: 'claude-session-after-compact',
       uuid: 'assistant-after-compact',
       message: { stop_reason: 'end_turn' },
     };
     await ctx.fileFollows[1]?.emit(jsonLine(rotatedRow));
+    expect(observedRows).toEqual([rotatedRow]);
     await publisher.observeSourceTranscript({ providerSessionId: 'claude-session-after-compact', sourceId: `source:${rotatedRow.uuid}`, row: rotatedRow });
     expect(ctx.agentRuntime.sessionHooks.publishProviderTranscript).toHaveBeenCalledWith(expect.objectContaining({
       providerSessionId: 'claude-session-after-compact',
@@ -1105,6 +1113,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
     }));
 
     ctx.agentRuntime.sessionHooks.publishProviderTranscript.mockClear();
+    observedRows.length = 0;
     await ctx.fileFollows[0]?.emit(jsonLine({
       type: 'system',
       subtype: 'task_updated',
@@ -1118,7 +1127,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
       message: { stop_reason: 'end_turn' },
     }));
     expect(ctx.agentRuntime.sessionHooks.publishProviderTranscript).not.toHaveBeenCalled();
-    expect(observedRows).toEqual([rotatedRow]);
+    expect(observedRows).toEqual([]);
   });
 
   it('rebinds the same main session when a later trusted hook reports a moved transcript path', async () => {
@@ -1165,6 +1174,7 @@ describe('createClaudeUnifiedProviderTranscriptPublisher', () => {
 
     const movedRow = {
       type: 'assistant',
+      sessionId: 'claude-session-1',
       uuid: 'assistant-after-transcript-move',
       message: { stop_reason: 'end_turn' },
     };

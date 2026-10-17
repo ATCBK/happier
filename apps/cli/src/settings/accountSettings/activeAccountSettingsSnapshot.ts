@@ -133,14 +133,27 @@ function emitActiveAccountSettingsSnapshot(
 export function preserveAccountCatalogsInSnapshot(
   previous: ActiveAccountSettingsSnapshot | null,
   next: ActiveAccountSettingsSnapshot,
+  previousSource?: ActiveAccountSettingsSnapshot | null,
 ): ActiveAccountSettingsSnapshot {
+  // A captured reader can hydrate domains privately. Refreshing its source's
+  // preferences or another domain must retain those reads when the source did
+  // not change that domain; an actual source change still wins.
+  const sourceUnchangedAccount = previousSource && belongsToSameAccount(previousSource, next);
   const inherited = previous && belongsToSameAccount(previous, next)
-    ? independentAccountFields.filter(field => next[field] === undefined && previous[field] !== undefined)
+    ? independentAccountFields.filter(field => (next[field] === undefined
+      || sourceUnchangedAccount && next[field] === previousSource[field]) && previous[field] !== undefined)
     : [];
   let accepted: ActiveAccountSettingsSnapshot = inherited.length > 0 && previous
     ? { ...next, ...Object.fromEntries(inherited.map(field => [field, previous[field]])) }
     : next;
   if (previous && belongsToSameAccount(previous, accepted)) {
+    // A private source read can be newer than the ambient Settings underneath
+    // an independent catalog publication. Keep that accepted Settings read,
+    // while catalogs and current key material still reconcile from the source.
+    if (accepted.settingsVersion < previous.settingsVersion) {
+      accepted = { ...accepted, source: previous.source, settings: previous.settings,
+        rawSettings: previous.rawSettings, settingsVersion: previous.settingsVersion, loadedAtMs: previous.loadedAtMs };
+    }
     // A newer observation can advance revision/timing without changing the
     // preferences or material consumed by an admitted operation.
     const unchanged = (['settings', 'rawSettings', 'settingsSecretsReadKeys'] as const)
@@ -731,16 +744,19 @@ export function resolveActiveAccountSettingsSnapshotRevision(
 }
 
 /**
- * The configured External Session source revision. It extends the Account
- * Settings revision with the active Account lifetime and Connected Services
- * projection so source materializers use their existing revision lifecycle
- * when either input changes.
+ * Configured sources consume Account preferences and Connected Services, not
+ * the independently hydrated Profile, Prompt, Provider or MCP catalogs. A
+ * catalog publication or a newer read timestamp must not retire a live native
+ * transcript follower. Keep actual preference/availability changes and Account
+ * lifetime or Connected Services revocation in the existing source lifecycle.
  */
 export function resolveActiveAccountConfiguredExternalSessionSourceRevision(
   snapshot: ActiveAccountSettingsSnapshot | null,
 ): string {
   return [
-    resolveActiveAccountSettingsSnapshotRevision(snapshot),
+    snapshot
+      ? `${snapshot.scopeKey ?? 'active'}:${snapshot.settingsVersion}:${snapshot.source === 'none' ? 'unavailable' : 'available'}`
+      : 'account-profile:bootstrap',
     'connected-services',
     activeLifetimeToken,
     activeConnectedServicesProjectionRevision,

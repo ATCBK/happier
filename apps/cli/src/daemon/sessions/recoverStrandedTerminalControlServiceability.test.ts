@@ -173,6 +173,24 @@ describe('recoverStrandedTerminalControlServiceability', () => {
     expect(input.retireExactTerminalControlServiceability).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [{ paneAlive: false, paneDead: true, observedAt: 200 }, { status: 'stopped' }],
+    [{ paneAlive: true, observedAt: 200 }, { status: 'incomplete', reason: 'tracked_runner_absent' }],
+    [{ paneAlive: false, probeInconclusive: true, observedAt: 200 }, { status: 'incomplete', reason: 'missing_topology_proof' }],
+  ] as const)('reproves a retired host for repeated Stop after tracked-runner settlement (%j)', async (liveness, expected) => {
+    const retiredMetadata = metadata();
+    const terminal = retiredMetadata.terminal as { controlServiceabilityV1: Record<string, unknown> };
+    // The real retirement producer leaves the exact tmux target but clears serviceability.
+    terminal.controlServiceabilityV1 = { ...terminal.controlServiceabilityV1,
+      state: 'unknown', reason: 'attachment_retired', retired: true };
+    const evaluateLiveness = vi.fn(async () => liveness);
+    const input = params({ evaluateLiveness, metadata: retiredMetadata });
+
+    await expect(recoverStrandedTerminalControlServiceability(input)).resolves.toEqual(expected);
+    expect(evaluateLiveness).toHaveBeenCalled();
+    expect(input.retireExactTerminalControlServiceability).not.toHaveBeenCalled();
+  });
+
   it('does not probe or retire a replacement attachment', async () => {
     const evaluateLiveness = vi.fn(async () => ({ paneAlive: false, paneDead: true, observedAt: 200 }));
     const input = params({ evaluateLiveness, expectedAttachmentId: 'attachment-local' });

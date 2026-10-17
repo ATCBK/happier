@@ -1,15 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ChildProcess, spawn } from 'node:child_process';
+import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { createTerminalLauncherFixture } from '@/testkit/process/terminalLauncher';
 import { launchBorrowedTerminalProcess } from '@/terminal/host/borrowedTerminalProcess';
 import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createJiti } from 'jiti';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
-import { toAgentSessionMcpLaunchConfigs } from './nativeAgentSession';
+import { createWorkspaceWritesPolicyPreparation } from '@/session/roles/workspaceWritesPolicyPreparation';
+import { resolveAgentSessionMcpLaunchConfigs, toAgentSessionMcpLaunchConfigs } from './nativeAgentSession';
+import { buildCodexAppServerConfigOverrides } from '@happier-dev/plugins-codex/agent/runtime/appServer/config/overrides';
 import * as processIdentity from '@/daemon/processIdentity';
 
 it('restricts native MCP catalogs through the session matcher without confusing server prefixes', () => {
@@ -26,8 +28,12 @@ it('restricts native MCP catalogs through the session matcher without confusing 
 import { hashProcessCommand } from '@/daemon/sessionRegistry';
 import { createRunnerAgentSessionBootstrapAuthorization, publishAgentRuntimeDaemonServiceAuthority } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { createRunnerAgentSessionRuntimeBootstrap } from '@/agent/runtime/session/process/runnerAgentSessionRuntimeSource';
+import { createRunnerAgentDaemonFacets } from '@/agent/runtime/session/process/runnerAgentDaemonFacets';
+import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+import { AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { AgentRuntimeDaemonServiceRequestV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createImmutablePluginGenerationRecordFromSource, prepareImmutablePluginGeneration, persistValidatedAgentSessionRunnerFactories } from '@/plugins/store/registry/generationStore';
 import { projectEngineRuntimeContributionFromAgent } from './contributions';
 
 import type {
@@ -165,6 +171,7 @@ import { writeTerminalHostAttachmentInfo, readTerminalHostAttachmentInfo } from 
 import type { NativeAgentRuntimeSessionFixtureParams as HostSessionRuntimeFactoryParams } from './nativeAgentSession.testkit';
 import { createNativeAgentSessionPublications } from './nativeAgentSessionPublications';
 import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
+import { registerSessionControlHandlers } from '@/rpc/handlers/sessionControls';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import type { PermissionModeQueuedPrompt, PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
 import { createStablePluginStorageService } from '@/plugins/runtime/context/storage';
@@ -181,6 +188,27 @@ import { createBoundedAgentExternalSessionsContribution } from '@/session/extern
 import { createAgentExternalSessionsExecutionSurface } from '@/agent/runtime/registry/agentExternalSessionsExecutionSurface';
 import { resolveExternalSessionSourceFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
 import { deriveNativeUsageAccountingIdentity } from '@/usage/collector/nativeUsageAccountingIdentity';
+import { loadCommittedTranscriptLocalIdBaseline } from '@/api/session/client/transcript/committedTranscriptLocalIdBaseline';
+
+it.each([undefined, []])('omits MCP servers without probing them when deny allows no tools (%j)', async (allowedTools) => {
+    const policy = { unlistedTools: 'deny' as const, allowedTools };
+    // The real OS boundary would reject this server if launch resolution probed it.
+    const servers = { unavailable: { command: join(process.cwd(), 'no-tools-mcp-must-not-start') } };
+    const result = await resolveAgentSessionMcpLaunchConfigs(servers, policy);
+    expect(result).toBeUndefined();
+    const overrides = buildCodexAppServerConfigOverrides(result ?? {}, policy);
+    expect(overrides).toContain('features.shell_tool=false');
+    expect(overrides).toContain('web_search="disabled"');
+    expect(overrides.some((entry) => entry.startsWith('mcp_servers.'))).toBe(false);
+});
+
+it('requires an MCP catalog when a denied-by-default recipe lists a server tool', async () => {
+    await expect(resolveAgentSessionMcpLaunchConfigs({
+        unavailable: { command: join(process.cwd(), 'no-tools-mcp-must-not-start') },
+    }, {
+        unlistedTools: 'deny', allowedTools: ['mcp__unavailable__*'],
+    })).rejects.toMatchObject({ name: 'McpServerProbeError', phase: 'connect', cause: { code: 'ENOENT' } });
+});
 
 vi.mock('node:fs', async (importOriginal) => {
     const fs = await importOriginal<typeof import('node:fs')>();
@@ -581,6 +609,28 @@ function createWorkflowActivityHeadline() {
     } as const;
 }
 
+function createClaudeSettingsFixture(signal: AbortSignal, readValues: () => Record<string, ProtocolJsonValue>) {
+    const pluginId = CLAUDE_ACCOUNTING_MANIFEST.id;
+    const host = createStablePluginSettingsHost({
+        declarations: (CLAUDE_ACCOUNTING_MANIFEST.contributes.settings ?? []).map(contribution => ({
+            pluginId, contribution: PluginSettingsContributionV2Schema.parse(contribution),
+        })),
+        broker: createStablePluginEventsBroker(),
+        // The persisted Account record is the controlled boundary; scope/defaults stay real.
+        recordStore: createAccountSettingsBackedSettingsRecordStore({ async bindOperation() { return {
+            async readRecord() { return { status: 'present' as const, revision: 1, values: readValues() }; },
+            async writeRecord() { throw new Error('This fixture must not write Account settings'); },
+        }; } }),
+    });
+    const settings = host.bind({ plugin: { id: pluginId, version: '0.0.0' },
+        contribution: { id: 'claude', qualifiedId: `${pluginId}/agents/claude` },
+        occurrenceId: 'claude-settings-fixture', correlationId: 'claude-settings-fixture',
+        surface: 'agent', signal, isOccurrenceCurrent: () => !signal.aborted,
+    });
+    if (!settings) throw new Error('The declared Claude Account settings did not bind');
+    return settings;
+}
+
 function createAgentActivityHeadline() {
     return {
         v: 1,
@@ -601,7 +651,7 @@ function createAgentActivityHeadline() {
 }
 
 describe('native Agent session host adapter', () => {
-    it.each(['fresh', 'resume', 'respawn', 'runtime-recovery', 'runtime-recovery-authority-missing', 'prompt-failure', 'claim-rejected'] as const)(
+    it.each(['fresh', 'resume', 'respawn', 'runtime-recovery', 'runtime-recovery-authority-missing', 'prompt-failure', 'claim-rejected', 'mcp-before-open', 'cancel-before-open'] as const)(
         'claims the real runner bootstrap before startup contributions (%s)', async (scenario) => {
         await withTempDir('native-runner-startup-authority-', async (temporaryDirectory) => {
             const directory = await realpath(temporaryDirectory);
@@ -626,7 +676,21 @@ describe('native Agent session host adapter', () => {
                     watch() { return { dispose() {} }; }, async dispose() {}
                 }; } } };
             }`);
-            const sourceCustody = { kind: 'development' as const, registeredRootId: directory };
+            // External runner code is admitted as an immutable installed generation;
+            // development custody is reserved for the executing first-party source tree.
+            const paths = resolvePluginStorePaths({ happyHomeDir: directory });
+            const record = await createImmutablePluginGenerationRecordFromSource({
+                pluginId, sourceRootPath: directory, manifestRelativePath: '.happier-plugin/plugin.json',
+                distribution: { kind: 'localPath', canonicalPath: directory },
+                updatePolicy: 'allowed', createdAtMs: 1,
+            });
+            await prepareImmutablePluginGeneration({ paths, sourceRootPath: directory, record });
+            const locator = { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 as const };
+            await persistValidatedAgentSessionRunnerFactories({ paths, record, manifestAuthority: 'external',
+                factories: [{ localAgentId, locator, normalizedModulePath: 'runtime.mjs', loadMode: 'immutable-js' }],
+            });
+            const sourceCustody = { kind: 'managed' as const, immutableGenerationId: record.immutableGenerationId,
+                installSource: 'localPath' as const };
             const issued = await createRunnerAgentSessionBootstrapAuthorization({
                 happyHomeDir: directory, publicReleaseRing: 'stable', descriptor: {
                     v: 1, pluginId, pluginVersion: '1.0.0', agentId, backendId: agentId,
@@ -644,6 +708,14 @@ describe('native Agent session host adapter', () => {
             const fetchSpy = vi.fn<typeof fetch>(async (_url, init) => {
                 const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
                 expect(request.context.sessionId).toBe(sessionId);
+                if (request.operation.kind === 'mcp.request_auth.open') {
+                    events.push('daemon-mcp');
+                    return new Response(JSON.stringify({ ok: true, result: { kind: 'mcp.request_auth',
+                        capabilityFile: join(directory, 'mcp-capability.json'), resource: request.operation.resource } }), { status: 200 });
+                }
+                if (request.operation.kind === 'mcp.request_auth.close') {
+                    return new Response(JSON.stringify({ ok: true, result: { kind: 'mcp.request_auth.closed' } }), { status: 200 });
+                }
                 expect(request.operation.kind).toBe('turn_contributions.resolve');
                 events.push('daemon-prompt');
                 return new Response(JSON.stringify({ ok: true, result: {
@@ -661,7 +733,7 @@ describe('native Agent session host adapter', () => {
                     runner: { pid: process.pid, processStartTimeMs: 1, processCommandHash: hashProcessCommand(command),
                         snapshotIdentity: 'snapshot:startup-authority' },
                     retainedAgent: { v: 1, pluginId, pluginVersion: '1.0.0', agentId, localAgentId, sourceCustody,
-                        locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+                        locator,
                         normalizedModulePath: 'runtime.mjs', loadMode: 'immutable-js' },
                     httpPort: 43123,
                 });
@@ -685,6 +757,10 @@ describe('native Agent session host adapter', () => {
                     backend: projectEngineRuntimeContributionFromAgent(bootstrap.agentContribution, agentId),
                     createSessionHostServiceOwners: () => createSessionHostServiceOwners(),
                     sessionInput: buildPluginSessionBindingInput({ credentials, directory,
+                        ...(scenario === 'mcp-before-open' ? { resolveLateEnvironment: async () => {
+                            events.push('late-environment');
+                            return { environmentVariables: {}, unsetEnvironmentVariables: [], sensitiveEnvironmentVariableNames: [] };
+                        } } : {}),
                         ...(scenario === 'resume' || scenario === 'respawn' ? { resume: 'native-resume' } : {}),
                         ...(scenario === 'respawn' ? { existingSessionId: sessionId, startedBy: 'daemon' as const } : {}),
                     }),
@@ -701,6 +777,23 @@ describe('native Agent session host adapter', () => {
                         return 'Use the claimed startup instructions.';
                     },
                 };
+                if (scenario === 'mcp-before-open' || scenario === 'cancel-before-open') {
+                    await plan.config.lifecycleHooks?.onSessionInitialized?.({
+                        session: hostRuntimeParams.session, opts: {}, metadata: {}, attachedToExistingSession: false,
+                        machineId: 'machine-1', signal: generation.signal,
+                    } as never);
+                    if (scenario === 'cancel-before-open') {
+                        expect(bootstrap.identity.isCurrent()).toBe(true);
+                        generation.abort();
+                        await vi.waitFor(() => expect(bootstrap.identity.isCurrent()).toBe(false));
+                        expect(events).toEqual(['claim']);
+                        return;
+                    }
+                    await expect(bootstrap.daemonTurnContributionsBridge!.mcpRequestAuth!.open({
+                        serverId: 'oauth-server', resource: 'https://mcp.fixture.test/mcp', materializationId: 'startup-mcp',
+                    })).resolves.toMatchObject({ resource: 'https://mcp.fixture.test/mcp' });
+                    expect(events).toEqual(['late-environment', 'claim', 'daemon-mcp']);
+                }
                 const create = plan.config.createSessionRuntime(hostRuntimeParams as never);
                 if (scenario === 'claim-rejected') {
                     await expect(create).rejects.toThrow('Runner Agent canonical session authority is unavailable');
@@ -712,7 +805,8 @@ describe('native Agent session host adapter', () => {
                 } else {
                     const created = await create;
                     expect(created.operations.readSessionStartupInstructions?.()?.instructions).toBe('Use the claimed startup instructions.');
-                    expect(events).toEqual(['claim', 'daemon-prompt']);
+                    expect(events).toEqual(scenario === 'mcp-before-open'
+                        ? ['late-environment', 'claim', 'daemon-mcp', 'daemon-prompt'] : ['claim', 'daemon-prompt']);
                     await created.operations.resetOrDisposeRuntime();
                     if (scenario === 'runtime-recovery' || scenario === 'runtime-recovery-authority-missing') {
                         expect(bootstrap.identity.isCurrent()).toBe(false);
@@ -751,6 +845,7 @@ describe('native Agent session host adapter', () => {
             const generation = new AbortController();
             const nativeRecord = join(directory, 'native.jsonl');
             const nativePath = join(directory, 'native-client');
+            const diagnostic = vi.spyOn(logger, 'infoFile');
             const herdrPath = join(directory, 'herdr');
             const providerSessionId = agentId === 'codex' ? 'fresh-thread' : 'oc-session-zero-turn';
             const baseUrl = 'http://127.0.0.1:49211';
@@ -804,9 +899,13 @@ describe('native Agent session host adapter', () => {
                     const owners = createRealNativeHostOwners({ runtimeRegistry: null, runtimeAuthority: { runtimeCapabilities: [] }, identity: { pluginId, agentId, occurrenceId: 'selected-optional', isCurrent: () => !generation.signal.aborted },
                         backend, agent, hostSession: { session, machineId: 'selected-machine', permissionHandler: new ProviderEnforcedPermissionHandler(session, { logPrefix: '[selected-optional]' }) },
                         sessionId: session.sessionId, directory, happyHomeDir: directory, signal: generation.signal });
-                    const factory = await loadRealAgentRuntimeFactory(agentId === 'codex'
-                        ? 'packages/plugins/codex/src/agent/runtime/engine.ts' : 'packages/plugins/opencode/src/agent/runtime/nativeRuntime.ts',
-                    agentId === 'codex' ? 'createCodexAgentRuntime' : 'createOpenCodeAgentRuntime');
+                    const runtimePath = agentId === 'codex'
+                        ? '../../../../../../../packages/plugins/codex/src/agent/runtime/engine.ts'
+                        : '../../../../../../../packages/plugins/opencode/src/agent/runtime/nativeRuntime.ts';
+                    // Vitest loads the actual source without adding a second package's source graph to CLI compilation.
+                    const factories: Readonly<Record<string, AgentRuntimeFactory>> = await import(runtimePath);
+                    const factory = factories[agentId === 'codex' ? 'createCodexAgentRuntime' : 'createOpenCodeAgentRuntime'];
+                    if (!factory) throw new Error('Actual selected Agent runtime factory is unavailable');
                     const runtime = await factory({ plugin: { id: pluginId, version: '0.0.0' }, agent: { id: agentId }, signal: generation.signal });
                     if (!runtime.sessions?.resolveTerminalPresentation) throw new Error('The actual optional provider omitted its selected presentation');
                     const selected = await runtime.sessions.resolveTerminalPresentation({ cwd: directory, requestedHost: 'herdr', runtimeDescriptorV1: {
@@ -863,7 +962,12 @@ describe('native Agent session host adapter', () => {
                     stopRuntimeSubscriptions.push(created.operations.subscribeRuntimeEvents(event => { runtimeEvents.push(event); }));
                     if (!created.terminalRemoteModeLoop) throw new Error('Actual optional provider omitted its shared mode owner');
                     loop = runTerminalRemoteSessionModeLoop(created.terminalRemoteModeLoop).then(() => undefined).catch(error => { loopFailure = error; });
-                    await vi.waitFor(() => expect(session.__getAgentState().localControl).toMatchObject({ attached: true, canDetach: true, remoteWritable: true, topology: 'shared' }));
+                    await vi.waitFor(() => expect(session.rpcHandlerManager.hasHandler('switch')).toBe(true));
+                    await expect(session.rpcHandlerManager.invokeLocal('switch', { to: 'local' })).resolves.toBe(true);
+                    await vi.waitFor(() => {
+                        expect(diagnostic.mock.calls.filter(([message]) => String(message).includes('restoration failed'))).toEqual([]);
+                        expect(session.__getAgentState().localControl).toMatchObject({ attached: true, canDetach: true, remoteWritable: true, topology: 'shared' });
+                    });
                     await vi.waitFor(async () => expect((await readFile(nativeRecord, 'utf8')).trim()).not.toBe(''));
                     const records: unknown[] = (await readFile(nativeRecord, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
                     expect(records).toHaveLength(1);
@@ -915,12 +1019,20 @@ describe('native Agent session host adapter', () => {
                     expect(loopFailure).toBeUndefined();
                 };
                 if (agentId === 'codex') await withCodexNativeAttachFixture(async fixture => {
-                    await runProvider({ ...baseServices.exec, ...fixture.exec }, fixture.endpoints);
-                    expect(fixture.requests.filter(request => request.method === 'thread/start')).toHaveLength(1);
-                    expect(fixture.requests.some(request => request.method === 'turn/start')).toBe(false);
+                    try {
+                        await runProvider({ ...baseServices.exec, ...fixture.exec }, fixture.endpoints);
+                        expect(fixture.requests.filter(request => request.method === 'thread/start')).toHaveLength(1);
+                        expect(fixture.requests.some(request => request.method === 'turn/start')).toBe(false);
+                    } finally {
+                        // The native Session must release its sockets before its external server fixture closes.
+                        generation.abort();
+                        await opened.runtime?.operations.resetOrDisposeRuntime();
+                        await loop;
+                    }
                 });
                 else await runProvider({ ...baseServices.exec, systemTools: { ...baseServices.exec.systemTools, resolve: async () => ({ executable: { kind: 'systemTool', id: 'opencode-cli' }, executablePath: nativePath }) } });
             } finally {
+                diagnostic.mockRestore();
                 for (const stop of stopRuntimeSubscriptions) stop();
                 generation.abort();
                 try {
@@ -944,11 +1056,15 @@ describe('native Agent session host adapter', () => {
             }
         }));
     });
-    it.skipIf(process.platform === 'win32').each(['unified', 'sdk'] as const)('prepares the captured Claude Session through its real host owner (%s)', async selectedMode => {
+    it.skipIf(process.platform === 'win32').each(['unified', 'sdk', 'sdk-goal-first', 'sdk-startup-goal-replacement', 'sdk-startup-goal-stop', 'sdk-inflight-goal', 'sdk-inflight-goal-stop', 'sdk-inflight-goal-wrong-echo', 'sdk-sentinel-before-echo',
+        'sdk-history-active', 'sdk-history-cancelled', 'sdk-history-complete', 'sdk-history-failed', 'sdk-history-wrong-echo'] as const)('prepares the captured Claude Session through its real host owner (%s)', async scenario => {
+        const selectedMode = scenario === 'unified' ? 'unified' : 'sdk';
         await withTempDir('native-selected-claude-host-', async directory => await withHerdrApi(async api => {
             api.setServerVersion('0.9.3');
             const nativeRecord = join(directory, 'native.jsonl');
             const nativePath = join(directory, 'claude-fixture');
+            const diagnostic = vi.spyOn(logger, 'infoFile');
+            const protocolWarnings = vi.spyOn(logger, 'warn');
             const herdrPath = join(directory, 'herdr-fixture');
             // These executables are the genuine OS/third-party CLI boundary. No provider request is made.
             await writeFile(nativePath, `#!${process.execPath}\nconst fs=require('node:fs');\nif(process.argv.includes('--version')){console.log('2.1.287 (Claude Code)');process.exit(0)}\nif(process.argv.includes('--help')){console.log('--effort --system-prompt-snapshot');process.exit(0)}\nfs.appendFileSync(${JSON.stringify(nativeRecord)},JSON.stringify({pid:process.pid,argv:process.argv.slice(2),configDir:process.env.CLAUDE_CONFIG_DIR})+'\\n');\nprocess.on('SIGINT',()=>process.exit(0));process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000);\n`, { mode: 0o755 });
@@ -959,6 +1075,84 @@ describe('native Agent session host adapter', () => {
             let modeLoopRun: Promise<void> | null = null;
             let loopFailure: unknown;
             let closeSession: (() => Promise<void>) | null = null;
+            let daemonFacets: Awaited<ReturnType<typeof createRunnerAgentDaemonFacets>> | null = null;
+            let stopRuntimeEvents: (() => void) | null = null;
+            const followedProviders: string[] = [];
+            const closedFollows = new Map<string, () => void>();
+            const sdkListeners = new Set<Parameters<PluginProtocolClientHandle<'jsonStream'>['client']['subscribe']>[0]>();
+            const sdkUserPrompts: ProtocolJsonValue[] = [];
+            const pendingSdkGoalResults: Array<(fail?: boolean) => Promise<void>> = [];
+            const pendingSdkPersonResults: Array<() => Promise<void>> = [];
+            const startupGoal: { publish?: () => Promise<void> } = {};
+            const claudeEvents: AgentSessionRuntimeEvent[] = [];
+            const sdkHook: { current: Readonly<{ port: number; secret: string }> | null } = { current: null };
+            const capturedTranscript = join(directory, 'claude-home', 'projects', 'captured-project', 'exact-sdk-native-conversation.jsonl');
+            await mkdir(dirname(capturedTranscript), { recursive: true });
+            const historicalGoal = scenario.startsWith('sdk-history-');
+            const goalRow = (uuid: string, met = false) => ({ type: 'attachment', uuid,
+                sessionId: 'exact-sdk-native-conversation', timestamp: new Date().toISOString(),
+                attachment: { type: 'goal_status', met, sentinel: true, condition: 'Keep the native objective' } });
+            await writeFile(capturedTranscript, historicalGoal
+                ? `${JSON.stringify({ ...goalRow('historical-goal-before-this-command', scenario === 'sdk-history-cancelled'), timestamp: '2026-01-01T00:00:00.000Z' })}\n` : '');
+            const createSdkClient = (): PluginProtocolClientHandle<'jsonStream'> => {
+                let settleSdkExit: ((result: Awaited<ReturnType<PluginProtocolClientHandle<'jsonStream'>['wait']>>) => void) | undefined;
+                const sdkExit = new Promise<Awaited<ReturnType<PluginProtocolClientHandle<'jsonStream'>['wait']>>>(resolve => { settleSdkExit = resolve; });
+                const disposeSdk = async () => { settleSdkExit?.({ stdout: new Uint8Array(), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false,
+                    termination: { requestedBy: { kind: 'none' }, observed: { kind: 'exit', exitCode: 0 } } }); };
+                const emitSdk = async (record: ProtocolJsonValue) => { await Promise.all([...sdkListeners].map(listener => listener(record))); };
+                return {
+                    client: {
+                        async write(record) {
+                            if (!isProtocolJsonObject(record)) throw new Error('Expected SDK record');
+                            if (record.type === 'control_request') {
+                                if (typeof record.request_id !== 'string') throw new Error('Expected SDK control request id');
+                                await emitSdk({ type: 'control_response', response: { subtype: 'success', request_id: record.request_id, response: {} } });
+                            } else if (record.type === 'user') {
+                                sdkUserPrompts.push(record);
+                                const hook = sdkHook.current;
+                                if (!hook) throw new Error('The real SDK Session hook server was not started');
+                                const response = await fetch(`http://127.0.0.1:${hook.port}/hook/session-start`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-happier-hook-secret': hook.secret },
+                                    body: JSON.stringify({ hook_event_name: 'SessionStart', source: 'resume', session_id: 'exact-sdk-native-conversation', transcript_path: capturedTranscript, cwd: directory }) });
+                                expect(response.ok).toBe(true);
+                                if (!isProtocolJsonObject(record.message) || typeof record.message.content !== 'string') throw new Error('Expected native SDK prompt text');
+                                const prompt = record.message.content;
+                                const accepted = await fetch(`http://127.0.0.1:${hook.port}/hook/session-start`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-happier-hook-secret': hook.secret },
+                                    body: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'exact-sdk-native-conversation', prompt }) });
+                                expect(accepted.ok).toBe(true);
+                                // Native slash commands persist command markup, rather than the literal SDK input.
+                                const nativePrompt = prompt.startsWith('/goal ')
+                                    ? `<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>${prompt.slice('/goal '.length)}</command-args>` : prompt;
+                                // Real Claude writes the Set sentinel before its supplied user UUID echo.
+                                const sentinelBeforeEcho = scenario === 'sdk-sentinel-before-echo' && prompt.startsWith('/goal ') && prompt !== '/goal clear';
+                                if (sentinelBeforeEcho) {
+                                    await appendFile(capturedTranscript, `${JSON.stringify(goalRow(`native-sentinel-${sdkUserPrompts.length}`))}\n`);
+                                }
+                                await appendFile(capturedTranscript, `${JSON.stringify({ type: 'user', uuid: scenario.endsWith('wrong-echo') && prompt.startsWith('/goal ') ? 'misbound-command-echo' : record.uuid, sessionId: 'exact-sdk-native-conversation', timestamp: new Date().toISOString(), message: { role: 'user', content: nativePrompt } })}\n`);
+                                if (!historicalGoal && prompt.startsWith('/goal ') && prompt !== '/goal clear') {
+                                    const publish = async () => { await appendFile(capturedTranscript, `${JSON.stringify({ type: 'attachment', uuid: `native-goal-${sdkUserPrompts.length}`, sessionId: 'exact-sdk-native-conversation', timestamp: new Date().toISOString(), attachment: { type: 'goal_status', met: false, ...(!sentinelBeforeEcho ? { sentinel: true } : {}), condition: prompt.slice('/goal '.length) } })}\n`); };
+                                    if (scenario === 'sdk-startup-goal-replacement' || scenario === 'sdk-startup-goal-stop') startupGoal.publish = publish;
+                                    else await publish();
+                                }
+                                await emitSdk({ type: 'system', subtype: 'init', session_id: 'exact-sdk-native-conversation', tools: [], mcp_servers: [], slash_commands: ['goal'] });
+                                const complete = async (fail = false) => { await emitSdk({ type: 'result', subtype: fail ? 'error_during_execution' : 'success', is_error: fail, ...(fail ? { errors: ['Native Goal failed'] } : {}), session_id: 'exact-sdk-native-conversation', num_turns: 1, total_cost_usd: 0, duration_ms: 1, duration_api_ms: 1 }); };
+                                // Claude can keep pursuing an installed Goal after its native
+                                // goal_status has been written. Hold that native work open.
+                                if (prompt.startsWith('/goal ') && prompt !== '/goal clear') pendingSdkGoalResults.push(async fail => {
+                                    await complete(fail);
+                                    // The real query retires its process after consuming this result.
+                                    await sdkExit;
+                                });
+                                else if (scenario.startsWith('sdk-inflight-') && !prompt.startsWith('/goal ')) pendingSdkPersonResults.push(complete);
+                                else await complete();
+                            }
+                        },
+                        subscribe(listener) { sdkListeners.add(listener); return { dispose() { sdkListeners.delete(listener); } }; },
+                        dispose: disposeSdk,
+                    },
+                    process: { async write() {}, async closeStdin() {}, wait: () => sdkExit, onOutput: () => ({ dispose() {} }), dispose: disposeSdk },
+                    wait: () => sdkExit, dispose: disposeSdk,
+                };
+            };
             let created: Awaited<ReturnType<NonNullable<Awaited<ReturnType<typeof createNativeAgentRuntimeSessionPlan>>['config']['createSessionRuntime']>>> | null = null;
             try {
                 process.env.HAPPIER_CLAUDE_PATH = nativePath;
@@ -972,26 +1166,22 @@ describe('native Agent session host adapter', () => {
                 const backend = { ...base.backend, pluginId, provenance: 'first_party' as const, source: { kind: 'bundled' as const } };
                 const agent = { ...base.agent, pluginId, provenance: 'first_party' as const, source: { kind: 'bundled' as const }, richDefinition: { provenance: 'first_party' as const, definition } };
                 let selectedSetting = selectedMode === 'unified';
-                const settingsHost = createStablePluginSettingsHost({
-                    declarations: (manifestModule.PLUGIN_MANIFEST.contributes.settings ?? []).map(contribution => ({ pluginId, contribution: PluginSettingsContributionV2Schema.parse(contribution) })),
-                    broker: createStablePluginEventsBroker(),
-                    recordStore: createAccountSettingsBackedSettingsRecordStore({ async bindOperation() { return {
-                        async readRecord() { return { status: 'present' as const, revision: 1, values: { claudeUnifiedTerminalEnabled: selectedSetting } }; },
-                        async writeRecord() { throw new Error('The consumer proof must not write Account settings'); },
-                    }; } }),
-                });
                 const invocationSeed = { plugin: { id: pluginId, version: '0.0.0' }, contribution: { id: 'claude', qualifiedId: `${pluginId}/agents/claude` }, occurrenceId: 'selected-host-test', correlationId: 'selected-host-test', surface: 'agent' as const, signal: generation.signal, isOccurrenceCurrent: () => !generation.signal.aborted };
-                const settings = settingsHost.bind(invocationSeed);
-                if (!settings) throw new Error('The actual Claude settings declaration did not bind');
+                const settings = createClaudeSettingsFixture(generation.signal, () => ({ claudeUnifiedTerminalEnabled: selectedSetting }));
                 const storage = createStablePluginStorageService({ pluginId, paths: resolvePluginStorePaths({ happyHomeDir: directory }), sessionId: 'selected-host-happier', occurrenceId: invocationSeed.occurrenceId, signal: generation.signal, isOccurrenceCurrent: invocationSeed.isOccurrenceCurrent });
                 const invocationLogger = createPluginInvocationLogger({ seed: invocationSeed, sink: { write(record) { logger.infoFile('Selected-Claude fixture diagnostic', record); } } });
-                const factory = await loadRealAgentRuntimeFactory('packages/plugins/claude/src/agent/runtime/nativeRuntime.ts', 'createClaudeAgentRuntime');
+                const runtimePath = '../../../../../../../packages/plugins/claude/src/agent/runtime/nativeRuntime.ts';
+                const { createClaudeAgentRuntime: factory }: Readonly<{ createClaudeAgentRuntime: AgentRuntimeFactory }> = await import(runtimePath);
                 const runtime = await factory({ plugin: { id: pluginId, version: '0.0.0' }, agent: { id: 'claude' }, signal: generation.signal });
                 const sessionId = 'selected-host-happier';
                 const attachment = await writeTerminalHostAttachmentInfo({ happyHomeDir: directory, sessionId, lifecycle: 'borrowed', handle: { kind: 'herdr', sessionName: 'selected-test', socketPath: api.socketPath, terminalId: 'p1', paneId: 'p1', attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared', locality: 'same_machine', liveProbe: 'required' } } });
                 const terminal = buildTerminalMetadataFromHostHandle(attachment.handle);
                 const metadata = createTestMetadata({ flavor: 'claude', path: directory, happyHomeDir: directory, terminal, startedBy: 'terminal' });
                 const session = createMutableApiSessionClientFixture({ sessionId, metadata, agentState: selectedMode === 'unified' ? { controlledByUser: true, localControl: { topology: 'exclusive', attached: true, canAttach: false, canDetach: true, remoteWritable: false } } : { controlledByUser: false } });
+                session.fetchCommittedTranscriptLocalIdBaseline = async input => await loadCommittedTranscriptLocalIdBaseline({ ...input,
+                    // The Home transcript page is a persistence/HTTP boundary; baseline reduction stays real.
+                    fetchPage: async () => ({ messages: [{ seq: 1, localId: 'captured-resume' }], hasMore: false, nextBeforeSeq: null }),
+                });
                 closeSession = () => session.close();
                 api.panes.add('p1');
                 const permissionHandler = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[selected-Claude-proof]' });
@@ -1017,7 +1207,12 @@ describe('native Agent session host adapter', () => {
                     { ...selected, controlDescriptorAvailable: true },
                 )).toEqual({ action: 'fence', reason: 'attachment_changed' });
                 const captured = createSessionMetadata({ flavor: 'claude', machineId: 'selected-machine', directory, runtimeDescriptorV1: selected.runtimeDescriptorV1, launchControlMetadata: captureSessionLaunchControlMetadata({ processEnvironment: {} }) });
-                const startupMetadata = { ...metadata, runtimeDescriptorV1: captured.metadata.runtimeDescriptorV1 };
+                // A retained carrier need not have persisted the newly admitted
+                // launch descriptor. Its captured bootstrap selection still owns
+                // the driver when live settings change before native open.
+                const startupMetadata = scenario === 'sdk'
+                    ? metadata
+                    : { ...metadata, runtimeDescriptorV1: captured.metadata.runtimeDescriptorV1 };
                 session.__setMetadata(startupMetadata);
                 selectedSetting = !selectedSetting;
                 const retainedSelection = await runtime.sessions.resolveTerminalPresentation({
@@ -1031,14 +1226,73 @@ describe('native Agent session host adapter', () => {
                     ...(selectedMode === 'unified' ? { retainedTerminalRecovery: 'adopt' } : {}),
                 });
                 const executionSurfaces = resolveBackendExecutionSurfacesFromNativeAgentRuntime({ backend, runtime, agentId: 'claude', isCurrent: () => !generation.signal.aborted, declaredAgentSurfaceFamilies: new Set(['terminalRuntime']), diagnostics: [] });
+                if (selectedMode === 'sdk') {
+                    const lease = createLease('claude');
+                    const retainedAgent = createAgentSessionRunnerFactoryBinding({ v: 1, pluginId, pluginVersion: '0.0.0', agentId: 'claude', localAgentId: 'claude', sourceCustody: lease.sourceCustody!,
+                        locator: { module: './nativeRuntime.ts', export: 'createClaudeAgentRuntime', runtimeApiVersion: 1 }, normalizedModulePath: 'nativeRuntime.ts', loadMode: 'source-ts' });
+                    daemonFacets = await createRunnerAgentDaemonFacets({ authority: { happyHomeDir: directory, publicReleaseRing: 'stable', path: join(directory, 'daemon-authority.json'), sessionId,
+                        runner: { pid: process.pid, processStartTimeMs: 1, processCommandHash: hashProcessCommand('selected-Claude fixture'), snapshotIdentity: 'selected-Claude' }, retainedAgent },
+                        // The runner's daemon RPC transport is the substituted system boundary.
+                        // Native follow admission, strict wire parsing and disposal remain real.
+                        dispatch: async input => {
+                            const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(input.createRequest('A'.repeat(43)));
+                            expect(request.context.sessionId).toBe(sessionId);
+                            const operation = request.operation;
+                            if (operation.kind === 'voice.authority.snapshot') return AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: true, result: { kind: operation.kind, agentSourceCustody: retainedAgent.sourceCustody, providers: [] } });
+                            if (operation.kind === 'external_session.follow.open') {
+                                expect(await readFile(nativeRecord, 'utf8').catch(() => '')).toBe('');
+                                expect(operation.target).toEqual({ kind: 'providerSession', agentId: 'claude', providerSessionId: 'exact-sdk-native-conversation' });
+                                if (operation.target.kind !== 'providerSession') throw new Error('Expected exact native provider follow target');
+                                expect(operation.projection).toBe('terminal');
+                                followedProviders.push(operation.target.providerSessionId);
+                                return AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: true, result: { kind: operation.kind, followId: operation.followId, result: { status: 'following', startingCursor: 'native-tail' } } });
+                            }
+                            if (operation.kind === 'external_session.follow.next') {
+                                await new Promise<void>(resolve => { closedFollows.set(operation.followId, resolve); });
+                                return AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: true, result: { kind: 'external_session.follow.event', followId: operation.followId, eventId: 'native-retired', event: { kind: 'terminated', reason: 'retired', cursor: 'native-tail' } } });
+                            }
+                            if (operation.kind === 'external_session.follow.close') {
+                                closedFollows.get(operation.followId)?.();
+                                closedFollows.delete(operation.followId);
+                                return AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: true, result: { kind: 'external_session.follow.closed', followId: operation.followId } });
+                            }
+                            throw new Error(`Unexpected selected-Claude daemon operation ${operation.kind}`);
+                        },
+                    });
+                }
                 const binding = buildPluginSessionBindingInput({ credentials, directory, startedBy: 'terminal', startingMode: selectedMode === 'unified' ? 'terminal' : 'remote', ...(selectedMode === 'sdk' ? { resume: 'exact-sdk-native-conversation' } : {}), environmentVariables: { HAPPIER_CLAUDE_PATH: nativePath, HERDR_BIN_PATH: herdrPath, CLAUDE_CONFIG_DIR: join(directory, 'claude-home') }, backendTarget: { kind: 'backend', backendId: 'claude' } });
-                const plan = await createNativeAgentRuntimeSessionPlan({ runtime, lease: { ...createLease('claude'), pluginId }, backend, agent, sessionInput: { ...binding, bootstrap: { ...binding.bootstrap, runtimeDescriptorV1: selected.runtimeDescriptorV1 } }, executionSurfaces, generationSignal: generation.signal, createInvocationServices: async () => ({ ...createUnavailablePluginServices(), settings, storage, logger: invocationLogger }), createSessionHostServiceOwners: () => owners });
+                const plan = await createNativeAgentRuntimeSessionPlan({ runtime, lease: { ...createLease('claude'), pluginId }, backend, agent, sessionInput: { ...binding, bootstrap: { ...binding.bootstrap, runtimeDescriptorV1: selected.runtimeDescriptorV1 } }, executionSurfaces, externalSessionHostOperations: daemonFacets?.externalSessionHostOperations, generationSignal: generation.signal, createInvocationServices: async () => {
+                    const unavailable = createUnavailablePluginServices();
+                    return { ...unavailable, settings, storage, logger: invocationLogger,
+                        ...(selectedMode === 'sdk' ? { exec: { ...unavailable.exec,
+                            systemTools: { ...unavailable.exec.systemTools, resolve: async () => ({ executable: { kind: 'systemTool' as const, id: 'claude-cli' }, executablePath: nativePath }) },
+                            // The vendor JSON-stream process is the external boundary; only that protocol is opened here.
+                            clients: { spawn: async () => createSdkClient() } as unknown as HostPluginServices['exec']['clients'],
+                        } } : {}),
+                    };
+                }, createSessionHostServiceOwners: () => ({ ...owners, sessionHooks: { ...owners.sessionHooks,
+                    async startServer(request) {
+                        const server = await owners.sessionHooks.startServer(request);
+                        // Observe the actual authenticated HTTP endpoint used by the vendor process.
+                        if (request.lifetime !== 'invocation' && request.sessionHookSecret) sdkHook.current = { port: server.port, secret: request.sessionHookSecret };
+                        return server;
+                    },
+                } }) });
                 const params: HostSessionRuntimeFactoryParams = {
                     directory, metadata: startupMetadata, currentTerminalMetadata: metadata, machineId: 'selected-machine', agentTargetKey: 'backend:claude', session, transcriptSession: session,
                     messageQueue: new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode), messageBuffer: new MessageBuffer(), mcpServers: {}, permissionHandler, getPermissionMode: () => 'default', memoryRecallGuidanceEnabled: false, runnerProcessIdentity: null, startupModelSelection: null,
                     async runWithTerminalModelSelection(effect) { return { status: 'completed', value: await effect(null, async localEffect => ({ status: 'completed', value: await localEffect() })) }; },
                 };
                 created = await plan.config.createSessionRuntime!(params);
+                stopRuntimeEvents = created.operations.subscribeRuntimeEvents(event => { claudeEvents.push(event); });
+                const goalControls: SessionRuntimeControls = {};
+                applySessionRuntimeControls(goalControls, created.nativeRuntime ?? null);
+                registerSessionControlHandlers(session.rpcHandlerManager, {
+                    sessionRuntimeControls: goalControls,
+                    getSessionMetadata: () => session.getMetadataSnapshot(),
+                });
+                await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET,
+                    { capabilitiesOnly: true })).resolves.toMatchObject({ nativeGoalOwner: true });
                 if (!created.prepareStartupPresentation) throw new Error('The real native host omitted startup presentation');
                 const startup = await created.prepareStartupPresentation();
                 if (selectedMode === 'unified') {
@@ -1050,12 +1304,186 @@ describe('native Agent session host adapter', () => {
                     const loop = startup.terminalRemoteModeLoop;
                     expect(loop?.startingMode).toBe('remote');
                     expect(await readFile(nativeRecord, 'utf8').catch(() => '')).toBe('');
+                    // A captured SDK Session has actually resumed once; a requested resume id alone is not provider evidence.
+                    if (scenario === 'sdk') {
+                        await created.operations.sendTurnPrompt('Resume the captured fixture', { localId: 'captured-resume', turnId: 'captured-resume-turn', userMessageSeq: 1 });
+                        await created.operations.waitForTurnCompletion();
+                        expect(created.operations.readSessionIdentity()).toEqual({ sessionId: 'exact-sdk-native-conversation' });
+                        expect(claudeEvents).toContainEqual(expect.objectContaining({ kind: 'provider-session-id', providerSessionId: 'exact-sdk-native-conversation' }));
+                    }
+                    if (scenario.startsWith('sdk-inflight-')) {
+                        await created.operations.sendTurnPrompt('The first person turn is still streaming', {
+                            localId: 'first-person-input', turnId: 'first-person-turn', userMessageSeq: 1,
+                        });
+                        await vi.waitFor(() => expect(pendingSdkPersonResults).toHaveLength(1));
+                        expect(claudeEvents.some(event => event.kind === 'message-delta')).toBe(false);
+                        let settled = false;
+                        const receipt = session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET,
+                            { objective: 'Keep the native objective' }).then(result => { settled = true; return result; });
+                        await new Promise<void>(resolve => setImmediate(resolve));
+                        expect(settled, 'Set must wait for native admission instead of refusing the active first turn').toBe(false);
+                        expect(sdkUserPrompts).toHaveLength(1);
+                        await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {}))
+                            .resolves.toMatchObject({ workState: null });
+                        if (scenario === 'sdk-inflight-goal-stop') {
+                            await created.operations.resetOrDisposeRuntime('session_closed');
+                            await expect(receipt).resolves.toMatchObject({ ok: false });
+                            expect(sdkUserPrompts).toHaveLength(1);
+                            return;
+                        }
+                        await pendingSdkPersonResults.shift()!();
+                        await vi.waitFor(() => expect(pendingSdkGoalResults).toHaveLength(1));
+                        if (scenario === 'sdk-inflight-goal-wrong-echo') {
+                            await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete()));
+                            await expect(receipt).resolves.toMatchObject({ ok: false,
+                                errorCode: 'session_goal_control_work_state_unavailable' });
+                        } else {
+                            await expect(receipt).resolves.toMatchObject({ workState: { items: [expect.objectContaining({
+                                kind: 'goal', title: 'Keep the native objective', status: 'active',
+                            })] } });
+                            await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {}))
+                                .resolves.toMatchObject({ workState: { items: [expect.objectContaining({
+                                    title: 'Keep the native objective', status: 'active',
+                                })] } });
+                            await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete()));
+                        }
+                        return;
+                    }
+                    if (historicalGoal) {
+                        let settled = false;
+                        const receipt = session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET,
+                            { objective: 'Keep the native objective' }).then(result => { settled = true; return result; });
+                        await vi.waitFor(async () => {
+                            expect(pendingSdkGoalResults).toHaveLength(1);
+                            await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {})).resolves.toMatchObject({
+                                workState: { items: [expect.objectContaining({ vendorRef: 'historical-goal-before-this-command',
+                                    status: scenario === 'sdk-history-cancelled' ? 'cancelled' : 'active' })] },
+                            });
+                        });
+                        await new Promise<void>(resolve => setImmediate(resolve));
+                        expect(settled, 'historical Goal evidence must not acknowledge this new native Set').toBe(false);
+                        const competingReceipt = scenario === 'sdk-history-active'
+                            ? session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET,
+                                { objective: 'Competing Goal' }) : null;
+                        expect(sdkUserPrompts).toHaveLength(1);
+                        if (scenario === 'sdk-history-active') {
+                            // A native file rewrite can replay old rows after this
+                            // observer has already seen the new command's echo.
+                            await writeFile(capturedTranscript, `${JSON.stringify({ ...goalRow('older-goal-after-reset'), timestamp: '2026-01-01T00:00:00.000Z' })}\n`);
+                            await vi.waitFor(async () => {
+                                await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {})).resolves.toMatchObject({
+                                    workState: { items: [expect.objectContaining({ vendorRef: 'older-goal-after-reset' })] },
+                                });
+                            });
+                            expect(settled, 'a transcript reset must re-establish the command observation boundary').toBe(false);
+                            const command = sdkUserPrompts[0];
+                            if (!isProtocolJsonObject(command) || typeof command.uuid !== 'string') throw new Error('Native Goal command UUID missing');
+                            await appendFile(capturedTranscript, `${JSON.stringify({ type: 'user', uuid: command.uuid,
+                                sessionId: 'exact-sdk-native-conversation', message: { role: 'user', content: '/goal Keep the native objective' } })}\n`);
+                        }
+                        if (scenario === 'sdk-history-wrong-echo') {
+                            await appendFile(capturedTranscript, `${JSON.stringify(goalRow('new-active-with-misbound-echo'))}\n`);
+                            await vi.waitFor(async () => {
+                                await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {})).resolves.toMatchObject({
+                                    workState: { items: [expect.objectContaining({ vendorRef: 'new-active-with-misbound-echo', status: 'active' })] },
+                                });
+                            });
+                            expect(settled, 'fresh active evidence from a different command cannot acknowledge Set').toBe(false);
+                        }
+                        if (scenario === 'sdk-history-complete' || scenario === 'sdk-history-failed' || scenario === 'sdk-history-wrong-echo') {
+                            await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete(scenario === 'sdk-history-failed')));
+                            await expect(receipt).resolves.toMatchObject({ ok: false, errorCode: 'session_goal_control_work_state_unavailable' });
+                        } else {
+                            await appendFile(capturedTranscript, `${JSON.stringify(goalRow('new-cancelled-goal', true))}\n`);
+                            await vi.waitFor(async () => {
+                                await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {})).resolves.toMatchObject({
+                                    workState: { items: [expect.objectContaining({ vendorRef: 'new-cancelled-goal', status: 'cancelled' })] },
+                                });
+                            });
+                            expect(settled, 'a new cancelled status is not Set success').toBe(false);
+                            await appendFile(capturedTranscript, `${JSON.stringify(goalRow('new-active-goal'))}\n`);
+                            await expect(receipt).resolves.toMatchObject({ workState: { items: [expect.objectContaining({
+                                vendorRef: 'new-active-goal', status: 'active', title: 'Keep the native objective',
+                            })] } });
+                            if (competingReceipt) await expect(competingReceipt).resolves.toMatchObject({ ok: false, errorCode: 'session_goal_control_inject_failed' });
+                            await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete()));
+                        }
+                        return;
+                    }
+                    if (scenario === 'sdk-startup-goal-replacement' || scenario === 'sdk-startup-goal-stop') {
+                        // The first person's startup plan can replace the opened runtime
+                        // before its first text, while a turn-neutral Goal is still settling.
+                        const receipt = session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET,
+                            { objective: 'Keep the native objective' });
+                        await vi.waitFor(() => expect(startupGoal.publish).toBeDefined());
+                        let replacementSettled = false;
+                        const replacement = created.operations.resetOrDisposeRuntime('session_closed', {
+                            kind: 'resume', providerSessionId: 'exact-sdk-native-conversation', importHistory: false,
+                        }).then(() => { replacementSettled = true; });
+                        await new Promise<void>(resolve => setImmediate(resolve));
+                        if (scenario === 'sdk-startup-goal-stop') {
+                            // A real Stop still retires the native process immediately,
+                            // and the waiting startup reopen must not revive the Session.
+                            await created.operations.resetOrDisposeRuntime('session_closed');
+                            await replacement;
+                            await expect(receipt).resolves.toMatchObject({ ok: false,
+                                errorCode: 'session_goal_control_work_state_unavailable' });
+                            await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET,
+                                { objective: 'Must remain stopped' })).resolves.toHaveProperty('ok', false);
+                            return;
+                        }
+                        await startupGoal.publish!();
+                        try {
+                            await expect(receipt).resolves.toMatchObject({ workState: { items: [expect.objectContaining({
+                                kind: 'goal', title: 'Keep the native objective', status: 'active',
+                            })] } });
+                            await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {}))
+                                .resolves.toMatchObject({ workState: { items: [expect.objectContaining({
+                                    title: 'Keep the native objective', status: 'active',
+                                })] } });
+                            expect(claudeEvents.some(event => event.kind === 'message-delta')).toBe(false);
+                        } finally {
+                            await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete()));
+                            await replacement;
+                        }
+                        expect(replacementSettled).toBe(true);
+                        return;
+                    }
+                    const setAndReadGoal = async () => {
+                        let receiptSettled = false;
+                        let receiptResult: unknown;
+                        const receipt = session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET,
+                            { objective: 'Keep the native objective' }).then(result => { receiptSettled = true; receiptResult = result; return result; });
+                        await vi.waitFor(async () => {
+                            if (receiptSettled) expect(receiptResult, JSON.stringify(receiptResult)).not.toHaveProperty('ok', false);
+                            await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {})).resolves.toMatchObject({
+                                workState: { items: expect.arrayContaining([expect.objectContaining({ kind: 'goal', title: 'Keep the native objective' })]) },
+                            });
+                        });
+                        await new Promise<void>(resolve => setImmediate(resolve));
+                        expect(receiptSettled).toBe(true);
+                        await expect(receipt).resolves.toMatchObject({
+                            workState: { items: expect.arrayContaining([expect.objectContaining({ kind: 'goal', title: 'Keep the native objective' })]) },
+                        });
+                        await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete()));
+                    };
+                    await setAndReadGoal();
+                    await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR, {})).resolves.toMatchObject({
+                        workState: { items: [] },
+                    });
+                    await setAndReadGoal();
+                    expect(sdkUserPrompts).toContainEqual(expect.objectContaining({
+                        message: expect.objectContaining({ content: '/goal Keep the native objective' }),
+                    }));
                     if (!loop) throw new Error('The selected SDK Session omitted its real local/remote loop');
                     modeLoopRun = runTerminalRemoteSessionModeLoop(loop).then(() => undefined).catch(error => { loopFailure = error; });
                     await vi.waitFor(() => expect(session.rpcHandlerManager.hasHandler('switch')).toBe(true));
                     await expect(session.rpcHandlerManager.invokeLocal('switch', { to: 'local' })).resolves.toBe(true);
                 }
-                await vi.waitFor(async () => expect((await readFile(nativeRecord, 'utf8')).trim()).not.toBe(''));
+                await vi.waitFor(async () => {
+                    expect(diagnostic.mock.calls.filter(([message]) => String(message).includes('restoration failed'))).toEqual([]);
+                    expect((await readFile(nativeRecord, 'utf8')).trim()).not.toBe('');
+                });
                 const records: unknown[] = (await readFile(nativeRecord, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
                 expect(records).toHaveLength(1);
                 const record = records[0];
@@ -1065,6 +1493,7 @@ describe('native Agent session host adapter', () => {
                 expect(record).toMatchObject({ argv: expect.arrayContaining(['--plugin-dir']), configDir: join(directory, 'claude-home') });
                 if (selectedMode === 'sdk') {
                     expect(record).toMatchObject({ argv: expect.arrayContaining(['--resume', 'exact-sdk-native-conversation']) });
+                    expect(followedProviders).toEqual(['exact-sdk-native-conversation']);
                     await expect(session.rpcHandlerManager.invokeLocal('switch', { to: 'remote' })).resolves.toBe(true);
                     await vi.waitFor(() => expect(session.__getAgentState()).toMatchObject({ controlledByUser: false }));
                     await vi.waitFor(() => expect(() => process.kill(capturedPid, 0)).toThrow());
@@ -1074,7 +1503,12 @@ describe('native Agent session host adapter', () => {
                     expect((await readFile(nativeRecord, 'utf8')).trim().split('\n')).toHaveLength(1);
                 }
                 expect(api.requests.some(request => request.method === 'layout.apply')).toBe(false);
+                expect(protocolWarnings.mock.calls.filter(([message]) =>
+                    String(message).includes('rejected canonical runtime event'))).toEqual([]);
             } finally {
+                await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete()));
+                diagnostic.mockRestore();
+                protocolWarnings.mockRestore();
                 try {
                     await created?.operations.resetOrDisposeRuntime();
                     const disposedPid = nativePid;
@@ -1083,6 +1517,8 @@ describe('native Agent session host adapter', () => {
                 finally {
                     generation.abort();
                     await modeLoopRun;
+                    stopRuntimeEvents?.();
+                    await daemonFacets?.dispose();
                     await closeSession?.();
                     if (!nativePid) {
                         const records = await readFile(nativeRecord, 'utf8').catch(() => '');
@@ -2162,7 +2598,7 @@ describe('native Agent session host adapter', () => {
         }
     });
 
-    it('carries the canonical bounded runtime descriptor into the native Agent open request', async () => {
+    it.each(['metadata', 'bootstrap', 'bootstrap_over_retained_metadata'] as const)('carries the canonical bounded runtime descriptor into the native Agent open request (%s)', async source => {
         const agentId = 'acme-native-runtime-descriptor';
         const contributions = createExternalContributionFixtures(agentId);
         const runtimeDescriptorV1 = {
@@ -2173,6 +2609,10 @@ describe('native Agent session host adapter', () => {
                 sessionFile: '/agent/sessions/provider-session-1.jsonl',
             },
         };
+        const sessionInput = buildPluginSessionBindingInput({
+            credentials,
+            directory: '/tmp/acme-native-runtime-descriptor',
+        });
         const open = vi.fn(async (request: AgentSessionOpenRequest) => {
             expect(request.runtimeDescriptorV1).toEqual(runtimeDescriptorV1);
             return {
@@ -2187,10 +2627,10 @@ describe('native Agent session host adapter', () => {
             backend: contributions.backend,
             agent: contributions.agent,
             createSessionHostServiceOwners: () => createSessionHostServiceOwners(),
-            sessionInput: buildPluginSessionBindingInput({
-                credentials,
-                directory: '/tmp/acme-native-runtime-descriptor',
-            }),
+            sessionInput: source === 'metadata' ? sessionInput : {
+                ...sessionInput,
+                bootstrap: { ...sessionInput.bootstrap, runtimeDescriptorV1 },
+            },
         });
         if (!plan.config.createSessionRuntime) {
             throw new Error('expected a session runtime factory');
@@ -2198,7 +2638,10 @@ describe('native Agent session host adapter', () => {
 
         await plan.config.createSessionRuntime({
             directory: '/tmp/acme-native-runtime-descriptor',
-            metadata: { runtimeDescriptorV1 },
+            metadata: source === 'metadata' ? { runtimeDescriptorV1 }
+                : source === 'bootstrap_over_retained_metadata'
+                    ? { runtimeDescriptorV1: { ...runtimeDescriptorV1, agent: { backendMode: 'previous-driver' } } }
+                    : {},
             machineId: 'machine-1',
             session: createNativeSessionClientTestPort(
                 'session-native-runtime-descriptor',
@@ -2225,6 +2668,19 @@ describe('native Agent session host adapter', () => {
             expect(request.launchEnvironment?.values).toMatchObject({
                 PROFILE_SECRET: 'profile-plaintext',
             });
+            if (process.platform !== 'win32') {
+                // Claude Code 2.1.301's native shell snapshot writes inherited
+                // PATH explicitly, using an empty value when it is absent.
+                // Model that third-party process boundary, then run real Bash/Git.
+                const child = spawnSync(process.execPath, ['-e', `
+                    const shell = require('node:child_process').spawnSync('/bin/bash', ['-c', 'git --version'], {
+                        env: { ...process.env, PATH: process.env.PATH ?? '' }, encoding: 'utf8',
+                    });
+                    process.stdout.write(JSON.stringify({ status: shell.status, stdout: shell.stdout, stderr: shell.stderr }));
+                `], { env: request.launchEnvironment?.values, encoding: 'utf8' });
+                expect(child.status).toBe(0);
+                expect(JSON.parse(child.stdout)).toMatchObject({ status: 0, stdout: expect.stringMatching(/^git version /u) });
+            }
             expect(redactBugReportSensitiveText(
                 'value=profile-plaintext',
             )).toBe('value=[REDACTED]');
@@ -2789,7 +3245,7 @@ describe('native Agent session host adapter', () => {
             transcriptSession: {}, messageBuffer: {}, mcpServers: {}, permissionHandler: {},
             getPermissionMode: () => 'default', setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
         } as never);
-        let binding: Readonly<{ dispose(): Promise<void> }> | undefined;
+        let binding: Readonly<{ dispose(): Promise<void>; failure?: Promise<Error> }> | undefined;
         const following = contexts[0]!.session.services.transcripts.followSource?.({
             providerSessionId: 'native-source', replay: 'fresh',
         });
@@ -2807,7 +3263,7 @@ describe('native Agent session host adapter', () => {
             });
             expect(observed).toEqual([
                 'commit-started', 'committed', 'consumed',
-                'commit-started', 'committed', 'consumed',
+                'consumed',
             ]);
             await created.operations.resetOrDisposeRuntime('runtime_recovery', { kind: 'create' });
             expect(sourceDisposed).toBe(true);
@@ -2820,11 +3276,13 @@ describe('native Agent session host adapter', () => {
             });
             expect(observed).toEqual([
                 'commit-started', 'committed', 'consumed',
-                'commit-started', 'committed', 'consumed',
-                'commit-started', 'committed', 'consumed',
+                'consumed',
+                'consumed',
             ]);
             failSource(new Error('active source transport failed'));
-            await vi.waitFor(() => expect(contexts[1]!.signal.aborted).toBe(true));
+            expect(binding?.failure).toBeDefined();
+            await expect(binding?.failure).resolves.toMatchObject({ message: 'active source transport failed' });
+            expect(contexts[1]!.signal.aborted).toBe(false);
         } finally {
             releaseCommit();
             await following?.catch(() => undefined);
@@ -4378,6 +4836,7 @@ describe('native Agent session host adapter', () => {
                 await created.operations.sendTurnPrompt('Complete turn A', { localId: 'prompt-a', turnId: 'host-turn-a', userMessageSeq: 10 });
                 fixture.emitNotification('item/agentMessage/delta', { threadId: 'fresh-thread', turnId: 'provider-turn-1', itemId: 'reply-a', delta: 'Completed A' });
                 fixture.emitNotification('turn/completed', { threadId: 'fresh-thread', turn: { id: 'provider-turn-1', status: 'completed' } });
+                await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-complete', turnId: 'host-turn-a' })));
                 await created.operations.waitForTurnCompletion();
                 await created.operations.sendTurnPrompt('Partially answer turn B', { localId: 'prompt-b', turnId: 'host-turn-b', userMessageSeq: 21 });
                 fixture.emitNotification('item/agentMessage/delta', { threadId: 'fresh-thread', turnId: 'provider-turn-2', itemId: 'reply-b', delta: 'Partial B' });
@@ -4440,6 +4899,108 @@ describe('native Agent session host adapter', () => {
                 await created.operations.resetOrDisposeRuntime();
             }
         });
+    });
+
+    it.each(['dispatch', 'retire'] as const)('queues an external plugin native Goal between the active turn and the next queued input (%s)', async nextDisposition => {
+        const agentId = 'acme-queued-goal-agent';
+        const contributions = createExternalContributionFixtures(agentId);
+        const agent: ResolvedAgentContribution = { ...contributions.agent, richDefinition: {
+            ...contributions.agent.richDefinition, definition: { ...contributions.agent.richDefinition.definition,
+                capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: false,
+                    goals: { active: { get: true, clear: true, set: { fields: ['objective'] } }, source: 'goals' },
+                    workStateSources: [{ id: 'goals', itemKinds: ['goal'] }],
+                } },
+            },
+        } };
+        const order: string[] = [];
+        let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+        let sequence = 0;
+        let releaseGoal!: () => void;
+        const goalEvidence = new Promise<void>(resolve => { releaseGoal = resolve; });
+        const runtime: AgentRuntime = { sessions: {
+            goals: {
+                async get() { return { status: 'unchanged', revision: 'current' }; },
+                async set(mutation, context) {
+                    order.push('goal');
+                    await goalEvidence;
+                    const publication = await context.goalSource.publish({ sourceSequence: 1, observedAtMs: 1,
+                        items: [{ localId: 'native-goal', kind: 'goal', origin: 'vendor', status: 'active',
+                            title: mutation.objective!, updatedAtMs: 1 }],
+                    });
+                    if (publication.status !== 'applied') throw new Error('Native Goal publication unavailable');
+                    return { status: 'applied', revision: publication.revision };
+                },
+                async clear() { return { status: 'unchanged', revision: 'current' }; },
+            },
+            async open(_request, context) {
+                return {
+                    async send(request) {
+                        order.push(`send:${request.input.text}`);
+                        if (request.delivery.kind !== 'newTurn') throw new Error('Expected a new external turn');
+                        listener?.({ kind: 'input-accepted', sessionId: context.session.id, inputIds: request.inputIds,
+                            delivery: request.delivery, emittedAtMs: 1, sequence: ++sequence });
+                        listener?.({ kind: 'turn-start', sessionId: context.session.id, turnId: request.delivery.turnId,
+                            startedBy: 'host', emittedAtMs: 1, sequence: ++sequence });
+                        return { status: 'admitted' };
+                    },
+                    watch(handler) { listener = handler; return { dispose() { listener = undefined; } }; },
+                    async dispose() {},
+                };
+            },
+        } };
+        const plan = await createNativeAgentRuntimeSessionPlan({ runtime, lease: createLease(agentId),
+            backend: contributions.backend, agent,
+            sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/tmp/external-queued-goal',
+                backendTarget: { kind: 'backend', backendId: agentId } }),
+            createSessionHostServiceOwners,
+        });
+        let retireInput: ((localId: string) => void) | undefined;
+        const session = createNativeSessionClientTestPort('external-queued-goal', {
+            subscribePendingProviderInputRetirement(handler: (localId: string) => void) {
+                retireInput = handler;
+                return () => { retireInput = undefined; };
+            },
+        });
+        const created = await plan.config.createSessionRuntime!({
+            directory: '/tmp/external-queued-goal', metadata: {}, machineId: 'machine-1', session,
+            transcriptSession: {}, messageBuffer: new MessageBuffer(), mcpServers: {},
+            messageQueue: new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode),
+            permissionHandler: new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[ExternalGoal]' }),
+            getPermissionMode: () => 'default', memoryRecallGuidanceEnabled: false, runnerProcessIdentity: null,
+            startupModelSelection: null,
+            async runWithTerminalModelSelection(effect) { return { status: 'completed', value: await effect(null,
+                async localEffect => ({ status: 'completed', value: await localEffect() })) }; },
+        });
+        const controls: SessionRuntimeControls = {};
+        applySessionRuntimeControls(controls, created.nativeRuntime ?? null);
+        registerSessionControlHandlers(session.rpcHandlerManager, { sessionRuntimeControls: controls,
+            getSessionMetadata: () => session.getMetadataSnapshot() });
+        try {
+            await created.operations.sendTurnPrompt('first', { localId: 'first-input', turnId: 'first-turn' });
+            const receipt = session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET, { objective: 'External native objective' });
+            // Let the asynchronous RPC reach the native dispatch owner before
+            // offering the next Queue input at that same owner.
+            await new Promise<void>(resolve => setImmediate(resolve));
+            const nextInput = created.operations.sendTurnPrompt('second', { localId: 'second-input', turnId: 'second-turn' })
+                .then(() => 'sent', () => 'retired');
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(order).toEqual(['send:first']);
+            listener?.({ kind: 'turn-complete', sessionId: session.sessionId, turnId: 'first-turn', emittedAtMs: 2, sequence: ++sequence });
+            await vi.waitFor(() => expect(order).toEqual(['send:first', 'goal']));
+            if (nextDisposition === 'retire') {
+                if (!retireInput) throw new Error('Native input retirement was not bound');
+                retireInput('second-input');
+            }
+            releaseGoal();
+            await expect(receipt).resolves.toMatchObject({ workState: { items: [expect.objectContaining({ title: 'External native objective' })] } });
+            await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {}))
+                .resolves.toMatchObject({ workState: { items: [expect.objectContaining({ title: 'External native objective' })] } });
+            await expect(nextInput).resolves.toBe(nextDisposition === 'retire' ? 'retired' : 'sent');
+            expect(order).toEqual(nextDisposition === 'retire' ? ['send:first', 'goal'] : ['send:first', 'goal', 'send:second']);
+        } finally {
+            releaseGoal();
+            await created.operations.resetOrDisposeRuntime();
+        }
     });
 
     it('projects declared native direct facets and persists the pre-dispatch rollback range without an Agent-id branch', async () => {
@@ -4583,9 +5144,7 @@ describe('native Agent session host adapter', () => {
             directory: '/tmp/acme-direct-controls-agent', metadata: {}, machineId: 'machine-1',
             session: hostSession, transcriptSession: {}, messageBuffer: {},
             mcpServers: {},
-            permissionHandler: {
-                cancelByPlugin: vi.fn(async () => undefined),
-            },
+            permissionHandler: new ProviderEnforcedPermissionHandler(hostSession as never, { logPrefix: '[DirectFacetsTest]' }),
             getPermissionMode: () => 'default',
             setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
         } as never);
@@ -4676,6 +5235,7 @@ describe('native Agent session host adapter', () => {
             kind: 'turn-complete', sessionId: 'session-direct-controls', turnId: 'turn-1',
             emittedAtMs: 4, sequence: 4,
         });
+        await created.operations.waitForTurnCompletion();
         await expect(controls.rollbackConversation({ v: 1, target: { type: 'latest_turn' } })).resolves.toEqual({
             ok: true,
             target: { type: 'latest_turn' },
@@ -5472,6 +6032,66 @@ describe('native Agent session host adapter', () => {
         });
     });
 
+    it.each([undefined, 'allow', 'deny'] as const)('reports native retirement instead of a Role refusal during %s workspace policy preparation', async (workspaceWrites) => {
+        // The native Agent port is the external plugin boundary; host lifecycle
+        // and the Role preparation consumer remain the production implementation.
+        const session: AgentSessionRuntime = {
+            send: async () => ({ status: 'admitted' }),
+            updateConfiguration: async () => ({ status: 'applied', changed: [] }),
+            watch: () => ({ dispose: () => undefined }),
+            dispose: () => undefined,
+        };
+        const runtime = createNativeAgentSessionOperations(session, 'retired-workspace-policy', undefined, undefined, undefined, {
+            mode: { value: null, updatedAtMs: 0 }, model: { value: 'claude-haiku-4-5', updatedAtMs: 0 },
+            permissionIntent: { value: 'default', updatedAtMs: 0 }, options: {},
+        });
+        const prepare = createWorkspaceWritesPolicyPreparation({
+            update: workspaceWrites => runtime.updateSessionRuntimeConfig({ workspaceWrites }),
+        });
+        await runtime.resetOrDisposeRuntime('runtime_recovery');
+        await expect(prepare(workspaceWrites)).resolves.toEqual({ ok: false, errorCode: 'native_agent_runtime_ended' });
+    });
+
+    it('records the native refusal code for workspace policy preparation without logging private configuration details', async () => {
+        await withTempDir('native-workspace-policy-', async (directory) => {
+            vi.stubEnv('HAPPIER_LOG_LEVEL', 'info');
+            const logPath = join(directory, 'runtime.log');
+            const processLogger = new Logger({ logFilePath: logPath, pruneCurrentProcessLogs: false });
+            const restoreLogger = bindProcessLogger(processLogger);
+            // The native Agent configuration port is the external plugin boundary.
+            const session: AgentSessionRuntime = {
+                send: async () => ({ status: 'admitted' }),
+                updateConfiguration: async () => ({ status: 'rejected', diagnostic: {
+                    code: 'permission_mode_update_failed', severity: 'error', message: 'fixture-private-credential-path',
+                } }),
+                watch: () => ({ dispose: () => undefined }),
+                dispose: () => undefined,
+            };
+            const runtime = createNativeAgentSessionOperations(session, 'native-workspace-policy', undefined, undefined, undefined, {
+                mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-private-model', updatedAtMs: 0 },
+                permissionIntent: { value: 'default', updatedAtMs: 0 }, options: {},
+            });
+            try {
+                await expect(runtime.updateSessionRuntimeConfig({ workspaceWrites: 'allow' })).resolves.toMatchObject({ status: 'failed' });
+                processLogger.flushSync();
+                const log = await readFile(logPath, 'utf8').catch((error: unknown) => {
+                    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return '';
+                    throw error;
+                });
+                expect(log).toContain('[NativeAgentSession] Workspace policy preparation refused');
+                expect(log).toContain('"diagnosticCode":"permission_mode_update_failed"');
+                expect(log).toContain('"workspaceWrites":"allow"');
+                expect(log).toContain('"status":"rejected"');
+                expect(log).not.toContain('fixture-private-credential-path');
+                expect(log).not.toContain('fixture-private-model');
+            } finally {
+                await runtime.resetOrDisposeRuntime();
+                restoreLogger();
+                vi.unstubAllEnvs();
+            }
+        });
+    });
+
     it('does not offer undeclared native configuration or manual compaction methods', async () => {
         const updateConfiguration = vi.fn<NonNullable<AgentSessionRuntime['updateConfiguration']>>(
             async () => ({ status: 'applied', changed: [] }),
@@ -6159,7 +6779,7 @@ describe('native Agent session host adapter', () => {
         await created.operations.resetOrDisposeRuntime();
     });
 
-    it('defers runner-managed Provider materialization across a non-null late environment until custody preparation', async () => {
+    it.each([true, false])('defers runner-managed Provider materialization until custody preparation (late environment: %s)', async (hasLateEnvironment) => {
         const agentId = 'acme-runner-late-provider-agent';
         const contributions = createExternalContributionFixtures(agentId);
         const metadata = managedProviderBindingMetadata(
@@ -6214,7 +6834,7 @@ describe('native Agent session host adapter', () => {
                         modelId: 'provider-model-public-late',
                     },
                 },
-                resolveLateEnvironment: async () => {
+                ...(hasLateEnvironment ? { resolveLateEnvironment: async () => {
                     events.push('late-environment');
                     return {
                         environmentVariables: {
@@ -6223,7 +6843,7 @@ describe('native Agent session host adapter', () => {
                         unsetEnvironmentVariables: [],
                         sensitiveEnvironmentVariableNames: [],
                     };
-                },
+                } } : {}),
             }),
         });
         if (!plan.config.createSessionRuntime) {
@@ -6254,7 +6874,7 @@ describe('native Agent session host adapter', () => {
             memoryRecallGuidanceEnabled: false,
         } as never)).rejects.toBe(expectedFailure);
         expect(events).toEqual([
-            'late-environment',
+            ...(hasLateEnvironment ? ['late-environment'] : []),
             'custody-register',
             'public-provider-prepare',
         ]);
@@ -8041,10 +8661,7 @@ describe('native Agent session host adapter', () => {
             events.push('services-ready');
             return Object.freeze({
                 ...invocationServices,
-                settings: Object.freeze({
-                    ...invocationServices.settings,
-                    get: async () => null,
-                }),
+                settings: createClaudeSettingsFixture(lease.retirementSignal, () => ({})),
                 connectedAccounts: Object.freeze({
                     ...invocationServices.connectedAccounts,
                     getBinding: async () => null,
@@ -8437,7 +9054,8 @@ describe('native Agent session host adapter', () => {
         const sendUserMessage = vi.fn(async () => undefined);
         const handleAsyncQuestion = registerCodexInteractions({
             // Only app-server method registration crosses this native transport boundary.
-            client: { registerRequestHandler: () => undefined, registerNotificationHandler: () => undefined } as never,
+            client: { registerRequestHandler: () => undefined, registerNotificationHandler: () => undefined,
+                onExit: () => ({ dispose() {} }) } as never,
             ui: context.services.interactions,
             getThreadId: () => 'thread-1',
             sendUserMessage,
@@ -8579,6 +9197,7 @@ describe('native Agent session host adapter', () => {
         expect(Reflect.ownKeys(publicExternalSessions).sort()).toEqual([
             'attach',
             'capabilities',
+            'closeList',
             'followTranscript',
             'list',
             'readTranscript',
@@ -8828,6 +9447,7 @@ describe('native Agent session host adapter', () => {
         expect(Reflect.ownKeys(publicExternalSessions).sort()).toEqual([
             'attach',
             'capabilities',
+            'closeList',
             'followTranscript',
             'list',
             'readTranscript',
@@ -10790,9 +11410,8 @@ describe('native Agent session host adapter', () => {
 
         expect(nextTurnError).toBeInstanceOf(Error);
         expect(nextTurnError).toMatchObject({
-            message: expect.stringContaining('agent_session_error'),
+            message: expect.stringContaining('pi_rpc_unexpected_exit'),
         });
-        expect((nextTurnError as Error).message).not.toContain('pi_rpc_unexpected_exit');
         expect(classifyPrimarySessionRuntimeIssue({
             cause: 'session_error',
             error: nextTurnError,
@@ -11995,6 +12614,37 @@ describe('native Agent session host adapter', () => {
         }]);
     });
 
+    it('publishes unresolved input custody before waiting for native disposal', async () => {
+        let releaseDispose = () => {};
+        const nativeDisposal = new Promise<void>((resolve) => { releaseDispose = resolve; });
+        const session: AgentSessionRuntime = {
+            send: async () => ({ status: 'admitted' }),
+            watch: () => ({ dispose() {} }),
+            dispose: vi.fn(async () => await nativeDisposal),
+        };
+        const runtime = createNativeAgentSessionOperations(session, 'session-1');
+        const deliveryOutcomes: unknown[] = [];
+        runtime.setOnPromptDeliveryOutcome((outcome) => deliveryOutcomes.push(outcome));
+        await runtime.sendTurnPrompt('waiting at native trust', {
+            localId: 'queue-local-dispose-pending', turnId: 'turn-dispose-pending',
+        });
+
+        const disposing = runtime.resetOrDisposeRuntime('session_closed');
+        try {
+            await vi.waitFor(() => expect(session.dispose).toHaveBeenCalledOnce());
+            expect(deliveryOutcomes).toEqual([{
+                type: 'input-custody-unknown',
+                localId: 'queue-local-dispose-pending',
+                userMessageSeq: null,
+                issue: { code: 'native_runtime_disposed_with_input_in_flight', severity: 'warning' },
+            }]);
+        } finally {
+            releaseDispose();
+            await disposing;
+        }
+        expect(deliveryOutcomes).toHaveLength(1);
+    });
+
     it('does not downgrade accepted native input to custody-unknown during disposal', async () => {
         const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
         const send = vi.fn<AgentSessionRuntime['send']>(async (request) => {
@@ -12464,6 +13114,7 @@ describe('native Agent session host adapter', () => {
             { localId: 'queue-local-pre-ack', turnId: 'turn-pre-ack' },
         );
 
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
         await expect(runtime.cancelTurn()).resolves.toBeUndefined();
         await expect(sending).resolves.toBeUndefined();
         expect(cancel).toHaveBeenCalledTimes(1);
@@ -12586,6 +13237,7 @@ describe('native Agent session host adapter', () => {
             },
         );
 
+        await vi.waitFor(() => expect(admissionSignal).not.toBeNull());
         await expect(runtime.cancelTurn()).resolves.toBeUndefined();
         await expect(sending).rejects.toThrow(
             'cancelled before admission',
@@ -13249,7 +13901,8 @@ describe('native Agent terminal transcript follow admission (ES-PEP-03/ES-PEP-05
         const resolveLinkIdentity = vi.fn(async ({ source, remoteSessionId }: Readonly<{
             source: Readonly<Record<string, unknown>>;
             remoteSessionId: string;
-        }>) => ({ source, remoteSessionId }));
+        }>) => ({ source: source.kind === 'terminalBeta' ? { ...source, workspacePath: '/canonical/beta' } : source,
+            remoteSessionId }));
         const harness = await createTerminalFollowHarness({
             agentId,
             configuredSources: ['terminalAlpha', 'terminalBeta'].map((sourceKind) => ({
@@ -13329,7 +13982,7 @@ describe('native Agent terminal transcript follow admission (ES-PEP-03/ES-PEP-05
         );
         // The unbound sibling source is never consulted, so no aggregate scan
         // can report the Session's own transcript as ambiguous.
-        expect(resolveLinkIdentity).toHaveBeenCalledOnce();
+        expect([...new Set(resolveLinkIdentity.mock.calls.map(([request]) => request.source.kind))]).toEqual(['terminalBeta']);
         expect(resolveLinkIdentity).toHaveBeenCalledWith(
             expect.objectContaining({
                 source: expect.objectContaining({ kind: 'terminalBeta' }),
@@ -13682,7 +14335,6 @@ describe('native Agent session usage bridge — full canonical UsageObservation 
             }) + '\n');
             const declaration = CLAUDE_ACCOUNTING_MANIFEST.contributes.agents.find((agent) => agent.id === 'claude');
             if (!declaration?.surfaces?.externalSession) throw new Error('Expected canonical Claude source declaration');
-            expect(declaration.surfaces.externalSession.sources.every((source) => !source.terminalFollow)).toBe(true);
             const base = createExternalContributionFixtures('claude');
             const agent = {
                 ...base.agent, pluginId: CLAUDE_ACCOUNTING_MANIFEST.id, provenance: 'first_party', source: { kind: 'bundled' },

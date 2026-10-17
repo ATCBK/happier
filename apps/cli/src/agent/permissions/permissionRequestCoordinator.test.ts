@@ -1224,6 +1224,34 @@ describe('PermissionRequestCoordinator', () => {
         await expect(retry).rejects.toThrow('Permission request aborted');
     });
 
+    it('withdraws response admission before the final caller cancellation is durable', async () => {
+        const session = new DeferredUpdateSession();
+        const { coordinator } = createHarness(session);
+        const abort = new AbortController();
+        const request = { ...bashRequest, lifetime: 'occurrence' as const,
+            owner: { kind: 'plugin' as const, pluginId: 'plugin-a' } };
+        const pending = coordinator.requestDecision(request, { signal: abort.signal }).catch(error => error);
+        const context = coordinator.getResponseContext(request.requestId)!;
+        const apply = vi.fn(async () => undefined);
+        session.deferNextUpdate();
+        abort.abort();
+        try {
+            expect(session.agentState.requests?.[request.requestId]).toBeDefined();
+            expect(coordinator.getResponseContext(request.requestId)).toBeNull();
+            await expect(coordinator.handleResponse({ requestId: request.requestId,
+                buildCompletion: () => ({ result: approve(), completedRequest: { status: 'approved' } }),
+            })).resolves.toBe(false);
+            await expect(coordinator.completeResponse({ context, acknowledgeDecisionApplication: apply,
+                completion: { result: approve(), completedRequest: { status: 'approved' } },
+            })).resolves.toBe(false);
+            expect(apply).not.toHaveBeenCalled();
+        } finally {
+            session.resolveDeferredUpdate();
+            await expect(pending).resolves.toMatchObject({ message: 'Permission request aborted' });
+        }
+        expect(session.agentState.completedRequests?.[request.requestId]).toMatchObject({ status: 'canceled' });
+    });
+
     it.each(['input', 'lifetime'] as const)('does not consume an in-flight cached decision when the same id is retried with different %s', async (changed) => {
         const session = new DeferredUpdateSession();
         const { coordinator } = createHarness(session);

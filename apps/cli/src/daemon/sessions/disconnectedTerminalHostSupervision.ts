@@ -66,19 +66,14 @@ export async function shouldRetainTrackedTerminalHostExitMarker(input: Readonly<
   const sessionId = tracked.happySessionId?.trim();
   if (sessionId) {
     const attachment = await readTerminalHostAttachmentState({ happyHomeDir: input.happyHomeDir, sessionId });
-    const terminal = tracked.happySessionMetadataFromLocalWebhook?.terminal ?? tracked.hostedTerminal;
-    if (attachment.status === 'absent' && !tracked.publishedTerminalControlServiceabilityAttachmentId
-      && (!terminal?.mode || terminal.mode === 'plain')) return false;
+    // A historical launch mode/attachment id is not retained host custody.
+    // Home finality and deferred control retirement retain their own evidence.
+    if (attachment.status === 'absent') return false;
+    if (attachment.status === 'unreadable') return true;
     const presentation = await resolveTrackedSessionTerminalPresentation(
       tracked, attachment.status === 'present' ? attachment.info.handle.kind : 'plain',
     );
     if (presentation?.kind === 'provider_attach') {
-      if (attachment.status === 'unreadable') {
-        logger.infoFile('[DAEMON RUN] Retaining runner-exit marker because terminal custody is unreadable', {
-          sessionId, reason: attachment.reason,
-        });
-        return true;
-      }
       return attachment.status === 'present' && attachment.info.version !== 3;
     }
   }
@@ -98,9 +93,14 @@ export async function resolveTrackedSessionTerminalHostExitCandidate(input: Read
   const { tracked, attachmentInfo } = input;
   const sessionId = tracked.happySessionId?.trim();
   if (!sessionId) return null;
+  if (!attachmentInfo) {
+    // The nullable reader also maps unreadable custody to null. Only positive
+    // absence allows final exit to retire tracking; a replacement must be observed anew.
+    const current = await readTerminalHostAttachmentState({ happyHomeDir: input.happyHomeDir, sessionId });
+    if (current.status === 'absent') return null;
+    throw new Error('terminal_host_attachment_unavailable_after_runner_exit');
+  }
   const terminal = tracked.happySessionMetadataFromLocalWebhook?.terminal ?? tracked.hostedTerminal;
-  if (!attachmentInfo && !tracked.publishedTerminalControlServiceabilityAttachmentId
-    && (!terminal?.mode || terminal.mode === 'plain')) return null;
   if (attachmentInfo?.version !== 2) {
     const optionalPresentation = (await resolveTrackedSessionTerminalPresentation(
       tracked, attachmentInfo?.handle.kind ?? 'plain',

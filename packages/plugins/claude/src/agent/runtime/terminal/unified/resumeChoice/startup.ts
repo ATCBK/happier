@@ -115,14 +115,21 @@ export function createClaudeUnifiedResumeChoiceStartupHandler(params: Readonly<{
   let pendingAbort: AbortController | null = null;
   let pendingRequest: Promise<void> | null = null;
   let pendingIdentity: string | null = null;
+  let applyingDecision = false;
   let closedIdentity: string | null = null;
   let autoAttemptedIdentity: string | null = null;
   let pendingUserActionNotified = false;
   const runtimeInstanceId = randomUUID();
   const orphanDialogAnswerAttempts = new Map<ClaudeUnifiedRecognizedDialogId, number>();
 
-  const cancelPending = async (): Promise<void> => {
+  const cancelPending = async (): Promise<boolean> => {
     const task = pendingRequest;
+    // A submitted answer advances native UI before its application ACK and durable
+    // Session settlement finish. A screen transition must not cancel that answer.
+    // Disposal still retires the occurrence, including any in-flight application.
+    if (applyingDecision && !disposed) {
+      return false;
+    }
     pendingAbort?.abort();
     pendingAbort = null;
     pendingRequest = null;
@@ -132,6 +139,7 @@ export function createClaudeUnifiedResumeChoiceStartupHandler(params: Readonly<{
       pendingUserActionNotified = false;
       params.onPendingUserActionChange?.(false);
     }
+    return true;
   };
 
   const isStartupActive = (): boolean => params.isStartupActive?.() ?? true;
@@ -212,7 +220,6 @@ export function createClaudeUnifiedResumeChoiceStartupHandler(params: Readonly<{
       .digest('hex')
       .slice(0, 24);
     const requestId = `${params.sessionId}:claude-dialog:${digest}`;
-    let appliedByAcknowledgement = false;
     const applyDecision = async (result: PermissionDecisionResult): Promise<boolean> => {
       const dialogOption = resolveClaudeUnifiedDialogSelectedOption(readDecisionAnswers(result), dialog.options);
       return dialogOption && dialog.kind === 'recognized'
@@ -241,12 +248,20 @@ export function createClaudeUnifiedResumeChoiceStartupHandler(params: Readonly<{
       acknowledgeDecisionApplication: async (result) => {
         if (result.decision === 'denied' || result.decision === 'abort') return;
         if (dialog.kind === 'unrecognized' && dialog.mode === 'notice') return;
-        if (!await applyDecision(result)) {
-          throw new Error('claude_unified_dialog_terminal_answer_failed');
+        if (disposed || abort.signal.aborted || pendingAbort !== abort || pendingIdentity !== identity) {
+          throw new Error('claude_unified_dialog_request_retired');
         }
-        appliedByAcknowledgement = true;
+        applyingDecision = true;
+        try {
+          if (!await applyDecision(result)) {
+            throw new Error('claude_unified_dialog_terminal_answer_failed');
+          }
+        } catch (error) {
+          applyingDecision = false;
+          throw error;
+        }
       },
-    }).then(async (result) => {
+    }).then(() => {
       if (pendingRequest !== task || pendingIdentity !== identity || abort.signal.aborted) return;
       // An incomplete/ambiguous prompt is navigation-only. A returned UI value can never become
       // terminal input; the exact episode remains closed until the visible identity changes.
@@ -254,13 +269,11 @@ export function createClaudeUnifiedResumeChoiceStartupHandler(params: Readonly<{
         closedIdentity = identity;
         return;
       }
-      // Released hosts call the application acknowledgement above before resolving this promise.
-      // Retain the legacy continuation for a mixed-version host that ignores the new optional hook.
-      if (!appliedByAcknowledgement && !await applyDecision(result)) closedIdentity = identity;
     }).catch(() => {
       if (pendingRequest === task) closedIdentity = identity;
     }).finally(() => {
       if (pendingRequest !== task) return;
+      applyingDecision = false;
       pendingAbort = null;
       pendingRequest = null;
       pendingIdentity = null;
@@ -342,7 +355,7 @@ export function createClaudeUnifiedResumeChoiceStartupHandler(params: Readonly<{
           ) {
             return 'waiting_for_user';
           }
-          await cancelPending();
+          if (!await cancelPending()) return 'waiting_for_user';
         }
         closedIdentity = null;
         return 'unhandled';
@@ -351,7 +364,9 @@ export function createClaudeUnifiedResumeChoiceStartupHandler(params: Readonly<{
       const identity = getClaudeUnifiedDialogIdentity(dialog);
       if (closedIdentity !== null && closedIdentity !== identity) closedIdentity = null;
       // Any identity mutation replaces the episode, including same-id context/option changes.
-      if (pendingIdentity !== null && pendingIdentity !== identity) await cancelPending();
+      if (pendingIdentity !== null && pendingIdentity !== identity) {
+        if (!await cancelPending()) return 'waiting_for_user';
+      }
 
       if (dialog.kind === 'unrecognized') {
         return publish(dialog);

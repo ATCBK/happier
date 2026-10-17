@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { accountSettingsParse } from '@happier-dev/protocol';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { AgentState } from '@/api/types';
@@ -40,10 +42,18 @@ function requests(session: FakeSession): NonNullable<AgentState['requests']> {
 async function answerThroughPresentUserRpc(session: FakeSession, response: unknown): Promise<void> {
     const handler = session.rpcHandlerManager.handlers.get('session.permission.respond');
     if (!handler) throw new Error('Expected the canonical permission response RPC handler');
-    await handler(response);
+    expect(await handler(response)).toBeUndefined();
 }
 
 describe('plugin interaction caller attribution', () => {
+    beforeEach(() => {
+        resetActiveAccountSettingsSnapshotForTests();
+        setActiveAccountSettingsSnapshot({ scopeKey: 'interaction-attribution-test', source: 'network', settingsVersion: 1,
+            settings: accountSettingsParse({}), rawSettings: {}, settingsSecretsReadKeys: [], loadedAtMs: 1,
+            promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] },
+        });
+    });
+    afterEach(() => resetActiveAccountSettingsSnapshotForTests());
     it('uses one stable host-stamped contribution owner and isolates siblings', async () => {
         const session = new FakeSession();
         const permissionHandler = new ProviderEnforcedPermissionHandler(
@@ -69,11 +79,12 @@ describe('plugin interaction caller attribution', () => {
                 activePluginIds: new Set(),
             },
         });
-        const binding = createLoggerAndEventsAvailablePluginInvocationServiceBinding('ordinary-occurrenceId-1', 'binding');
+        const occurrenceId = createPluginRuntimeOccurrenceId('acme.ordinary');
+        const binding = createLoggerAndEventsAvailablePluginInvocationServiceBinding(occurrenceId, 'binding');
         const seed = Object.freeze({
             plugin: Object.freeze({ id: 'acme.ordinary', version: '1.0.0' }),
             contribution: Object.freeze({ id: 'run', qualifiedId: 'acme.ordinary/actions/run' }),
-            occurrenceId: createPluginRuntimeOccurrenceId('acme.ordinary'),
+            occurrenceId,
             correlationId: 'ordinary-correlation-1',
             surface: 'cli' as const,
             session: Object.freeze({ id: session.sessionId }),
@@ -199,6 +210,7 @@ describe('plugin interaction caller attribution', () => {
     });
 
     it('keeps an OpenCode native-plugin approval bounded by its active admitted turn after Session widens', async () => {
+        const occurrenceId = createPluginRuntimeOccurrenceId('happier.agent.opencode');
         const session = new FakeSession();
         const permissionHandler = new ProviderEnforcedPermissionHandler(
             session as unknown as ApiSessionClient,
@@ -231,7 +243,7 @@ describe('plugin interaction caller attribution', () => {
                 id: 'opencode',
                 qualifiedId: 'happier.agent.opencode/agents/opencode',
             }),
-            occurrenceId: createPluginRuntimeOccurrenceId('happier.agent.opencode'),
+            occurrenceId,
             correlationId: 'opencode-correlation-1',
             surface: 'agent' as const,
             session: Object.freeze({ id: session.sessionId }),
@@ -249,7 +261,7 @@ describe('plugin interaction caller attribution', () => {
             }),
             isOccurrenceCurrent: () => true,
         }), createLoggerAndEventsAvailablePluginInvocationServiceBinding(
-            'opencode-occurrenceId-1',
+            occurrenceId,
             'opencode-binding-1',
         )).interactions;
 
@@ -271,6 +283,7 @@ describe('plugin interaction caller attribution', () => {
         if (!requestId) throw new Error('expected bounded approval request');
         await answerThroughPresentUserRpc(session, {
             id: requestId,
+            turnId: 'turn-opencode-read-only',
             approved: false,
             decision: 'denied',
         });
@@ -282,6 +295,7 @@ describe('plugin interaction caller attribution', () => {
     });
 
     it('fails closed when an active native-plugin turn lacks its causal authority', async () => {
+        const occurrenceId = createPluginRuntimeOccurrenceId('happier.agent.opencode');
         const session = new FakeSession();
         const permissionHandler = new ProviderEnforcedPermissionHandler(
             session as unknown as ApiSessionClient,
@@ -314,7 +328,7 @@ describe('plugin interaction caller attribution', () => {
                 id: 'opencode',
                 qualifiedId: 'happier.agent.opencode/agents/opencode',
             }),
-            occurrenceId: createPluginRuntimeOccurrenceId('happier.agent.opencode'),
+            occurrenceId,
             correlationId: 'opencode-correlation-2',
             surface: 'agent' as const,
             session: Object.freeze({ id: session.sessionId }),
@@ -328,7 +342,7 @@ describe('plugin interaction caller attribution', () => {
             }),
             isOccurrenceCurrent: () => true,
         }), createLoggerAndEventsAvailablePluginInvocationServiceBinding(
-            'opencode-occurrenceId-2',
+            occurrenceId,
             'opencode-binding-2',
         )).interactions;
 

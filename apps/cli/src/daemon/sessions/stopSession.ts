@@ -272,6 +272,15 @@ export function createStopSession(params: Readonly<{
         && pidToTrackedSession.get(pid) === expected
         && isExactTrackedRunner(pid, expected, options?.expectedTrackedRunner);
     };
+    const haveTrackedRunnersExited = async (trackedPids: readonly number[]): Promise<boolean> => {
+      if (!params.areTrackedRunnersExited) return false;
+      try {
+        return await params.areTrackedRunnersExited({ sessionId: normalizedSessionId, trackedPids });
+      } catch (error) {
+        logWarning(`[DAEMON RUN] Failed to check tracked runner exit for session ${normalizedSessionId}`, error);
+        return false;
+      }
+    };
 
     const readHostAttachmentInfo = params.readHostAttachmentInfo ?? readTerminalHostAttachmentInfo;
     const readHostAttachmentState = params.readHostAttachmentState
@@ -355,6 +364,9 @@ export function createStopSession(params: Readonly<{
             && mode !== 'windows_terminal' && mode !== 'windows_console') continue;
           const pid = pidsToStop[index]!;
           const expected = expectedTrackedSessionsByPid.get(pid);
+          // No unknown host is signalled or disposed. A positively dead runner
+          // still proceeds through final presence, remainder and metadata retirement.
+          if (await haveTrackedRunnersExited([pid]) && isCapturedTrackedRunnerCurrent(pid)) continue;
           const ownsCurrentRunner = expected?.startedBy === 'daemon'
             && isCapturedTrackedRunnerCurrent(pid)
             && await isPidSafeHappySessionProcess({
@@ -523,21 +535,6 @@ export function createStopSession(params: Readonly<{
       }
     }
 
-    const haveTrackedRunnersExited = async (trackedPids: readonly number[]): Promise<boolean> => {
-      if (!params.areTrackedRunnersExited) return false;
-      try {
-        return await params.areTrackedRunnersExited({
-          sessionId: normalizedSessionId,
-          trackedPids,
-        });
-      } catch (error) {
-        logWarning(
-          `[DAEMON RUN] Failed to check tracked runner exit for session ${normalizedSessionId}`,
-          error,
-        );
-        return false;
-      }
-    };
     const runnersAlreadyExited = await observeStopPhase('runner_exit_probe', () => haveTrackedRunnersExited(pidsToStop));
     const signalEligiblePids: number[] = [];
     for (const pid of runnersAlreadyExited ? [] : pidsToStop) {
@@ -804,7 +801,9 @@ export function createStopSession(params: Readonly<{
       if (disposition.status === 'destroyed' && disposition.descriptorRetained) {
         return incompleteStopSession('terminal_attachment_descriptor_retirement_failed');
       }
-      if (disposition.status === 'destroyed' && params.onExactTerminalAttachmentRetired) {
+      // A concurrent confirmed-dead recovery can own the same exact retirement.
+      const attachmentRetired = disposition.status === 'destroyed' || disposition.status === 'retired';
+      if (attachmentRetired && params.onExactTerminalAttachmentRetired) {
         await params.onExactTerminalAttachmentRetired({
           happyHomeDir: configuration.happyHomeDir,
           sessionId: normalizedSessionId,
@@ -813,7 +812,7 @@ export function createStopSession(params: Readonly<{
           logWarning(`[DAEMON RUN] Failed to record terminal host retirement for session ${normalizedSessionId}`, error);
         });
       }
-      if (disposition.status === 'destroyed') {
+      if (attachmentRetired) {
         logger.infoFile('[DAEMON STOP] Exact attachment retirement completed', {
           sessionId: normalizedSessionId,
           elapsedMs: Date.now() - retirementStartedAtMs,
@@ -829,7 +828,8 @@ export function createStopSession(params: Readonly<{
       try {
         let retired = false;
         for (const trackedSession of expectedTrackedSessionsByPid.values()) {
-          const retirement = await params.retireAbsentTerminalControlServiceability({ sessionId: normalizedSessionId, trackedSession });
+          const retirement = await observeStopPhase('plain_control_serviceability_retirement', () =>
+            params.retireAbsentTerminalControlServiceability!({ sessionId: normalizedSessionId, trackedSession }));
           if (retirement === 'deferred' && [...pidToTrackedSession.values()].includes(trackedSession)) {
             return incompleteStopSession('terminal_control_serviceability_retirement_failed');
           }

@@ -1130,6 +1130,52 @@ describe('createSessionProviderInputConsumer', () => {
     }
   });
 
+  it.each(['queued_input_preparation', 'pending_handoff', 'pending_provider_custody', 'context_only'] as const)(
+    'identifies a held %s phase without abandoning accepted input', async (phase) => {
+      vi.useFakeTimers();
+      const info = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+      const held = createDeferred<void>();
+      const queue = new MessageQueue2<{ id: string }, string>(() => 'hash');
+      const mode = { id: 'default' };
+      const batch = { message: 'accepted input', mode, isolate: true, hash: 'hash' };
+      if (phase === 'queued_input_preparation') queue.pushImmediate(batch.message, mode);
+      const consumer = createSessionProviderInputConsumer({
+        messageQueue: queue,
+        session: {
+          waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
+          reconcilePendingProviderInputCustodyBeforeMaterialization: async () => {
+            if (phase === 'pending_provider_custody') await held.promise;
+            return true;
+          },
+          materializeNextPendingMessageSafely: async () => {
+            if (phase === 'context_only') return { type: 'no_pending' as const };
+            queue.pushImmediate(batch.message, mode);
+            return { type: 'materialized' as const, localId: 'input', seq: null, content: null };
+          },
+        },
+        ...(phase === 'context_only' ? { takeContextOnlyInput: async () => { await held.promise; return batch; } } : {}),
+      });
+      try {
+        const input = consumer.waitForNextInput({
+          abortSignal: new AbortController().signal,
+          ...(phase === 'queued_input_preparation' ? { beforeCollectQueuedBatch: async () => { await held.promise; } } : {}),
+          ...(phase === 'pending_handoff' ? { beforePendingMaterialize: async () => { await held.promise; return true; } } : {}),
+        });
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(info).toHaveBeenCalledWith('[pendingQueue] input consumer phase remains unsettled',
+          expect.objectContaining({ phase }));
+        held.resolve();
+        await expect(input).resolves.toMatchObject({ message: batch.message });
+        expect(info).toHaveBeenCalledWith('[pendingQueue] input consumer slow phase settled',
+          expect.objectContaining({ phase }));
+      } finally {
+        held.resolve();
+        info.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('reports the exact materialization subphase when the canonical owner remains unsettled', async () => {
     vi.useFakeTimers();
     const infoFileSpy = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});

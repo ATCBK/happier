@@ -310,7 +310,7 @@ export function createSessionProviderInputConsumer<Mode, Message>(
       notifyLiveWorkChanged();
     }
     try {
-      await previousTurn.catch(() => undefined);
+      await observePendingInputPhase('pending_materialization_turn', async () => await previousTurn.catch(() => undefined));
       return await operation();
     } finally {
       activePendingMaterializationTurns -= 1;
@@ -350,7 +350,7 @@ export function createSessionProviderInputConsumer<Mode, Message>(
 
   const waitUntilAdmitted = async (abortSignal: AbortSignal): Promise<boolean> => {
     while (readAdmission()) {
-      if (!await waitForAdmissionChange(abortSignal)) return false;
+      if (!await observePendingInputPhase('input_admission', async () => await waitForAdmissionChange(abortSignal))) return false;
     }
     return true;
   };
@@ -836,7 +836,8 @@ async function waitForNextInput<Mode, Message>(
       const contextOnlyBatch = opts.session.hasPendingProviderInput?.()
         ? null
         : opts.takeDeferredContextOnlyBatch()
-          ?? (opts.hasDeferredContextOnlyBatch() ? null : await opts.takeContextOnlyInput?.(opts.abortSignal));
+          ?? (opts.hasDeferredContextOnlyBatch() ? null : await observePendingInputPhase('context_only',
+            async () => await opts.takeContextOnlyInput?.(opts.abortSignal)));
       if (contextOnlyBatch) {
         controller.abort('sessionProviderInputConsumer-context-only');
         return contextOnlyBatch;
@@ -937,7 +938,7 @@ async function returnBatch<Mode, Message>(
 async function collectQueuedBatch<Mode, Message>(
   opts: WaitForNextInputOptions<Mode, Message>,
 ): Promise<MessageBatch<Mode, Message> | null> {
-  await opts.beforeCollectQueuedBatch?.();
+  await observePendingInputPhase('queued_input_preparation', async () => await opts.beforeCollectQueuedBatch?.());
   if (opts.messageQueue.size() <= 0) {
     return null;
   }
@@ -971,7 +972,7 @@ async function materializePendingMessage<Mode, Message>(
   return await opts.runPendingMaterializationExclusive(async () => {
     if (opts.abortSignal.aborted || !opts.isAdmitted() || opts.hasLocalInputCustody()) return null;
     if (isSessionPendingDrainBlocked(opts.session)) return null;
-    if ((await (opts.beforePendingMaterialize?.() ?? true)) !== true) return null;
+    if ((await observePendingInputPhase('pending_handoff', async () => await (opts.beforePendingMaterialize?.() ?? true))) !== true) return null;
     if (!opts.isAdmitted() || opts.hasLocalInputCustody()) return null;
     if ((await reconcilePendingProviderInputCustodyBeforeMaterialization(opts.session)) !== true) return null;
     if (opts.abortSignal.aborted || !opts.isAdmitted() || opts.hasLocalInputCustody()) return null;
@@ -1082,7 +1083,8 @@ async function drainPendingMessages(
 async function reconcilePendingProviderInputCustodyBeforeMaterialization(
   session: SessionProviderInputConsumerSession,
 ): Promise<boolean> {
-  return await (session.reconcilePendingProviderInputCustodyBeforeMaterialization?.() ?? true);
+  return await observePendingInputPhase('pending_provider_custody',
+    async () => await (session.reconcilePendingProviderInputCustodyBeforeMaterialization?.() ?? true));
 }
 
 function isSessionPendingDrainBlocked(session: SessionProviderInputConsumerSession): boolean {
@@ -1238,6 +1240,12 @@ type PendingInputConsumerDiagnosticPhase =
   | 'materialize'
   | 'materialize_runtime_tail_retry'
   | 'metadata_reconcile'
+  | 'pending_materialization_turn'
+  | 'input_admission'
+  | 'queued_input_preparation'
+  | 'pending_handoff'
+  | 'pending_provider_custody'
+  | 'context_only'
   | PendingMaterializationDiagnosticPhase;
 
 async function observePendingInputPhase<T>(

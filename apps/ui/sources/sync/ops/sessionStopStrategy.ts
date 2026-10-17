@@ -297,6 +297,28 @@ export async function stopSessionUsingCanonicalStrategy(params: Readonly<{
         return { success: false, failedAt, reason: 'failed', message: unknownErrorMessage(error),
             ...(errorCode ? { errorCode } : {}) };
     };
+    const readFreshSession = async () => {
+        assertCurrent();
+        if (!serverId) return null;
+        const { session } = await runWithServerRequestAuthorityForServerAccountScope({
+            ...(params.scope ? { scope: params.scope } : { serverId }), activeRequest: serverFetch,
+        }, async authority => {
+            assertCurrent();
+            return await readSessionSnapshotForAuthority({
+                authority: { ...authority, request: async (path, init, options) => {
+                    const cancellation = mergeAbortSignals([params.signal, init?.signal ?? undefined]);
+                    try {
+                        assertCurrent();
+                        return await authority.request(path, { ...init, signal: cancellation.signal }, options);
+                    } finally { cancellation.dispose(); }
+                } },
+                sessionId: params.sessionId,
+                isCurrent: () => !params.signal?.aborted && (params.isCurrent?.() ?? true),
+            });
+        });
+        assertCurrent();
+        return session;
+    };
     let machineTarget = readMachineControlTargetForSession(params.scope
         ? { ...params.scope, sessionId: params.sessionId }
         : serverId ? { serverId, sessionId: params.sessionId } : params.sessionId);
@@ -305,26 +327,12 @@ export async function stopSessionUsingCanonicalStrategy(params: Readonly<{
         if (!machineTarget && params.serverId && params.scope) {
             // A route Home need not have published its private Session into the focused store.
             // Read through the existing exact-Account authority and keep this projection local.
-            const { session } = await runWithServerRequestAuthorityForServerAccountScope({
-                scope: params.scope, activeRequest: serverFetch,
-            }, async authority => {
-                assertCurrent();
-                return await readSessionSnapshotForAuthority({
-                    authority: { ...authority, request: async (path, init, options) => {
-                        const cancellation = mergeAbortSignals([params.signal, init?.signal ?? undefined]);
-                        try {
-                            assertCurrent();
-                            return await authority.request(path, { ...init, signal: cancellation.signal }, options);
-                        } finally { cancellation.dispose(); }
-                    } },
-                    sessionId: params.sessionId,
-                    isCurrent: () => !params.signal?.aborted && (params.isCurrent?.() ?? true),
-                });
-            });
-            assertCurrent();
-            machineTarget = resolveMachineControlTargetForSessionFromState({
-                ...storage.getState(), sessions: { [params.sessionId]: session }, sessionListRowsByServerId: {},
-            }, { ...params.scope, sessionId: params.sessionId });
+            const session = await readFreshSession();
+            if (session) {
+                machineTarget = resolveMachineControlTargetForSessionFromState({
+                    ...storage.getState(), sessions: { [params.sessionId]: session }, sessionListRowsByServerId: {},
+                }, { ...params.scope, sessionId: params.sessionId });
+            }
         }
         assertCurrent();
     } catch (error) {
@@ -361,6 +369,21 @@ export async function stopSessionUsingCanonicalStrategy(params: Readonly<{
                 message: daemonStop.message,
                 ...(daemonStop.errorCode ? { errorCode: daemonStop.errorCode } : {}),
             };
+        }
+        if (daemonStop.reason === 'not_found') {
+            try {
+                // Exact daemon absence plus a fresh authoritative inactive Session
+                // is the same confirmed-stop evidence used by the CLI owner.
+                if ((await readFreshSession())?.active === false) {
+                    return { success: true, effect: 'process_stopped', method: 'daemon_machine_rpc' };
+                }
+            } catch (error) {
+                try { assertCurrent(); }
+                catch (interruption) { return failed(interruption, 'daemon_machine_rpc'); }
+                // Unavailable confirmation retains the existing runner fallback;
+                // it never upgrades an absent runtime into confirmed success.
+                log.log('[SESSION STOP] Fresh inactive confirmation unavailable');
+            }
         }
         daemonFallback = daemonStop;
     }

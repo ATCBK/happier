@@ -11,6 +11,7 @@ import type {
 } from './agentStateRequestStore';
 import {
     isPermissionRequestOwnedByPlugin,
+    isPermissionRequestOwnedByPluginTurn,
     normalizePermissionRequestOwner,
     permissionRequestOwnersEqual,
     type PermissionRequestOwner,
@@ -325,6 +326,10 @@ export class PermissionRequestCoordinator<TResult> {
         if (entry) {
             if (entry.cancelReason) return null;
             if (entry.status === 'detached') return null;
+            // The last caller has withdrawn while terminal persistence is pending.
+            // Preserve an existing first-answer claim, which that persistence cannot cancel.
+            if (entry.completionPersistence && entry.waiters.size === 0
+                && this.store.hasPermissionResponseClaim?.(requestId) !== true) return null;
             return {
                 requestId,
                 toolName: entry.toolName,
@@ -452,6 +457,7 @@ export class PermissionRequestCoordinator<TResult> {
     async completeResponse(params: Readonly<{
         context: PermissionRequestCoordinatorContext;
         completion: PermissionRequestCoordinatorCompletion<TResult>;
+        acknowledgeDecisionApplication?: (result: TResult) => Promise<void>;
     }>): Promise<boolean> {
         const { context, completion } = params;
         const entry = this.pendingRequests.get(context.requestId);
@@ -461,6 +467,11 @@ export class PermissionRequestCoordinator<TResult> {
 
             const precedingPersistence = entry.completionPersistence ?? Promise.resolve(true);
             const completionPersistence = precedingPersistence.then(async () => {
+                // Application belongs to the same settlement admission as persistence.
+                // A stale app row must not apply a decision after cancellation has begun.
+                if (params.acknowledgeDecisionApplication) {
+                    await params.acknowledgeDecisionApplication(completion.result);
+                }
                 const persisted = await this.store.completeRequest({
                     requestId: entry.requestId,
                     ...completion.completedRequest,
@@ -545,6 +556,9 @@ export class PermissionRequestCoordinator<TResult> {
 
         if (!this.store.hasOutstandingRequest(context.requestId)) return false;
 
+        if (params.acknowledgeDecisionApplication) {
+            await params.acknowledgeDecisionApplication(completion.result);
+        }
         const persisted = await this.store.completeRequest({
             requestId: context.requestId,
             ...completion.completedRequest,
@@ -623,8 +637,7 @@ export class PermissionRequestCoordinator<TResult> {
         const normalizedPluginId = pluginId.trim();
         if (!normalizedPluginId || !turnId.trim()) return;
         const requestIds = [...this.pendingRequests.values()]
-            .filter((entry) => entry.lifetime === 'turn' && (entry.turnId === turnId || entry.turnId === undefined)
-                && isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId))
+            .filter((entry) => isPermissionRequestOwnedByPluginTurn(entry, normalizedPluginId, turnId))
             .map((entry) => entry.requestId);
         await this.cancelRequests(requestIds, reason);
     }

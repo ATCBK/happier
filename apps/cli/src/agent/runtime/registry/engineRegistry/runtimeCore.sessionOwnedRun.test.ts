@@ -32,6 +32,15 @@ import { createExecutionRunAccountSettingsSnapshotResolver } from '@/api/machine
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { createManifestAgentCatalogEntry } from '@/plugins/projection/registry/agentCliMetadata';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createClaudeNativeAgentSdkContext } from '../../../../../../../packages/plugins/claude/src/agent/runtime/nativeServices';
+import { createClaudeUnifiedResumeChoiceStartupHandler } from '../../../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/resumeChoice/startup';
+import { parseClaudeScreenState } from '../../../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/screenState';
+import { createFakeControlPort } from '../../../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/tuiControls/fakeControlPort';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetInMemoryAccountSettingsContextForTests(); });
 
@@ -96,6 +105,73 @@ function createContributions() {
 }
 
 describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
+  it('publishes a terminal child workspace trust question through the real child context', async () => {
+    const { backend, agent } = createContributions();
+    setActiveAccountSettingsSnapshot({ scopeKey: 'child-trust', source: 'network', settingsVersion: 1,
+      settings: accountSettingsParse({}), rawSettings: {}, settingsSecretsReadKeys: [], loadedAtMs: 1,
+      promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] },
+    });
+    let state: AgentState = { requests: {}, completedRequests: {} };
+    const rpcHandlerManager = new ServerBoundPermissionRpcHandlerManager('trust-parent');
+    // Session persistence/RPC ingress and the native terminal are the boundaries.
+    const parent = { sessionId: 'trust-parent', rpcHandlerManager,
+      getMetadataSnapshot: () => ({ path: '/parent', machineId: 'machine-a' }),
+      getAgentStateSnapshot: () => state, updateMetadata: async () => undefined,
+      updateAgentState: async (update: (previous: AgentState) => AgentState) => { state = update(state); },
+      enqueueAgentMessageCommitted: async () => undefined,
+    };
+    const permissions = new ProviderEnforcedPermissionHandler(parent as unknown as ApiSessionClient, { logPrefix: '[ChildTrust]' });
+    const trust = 'Accessing workspace:\n/tmp/new-child\nQuick safety check: Is this a project you created or one you trust?\n❯ 1. Yes, I trust this folder\n  2. No, exit';
+    const port = createFakeControlPort({ captures: [trust, '──────────────────────────────\n❯ \n──────────────────────────────'] });
+    let startup: ReturnType<typeof createClaudeUnifiedResumeChoiceStartupHandler> | undefined;
+    let context: AgentSessionRuntimeContext | undefined;
+    const adapter = await resolveBackendRuntimeCore({
+      backend, agent, runtimeRegistry: null, executionSurfaces: createEmptyBackendExecutionSurfaces(),
+      runtimeOwner: { backendId: AGENT_ID,
+        selected: { kind: 'plugin_engine', ownerId: AGENT_ID, provenance: 'external', pluginId: AGENT_ID }, candidates: [] },
+      nativeAgentRuntime: { sessions: { open: async (_request, childContext) => {
+        context = childContext;
+        startup = createClaudeUnifiedResumeChoiceStartupHandler({ ctx: createClaudeNativeAgentSdkContext(childContext),
+          sessionId: parent.sessionId, port, settleMs: 0, wait: async () => undefined });
+        await startup.handle(parseClaudeScreenState(trust));
+        return { send: async () => ({ status: 'admitted' }), cancel: async () => ({ status: 'notRunning' }),
+          watch: () => ({ dispose() {} }), dispose: async () => { await startup?.dispose(); } };
+      } } },
+      nativeAgentRuntimeIdentity: { pluginId: AGENT_ID, pluginVersion: '1.0.0', agentId: AGENT_ID,
+        localAgentId: 'default', occurrenceId: 'agent-occurrence', sourceCustody: { kind: 'managed', immutableGenerationId: 'child-trust-generation', installSource: 'npm' },
+        isCurrent: () => true },
+      // The real runner operation bundle has no live Session permission binding.
+      createNativeAgentInvocationServices: async () => createUnavailablePluginServices(),
+    });
+    const runtime = adapter!.runtimeCore.createExecutionRunBackend({
+      scope: 'session_owned', cwd: '/tmp/new-child', runId: 'trust-child', controllerOccurrenceId: 'trust-child-occurrence',
+      backendId: AGENT_ID, permissionMode: 'read_only',
+      start: { intent: 'delegate', runClass: 'bounded', retentionPolicy: 'ephemeral', ioMode: 'request_response' },
+      sessionInteractionHost: { session: parent as unknown as ApiSessionClient, machineId: 'machine-a', permissionHandler: permissions,
+        readOwnerAccountCredentials: async () => ({ token: 'fixture-token', encryption: { type: 'legacy', secret: new Uint8Array(32) } }),
+      },
+    });
+    try {
+      await runtime!.provisionRuntime!();
+      await vi.waitFor(() => expect(Object.keys(state.requests ?? {})).toHaveLength(1));
+      const [requestId, request] = Object.entries(state.requests ?? {})[0]!;
+      expect(requestId).toContain('execution-run:trust-child:trust-child-occurrence:');
+      expect(request).toMatchObject({ tool: 'AskUserQuestion', arguments: { happierDialog: { dialogId: 'trust_folder' } } });
+      expect(port.sentLiteral).toEqual([]);
+      const answer = rpcHandlerManager.handlers.get('session.user_action.answer');
+      await answer!({ id: requestId, approved: true, answers: { claudeUnifiedTerminalTrustFolder: ['trust_once'] } });
+      await vi.waitFor(() => expect(state.requests?.[requestId]).toBeUndefined());
+      expect(port.sentLiteral).toEqual(['1']);
+      expect(state.completedRequests?.[requestId]).toMatchObject({ status: 'approved' });
+      await expect(context!.services.sessions.current!.permissions.requestDecision({ requestId: 'unadmitted-edit', toolName: 'Edit', input: {} }))
+        .resolves.toEqual({ decision: 'denied' });
+    } finally {
+      await startup?.dispose();
+      await runtime?.dispose();
+      await permissions.abortPendingRequestsAndFlush('test cleanup');
+    }
+  });
+
   it.each([
     { mode: 'read_only', writes: 'deny' as const, read: { decision: 'approved' }, edit: { decision: 'denied' } },
     { mode: 'no_tools', writes: 'deny' as const, read: { decision: 'denied' }, edit: { decision: 'denied' } },

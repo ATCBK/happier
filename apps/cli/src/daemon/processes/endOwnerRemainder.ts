@@ -55,7 +55,7 @@ export function createEndOwnerRemainder(input: Readonly<{
     }
     return {
         async capture(owner) {
-            const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh' });
+            const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });
             if (view.status !== 'ok') { reportUnavailable(); return undefined; }
             const key = processOwnerKey(owner);
             return { roots: view.roots.filter(root => processOwnerKey(root.owner) === key),
@@ -71,7 +71,7 @@ export function createEndOwnerRemainder(input: Readonly<{
         },
         async observeEnd(owner, captured) {
             try {
-                const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh' });
+                const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });
                 if (view.status !== 'ok') reportUnavailable();
                 const key = processOwnerKey(owner);
                 if (captured?.scope === 'subtree') {
@@ -90,7 +90,7 @@ export function createEndOwnerRemainder(input: Readonly<{
         },
         async end(owner, captured) {
             try {
-                const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh' });
+                const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });
                 if (view.status !== 'ok') { reportUnavailable(); return { status: 'unavailable', outcomes: [] }; }
                 const key = processOwnerKey(owner);
                 // A resumed owner reowns its tagged processes. An older exit cannot retire it.
@@ -118,7 +118,7 @@ export function createEndOwnerRemainder(input: Readonly<{
                 const result = await terminate({ targets: targets.map(row => ({ pid: row.pid, start: row.start })), tree: false,
                     ...(exclusiveContainment ? { containment: exclusiveContainment } : {}),
                         async authorizeSnapshot(snapshot) {
-                            const current = await input.processOwnershipRuntime.resolveSnapshot(snapshot);
+                            const current = await input.processOwnershipRuntime.resolveSnapshot(snapshot, undefined, { requesterAttribution: 'retained' });
                             if (current.status !== 'ok') return false;
                             if (current.roots.some(root => root.live && processOwnerKey(root.owner) === key
                                 && snapshot.rows.some(row => row.pid === root.pid && row.state !== 'zombie' && equalProcessStart(row.start, root.start)))) return false;
@@ -133,7 +133,9 @@ export function createEndOwnerRemainder(input: Readonly<{
                             const freshMembers = exclusiveContainment?.kind === 'linux_unit' ? membersOfCgroup(index, exclusiveContainment.prefix)
                                 : exclusiveContainment?.kind === 'windows_job' ? membersOfJob(index, exclusiveContainment.name)
                                 : snapshot.rows.filter(row => targets.some(target => row.pid === target.pid && equalProcessStart(row.start, target.start)));
-                            return freshMembers.every(member => ownership.some(row => row.pid === member.pid
+                            // Positive zombie state already proves exit; ownership
+                            // enrichment may disappear before the kernel reaps it.
+                            return freshMembers.every(member => member.state === 'zombie' || ownership.some(row => row.pid === member.pid
                                 && equalProcessStart(row.start, member.start) && row.ownerEnded && row.owner
                                 && processOwnerKey(row.owner) === key && row.level !== 'unknown'
                                 && row.evidence.some(evidence => evidence.state === 'met' && ['fence', 'parent_chain', 'marker'].includes(evidence.kind))));

@@ -492,8 +492,7 @@ describe('createPluginSessionHandleCapabilitiesFactory', () => {
         properties: { approved: { type: 'boolean', title: 'Approved' } },
       },
     }, { signal: callerAbort.signal });
-    await Promise.resolve();
-    expect(observedSignal).toBeDefined();
+    await vi.waitFor(() => expect(observedSignal).toBeDefined());
     callerAbort.abort(new Error('caller cancelled'));
     expect(observedSignal?.aborted).toBe(true);
     pendingInteractions.shift()?.();
@@ -508,7 +507,7 @@ describe('createPluginSessionHandleCapabilitiesFactory', () => {
         properties: { approved: { type: 'boolean', title: 'Approved' } },
       },
     });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(pendingInteractions).toHaveLength(1));
     live = { ...live, scopeId: Symbol('mcp-successor') };
     pendingInteractions.shift()?.();
     await expect(retired).resolves.toEqual({

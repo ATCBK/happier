@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { bindAgentCliLaunchSpec, buildAgentCliLaunchSpecFromResolution } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import { prepareManagedAgentCliLaunch } from '@/packagedRuntime/managedTools/prepareManagedAgentCliLaunch';
 
-import { resolveExecutablePluginRuntimeRegistry } from '../../../resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createRetainedAgentCliSystemToolService } from './agentCliBinding';
 import { createClaudeNativeSdkQueryContext } from '../../../../../../../../packages/plugins/claude/src/agent/sdk/nativeExec.js';
 import { createClaudeAgentSdkTurnOperations } from '../../../../../../../../packages/plugins/claude/src/agent/runtime/remote/sdk/session.js';
@@ -337,10 +337,11 @@ describe('Agent CLI system-tool binding (integration)', () => {
             process.env[fixture.overrideEnvKey] = overridePath;
             process.env.HAPPIER_JS_RUNTIME_PATH = process.execPath;
 
-            const runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
+            const admitted = await createAdmittedPluginRuntimeFixture({
                 happyHomeDir,
-                pluginIds: [fixture.pluginId],
+                runtimeOptions: { pluginIds: [fixture.pluginId] },
             });
+            const runtimeRegistry = admitted.registry;
             try {
                 await runtimeRegistry.activateContributionsOnDemand([{
                     pluginId: fixture.pluginId,
@@ -381,7 +382,7 @@ describe('Agent CLI system-tool binding (integration)', () => {
                     expect(new TextDecoder().decode(result.stdout)).toBe(expectedOutput);
                 }
             } finally {
-                await runtimeRegistry.dispose();
+                await admitted.dispose();
                 if (previousPath === undefined) delete process.env.PATH;
                 else process.env.PATH = previousPath;
                 if (previousOverride === undefined) delete process.env[fixture.overrideEnvKey];

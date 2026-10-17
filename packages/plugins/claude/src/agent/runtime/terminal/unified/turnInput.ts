@@ -74,7 +74,6 @@ export function createClaudeUnifiedPromptInput(params: Readonly<{
         ? {}
         : {
           deferredUntilQuietMs: CLAUDE_UNIFIED_TERMINAL_INPUT_QUIET_PERIOD_MS,
-          deferReason: 'user_typing' as const,
         }),
       timeoutMs: resolveTerminalPromptWriteTimeoutMs(params.text),
     },
@@ -97,7 +96,6 @@ export function createClaudeUnifiedTurnNeutralControlInput(params: Readonly<{
     },
     scheduling: {
       deferredUntilQuietMs: CLAUDE_UNIFIED_TERMINAL_INPUT_QUIET_PERIOD_MS,
-      deferReason: 'user_typing',
       timeoutMs: resolveTerminalPromptWriteTimeoutMs(params.text),
     },
   };

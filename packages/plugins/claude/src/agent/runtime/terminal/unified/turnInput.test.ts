@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createClaudeUnifiedPromptInput } from './turnInput.js';
+import { createClaudeUnifiedPromptInput, createClaudeUnifiedTurnNeutralControlInput } from './turnInput.js';
 
 describe('createClaudeUnifiedPromptInput', () => {
   it('scales terminal-host write timeout for large prompt payloads', () => {
@@ -14,7 +14,7 @@ describe('createClaudeUnifiedPromptInput', () => {
     expect(input.scheduling.timeoutMs).toBe(125_000);
   });
 
-  it('guards queued prompts with a terminal quiet period but lets steers bypass it', () => {
+  it('checks terminal quiet for queued prompts and controls without imposing a permanent deferral', () => {
     const queued = createClaudeUnifiedPromptInput({
       text: 'queued prompt',
       sessionId: 'session-1',
@@ -27,11 +27,14 @@ describe('createClaudeUnifiedPromptInput', () => {
       nonce: 2,
       isSteer: true,
     });
-
-    expect(queued.scheduling).toMatchObject({
-      deferredUntilQuietMs: 800,
-      deferReason: 'user_typing',
+    const control = createClaudeUnifiedTurnNeutralControlInput({
+      text: '/goal clear', sessionId: 'session-1', nonce: 3,
     });
+
+    expect(queued.scheduling.deferredUntilQuietMs).toBe(800);
+    expect(control.scheduling.deferredUntilQuietMs).toBe(800);
+    expect(queued.scheduling.deferReason).toBeUndefined();
+    expect(control.scheduling.deferReason).toBeUndefined();
     expect(steer.scheduling.deferredUntilQuietMs).toBeUndefined();
     expect(steer.scheduling.deferReason).toBeUndefined();
   });

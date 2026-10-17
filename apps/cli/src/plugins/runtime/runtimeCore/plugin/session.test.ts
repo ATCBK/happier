@@ -10,6 +10,7 @@ import {
   SessionCreationCorrespondenceV1Schema,
   deriveSessionCreationTagV1,
   type ProviderBoundModelRef,
+  type TeamCredentialProviderModelSelectionV1,
 } from '@happier-dev/protocol';
 
 import {
@@ -1031,6 +1032,10 @@ describe('plugin session runtime adapters', () => {
 
   it('rebinds canonical native operations after reset and fences stale predecessor events', async () => {
     const lifecycleOrder: string[] = [];
+    const initialTeamSelection: TeamCredentialProviderModelSelectionV1 = {
+      kind: 'team_credential_provider_model', resourceId: 'initial-resource', teamId: 'initial-team',
+      expectedResourceRevision: 1, deliveryMode: 'brokered', agentTargetKey: 'backend:acme.sample.backend', modelId: 'initial-model',
+    };
     const initialProviderBindingAdmission = Object.freeze({
       v: 1,
       connectionId: 'pc-initial',
@@ -1053,6 +1058,7 @@ describe('plugin session runtime adapters', () => {
     }>) => ({ ok: true as const, status: 'accepted' as const, ...request }));
     const first = {
       ...createRuntimeTurnOperations(),
+      readAppliedTeamCredentialModel: () => initialTeamSelection,
       canInterruptForPendingInput: () => false,
       interruptPendingInputAndRun: firstInterruptPendingInputAndRun,
       sendTurnPrompt: vi.fn(async (prompt: string) => {
@@ -1071,6 +1077,7 @@ describe('plugin session runtime adapters', () => {
     };
     const second = {
       ...createRuntimeTurnOperations(),
+      readAppliedTeamCredentialModel: () => null,
       canInterruptForPendingInput: () => true,
       interruptPendingInputAndRun: secondInterruptPendingInputAndRun,
       sendTurnPrompt: vi.fn(async (prompt: string) => {
@@ -1111,6 +1118,7 @@ describe('plugin session runtime adapters', () => {
           expectedStateAtMs?: number;
         }>): Promise<unknown> | unknown;
         canInterruptForPendingInput(): boolean;
+        readAppliedTeamCredentialModel(): TeamCredentialProviderModelSelectionV1 | null | undefined;
       }>;
     }>).operations;
     expect((created as Readonly<{
@@ -1122,13 +1130,20 @@ describe('plugin session runtime adapters', () => {
         expect(input).toBe(successorProviderBindingAdmission);
         lifecycleOrder.push('successor-admitted');
       },
-      onSuccessorBound: async () => { lifecycleOrder.push('bound'); },
-      onSuccessorUsable: async () => { lifecycleOrder.push('usable'); },
+      onSuccessorBound: async () => {
+        expect(operations.readAppliedTeamCredentialModel()).toBeUndefined();
+        lifecycleOrder.push('bound');
+      },
+      onSuccessorUsable: async () => {
+        expect(operations.readAppliedTeamCredentialModel()).toBeNull();
+        lifecycleOrder.push('usable');
+      },
     });
     const observed: unknown[] = [];
     operations.subscribeRuntimeEvents((event) => observed.push(event));
 
     expect(operations.canInterruptForPendingInput()).toBe(false);
+    expect(operations.readAppliedTeamCredentialModel()).toEqual(initialTeamSelection);
     await operations.sendTurnPrompt('first');
     await expect(operations.interruptPendingInputAndRun({
       sessionId: 'host-session-1',
@@ -1145,6 +1160,7 @@ describe('plugin session runtime adapters', () => {
       importHistory: false,
     });
     expect(operations.canInterruptForPendingInput()).toBe(true);
+    expect(operations.readAppliedTeamCredentialModel()).toBeNull();
     await operations.sendTurnPrompt('second');
     await expect(operations.interruptPendingInputAndRun({
       sessionId: 'host-session-1',
