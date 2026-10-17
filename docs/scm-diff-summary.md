@@ -220,8 +220,15 @@ panel replay remain part of the program's live validation.
 
 The unreleased PR triage default catalog includes a PR-only explanation action.
 It reuses configured-action recipients and canonical context attachments, sends an
-ordinary session message, then opens the session. A stored customized or empty
-action catalog remains authoritative; new defaults do not overwrite it.
+ordinary session message, then opens the session. The catalog parser preserves
+configured rows and their order, then appends missing built-ins in default order,
+including for a stored empty catalog. Explicitly disabled built-ins stay disabled;
+deleting one records `enabled: false`, while deleting a custom action removes it.
+Reset removes the stored override and restores the current built-ins. Unreadable
+catalogs remain unavailable. UI offers, configured-run admission, bulk retry and
+review continuation consume the same enabled/coherent/subject-aware selection;
+none may dispatch a disabled built-in through an alternate entrance. See
+[Triage sources](triage-sources.md) for the catalog owner.
 
 Current comparison/generation sources do not supply a repository PR template.
 The Git PR writer applies its existing template only when no body was supplied;
@@ -276,8 +283,14 @@ it does not replace an explicit draft with generated prose. Template-aware
   not a workspace permission id. Missing or ambiguous accepted workspace refs
   leave Project analysis unavailable rather than manufacturing a Session.
 - [`walkthroughReading.ts`](../apps/ui/sources/components/sessions/files/walkthrough/walkthroughReading.ts)
-  projects each stop's first Explain occurrence per file once per reading.
-  Hunk annotations look up those notes directly; they do not rebuild the reading.
+  projects Explain notes once per reading. Each stop's first matched hunk carries
+  its gist; later files and secondary stops use title-only notes. Hunk annotations
+  look up those notes directly; they do not rebuild the reading or generate prose.
+- [`resolveMobileBottomChromeModel.ts`](../apps/ui/sources/components/navigation/mobile/chrome/resolveMobileBottomChromeModel.ts)
+  hides cockpit bottom tabs for a pushed Session Details `scmReview` destination,
+  before considering a registered cockpit fallback. Files and Walkthrough retain
+  their own reading controls and Back; unrelated Details routes retain their
+  existing chrome.
 
 The existing Action catalog and machine/Session RPC dispatcher remain the public
 entry points. See [Actions](actions.md) and the generated
@@ -518,6 +531,24 @@ marks or replace exact occurrence selection.
 
 ## Saved edits, personal marks and offline access
 
+Files, Walkthrough and Commits restore through `useScmWalkthroughState` and the
+same machine saved-result reader. Its `idle|restoring|ready|unavailable` state is
+separate from generation: a pending read is not an empty result, and a failed read
+offers retry rather than a new-generation empty state. An exact metadata target
+can be read before presence hydrates; unknown reachability is not offline.
+An unavailable or ambiguous Session target settles as unavailable. Only confirmed
+unreachability warrants offline copy; unknown presence uses a reachability notice.
+
+Restoration and in-memory selection are scoped to Home, Account, host, repository,
+comparison and requested output, ordered by saved inventory recency. A newer
+failed/cancelled attempt without that output's value can fall back to an older
+published value. Failure of a sibling output cannot hide a newer usable commit
+plan or relabel a completed walkthrough. Pending/writing/failed/complete projection
+also follows the requested output when it was added after the original request.
+Run-observation refusal preserves the last saved projection and does not establish
+generation failure. Typed admission failures remain visible over retained content;
+only model-related failures offer model selection as recovery.
+
 `scm.diffSummary.result.*`, `refine` and `addOutputs` use the existing authenticated
 machine/Session transport. Writes bind `resultId` and `expectedRevision`; the
 machine uses protected atomic local state under the existing runtime directory
@@ -532,6 +563,10 @@ unrelated outputs. Merge retains the chosen title and exact coverage. Undo is
 revision-checked and preserves current generator linkage. Accepted application
 states `applying|paused|unknown` lock editing, refinement, Undo and deletion.
 Already-published leading commit groups remain immutable after the lock releases.
+A completed application is no longer editable. When an unlocked application has
+unlanded groups, only those remaining groups can be edited; left-out/move controls
+follow that same proposal editability predicate. Landed rows retain their SHA and
+actual message without offering to rewrite them.
 
 The result revision owner also persists walkthrough/stop edited-title provenance,
 each stop's latest changed/moved revision, and an update notice identifying the

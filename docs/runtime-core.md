@@ -76,6 +76,15 @@ the Run retains the prepared instructions. Ordinary later resource reads still
 obey publication fences. The existing controller occurrence retains its admitted
 profile catalog for Pending, send, Actions, public projection and terminal hooks,
 so another acquisition cannot replace a live Run's profile decisions.
+Runner-to-daemon service preparation belongs to the containing invocation,
+including native launch preparation and Project setup or approval. The pending
+working-tree correction binds its service proxy to that invocation's cancellation
+and removes the implicit five-minute transport deadline. This correction is not
+yet committed: the committed service client still defaults to 300,000 ms when no
+timeout is supplied. Do not infer the correction from a fresh runner alone; it
+requires the changed client and invocation binding to land and be loaded together.
+Explicit caller deadlines remain effective. Response loss after dispatch retains
+its unknown effect outcome rather than authorizing replay.
 The bridge binds snapshot release to Run runtime
 cleanup, and the daemon's existing tracked-runner exit cleanup releases abandoned
 leases. New acquisition refuses unavailable or replaced authority with a typed
@@ -1077,6 +1086,9 @@ The host's metadata reader recognizes the recorded source identity for both foll
 and cold reconciliation. Follow opens metadata through the existing Session-mode decoder
 and retains both row and source identities in its paged baseline; plugins receive the
 native identity in their existing reconciliation baseline, without a second dedupe owner.
+The projector retains completed native source identities for its Session lifetime:
+a repeated committed fact cannot finalize a later unnamed segment or duplicate a
+Session-scoped row. Stored metadata is read through the canonical tolerant reader.
 OpenCode derives its stable ID through the same
 provider-session/message helper used by history import, so cold reconciliation recognizes
 streamed rows without a second persisted format or native-ID parser.
