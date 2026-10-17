@@ -571,6 +571,13 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
   return await waitForDaemonRunningWithinBudget({
     timeoutMs: params.timeoutMs,
     pollMs: params.pollMs,
+    // The OS service owns startup before the daemon can publish local ownership.
+    // Reuse the daemon owner's live-start checkpoint rather than failing healthy
+    // startup at a phase-local deadline. A conflicting owner or stopped service
+    // still ends this wait; the containing command owns cancellation.
+    isStillStarting: async () => Boolean(params.healthCommand
+      && runCommandCaptureBestEffort(params.healthCommand).ok
+      && (await evaluateCurrentDaemonOwner()).kind === 'none'),
     isRunning: async () => {
       const ownership = await evaluateCurrentDaemonOwner();
       if (ownership.kind === 'none') {

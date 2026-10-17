@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { buildLaunchdPlistXml, renderSystemdServiceUnit, renderWindowsScheduledTaskWrapperPs1 } from '@happier-dev/cli-common/service';
 import { withConfiguredDaemonTestHome, writeDaemonSettingsFixture } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -938,6 +938,8 @@ describe('runDaemonServiceCliCommand', () => {
 
   it('restores the manual daemon when service install takeover only observes a transient healthy owner', async () => {
     await withTempDir('happier-service-install-takeover-transient-owner-', async (homeDir) => {
+      const daemonOwner = spawnDaemonLifecycleOwner();
+      onTestFinished(async () => { await daemonOwner.kill(); });
       let expectedServiceLabel = '';
       let writeDaemonStateImpl: ((state: DaemonLocallyPersistedState) => void) | null = null;
       let clearDaemonStateImpl: (() => void) | null = null;
@@ -962,8 +964,8 @@ describe('runDaemonServiceCliCommand', () => {
           }
           return { status: 1, stdout: Buffer.from(''), stderr: Buffer.from('inactive') };
         }
-        writeDaemonStateImpl?.({
-          pid: process.pid,
+        if (command === 'systemctl' && (args.includes('start') || args.includes('restart'))) writeDaemonStateImpl?.({
+          pid: daemonOwner.pid,
           httpPort: 43129,
           startedAt: Date.now(),
           startedWithCliVersion: '0.0.0-service',
@@ -994,7 +996,7 @@ describe('runDaemonServiceCliCommand', () => {
       expectedServiceLabel = paths.label;
 
       writeDaemonState({
-        pid: process.pid,
+        pid: daemonOwner.pid,
         httpPort: 43130,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -1241,9 +1243,14 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('allows service start when ownership appears after the initial post-auth convergence delay', async () => {
+  it('keeps an active service pending until ownership appears beyond both readiness windows', async () => {
     await withTempDir('happier-service-start-delayed-owner-', async (homeDir) => {
-      let ownerWritten = false;
+      const daemonOwner = spawnDaemonLifecycleOwner();
+      let ownerTimer: ReturnType<typeof setTimeout> | null = null;
+      onTestFinished(async () => {
+        if (ownerTimer) clearTimeout(ownerTimer);
+        await daemonOwner.kill();
+      });
       let expectedServiceLabel = '';
       let currentPublicReleaseChannel: 'stable' | 'preview' | 'dev' = 'stable';
       let writeDaemonStateImpl: ((state: DaemonLocallyPersistedState) => void) | null = null;
@@ -1269,9 +1276,9 @@ describe('runDaemonServiceCliCommand', () => {
             if (command === 'systemctl' && args.includes('is-active')) {
               return { status: 0, stdout: Buffer.from('active'), stderr: Buffer.from('') };
             }
-            setTimeout(() => {
+            if (command === 'systemctl' && (args.includes('start') || args.includes('restart')) && ownerTimer === null) ownerTimer = setTimeout(() => {
               writeDaemonStateImpl?.({
-                pid: process.pid,
+                pid: daemonOwner.pid,
                 httpPort: 43123,
                 startedAt: Date.now(),
                 startedWithCliVersion: configuration.currentCliVersion,
@@ -1279,8 +1286,7 @@ describe('runDaemonServiceCliCommand', () => {
                 startupSource: 'background-service',
                 serviceLabel: expectedServiceLabel,
               });
-              ownerWritten = true;
-            }, 100);
+            }, 400);
             return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
           }),
         };
@@ -1301,7 +1307,12 @@ describe('runDaemonServiceCliCommand', () => {
       const paths = resolveDaemonServicePaths(runtime);
       expectedServiceLabel = paths.label;
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledDaemonServiceFile(paths.installedPath);
+      const expectedPlan = planDaemonServiceInstall({
+        ...runtime,
+        mode: 'user',
+        uid: runtime.uid ?? undefined,
+      });
+      writeFileSync(paths.installedPath, expectedPlan.files[0]?.content ?? '', 'utf-8');
       await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(1), token: 'token-delayed-owner' });
       clearDaemonStateForTestTeardown();
 
@@ -1585,6 +1596,8 @@ describe('runDaemonServiceCliCommand', () => {
 
   it('fails service restart when the background-service owner keeps the old release channel', async () => {
     await withTempDir('happier-service-restart-stale-owner-', async (homeDir) => {
+      const daemonOwner = spawnDaemonLifecycleOwner();
+      onTestFinished(async () => { await daemonOwner.kill(); });
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
         HAPPIER_HOME_DIR: happierHomeDir,
@@ -1624,10 +1637,11 @@ describe('runDaemonServiceCliCommand', () => {
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledDaemonServiceFile(paths.installedPath);
+      const expectedPlan = planDaemonServiceInstall({ ...runtime, mode: 'user', uid: runtime.uid ?? undefined });
+      writeFileSync(paths.installedPath, expectedPlan.files[0]?.content ?? '', 'utf-8');
 
       writeDaemonState({
-        pid: process.pid,
+        pid: daemonOwner.pid,
         httpPort: 43127,
         startedAt: Date.now(),
         startedWithCliVersion: configuration.currentCliVersion,
