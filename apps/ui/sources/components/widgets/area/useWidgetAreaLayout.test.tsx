@@ -286,6 +286,80 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     await hook.unmount();
 });
 
+it('applies a reversible edit to the displayed area during a publication refresh without losing concurrent edits', async () => {
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://area-write-refresh.test', accountId: 'actor' });
+    const surface: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor',
+        owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
+    const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
+    const layout: WidgetAreaLayoutV1 = { v: 1, surface, items: ['first', 'sibling'].map(id => ({ kind: 'widget',
+        instance: { v: 1, id, definition: { kind: 'builtin', id: 'project_about' }, bindings: {} } })) };
+    let row: HomeHubArtifactV1 = { artifactId, ownerAccountId: 'actor', access: 'owner',
+        header: buildWidgetSurfaceArtifactHeaderV1(layout), body: JSON.stringify(layout), revision: { headerVersion: 1, bodyVersion: 1 } };
+    const transport: HomeHubArtifactTransportV1 = {
+        read: async () => row,
+        create: async () => { throw new Error('Unexpected create'); },
+        update: async input => {
+            if (input.expectedRevision.bodyVersion !== row.revision.bodyVersion) return { ok: false, errorCode: 'version_mismatch', error: 'Conflict' };
+            row = { ...row, header: input.header, body: input.body,
+                revision: { headerVersion: row.revision.headerVersion + 1, bodyVersion: row.revision.bodyVersion + 1 } };
+            return { ok: true, revision: row.revision };
+        },
+    };
+    const owner = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true });
+    const area = createWidgetAreaActionPortV1(() => owner);
+    let blockRead = false;
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const port: WidgetAreaPort = { execute: async (operation, signal, target) => {
+        const selected = target?.surface ?? surface;
+        if (operation.actionId === 'widgets.item.list') {
+            if (blockRead) await pending;
+            return PluginUiWidgetAreaResultV1Schema.parse({ ok: true, result: await area.read(selected, {}, signal) });
+        }
+        if (operation.actionId !== 'widgets.item.frame.set') throw new Error('Unexpected operation');
+        return PluginUiWidgetAreaResultV1Schema.parse(await area.apply(selected,
+            { kind: 'frame', instanceId: operation.instanceId, frameStyle: operation.frameStyle }, {}, signal));
+    } };
+    const context = {};
+    const hook = await renderHook(() => useWidgetAreaLayout(port, context));
+    try {
+        await flushHookEffects();
+        const retained = hook.getCurrent().state;
+        if (retained.status !== 'ready') throw new Error('Expected admitted area');
+        await owner.apply({ kind: 'rename', instanceId: 'sibling', displayName: 'Concurrent edit' });
+        blockRead = true;
+        await act(async () => storage.getState().applyArtifacts([{ id: artifactId, title: 'Overview', isDecrypted: true,
+            ownerAccountId: 'actor', access: 'owner', storageMode: 'plain', headerVersion: 2, bodyVersion: 2,
+            seq: 2, createdAt: 1, updatedAt: 2 }]));
+        expect(retained.isCurrent()).toBe(false);
+        expect(retained.isReadPending()).toBe(true);
+        await act(async () => {
+            expect(await hook.getCurrent().write({ actionId: 'widgets.item.frame.set', instanceId: 'first', frameStyle: 'plain' }))
+                .toEqual({ kind: 'applied' });
+        });
+        expect((await owner.read()).items).toMatchObject([
+            { kind: 'widget', frameStyle: 'plain', instance: { id: 'first' } },
+            { kind: 'widget', instance: { id: 'sibling', displayName: 'Concurrent edit' } },
+        ]);
+        // Refresh-time editing still rechecks the writer's latest access, not the retained read.
+        row = { ...row, access: 'view' };
+        await act(async () => {
+            expect(await hook.getCurrent().write({ actionId: 'widgets.item.frame.set', instanceId: 'first', frameStyle: 'card' }))
+                .toEqual({ kind: 'refused', errorCode: 'artifact_access_forbidden' });
+        });
+        await act(async () => { blockRead = false; release?.(); });
+        await flushHookEffects();
+        expect(hook.getCurrent().state).toMatchObject({ status: 'ready', canEdit: false, items: [
+            { frameStyle: 'plain' }, { instance: { displayName: 'Concurrent edit' } },
+        ] });
+    } finally {
+        release?.();
+        await hook.unmount();
+        storage.getState().deleteArtifact(artifactId);
+        await connection.dispose();
+    }
+});
+
 it('keeps the newly selected area when an earlier captured durable write acknowledges late', async () => {
     const surface = (pageId: string): WidgetSurfaceRefV1 => ({ serverId: 'home', accountId: 'actor', owner: { kind: 'pluginArea', pluginId: 'acme', pageId, area: 'main' } });
     const first = surface('first'); const second = surface('second');

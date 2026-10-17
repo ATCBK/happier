@@ -42,7 +42,7 @@ export type WidgetAreaLayoutState<C> =
         preset?: WidgetSurfaceReadV1['preset'];
         /** This read's exact publication and binding still admit mounted effects. */
         isCurrent: () => boolean;
-        /** A new observation is pending under the same authority; this never admits effects. */
+        /** A new observation is pending under the same authority; mounted reads still require isCurrent. */
         isReadPending: () => boolean;
         /** The page context this read was admitted with; widgets follow only an admitted context. */
         context: C;
@@ -179,7 +179,11 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         if (!mounted.current || binding.current.port !== port || binding.current.context !== context)
             return { kind: 'refused', errorCode: 'widget_area_unavailable' };
         const admitted = displayed.current;
-        if (admitted.status !== 'ready' || !admitted.isCurrent()) return { kind: 'refused', errorCode: 'widget_area_unavailable' };
+        // A newer publication suspends mounted reads, but not a person's edit to the displayed
+        // area. Its canonical writer re-reads access and the latest revision before CAS/replay.
+        // Both facts fail closed on Account retirement; never retarget to a pending selection.
+        if (admitted.status !== 'ready' || (!admitted.isCurrent() && !admitted.isReadPending()))
+            return { kind: 'refused', errorCode: 'widget_area_unavailable' };
         let outcome: WidgetAreaWriteOutcome;
         try {
             const result = await port.execute(operation, undefined, { surface: admitted.surface, context: admitted.context });
