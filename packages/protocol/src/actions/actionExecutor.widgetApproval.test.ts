@@ -9,6 +9,8 @@ import type { WidgetSurfaceRefV1 } from '../widgets/widgetInstanceV1.js';
 import { createWidgetActionInputResolverV1 } from '../widgets/widgetActionInputResolverV1.js';
 import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
 import { createWidgetAreaActionPortV1, createWidgetAreaLayoutArtifactPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
+import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { createPluginWidgetAreaHostPortV1 } from '../plugins/ui/widgetAreaHost.js';
 
 const account = { serverId: 'home', accountId: 'account' };
 
@@ -110,6 +112,51 @@ const consequentialEdits: readonly { action: ActionId; input: (state: Fixture) =
 ];
 
 describe('contextual widget approval at the Action executor', () => {
+  it.each(['execute', 'prepare'] as const)('retains followed page input only in the live blocking %s invocation', async entry => {
+    const boundary = createWorkBoardArtifactBoundary();
+    const surface: WidgetSurfaceRefV1 = { ...account, owner: { kind: 'pluginArea', pluginId: 'external.widgets', pageId: 'overview', area: 'pinned' } };
+    const artifact = createWidgetSurfaceArtifactPortV1(boundary.forAccount(account.accountId), { surface, isCurrent: () => true });
+    let stored: ApprovalRequest | null = null;
+    const executor = createActionExecutor({
+      widgetAccountScope: () => account,
+      widgetSurfaceActions: { pluginArea: createWidgetAreaActionPortV1(() => artifact) },
+      widgetInputs: createWidgetActionInputResolverV1({
+        readDescriptor: async ({ instance }) => readBuiltinWidgetDescriptorV1(instance.definition),
+        readContext: async request => request.context.widgetAreaContext?.values ?? {},
+        readViewerValues: async () => ({ values: {} }),
+        // Session readability is the external host boundary; the resolver and binder remain real.
+        validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+      }),
+      // Approval persistence and human decision are the external boundaries.
+      approvalsCreate: async ({ request }) => { stored = request; return { artifactId: 'approval' }; },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => { stored = request; return { ok: true }; },
+      approvalsWaitForDecision: async ({ request }) => ({ decision: 'approve', request: {
+        ...request, status: 'approved', decision: { kind: 'approve', decidedAtMs: 2 },
+      } }),
+      isApprovalExecutionOriginCurrent: async () => true,
+    });
+    const host = createPluginWidgetAreaHostPortV1({ scope: account, pluginId: 'external.widgets', pageId: 'overview',
+      declarations: [{ name: 'pinned', contextSchema: { type: 'object', properties: { session: { type: 'object' } }, required: ['session'], additionalProperties: false } }],
+      isCurrent: () => true,
+      execute: async (id, input, context) => {
+        const invocation = { ...context, surface: 'plugin' as const, authority: 'account_automation' as const,
+          defaultSessionMachineId: 'machine', runtimeAccountId: account.accountId,
+          actionCaller: { kind: 'plugin' as const, pluginId: 'external.widgets', contributionLocalId: 'overview',
+            sourceCustody: { kind: 'development' as const, registeredRootId: 'external-root' } } };
+        if (entry === 'execute') return executor.execute(id, input, invocation);
+        const prepared = await executor.prepare(id, input, invocation);
+        return prepared.kind === 'ready' ? prepared.invocation.run() : prepared.result;
+      } });
+    const copy = { v: 1 as const, id: 'follow', definition: { kind: 'builtin' as const, id: 'session_summary' },
+      bindings: { session: { kind: 'context' as const, slot: 'session' } } };
+    const result = await host.execute({ area: 'pinned', context: { session: { serverId: account.serverId, sessionId: 'private-session' } },
+      operation: { actionId: 'widgets.item.add', instance: copy } }, undefined, 'page-add-request');
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { instance: copy } });
+    expect((await artifact.read()).items).toContainEqual(expect.objectContaining({ instance: copy }));
+    expect(stored).toMatchObject({ status: 'executed' });
+    expect(JSON.stringify(stored)).not.toContain('private-session');
+  });
   it('refuses a confirmation when current Account policy changed to Ask-first while the host was open', async () => {
     let settings = normalizeActionsSettingsV1({ v: 1 });
     const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, true, true,
