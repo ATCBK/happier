@@ -5,6 +5,28 @@ import { buildWidgetDefinitionArtifactHeaderV1, createWidgetDefinitionArtifactPo
 import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 
 describe('Widget Action input transport authority', () => {
+    it('admits a local Session profile pin only when the captured Home owner proves equivalence', async () => {
+        const scope = { serverId: 'srv_widget_home', accountId: 'viewer',
+            isSameServerId: (id: string) => ['srv_widget_home', 'local-profile'].includes(id) };
+        let readable = true;
+        const deps = createCliWidgetInputActionDepsV1({ serverId: scope.serverId, accountId: scope.accountId,
+            getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => scope }),
+            readCandidates: async () => [], validateSession: async () => readable });
+        const request = { ref: { surface: { serverId: scope.serverId, accountId: scope.accountId,
+            owner: { kind: 'home' as const } }, instanceId: 'summary' },
+            instance: { v: 1 as const, id: 'summary', definition: { kind: 'builtin' as const, id: 'session_summary' },
+                bindings: { session: { kind: 'context' as const, slot: 'session' } } },
+            groupBindings: { session: { kind: 'value' as const, value: { serverId: 'local-profile', sessionId: 'B' } } },
+            context: { surface: 'cli' as const } };
+        expect(await deps.widgetInputs!.resolve(request)).toMatchObject({ status: 'ready', input: {
+            session: { serverId: 'local-profile', sessionId: 'B' },
+        } });
+        readable = false;
+        expect(await deps.widgetInputs!.resolve(request)).toMatchObject({ status: 'denied' });
+        expect(await deps.widgetInputs!.resolve({ ...request, instance: { ...request.instance, bindings: {
+            session: { kind: 'value', value: { serverId: 'foreign-home', sessionId: 'B' } },
+        } } })).toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_target_scope_mismatch' }] });
+    });
     it.each(['inline', 'artifact'] as const)('preserves native Session admission for a saved %s builtin', async kind => {
         const native = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'changes' })!;
         const definition: WidgetDefinitionV1 = { v: 1, id: 'native-definition', name: 'Saved changes',

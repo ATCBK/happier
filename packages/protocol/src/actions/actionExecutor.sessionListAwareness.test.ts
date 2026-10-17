@@ -69,6 +69,23 @@ const agentContext = {
 } as const;
 
 describe('session.list execution', () => {
+  it.each(['srv_widget_home', 'local-profile'])('keeps %s Session pins comparable to options across proven Home aliases', async selectedHome => {
+    const surface = { serverId: 'srv_widget_home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const sessionList = async () => buildSessionAwarenessListResultV1({ sessions: [{
+      v: 1, sessionId: 'B', title: 'Bound B', lifecycle: 'active', runtime: 'idle', freshness: 'live',
+      operational: { primary: 'none', reasons: [] }, encryption: 'plain', availability: 'complete',
+    }], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false });
+    const executor = createExecutor({ sessionList, widgetAccountScope: () => ({ serverId: surface.serverId, accountId: surface.accountId,
+      isSameServerId: id => [surface.serverId, 'local-profile'].includes(id) }) });
+    const consumer = { kind: 'widget' as const, surface, definition: { kind: 'builtin' as const, id: 'session_summary' },
+      selectedSession: { serverId: selectedHome, sessionId: 'B' } };
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'local-profile' };
+    expect(await executor.execute('action.options.resolve', { consumer, fieldPath: 'session' }, context))
+      .toMatchObject({ ok: true, result: { options: [{ value: consumer.selectedSession }] } });
+    expect(await executor.execute('action.options.resolve', { consumer: { ...consumer,
+      selectedSession: { ...consumer.selectedSession, serverId: 'foreign-home' } }, fieldPath: 'session' }, context))
+      .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+  });
   it.each(['changes', 'local_services'] as const)('offers %s Session options from the same awareness owner without requiring a plugin catalog', async (id) => {
     const sessionList = vi.fn(async () => buildSessionAwarenessListResultV1({ sessions: [{
       v: 1, sessionId: 'B', title: 'Bound B', lifecycle: 'active', runtime: 'idle', freshness: 'live',

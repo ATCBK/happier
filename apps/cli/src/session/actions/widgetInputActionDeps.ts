@@ -13,6 +13,7 @@ import { isWidgetConnectedAccountSelectionEligibleV1, resolveWidgetViewerPurpose
 import { findWidgetLayoutParentV1, readWidgetActionSurfacePortV1, WidgetSurfaceReadV1Schema, type WidgetInputBindingsV1, type WidgetCandidateIdentityV1, type WidgetActionInputResolverV1, type WidgetInputDescriptorV1 } from '@happier-dev/protocol/widgets';
 import { readInputPath } from '@happier-dev/protocol/inputs/inputPredicates';
 import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
+import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { createDaemonPluginActionExecutor } from './createDaemonPluginActionExecutor';
 
 type Request = Parameters<WidgetActionInputResolverV1['resolve']>[0];
@@ -33,6 +34,8 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
     validateSession(session: Readonly<{ serverId: string; sessionId: string }>, signal?: AbortSignal): Promise<boolean>;
 }>): Pick<ActionExecutorDeps, 'widgetInputs' | 'widgetConnectedAccountOptions'> {
     const descriptors = new WeakMap<Request, Descriptor>();
+    const isSessionHomeAdmitted = (serverId: string) => input.getDeps().widgetAccountScope?.()?.isSameServerId?.(serverId)
+        ?? areServerProfileIdentifiersEquivalent(input.serverId, serverId);
     const groupBindings = new WeakMap<Request, Promise<WidgetInputBindingsV1 | undefined>>();
     const readGroupBindings = (request: Request) => {
         if (request.groupBindings !== undefined) return Promise.resolve(request.groupBindings);
@@ -132,7 +135,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                     const bound = resolveConfiguredWidgetTargetInputV1({ instance: request.instance, descriptor, providedContext: await readProvidedContext(request),
                         viewerValues: (await readViewerPurpose(request, descriptor))?.values ?? {} });
                     const session = bound.status === 'ready' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(bound.input, targetDeclaration.path)) : null;
-                    if (session?.success && session.data.serverId === input.serverId && await input.validateSession(session.data, request.signal)) {
+                    if (session?.success && isSessionHomeAdmitted(session.data.serverId) && await input.validateSession(session.data, request.signal)) {
                         const target = await input.readResources?.(request.signal, session.data);
                         descriptor = { ...descriptor, resourceDeclarations: target?.resources ?? [], connectedAccountDescriptors: target?.connectedAccountDescriptors ?? [] };
                     } else if (bound.status === 'ready') return null;
@@ -158,7 +161,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                         : binding.kind === 'context' ? providedContext[binding.slot] ?? [] : [];
                     if (values.length !== 1) continue;
                     const target = VoiceTrackedSessionAddressV1Schema.safeParse(values[0]);
-                    if (!target.success || target.data.serverId !== input.serverId || !await input.validateSession(target.data, request.signal)) continue;
+                    if (!target.success || !isSessionHomeAdmitted(target.data.serverId) || !await input.validateSession(target.data, request.signal)) continue;
                     const current = (await input.readCandidates(request.signal, target.data)).filter(candidate => {
                         const declaration = readWidgetInputTargetV1(candidate);
                         return matches(candidate) && declaration.kind === 'session' && declaration.path === path;
@@ -175,7 +178,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                 const bound = resolveConfiguredWidgetTargetInputV1({ instance: request.instance, descriptor: targetDescriptor,
                     providedContext: await readProvidedContext(request), viewerValues: (await readViewerPurpose(request, targetDescriptor))?.values ?? {} });
                 const target = bound.status === 'ready' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(bound.input, targetDeclaration.path)) : null;
-                if (target?.success && target.data.serverId === input.serverId && await input.validateSession(target.data, request.signal)) {
+                if (target?.success && isSessionHomeAdmitted(target.data.serverId) && await input.validateSession(target.data, request.signal)) {
                     const current = (await input.readCandidates(request.signal, target.data)).find(matches);
                     candidate = current && sameStrictJsonValue(readWidgetInputTargetV1(current), targetDeclaration) ? current : undefined;
                 } else return null;
@@ -237,7 +240,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             if (target?.kind !== 'session' || target.path !== field.path) return { status: 'valid' };
             const session = VoiceTrackedSessionAddressV1Schema.safeParse(value);
             if (!session.success) return { status: 'invalid', reasonCode: 'widget_session_selection_invalid' };
-            if (session.data.serverId !== input.serverId) return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+            if (!isSessionHomeAdmitted(session.data.serverId)) return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
             return await input.validateSession(session.data, request.signal)
                 ? { status: 'valid' } : { status: 'denied', reasonCode: 'widget_session_access_denied' };
         },
