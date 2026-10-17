@@ -239,6 +239,27 @@ describe('ProjectRightPanel right-sidebar registry tabs', () => {
         expect(screen.findHostByTestId('project-rightpanel-action:files')).not.toBeNull();
         expect(runtime.pane.scopeState?.right).toEqual(retainedRight);
     });
+    it('offers the Project Widgets block beside Code through the shared Project area, never on a phone', async () => {
+        const { ProjectAsideWidgets } = await import('@/components/widgets/area/ProjectWidgetArea');
+        const { ProjectRightSidebarProvider, ProjectRightSidebarRail } = await import('./ProjectRightPanel');
+        const screen = await mount(createBuiltinPaneDestination('widgets'));
+        expect(screen.findHostByTestId('project-rightpanel-tab:widgets')).not.toBeNull();
+        expect(screen.findHostByTestId('project-rightpanel-surface-widgets')).not.toBeNull();
+        // The same Project area binding Overview uses: this Project and its selected checkout.
+        expect(screen.tree.findByType(ProjectAsideWidgets).props).toMatchObject({
+            serverId: runtime.serverId, projectRef: panelProps().workspaceRef });
+        const rail = (activePage: 'code' | 'overview') => <runtime.Wrapper>
+            <ProjectRightSidebarProvider {...panelProps()} activePage={activePage}><ProjectRightSidebarRail /></ProjectRightSidebarProvider>
+        </runtime.Wrapper>;
+        await act(async () => screen.update(rail('code')));
+        expect(screen.findHostByTestId('project-rightpanel-action:widgets')).not.toBeNull();
+        // Overview already draws the whole layout, its side area included.
+        await act(async () => screen.update(rail('overview')));
+        expect(screen.findHostByTestId('project-rightpanel-action:widgets')).toBeNull();
+        device.phone = true;
+        const phone = await mount(createBuiltinPaneDestination('browser'));
+        expect(phone.findHostByTestId('project-rightpanel-tab:widgets')).toBeNull();
+    });
     it('keeps Browser and Services available on phone', async () => {
         device.phone = true;
         const screen = await mount(createBuiltinPaneDestination('browser'));

@@ -185,8 +185,17 @@ describe('rightSidebarTabRegistry', () => {
         scope: 'project',
         terminalTabAvailable: true,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'scripts', 'terminal', 'browser', 'services']);
+    ).toEqual([
+      'git',
+      'files',
+      'scripts',
+      'widgets',
+      'terminal',
+      'browser',
+      'services',
+    ]);
 
+    // A phone reads the Project's widgets on its Project page, below the checkout.
     expect(
       resolveRightSidebarTabs({
         scope: 'project',

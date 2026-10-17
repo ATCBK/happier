@@ -43,6 +43,7 @@ import { useServicesOpenInBrowser } from '@/components/sessions/localServices/us
 import { ProjectRightPanelBrowserView } from './browser/ProjectRightPanelBrowserView';
 import { ProjectRightPanelServicesView } from './services/ProjectRightPanelServicesView';
 import { ProjectScriptsBody } from '@/components/projects/projectSetup/ProjectScriptsBody';
+import { ProjectWidgetsPane } from './ProjectOverviewWidgets';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { ProjectBrowseFilesSurface } from './surfaces/ProjectBrowseFilesSurface';
 import { ProjectGitSurface } from './surfaces/ProjectGitSurface';
@@ -429,6 +430,14 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                             <React.Suspense fallback={<PaneLoadingFallback />}>
                                 {checkoutWorkspace ? <ProjectScriptsBody workspace={checkoutWorkspace} presentation="widget" testID="project-rightpanel-scripts" outputScopeId={props.scopeId} />
                                     : <SurfaceStateCard kind="unavailable" title={t('common.unavailable')} testID="project-rightpanel-scripts-unavailable" />}
+                            </React.Suspense>
+                        </RetainedPanelSurface>
+                    ) : null}
+                    {availableTabIds.has('widgets') ? (
+                        <RetainedPanelSurface isActive={activeTab === 'widgets'} testID="project-rightpanel-surface-widgets">
+                            <React.Suspense fallback={<PaneLoadingFallback />}>
+                                <ProjectWidgetsPane workspaceRef={props.workspaceRef} activeRootPath={props.activeRootPath}
+                                    testID="project-rightpanel-widgets" />
                             </React.Suspense>
                         </RetainedPanelSurface>
                     ) : null}
