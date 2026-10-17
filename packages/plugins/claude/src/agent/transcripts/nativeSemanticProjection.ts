@@ -481,9 +481,17 @@ export function classifyClaudeNativeTranscriptRow(
       : base;
   }
   // Claude Code 2.1.302: bash input retains the bytes after the leading `!`.
-  // Keep display content intact; only lifecycle identity unwraps the native envelope.
+  // Display and lifecycle correlation share the same logical shell command.
   const shellInput = /^<bash-input>([\s\S]*)<\/bash-input>$/u.exec(text.trim());
-  if (shellInput) return { ...base, lifecycle: { kind: 'shell_input', text: `!${shellInput[1]}` } };
+  if (shellInput) {
+    const commandText = `!${shellInput[1]}`;
+    return {
+      ...base,
+      content: { kind: 'message', text: commandText },
+      semanticParts: [{ kind: 'text', text: commandText }],
+      lifecycle: { kind: 'shell_input', text: commandText },
+    };
+  }
   if (/^<bash-(?:stdout|stderr)>/u.test(text.trim())) {
     // Bash output carries literal stream bytes, unlike slash-command output's
     // XML-escaped presentation text. Preserve whitespace and entities verbatim.

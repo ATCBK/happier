@@ -16,7 +16,11 @@ import {
 describe('Claude native transcript semantic projection', () => {
   it('keeps shell content visible while projecting exact input identity and output semantics', () => {
     const input = { type: 'user', uuid: 'shell-input', message: { role: 'user', content: '<bash-input> echo hi</bash-input>' } };
-    expect(classifyClaudeNativeTranscriptRow(input)).toMatchObject({ visibility: 'visible', lifecycle: { kind: 'shell_input', text: '! echo hi' } });
+    expect(classifyClaudeNativeTranscriptRow(input)).toMatchObject({ visibility: 'visible', messageRole: 'user',
+      content: { kind: 'message', text: '! echo hi' }, lifecycle: { kind: 'shell_input', text: '! echo hi' } });
+    expect(projectClaudeJsonlLineToDirectMessages({ fileRelPath: 'projects/session.jsonl', lineStartOffsetBytes: 0, lineValue: input }))
+      .toMatchObject([{ messageRole: 'user', userProjection: 'source_fact',
+        raw: { role: 'user', content: { type: 'text', text: '! echo hi' } } }]);
     expect(projectClaudeTranscriptRowToProviderPayload({ providerSessionId: 'claude-session-1', row: input, suppressPriorEraTurnClosure: false })).toMatchObject({ kind: 'text', text: '! echo hi' });
     const output = { ...input, uuid: 'shell-output', message: { role: 'user', content: '<bash-stdout>hi\n  literal </bash-stdout> tail &lt;literal&gt;\n</bash-stdout><bash-stderr>warning\n</bash-stderr>' } };
     expect(classifyClaudeNativeTranscriptRow(output)).toMatchObject({ visibility: 'visible', messageRole: 'agent',
