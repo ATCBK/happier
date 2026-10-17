@@ -4719,6 +4719,8 @@ export const ru: TranslationStructure = {
   },
 
     errors: {
+    machineRpcDecryptionFailed: "Не удалось расшифровать данные этого компьютера. Войдите с соответствующим ключом аккаунта и попробуйте снова.",
+    machineRpcContextUnavailable: "Подключение к этому компьютеру недоступно. Обновите список компьютеров и попробуйте снова.",
     networkError: "Произошла ошибка сети",
     serverError: "Произошла ошибка сервера",
     unknownError: "Произошла неизвестная ошибка",

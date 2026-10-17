@@ -2,7 +2,7 @@ import type { ApiEphemeralActivityUpdate, ApiMessage, ApiUpdateContainer } from 
 import type { Encryption } from '@/sync/encryption/encryption';
 import type { NormalizedMessage } from '@/sync/typesRaw';
 import type { EphemeralUpdate } from '@happier-dev/protocol/updates';
-import type { ActionOperationRevisionEphemeralV1 } from '@happier-dev/protocol';
+import { isPlainMachineDataKeyMarker, type ActionOperationRevisionEphemeralV1 } from '@happier-dev/protocol';
 import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { buildPendingChangedSessionPatch } from './pendingChangedSessionPatch';
@@ -1131,6 +1131,7 @@ function enqueueDeferredTranscriptStreamSegment(entry: DeferredTranscriptStreamS
 }
 
 export async function handleSocketUpdate(params: {
+    getAccountEncryptionMode?: () => Promise<'plain' | 'e2ee'>;
     update: unknown;
     encryption: Encryption;
     settingsScope?: AccountSettingsScope | null;
@@ -1208,6 +1209,7 @@ export async function handleSocketUpdate(params: {
     if (!shouldContinue()) return;
 
     await handleUpdateContainer({
+        getAccountEncryptionMode: params.getAccountEncryptionMode,
         updateData,
         encryption,
         settingsScope,
@@ -1245,7 +1247,38 @@ export async function handleSocketUpdate(params: {
     });
 }
 
+async function initializeMachineFromPublishedDataKey(params: Readonly<{
+    encryption: Encryption;
+    machineId: string;
+    envelope: unknown;
+    getAccountEncryptionMode?: () => Promise<'plain' | 'e2ee'>;
+    shouldContinue: () => boolean;
+}>): Promise<boolean> {
+    const { encryption, machineId, envelope, shouldContinue } = params;
+    const hasPlainMarker = typeof envelope === 'string' && isPlainMachineDataKeyMarker(envelope);
+    let isPlain = false;
+    let key: Uint8Array | null = null;
+    try {
+        if (hasPlainMarker) {
+            isPlain = await params.getAccountEncryptionMode?.() === 'plain';
+        } else if (typeof envelope === 'string' && envelope.length > 0) {
+            key = await encryption.decryptEncryptionKey(envelope);
+        }
+    } catch (error) {
+        console.warn(`[machineSocket] Could not resolve content for machine ${machineId}; machine content is unavailable.`, error);
+    }
+    if (!shouldContinue()) return false;
+    if (!isPlain && envelope !== null && envelope !== undefined && !key) {
+        await encryption.initializeMachines(new Map(), { unavailableMachineIds: new Set([machineId]) });
+        console.warn(`Failed to resolve the content mode or data key for machine ${machineId}; machine content is unavailable.`);
+        return false;
+    }
+    await encryption.initializeMachines(new Map([[machineId, key]]), isPlain ? { plainMachineIds: new Set([machineId]) } : undefined);
+    return shouldContinue() && encryption.getMachineEncryption(machineId) !== null;
+}
+
 export async function handleUpdateContainer(params: {
+    getAccountEncryptionMode?: () => Promise<'plain' | 'e2ee'>;
     updateData: ApiUpdateContainer;
     encryption: Encryption;
     settingsScope?: AccountSettingsScope | null;
@@ -1888,12 +1921,10 @@ export async function handleUpdateContainer(params: {
         //
         // NOTE: When the dataEncryptionKey is null, we still initialize with null so
         // the machine has a fallback encryptor available (legacy path).
-        const decryptedDataKey =
-            typeof (machineUpdate as any).dataEncryptionKey === 'string' && (machineUpdate as any).dataEncryptionKey.length > 0
-                ? await encryption.decryptEncryptionKey((machineUpdate as any).dataEncryptionKey)
-                : null;
-        if (!shouldContinue()) return;
-        await encryption.initializeMachines(new Map([[machineId, decryptedDataKey]]));
+        await initializeMachineFromPublishedDataKey({
+            encryption, machineId, envelope: machineUpdate.dataEncryptionKey,
+            getAccountEncryptionMode: params.getAccountEncryptionMode, shouldContinue,
+        });
         if (!shouldContinue()) return;
 
         // Apply a placeholder immediately so UI state (e.g. onboarding) can react
@@ -1917,7 +1948,33 @@ export async function handleUpdateContainer(params: {
     } else if (updateData.body.t === 'update-machine') {
         const machineUpdate = updateData.body;
         const machineId = machineUpdate.machineId; // Changed from .id to .machineId
-        const machine = storage.getState().machines[machineId];
+        let machine = storage.getState().machines[machineId];
+
+        if (Object.prototype.hasOwnProperty.call(machineUpdate, 'dataEncryptionKey')) {
+            // A whole-row conversion carries both content versions. A replayed older
+            // conversion must not replace the codec after its documents are stale.
+            const isStaleConversion = () => {
+                const current = storage.getState().machines[machineId];
+                return Boolean(current && machineUpdate.metadata && machineUpdate.daemonState
+                    && machineUpdate.metadata.version <= current.metadataVersion
+                    && machineUpdate.daemonState.version <= current.daemonStateVersion);
+            };
+            if (isStaleConversion()) return;
+            const initialized = await initializeMachineFromPublishedDataKey({
+                encryption, machineId, envelope: machineUpdate.dataEncryptionKey,
+                getAccountEncryptionMode: params.getAccountEncryptionMode,
+                shouldContinue: () => shouldContinue() && !isStaleConversion(),
+            });
+            if (!shouldContinue() || isStaleConversion()) return;
+            machine = storage.getState().machines[machineId];
+            if (!initialized) {
+                if (machine) {
+                    storage.getState().applyMachines([{ ...machine, metadata: null, daemonState: null }], false, { sourceServerId });
+                }
+                invalidateMachines();
+                return;
+            }
+        }
 
         // Machine encryption is derived from the machine's dataEncryptionKey, which can
         // arrive slightly later (e.g. after a machines refresh). Fail closed and

@@ -11,7 +11,7 @@ import {
 } from '@happier-dev/protocol';
 import { AGENTS_CORE } from '@happier-dev/agents';
 
-import type { Credentials } from '@/persistence';
+import { requireEncryptionCredentials, type Credentials } from '@/persistence';
 
 import type { ProviderAccountUsageStore } from './store';
 
@@ -76,6 +76,7 @@ function isProviderCompatibleWithConnectedServiceSource(input: Readonly<{
 }
 
 function accountScopedMaterial(credentials: Credentials): Parameters<typeof decryptProviderAccountUsageSnapshot>[0]['material'] {
+  requireEncryptionCredentials(credentials);
   return credentials.encryption.type === 'legacy'
     ? { type: 'legacy', secret: credentials.encryption.secret }
     : { type: 'dataKey', machineKey: credentials.encryption.machineKey };

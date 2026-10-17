@@ -76,18 +76,18 @@ function makeCodexOauthRecord(now: number) {
   });
 }
 
-function makeLegacyCredentials(): Credentials {
-  const credentials: Credentials = {
+function makeLegacyCredentials() {
+  const credentials = {
     token: 'happy-token',
     encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
-  };
+  } satisfies Credentials;
   if (credentials.encryption.type !== 'legacy') {
     throw new Error('test fixture expected legacy encryption');
   }
   return credentials;
 }
 
-function makeCodexApi(now: number, credentials: Credentials): ApiClient {
+function makeCodexApi(now: number, credentials: ReturnType<typeof makeLegacyCredentials>): ApiClient {
   if (credentials.encryption.type !== 'legacy') {
     throw new Error('test fixture expected legacy encryption');
   }
@@ -109,7 +109,7 @@ function makeCodexApi(now: number, credentials: Credentials): ApiClient {
   } as unknown as ApiClient;
 }
 
-function makePiCodexApi(now: number, credentials: Credentials): ApiClient {
+function makePiCodexApi(now: number, credentials: ReturnType<typeof makeLegacyCredentials>): ApiClient {
   if (credentials.encryption.type !== 'legacy') {
     throw new Error('test fixture expected legacy encryption');
   }

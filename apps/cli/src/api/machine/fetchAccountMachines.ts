@@ -5,11 +5,18 @@ import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 // Identity-only readers also consume these rows. Older relays omit replacement
 // and revocation fields; absence retains their released meaning.
-const accountMachineSchema = z.object({
+export const accountMachineSchema = z.object({
   id: z.string().min(1),
   active: z.boolean().optional(),
   revokedAt: z.number().nullable().optional(),
   replacedByMachineId: z.string().nullable().optional(),
+  // Preserve malformed present values so encryption readers cannot mistake them
+  // for the historical absence of a published key.
+  dataEncryptionKey: z.unknown().optional(),
+  metadata: z.string().optional(),
+  metadataVersion: z.number().optional(),
+  daemonState: z.string().nullable().optional(),
+  daemonStateVersion: z.number().optional(),
 });
 const accountMachineInventorySchema = z.array(accountMachineSchema);
 export type AccountMachineInventoryRow = z.infer<typeof accountMachineSchema>;

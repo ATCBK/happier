@@ -21,10 +21,11 @@ export const FeatureGatesSchema = z.object({
   encryption: z
     .object({
       plaintextStorage: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
+      plaintextMachine: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
       accountOptOut: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
     })
     .optional()
-    .default({ plaintextStorage: DEFAULT_GATE_DISABLED, accountOptOut: DEFAULT_GATE_DISABLED }),
+    .default({ plaintextStorage: DEFAULT_GATE_DISABLED, plaintextMachine: DEFAULT_GATE_DISABLED, accountOptOut: DEFAULT_GATE_DISABLED }),
   attachments: z
     .object({
       uploads: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
