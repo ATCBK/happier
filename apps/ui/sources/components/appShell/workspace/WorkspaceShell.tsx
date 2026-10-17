@@ -38,13 +38,13 @@ const renderSessionDetails = () => <SessionDetailsBody />;
 const leafMinimum = () => WORKSPACE_VIEW_MINIMUM;
 type GroupPayload = Readonly<{ groupId: string }>;
 
-const styles = StyleSheet.create((theme) => ({
+const styles = StyleSheet.create(() => ({
     group: { minWidth: 0, minHeight: 0 },
+    // A pane below the top row carries its tabs on the title bar's own material: the rail continued into the
+    // split, transparent over the window atmosphere and flush to the divider, so the gutter shows no second surface.
     strip: {
         flexDirection: 'row', alignItems: 'center', minHeight: M.heightPx,
         paddingLeft: M.paddingStartPx, paddingRight: M.paddingEndPx,
-        borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border.subtle,
-        backgroundColor: theme.colors.surface.inset,
     },
     body: { flex: 1, minWidth: 0, minHeight: 0 },
 }));

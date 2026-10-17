@@ -231,7 +231,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
             <DocumentTabStrip
                 variant="bar"
                 barTabHeightPx={tabHeightPx}
-                barFadeColor={props.placement === 'bar' ? theme.colors.background.canvas : theme.colors.surface.inset}
+                barFadeColor={theme.colors.background.canvas}
                 activeEmphasis={props.focused ? 'raised' : 'quiet'}
                 tabs={stripTabs}
                 activeTabKey={group.activeTabId}
