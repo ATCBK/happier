@@ -125,6 +125,7 @@ export const logger = pino({
     },
     serializers: {
         req: serializeHttpRequestForLog,
+        error: pino.stdSerializers.err,
     },
     timestamp: () => `,"time":${Date.now()},"localTime":"${formatLocalTime()}"`,
 });
