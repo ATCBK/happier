@@ -1226,6 +1226,10 @@ describe('AcpBackend.waitForResponseComplete', () => {
         });
         backendForCleanup = backend;
 
+        const finalStatuses: unknown[] = [];
+        backend.onMessage((message) => {
+          if (message.type === 'status' && message.status === 'idle') finalStatuses.push(message);
+        });
         const started = await backend.startSession();
         await backend.sendPrompt(started.sessionId, 'hi');
 
@@ -1233,6 +1237,7 @@ describe('AcpBackend.waitForResponseComplete', () => {
           kind: 'completed',
           stopReason: 'end_turn',
         });
+        expect(finalStatuses).toContainEqual({ type: 'status', status: 'idle', turnFinished: true });
       } finally {
         await backendForCleanup?.dispose().catch(() => {});
       }
