@@ -2,6 +2,7 @@ import { buildSessionListRenderableMetadata } from '@/sync/domains/session/listi
 import { describe, expect, it } from 'vitest';
 
 import type { Message } from '@/sync/domains/messages/messageTypes';
+import { buildTranscriptRenderableAggregate } from '@/sync/domains/messages/transcriptRenderableAggregate';
 import type { SessionListViewItem } from '@/sync/domains/session/listing/sessionListViewData';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
@@ -168,6 +169,32 @@ function createSettings(
 }
 
 describe('buildSessionListRowModel', () => {
+    it('uses the maintained unread watermark in a row without a store renderable', () => {
+        let historicalVisits = 0;
+        const message: Message = {
+            ...createMessage('historical', NOW_MS - 1_000, 10),
+            get transcriptObservationProvenance() {
+                historicalVisits += 1;
+                return undefined;
+            },
+        };
+        const messages = createMessages([message]);
+        messages.renderableAggregate = buildTranscriptRenderableAggregate({ messages: [message], completedRequests: null });
+        historicalVisits = 0;
+
+        const model = buildSessionListRowModel({
+            item: createSessionItem(createRenderable('s_aggregate', { lastViewedSessionSeq: 10 })),
+            state: { messages },
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings(),
+        });
+
+        expect(model.hasUnreadMessages).toBe(false);
+        expect(historicalVisits).toBe(0);
+    });
+
     it('keeps the useful subtitle and exposes a canonical scheduled reminder presentation', () => {
         const model = buildSessionListRowModel({
             item: createSessionItem(createRenderable('reminded-session')),

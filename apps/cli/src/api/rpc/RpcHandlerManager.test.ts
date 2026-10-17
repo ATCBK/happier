@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { RpcHandlerManager } from './RpcHandlerManager';
+import { logger } from '@/ui/logger';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
 import { decodeBase64, encodeBase64, encrypt, decrypt } from '@/api/encryption';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -265,6 +266,45 @@ describe('RpcHandlerManager.handleRequest (plaintext)', () => {
 });
 
 describe('RpcHandlerManager.handleRequest (encrypted)', () => {
+  it.each(['legacy', 'dataKey'] as const)('records a %s key mismatch without logging key material or running the handler', async (encryptionVariant) => {
+    const encryptionKey = new Uint8Array(32).fill(3);
+    const callerKey = new Uint8Array(32).fill(7);
+    const params = { privateValue: 'must-not-be-logged' };
+    const encryptedParams = encodeBase64(encrypt(callerKey, encryptionVariant, params));
+    const infoFile = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    try {
+      const rpc = new RpcHandlerManager({
+        scopePrefix: 'machine-1',
+        encryptionKey,
+        encryptionVariant,
+        logger: () => {},
+      });
+      let handlerRan = false;
+      rpc.registerHandler('demo.method', async () => {
+        handlerRan = true;
+        return { ok: true };
+      });
+
+      const response = await rpc.handleRequest({ method: 'machine-1:demo.method', params: encryptedParams });
+
+      expect(handlerRan).toBe(false);
+      expect(decrypt(encryptionKey, encryptionVariant, decodeBase64(response))).toEqual({ error: 'Invalid RPC params' });
+      expect(infoFile).toHaveBeenCalledWith(expect.any(String), {
+        reason: 'rpc_params_decryption_failed',
+        method: 'demo.method',
+        encryptionVariant,
+      });
+      const logged = JSON.stringify(infoFile.mock.calls);
+      expect(logged).not.toContain('machine-1');
+      expect(logged).not.toContain(params.privateValue);
+      expect(logged).not.toContain(encryptedParams);
+      expect(logged).not.toContain(encodeBase64(encryptionKey));
+      expect(logged).not.toContain(encodeBase64(callerKey));
+    } finally {
+      infoFile.mockRestore();
+    }
+  });
+
   it('keeps the encrypted result opaque while exposing requested transport acknowledgement metadata', async () => {
     const encryptionKey = new Uint8Array(32).fill(3);
     const rpc = new RpcHandlerManager({

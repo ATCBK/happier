@@ -1,3 +1,4 @@
+import type { SessionEncryptionContext } from '@/session/transport/encryption/sessionEncryptionContext';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -80,10 +81,7 @@ function sleep(ms: number): Promise<void> {
 
 function decryptTranscriptRowContent(params: Readonly<{
   content: { t: 'encrypted'; c: string } | { t: 'plain'; v: unknown };
-  ctx: Readonly<{
-    encryptionKey: Uint8Array;
-    encryptionVariant: 'legacy' | 'dataKey';
-  }>;
+  ctx: SessionEncryptionContext;
 }>): unknown | null {
   if (params.content.t === 'plain') {
     return params.content.v;
@@ -198,10 +196,7 @@ async function resolveCurrentTurnAfterSeqExclusive(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
-  ctx: Readonly<{
-    encryptionKey: Uint8Array;
-    encryptionVariant: 'legacy' | 'dataKey';
-  }>;
+  ctx: SessionEncryptionContext;
 }>): Promise<number> {
   const materializedSeq = Math.max(0, Math.trunc(params.materializedSeq));
   const fallbackAfterSeqExclusive = Math.max(0, materializedSeq - 1);
@@ -329,10 +324,7 @@ async function readAssistantTurnOutcomeAfterCurrentUserTurn(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
-  ctx: Readonly<{
-    encryptionKey: Uint8Array;
-    encryptionVariant: 'legacy' | 'dataKey';
-  }>;
+  ctx: SessionEncryptionContext;
 }>): Promise<AssistantTurnOutcome> {
   const afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1);
   const rows = await fetchEncryptedTranscriptPageAfterSeq({
@@ -370,10 +362,7 @@ async function waitForAssistantOutcomeAfterCurrentUserTurn(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
-  ctx: Readonly<{
-    encryptionKey: Uint8Array;
-    encryptionVariant: 'legacy' | 'dataKey';
-  }>;
+  ctx: SessionEncryptionContext;
   maxWaitMs: number;
 }>): Promise<AssistantTurnOutcome> {
   const deadlineMs = Date.now() + Math.max(1, Math.trunc(params.maxWaitMs));

@@ -7,7 +7,7 @@ import {
 import { randomBytes } from 'node:crypto';
 
 import type { ApiClient } from '@/api/api';
-import type { Credentials } from '@/persistence';
+import { requireEncryptionCredentials, type Credentials } from '@/persistence';
 import { resolveConnectedServiceAccountMode } from '@/cloud/connectedServices/resolveConnectedServiceAccountMode';
 import { assertConnectedServiceCredentialRecordBinding } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import {
@@ -94,6 +94,7 @@ export async function persistRefreshedCredential(input: Readonly<{
     return result;
   }
 
+  requireEncryptionCredentials(input.credentials);
   const sealedCiphertext = sealConnectedServiceCredentialCiphertext({
     material:
       input.credentials.encryption.type === 'legacy'

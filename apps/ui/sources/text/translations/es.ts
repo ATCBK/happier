@@ -4771,6 +4771,8 @@ export const es: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "No se pueden descifrar los datos de esta máquina. Inicia sesión con la clave de cuenta correspondiente e inténtalo de nuevo.",
+    machineRpcContextUnavailable: "La conexión con esta máquina no está disponible. Actualiza tus máquinas e inténtalo de nuevo.",
     networkError: "Error de conexión",
     serverError: "Error del servidor",
     unknownError: "Error desconocido",

@@ -60,6 +60,9 @@ export const UI_FEATURE_REGISTRY = {
     'encryption.plaintextStorage': {
         settingsToggle: undefined,
     },
+    'encryption.plaintextMachine': {
+        settingsToggle: undefined,
+    },
     'encryption.accountOptOut': {
         settingsToggle: undefined,
     },

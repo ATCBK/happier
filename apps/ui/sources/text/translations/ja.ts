@@ -5051,6 +5051,8 @@ localTailscale: {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "このマシンのデータを復号できません。対応するアカウントキーでサインインして、もう一度お試しください。",
+    machineRpcContextUnavailable: "このマシンに接続できません。マシン一覧を更新して、もう一度お試しください。",
     networkError: "ネットワークエラーが発生しました",
     serverError: "サーバーエラーが発生しました",
     unknownError: "不明なエラーが発生しました",
