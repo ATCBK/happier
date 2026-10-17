@@ -328,10 +328,19 @@ describe('ProjectsListView', () => {
         expect(add?.props.items.map((item: { id: string }) => item.id)).toEqual(expect.arrayContaining(['clone', 'manage']));
     });
 
-    it('opens Save as a source as the new-Source editor for that exact checkout, and discards it on close', async () => {
+    it('opens Save as a source with no repository guess when the exact checkout has no hosting identity', async () => {
         workspaceRefsV1Mock = [{ id: 'wr_1', serverId, machineId: 'm1', rootPath: '/repo', label: 'Repo', createdAtMs: 1 }];
+        homes.answer(serverId, `/v1/projects/sources?serverId=${encodeURIComponent(serverId)}&query=`, { body: {
+            ok: true,
+            sources: [{ id: 'unrelated', revision: 1, name: 'Unrelated source', createdByAccountId: 'account-1', audience: [],
+                repository: { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
+                    repository: { nameWithOwner: 'octocat/Hello-World' }, protocol: 'https' } }],
+            coverage: { complete: true, nextCursor: null },
+        } });
         const { ProjectsListView } = await import('./ProjectsListView');
         const screen = await renderProjects(<ProjectsListView />);
+        await vi.waitFor(() => expect(screen.findAllByType(DropdownMenu)
+            .some(node => node.props.items?.some((item: { id: string }) => item.id === 'source:unrelated'))).toBe(true));
         const menu = screen.root.findAll((node) => typeof node.props?.onSaveAsSource === 'function' && node.props.workspaceRef?.id === 'wr_1')[0]!;
 
         await act(async () => { await menu.props.onSaveAsSource(menu.props.workspaceRef); });
@@ -341,6 +350,8 @@ describe('ProjectsListView', () => {
             | undefined;
         expect(sheet).toBeTruthy();
         expect(sheet!.props.controller.getSnapshot().creationDraft?.name).toBe('Repo');
+        expect(sheet!.props.controller.getSnapshot().creationDraft).toMatchObject({ address: '', repository: null });
+        expect(sheet!.props.controller.getSnapshot().addressSaveDisabledReason).toBe('projects.sources.saveNeedsAddress');
 
         await act(async () => { sheet!.props.discard(); });
         expect(sheet!.props.controller.getSnapshot().creationDraft).toBeNull();

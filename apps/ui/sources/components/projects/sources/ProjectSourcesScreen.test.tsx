@@ -226,6 +226,7 @@ describe('Projects › Sources', () => {
       ).toBeTruthy(),
     );
     const field = screen.findByTestId('projects.sources.detail.address.field')!;
+    expect(field.props.autoComplete).toBe('off');
     await act(async () => {
       field.props.onChangeText?.('github.com/acme/billing');
     });

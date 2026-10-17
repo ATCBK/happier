@@ -720,6 +720,7 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
             value={addressText}
             placeholder={t('projects.sources.addressPlaceholder')}
             autoCapitalize="none"
+            autoComplete="off"
             autoFocus={props.creating}
             error={
               addressError ??

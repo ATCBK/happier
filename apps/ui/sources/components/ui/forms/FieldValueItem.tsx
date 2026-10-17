@@ -46,6 +46,8 @@ export type FieldValueItemProps = Omit<ItemProps, 'rightElement' | 'onPress' | '
     /** Masks the draft as it is typed (secrets); pass `value=""` so a saved secret is never echoed. */
     secureTextEntry?: boolean;
     autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+    /** Controls browser/password-manager autofill for values that must come only from this form. */
+    autoComplete?: RNTextInputProps['autoComplete'];
     /** Names the field; defaults to the row title. */
     fieldAccessibilityLabel?: string;
     error?: string | null;
@@ -74,6 +76,7 @@ export const FieldValueItem = React.memo(function FieldValueItem(props: FieldVal
         monospace,
         secureTextEntry,
         autoCapitalize,
+        autoComplete,
         fieldAccessibilityLabel,
         error,
         autoFocus,
@@ -101,6 +104,7 @@ export const FieldValueItem = React.memo(function FieldValueItem(props: FieldVal
                     monospace={monospace}
                     secureTextEntry={secureTextEntry}
                     autoCapitalize={autoCapitalize}
+                    autoComplete={autoComplete}
                     editable={itemProps.disabled !== true}
                     error={error}
                     autoFocus={autoFocus}
