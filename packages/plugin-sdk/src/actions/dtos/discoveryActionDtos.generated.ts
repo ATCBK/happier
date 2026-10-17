@@ -14,6 +14,7 @@ export type DiscoveryActionInputById = {
         [x: string]: unknown;
         id: string;
         includeOutputSchema?: boolean | undefined;
+        schemaPath?: string | undefined;
     };
     readonly "action.options.resolve": {
         [x: string]: unknown;
@@ -416,6 +417,49 @@ export type DiscoveryActionResultById = {
             } | undefined;
             compatibility?: Record<string, unknown> | undefined;
         };
+        schemaSections?: {
+            path: string;
+            description: string;
+        }[] | undefined;
+        schemaSection?: {
+            path: string;
+            schema: Record<string, unknown>;
+        } | undefined;
+        invocationContext?: {
+            sessionId?: string | undefined;
+            widgetSurface?: {
+                serverId: string;
+                accountId: string;
+                owner: {
+                    kind: 'home';
+                } | {
+                    kind: 'sessionBoard';
+                    sessionId: string;
+                } | {
+                    kind: 'companion';
+                    sessionId: string;
+                } | {
+                    kind: 'workBoard';
+                    boardId: string;
+                } | {
+                    kind: 'project';
+                    projectId: string;
+                    layoutId?: string | undefined;
+                } | {
+                    kind: 'pluginArea';
+                    pluginId: string;
+                    pageId: string;
+                    area: string;
+                    layoutId?: string | undefined;
+                } | {
+                    kind: 'corePage';
+                    pageId: string;
+                    area: string;
+                    layoutId?: string | undefined;
+                };
+                artifactId?: string | undefined;
+            } | undefined;
+        } | undefined;
     };
     readonly "action.options.resolve": {
         actionId: string | null;

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { accountSettingsParse, deriveSessionCreationTagV1, FeaturesResponseSchema, SessionCreationCorrespondenceV1Schema, SessionInputRequestSchema } from '@happier-dev/protocol';
 import { encrypt, decrypt, encodeBase64 } from '@/api/encryption';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
@@ -24,7 +25,7 @@ import { restartSessionRunnerOnCurrentRuntime } from '@/daemon/plannedRunnerRest
 import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
 import type { TrackedSession } from '@/daemon/types';
 import { ActionDiscoveryDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 
 const env = process.env;
 
@@ -121,12 +122,34 @@ describe('createHappierMcpServer real host admission', () => {
       const tools = await client.listTools();
       expect(tools.tools.find(tool => tool.name === 'action_spec_get')?.inputSchema.properties)
         .toHaveProperty('includeOutputSchema');
-      for (const id of ['widgets.catalog.list', 'boards.apply', 'home.hub.layout.update', 'session.board.item.upsert'] as const) {
-        const reply = await client.callTool({ name: 'action_spec_get', arguments: { id } });
+      expect(tools.tools.find(tool => tool.name === 'action_spec_get')?.inputSchema.properties)
+        .toHaveProperty('schemaPath');
+      const readDefinition = async (id: string, includeOutputSchema = false) => {
+        const reply = CallToolResultSchema.parse(await client.callTool({ name: 'action_spec_get', arguments: { id, includeOutputSchema } }));
         expect(reply.isError, id).not.toBe(true);
         const text = reply.content.find(content => content.type === 'text');
         if (!text || text.type !== 'text') throw new Error('Missing discovery result');
-        const definition = ActionDiscoveryDefinitionV1Schema.parse(JSON.parse(text.text).actionSpec);
+        expect(text.text.length, id).toBeLessThan(50000);
+        const payload: unknown = JSON.parse(text.text);
+        const result = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(payload);
+        const definition = ActionDiscoveryDefinitionV1Schema.parse(result.actionSpec);
+        for (const entry of result.schemaSections ?? []) {
+          const part = CallToolResultSchema.parse(await client.callTool({ name: 'action_spec_get', arguments: { id, schemaPath: entry.path } }));
+          const partText = part.content.find(content => content.type === 'text');
+          if (!partText || partText.type !== 'text') throw new Error('Missing schema section');
+          expect(partText.text.length, entry.path).toBeLessThan(50000);
+          const section = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(JSON.parse(partText.text)).schemaSection;
+          if (!section) throw new Error('Missing schema section');
+          const [root, , name] = entry.path.slice(1).split('/');
+          const schema = root === 'inputSchema' ? definition.inputSchema : definition.outputSchema;
+          if (!schema || !name) throw new Error('Unknown schema root');
+          const definitions = schema.definitions && typeof schema.definitions === 'object' ? schema.definitions : {};
+          schema.definitions = { ...definitions, [name.replace(/~1/g, '/').replace(/~0/g, '~')]: section.schema };
+        }
+        return definition;
+      };
+      for (const id of ['widgets.catalog.list', 'boards.apply', 'home.hub.layout.update', 'session.board.item.upsert'] as const) {
+        const definition = await readDefinition(id);
         expect(definition.id).toBe(id);
         expect(definition.outputSchema).toBeUndefined();
         const validate = new Ajv({ strict: false }).compile(definition.inputSchema);
@@ -156,13 +179,7 @@ describe('createHappierMcpServer real host admission', () => {
           } } })).toBe(false);
         }
       }
-      const reply = await client.callTool({ name: 'action_spec_get', arguments: {
-        id: 'widgets.catalog.list', includeOutputSchema: true,
-      } });
-      expect(reply.isError).not.toBe(true);
-      const text = reply.content.find(content => content.type === 'text');
-      if (!text || text.type !== 'text') throw new Error('Missing complete discovery result');
-      const full = ActionDiscoveryDefinitionV1Schema.parse(JSON.parse(text.text).actionSpec);
+      const full = await readDefinition('widgets.catalog.list', true);
       expect(full.outputSchema).toBeDefined();
       expect(new Ajv({ strict: false }).compile(full.outputSchema!)({})).toBe(false);
     } finally { await client.close(); await runtime.mcp.close(); await daemon.close(); }

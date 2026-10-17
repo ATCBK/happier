@@ -442,13 +442,24 @@ parent state. Choice projections do not authorize credentials or model execution
 | CLI presentation, including demoting an ineffective success | `apps/cli/src/cli/actions/commandPresentation.ts`, `.../executeCommand.ts` |
 | Machine-RPC route class for an Action-bearing method | `packages/protocol/src/machines/peer/mediation/rpc/routePolicyV1.ts` |
 
-In 0.3 development, `action.spec.get` always returns the complete input schema,
-hints and examples. Agent, MCP and CLI discovery omit the output schema by
-default, matching search summaries; pass `includeOutputSchema: true` to retrieve
-the complete result contract. Other surfaces retain output schemas by default.
-Shared subschemas use document-local references rather than repeated expansion;
-the returned schema is self-contained and is never truncated to fit an output
-budget.
+In 0.3 development, `action.spec.get` returns input schemas, hints and examples.
+Agent, MCP and CLI discovery expose shared definitions as named `schemaSections`;
+read a definition with the same Action `id` and its `schemaPath`. The response's
+`schemaSection.schema` contains the complete definition. Its local references
+still resolve against the original `inputSchema` or `outputSchema` root, rather
+than the section itself. Reattach the listed definitions before compiling the
+schema with a JSON Schema validator. No fields or allowed values are truncated.
+Tools omit outputs by default; `includeOutputSchema: true` includes their section
+index, and a `/outputSchema/...` section read includes outputs automatically.
+UI/API retain full, self-contained schemas and outputs by default.
+
+Session-bound discovery also returns `invocationContext.sessionId` and, when the
+Account scope is available, `invocationContext.widgetSurface`. Session Board
+Actions fill an omitted `sessionId` from that invoking Session. Widget Actions
+require an explicit qualified surface: use the returned surface for that Session
+Board, or retain its Home/Account ids and choose `owner: {kind: 'home'}` for Home.
+These references grant no access; the existing scope and target checks still run.
+Do not guess a Home id from a hostname or a local server-profile id.
 
 There is no server-side Action executor. Three hosts execute: the UI executor
 (`apps/ui/sources/sync/ops/actions/defaultActionExecutor.ts`), the daemon executor

@@ -2702,14 +2702,28 @@ describe('createActionExecutor (inventory/discovery)', () => {
 
   it('returns canonical input schemas when agents discover Action specs', async () => {
     const executor = createActionExecutor(createDeps());
+    const hydrateInput = async (id: string, result: unknown) => {
+      const parsed = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(result);
+      const definition = ActionDiscoveryDefinitionV1Schema.parse(parsed.actionSpec);
+      const definitions: Record<string, unknown> = {};
+      for (const section of parsed.schemaSections ?? []) {
+        if (!section.path.startsWith('/inputSchema/definitions/')) continue;
+        const read = await executor.execute('action.spec.get', { id, schemaPath: section.path }, { surface: 'agent' });
+        if (!read.ok) throw new Error('Schema section discovery failed');
+        const body = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(read.result).schemaSection;
+        if (!body) throw new Error('Missing schema section');
+        const name = section.path.slice('/inputSchema/definitions/'.length).replace(/~1/g, '/').replace(/~0/g, '~');
+        definitions[name] = body.schema;
+      }
+      return { ...definition.inputSchema, ...(Object.keys(definitions).length ? { definitions } : {}) };
+    };
 
     const planResult = await executor.execute('action.spec.get', {
       id: 'subagents.plan.start',
     }, { surface: 'agent' });
 
     if (!planResult.ok) throw new Error('Plan schema discovery failed');
-    const planDefinition = ActionDiscoveryDefinitionV1Schema.parse(planResult.result.actionSpec);
-    const validatePlan = compileProtocolJsonSchema(planDefinition.inputSchema, 'draft-07');
+    const validatePlan = compileProtocolJsonSchema(await hydrateInput('subagents.plan.start', planResult.result), 'draft-07');
     const validPlan = { sessionId: 'session-1', instructions: 'Plan the work', backendTargetKeys: ['agent:claude'] };
     expect(validatePlan(validPlan)).toBe(true);
     expect(validatePlan({ ...validPlan, backendTargetKeys: [] })).toBe(false);
@@ -2720,9 +2734,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     }, { surface: 'agent' });
 
     if (!spawnResult.ok) throw new Error('Session creation schema discovery failed');
-    const { actionSpec } = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(spawnResult.result);
-    const discovered = ActionDiscoveryDefinitionV1Schema.parse(actionSpec);
-    const validate = compileProtocolJsonSchema(discovered.inputSchema, 'draft-07');
+    const validate = compileProtocolJsonSchema(await hydrateInput('session.spawn_new', spawnResult.result), 'draft-07');
     // Validate the published contract, including local references, without
     // requiring the producer to inline shared schema definitions.
     expect(validate(canonicalSessionSpawnInput)).toBe(true);
@@ -2741,6 +2753,31 @@ describe('createActionExecutor (inventory/discovery)', () => {
         v: 1, id: 'repository-guidance', revision, instructions: 'Use repository guidance.',
       } })).toBe(accepted);
     }
+  // This now exercises one real Action call per named definition, in addition
+  // to compiling both schemas; it is a composed retrieval rather than two reads.
+  }, 30_000);
+
+  it('discovers Board context and lossless schema sections within the MCP output boundary', async () => {
+    const executor = createActionExecutor({ ...createDeps(), widgetAccountScope: () => ({ serverId: 'real-home', accountId: 'real-account' }) });
+    const context = { surface: 'mcp' as const, defaultSessionId: 'current-session' };
+    const discovered = await executor.execute('action.spec.get', { id: 'session.board.item.upsert' }, context);
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok) return;
+    expect(discovered.result).toMatchObject({ invocationContext: {
+      sessionId: 'current-session', widgetSurface: { serverId: 'real-home', accountId: 'real-account', owner: { kind: 'sessionBoard', sessionId: 'current-session' } },
+    } });
+    expect(JSON.stringify(discovered.result).length + 15).toBeLessThanOrEqual(50000);
+    expect(getActionSpec('action.spec.get').inputSchema.safeParse({ id: 'session.board.item.upsert', schemaPath: '/inputSchema' }).success).toBe(true);
+    const section = await executor.execute('action.spec.get', { id: 'session.board.item.upsert', schemaPath: '/inputSchema' }, context);
+    expect(section).toMatchObject({ ok: true, result: { schemaSection: { path: '/inputSchema' } } });
+    expect(await executor.execute('action.spec.get', { id: 'session.board.item.upsert', schemaPath: '/inputSchema/not-a-field' }, context))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    const output = await executor.execute('action.spec.get', {
+      id: 'session.board.item.upsert', schemaPath: '/outputSchema', includeOutputSchema: false,
+    }, context);
+    expect(output).toMatchObject({ ok: true, result: { schemaSection: { path: '/outputSchema' } } });
+    const unbound = await executor.execute('action.spec.get', { id: 'widgets.catalog.list' }, { surface: 'mcp' });
+    expect(unbound.ok && unbound.result).not.toHaveProperty('invocationContext');
   });
 
   it('rejects action.spec.get for actions that are not surfaced on the current surface', async () => {

@@ -802,6 +802,7 @@ import {
 } from '../identity/githubApps.js';
 import { ActionApprovalSchema, ActionApprovalPolicySchema, resolveActionApprovalFlow, type ActionApproval } from './actionApprovalMetadata.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { WidgetSurfaceRefV1Schema } from '../widgets/widgetInstanceV1.js';
 import { ActionInvokeInputSchema } from './actionInvokeInput.js';
 import { isSourceQualifiedLocalServicePreviewActionInput } from './specs/localServices.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
@@ -2437,6 +2438,7 @@ const ActionSpecSearchCliInputSchema = lazyZodSchema(() => z.strictObject({
 const ActionSpecGetInputSchema = lazyZodSchema(() => z.looseObject({
   id: z.string().check(z.minLength(1)),
   includeOutputSchema: z.optional(z.boolean()),
+  schemaPath: z.optional(z.string().check(z.startsWith('/'))),
 }));
 
 const ActionSpecSearchResultSchema = lazyZodSchema(() => z.strictObject({
@@ -2445,6 +2447,12 @@ const ActionSpecSearchResultSchema = lazyZodSchema(() => z.strictObject({
 
 const ActionSpecGetResultSchema = lazyZodSchema(() => z.strictObject({
   actionSpec: ActionDiscoveryDefinitionV1Schema,
+  schemaSections: z.optional(z.array(z.strictObject({ path: z.string(), description: z.string() }))),
+  schemaSection: z.optional(z.strictObject({ path: z.string(), schema: z.record(z.string(), z.unknown()) })),
+  invocationContext: z.optional(z.strictObject({
+    sessionId: z.optional(z.string()),
+    widgetSurface: z.optional(WidgetSurfaceRefV1Schema),
+  })),
 }));
 
 const ActionOptionsResolveInputSchema = lazyZodSchema(() => z.looseObject({
@@ -5810,7 +5818,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
     id: 'action.spec.get', approval: {result: 'required'},
     title: 'Get action spec',
     sideEffectClass: 'read',
-    description: 'Get one Happier action spec with its complete input schema, hints and examples. Agent, MCP and CLI results omit the output schema by default; set includeOutputSchema: true to read it. Shared schemas use document-local references.',
+    description: 'Get a Happier action spec, hints, examples and invoking Session context. Agent, MCP and CLI results reference named schemaSections: retrieve any section with the same id and schemaPath. Nothing is truncated. Section-local # references resolve against the original inputSchema or outputSchema root. Set includeOutputSchema:true for outputs. UI/API keep full schemas. Session Board actions fill omitted sessionId from the invoking Session; widget Actions require a qualified surface: use invocationContext.widgetSurface for this Session Board, changing only owner to {kind:"home"} for Home. Never guess serverId/accountId.',
     safety: 'safe',
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
@@ -5831,6 +5839,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
       fields: [
         { path: 'id', title: 'Action id', description: 'The exact Happier action id.', widget: 'text', required: true },
         { path: 'includeOutputSchema', title: 'Include output schema', description: 'Include the complete output schema. Defaults to false for Agent, MCP and CLI discovery; true on other surfaces.', widget: 'boolean' },
+        { path: 'schemaPath', title: 'Schema section', description: 'Read a schemaSections path from the same Action. JSON Pointer into the original inputSchema/outputSchema; named definitions are complete and local references keep their original root.', widget: 'text' },
       ],
     },
     cli: {

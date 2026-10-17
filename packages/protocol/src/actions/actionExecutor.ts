@@ -187,6 +187,7 @@ import {
   searchSerializedActionSpecsForSurface,
   serializeActionFieldOptions,
 } from './actionCatalog.js';
+import { projectActionSpecSchemaSections } from './actionSpecSections.js';
 import { resolveActionApprovalFlow } from './actionApprovalMetadata.js';
 import { parseInputTypeOptionsSourceId } from '../inputs/inputTypes.js';
 import { readInputFieldOptionsSourceId } from '../inputs/inputTypeRuntime.js';
@@ -6401,9 +6402,22 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
         if (actionId === 'action.spec.get') {
           const requestedId = String(data.id);
-          const includeOutputSchema = typeof data.includeOutputSchema === 'boolean'
+          const schemaPath = typeof data.schemaPath === 'string' ? data.schemaPath : undefined;
+          const includeOutputSchema = schemaPath?.startsWith('/outputSchema') === true || (typeof data.includeOutputSchema === 'boolean'
             ? data.includeOutputSchema
-            : ctx.surface !== 'agent' && ctx.surface !== 'mcp' && ctx.surface !== 'cli';
+            : ctx.surface !== 'agent' && ctx.surface !== 'mcp' && ctx.surface !== 'cli');
+          const projectDiscovery = (definition: Parameters<typeof projectActionSpecSchemaSections>[0]) => {
+            const scope = deps.widgetAccountScope?.();
+            const sessionId = ctx.defaultSessionId;
+            const invocationContext = sessionId ? { sessionId,
+              ...(scope ? { widgetSurface: { serverId: scope.serverId, accountId: scope.accountId,
+                owner: { kind: 'sessionBoard' as const, sessionId } } } : {}) } : undefined;
+            return {
+              ...(schemaPath !== undefined || ctx.surface === 'agent' || ctx.surface === 'mcp' || ctx.surface === 'cli'
+                ? projectActionSpecSchemaSections(definition, schemaPath) : { actionSpec: definition }),
+              ...(invocationContext ? { invocationContext } : {}),
+            };
+          };
           try {
             const requestedSpec = getActionSpec(requestedId as ActionId);
             const credentialFailure = credentialScopeFailure(requestedId, ctx, undefined, true);
@@ -6414,14 +6428,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             }
             return {
               ok: true,
-              result: {
-                actionSpec: projectActionDefinitionForExternalDiscovery(
-                  actionSpecToActionDefinitionV1(requestedSpec, {
-                    surface: ctx.surface ?? null,
-                    includeOutputSchema,
-                  }),
-                ),
-              },
+              result: projectDiscovery(projectActionDefinitionForExternalDiscovery(
+                actionSpecToActionDefinitionV1(requestedSpec, {
+                  surface: ctx.surface ?? null,
+                  includeOutputSchema,
+                }),
+              )),
             };
           } catch {
             const contributedDefinition = getContributedActionDefinition(requestedId, ctx);
@@ -6441,14 +6453,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             const { outputSchema: _summaryOutputSchema, ...contributedMetadata } = contributedDefinition;
             return {
               ok: true,
-              result: {
-                actionSpec: projectActionDefinitionForExternalDiscovery({
-                  ...contributedMetadata,
-                  kindVersion: 1,
-                  inputSchema: { ...schemas.inputSchema },
-                  ...(includeOutputSchema && schemas.outputSchema !== undefined ? { outputSchema: { ...schemas.outputSchema } } : {}),
-                }),
-              },
+              result: projectDiscovery(projectActionDefinitionForExternalDiscovery({
+                ...contributedMetadata,
+                kindVersion: 1,
+                inputSchema: { ...schemas.inputSchema },
+                ...(includeOutputSchema && schemas.outputSchema !== undefined ? { outputSchema: { ...schemas.outputSchema } } : {}),
+              })),
             };
           }
         }
