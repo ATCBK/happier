@@ -110,7 +110,7 @@
     "socket.io": "^4.8.1",
     "socket.io-adapter": "^2.5.8",
     "@sentry/node": "10.39.0",
-    "tmp": "^0.2.3",
+    "tmp": "^0.2.6",
     "tsx": "^4.19.2",
     "tweetnacl": "^1.0.3",
     "uuid": "^9.0.1",
