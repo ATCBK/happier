@@ -26,10 +26,11 @@ function parseAllowedOAuthReturnSchemes(env: NodeJS.ProcessEnv): Set<string> {
     return schemes;
 }
 
-const DESKTOP_WEBVIEW_SCHEMES = new Set(["tauri"]);
-
-function isDesktopWebviewScheme(protocol: string): boolean {
-    return DESKTOP_WEBVIEW_SCHEMES.has(protocol.replace(/:$/, "").toLowerCase());
+function isDesktopWebviewUrl(url: URL): boolean {
+    // Tauri serves the bundled UI at tauri://localhost on macOS/Linux and
+    // http(s)://tauri.localhost on Windows, independently of the relay UI path.
+    return url.protocol === "tauri:" ||
+        ((url.protocol === "http:" || url.protocol === "https:") && url.hostname === "tauri.localhost");
 }
 
 function isSafeWebRedirectUrl(env: NodeJS.ProcessEnv, url: URL): boolean {
@@ -131,7 +132,7 @@ export function resolveWebAppOAuthReturnUrlFromRequestHeaders(params: {
         try {
             const url = new URL(raw);
             if (!isLoopbackHostname(url.hostname)) continue;
-            const desktopWebview = isDesktopWebviewScheme(url.protocol);
+            const desktopWebview = isDesktopWebviewUrl(url);
             if (url.protocol !== "http:" && url.protocol !== "https:" && !desktopWebview) continue;
             const loopbackUiBasePath = desktopWebview
                 ? ""

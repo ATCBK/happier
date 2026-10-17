@@ -148,4 +148,16 @@ describe('resolveWebAppOAuthReturnUrlFromRequestHeaders', () => {
     });
     expect(resolved).toBeNull();
   });
+
+  it.each(['http:', 'https:'])('returns the Windows desktop webview on %s to its bundle root instead of the relay UI prefix', (protocol) => {
+    expect(resolveWebAppOAuthReturnUrlFromRequestHeaders({
+      env: {
+        HAPPIER_PUBLIC_SERVER_URL: 'https://stack.example.test/base/',
+        HAPPIER_SERVER_UI_DIR: '/tmp/ui',
+        HAPPIER_SERVER_UI_PREFIX: '/ui',
+      },
+      providerId: 'okta',
+      headers: { origin: `${protocol}//tauri.localhost` },
+    })).toBe(`${protocol}//tauri.localhost/oauth/okta`);
+  });
 });
