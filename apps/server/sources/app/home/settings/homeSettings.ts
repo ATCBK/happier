@@ -14,7 +14,7 @@ import { authorizeHomeGovernanceMutationInTx } from "@/app/home/governance/homeC
 import { peekInferredPublicServerUrl } from "@/app/integrations/publicUrl/publicServerUrlInference";
 import { SERVER_CONFIG_REGISTRY } from "@/config/serverConfigRegistry";
 import { decryptString, encryptString } from "@/modules/encrypt";
-import { db, isPrismaErrorCode } from "@/storage/db";
+import { db, getDbProviderFromEnv, isPrismaErrorCode } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 
 import { buildHomeConfigEnv, composeHomeConfigEnv, projectHomeSettings } from "./homeConfigOverlay";
@@ -145,14 +145,19 @@ export function buildHomeConfigEnvFromRecord(
 }
 
 /**
- * The request/job overlay (§3.1 "Request/job-scoped configuration"): one indexed row read, then the
+ * The request/job overlay (§3.1 "Request/job-scoped configuration"): settings and policy reads, then the
  * `apply: 'live'` Home values over `base` for every key the deployment leaves unset. Restart keys keep
  * the values this process started with. No process cache: every replica reads the same row.
  */
 export async function readHomeConfigEnv(base: ServerConfigEnv = process.env): Promise<ServerConfigEnv> {
     const [record, policyValues] = await inTx(tx => Promise.all([
         readHomeSettingsInTx(tx), readHomeAuthenticationPolicyValues(tx),
-    ]), { isolationLevel: "Serializable", /* Home settings and authentication policy are captured as one effective configuration snapshot. */ readOnly: true });
+    ]), {
+        // A coherent request/job overlay does not certify serial ordering with
+        // configuration writers; mutation admission keeps its own transaction.
+        isolationLevel: getDbProviderFromEnv(process.env, "postgres") === "postgres" ? "RepeatableRead" : "Serializable",
+        readOnly: true,
+    });
     return buildHomeConfigEnvFromRecord(base, record, SERVER_CONFIG_REGISTRY, policyValues);
 }
 

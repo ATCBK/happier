@@ -5,11 +5,12 @@ import { db } from "@/storage/db";
 import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime, withSqliteReadSnapshot, type TransactionClient } from "@/storage/prisma";
 import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
 import { log } from "@/utils/logging/log";
+import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 
 export type Tx = TransactionClient;
 export type InTxOptions = Readonly<{
     readOnly?: boolean;
-    isolationLevel?: "Serializable" | "ReadCommitted";
+    isolationLevel?: "Serializable" | "RepeatableRead" | "ReadCommitted";
     timeoutMs?: number;
     maxWaitMs?: number;
     deadlineAtMs?: number;
@@ -178,8 +179,11 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
         ) {
             throw new TransactionDeadlineExceededError(null);
         }
+        if (provider === "postgres" && options?.readOnly) {
+            await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+        }
         (tx as any)[symbol] = [];
-        let result = await fn(tx);
+        let result = await timeWebLatencyPhase('db.transaction.callback', () => fn(tx));
         let callbacks = (tx as any)[symbol] as (() => void)[];
         return { result, callbacks };
     }
@@ -211,7 +215,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                           timeout: boundedTimeoutMs,
                           maxWait: boundedMaxWaitMs,
                       };
-            let result = await db.$transaction(wrapped, txOpts);
+            let result = await timeWebLatencyPhase('db.transaction.attempt', () => db.$transaction(wrapped, txOpts));
             for (let callback of result.callbacks) {
                 try {
                     callback();

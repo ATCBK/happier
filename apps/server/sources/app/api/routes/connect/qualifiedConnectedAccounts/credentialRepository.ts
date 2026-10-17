@@ -1948,8 +1948,10 @@ export async function listQualifiedConnectedAccounts(
         service: QualifiedConnectedAccountServiceRef;
     }>,
 ): Promise<QualifiedConnectedAccountProfileV4[]> {
-    return await inTx(async (tx) =>
-        await listQualifiedConnectedAccountsInTx(tx, params), { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+    // This projection reads one credential-row SELECT, then maps synchronously.
+    // Its statement snapshot already keeps identities and revisions coherent;
+    // there is no multi-statement admission invariant that needs SSI tracking.
+    return await listQualifiedConnectedAccountsInTx(db, params);
 }
 
 function withQualifiedCredentialHealthForStoredFormat(params: Readonly<{
