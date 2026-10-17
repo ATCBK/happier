@@ -207,20 +207,23 @@ describe('WidgetFrame', () => {
         await act(async () => { screen.findByTestId('grouped.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 240 } } }); });
         expect(observed).toMatchObject({ size: 'small', geometry: { width: 330, height: 240 } });
     });
-    it('gives every half-width card the half-cell header, grouped or not: the title keeps its room and activity is its spinner alone', async () => {
+    it('says Refreshing in words wherever the header has the room and falls back to the spinner alone where it has not', async () => {
         const { useWidgetFrameResourceActivity } = await import('./widgetFrameResourceActivity');
         function Refreshing() { useWidgetFrameResourceActivity(true); return <>rows</>; }
-        const frame = (width: 'half' | 'full') => <WidgetFrame testID={width} frameStyle="card" placement="home" title="Period summary" source="Account"
-            widgetPresentation={{ size: width === 'half' ? 'medium' : 'full', footprint: { columns: 2, columnSpan: width === 'half' ? 1 : 2, rowSpan: 2, height: 'regular', width } }}
+        const frame = (testID: string) => <WidgetFrame testID={testID} frameStyle="card" placement="home" title="Period summary" source="Account"
+            widgetPresentation={{ size: 'medium', footprint: { columns: 2, columnSpan: 1, rowSpan: 2, height: 'regular', width: 'half' } }}
             body={{ kind: 'content', children: <Refreshing /> }} />;
-        const half = await renderScreen(frame('half'));
+        // A half-width cell with room: the dot-matrix glyph alone would read as one more grip beside the card's own.
+        const roomy = await renderScreen(frame('roomy'));
         await flushHookEffects({ cycles: 2 });
-        expect(half.findByTestId('half.refreshing')?.props.accessibilityLabel).toBe('widgetDefinition.refreshing');
-        expect(half.getTextContent()).not.toContain('widgetDefinition.refreshing');
-        // A full-width card has the room, so the word stays.
-        const full = await renderScreen(frame('full'));
+        await act(async () => { roomy.findByTestId('roomy')!.props.onLayout({ nativeEvent: { layout: { width: 400, height: 280 } } }); });
+        expect(roomy.getTextContent()).toContain('widgetDefinition.refreshing');
+        // Below the frame's narrowing width the title keeps its room and the glyph stays, named for assistive technology.
+        const tight = await renderScreen(frame('tight'));
         await flushHookEffects({ cycles: 2 });
-        expect(full.getTextContent()).toContain('widgetDefinition.refreshing');
+        await act(async () => { tight.findByTestId('tight')!.props.onLayout({ nativeEvent: { layout: { width: 280, height: 280 } } }); });
+        expect(tight.findByTestId('tight.refreshing')?.props.accessibilityLabel).toBe('widgetDefinition.refreshing');
+        expect(tight.getTextContent()).not.toContain('widgetDefinition.refreshing');
     });
     it('fades the foot of a fixed body whose rows run past it, so no line reads as cut off', async () => {
         const frame = await renderScreen(<WidgetFrame testID="fixed" frameStyle="card" placement="home" title="Period summary"

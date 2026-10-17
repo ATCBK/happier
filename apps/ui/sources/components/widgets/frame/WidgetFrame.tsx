@@ -247,10 +247,6 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     const inset = resolveHappierWidgetFrameInsetPx(props.frameStyle);
     // Inside a group nothing clips (A6): a grid cell keeps its rows' room and grows; a phone's stack is its content.
     const bodyHeight = props.bodyHeight ?? (props.grouped ? phone ? 'content' : 'grow' : 'fixed');
-    // A half-width cell, grouped or standalone (its footprint, never its caller), keeps the title's room:
-    // the activity label is its spinner alone (lab wgpres D). A phone stacks every card full width.
-    const compactHeader = !phone && props.widgetPresentation !== undefined
-        && props.widgetPresentation.footprint.columnSpan * 2 <= props.widgetPresentation.footprint.columns;
     // A fixed body whose rows run past it fades at the cut edge, so no line reads as cut off mid-height.
     const bodyFades = useScrollEdgeFades({ enabledEdges: FIXED_BODY_FADE_EDGES });
     const onFixedViewportLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
@@ -275,14 +271,16 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     // While a read refreshes, the meta slot says so in place of its time (lab ST "Refreshing"): the
     // shared activity glyph and the word, then the time returns. The content below never moves.
     const refreshing = refreshingResources.size > 0;
-    // Where the header is narrow the word leaves and the glyph stays, named for assistive technology.
+    // Where the header is narrow (the frame's own measured width, never its footprint) the word leaves and the glyph
+    // stays, named for assistive technology: a lone dot-matrix glyph beside the grip reads as a second grip, so it
+    // is only the fallback for a header with no room for the word.
     const refreshingMark = refreshing ? (
         <View testID={`${props.testID}.refreshing`} style={styles.refreshing} accessibilityLiveRegion="polite"
             accessible accessibilityLabel={t('widgetDefinition.refreshing')}>
             <ActivitySpinner size={ICON_SIZE.xs - 2} color={theme.colors.text.tertiary} />
         </View>
     ) : undefined;
-    const meta = !refreshing ? props.meta : compactHeader ? refreshingMark : (
+    const meta = !refreshing ? props.meta : (
         <View testID={`${props.testID}.refreshing`} style={styles.refreshing} accessibilityLiveRegion="polite">
             <ActivitySpinner size={ICON_SIZE.xs - 2} color={theme.colors.text.tertiary} />
             <Text style={styles.source} numberOfLines={1}>{t('widgetDefinition.refreshing')}</Text>
@@ -385,7 +383,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             renderSourceGlyph={renderSourceGlyph}
             sourcePlacement={props.sourcePlacement ?? (phone || props.titleMeta ? 'below' : 'inline')}
             meta={meta}
-            {...(refreshingMark && !compactHeader ? { compactMeta: refreshingMark } : {})}
+            {...(refreshingMark ? { compactMeta: refreshingMark } : {})}
             {...(props.leading ? { leading: props.leading } : {})}
             accessory={props.menu}
             disclosure={props.disclosure}
