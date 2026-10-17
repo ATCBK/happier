@@ -1708,6 +1708,12 @@ present only in Agent state keep their existing behavior without caching a provi
 decision. Native and automatic decisions retain their non-blocking reconciliation
 paths and are outside this acknowledgement guarantee.
 
+Terminal Agent-state update failures report `session_agent_state_update_failed` in the
+normal file log, including when a best-effort caller absorbs the error. This
+record contains operation context only; it excludes request contents and server
+error payloads. It does not distinguish transport from local preparation failures
+and does not imply a replay guarantee.
+
 ## Implementation references
 - CLI entry: `apps/cli/src/index.ts`
 - Daemon: `apps/cli/src/daemon`

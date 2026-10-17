@@ -244,5 +244,12 @@ export async function updateSessionAgentStateWithAck(opts: {
             'agent_state_update_failed',
             false,
         );
+    }).catch((error: unknown) => {
+        logger.infoFile('[API] session_agent_state_update_failed', {
+            phase: 'terminal_failure',
+            operation: 'update-state',
+            sessionId: opts.sessionId,
+        });
+        throw error;
     });
 }

@@ -5,7 +5,7 @@ import {
   updateSessionMetadataWithAck,
 } from './stateUpdates';
 import { logger } from '@/ui/logger';
-import type { Metadata } from '../types';
+import type { AgentState, Metadata } from '../types';
 import { decodeBase64, decrypt } from '../encryption';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
@@ -202,6 +202,37 @@ describe('stateUpdates (plaintext sessions)', () => {
 
     expect(agentState.requests.req_permission.tool).toBe('Write');
     expect(version).toBe(2);
+  });
+
+  it('reports a settled agent-state write failure without logging private state or server payloads', async () => {
+    const privateServerError = 'private server response /private/workspace';
+    const agentState: AgentState = {
+      requests: { pending: { tool: 'Bash', arguments: { command: 'private command' }, createdAt: 1 } },
+    };
+    const infoFile = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    try {
+      await expect(updateSessionAgentStateWithAck({
+        socket: { emitWithAck: async () => ({ result: 'error', error: privateServerError }) },
+        sessionId: 's1',
+        sessionEncryptionMode: 'plain',
+        encryptionKey: new Uint8Array(32),
+        encryptionVariant: 'legacy',
+        getAgentState: () => agentState,
+        setAgentState: () => { throw new Error('failed write must not replace the acknowledged snapshot'); },
+        getAgentStateVersion: () => 1,
+        setAgentStateVersion: () => { throw new Error('failed write must not advance the version'); },
+        syncSessionSnapshotFromServer: async () => {},
+        handler: (current) => ({ ...current, requests: {} }),
+      })).rejects.toMatchObject({ code: 'agent_state_update_failed', retryable: false });
+      expect(infoFile.mock.calls).toEqual([[
+        '[API] session_agent_state_update_failed',
+        { phase: 'terminal_failure', operation: 'update-state', sessionId: 's1' },
+      ]]);
+      expect(JSON.stringify(infoFile.mock.calls)).not.toContain(privateServerError);
+      expect(JSON.stringify(infoFile.mock.calls)).not.toContain('private command');
+    } finally {
+      infoFile.mockRestore();
+    }
   });
 
   it('does not send stale runtime issue summaries with update-state payloads', async () => {
