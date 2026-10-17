@@ -4015,6 +4015,46 @@ describe('SessionView (direct sessions)', () => {
     ]);
   });
 
+  it('keeps a settled failed effect in the composer attention tray', async () => {
+    const approval = StoredApprovalRequestSchema.parse({
+      v: 2, status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
+      actionId: 'daemon.filesystem.writeFile',
+      actionArgs: { rootPath: '/home/happier/mqa2-c14-clone', path: '.', content: '' },
+      summary: 'Write file',
+      origin: { kind: 'transcript_tool_call', sessionId: 's1', toolCallId: '2', mcpRequestId: '2', toolName: 'action_execute' },
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: {
+        executedAtMs: 3,
+        ok: true,
+        result: { success: false, error: "EISDIR: illegal operation on a directory, open '/home/happier/mqa2-c14-clone'" },
+      },
+    });
+    storageState.artifacts = {
+      failed_effect: {
+        id: 'failed_effect',
+        header: buildApprovalRequestArtifactHeaderV1(approval, { legacyServerId: 'server-route-1' }),
+        title: approval.summary,
+        body: JSON.stringify(approval),
+        headerVersion: 1,
+        bodyVersion: 1,
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 3,
+        isDecrypted: true,
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.approvalRequests).toEqual([
+      expect.objectContaining({
+        artifact: expect.objectContaining({ id: 'failed_effect' }),
+        approval: expect.objectContaining({ status: 'executed', actionId: 'daemon.filesystem.writeFile' }),
+      }),
+    ]);
+  });
+
   it('keeps bodyless approval headers indexed without exposing an unhydrated request to AgentInput', async () => {
     const approval = StoredApprovalRequestSchema.parse({
       v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,

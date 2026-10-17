@@ -8,7 +8,10 @@ import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/ap
  * the transcript projection keeps its selector identity.
  */
 export const TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS: readonly ApprovalSettledPresentation[] = [
-    // A settled request whose physical effect failed remains visible beside the Agent turn.
-    (approval) => readApprovalExecutionFailure(approval) !== null,
     presentsSettledResourceProposal,
+];
+
+/** Settled requests that remain actionable attention above the composer instead of moving rows. */
+export const COMPOSER_SETTLED_APPROVAL_PRESENTATIONS: readonly ApprovalSettledPresentation[] = [
+    (approval) => readApprovalExecutionFailure(approval) !== null,
 ];

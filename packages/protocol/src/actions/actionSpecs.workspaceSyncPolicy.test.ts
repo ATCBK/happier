@@ -16,9 +16,10 @@ describe('workspace sync relationship policy discovery', () => {
     }
 
     const executor = createActionExecutor({} as ActionExecutorDeps);
-    await expect(executor.execute('action.options.resolve', {
+    const resolved = await executor.execute('action.options.resolve', {
       actionId: 'workspace.sync.relationship.create', fieldPath: 'contentPolicy',
-    }, { surface: 'agent', authority: 'account_automation' })).resolves.toMatchObject({
+    }, { surface: 'agent', authority: 'account_automation' });
+    expect(resolved).toMatchObject({
       ok: true,
       result: {
         actionId: 'workspace.sync.relationship.create',
@@ -29,5 +30,18 @@ describe('workspace sync relationship policy discovery', () => {
         ]),
       },
     });
+    if (!resolved.ok) throw new Error(resolved.error);
+    const options = getActionSpec('action.options.resolve').outputSchema!.parse(resolved.result).options;
+    for (const option of options) {
+      expect(getActionSpec('workspace.sync.relationship.create').inputSchema.safeParse({
+        v: 1,
+        sourceWorkspaceRefId: '46bcce80-a314-400a-98eb-656df965e06e',
+        targetMachineId: '58f6e63a-cd69-4302-83f1-325d10da7ec3',
+        targetPath: '/home/happier/mqa2-c23-sync-target',
+        mode: 'keep_both_in_sync',
+        contentPolicy: option.value,
+        destinationIntent: 'materialize_from_source_workspace',
+      }).success).toBe(true);
+    }
   });
 });

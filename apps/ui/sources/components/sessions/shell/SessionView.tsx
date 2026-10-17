@@ -207,7 +207,7 @@ import { resourceHasAvailableTeamCredentialProviderModel } from '@/components/se
 import { useScmSessionAutoRefresh } from '@/scm/refresh/useScmSessionAutoRefresh';
 import {
 } from '@/sync/ops';
-import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '@/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
+import { COMPOSER_SETTLED_APPROVAL_PRESENTATIONS, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '@/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
 import { useWorkspaceRefs, storage, useEnabledAutomationsCountForSession, useEndpointConnectivity, useIsDataReady, useIsMachineListSettled, useLocalSetting, useOpenApprovalArtifactsForSession, useTranscriptApprovalArtifactsForSession, useProfile, useMachine, useServerScopedMachine, useSessionPendingMessages, useSessionTranscriptIds, useSessionVisibleReadSeq, useSetting, useSocketStatus, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import {
     serverAccountScopeKeySuffix,
@@ -1908,7 +1908,7 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
         expectedRouteServerId ?? session?.serverId,
         sessionId,
     );
-    const approvalRequests = useOpenApprovalArtifactsForSession(approvalSessionAddress);
+    const approvalRequests = useTranscriptApprovalArtifactsForSession(approvalSessionAddress, COMPOSER_SETTLED_APPROVAL_PRESENTATIONS);
     // The transcript also keeps decided approvals whose body has a settled presentation (AGW-8).
     const transcriptApprovalRequests = useTranscriptApprovalArtifactsForSession(approvalSessionAddress, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS);
     const safeArea = useChromeSafeAreaInsets();
