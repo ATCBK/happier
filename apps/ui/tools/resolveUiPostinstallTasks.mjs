@@ -28,6 +28,7 @@ export function resolveUiPostinstallTasks({ env }) {
             'vendor-monaco',
             'vendor-pierre-diffs-worker',
             'vendor-password-kdf-worker',
+            'vendor-crypto-worker',
             'vendor-codemirror-webview-bundle',
             'vendor-xterm-webview-bundle',
             'vendor-tiptap-webview-bundle',
@@ -46,7 +47,7 @@ export function resolveUiPostinstallTasks({ env }) {
     // Dependency refresh verifies installed packages. Source compilers own
     // their output freshness and last-green reuse at UI preparation instead.
     if (env?.HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY === '1') {
-        return tasks.filter(task => !['prepare-atmosphere-renderers', 'vendor-password-kdf-worker',
+        return tasks.filter(task => !['prepare-atmosphere-renderers', 'vendor-password-kdf-worker', 'vendor-crypto-worker',
             'vendor-tiptap-webview-bundle', 'vendor-mermaid-webview-bundle'].includes(task))
     }
     return tasks

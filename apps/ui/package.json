@@ -14,6 +14,7 @@
       "tools/react-native-enriched-markdown",
       "tools/diffs",
       "tools/password",
+      "tools/crypto",
       "tools/atmosphere",
       "tools/sourceAsset.mjs",
       "tools/codemirror",
