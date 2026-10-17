@@ -5056,10 +5056,14 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) return notSupported();
       // Linking runs on the machine that hosts the selected source Workspace.
       // Its address comes from current Account rows, never from the caller.
-      const currentServerId = normalizeStringValue(serverId) ?? params.serverIdentityId ?? projectHomeId;
-      const denied = await projectHomeAdmission(currentServerId);
+      const requestedServerId = normalizeStringValue(serverId);
+      const denied = await projectHomeAdmission(requestedServerId ?? actionHomeId);
       if (denied) return denied;
       const rows = await readProjectRows(signal);
+      // Action contexts carry a device-local profile in `serverId`, while
+      // WorkspaceRefs are keyed by the stable Home identity when available.
+      // Admission accepts either identifier; domain lookup must use the Home.
+      const currentServerId = actionHomeId;
       const source = resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId, currentServerId)
         ?? (serverId === undefined && params.serverIdentityId === undefined
           ? resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId) : null);

@@ -92,22 +92,30 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
         const portableRef = { ...ref, serverId: homeId };
         const boundary = accountRows([refRow(portableRef), refRow({ ...refB, serverId: homeId }), graphRow()]);
         const invoke = vi.fn().mockImplementation(async method => method.startsWith('usage.sources.') ? { sources: [] }
-          : method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE ? { created: true, relationshipId: 'rel-portable' }
+          : method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_REPLACEMENT_PREFLIGHT ? { type: 'not_required' }
+          : method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE ? {
+              v: 1, created: true, relationshipId: 'rel-portable', controllerMachineId: ref.machineId,
+              sourceWorkspaceRefId: ref.id, targetWorkspaceRefId: refB.id,
+              status: { relationshipId: 'rel-portable', controllerMachineId: ref.machineId, state: 'watching',
+                alphaPath: ref.rootPath, betaPath: refB.rootPath, mode: 'keep_both_in_sync',
+                endpointStates: { alpha: null, beta: null }, conflictCount: 0, lastCycleObservedAtMs: null },
+            }
           : { status: 'page', relationshipId: 'rel-ab', conflicts: [], totalCount: 0, nextCursor: null });
         const actions = createCliActionDeps({ token, credentials: { token, encryption: null },
           serverId: profileId, serverIdentityId: homeId, serverHttpBaseUrl: serverUrl, sessionId: 'session-a', mode: 'plain', ctx: null,
           machineActionDirectTargetTransport: { machineId: 'machine-a', invoke } });
         const executor = createActionExecutor(actions);
         const context = { surface: 'cli' as const, serverId: homeId, bypassApprovals: true };
-        const syncResult = await actions.workspaceSyncRelationshipCreate!({ serverId: homeId, operationId: 'portable-sync',
-          context,
-          input: { v: 1, sourceWorkspaceRefId: ref.id, targetMachineId: refB.machineId, targetPath: refB.rootPath,
-            mode: 'keep_both_in_sync', contentPolicy: relationship().contentPolicy, destinationIntent: 'use_existing' } });
-        expect.soft(syncResult).toMatchObject({ created: true, relationshipId: 'rel-portable' });
+        const syncResult = await executor.execute('workspace.sync.relationship.create', {
+          v: 1, sourceWorkspaceRefId: ref.id, targetMachineId: ref.machineId, targetPath: refB.rootPath,
+          mode: 'keep_both_in_sync', contentPolicy: relationship().contentPolicy, destinationIntent: 'use_existing',
+        }, { ...context, surface: 'agent', serverId: profileId, serverIdentityId: homeId, actionRequestId: 'portable-sync' });
+        expect.soft(syncResult, JSON.stringify(syncResult))
+          .toMatchObject({ ok: true, result: { created: true, relationshipId: 'rel-portable' } });
         expect(invoke).toHaveBeenCalledWith(
           RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE,
           expect.objectContaining({ operationId: 'portable-sync' }),
-          expect.objectContaining({ localActionContext: expect.objectContaining({ surface: 'cli' }) }),
+          expect.objectContaining({ localActionContext: expect.objectContaining({ surface: 'agent' }) }),
         );
         const syncRead = await actions.workspaceSyncConflictsList!({ input: { workspaceRefId: refB.id, relationshipId: 'rel-ab', limit: 50 } })
           .catch(error => ({ errorCode: error.code }));
