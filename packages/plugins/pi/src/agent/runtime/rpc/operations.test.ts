@@ -502,6 +502,117 @@ describe('createPiRuntimeOperations', () => {
     await runtime.dispose();
   });
 
+  it('publishes extension-injected user prompts as user transcript rows with a provider-started turn', async () => {
+    const capture: Capture = { specs: [], written: [] };
+    const runtime = await createRuntime(capture);
+    const events: AgentSessionRuntimeEvent[] = [];
+    runtime.watch((event) => events.push(event));
+
+    // A Pi extension (e.g. AFT background bash) injects a prompt while the session is idle,
+    // then the provider starts a run on its own.
+    await emit(capture, {
+      type: 'message_end',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: '<system-reminder>\n[BACKGROUND BASH COMPLETED]\n- task bash-1 (exit 0)\n</system-reminder>' }],
+      },
+    });
+    await emit(capture, { type: 'agent_start' });
+    await emit(capture, {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'ack' },
+    });
+    await emit(capture, { type: 'agent_end' });
+
+    const parsedEvents = parseEvents(events);
+    const injectedText = '<system-reminder>\n[BACKGROUND BASH COMPLETED]\n- task bash-1 (exit 0)\n</system-reminder>';
+    expect(parsedEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'transcript-message-committed',
+        role: 'user',
+        text: injectedText,
+        messageId: expect.stringMatching(/^provider-user-prompt:[0-9a-f]{24}$/),
+      }),
+    ]));
+    const turnStart = parsedEvents.find((event) => event.kind === 'turn-start');
+    expect(turnStart).toMatchObject({ kind: 'turn-start', startedBy: 'provider' });
+    const turnComplete = parsedEvents.find((event) => event.kind === 'turn-complete');
+    expect(turnComplete).toMatchObject({ turnId: turnStart?.turnId });
+    expect(parsedEvents.some((event) => event.kind === 'turn-failed')).toBe(false);
+
+    await runtime.dispose();
+  });
+
+  it('suppresses the echo of host-submitted prompts and keeps only injected user prompts', async () => {
+    const capture: Capture = { specs: [], written: [] };
+    const runtime = await createRuntime(capture);
+    const events: AgentSessionRuntimeEvent[] = [];
+    runtime.watch((event) => events.push(event));
+
+    const submission = sendPrompt(runtime, 'happier sent prompt');
+    await waitForWrittenCount(capture, 1);
+    await ackLastCommand(capture);
+    await expect(submission).resolves.toEqual({ status: 'admitted' });
+
+    // Pi echoes the accepted prompt as a user message before the run starts.
+    await emit(capture, {
+      type: 'message_end',
+      message: { role: 'user', content: [{ type: 'text', text: 'happier sent prompt' }] },
+    });
+    await emit(capture, { type: 'agent_start' });
+    await emit(capture, {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'ok' },
+    });
+
+    const committed = parseEvents(events).filter((event) => event.kind === 'transcript-message-committed');
+    expect(committed).toEqual([]);
+
+    await runtime.dispose();
+  });
+
+  it('suppresses the echo of in-flight steer messages', async () => {
+    const capture: Capture = { specs: [], written: [] };
+    const runtime = await createRuntime(capture);
+    const events: AgentSessionRuntimeEvent[] = [];
+    runtime.watch((event) => events.push(event));
+
+    const submission = sendPrompt(runtime, 'happier sent prompt');
+    await waitForWrittenCount(capture, 1);
+    await ackLastCommand(capture);
+    await expect(submission).resolves.toEqual({ status: 'admitted' });
+    await emit(capture, { type: 'agent_start' });
+
+    const steer = runtime.send({
+      inputIds: ['pi-input-2'],
+      input: { text: 'focus on error handling' },
+      delivery: { kind: 'steer', turnId: 'pi-turn-1' },
+    });
+    await waitForWrittenCount(capture, 2);
+    await ackLastCommand(capture);
+    await expect(steer).resolves.toEqual({ status: 'admitted' });
+
+    // The steer text echoes as a user message mid-turn.
+    await emit(capture, {
+      type: 'message_end',
+      message: { role: 'user', content: [{ type: 'text', text: 'focus on error handling' }] },
+    });
+    // An extension injects a different prompt during the same turn.
+    await emit(capture, {
+      type: 'message_end',
+      message: { role: 'user', content: [{ type: 'text', text: '<system-reminder>[BG BASH STILL RUNNING]</system-reminder>' }] },
+    });
+
+    const committed = parseEvents(events).filter(
+      (event) => event.kind === 'transcript-message-committed' && event.role === 'user',
+    );
+    expect(committed.map((event) => (event as { text?: string }).text)).toEqual([
+      '<system-reminder>[BG BASH STILL RUNNING]</system-reminder>',
+    ]);
+
+    await runtime.dispose();
+  });
+
   it('answers a blocking Pi extension dialog through the canonical interaction surface', async () => {
     const capture: Capture = {
       specs: [],

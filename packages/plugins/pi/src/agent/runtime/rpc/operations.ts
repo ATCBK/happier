@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createSecureTempDirectorySync, writeAtomicTextFile } from '@happier-dev/plugin-sdk/fs';
 import { buildPiModelDiscoveryExtensionSource, parsePiModelDiscoveryRecord } from '../../models/discoveryExtension.js';
@@ -45,6 +45,7 @@ import {
 } from './client.js';
 import {
   createPiRuntimeEventProjector,
+  extractPiUserPromptText,
   readPiProviderTurnId,
   readPiRuntimeRecordType,
   type PiRuntimeEvent,
@@ -479,6 +480,16 @@ function createPiExecSpec(
   };
 }
 
+/**
+ * Deterministic message id for provider-observed user prompts (extension-injected
+ * prompts such as Pi background-bash completion reminders). Repeats of the same text
+ * commit the same row identity so the host transcript dedupes instead of duplicating.
+ */
+function buildProviderUserPromptLocalId(text: string): string {
+  const digest = createHash('sha256').update(text).digest('hex').slice(0, 24);
+  return `provider-user-prompt:${digest}`;
+}
+
 function createRuntimeOperations(params: Readonly<{
   rpc: PiJsonStreamRpcClient;
   logger: PluginLoggerService;
@@ -511,6 +522,42 @@ function createRuntimeOperations(params: Readonly<{
   let pendingPromptAdmission: PendingPromptAdmission | null = null;
   let pendingCancellation: PendingCancellation | null = null;
   let piCompactionInProgress = false;
+
+  /**
+   * Prompt texts this runtime sent through the Pi RPC `prompt` command whose user-message
+   * echo has not arrived yet. Pi emits `message_end` user events for EVERY user message,
+   * so host-submitted prompts (new turns, follow-ups, steers) echo back identically to
+   * extension-injected prompts. Only injected prompts may surface as user transcript
+   * rows; the host already committed its own prompt text at submission time.
+   */
+  const awaitingPromptEchoTexts: string[] = [];
+  const MAX_AWAITING_PROMPT_ECHOES = 64;
+
+  function noteHostPromptSentToPi(text: string): void {
+    awaitingPromptEchoTexts.push(text);
+    if (awaitingPromptEchoTexts.length > MAX_AWAITING_PROMPT_ECHOES) {
+      awaitingPromptEchoTexts.splice(0, awaitingPromptEchoTexts.length - MAX_AWAITING_PROMPT_ECHOES);
+    }
+  }
+
+  function consumeHostPromptEcho(text: string): boolean {
+    const echoIndex = awaitingPromptEchoTexts.indexOf(text);
+    if (echoIndex === -1) return false;
+    awaitingPromptEchoTexts.splice(echoIndex, 1);
+    return true;
+  }
+
+  function publishProviderUserPromptText(text: string): void {
+    params.publishRuntimeEvent({
+      kind: 'transcript-message-committed',
+      sessionId: params.sessionId,
+      emittedAtMs: Date.now(),
+      messageId: buildProviderUserPromptLocalId(text),
+      role: 'user',
+      text,
+      ...(activeTurn ? { turnId: activeTurn.turnId } : {}),
+    });
+  }
 
   function beginTurn(
     agentTurnId: string | null = null,
@@ -678,6 +725,14 @@ function createRuntimeOperations(params: Readonly<{
       readOrBeginTurn(agentTurnId);
       activeTurnStartObserved = true;
       return;
+    }
+    if (type === 'message_end') {
+      const userPromptText = extractPiUserPromptText(record.message);
+      if (userPromptText !== null) {
+        if (consumeHostPromptEcho(userPromptText)) return;
+        publishProviderUserPromptText(userPromptText);
+        return;
+      }
     }
     const turn = activeTurn;
     const providerFailureDiagnostic = readPiProviderFailureDiagnostic(record);
@@ -863,6 +918,7 @@ function createRuntimeOperations(params: Readonly<{
       };
       pendingPromptAdmission = admission;
       const providerNativeCommand = params.resolveProviderNativeCommand(prompt);
+      noteHostPromptSentToPi(prompt);
       const accept = () => {
         admission.onAccepted();
         readOrBeginTurn(null, admission.turnId, 'host');
@@ -952,6 +1008,7 @@ function createRuntimeOperations(params: Readonly<{
       if (pendingPromptAdmission) {
         throw new Error('Pi prompt admission is already in progress');
       }
+      noteHostPromptSentToPi(message);
       try {
         await params.rpc.send({ type: 'prompt', message, streamingBehavior: 'steer' }, 30_000);
       } catch (error) {
