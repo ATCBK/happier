@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import {
   readModelPackPromotionIntents,
 } from './nodeModelPackInstallerHost';
 import type { PinnedHttpStreamTransport } from '../../network/pinnedHttp';
+import { bindProcessLogger, Logger } from '../../ui/logger';
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
@@ -79,6 +80,64 @@ function createTestNodeModelPackInstallerHost(
 }
 
 describe('node model-pack installer host — real Range resume (FIND-010)', () => {
+  it('logs genuine partial stat and cleanup failures locally while absent files stay quiet', async () => {
+    const logPath = join(root, 'warning.log');
+    await writeFile(logPath, '');
+    const log = new Logger({ logFilePath: logPath, pruneCurrentProcessLogs: false, allowDangerousRemoteLogging: false });
+    const restore = bindProcessLogger(log);
+    const manifest = { packId: 'warning-pack', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://models.example/model.bin', sha256: sha256Hex(new Uint8Array([1])), sizeBytes: 1 }] } satisfies ModelPackManifest;
+    const host = createTestNodeModelPackInstallerHost({ packsRootDir });
+    const staging = await host.beginStaging(manifest.packId, deriveModelPackStagingPlan(manifest));
+    try {
+      expect(await staging.partialByteLength('absent.bin')).toBe(0);
+      await staging.resetPartial('absent.bin');
+      log.flushSync();
+      expect(await readFile(logPath, 'utf8')).toBe('');
+      const scratch = join(packsRootDir, '.warning-pack.scratch');
+      await writeFile(join(scratch, 'blocked'), 'file');
+      expect(await staging.partialByteLength('blocked/model.bin')).toBe(0);
+      log.flushSync();
+      const statLog = await readFile(logPath, 'utf8');
+      await writeFile(logPath, '');
+      await mkdir(join(scratch, 'model.bin'));
+      await writeFile(join(scratch, 'model.bin', 'retained.bin'), 'retained');
+      await staging.resetPartial('model.bin');
+      expect(await readFile(join(scratch, 'model.bin', 'retained.bin'), 'utf8')).toBe('retained');
+      log.flushSync();
+      expect(statLog).toContain('ENOTDIR');
+      expect(await readFile(logPath, 'utf8')).toContain('EISDIR');
+    } finally { await staging.cleanup(); restore(); }
+  });
+
+  it('logs cleanup failure after promotion without replacing the installed bytes', async () => {
+    const logPath = join(root, 'cleanup-warning.log');
+    await writeFile(logPath, '');
+    const log = new Logger({ logFilePath: logPath, pruneCurrentProcessLogs: false, allowDangerousRemoteLogging: false });
+    const restore = bindProcessLogger(log);
+    const bytes = new Uint8Array([1]);
+    const manifest = { packId: 'cleanup-warning', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://models.example/model.bin', sha256: sha256Hex(bytes), sizeBytes: 1 }] } satisfies ModelPackManifest;
+    const host = createTestNodeModelPackInstallerHost({ packsRootDir });
+    const staging = await host.beginStaging(manifest.packId, deriveModelPackStagingPlan(manifest));
+    let cleaned = false;
+    try {
+      await staging.appendDownloadedChunk('model.bin', bytes);
+      await staging.writeManifest(manifest);
+      const promotion = await staging.promote(null);
+      await promotion.commit();
+      const retainedRoot = join(root, 'retained-packs');
+      await rename(packsRootDir, retainedRoot);
+      await writeFile(packsRootDir, 'blocks cleanup path');
+      await expect(rm(join(packsRootDir, '.cleanup-warning.scratch'), { recursive: true, force: true })).rejects.toMatchObject({ code: 'ENOTDIR' });
+      await staging.cleanup();
+      cleaned = true;
+      expect(await readFile(join(retainedRoot, manifest.packId, 'model.bin'))).toEqual(Buffer.from(bytes));
+      log.flushSync();
+      expect(await readFile(logPath, 'utf8')).toContain('ENOTDIR');
+    } finally { if (!cleaned) await staging.cleanup(); restore(); }
+  });
+
   it('drops retired persisted promotion fields and rejects malformed known recovery identity', async () => {
     const marker = join(packsRootDir, '.stored-pack.promote-intent');
     const canonical = { schemaVersion: 1, packId: 'stored-pack', phase: 'metadata_pending',

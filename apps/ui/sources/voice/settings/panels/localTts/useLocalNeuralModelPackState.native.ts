@@ -48,8 +48,9 @@ export function useLocalNeuralModelPackState(params: {
       setModelStatus((cur) => cur === 'downloading' ? cur : summary.installed ? 'ready' : 'idle');
       setUpdateCheckedRemote(null);
       return summary;
-    } catch {
+    } catch (error) {
       if (!isCurrent() || !accountLifetime.isCurrent()) return;
+      console.warn('[modelPacks] Failed to refresh native model pack state', error);
       setInstallSummary(null);
       setInstalled(false);
       setModelStatus((cur) => cur === 'downloading' ? cur : 'idle');

@@ -129,8 +129,8 @@ function assertOperationAvailable(
 function tryDelete(node: Pick<ExpoFsFile | ExpoFsDirectory, 'exists' | 'delete'>): void {
   try {
     if (node.exists && node.delete) node.delete({ idempotent: true });
-  } catch {
-    // ignore
+  } catch (error) {
+    console.warn('model_pack_file_cleanup_failed', error);
   }
 }
 
@@ -362,7 +362,8 @@ export function createExpoModelPackInstallerHost(opts: {
           if (typeof file.size === 'number' && file.size >= 0) return file.size;
           try {
             return await streamFile(file, () => undefined);
-          } catch {
+          } catch (error) {
+            console.warn('model_pack_partial_read_failed', error);
             return 0;
           }
         },

@@ -14,7 +14,7 @@ import {
 } from './installer/host.native';
 import { fetchRemoteManifest } from './installer/network';
 import { assertManifestPathsSafe, getMetaFile, getPackRootDir, normalizePackId } from './installer/paths';
-import type { InstallerFs, InstallMode, InstallerOverrides, InvalidatePackRuntime, UpdatePolicy } from './installer/types';
+import type { ExpoFsFile, InstallerFs, InstallMode, InstallerOverrides, InvalidatePackRuntime, UpdatePolicy } from './installer/types';
 
 /**
  * Runtime state derived from the live pack directory. Native voice engines and
@@ -186,11 +186,13 @@ export async function ensureModelPackInstalled(
   });
 }
 
-async function readInstalledManifest(meta: any): Promise<ModelPackManifest | null> {
+async function readInstalledManifest(meta: Pick<ExpoFsFile, 'text'>): Promise<ModelPackManifest | null> {
   try {
     const parsed = JSON.parse(await meta.text());
     return parseModelPackManifest(parsed?.manifest ?? parsed);
-  } catch {
+  } catch (error) {
+    // Parser errors can include receipt contents, so report only their type.
+    console.warn('[modelPacks] Failed to read installed model pack manifest', error instanceof Error ? error.name : 'unknown');
     return null;
   }
 }
@@ -218,15 +220,7 @@ export async function checkModelPackUpdateAvailable(
   const rootDir = getPackRootDir(fs, id);
   const meta = getMetaFile(fs, rootDir);
 
-  let installedManifest: ModelPackManifest | null = null;
-  if (meta.exists) {
-    try {
-      const parsed = JSON.parse(await meta.text());
-      installedManifest = parseModelPackManifest(parsed?.manifest ?? parsed);
-    } catch {
-      installedManifest = null;
-    }
-  }
+  const installedManifest = meta.exists ? await readInstalledManifest(meta) : null;
 
   if (!opts.manifestUrl || !opts.manifestUrl.trim()) {
     return { installed: Boolean(installedManifest), updateAvailable: false, installedManifest, remoteManifest: null };

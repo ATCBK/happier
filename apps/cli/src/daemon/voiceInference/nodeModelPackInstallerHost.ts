@@ -30,6 +30,7 @@ import { lookup } from 'node:dns/promises';
 import { createReadStream } from 'node:fs';
 import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { logger } from '../../ui/logger';
 
 import { filePathParts } from '@happier-dev/protocol/voice/modelPacks/pathSafety';
 import type {
@@ -443,7 +444,10 @@ export function createNodeModelPackInstallerHost(opts: {
           try {
             const info = await stat(scratchPath(filePath));
             return info.isFile() ? info.size : 0;
-          } catch {
+          } catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+              logger.warnLocalFile('model_pack_partial_stat_failed', error);
+            }
             return 0;
           }
         },
@@ -466,7 +470,9 @@ export function createNodeModelPackInstallerHost(opts: {
           }
         },
         resetPartial: async (filePath) => {
-          await rm(scratchPath(filePath), { force: true }).catch(() => undefined);
+          await rm(scratchPath(filePath), { force: true }).catch((error) => {
+            logger.warnLocalFile('model_pack_partial_cleanup_failed', error);
+          });
         },
         appendDownloadedChunk: async (filePath, chunk) => {
           const target = scratchPath(filePath);
@@ -581,7 +587,9 @@ export function createNodeModelPackInstallerHost(opts: {
           // successful promote consumes it (scratch was renamed into live). Nothing
           // to clean here — the stable scratch is intentionally retained.
           if (promoted) {
-            await rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
+            await rm(scratchDir, { recursive: true, force: true }).catch((error) => {
+              logger.warnLocalFile('model_pack_staging_cleanup_failed', error);
+            });
           }
           release();
         },

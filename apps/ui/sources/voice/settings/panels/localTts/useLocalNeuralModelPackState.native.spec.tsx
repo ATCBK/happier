@@ -30,6 +30,40 @@ describe('useLocalNeuralModelPackState (native)', () => {
   afterEach(() => { standardCleanup(); boundary.disposeNativeSdkBridge(); vi.unstubAllGlobals(); });
   afterAll(async () => { alert.mockRestore(); await boundary.disposeAudioSession(); });
 
+  it('warns when native storage becomes unavailable, falls back, and recovers on a later refresh', async () => {
+    const manifest = { packId: input.packId, kind: 'tts_sherpa', model: 'kokoro', version: '1',
+      files: [{ path: 'model.bin', url: 'https://example.test/model.bin', sha256: 'a'.repeat(64), sizeBytes: 1 }] };
+    filesystem.files.set(`${filesystem.root}/${input.packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+    filesystem.files.set(`${filesystem.root}/${input.packId}/model.bin`, new Uint8Array([1]));
+    const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: input });
+    expect(hook.getCurrent().installed).toBe(true);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const BaseDirectory = filesystem.fs.Directory;
+    class UnavailableDirectory extends BaseDirectory {
+      constructor(...args: unknown[]) {
+        super(...args);
+        throw new Error('storage_unavailable');
+      }
+    }
+    try {
+      filesystem.fs.Directory = UnavailableDirectory;
+      await act(async () => { await hook.getCurrent().refreshInstallState(); });
+      expect(hook.getCurrent().installed).toBe(false);
+      expect(hook.getCurrent().installSummary).toBeNull();
+      expect(hook.getCurrent().modelStatus).toBe('idle');
+      expect(warning.mock.calls.some(call => call.some(value =>
+        value instanceof Error && value.message === 'storage_unavailable'))).toBe(true);
+      expect(alert).not.toHaveBeenCalled();
+      filesystem.fs.Directory = BaseDirectory;
+      await act(async () => { await hook.getCurrent().refreshInstallState(); });
+      expect(hook.getCurrent().installed).toBe(true);
+      expect(hook.getCurrent().modelStatus).toBe('ready');
+    } finally {
+      filesystem.fs.Directory = BaseDirectory;
+      warning.mockRestore();
+    }
+  });
+
   it('surfaces prepare errors via Modal.alert', async () => {
     const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: input });
     await act(async () => { await hook.getCurrent().prepareModel(); });

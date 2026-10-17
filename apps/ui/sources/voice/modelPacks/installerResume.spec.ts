@@ -57,6 +57,38 @@ function streamResponse(bytes: Uint8Array, status: number): any {
 }
 
 describe('Expo native host — real Range resume (FIND-010)', () => {
+  it('reports failed partial reads and cleanup while absent files stay quiet', async () => {
+    const { fs, files } = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = makeManifest(bytes);
+    seedResumePlan(files, manifest);
+    files.set('file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin', bytes);
+    const readError = new Error('EIO_partial_read');
+    const cleanupError = new Error('EACCES_partial_delete');
+    const BaseFile = fs.File;
+    class FaultyFile extends BaseFile {
+      constructor(...args: unknown[]) {
+        super(...args);
+        Object.defineProperty(this, 'size', { get: () => Number.NaN });
+      }
+      override open(): ReturnType<InstanceType<typeof BaseFile>['open']> { throw readError; }
+      override delete() { throw cleanupError; }
+    }
+    const host = createExpoModelPackInstallerHost({ fs: { ...fs, File: FaultyFile } });
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const staging = await host.beginStaging('resume', deriveModelPackStagingPlan(manifest));
+    try {
+      expect(await staging.partialByteLength('absent.bin')).toBe(0);
+      await staging.resetPartial('absent.bin');
+      expect(warning).not.toHaveBeenCalled();
+      expect(await staging.partialByteLength('model.bin')).toBe(0);
+      await staging.resetPartial('model.bin');
+      expect(files.get('file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin')).toEqual(bytes);
+      expect(warning.mock.calls.flat()).toContain(readError);
+      expect(warning.mock.calls.flat()).toContain(cleanupError);
+    } finally { await staging.cleanup(); warning.mockRestore(); }
+  });
+
   it('retains its existing prefix and retries only the interrupted native tail', async () => {
     const { fs, files } = createMemFs();
     const full = new Uint8Array([1, 2, 3, 4, 5, 6]);
