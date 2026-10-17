@@ -120,8 +120,6 @@ installSessionShellCommonModuleMocks({
             overrides: {
                 useWorkspaceRefs: () => workspaceRefsV1,
                 useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'compactSessionView') return false;
-                    if (key === 'compactSessionViewMinimal') return false;
                     if (key === 'sessionTagsEnabled') return true;
                     if (key === 'hideInactiveSessions') return hideInactiveSessions;
                     if (key === 'workspacePathDisplayModeV1') return 'path';

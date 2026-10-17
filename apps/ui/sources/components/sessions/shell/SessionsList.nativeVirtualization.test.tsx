@@ -397,8 +397,6 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
             overrides: {
                 useWorkspaceRefs: () => workspaceRefsV1,
                 useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'compactSessionView') return false;
-                    if (key === 'compactSessionViewMinimal') return false;
                     if (key === 'sessionListIdentityDisplay') return sessionListIdentityDisplay;
                     if (key === 'sessionTagsEnabled') return true;
                     if (key === 'sessionListOrderingModeV1') return sessionListOrderingModeV1;

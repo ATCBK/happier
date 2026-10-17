@@ -263,7 +263,7 @@ function SessionsList(props: React.ComponentProps<typeof SessionsListView>) {
 }
 async function renderSessionsList() {
     storage.getState().applySettingsLocal({
-        compactSessionView: false, compactSessionViewMinimal: false, sessionTagsEnabled: true,
+        sessionListDensity: 'detailed', sessionTagsEnabled: true,
         sessionListOrderingModeV1, sessionListFolderSortModeV1, sessionListSectionModeV1,
         sessionListActiveGroupingV1, sessionListInactiveGroupingV1, hideInactiveSessions,
     });
