@@ -26,6 +26,8 @@ import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExec
     ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
+import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui';
+import { buildWidgetSurfaceArtifactIdV1 } from '@happier-dev/protocol/widgets/widgetSurfaceArtifactV1';
 
 // Only HTTP, device credentials and Socket.IO network acknowledgements are replaced.
 // Home/Account policy, Sync, scoped RPC, the Artifact codec and versioned CAS remain real.
@@ -184,6 +186,75 @@ await import('@/sync/syncEngine');
 await import('./defaultActionExecutor');
 
 describe('createDefaultActionExecutor approvals', () => {
+    it.each(['current', 'replaced', 'unavailable', 'detached'] as const)('W04 returns a mounted widget-area approval to its live app waiter (%s)', async source => {
+        const { getSharedBlockingApprovalCoordinator } = await import('@happier-dev/protocol/actions/blockingApprovalCoordinator');
+        const { createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const coordinator = getSharedBlockingApprovalCoordinator();
+        const artifactId = 'w04-mounted-area';
+        const machineId = 'machine-exact';
+        const surface = { serverId: homeId, accountId: 'account-a', owner: {
+            kind: 'pluginArea' as const, pluginId: 'external.widgets', pageId: 'overview', area: 'pinned' } };
+        const request = ApprovalRequestSchema.parse({
+            v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'system', pluginId: 'external.widgets', contributionLocalId: 'overview' },
+            requestedSurface: 'plugin', approval: { flow: 'blocking', result: 'required' },
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'plugin',
+                caller: { kind: 'plugin', pluginId: 'external.widgets', contributionLocalId: 'overview',
+                    sourceCustody: { kind: 'development', registeredRootId: '/external/widgets' } },
+                serverId: homeId, serverIdentityId: 'srv_approval_home', accountId: 'account-a',
+                machineId, actionId: 'widgets.item.add', requestId: 'w04-add' },
+            actionId: 'widgets.item.add', summary: 'Add followed widget', actionArgs: {
+                surface,
+                instance: { v: 1, id: 'followed', definition: { kind: 'builtin', id: 'session_summary' },
+                    bindings: { session: { kind: 'context', slot: 'session' } } },
+            },
+        });
+        await seedApproval(artifactId, request);
+        const machine = { ...createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }),
+            installationId: 'installation-1', installationPublicKey: encodeBase64(installation.publicKey, 'base64'),
+            revokedAt: null, replacedByMachineId: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER };
+        homes.answer(homeId, '/v1/machines', { body: [machine] });
+        homes.answer(homeId, '/v1/machines/machine-exact', { body: { machine: { ...machine, kind: 'persistent' } } });
+        rpcResult = source === 'unavailable'
+            ? { status: 'unavailable', code: 'plugin_targeted_contributions_target_unavailable' }
+            : { status: 'current', targetedContributions: PluginUiTargetedContributionsV1Schema.parse({
+                target: { pluginId: 'external.widgets', occurrenceId: 'occurrence', sourceCustody: {
+                    kind: 'development', registeredRootId: source === 'replaced' ? '/replacement/widgets' : '/external/widgets' } },
+                points: [],
+            }), targetedSurfaceMounts: [] };
+        // Only the actual remote boundary is substituted. The daemon cannot reach
+        // an app-local waiter or its followed page values; consent remains approved.
+        homes.answer(homeId, '/v1/actions/approval.request.decide', { select: body => {
+            const carried = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            return { body: { v: 1, actionId: 'approval.request.decide', requestId: carried.requestId,
+                execution: { ok: true, result: { ok: true, status: 'approved' } } } };
+        } });
+        const cancellation = new AbortController();
+        const pending = source === 'detached' ? null : coordinator.waitForDecision({ artifactId, request, signal: cancellation.signal });
+        const completed = pending?.catch(() => null);
+        try {
+            expect(coordinator.getLiveWaiterCount(artifactId)).toBe(source === 'detached' ? 0 : 1);
+            const decided = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, context());
+            expect(decided).toMatchObject({ ok: true });
+            const status = source === 'replaced' || source === 'unavailable' ? 'failed' : 'approved';
+            expect(persistedApproval(artifactId)).toMatchObject({ status,
+                ...(status === 'failed' ? { execution: { ok: false, errorCode: 'approval_stale' } } : {}) });
+            expect(coordinator.getLiveWaiterCount(artifactId)).toBe(0);
+            if (completed) await expect(completed).resolves.toMatchObject({ decision: 'approve', request: { status } });
+            expect(homes.requestsFor('/v1/actions/approval.request.decide')).toHaveLength(source === 'detached' ? 1 : 0);
+            expect(outgoing).toEqual(expect.arrayContaining([expect.objectContaining({
+                method: machineId + ':' + RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
+                params: expect.objectContaining({ machineId, pluginId: 'external.widgets' }),
+            })]));
+            // Decision delivery owns no widget effect. In particular, withdrawn
+            // custody cannot create the area's domain Artifact while settling.
+            expect(homes.artifacts(homeId).readPlainBody(buildWidgetSurfaceArtifactIdV1(surface))).toBeNull();
+        } finally {
+            cancellation.abort();
+            await completed;
+        }
+    });
+
     it.each([
         { actionId: 'mcp.servers.signIn.start', input: { serverId: 'oauth-server' }, currentInventory: 'none' },
         { actionId: 'teams.credentials.externalKeys.create', input: {

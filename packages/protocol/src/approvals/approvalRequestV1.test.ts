@@ -9,7 +9,46 @@ import {
   ApprovalRequestV2Schema,
   StoredApprovalRequestSchema,
   requiresExactDaemonApprovalReplay,
+  isMountedPluginBlockingApprovalEligibleForLiveClient,
 } from './approvalRequestV1.js';
+
+it('admits only unsigned mounted plugin Account/client blocking continuations to their live client', () => {
+  const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+    createdBy: { surface: 'system' }, requestedSurface: 'plugin', approval: { flow: 'blocking', result: 'required' },
+    actionId: 'widgets.item.add', summary: 'Add widget', actionArgs: {
+      surface: { serverId: 'home', accountId: 'alice', owner: { kind: 'pluginArea', pluginId: 'example.widgets', pageId: 'overview', area: 'pinned' } },
+      instance: { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} },
+    }, executionOriginV1: { v: 1, authority: 'account_automation', surface: 'plugin',
+      caller: { kind: 'plugin', pluginId: 'example.widgets', contributionLocalId: 'overview', sourceCustody: { kind: 'development', registeredRootId: 'root' } },
+      serverId: 'home', serverIdentityId: 'srv_home', accountId: 'alice', machineId: 'machine', actionId: 'widgets.item.add', requestId: 'add' } });
+  expect(isMountedPluginBlockingApprovalEligibleForLiveClient(request)).toBe(true);
+  // Eligibility never relaxes exact source admission for durable/remote replay.
+  expect(requiresExactDaemonApprovalReplay(request)).toBe(true);
+  const target = { kind: 'machine' as const, machineId: 'machine' };
+  const signed = ApprovalRequestV2Schema.parse({ ...request, executionOriginV1: {
+    ...request.executionOriginV1, target, externalActionInputSignature: 'a'.repeat(86),
+    externalActionExecutionAuthorization: { v: 1, token: 'signed-account-root', binding: {
+      serverIdentityId: 'srv_home', accountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
+      machineId: 'machine', custodianAccountId: 'alice', installationId: 'installation',
+      actionId: request.actionId, requestId: 'add', requestEnvelopeDigest: 'a'.repeat(43), target,
+    } },
+  } });
+  expect(isMountedPluginBlockingApprovalEligibleForLiveClient(signed)).toBe(false);
+  expect(requiresExactDaemonApprovalReplay(signed)).toBe(true);
+  for (const patch of [
+    { approval: undefined },
+    { approval: { flow: 'deferred', result: 'required' } },
+    { executionOriginV1: { ...request.executionOriginV1, machineId: undefined } },
+    { executionOriginV1: { ...request.executionOriginV1, serverIdentityId: undefined } },
+    { executionOriginV1: { ...request.executionOriginV1, sessionId: 'session', target: { kind: 'session', sessionId: 'session' } } },
+    { executionOriginV1: { ...request.executionOriginV1, callerPermissionMode: 'default' } },
+    { executionOriginV1: { ...request.executionOriginV1, externalActionInputSignature: 'a'.repeat(86) } },
+    { requestedSurface: 'agent', executionOriginV1: { ...request.executionOriginV1, surface: 'agent', caller: { kind: 'session', sessionId: 'session', starterDepth: 0, turnDepth: 0 } } },
+    { actionId: 'session.stop', actionArgs: { sessionId: 'session' }, executionOriginV1: { ...request.executionOriginV1, actionId: 'session.stop' } },
+  ]) {
+    expect(isMountedPluginBlockingApprovalEligibleForLiveClient(ApprovalRequestV2Schema.parse({ ...request, ...patch }))).toBe(false);
+  }
+});
 
 it('keeps client Voice replay in the approving app without transferring plugin or Machine custody', () => {
   const actionId = 'ui.voice_global.set_muted';

@@ -32,7 +32,8 @@ import { buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol/
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { buildMachineAgentsDetectRequest, projectMachineAgentsDetectResponse, projectAcpCatalogForMachineInventory, MachineAgentInventoryUnavailableError } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
-import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay, isMountedPluginBlockingApprovalEligibleForLiveClient, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { readOriginalAccountActionMachine } from '@/sync/api/externalActionAccountTransport';
 import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
@@ -117,7 +118,7 @@ import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabl
 import { getActionRequiredServerFeatureId } from '@happier-dev/protocol/actions/actionRequiredServerFeature';
 import { projectSessionFollowSourceKeyPreparationAfterSetV1, type SessionFollowSourceKeyPreparationResultV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
 import type { SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
-import { machineContributionRegistryProjectionDescribe } from '@/sync/ops/machineContributionRegistryProjection';
+import { machineContributionRegistryProjectionDescribe, machinePluginUiTargetedContributionsRead } from '@/sync/ops/machineContributionRegistryProjection';
 import { machineWorkspaceFileSearch } from '@/sync/ops/machineWorkspaceFileSearch';
 import { randomUUID } from '@/platform/randomUUID';
 import { executeCurrentUiContextAction, executeCurrentUiContextContributedAction } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
@@ -1207,6 +1208,17 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         accountServerId: accountContext.serverId,
         accountId: accountContext.accountId,
       })) return false;
+      if (isMountedPluginBlockingApprovalEligibleForLiveClient(request) && origin.caller.kind === 'plugin' && origin.machineId) {
+        // Reuse the exact daemon's current source producer. A retained app
+        // invocation keeps its operands locally; its plugin never becomes host.
+        const current = await machinePluginUiTargetedContributionsRead(origin.machineId, {
+          serverId: accountContext.serverId, pluginId: origin.caller.pluginId,
+          accountLifetime: accountContext.accountLifetime, ...(signal ? { signal } : {}),
+        });
+        accountContext.assertCurrent();
+        return !signal?.aborted && current.supported
+          && pluginSourceCustodyV1Equal(origin.caller.sourceCustody, current.targetedContributions.target.sourceCustody);
+      }
       // Exact-daemon families verify their signed input at that daemon. For an
       // app-owned Account proposal, verify against the fresh Home installation
       // identity before the Artifact claim and again immediately before effect.
@@ -2234,6 +2246,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     } : undefined,
 
     approvalRequestApprovedReplay: async ({ artifactId, request, context, requestId, signal }) => {
+      // Currentness above has revalidated the daemon-produced source identity.
+      // Only this existing live continuation may spend its retained app operands;
+      // durable/signed/remote replay keeps the exact-daemon route below.
+      if (isMountedPluginBlockingApprovalEligibleForLiveClient(request)
+        && approvalCoordinator.getLiveWaiterCount(artifactId) > 0
+        && accountContext && context.surface === 'ui' && context.authority === 'present_user'
+        && !context.externalActionCredential && !context.externalActionExecutionAuthorization
+        && !context.rpcSessionAuthorization && (!context.actionCaller || context.actionCaller.kind === 'host')) return null;
       if (!requiresExactDaemonApprovalReplay(request)) {
         // Returning null resumes the single Protocol replay owner, including its
         // Artifact CAS and live-only result projection, on this captured app.

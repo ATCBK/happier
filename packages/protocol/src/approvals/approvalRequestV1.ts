@@ -4,7 +4,7 @@ import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
-import { ActionApprovalSchema } from '../actions/actionApprovalMetadata.js';
+import { ActionApprovalSchema, resolveActionApprovalFlow } from '../actions/actionApprovalMetadata.js';
 import { ActionIdSchema } from '../actions/actionIds.js';
 import { PluginContributionLocalIdSchema } from '../plugins/contributionIdentity.js';
 import { PluginIdSchema } from '../plugins/pluginId.js';
@@ -534,6 +534,36 @@ const SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
   api: true,
 } as const satisfies Record<ApprovalExecutionOriginV1['surface'], boolean>;
 
+function resolveApprovalRequestAppExecutionPlacement(approval: ApprovalRequest): 'account' | 'client' | null {
+  const actionId = ActionIdSchema.safeParse(approval.actionId);
+  const spec = actionId.success ? getActionSpec(actionId.data) : null;
+  const input = spec?.inputSchema.safeParse(approval.actionArgs);
+  // The admitted request owns its flow; authored specs may omit the default
+  // or be routed as deferred proposals. A blocking show-once result belongs
+  // to the original invocation, never the approving app or durable history.
+  const retainedLiveResult = spec?.approvalResultCustody === 'live_only'
+    && resolveActionApprovalFlow(approval.approval ?? spec.approval) === 'blocking';
+  if (!spec || !input?.success || spec.workspaceWrite === true
+    || spec.approvalInputCustody === 'live_only' || retainedLiveResult) return null;
+  const placement = resolveActionExecutionPlacementForInput(spec, input.data);
+  return placement === 'account' || placement === 'client' ? placement : null;
+}
+
+/** Eligibility only: the host must still prove current source custody and own the live waiter. */
+export function isMountedPluginBlockingApprovalEligibleForLiveClient(approval: ApprovalRequest): boolean {
+  if (approval.v !== 2 || !approval.approval || resolveActionApprovalFlow(approval.approval) !== 'blocking'
+    || resolveApprovalRequestAppExecutionPlacement(approval) === null) return false;
+  const origin = approval.executionOriginV1;
+  return origin.surface === 'plugin' && origin.authority === 'account_automation'
+    && origin.caller.kind === 'plugin' && Boolean(origin.serverIdentityId && origin.accountId && origin.machineId)
+    && origin.externalActionExecutionAuthorization === undefined && origin.externalActionInputSignature === undefined
+    && origin.principalId === undefined && origin.credentialId === undefined
+    && origin.sessionId === undefined && origin.sessionListAccess === undefined && origin.sessionInputSource === undefined
+    && origin.runId === undefined && origin.runOccurrenceId === undefined && origin.callerPermissionMode === undefined
+    && origin.causalPermissionAuthority === undefined && origin.sessionAgentSpawnPolicyV1 === undefined
+    && (origin.target === undefined || origin.target.kind === 'machine' && origin.target.machineId === origin.machineId);
+}
+
 /**
  * True when this durable approval carries authority facts a client cannot
  * verify itself, so its replay belongs to the exact daemon named by the origin.
@@ -550,12 +580,9 @@ export function requiresExactDaemonApprovalReplay(approval: ApprovalRequest): bo
   const actionId = ActionIdSchema.safeParse(approval.actionId);
   const spec = actionId.success ? getActionSpec(actionId.data) : null;
   const input = spec?.inputSchema.safeParse(approval.actionArgs);
-  const clientEffect = spec && input?.success
-    && resolveActionExecutionPlacementForInput(spec, input.data) === 'client'
-    && spec.workspaceWrite !== true && spec.approvalInputCustody !== 'live_only';
-  const accountEffect = spec && input?.success
-    && resolveActionExecutionPlacementForInput(spec, input.data) === 'account'
-    && spec.workspaceWrite !== true && spec.approvalInputCustody !== 'live_only';
+  const appPlacement = resolveApprovalRequestAppExecutionPlacement(approval);
+  const clientEffect = appPlacement === 'client';
+  const accountEffect = appPlacement === 'account';
   const authorization = origin.externalActionExecutionAuthorization;
   if (authorization) {
     return !((accountEffect || clientEffect) && 'authentication' in authorization.binding
