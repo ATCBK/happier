@@ -57,7 +57,12 @@ function deriveStoredReadSchema<T extends z.core.$ZodType>(schema: T, custom: ((
     case 'pipe': overrides = { in: createStoredReadSchema(def.in), out: createStoredReadSchema(def.out) }; break;
     // Native lazy parsing caches this inner definition. Calling def.getter()
     // again would build a second source graph instead of projecting that one.
-    case 'lazy': overrides = { getter: () => createStoredReadSchema((schema as unknown as z.core.$ZodLazy)._zod.innerType) }; break;
+    case 'lazy': overrides = {
+      getter: () => createStoredReadSchema((schema as unknown as z.core.$ZodLazy)._zod.innerType),
+      // Native lazy clones cache their inner schema on the definition. A warm
+      // canonical cache would bypass this reader's projected getter entirely.
+      _cachedInner: undefined,
+    }; break;
     default: return schema;
   }
   // Spreading the definition would evaluate native default/prefault getters

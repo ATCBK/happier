@@ -462,16 +462,21 @@ describe('personal widget areas at the Account Artifact owner', () => {
     });
     it('drops nested stored extras while keeping required identity and Action inputs strict', async () => {
         const b = boundary();
-        await b.port.apply({ kind: 'add', instance: instance('a') });
+        const installed = { ...instance('a'), definition: { kind: 'installed' as const,
+            surface: { pluginId: 'acme.widgets', localId: 'status' } } };
+        await b.port.apply({ kind: 'add', instance: installed });
         const id = buildWidgetSurfaceArtifactIdV1(surface);
         const row = b.rows.get(id)!;
         const canonical = JSON.parse(row.body!);
+        expect(areaOwner.WidgetAreaLayoutV1Schema.parse(canonical)).toEqual(canonical);
         const raw = { ...canonical, extra: true, surface: { ...surface, extra: true, owner: { ...surface.owner, extra: true } },
-            items: [{ ...canonical.items[0], extra: true, instance: { ...instance('a'), extra: true } }] };
+            items: [{ ...canonical.items[0], extra: true, instance: { ...installed, extra: true,
+                definition: { ...installed.definition, extra: true, surface: { ...installed.definition.surface, extra: true } } } }] };
+        expect(areaOwner.WidgetAreaLayoutV1Schema.safeParse(raw).success).toBe(false);
         b.rows.set(id, { ...row, body: JSON.stringify(raw) });
         expect(await b.port.read()).toEqual(canonical);
         await b.port.apply({ kind: 'rename', instanceId: 'a', displayName: 'Renamed' });
-        expect(JSON.parse(b.rows.get(id)!.body!)).toEqual({ ...canonical, items: [{ ...canonical.items[0], instance: { ...instance('a'), displayName: 'Renamed' } }] });
+        expect(JSON.parse(b.rows.get(id)!.body!)).toEqual({ ...canonical, items: [{ ...canonical.items[0], instance: { ...installed, displayName: 'Renamed' } }] });
         await expect(b.port.apply({ kind: 'add', instance: { ...instance('b'), extra: true } } as Parameters<typeof b.port.apply>[0])).rejects.toBeDefined();
         b.rows.set(id, { ...row, body: JSON.stringify({ ...raw, surface: { ...raw.surface, accountId: undefined } }) });
         await expect(b.port.read()).rejects.toMatchObject({ code: 'invalid_widget_area_record' });
