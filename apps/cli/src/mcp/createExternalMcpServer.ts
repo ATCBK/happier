@@ -120,6 +120,18 @@ export function createExternalMcpServer(params: Readonly<{
         const cryptoContext = ctx
           ? { mode: 'e2ee' as const, ctx }
           : { mode: 'plain' as const, ctx: null };
+        const { projectWorkerAction: projectWorkerAccountAction, ...accountServerActionPorts } = createAccountServerActionDeps({
+          token: params.credentials.token,
+          credentials: params.credentials,
+          isCredentialCurrent: async () => sameStoredCredentials(
+            params.credentials,
+            await readStoredCredentialsForServerId(serverId).catch(() => null),
+          ),
+          serverId,
+          serverHttpBaseUrl,
+          ...(serverIdentityId ? { serverIdentityId } : {}),
+          resolveServerFeaturesSnapshot,
+        });
         const followDeps = createSessionFollowActionDeps({
           token: params.credentials.token,
           serverId,
@@ -141,21 +153,11 @@ export function createExternalMcpServer(params: Readonly<{
             ...(serverIdentityId ? { serverIdentityId } : {}),
             serverHttpBaseUrl,
             sessionId: 'cli-global',
+            ...(projectWorkerAccountAction ? { projectWorkerAccountAction } : {}),
           },
           {
             invokeContributedAction: async (request) => pluginExecutor.invokeContributedAction(request),
-            ...createAccountServerActionDeps({
-              token: params.credentials.token,
-              credentials: params.credentials,
-              isCredentialCurrent: async () => sameStoredCredentials(
-                params.credentials,
-                await readStoredCredentialsForServerId(serverId).catch(() => null),
-              ),
-              serverId,
-              serverHttpBaseUrl,
-              ...(serverIdentityId ? { serverIdentityId } : {}),
-              resolveServerFeaturesSnapshot,
-            }),
+            ...accountServerActionPorts,
             ...followDeps,
             ...createSessionDiscussionActionDeps({
               credentials: params.credentials,
