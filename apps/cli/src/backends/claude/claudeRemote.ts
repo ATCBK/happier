@@ -4,7 +4,7 @@ import { resolveClaudeSdkPermissionModeFromEnhancedMode } from "./utils/permissi
 import { parseSpecialCommand } from "@/cli/parsers/specialCommands";
 import { logger } from "@/lib";
 import { PushableAsyncIterable } from "@/utils/PushableAsyncIterable";
-import type { PermissionResult } from "./sdk/types";
+import { ClaudeNativeProviderExitUnverifiedError, type PermissionResult } from "./sdk/types";
 import type { JsRuntime } from "./runClaude";
 import { getClaudeRemoteSystemPrompt } from "./utils/remoteSystemPrompt";
 import { parseClaudeSdkFlagOverridesFromArgs } from "./remote/sdkFlagOverrides";
@@ -319,6 +319,7 @@ export async function claudeRemote(opts: {
     };
 
     const messages = new PushableAsyncIterable<SDKUserMessage>();
+    let ownsQuery = true;
     // Start the loop
     const response = query({
         prompt: messages,
@@ -328,7 +329,20 @@ export async function claudeRemote(opts: {
             logger.debugLargeJson(`[claudeRemote] Message ${message.type}`, message);
             opts.onMessage(message);
         },
+        onProcessExited: async ({ nativeExited, processTreeStopped }) => {
+            if (!ownsQuery) return;
+            // Native provider exit requires the launcher's positive IPC fact or owned tree cleanup.
+            const providerStopped = nativeExited || processTreeStopped;
+            try {
+                await opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit', { providerStopped });
+            } finally {
+                if (!providerStopped) throw new ClaudeNativeProviderExitUnverifiedError();
+            }
+        },
     });
+    const responseIterator = response[Symbol.asyncIterator]();
+    let responseError: unknown;
+    try {
     opts.onWorkflowActivityObserverReady?.();
     await opts.runtimeActivityAdapter?.activateObservation('claude-legacy-provider-observer-installed');
     opts.setUserMessageSender?.((message: SDKUserMessage) => messages.push(message));
@@ -360,7 +374,10 @@ export async function claudeRemote(opts: {
     try {
         logger.debug(`[claudeRemote] Starting to iterate over response`);
 
-        for await (const message of response) {
+        for (;;) {
+            const next = await responseIterator.next();
+            if (next.done) break;
+            const message = next.value;
             // NOTE: opts.onMessage is already called via onMessageReceived above.
             // This loop handles control flow only (result/init/abort).
 
@@ -440,6 +457,26 @@ export async function claudeRemote(opts: {
         opts.setTurnInterrupt?.(null);
         opts.setUserMessageSender?.(null);
         updateThinking(false);
+    }
+    } catch (error) {
+        responseError = error;
+        throw error;
+    } finally {
+        // The next runner shares this session's provider ledger. Finish this owned query's
+        // process exit observation before admitting replacement provider tasks.
+        try {
+            await responseIterator.return?.();
+        } catch (error) {
+            await opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_cleanup_failed').catch((observationError) => {
+                logger.debug('[claudeRemote] Failed to publish cleanup observation loss', observationError);
+            });
+            if (responseError && responseError !== error) {
+                throw new AggregateError([responseError, error], 'Claude legacy runtime failed with incomplete owned process cleanup', { cause: responseError });
+            }
+            throw error;
+        } finally {
+            ownsQuery = false;
+        }
     }
     } finally {
         // File retirement is nonfatal to the completed provider outcome. Its owner

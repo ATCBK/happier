@@ -450,13 +450,11 @@ export abstract class BasePermissionHandler {
                     updatedPermissions,
                     requestSource,
                 );
-                const completed = structuredAnswers
-                    ? await this.requestCoordinator.completeResponseWithAck({
-                        context,
-                        completion: { result, completedRequest },
-                    })
-                    : this.completePendingPermissionRequest(response.id, context, result, completedRequest);
-                if (structuredAnswers && !completed) return false;
+                const completed = await this.requestCoordinator.completeRpcResponse({
+                    context,
+                    completion: { result, completedRequest },
+                });
+                if (!completed && (structuredAnswers || context.status === 'live')) return false;
 
                 this.applyPermissionResponseSideEffects({
                     response,
@@ -470,7 +468,7 @@ export abstract class BasePermissionHandler {
                             : `Permission ${response.approved ? 'approved' : 'denied'} for ${context.toolName}`,
                 });
 
-                if (structuredAnswers) this.pendingRequests.delete(response.id);
+                if (completed) this.pendingRequests.delete(response.id);
 
                 if (!legacyPending?.coordinatorManaged) {
                     this.pendingRequests.delete(response.id);

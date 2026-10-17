@@ -398,6 +398,7 @@ import {
   restartSessionRunnerOnCurrentRuntime,
   type RestartSessionRunnerCompletion,
 } from './plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import { restartStaleSessionRunnersAfterDaemonStart } from './plannedRunnerRestart/restartStaleRunnersAfterDaemonStart';
 import { resolveCurrentSessionRunnerLaunchIdentity } from './sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
 import { shouldRefreshSessionRunnerResumeIdentity } from './sessionRunnerRuntime/resolveRestartEligibility';
 import { resolveSessionRunnerRuntimeState } from './sessionRunnerRuntime/resolveRuntimeState';
@@ -2229,18 +2230,25 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             await flushProviderAccountUsagePersistenceForShutdown();
 	            await flushDaemonServerWorkForShutdown();
             const initialInFlightSpawns = pidToAwaiter.size;
+            // A signalled planned restart has stopped its runner; let its replacement spawn within
+            // the same drain budget instead of exiting with the session left without a runner.
+            const hasPendingRunnerRestarts = () => sessionRunnerRestartCompletionWaiters.hasPending();
             const hasPendingRpcRequests = apiMachineForSessions !== null;
-            if (initialInFlightSpawns === 0 && !hasPendingRpcRequests) return;
+            if (initialInFlightSpawns === 0 && !hasPendingRunnerRestarts() && !hasPendingRpcRequests) return;
 
             logger.debug('[DAEMON RUN] Shutdown requested with in-flight work; deferring shutdown', {
               inFlightSpawns: initialInFlightSpawns,
+              pendingRunnerRestarts: hasPendingRunnerRestarts(),
               pendingRpcDrainEnabled: hasPendingRpcRequests,
               graceMs: shutdownSpawnDrainGraceMs,
               pollMs: shutdownSpawnDrainPollMs,
             });
 
             const start = Date.now();
-            while (pidToAwaiter.size > 0 && Date.now() - start < shutdownSpawnDrainGraceMs) {
+            while (
+              (pidToAwaiter.size > 0 || hasPendingRunnerRestarts())
+              && Date.now() - start < shutdownSpawnDrainGraceMs
+            ) {
               // eslint-disable-next-line no-await-in-loop
               await new Promise((resolve) => setTimeout(resolve, shutdownSpawnDrainPollMs));
             }
@@ -5074,6 +5082,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         ): SessionRunnerRestartDisabledReason | null => resolveSessionRunnerActivityDisabledReasonFromReaders(sessionId, {
           isTurnInProgress: (id) => connectedServiceTurnDeferralQueue.isTurnInFlight(id),
         });
+        const isDaemonShuttingDown = (): boolean => shutdownInitiated || connectedServiceQuotaProducersQuiesced;
 
         const normalizeSwitchTarget = (input: Readonly<{
           serviceId?: string | null;
@@ -5134,6 +5143,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             restartRequestedPids: connectedServicesRestartRequestedPids,
             pidToTrackedSession,
             canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
+            isShuttingDown: isDaemonShuttingDown,
             requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
               // K5:gated_restart raw signal is owned by planned runner restart deferral/reservation.
               await requestConnectedServiceSessionRestartSignal({
@@ -5216,6 +5226,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           restartRequestedPids: connectedServicesRestartRequestedPids,
           pidToTrackedSession,
           canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
+          isShuttingDown: isDaemonShuttingDown,
           requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
             // K5:gated_restart version refresh uses the planned restart primitive without
             // connected-service deferral/target metadata; this call is only the signal adapter.
@@ -7155,19 +7166,31 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       runtimeAuthRecoveryScheduler: runtimeAuthRecoveryScheduler ?? undefined,
       handleConnectedServiceTurnLifecycle: async (input) => {
         const lifecycleObservedAtMs = Date.now();
+        // A starting turn must be visible to restart gates before the awaited marker write; turn
+        // ends are recorded once the marker is settled, before any slower recovery cleanup, so a
+        // pending or failed cleanup cannot leave the session looking busy.
+        const isTurnStart = input.event === 'prompt_or_steer' || input.event === 'task_started';
+        if (isTurnStart) {
+          connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
+            sessionId: input.sessionId,
+            event: input.event,
+          });
+        }
         const trackedTurnResult = await applyTrackedSessionTurnLifecycle({
           trackedSessions: getCurrentChildren(),
           sessionId: input.sessionId,
           event: input.event,
           ...(input.turnId ? { turnId: input.turnId } : {}),
         });
+        if (!isTurnStart) {
+          connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
+            sessionId: input.sessionId,
+            event: input.event,
+          });
+        }
         if (trackedTurnResult.status === 'recorded') {
           await temporaryThrottleRecoveryScheduler.recordTurnLifecycle({ ...input, observedAtMs: lifecycleObservedAtMs });
         }
-        connectedServiceTurnDeferralQueue.recordTurnLifecycleEvent({
-          sessionId: input.sessionId,
-          event: input.event,
-        });
         // REV-1: failTurn emits `assistant_message_end` too — a FAILED turn (the
         // usage-limit interruption itself) is not provider-activity proof and must
         // not clear the recovery intents the failure report just armed.
@@ -9102,6 +9125,20 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         };
 
     logger.debug('[DAEMON RUN] Daemon started successfully, waiting for shutdown request');
+
+    // Startup reattach and every restart dependency are ready here; the pass logs and contains
+    // its own failures, so it must not delay or abort waiting for shutdown.
+    void restartStaleSessionRunnersAfterDaemonStart({
+      readSettings: () => readSettings(),
+      isShuttingDown: () => shutdownInitiated || connectedServiceQuotaProducersQuiesced,
+      resolveCurrentIdentity: resolveCurrentSessionRunnerLaunchIdentity,
+      trackedSessions: getCurrentChildren,
+      requestRestart: requestVersionRuntimeRefreshWithDeferral,
+      resolveActivityDisabledReason: resolveSessionRunnerActivityDisabledReason,
+      refreshTrackedSessionRuntimeSnapshot: refreshTrackedSessionRuntimeSnapshotForPlannedRestart,
+      logDebug: (message, payload) => logger.debug(message, payload),
+      logWarn: (message, payload) => logger.warn(message, payload),
+    });
 
     // Wait for shutdown request
     const shutdownRequest = await resolvesWhenShutdownRequested;

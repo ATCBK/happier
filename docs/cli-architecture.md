@@ -1698,6 +1698,26 @@ RPC is used to send commands over the Socket.IO connection:
 
 This mechanism allows the server and mobile clients to drive local actions without exposing a broad REST surface.
 
+In the current development CLI, UI permission responses settle through
+`PermissionRequestCoordinator.completeRpcResponse`, including detached late responses
+and requests present only in Agent state. Provider waiters, cached late decisions,
+and response side effects advance only after the existing Agent-state write
+acknowledges request completion. A failed write reaches the RPC caller while the
+request remains retryable and independent pending requests remain intact. Requests
+present only in Agent state keep their existing behavior without caching a provider
+decision. Native and automatic decisions retain their non-blocking reconciliation
+paths and are outside this acknowledgement guarantee.
+
+Metadata and Agent-state retries use the current managed socket on every attempt.
+Reconnection can therefore finish the same operation within its existing retry
+budget.
+
+Terminal Agent-state update failures report `session_agent_state_update_failed` in the
+normal file log, including when a best-effort caller absorbs the error. This
+record contains operation context only; it excludes request contents and server
+error payloads. It does not distinguish transport from local preparation failures
+and does not imply a replay guarantee.
+
 ## Implementation references
 - CLI entry: `apps/cli/src/index.ts`
 - Daemon: `apps/cli/src/daemon`

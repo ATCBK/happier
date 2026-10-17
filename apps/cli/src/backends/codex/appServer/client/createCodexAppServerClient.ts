@@ -583,7 +583,7 @@ async function createUnlockedCodexAppServerClient(params: CreateCodexAppServerCl
         // Snapshot and terminate descendants before closing stdio. Ending stdin first can let a
         // JavaScript launcher exit and re-parent its native Codex child before the tree walk.
         terminateTransportPromise = child
-            ? killProcessTree(child, { graceMs: 250 }).catch(() => undefined)
+            ? killProcessTree(child, { graceMs: 250 }).then(() => undefined).catch(() => undefined)
             : Promise.resolve();
         return terminateTransportPromise;
     };

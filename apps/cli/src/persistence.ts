@@ -167,6 +167,11 @@ export interface Settings {
   lastTokenSubByServerId?: Record<string, string | undefined>
   machineIdConfirmedByServerByServerId?: Record<string, boolean | undefined>
   daemonAutoStartWhenRunningHappy?: boolean
+  /**
+   * Opt-in: after the daemon starts, restart tracked session runners still pinned to an older
+   * CLI runtime onto the current one (idle runners only). Off unless explicitly `true`.
+   */
+  restartSessionRunnersOnUpdate?: boolean
   chromeMode?: boolean
   /**
    * Per-server, per-account reconnect cursor for `/v2/changes`.

@@ -7460,7 +7460,7 @@ export const fr: TranslationStructure = {
         invalidActionSubtitle: 'Cette action n’est plus disponible dans ce build.',
         configureActionAccessibilityLabel: 'Configurer l’action',
         approvalHelpTitle: 'Modes d’approbation',
-        approvalHelpBody: '« Demander d’abord » crée une demande d’approbation avant que cette action ne s’exécute depuis cette surface. Pour les sessions IA, cette demande est mise en file dans la surface d’approbations existante et n’attend pas dans une fenêtre modale. « Autorisé » laisse l’action s’exécuter depuis cette surface sans demande d’approbation.',
+        approvalHelpBody: "« Demander d’abord » exige votre approbation avant l’exécution de cette action depuis cette surface. Les commandes de l’application peuvent afficher une boîte de confirmation. Pour les sessions IA, une demande est mise en file dans la surface d’approbations existante et n’attend pas dans une fenêtre modale. « Autorisé » permet l’exécution sans demande d’approbation.",
         toolExposure: {
             title: 'Exposition des outils',
             footer: 'Détermine si les actions éligibles apparaissent comme des outils directs ou restent accessibles uniquement via la découverte d’actions.',

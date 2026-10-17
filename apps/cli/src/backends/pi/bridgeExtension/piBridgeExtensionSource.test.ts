@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
 
+import { resolveHappyToolsBridgeBackendOptions } from './resolveHappyToolsBridgeBackendOptions';
 import {
   buildPiBridgeExtensionSource,
   PI_BRIDGE_EXTENSION_VERSION,
@@ -94,6 +95,43 @@ describe('buildPiBridgeExtensionSource', () => {
 });
 
 describe('pi bridge extension behavior', () => {
+  it('registers host-generated JSON schemas without Zod runtime metadata', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'happier-pi-bridge-schemas-'));
+    try {
+      const resolved = await resolveHappyToolsBridgeBackendOptions({
+        agentDir: dir,
+        sessionId: 'sess-schemas',
+        settings: null,
+        memoryRecallGuidanceEnabled: true,
+        memoryMachineId: 'machine-1',
+      });
+      expect(resolved).not.toBeNull();
+      const configPath = join(dir, 'config.json');
+      writeFileSync(configPath, JSON.stringify(resolved!.sessionConfig));
+      const factory = await loadExtensionFactory();
+      const harness = createFakePi({ [PI_BRIDGE_CONFIG_PATH_FLAG]: configPath });
+      factory(harness.pi);
+      await harness.emit('session_start', {});
+
+      expect(harness.tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(['change_title', 'action_execute', 'memory_search']),
+      );
+      for (const tool of harness.tools) {
+        expect(tool.parameters, tool.name).not.toHaveProperty('~standard');
+        expect(tool.parameters, tool.name).toMatchObject({ type: 'object' });
+      }
+      expect(harness.tools.find((tool) => tool.name === 'change_title')?.parameters).toMatchObject({
+        properties: { title: { type: 'string' } },
+        required: ['title'],
+      });
+      const memorySchema = harness.tools.find((tool) => tool.name === 'memory_search')?.parameters;
+      expect(memorySchema).toMatchObject({ properties: { machineId: { type: 'string' } } });
+      expect(memorySchema).not.toHaveProperty('required', expect.arrayContaining(['machineId']));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('executes host-resolved tools through the Agent bridge with bounded typed results', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'happier-pi-bridge-execute-'));
     try {

@@ -1645,7 +1645,9 @@ export class ApiSessionClient extends EventEmitter {
         if (this.acceptedCanonicalPendingDeliveryResolutionLocalIdsInFlight.has(localId)) return;
         this.acceptedCanonicalPendingDeliveryResolutionLocalIdsInFlight.add(localId);
         try {
-            for (let attempt = 0; attempt < 2; attempt += 1) {
+            // Retain one settlement operation for the accepted localId until it commits or its
+            // existing session/runtime authority ends. Retrying settlement never invokes input.
+            for (let attempt = 0; ; attempt += 1) {
                 if (
                     !this.isAcceptedCanonicalPendingDeliveryOperationCurrent(authority)
                     || !this.canonicalPendingDeliveryByLocalId.has(localId)
@@ -1711,7 +1713,9 @@ export class ApiSessionClient extends EventEmitter {
                         && 'retryable' in error
                         && (error as { retryable?: unknown }).retryable === true,
                     );
-                    if ((!retryDirective && !isResponseLoss) || attempt > 0) {
+                    const isInternalFailure = error instanceof PendingQueueAcceptedSettlementError
+                        && error.settlementError === 'internal';
+                    if (!retryDirective && !isResponseLoss && !isInternalFailure) {
                         logger.infoFile('[pendingQueue] accepted provider delivery remains unresolved', {
                             sessionId: this.sessionId,
                             localId,
@@ -1724,6 +1728,13 @@ export class ApiSessionClient extends EventEmitter {
                     const retryAfterMs = retryDirective
                         ? Math.min(60_000, Math.max(250, retryDirective.retryAfterMs))
                         : 1_000;
+                    logger.infoFile('[pendingQueue] accepted provider delivery settlement retry scheduled', {
+                        sessionId: this.sessionId,
+                        localId,
+                        attempt: attempt + 1,
+                        retryAfterMs,
+                        error: serializedError,
+                    });
                     await delayUnrefAbortable(retryAfterMs, authority.abortSignal);
                 } else {
                     return;
@@ -5567,7 +5578,8 @@ export class ApiSessionClient extends EventEmitter {
         return this.metadataLock.inLock(async () => {
             await this.waitForSessionSocketOnlineForAckWrite('update-metadata');
             await updateSessionMetadataWithAck({
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 sessionEncryptionMode: this.sessionEncryptionMode,
                 encryptionKey: this.encryptionKey,
@@ -5594,7 +5606,8 @@ export class ApiSessionClient extends EventEmitter {
         return this.metadataLock.inLock(async () => {
             await this.waitForSessionSocketOnlineForAckWrite('update-metadata');
             return await updateSessionMetadataWithAckResult({
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 sessionEncryptionMode: this.sessionEncryptionMode,
                 encryptionKey: this.encryptionKey,
@@ -5719,7 +5732,8 @@ export class ApiSessionClient extends EventEmitter {
         return this.agentStateLock.inLock(async () => {
             await this.waitForSessionSocketOnlineForAckWrite('update-state');
             await updateSessionAgentStateWithAck({
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 sessionEncryptionMode: this.sessionEncryptionMode,
                 encryptionKey: this.encryptionKey,

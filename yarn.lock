@@ -10646,7 +10646,7 @@ fastify-type-provider-zod@6.1.0:
   dependencies:
     "@fastify/error" "^4.2.0"
 
-fastify@^5.7.3:
+fastify@^5.7.3, fastify@^5.8.3:
   version "5.8.4"
   resolved "https://registry.yarnpkg.com/fastify/-/fastify-5.8.4.tgz#9ad9ebeea57980cf8722b5c44ca27ea9255cf2d5"
   integrity sha512-sa42J1xylbBAYUWALSBoyXKPDUvM3OoNOibIefA+Oha57FryXKKCZarA1iDntOCWp3O35voZLuDg2mdODXtPzQ==

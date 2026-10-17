@@ -318,7 +318,7 @@ export class PermissionHandler {
         this.applyPermissionResponse({ id: toolCallId, approved: true, structuredAnswersV1: opts?.answers });
     }
 
-    private tryHandlePermissionRpc(message: PermissionResponse): boolean {
+    private async tryHandlePermissionRpc(message: PermissionResponse): Promise<boolean> {
         const id = typeof message?.id === 'string' ? message.id : '';
         if (!id) {
             return false;
@@ -346,7 +346,13 @@ export class PermissionHandler {
                 })
                 : undefined;
 
-        this.applyPermissionResponse({ ...message, ...(structuredAnswersV1 ? { structuredAnswersV1 } : {}) }, context);
+        const response = { ...message, ...(structuredAnswersV1 ? { structuredAnswersV1 } : {}) };
+        const completed = await this.permissionCoordinator.completeRpcResponse({
+            context,
+            completion: this.buildPermissionCompletion(response, context),
+        });
+        if (!completed) return false;
+        this.recordPermissionResponse(response, context);
         return true;
     }
 
@@ -483,6 +489,12 @@ export class PermissionHandler {
             logger.debug('[Claude] Permission response did not complete an outstanding request');
             return;
         }
+
+        this.recordPermissionResponse(message, context);
+    }
+
+    private recordPermissionResponse(message: PermissionResponse, context: PermissionRequestCoordinatorContext): void {
+        const id = message.id;
 
         if (this.isToolTraceEnabled()) {
             recordToolTraceEvent({

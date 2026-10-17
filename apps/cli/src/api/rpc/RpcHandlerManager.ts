@@ -159,6 +159,11 @@ export class RpcHandlerManager {
                 ? decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(request.params))
                 : null;
             if (this.encryptionMode !== 'plain' && decryptedParams === null) {
+              defaultLogger.infoFile('[RPC] Unable to decrypt request params; check that the caller and target use matching keys', {
+                reason: 'rpc_params_decryption_failed',
+                method: this.readUnprefixedMethod(request.method),
+                encryptionVariant: this.encryptionVariant,
+              });
               const errorResponse = {
                 error: 'Invalid RPC params',
               };

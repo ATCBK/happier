@@ -2429,7 +2429,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
     },
     surfaces: {
-      ui_button: false,
+      ui_button: true,
       ui_slash_command: false,
       voice_tool: false,
       voice_action_block: false,
@@ -2455,7 +2455,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
     },
     surfaces: {
-      ui_button: false,
+      ui_button: true,
       ui_slash_command: false,
       voice_tool: false,
       voice_action_block: false,

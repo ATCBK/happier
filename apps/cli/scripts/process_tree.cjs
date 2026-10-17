@@ -71,13 +71,18 @@ async function waitForAllGone(pids, timeoutMs, isAlive) {
 
 async function killProcessTree(proc, opts, enumerate = psList) {
   const pid = proc.pid;
-  if (!pid) return;
+  const rootHasExited = () => proc.exitCode != null || proc.signalCode != null;
+  if (!pid || rootHasExited()) return { rootObservedAlive: false };
 
   const graceMs = Math.max(1, opts?.graceMs ?? 1000);
   let signallingFailed = false;
   const onSignalFailure = () => { signallingFailed = true; };
-  const isAlive = (targetPid) => isPidAliveBySignal(targetPid, onSignalFailure);
-  const kill = (targetPid, signal) => bestEffortKillPid(targetPid, signal, onSignalFailure);
+  // An observed child exit revokes authority over its numeric PID, including after a wait.
+  const isAlive = (targetPid) => !(targetPid === pid && rootHasExited())
+    && isPidAliveBySignal(targetPid, onSignalFailure);
+  const kill = (targetPid, signal) => {
+    if (targetPid !== pid || !rootHasExited()) bestEffortKillPid(targetPid, signal, onSignalFailure);
+  };
 
   // Keep child runtimes attached to their owning CLI process tree and explicitly terminate
   // descendants on disposal so provider processes cannot outlive their supervisor.
@@ -85,7 +90,8 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   // freshly spawned descendant can be reported to its parent before it is visible in the
   // process listing; killing the parent then reparents that descendant and loses the only
   // relationship that lets this owner find it.
-  const rootStopped = process.platform !== 'win32' && isAlive(pid);
+  let rootObservedAlive = isAlive(pid);
+  const rootStopped = process.platform !== 'win32' && rootObservedAlive;
   if (rootStopped) kill(pid, 'SIGSTOP');
 
   let descendants;
@@ -100,7 +106,10 @@ async function killProcessTree(proc, opts, enumerate = psList) {
     discoveryFailed = true;
     descendants = [];
   }
-  const all = [...descendants, pid];
+  // Discovery yields to the OS: an externally killed root may have lost its descendants.
+  // Retain discovered descendants, but never resume or signal an exited root by its stale PID.
+  if (rootHasExited()) rootObservedAlive = false;
+  const all = rootHasExited() ? descendants : [...descendants, pid];
 
   // Try graceful first (children-first).
   for (const targetPid of descendants) kill(targetPid, 'SIGTERM');
@@ -109,7 +118,7 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   await waitForAllGone(all, graceMs, isAlive);
 
   const remaining = all.filter((p) => isAlive(p));
-  if (remaining.length === 0 && !discoveryFailed && !signallingFailed) return;
+  if (remaining.length === 0 && !discoveryFailed && !signallingFailed) return { rootObservedAlive };
 
   for (const targetPid of remaining) kill(targetPid, 'SIGKILL');
   await waitForAllGone(remaining, Math.min(250, graceMs), isAlive);
@@ -120,6 +129,7 @@ async function killProcessTree(proc, opts, enumerate = psList) {
       code: 'process_tree_termination_incomplete',
     });
   }
+  return { rootObservedAlive };
 }
 
 module.exports = { isPidAliveBySignal, killProcessTree };

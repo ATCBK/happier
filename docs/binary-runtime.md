@@ -65,6 +65,22 @@ The binary install directory can remain separate from an explicit data home.
 On Windows, `HAPPIER_NO_PATH_UPDATE` skips PATH changes only, not state-home persistence.
 This does not copy or migrate credentials from a previous data home.
 
+## Desktop executable identity
+
+Current development source configures `mainBinaryName` per desktop channel:
+`happier-desktop`, `happier-desktop-preview`, and `happier-desktop-dev`. These names
+keep Linux executables and icons distinct between channels and from the `happier`
+CLI. The Tauri configs own the names; candidate transfer, AppImage diagnostics, and
+macOS updater architecture inspection read them through the shared channel-config
+resolver instead of assuming the Cargo template name `app`.
+
+After an upgrade, open the app once so it can observe the computer's login-start
+setting. The existing autostart writer re-enables the same channel's login item
+with the current executable and `--menu-bar`, or removes it when login start is
+off. An unknown setting leaves the item untouched; failures remain visible in
+the tray and retry on the next setting observation. This reuses the existing
+login-item migration rather than adding another startup preference or writer.
+
 ## Desktop-initiated CLI acquisition
 
 The desktop app acquires the Happier CLI itself; the user never runs an installer to connect the

@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -10,6 +11,7 @@ import cliDistBuildManifest from '../../cliDistBuildManifest.cjs';
 import { buildCliBinaryArtifactPayload } from './buildCliBinaryArtifactPayload.js';
 
 const tempDirs: string[] = [];
+const sourceRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 
 async function createTempDir(): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), 'build-cli-binary-artifact-payload-'));
@@ -42,8 +44,7 @@ async function collectFiles(dir: string): Promise<string[]> {
 }
 
 async function collectStaticRuntimeScriptAssetSegments(): Promise<string[][]> {
-    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
-    const cliSourceFiles = (await collectFiles(join(repoRoot, 'apps', 'cli', 'src')))
+    const cliSourceFiles = (await collectFiles(join(sourceRepoRoot, 'apps', 'cli', 'src')))
         .filter((file) => file.endsWith('.ts') || file.endsWith('.tsx'));
     const assetKeys = new Set<string>();
 
@@ -174,6 +175,11 @@ describe('buildCliBinaryArtifactPayload bundled workspace sync', () => {
         for (const sidecarPath of new Map(sidecarPaths.map((path) => [path.join('/'), path])).values()) {
             await writeRepoFile(join(repoRoot, ...sidecarPath), 'placeholder\n', older);
         }
+        // Import the real installed launcher, including its transitive native-exit dependency.
+        for (const script of ['claude_launcher_runtime.cjs', 'childProcessOptions.cjs', 'native_process_exit.cjs']) {
+            await writeRepoFile(join(repoRoot, 'apps', 'cli', 'scripts', script),
+                await readFile(join(sourceRepoRoot, 'apps', 'cli', 'scripts', script), 'utf8'), older);
+        }
         await writeCliToolUnpackFixture(repoRoot, older);
 
         await writeRepoFile(join(repoRoot, 'packages', 'cli-common', 'package.json'), `${JSON.stringify({
@@ -184,9 +190,12 @@ describe('buildCliBinaryArtifactPayload bundled workspace sync', () => {
             exports: {
                 '.': './dist/index.js',
                 './firstPartyRuntime': './dist/firstPartyRuntime/index.js',
+                './expandHomeDirPath': './expandHomeDirPath.cjs',
             },
         }, null, 2)}\n`);
         await writeRepoFile(join(repoRoot, 'packages', 'cli-common', 'README.md'), 'cli-common');
+        await writeRepoFile(join(repoRoot, 'packages', 'cli-common', 'expandHomeDirPath.cjs'),
+            await readFile(join(sourceRepoRoot, 'packages', 'cli-common', 'expandHomeDirPath.cjs'), 'utf8'), older);
         await writeRepoFile(join(repoRoot, 'packages', 'cli-common', 'dist', 'index.js'), 'export {};\n', older);
         await writeRepoFile(join(repoRoot, 'packages', 'cli-common', 'dist', 'firstPartyRuntime', 'index.js'), 'export {};\n', older);
         await writeRepoFile(sourceWorkspaceInstallPath, currentSourceContent, older);
@@ -199,6 +208,7 @@ describe('buildCliBinaryArtifactPayload bundled workspace sync', () => {
             exports: {
                 '.': './dist/index.js',
                 './firstPartyRuntime': './dist/firstPartyRuntime/index.js',
+                './expandHomeDirPath': './expandHomeDirPath.cjs',
             },
         }, null, 2)}\n`);
         await writeRepoFile(join(repoRoot, 'apps', 'cli', 'node_modules', '@happier-dev', 'cli-common', 'dist', 'index.js'), 'export {};\n', older);
@@ -254,6 +264,8 @@ describe('buildCliBinaryArtifactPayload bundled workspace sync', () => {
 
         expect(buildVersions).toEqual(['0.2.10-dev.61']);
         expect(compileObservedContents).toEqual([currentSourceContent]);
+        const requireFromPayload = createRequire(join(payloadDir, 'scripts', 'claude_remote_launcher.cjs'));
+        expect(requireFromPayload('./claude_launcher_runtime.cjs')).toHaveProperty('runClaudeCli', expect.any(Function));
         expect(await readdir(join(payloadDir, 'node_modules', 'node-pty', 'prebuilds'))).toEqual(['darwin-arm64']);
         await expect(readFile(join(payloadDir, 'node_modules', '@huggingface', 'transformers', 'index.js'), 'utf8'))
             .rejects.toMatchObject({ code: 'ENOENT' });

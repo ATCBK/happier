@@ -129,10 +129,12 @@ function resolveSessionListRowSession(
 ): Session | SessionListRenderableSession {
     if (!storeSession) return rowSession;
     const rowRenderable = rowSession as Partial<SessionListRenderableSession>;
+    // List items retain structural snapshots while the store supplies live row state.
+    // An explicit clear must replace the snapshot's pending flag.
     const hasPendingPermissionRequests =
-        rowRenderable.hasPendingPermissionRequests === true || storeSession.hasPendingPermissionRequests === true;
+        storeSession.hasPendingPermissionRequests ?? (rowRenderable.hasPendingPermissionRequests === true);
     const hasPendingUserActionRequests =
-        rowRenderable.hasPendingUserActionRequests === true || storeSession.hasPendingUserActionRequests === true;
+        storeSession.hasPendingUserActionRequests ?? (rowRenderable.hasPendingUserActionRequests === true);
     const keepVisibleWhenInactive =
         rowRenderable.keepVisibleWhenInactive === true || storeSession.keepVisibleWhenInactive === true;
     const rowPendingBlockedCount = normalizeFiniteCount(rowRenderable.pendingBlockedCount);

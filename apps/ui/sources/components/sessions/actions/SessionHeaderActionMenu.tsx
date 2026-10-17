@@ -42,7 +42,7 @@ import { useSessionHandoffSourceReachability } from '@/sync/domains/sessionHando
 import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
 import { completeSessionForkNavigation } from '@/components/sessions/transcript/forkContext/completeSessionForkNavigation';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
-import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
+import { confirmSessionStop, executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
 import { listVisibleSessionActionIds } from '@/components/sessions/actions/sessionActionAvailability';
 import { createSessionActionDropdownItem } from '@/components/sessions/actions/sessionActionPresentation';
 import {
@@ -436,16 +436,9 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
         if (actionId === SESSION_ACTION_STOP_ID || actionId === SESSION_ACTION_ARCHIVE_ID) {
           fireAndForget((async () => {
             const isArchive = actionId === SESSION_ACTION_ARCHIVE_ID;
-            const confirmed = await Modal.confirm(
-              isArchive ? t('sessionInfo.archiveSession') : t('sessionInfo.stopSession'),
-              isArchive ? t('sessionInfo.archiveSessionConfirm') : t('sessionInfo.stopSessionConfirm'),
-              {
-                cancelText: t('common.cancel'),
-                confirmText: isArchive ? t('sessionInfo.archiveSession') : t('sessionInfo.stopSession'),
-                destructive: true,
-              },
-            );
-            if (!confirmed) return;
+            if (!isArchive) {
+              if (!await confirmSessionStop()) return;
+            }
             try {
               await executeSessionAction({
                 actionId: isArchive ? SESSION_ACTION_ARCHIVE_ID : SESSION_ACTION_STOP_ID,

@@ -24,10 +24,11 @@ vi.mock('ps-list', async (importOriginal) => {
 
 describe('createCodexSharedAppServer', () => {
   it.skipIf(process.platform === 'win32').each([
-    ['serializes native startup through the first real initialize handshake for a shared home', false, false],
-    ['initializes the default socket server despite an overlong caller TMPDIR', true, false],
-    ['keeps failed native startup exclusive through process shutdown', false, true],
-  ] as const)('%s', async (_name, longCallerTemp, firstInitializeFails) => {
+    ['serializes native startup through the first real initialize handshake for a shared home', false, false, false],
+    ['initializes the default socket server despite an overlong caller TMPDIR', true, false, false],
+    ['keeps failed native startup exclusive through process shutdown', false, true, false],
+    ['preserves live native initialization failure alongside failed process cleanup', false, true, true],
+  ] as const)('%s', async (_name, longCallerTemp, firstInitializeFails, cleanupListingDenied) => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-codex-shared-native-startup-'));
     if (longCallerTemp) {
       const callerTemp = join(directory, 'caller-temporary-directory-with-a-long-native-unix-socket-prefix');
@@ -89,7 +90,9 @@ describe('createCodexSharedAppServer', () => {
               let observedOwner: string | null = null;
               try { observedOwner = readFileSync(nativeStartupLock, 'utf8'); } catch { /* An absent owner means unlocked cleanup. */ }
               cleanupWasExclusive.push(observedOwner !== null && observedOwner === failedStartupOwner);
-              await killProcessTree(child);
+              const previousDenial = enumeration.denied;
+              enumeration.denied = cleanupListingDenied && suffix === 'a';
+              try { await killProcessTree(child); } finally { enumeration.denied = previousDenial; }
             } } : {}),
             // The test's routed TMPDIR may exceed the native Unix socket limit.
             ...(longCallerTemp ? {} : {
@@ -103,7 +106,11 @@ describe('createCodexSharedAppServer', () => {
         return client.request('test/ping');
       }));
       expect({ outcomes, stderr }).toEqual({ outcomes: [
-        firstInitializeFails ? { status: 'rejected', reason: expect.objectContaining({ message: 'fixture initialize failed' }) }
+        firstInitializeFails ? { status: 'rejected', reason: cleanupListingDenied
+          ? expect.objectContaining({ name: 'AggregateError', errors: [
+            expect.objectContaining({ message: 'fixture initialize failed' }),
+            expect.objectContaining({ code: 'process_tree_termination_incomplete' }),
+          ] }) : expect.objectContaining({ message: 'fixture initialize failed' }) }
           : { status: 'fulfilled', value: { pong: true } },
         { status: 'fulfilled', value: { pong: true } },
       ], stderr: [] });
@@ -116,7 +123,7 @@ describe('createCodexSharedAppServer', () => {
     }
   });
 
-  it('preserves native startup failure alongside failed process cleanup', async () => {
+  it('preserves native startup failure when the process already exited despite unavailable enumeration', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-codex-startup-failure-'));
     enumeration.denied = true;
     try {
@@ -127,11 +134,8 @@ describe('createCodexSharedAppServer', () => {
         processEnv: { ...process.env, HAPPIER_CODEX_APP_SERVER_BIN: process.execPath },
         dependencies: { createRuntimeDirectory: () => mkdtemp(join(directory, 'runtime-')) },
       }).catch((error: unknown) => error);
-      expect(failure).toMatchObject({
-        name: 'AggregateError',
-        errors: [expect.objectContaining({ message: expect.stringContaining('exited before its socket was ready') }),
-          expect.objectContaining({ code: 'process_tree_termination_incomplete' })],
-      });
+      expect(failure).toMatchObject({ message: expect.stringContaining('exited before its socket was ready') });
+      expect(failure).not.toBeInstanceOf(AggregateError);
       expect(await readdir(directory)).toEqual([]);
     } finally {
       enumeration.denied = false;

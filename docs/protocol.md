@@ -21,6 +21,18 @@ The protocol is designed to stay minimal, explicit, and resilient under intermit
 
 If a new protocol field or event is proposed, it should answer: does this create a durable sync primitive, or can it be encoded inside existing encrypted payloads without expanding the API surface?
 
+## Plaintext message storage (development)
+
+Before comparing or storing plaintext message envelopes, the server removes actual
+NUL characters (U+0000) from string values, including nested tool output. PostgreSQL
+JSONB cannot represent NUL. Literal text such as `\u0000` and other control
+characters remain unchanged. Transcript and pending-message ingress
+share `normalizeSessionMessageContentForStorage`; retries compare the normalized
+content. A fixed `nul-removed` warning records normalization without message data.
+NUL-bearing object keys and ciphertext are rejected as `invalid-params`: rewriting
+keys could merge distinct fields, and encrypted content is opaque. This correction
+is development source behavior; release availability is tracked separately.
+
 ## Authentication
 Most endpoints require `Authorization: Bearer <token>`. The same token is also used in the Socket.IO handshake. Full auth flows and endpoints are documented in `api.md`.
 
@@ -154,6 +166,7 @@ from this current-work projection.
 - `session-end`
   - `{ sid, time }`
   - Closes the authorized publisher and publishes its inactive state through the same lifecycle-update owner.
+  - The current development server also accepts the released UI v0.2.1 user-scoped Stop event. Its durable session update includes the initiating UI connection because the event has no authoritative response projection.
 
 - `usage-report`
   - `{ key, sessionId?, tokens, cost }`
