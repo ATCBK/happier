@@ -308,7 +308,7 @@ describe('ApprovalPromptCard', () => {
                 result: { success: false, error: "EISDIR: illegal operation on a directory, open '/home/happier/mqa2-c14-clone'" },
             },
         });
-        expect(TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS.some(presents => presents(approval))).toBe(true);
+        expect(TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS.some(presents => presents(approval))).toBe(false);
         const screen = await renderCard(approval);
         expect(screen.findByTestId('approval-prompt-execution-failure')).toBeTruthy();
         expect(screen.getTextContent()).toContain('EISDIR: illegal operation on a directory');

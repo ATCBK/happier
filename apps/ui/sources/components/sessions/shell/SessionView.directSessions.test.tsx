@@ -4023,6 +4023,16 @@ describe('SessionView (direct sessions)', () => {
       actionArgs: { rootPath: '/home/happier/mqa2-c14-clone', path: '.', content: '' },
       summary: 'Write file',
       origin: { kind: 'transcript_tool_call', sessionId: 's1', toolCallId: '2', mcpRequestId: '2', toolName: 'action_execute' },
+      executionOriginV1: {
+        v: 1,
+        authority: 'account_automation',
+        surface: 'agent',
+        caller: { kind: 'host' },
+        serverId: 'server-route-1',
+        sessionId: 's1',
+        actionId: 'daemon.filesystem.writeFile',
+        requestId: '42279c0c-08dd-4db1-8cbc-7cfe8ecbdb0d',
+      },
       decision: { kind: 'approve', decidedAtMs: 2 },
       execution: {
         executedAtMs: 3,
