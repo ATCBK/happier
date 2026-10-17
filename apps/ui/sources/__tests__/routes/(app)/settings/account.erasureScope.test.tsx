@@ -6,7 +6,7 @@ import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
-import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
@@ -28,19 +28,15 @@ vi.mock('expo-camera', () => ({
 await initializeTerminalRouteRuntimeForTests();
 
 describe('Account erasure original confirmation target', () => {
-    let restoreStorage: (() => void) | undefined;
-    let restoreLocks: (() => void) | undefined;
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
     afterEach(async () => {
         await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
         (await import('@/utils/system/runtimeFetch')).resetRuntimeFetch();
-        prompt.mockReset(); vi.restoreAllMocks(); restoreLocks?.(); restoreStorage?.(); vi.unstubAllGlobals();
+        prompt.mockReset(); vi.restoreAllMocks(); browser?.restore(); browser = undefined; vi.unstubAllGlobals();
     });
 
     it('retains both Home credentials when focus changes inside the DELETE prompt', async () => {
-        restoreStorage = installLocalStorageMock().restore;
-        restoreLocks = installWebLockManagerMock().restore;
-        vi.stubGlobal('window', { location: { origin: 'https://origin.example.test' } });
-        vi.stubGlobal('document', {});
+        browser = await installBrowserRuntimeForTests({ url: 'https://origin.example.test' });
         const erasures: Array<{ home: string; authorization: string | null }> = [];
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
         setRuntimeFetch(async (input, init) => {

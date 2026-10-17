@@ -21,6 +21,10 @@ import {
 } from './localServiceActionOutcome';
 
 describe('readLocalServiceActionOutcome', () => {
+    it.each(['approval_canceled', 'approval_rejected', 'cancelled'])('classifies the shared policy decline as cancelled (%s)', errorCode => {
+        expect(readLocalServiceActionOutcome({ ok: false, errorCode, error: errorCode }))
+            .toEqual({ kind: 'cancelled' });
+    });
     it('retains a strict establishment cause for existing Details and rejects extra output fields', () => {
         const establishmentFailure = { cause: 'port_in_use', port: 5173, exitCode: 1,
             sameProject: true, lastStderrLine: 'Error: listen EADDRINUSE: address already in use :::5173' };
@@ -94,6 +98,18 @@ function renderRunner() {
 describe('useLocalServiceActionRunner', () => {
     afterEach(standardCleanup);
     beforeEach(() => modalSpies.alert.mockReset());
+
+    it.each(['approval_canceled', 'approval_rejected', 'cancelled'])('clears pending without success or failure presentation when shared policy is declined (%s)', async errorCode => {
+        const { value, Harness } = renderRunner();
+        await renderScreen(<Harness />);
+        await act(async () => {
+            expect(await value.current?.run({ id: 'row:declined', failureTitle: 'Could not stop',
+                action: async () => ({ ok: false, errorCode, error: errorCode }) })).toBe(false);
+        });
+        expect(value.current?.pendingId).toBeNull();
+        expect(value.current?.failure).toBeNull();
+        expect(modalSpies.alert).not.toHaveBeenCalled();
+    });
 
     it.each(['not_installed', 'not_running', 'permission_denied', 'unavailable'])('shows the named machine and Docker prerequisite through the existing failure dialog (%s)', async cause => {
         const { value, Harness } = renderRunner();

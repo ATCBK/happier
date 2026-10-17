@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { JsonValue, PluginSettingDescriptor, PluginSettingsChange } from '@happier-dev/plugin-sdk';
 import type { SettingsService, ScopedSettingsService, SettingsScopeRef } from '@happier-dev/plugin-sdk/settings';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { PluginSettingsContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/settings';
 import * as module from '../fixtures/qa-plugin-authoring/qa-settings-actions/src/index.js';
 
 let plugin: PluginTestkit | undefined;
@@ -14,9 +15,31 @@ function settingsBoundary() {
     let values: Record<string, JsonValue> = { enabled: true, style: 'concise', unrelated: 'retain' };
     const listeners = new Set<(change: PluginSettingsChange) => void>();
     const scope = { kind: 'account' } as const;
-    const fields = module.manifest.contributes.settings.flatMap((group) => group.fields.map((field) => ({
-        ...field, target: group.target, scope: group.scope,
-    }))) satisfies readonly PluginSettingDescriptor[];
+    const groups = module.manifest.contributes.settings;
+    if (!groups) throw new Error('Missing QA settings declarations');
+    const fields = groups.map(group => PluginSettingsContributionV2Schema.parse(group)).flatMap((group) => {
+        if (group.target.kind !== 'plugin' || group.scope !== 'account') {
+            throw new Error('QA settings fixture requires plugin-scoped Account settings');
+        }
+        const { target, scope } = group;
+        return group.fields.map((field) => {
+            if (field.secret !== undefined && field.secret !== false) {
+                throw new Error('QA settings fixture requires non-secret fields');
+            }
+            if (typeof field.title !== 'string' || (field.description !== undefined && typeof field.description !== 'string')) {
+                throw new Error('QA settings fixture requires static field copy');
+            }
+            return {
+                id: field.id,
+                title: field.title,
+                description: field.description,
+                schema: field.schema,
+                default: field.default,
+                target,
+                scope,
+            };
+        });
+    }) satisfies readonly PluginSettingDescriptor[];
     const service: ScopedSettingsService = {
         async snapshot() { return { scope, revision: String(revision), values: { ...values } }; },
         async get<T extends JsonValue>(id: string) {

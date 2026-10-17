@@ -65,6 +65,9 @@ vi.mock('@/sync/domains/state/agentStateCapabilities', () => ({
     getPermissionsInUiWhileLocal: () => ({}),
 }));
 
+// Collect the composed graph before a test starts its renderer/act lifetime.
+const { ChatList } = await import('./ChatList');
+
 // Composed Legend-axis affordance decisions ported from the deleted FlashList monolith
 // (MIGRATE rows: catch-up overlay decision, row invalidation, throttle props).
 describe('ChatList composed Legend affordances', () => {
@@ -87,7 +90,6 @@ describe('ChatList composed Legend affordances', () => {
     });
 
     async function renderComposedChatList() {
-        const { ChatList } = await import('./ChatList');
         return renderChatList(React.createElement(ChatList, {
             session: { ...chatListHarnessState.sessionState },
             sessionSurfaceKey: sessionAddressKey({ serverId: 'test-server', sessionId: 'session-1' }),
@@ -175,7 +177,6 @@ describe('ChatList composed Legend affordances', () => {
             },
         }] satisfies readonly OpenApprovalArtifactForSession[];
 
-        const { ChatList } = await import('./ChatList');
         await screen.update(React.createElement(ChatList, {
             session: { ...chatListHarnessState.sessionState },
             sessionSurfaceKey: sessionAddressKey({ serverId: 'test-server', sessionId: 'session-1' }),

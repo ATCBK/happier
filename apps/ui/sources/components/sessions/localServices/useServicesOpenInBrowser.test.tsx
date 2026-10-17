@@ -214,7 +214,7 @@ describe('useServicesOpenInBrowser', () => {
         await act(async () => {
             expect(await decideApprovalAsInbox(fixture!.home.id, approval!.id, decision)).toMatchObject({ ok: true });
         });
-        expect(readLocalServiceActionOutcome(await pendingOpen!)).toMatchObject({ kind: decision === 'approve' ? 'succeeded' : 'failed' });
+        expect(readLocalServiceActionOutcome(await pendingOpen!)).toMatchObject({ kind: decision === 'approve' ? 'succeeded' : 'cancelled' });
         expect(screen.tree.findByType('HookProbe' as never).props.detailsTabKinds).toEqual(decision === 'approve' ? ['browser-view'] : []);
         expect(onAfterOpen).toHaveBeenCalledTimes(decision === 'approve' ? 1 : 0);
         expect(onAfterDetailsOpen).toHaveBeenCalledTimes(decision === 'approve' ? 1 : 0);

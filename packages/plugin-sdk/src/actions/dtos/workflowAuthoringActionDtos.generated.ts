@@ -556,9 +556,9 @@ export type WorkflowAuthoringActionInputById = {
         settings?: {
             description?: string | undefined;
             projectTarget?: {
-                machineId: unknown;
+                machineId: string;
                 directory: string;
-                workspaceRefId?: unknown;
+                workspaceRefId?: string | undefined;
             } | null | undefined;
             executionTarget?: 'session' | 'detached_run' | undefined;
             triggers?: {
@@ -741,9 +741,9 @@ export type WorkflowAuthoringActionInputById = {
                     enabled: boolean;
                 }[];
                 project: {
-                    machineId: unknown;
+                    machineId: string;
                     directory: string;
-                    workspaceRefId?: unknown;
+                    workspaceRefId?: string | undefined;
                 } | null;
                 inputs: Record<string, unknown>;
             } | undefined;
@@ -778,7 +778,7 @@ export type WorkflowAuthoringActionInputById = {
         draftId: string;
     };
     readonly "workflow.run.review.draft.set": {
-        runId: unknown;
+        runId: string;
         expectedContentRevision: string;
         value: unknown;
         scope: {

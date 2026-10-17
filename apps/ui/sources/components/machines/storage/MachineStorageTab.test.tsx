@@ -12,7 +12,7 @@ import { peekTempData } from '@/utils/sessions/tempDataStore';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { renderScreen } from '@/dev/testkit';
+import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -47,9 +47,10 @@ const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/se
 const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
-const { t } = await import('@/text');
+const { preloadTranslationsForSettings, setPreferredLanguageFromSettings, t } = await import('@/text');
 const { machineStorageStore } = await import('@/sync/domains/machines/storage/machineStorageStore');
 const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { MachineStorageTab } = await import('./MachineStorageTab');
 
 const GB = 1_000_000_000;
@@ -110,13 +111,18 @@ async function mount(params: React.ComponentProps<typeof MachineStorageTab>['par
     const serverId = await home.addHome({ name: 'Storage Home', serverUrl: `https://storage-tab-${Math.random().toString(36).slice(2)}.test`,
         serverIdentityId: 'srv_storage_tab', accountId: 'owner' });
     primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
-    home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
+    // Chart tests exercise admitted view changes; approval policy stays real and this person permits Settings writes.
+    const settings = settingsParse({
+        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+    });
+    home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
     // Mounted settings and known Project rows consume the applied Home/Account lifetime.
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const resolution = await resolveServerCredentialAccountScope(serverId);
     if (resolution.kind !== 'bound') throw new Error('Storage Home must be bound');
     storage.getState().activateProfileScope(resolution.scope);
     await storage.getState().activateSettingsScope(resolution.scope);
+    storage.getState().applySettings(settings, 1);
     storage.setState({ machines: {}, machineListByServerId: { [serverId]: [machine(overrides)] }, machineListStatusByServerId: { [serverId]: 'idle' } });
     transport.rpc.mockImplementation(async (rpc: Rpc) => {
         const { method } = rpc;
@@ -135,15 +141,122 @@ async function mount(params: React.ComponentProps<typeof MachineStorageTab>['par
 }
 /** A running session on this machine whose worktree is in use (the real session stop Action reaches it by the Machine network). */
 function holdingSession(serverId: string) {
+    const metadata = createSessionFixture().metadata;
+    if (!metadata) throw new Error('The canonical Session fixture must have readable metadata');
     return installSessionActionFixture({ homes: home, storage, serverId, session: { id: 'sess-1',
-        metadata: { path: '/Users/leeroy/dev/happier/.dev/worktree/live', host: 'leeroy-mbp', homeDir: '/Users/leeroy', machineId: 'machine', flavor: 'codex' } } });
+        metadata: { ...metadata, path: '/Users/leeroy/dev/happier/.dev/worktree/live', host: 'leeroy-mbp', homeDir: '/Users/leeroy', machineId: 'machine', flavor: 'codex' } } });
 }
 
 const before = storage.getState();
 beforeEach(async () => { await home.reset(); machineStorageStore.reset(); transport.rpc.mockReset(); routerPush.mockReset(); });
-afterEach(async () => { standardCleanup(); machineStorageStore.reset(); storage.setState(before); await home.reset(); });
+afterEach(async () => { standardCleanup(); setPreferredLanguageFromSettings('en'); machineStorageStore.reset(); storage.setState(before); await home.reset(); });
 
 describe('MachineStorageTab', () => {
+    it('refreshes mounted worktree evidence search when the language changes', async () => {
+        await preloadTranslationsForSettings('fr');
+        setPreferredLanguageFromSettings('fr');
+        const frenchEvidence = t('machineStorage.evidence.scm_registered_worktree');
+        setPreferredLanguageFromSettings('en');
+        const worktree: StorageItemV1 = { ...item('locale', 'Feature branch', GB, 'safe', 'merged_clean'),
+            kind: 'worktree', categoryId: 'worktrees', evidence: ['scm_registered_worktree'],
+            path: '/Users/leeroy/dev/project/.dev/worktree/locale' };
+        const { screen } = await mount({ id: 'storage', page: 'worktrees' }, {}, ({ method }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_WORKTREES_LIST) return { revision: 1, items: [worktree] };
+            return undefined;
+        });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-worktree-locale')).not.toBeNull()); });
+        await act(async () => { screen.changeTextByTestId('machine-storage-worktrees-find', frenchEvidence); });
+        expect(screen.findByTestId('machine-storage-worktree-locale')).toBeNull();
+        await act(async () => { setPreferredLanguageFromSettings('fr'); });
+        expect(screen.findByTestId('machine-storage-worktree-locale')).not.toBeNull();
+        expect(screen.getTextContent()).toContain(frenchEvidence);
+        await act(async () => { setPreferredLanguageFromSettings('en'); });
+        expect(screen.findByTestId('machine-storage-worktree-locale')).toBeNull();
+    });
+
+    it.each([
+        { id: 'storage' },
+        { id: 'storage', page: 'category', categoryId: 'caches' },
+        { id: 'storage', page: 'suggestions' },
+        { id: 'storage', page: 'worktrees' },
+        { id: 'storage', prepare: 'lowDisk', volumeId: 'mac' },
+    ] satisfies Array<React.ComponentProps<typeof MachineStorageTab>['params']>)('presents evidence without exposing machine codes on %j', async (params) => {
+        // A Machine transport response may contain a future evidence code or native recognizer identifiers.
+        const evidence = ['managed_cache_root', 'recognizer:private-cache-detector', 'manifest:private-project.json', 'future_private_evidence'];
+        const suggestion = { ...item('evidence', 'Tool cache', GB, 'safe', 'downloads_again'), evidence };
+        const { screen } = await mount(params, {}, ({ method }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return { ...SUMMARY, suggestionsTop: [suggestion] };
+            if (method === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST) return { ...CACHES, items: [suggestion] };
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUGGESTIONS_LIST || method === RPC_METHODS.DAEMON_STORAGE_WORKTREES_LIST) {
+                return { revision: 1, items: [suggestion] };
+            }
+            return undefined;
+        });
+        const rowId = 'prepare' in params ? 'machine-storage-lowdisk-evidence'
+            : params.page === 'category' ? 'machine-storage-item-evidence'
+            : params.page === 'suggestions' ? 'machine-storage-suggestion-evidence'
+            : params.page === 'worktrees' ? 'machine-storage-worktree-evidence'
+            : 'machine-storage-top-suggestion-evidence';
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId(rowId)).not.toBeNull()); });
+        const text = screen.getTextContent();
+        for (const raw of evidence) expect(text).not.toContain(raw);
+        expect(text).not.toContain('private-cache-detector');
+        expect(text).not.toContain('private-project.json');
+        for (const key of ['managed_cache_root', 'recognizer', 'manifest', 'unknown'] as const) {
+            expect(text).toContain(t(`machineStorage.evidence.${key}`));
+        }
+    });
+
+    it('honors Allowed Empty directly from Trash and keeps the exact displayed selection', async () => {
+        const calls: Rpc[] = [];
+        const { screen, serverId } = await mount({ id: 'storage', page: 'category', categoryId: 'trash' }, {}, rpc => {
+            calls.push(rpc);
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST) return { revision: 1, sizedAt: SUMMARY.sizedAt, categoryId: 'trash', items: [],
+                trashEntries: [{ entryId: 'entry-a', batchId: 'batch-a', volumeId: 'mac', originalPath: '/logs/old', title: 'Old log',
+                    size: size(64), movedAt: 1, movedBy: { accountId: 'owner', kind: 'person' }, emptiesAt: null, restorable: true }] };
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY) return { outcomes: [{ entryId: 'entry-a', status: 'deleted' }], freedBytes: 64 };
+            return undefined;
+        });
+        const settings = settingsParse({ actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'machines.storage.trash.empty': ['ui'] } } });
+        home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 2 } });
+        storage.getState().applySettings(settings, 2);
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-trash-empty-all')).not.toBeNull()); });
+        modal.current!.spies.confirm.mockClear().mockResolvedValue(false);
+        await act(async () => { screen.pressByTestId('machine-storage-trash-empty-all'); });
+        await act(async () => { await vi.waitFor(() => expect(calls.filter(call => call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY)).toHaveLength(1)); });
+        expect(calls.find(call => call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY)?.payload).toEqual({ serverId: 'srv_storage_tab', machineId: 'machine', entryIds: ['entry-a'] });
+        expect(modal.current!.spies.confirm).not.toHaveBeenCalled();
+    });
+
+    it('keeps a declined permanent review quiet and preserves its selection for retry', async () => {
+        const ref = resolved({ itemId: 'old-log', path: '/logs/old' });
+        const calls: Rpc[] = [];
+        const { screen } = await mount({ id: 'storage' }, {}, rpc => {
+            calls.push(rpc);
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return { ...SUMMARY, pile: { count: 1, freesBytes: 64, droppedSinceLastView: [] } };
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_PILE_GET) return { revision: 1, items: [ref], summary: { count: 1, freesBytes: 64, droppedSinceLastView: [] } };
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK) return { items: [{ ref, expect: 'checked-log', verdict: 'safe', reason: { code: 'rebuilds' }, size: size(64), absorbs: [] }],
+                staying: [], countedOnceBytes: 0, totalFreesBytes: 64, trashVolumes: [{ volumeId: 'mac', trashAvailable: true }] };
+            return undefined;
+        });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-pile-review')).not.toBeNull()); });
+        await act(async () => { screen.pressByTestId('machine-storage-pile-review'); });
+        const shown = modal.current!.spies.show.mock.calls.at(-1)?.[0] as { component: React.ComponentType<Record<string, unknown>>; props: Record<string, unknown> };
+        const close = vi.fn();
+        const Sheet = shown.component;
+        const sheet = await renderScreen(<Sheet {...shown.props} onClose={close} />);
+        await act(async () => { await vi.waitFor(() => expect(sheet.findByTestId('machine-storage-review-row-old-log')).not.toBeNull()); });
+        await act(async () => { sheet.pressByTestId('machine-storage-review-mode:delete'); });
+        modal.current!.spies.confirm.mockClear().mockResolvedValue(false);
+        await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
+        await act(async () => { await vi.waitFor(() => expect(modal.current!.spies.confirm).toHaveBeenCalledOnce()); });
+        expect(calls.some(call => call.method === RPC_METHODS.DAEMON_STORAGE_DELETE_NOW)).toBe(false);
+        expect(close).not.toHaveBeenCalled();
+        expect(sheet.getTextContent()).not.toContain(t('machineStorage.review.applyFailed'));
+        expect(sheet.findByTestId('machine-storage-review-confirm')?.props.disabled).toBe(false);
+        expect(sheet.getTextContent()).toContain(t('machineStorage.review.deleteForGood', { count: 1 }));
+    });
+
     it.each(['web', 'ios', 'android'] as const)('announces a worktree group as none, mixed, all, then none on %s', async platform => {
         // Only the platform SDK fact changes; the group, pile controller and shared Pressable stay real.
         const originalPlatform = Object.getOwnPropertyDescriptor(Platform, 'OS')!;
@@ -240,7 +353,7 @@ describe('MachineStorageTab', () => {
         expect(sheet.getTextContent()).toContain(t('machineStorage.review.moveToTrash', { count: 1 }));
     });
 
-    it('queries custom Large sizes and Old whole-day ages through the real scan Action, retaining values on invalid or canceled input', async () => {
+    it('queries unfiltered Large files, optional sizes and Old whole-day ages through the real scan Action, retaining values on invalid or canceled input', async () => {
         const scan: DiskScanStateV1 = { scanId: 'custom-scan', target: { volumeId: 'mac' }, status: 'complete', startedAt: 1, finishedAt: 2,
             progress: { sizedBytes: GB, usedBytes: GB, items: 1 }, unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } };
@@ -272,14 +385,25 @@ describe('MachineStorageTab', () => {
         await vi.waitFor(async () => {
             await act(async () => {});
             expect(lastView(), JSON.stringify({ methods: transport.rpc.mock.calls.map(call => (call[0] as Rpc).method), text: screen.getTextContent() }))
-                .toMatchObject({ tab: 'large', minBytes: 100 * 1e6 });
+                .toEqual({ tab: 'large', depth: 1 });
         });
+        async function chooseSize(id: string) {
+            await act(async () => { screen.pressByTestId('machine-storage-disk-large-min.trigger'); });
+            await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId(`machine-storage-disk-large-min:${id}`)).not.toBeNull(); });
+            await act(async () => { screen.pressByTestId(`machine-storage-disk-large-min:${id}`); });
+        }
+        await chooseSize('10000000');
+        await expectView({ tab: 'large', depth: 1, minBytes: 10_000_000 });
         await custom('machine-storage-disk-large-min', '2.5 MB');
         await expectView({ tab: 'large', depth: 1, minBytes: 2_500_000 });
         await custom('machine-storage-disk-large-min', '1 B');
         await expectView({ tab: 'large', depth: 1, minBytes: 1 });
         await custom('machine-storage-disk-large-min', '0');
         expect(lastView()).toMatchObject({ minBytes: 1 });
+        await custom('machine-storage-disk-large-min', null);
+        expect(lastView()).toMatchObject({ minBytes: 1 });
+        await chooseSize('all');
+        await expectView({ tab: 'large', depth: 1 });
         await act(async () => { screen.pressByTestId('machine-storage-disk-files:old'); });
         await act(async () => { await vi.waitFor(() => expect(lastView()).toMatchObject({ tab: 'old', olderThanMonths: 3 })); });
         await custom('machine-storage-disk-old-months', '45 days');
@@ -426,9 +550,25 @@ describe('MachineStorageTab', () => {
         expect(text).not.toContain('Keeping it tidy');
     });
 
+    it('gives a person who only uses the machine their own Session folders and Trash, and their own pile on those pages', async () => {
+        const { screen, setParams } = await mount({ id: 'storage' }, { isShared: true });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-category-sessionFolders')).not.toBeNull()); });
+        expect(screen.findByTestId('machine-storage-category-trash')).not.toBeNull();
+        // Everything else stays with the people who manage the machine.
+        expect(screen.findByTestId('machine-storage-category-worktrees')).toBeNull();
+        await act(async () => { screen.pressByTestId('machine-storage-category-trash'); });
+        expect(setParams).toHaveBeenCalledWith({ id: 'storage', page: 'category', categoryId: 'trash' });
+
+        const page = await mount({ id: 'storage', page: 'category', categoryId: 'trash' }, { isShared: true }, (rpc) => {
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return { ...SUMMARY, categories: [], pile: { count: 1, freesBytes: 64, droppedSinceLastView: [] } };
+            return undefined;
+        });
+        await act(async () => { await vi.waitFor(() => expect(page.screen.findByTestId('machine-storage-pile-review')).not.toBeNull()); });
+    });
+
     it('collects worktrees into the pile, asks before a Keep one, reviews, narrows, and moves exactly what stays ticked to Trash', async () => {
         const worktree = (itemId: string, title: string, verdict: StorageItemV1['verdict'], code: StorageItemV1['reason']['code'], extra: Partial<StorageItemV1> = {}): StorageItemV1 => ({
-            itemId, kind: 'worktree', categoryId: 'worktrees', title, evidence: [`branch ${title}`], path: `/Users/leeroy/dev/happier/.dev/worktree/${title}`,
+            itemId, kind: 'worktree', categoryId: 'worktrees', title, evidence: ['scm_registered_worktree'], path: `/Users/leeroy/dev/happier/.dev/worktree/${title}`,
             size: size(2 * GB), verdict, reason: { code }, collectable: verdict !== 'check', ...extra });
         const ITEMS = [
             worktree('wt-a', 'issues-282', 'safe', 'merged_clean'),
@@ -558,23 +698,31 @@ describe('MachineStorageTab', () => {
         expect(sheet.getTextContent()).toContain('Worktree with a running session');
     });
 
-    it('stops the session holding an in-use worktree, then removes it (Stop the session and remove, R42.1)', async () => {
+    it('stops the session holding an in-use worktree, then reviews its changed facts before removal (R42.1)', async () => {
         const path = '/Users/leeroy/dev/happier/.dev/worktree/live';
-        const pile = [resolved({ itemId: 'wt-live', path })];
+        const pile = [resolved({ itemId: 'wt-live', path }), resolved({ itemId: 'wt-kept', path: `${path}-kept` })];
         const order: string[] = [];
+        let stopped = false;
         const { screen, serverId } = await mount({ id: 'storage' }, {}, (rpc) => {
             const input = rpc.payload ?? {};
             switch (rpc.method) {
                 case RPC_METHODS.STOP_SESSION:
                     order.push(`stop:${String(input.sessionId)}`);
+                    stopped = true;
                     return { status: 'stopped' };
-                case RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET: return { ...SUMMARY, pile: { count: 1, freesBytes: 2 * GB, droppedSinceLastView: [] } };
-                case RPC_METHODS.DAEMON_STORAGE_PILE_GET: return { revision: 2, items: pile, summary: { count: 1, freesBytes: 2 * GB, droppedSinceLastView: [] } };
-                case RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK: return {
-                    items: [{ ref: pile[0], expect: 'expect-live', verdict: 'keep', reason: { code: 'in_use', detail: { sessionId: 'sess-1' } },
-                        loses: [{ code: 'in_use', detail: { sessionId: 'sess-1' } }], size: size(2 * GB), absorbs: [] }],
-                    staying: [], countedOnceBytes: 0, totalFreesBytes: 2 * GB, trashVolumes: [{ volumeId: 'mac', trashAvailable: true }] };
+                case RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET: return { ...SUMMARY, pile: { count: 2, freesBytes: 4 * GB, droppedSinceLastView: [] } };
+                case RPC_METHODS.DAEMON_STORAGE_PILE_GET: return { revision: 2, items: pile, summary: { count: 2, freesBytes: 4 * GB, droppedSinceLastView: [] } };
+                case RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK:
+                    if (stopped) order.push('check-stopped');
+                    return {
+                    items: [{ ref: pile[0], expect: stopped ? 'expect-stopped' : 'expect-live', verdict: stopped ? 'safe' : 'keep',
+                        reason: stopped ? { code: 'stopped' } : { code: 'in_use', detail: { sessionId: 'sess-1' } },
+                        loses: stopped ? [] : [{ code: 'in_use', detail: { sessionId: 'sess-1' } }], size: size(2 * GB), absorbs: [] },
+                        { ref: pile[1], expect: 'expect-kept', verdict: 'safe', reason: { code: 'stopped' }, size: size(2 * GB), absorbs: [] }],
+                    staying: [], countedOnceBytes: 0, totalFreesBytes: 4 * GB, trashVolumes: [{ volumeId: 'mac', trashAvailable: true }] };
                 case RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE:
+                    expect(input.items).toMatchObject([{ ref: { itemId: 'wt-live' }, expect: 'expect-stopped' }]);
+                    expect(input.items).toHaveLength(1);
                     order.push('move');
                     return { batchId: 'batch-live', mode: 'trash', inTrashBytes: 2 * GB, freedBytes: 0,
                         outcomes: (input.items as Array<{ ref: { itemId: string } }>).map(entry => ({ itemId: entry.ref.itemId, status: 'moved' })) };
@@ -590,9 +738,13 @@ describe('MachineStorageTab', () => {
         const sheet = await renderScreen(<Sheet {...shown.props} onClose={close} />);
         await act(async () => { await vi.waitFor(() => expect(sheet.findByTestId('machine-storage-review-row-wt-live')).not.toBeNull()); });
         expect(sheet.getTextContent()).toContain('Stop the session and remove');
+        await act(async () => { sheet.pressByTestId('machine-storage-review-row-wt-kept'); });
+        await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
+        await act(async () => { await vi.waitFor(() => expect(order).toEqual(['stop:sess-1', 'check-stopped'])); });
+        expect(close).not.toHaveBeenCalled();
         await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
         await act(async () => { await vi.waitFor(() => expect(close).toHaveBeenCalled()); });
-        expect(order).toEqual(['stop:sess-1', 'move']);
+        expect(order).toEqual(['stop:sess-1', 'check-stopped', 'move']);
     });
 
     it('keeps an in-use worktree when its session does not stop, and says so', async () => {

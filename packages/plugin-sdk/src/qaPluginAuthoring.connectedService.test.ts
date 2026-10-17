@@ -8,6 +8,17 @@ import type {
 
 import * as plugin from '../fixtures/qa-plugin-authoring/qa-connected-service/index.js';
 
+const hostInvocation = {
+    plugin: { id: plugin.manifest.id, version: plugin.manifest.version },
+    contribution: { id: 'demo', qualifiedId: `${plugin.manifest.id}/demo` },
+    surface: 'background',
+    invokedAtMs: 1,
+    // This fixture admits only credential storage; unexpected host-service reads fail closed.
+    services: new Proxy({} as ConnectedAccountReadContext['services'], {
+        get() { throw new Error('QA host invocation services are not admitted'); },
+    }),
+} satisfies Pick<ConnectedAccountReadContext, 'plugin' | 'contribution' | 'surface' | 'invokedAtMs' | 'services'>;
+
 // Only the host credential-storage boundary is faked; the registered producer is real.
 function credentialStore() {
     const values = new Map<string, string>();
@@ -19,31 +30,35 @@ function credentialStore() {
     return store;
 }
 
-function authenticationContext(store: ConnectedAccountCredentialStore) {
+function authenticationContext(store: ConnectedAccountCredentialStore, attemptId = 'qa-attempt-1', signal = new AbortController().signal) {
     const service = { pluginId: 'qa.public-connected-service', localId: 'demo' };
     const boundary = {
+        ...hostInvocation,
         service,
-        attempt: { kind: 'connect', attemptId: 'qa-attempt-1' },
+        attempt: { kind: 'connect', attemptId },
         configuration: {
-            target: { kind: 'attempt', attemptId: 'qa-attempt-1', service, modeId: 'manual' },
+            target: { kind: 'attempt', attemptId, service, modeId: 'manual' },
             revision: 'qa-config-1', values: {}, async getSecret() { return null; },
         },
         attemptCredentials: store,
-        signal: new AbortController().signal,
-    } satisfies Pick<ConnectedAccountAuthenticationContext,
-        'service' | 'attempt' | 'configuration' | 'attemptCredentials' | 'signal'>;
-    // The omitted invocation services are host boundary capabilities this producer never reads.
-    return boundary as ConnectedAccountAuthenticationContext;
+        signal,
+    } satisfies ConnectedAccountAuthenticationContext;
+    return boundary;
 }
 
 function readContext(store: ConnectedAccountCredentialStore) {
+    const account = { service: { pluginId: 'qa.public-connected-service', localId: 'demo' }, accountId: 'qa-host-account-1' };
     const boundary = {
-        account: { service: { pluginId: 'qa.public-connected-service', localId: 'demo' }, accountId: 'qa-host-account-1' },
+        ...hostInvocation,
+        account,
+        configuration: {
+            target: { kind: 'account', account, modeId: 'manual' },
+            revision: 'qa-config-1', values: {}, async getSecret() { return null; },
+        },
         credentials: store,
         signal: new AbortController().signal,
-    } satisfies Pick<ConnectedAccountReadContext, 'account' | 'credentials' | 'signal'>;
-    // No host services are exercised; only the credential boundary is needed for these reads.
-    return boundary as ConnectedAccountReadContext;
+    } satisfies ConnectedAccountReadContext;
+    return boundary;
 }
 
 describe('QA public connected-service authoring', () => {
@@ -58,12 +73,7 @@ describe('QA public connected-service authoring', () => {
             if (mode?.kind !== 'manual') throw new Error('Missing manual QA mode');
             const store = credentialStore();
             for (const attemptId of ['qa-attempt-1', 'qa-attempt-2']) {
-                const context = authenticationContext(store);
-                const result = await mode.complete({ fields: { token: 'qa-demo-token' } }, {
-                    ...context, attempt: { kind: 'connect', attemptId },
-                    configuration: { ...context.configuration,
-                        target: { kind: 'attempt', service: context.service, modeId: 'manual', attemptId } },
-                });
+                const result = await mode.complete({ fields: { token: 'qa-demo-token' } }, authenticationContext(store, attemptId));
                 expect(result).toEqual({ status: 'connected', displayName: 'QA Demo account', scopes: [] });
             }
             await expect(runtime.status(readContext(store))).resolves.toMatchObject({ status: 'connected' });
@@ -96,9 +106,7 @@ describe('QA public connected-service authoring', () => {
                 .rejects.toThrow(/storage unavailable/u);
             const cancellation = new AbortController();
             cancellation.abort();
-            await expect(mode.complete({ fields: { token: 'qa-demo-token' } }, {
-                ...authenticationContext(store), signal: cancellation.signal,
-            })).rejects.toMatchObject({ name: 'AbortError' });
+            await expect(mode.complete({ fields: { token: 'qa-demo-token' } }, authenticationContext(store, 'qa-attempt-1', cancellation.signal))).rejects.toMatchObject({ name: 'AbortError' });
             await expect(store.get('token')).resolves.toBeNull();
             await expect(runtime.revoke(readContext(store))).resolves.toEqual({ status: 'remoteUnsupported' });
         } finally {

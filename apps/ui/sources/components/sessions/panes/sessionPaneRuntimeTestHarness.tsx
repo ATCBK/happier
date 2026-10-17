@@ -25,6 +25,7 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 installDisconnectedServerSocketBoundary();
 // The connected Account lifecycle must use the real store beneath transport fixtures.
@@ -143,14 +144,22 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
                     if (!session || !areServerProfileIdentifiersEquivalent(session.serverId, account?.serverId)) return Response.json(
                         V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 },
                     );
-                    return json(V2SessionByIdResponseSchema.parse({ session: {
-                        ...createPlainSessionCurrentProjectionRecordFixture({
+                    const record = createPlainSessionCurrentProjectionRecordFixture({
                             id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
-                            active: session.active, activeAt: session.activeAt, metadata: session.metadata,
+                            active: session.active, activeAt: session.activeAt, metadata: readSessionOwnerMetadataView(session),
                             metadataVersion: session.metadataVersion, agentStateVersion: session.agentStateVersion,
                             responsibleAccountId: session.responsibleAccountId ?? null,
                             responsibleAccount: session.responsibleAccount ?? null,
-                        }),
+                        });
+                    const { ownerMetadata: _ownerMetadata, ...recipientRecord } = record;
+                    return json(V2SessionByIdResponseSchema.parse({ session: {
+                        ...(session.access && session.access.level !== 'owner' ? recipientRecord : record),
+                        ...(session.access ? {
+                            effectiveAccess: { v: 1, level: session.access.level,
+                                capabilities: session.access.capabilities, sources: session.access.sources ?? [] },
+                            ...(session.access.level !== 'owner' ? { share: { accessLevel: session.access.level,
+                                canApprovePermissions: session.access.capabilities.approveRuntimePermissions } } : {}),
+                        } : {}),
                         pendingVersion: session.pendingVersion, pendingCount: session.pendingCount,
                         pendingActivationAuthorization: session.pendingActivationAuthorization ?? undefined,
                     } }));
