@@ -101,6 +101,7 @@ describe('createSpawnedSession exact remote routing', () => {
     })).rejects.toMatchObject({ code: 'DAEMON_RPC_UNAVAILABLE' });
     expect(calls.every((call) => call.method.startsWith('remote:'))).toBe(true);
     expect(boundary.spawn).not.toHaveBeenCalled();
+    expect(boundary.get).toHaveBeenCalled();
     expect(boundary.get.mock.calls.every(([url]) => String(url).endsWith('/v1/machines/remote'))).toBe(true);
   });
 

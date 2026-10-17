@@ -60,8 +60,14 @@ describe('core e2e: durable request settlement recovery', () => {
     const journalFiles = (await readdir(homeDir, { recursive: true })).filter((file) => file.endsWith(`session-${sessionId}.json`));
     expect(journalFiles).toHaveLength(1);
     const admitted = await readFile(join(homeDir, journalFiles[0]), 'utf8');
-    expect(admitted).toContain('agent_state_request_settlement');
-    expect(admitted).toContain(credentialMode === 'tokenOnly' ? 'installation_encrypted_v1' : 'encrypted');
+    expect(JSON.parse(admitted)).toMatchObject({
+      mutations: expect.arrayContaining([expect.objectContaining({
+        kind: 'agent_state_request_settlement',
+        payload: expect.objectContaining({ content: expect.objectContaining({
+          t: credentialMode === 'tokenOnly' ? 'installation_encrypted_v1' : 'encrypted',
+        }) }),
+      })]),
+    });
     expect(admitted).not.toContain('private-settlement-marker');
     server = await startServerLight({ testDir, dbProvider: 'sqlite', extraEnv, preserveExistingDataDir: true, __portAllocator: async () => Number(new URL(baseUrl).port) });
     const observer = createUserScopedSocketCollector(baseUrl, auth.token);
