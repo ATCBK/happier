@@ -284,7 +284,8 @@ import {
 import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
-import { updateAgentStateBestEffort, updateMetadataBestEffort } from './sessionWritesBestEffort';
+import { updateAgentStateBestEffort, updateMetadataBestEffort, type AgentStateWriteOptions } from './sessionWritesBestEffort';
+import { AgentStateCompletionRecovery } from './agentStateCompletionRecovery';
 import { readCliClientUpgradeRequired } from '@/api/clientCompatibility/cliClientCompatibility';
 import { normalizeAgentPromptPayload } from '@/agent/core/AgentPromptPayload';
 import type {
@@ -595,6 +596,7 @@ export class ApiSessionClient extends EventEmitter {
     private executionRunPermissionHandler: CodexLikePermissionHandler | null = null;
     private readonly rpcLifecycleRegistrations: RpcLifecycleRegistration[] = [];
     private agentStateLock = new AsyncLock();
+    private readonly agentStateCompletionRecovery = new AgentStateCompletionRecovery(() => this.agentState);
     private metadataLock = new AsyncLock();
     private encryptionKey: Uint8Array;
     private encryptionVariant: 'legacy' | 'dataKey';
@@ -1361,6 +1363,17 @@ export class ApiSessionClient extends EventEmitter {
                 const isReconnect = this.hasConnectedOnce;
                 this.hasConnectedOnce = true;
                 this.sessionConnectionEpoch += 1;
+                // Permission completion owns only the Agent-state CAS; pending-input
+                // readiness may still be waiting for an independent runtime publisher.
+                if (this.agentStateCompletionRecovery.hasPending()) {
+                    await this.updateAgentState((state) => state).catch(() => {
+                        logger.infoFile('[API] session_permission_completion_replay_failed', {
+                            sessionId: this.sessionId,
+                            operation: 'update-state',
+                        });
+                    });
+                }
+
                 if (!await this.convergePendingInputReadiness?.(() => {
                     if (this.shouldKeepUserSocketConnected()) {
                         this.kickUserSocketConnect();
@@ -5727,31 +5740,43 @@ export class ApiSessionClient extends EventEmitter {
      * Update session agent state
      * @param handler - Handler function that returns the updated agent state
      */
-    updateAgentState(handler: (metadata: AgentState) => AgentState): Promise<void> {
+    updateAgentState(handler: (state: AgentState) => AgentState, options?: AgentStateWriteOptions): Promise<void> {
         logger.debugLargeJson('Updating agent state', this.agentState);
-        return this.agentStateLock.inLock(async () => {
-            await this.waitForSessionSocketOnlineForAckWrite('update-state');
-            await updateSessionAgentStateWithAck({
-                socket: this.socket,
-                getSocket: () => this.socket,
-                sessionId: this.sessionId,
-                sessionEncryptionMode: this.sessionEncryptionMode,
-                encryptionKey: this.encryptionKey,
-                encryptionVariant: this.encryptionVariant,
-                getAgentState: () => this.agentState,
-                setAgentState: (agentState) => {
-                    this.agentState = agentState;
-                },
-                getAgentStateVersion: () => this.agentStateVersion,
-                setAgentStateVersion: (version) => {
-                    this.agentStateVersion = version;
-                },
-                syncSessionSnapshotFromServer: async () => {
-                    await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
-                },
-                handler,
-            });
-        });
+        return this.agentStateLock.inLock(() => this.agentStateCompletionRecovery.runUpdate({
+            handler,
+            retainPermissionCompletionsOnFailure: options?.retainPermissionCompletionsOnFailure,
+            write: async (update) => {
+                await this.waitForSessionSocketOnlineForAckWrite('update-state');
+                await updateSessionAgentStateWithAck({
+                    socket: this.socket,
+                    getSocket: () => this.socket,
+                    sessionId: this.sessionId,
+                    sessionEncryptionMode: this.sessionEncryptionMode,
+                    encryptionKey: this.encryptionKey,
+                    encryptionVariant: this.encryptionVariant,
+                    getAgentState: () => this.agentState,
+                    setAgentState: (agentState) => {
+                        this.agentState = agentState;
+                    },
+                    getAgentStateVersion: () => this.agentStateVersion,
+                    setAgentStateVersion: (version) => {
+                        this.agentStateVersion = version;
+                    },
+                    syncSessionSnapshotFromServer: async () => {
+                        await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
+                    },
+                    handler: update,
+                });
+            },
+        }).catch((error: unknown) => {
+            if (options?.retainPermissionCompletionsOnFailure && this.agentStateCompletionRecovery.hasPending()) {
+                logger.infoFile('[API] session_permission_completion_deferred', {
+                    sessionId: this.sessionId,
+                    operation: 'update-state',
+                });
+            }
+            throw error;
+        }));
     }
 
     private trackSessionTurnWrite(

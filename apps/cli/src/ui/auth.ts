@@ -6,7 +6,7 @@ import tweetnacl from 'tweetnacl';
 import axios from 'axios';
 import { displayQRCode } from "./qrcode";
 import { delay } from "@/utils/time";
-import { writeCredentialsLegacy, readCredentials, readSettings, updateSettings, Credentials, writeCredentialsDataKey } from "@/persistence";
+import { writeCredentialsLegacy, readCredentials, readSettings, updateSettings, Credentials, writeCredentialsDataKey, writeCredentialsTokenOnly } from "@/persistence";
 import { generateWebAuthUrl } from "@/api/webAuth";
 import { sanitizeServerIdForFilesystem } from "@/server/serverId";
 import { openBrowser } from '@/ui/openBrowser';
@@ -248,6 +248,7 @@ export async function doAuth(): Promise<Credentials | null> {
             serverUrl: configuration.apiServerUrl,
             publicKey,
             supportsV2: true,
+            supportsTokenOnly: true,
             claimSecretHash,
         });
         pairing = applyTerminalAuthRequestExpiry(pairing, response);
@@ -558,6 +559,12 @@ async function waitForAuthentication(
                         return null;
                     }
 
+                    if (opened.type === 'tokenOnly') {
+                        const credentials = await writeCredentialsTokenOnly({ token });
+                        steps.stop('✓', 'Approved');
+                        return credentials;
+                    }
+
                     if (opened.type === 'legacy') {
                         await writeCredentialsLegacy({ secret: opened.key, token });
                         steps.stop('✓', 'Approved');
@@ -577,6 +584,7 @@ async function waitForAuthentication(
                         serverUrl: configuration.apiServerUrl,
                         publicKey,
                         supportsV2: true,
+                        supportsTokenOnly: true,
                         timeoutMs: remainingRequestTimeoutMs(),
                     });
                     return data;

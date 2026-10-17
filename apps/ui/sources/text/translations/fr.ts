@@ -4445,6 +4445,8 @@ export const fr: TranslationStructure = {
     },
 
     errors: {
+        machineRpcDecryptionFailed: "Impossible de déchiffrer les données de cette machine. Connecte-toi avec la clé de compte correspondante et réessaie.",
+        machineRpcContextUnavailable: "La connexion à cette machine est indisponible. Actualise tes machines et réessaie.",
         networkError: 'Erreur réseau',
         serverError: 'Erreur serveur',
         unknownError: 'Une erreur inconnue s’est produite',

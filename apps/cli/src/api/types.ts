@@ -382,13 +382,15 @@ export type DaemonState = z.infer<typeof DaemonStateSchema>
 
 export type Machine = {
   id: string,
-  encryptionKey: Uint8Array;
-  encryptionVariant: 'legacy' | 'dataKey';
+  publishedDataEncryptionKey?: string | null;
   metadata: MachineMetadata | null,
   metadataVersion: number,
   daemonState: DaemonState | null,
   daemonStateVersion: number,
-}
+} & (
+  | { encryptionKey: Uint8Array; encryptionVariant: 'legacy' | 'dataKey' }
+  | { encryptionKey: null; encryptionVariant: 'plain' }
+)
 
 /**
  * Session message from API

@@ -4629,6 +4629,8 @@ export const zhHans: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "无法解密此机器的数据。请使用匹配的账户密钥登录后重试。",
+    machineRpcContextUnavailable: "此机器的连接不可用。请刷新机器列表后重试。",
     networkError: "发生网络错误",
     serverError: "发生服务器错误",
     unknownError: "发生未知错误",

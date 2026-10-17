@@ -29,7 +29,7 @@ import {
   type ConnectedServiceQuotaSnapshotV1,
 } from '@happier-dev/protocol';
 
-import type { Credentials } from '@/persistence';
+import { requireEncryptionCredentials, type Credentials } from '@/persistence';
 import { ConnectedServiceAuthGroupRuntimeStateRevisionConflictError } from '@/api/connectedServices/connectedServiceCredentialApi';
 import { assertConnectedServiceCredentialRecordBinding } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import {
@@ -287,7 +287,6 @@ export class ConnectedServiceQuotasCoordinator {
   private quotaPersistenceAccountScope: QuotaPersistenceAccountScope;
   private readonly quotaPersistenceAccountScopeCanRefresh: boolean;
   private readonly quotaPersistenceMinFreshnessRefreshMs: number;
-  private readonly quotaFingerprintKeyMaterial: Uint8Array;
   private quotaFingerprintHmacKey: Uint8Array;
   private readonly authGroupSwitchCoordinator: AuthGroupSwitchCoordinator | null;
   private readonly consumeCommittedAuthGroupGeneration: ConsumeCommittedAuthGroupGeneration | null;
@@ -482,10 +481,6 @@ export class ConnectedServiceQuotasCoordinator {
           : 0.2,
       now: params.now,
     });
-    const fingerprintKeyMaterial = params.credentials.encryption.type === 'legacy'
-      ? params.credentials.encryption.secret
-      : params.credentials.encryption.machineKey;
-    this.quotaFingerprintKeyMaterial = fingerprintKeyMaterial;
     this.quotaFingerprintHmacKey = this.deriveQuotaFingerprintHmacKey();
     this.quotaPersistenceScheduler = createConnectedServiceQuotaPersistenceScheduler({
       run: async (_key, payload) => {
@@ -2161,7 +2156,11 @@ export class ConnectedServiceQuotasCoordinator {
 
   private deriveQuotaFingerprintHmacKey(): Uint8Array {
     return deriveQuotaSnapshotFingerprintHmacKey({
-      keyMaterial: this.quotaFingerprintKeyMaterial,
+      keyMaterial: this.credentials.encryption
+        ? this.credentials.encryption.type === 'legacy'
+          ? this.credentials.encryption.secret
+          : this.credentials.encryption.machineKey
+        : new TextEncoder().encode(`plain:${this.quotaPersistenceServerScope}:${this.quotaPersistenceAccountScope.kind === 'known' ? this.quotaPersistenceAccountScope.value : 'unknown-account'}`),
       serverScope: this.quotaPersistenceServerScope,
       accountScope: this.quotaPersistenceAccountScope.kind === 'known'
         ? this.quotaPersistenceAccountScope.value
@@ -2297,13 +2296,8 @@ export class ConnectedServiceQuotasCoordinator {
       return;
     }
 
-    const encryption = this.credentials.encryption;
-    const material =
-      encryption.type === 'legacy'
-        ? ({ type: 'legacy' as const, secret: encryption.secret })
-        : ({ type: 'dataKey' as const, machineKey: encryption.machineKey });
     const sealed = sealProviderAccountUsageSnapshot({
-      material,
+      material: this.resolveAccountScopedEncryptionMaterial(),
       snapshot: providerAccountUsageSnapshot,
       randomBytes: this.randomBytes,
     });
@@ -3018,10 +3012,6 @@ export class ConnectedServiceQuotasCoordinator {
         outcome = result('incomplete', 'probe_unavailable');
         return outcome;
       }
-      const encryption = this.credentials.encryption;
-      const material = encryption.type === 'legacy'
-        ? ({ type: 'legacy' as const, secret: encryption.secret })
-        : ({ type: 'dataKey' as const, machineKey: encryption.machineKey });
       const now = Math.max(0, Math.trunc(this.now()));
       const group = await this.readCurrentQuotaGroupForContext({
         serviceId,
@@ -3049,7 +3039,6 @@ export class ConnectedServiceQuotasCoordinator {
           if (lease.type === 'contended') {
             const observedSnapshot = await this.waitForContendedQuotaFetch({
               accountMode,
-              material,
               serviceId,
               profileId,
               fetcher,
@@ -3092,7 +3081,6 @@ export class ConnectedServiceQuotasCoordinator {
 
           const credential = await this.readCredentialForQuota({
             accountMode,
-            material,
             serviceId,
             profileId,
             signal: deadlineAtMs === null ? undefined : deadlineController.signal,
@@ -3217,9 +3205,16 @@ export class ConnectedServiceQuotasCoordinator {
     }
   }
 
+  private resolveAccountScopedEncryptionMaterial(): Parameters<typeof openConnectedServiceQuotaSnapshotCiphertext>[0]['material'] {
+    requireEncryptionCredentials(this.credentials);
+    const encryption = this.credentials.encryption;
+    return encryption.type === 'legacy'
+      ? { type: 'legacy', secret: encryption.secret }
+      : { type: 'dataKey', machineKey: encryption.machineKey };
+  }
+
   private openExistingQuotaSnapshot(input: Readonly<{
     storageMode: ResolvedQuotaStorageMode;
-    material: Parameters<typeof openConnectedServiceQuotaSnapshotCiphertext>[0]['material'];
     serviceId: ConnectedServiceId;
     profileId: string;
     existing: ExistingQuotaSnapshotResponse;
@@ -3230,9 +3225,10 @@ export class ConnectedServiceQuotasCoordinator {
     }
     const sealed = input.existing as Awaited<ReturnType<QuotaApi['getConnectedServiceQuotaSnapshotSealed']>>;
     if (!sealed?.sealed?.ciphertext) return null;
+    const material = this.resolveAccountScopedEncryptionMaterial();
     try {
       const opened = openConnectedServiceQuotaSnapshotCiphertext({
-        material: input.material,
+        material,
         ciphertext: sealed.sealed.ciphertext,
       });
       if (opened?.value) {
@@ -3245,7 +3241,7 @@ export class ConnectedServiceQuotasCoordinator {
     let providerOpened: ProviderAccountUsageSnapshotV1 | null = null;
     try {
       providerOpened = openSealedProviderAccountUsageSnapshot({
-        material: input.material,
+        material,
         sealed: sealed.sealed,
       });
     } catch {
@@ -3294,7 +3290,6 @@ export class ConnectedServiceQuotasCoordinator {
 
   private async readCredentialForQuota(input: Readonly<{
     accountMode: ConnectedServiceAccountMode;
-    material: Parameters<typeof openConnectedServiceQuotaSnapshotCiphertext>[0]['material'];
     serviceId: ConnectedServiceId;
     profileId: string;
     signal?: AbortSignal;
@@ -3335,7 +3330,7 @@ export class ConnectedServiceQuotasCoordinator {
       return { storageMode: 'e2ee', record: null, credentialRevision: null };
     }
     const opened = openConnectedServiceCredentialCiphertext({
-      material: input.material,
+      material: this.resolveAccountScopedEncryptionMaterial(),
       ciphertext: sealed.sealed.ciphertext,
     });
     const revision = readConnectedServiceCredentialRevisionBoundaryV1(sealed);
@@ -3401,7 +3396,6 @@ export class ConnectedServiceQuotasCoordinator {
 
   private async waitForContendedQuotaFetch(input: Readonly<{
     accountMode: ConnectedServiceAccountMode;
-    material: Parameters<typeof openConnectedServiceQuotaSnapshotCiphertext>[0]['material'];
     serviceId: ConnectedServiceId;
     profileId: string;
     fetcher: ConnectedServiceQuotaFetcher;
@@ -3440,7 +3434,6 @@ export class ConnectedServiceQuotasCoordinator {
     if (!observed) return null;
     return this.openExistingQuotaSnapshot({
       storageMode: observed.storageMode,
-      material: input.material,
       serviceId: input.serviceId,
       profileId: input.profileId,
       existing: observed.existing,
@@ -3674,11 +3667,7 @@ export class ConnectedServiceQuotasCoordinator {
       const accountMode = await resolveConnectedServiceAccountMode(this.api);
       if (accountMode === 'unknown') return unavailable();
       const existing = await this.readExistingQuotaSnapshot({ accountMode, serviceId, profileId });
-      const encryption = this.credentials.encryption;
-      const material = encryption.type === 'legacy'
-        ? { type: 'legacy' as const, secret: encryption.secret }
-        : { type: 'dataKey' as const, machineKey: encryption.machineKey };
-      const snapshot = this.openExistingQuotaSnapshot({ ...existing, material, serviceId, profileId });
+      const snapshot = this.openExistingQuotaSnapshot({ ...existing, serviceId, profileId });
       if (!snapshot || snapshot.serviceId !== serviceId || snapshot.profileId !== profileId) return unavailable();
       const credits = snapshot.recoveryCredits;
       if (!credits) return unavailable();
@@ -3830,15 +3819,9 @@ export class ConnectedServiceQuotasCoordinator {
     }
 
     const now = Math.max(0, Math.trunc(this.now()));
-    const encryption = this.credentials.encryption;
-    const material =
-      encryption.type === 'legacy'
-        ? ({ type: 'legacy' as const, secret: encryption.secret })
-        : ({ type: 'dataKey' as const, machineKey: encryption.machineKey });
 
     const credential = await this.readCredentialForQuota({
       accountMode,
-      material,
       serviceId,
       profileId,
     });
@@ -3999,11 +3982,6 @@ export class ConnectedServiceQuotasCoordinator {
     if (this.checkQuotaWorkGate('tick').status !== 'open') return;
     const accountMode = await resolveConnectedServiceAccountMode(this.api);
     if (accountMode === 'unknown') return;
-    const encryption = this.credentials.encryption;
-    const material =
-      encryption.type === 'legacy'
-        ? ({ type: 'legacy' as const, secret: encryption.secret })
-        : ({ type: 'dataKey' as const, machineKey: encryption.machineKey });
 
     const bindingsByServiceId = new Map<ConnectedServiceId, Set<string>>();
     const groupSwitchTargetsByBindingKey = new Map<string, ActiveGroupQuotaSwitchTarget[]>();
@@ -4232,7 +4210,7 @@ export class ConnectedServiceQuotasCoordinator {
           const quotaFresh = fetcher && this.isExistingQuotaSnapshotFresh({ existing: existing.existing, now, fetcher, forcedRefresh });
           const quotaDue = fetcher && !quotaFresh && !(failureState && now < failureState.nextAllowedAt);
           const storedSubscription = this.accountUsageStore?.resolveBySource({ serviceId, profileId, bindingKind: 'profile' })?.subscription;
-          const previousSubscription = storedSubscription ?? this.openExistingQuotaSnapshot({ storageMode: existing.storageMode, material,
+          const previousSubscription = storedSubscription ?? this.openExistingQuotaSnapshot({ storageMode: existing.storageMode,
             serviceId, profileId, existing: existing.existing })?.subscription;
           const subscriptionFailure = this.failureStateByBindingKey.get(`subscription\u0000${bindingKey}`);
           const subscriptionDue = subscriptionFetcher && !(subscriptionFailure && now < subscriptionFailure.nextAllowedAt)
@@ -4248,7 +4226,6 @@ export class ConnectedServiceQuotasCoordinator {
           // the last-known data with a stale_quota annotation.
           staleSnapshotForFallback = this.openExistingQuotaSnapshot({
             storageMode: existing.storageMode,
-            material,
             serviceId,
             profileId,
             existing: existing.existing,
@@ -4267,7 +4244,6 @@ export class ConnectedServiceQuotasCoordinator {
             if (!fetcher || !quotaDue) continue;
             const observedSnapshot = await this.waitForContendedQuotaFetch({
               accountMode,
-              material,
               serviceId,
               profileId,
               fetcher,
@@ -4294,7 +4270,6 @@ export class ConnectedServiceQuotasCoordinator {
 
           const credential = await this.readCredentialForQuota({
             accountMode,
-            material,
             serviceId,
             profileId,
           });

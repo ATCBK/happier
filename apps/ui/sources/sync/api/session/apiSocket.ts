@@ -27,6 +27,7 @@ import {
 import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
 import { isSocketIoAckTimeoutError, raceSocketIoAckTimeout } from '@/sync/runtime/socketIoAckTimeout';
 import type { SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
+import { t } from '@/text';
 
 const STATIC_EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS =
     process.env.EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS;
@@ -416,16 +417,16 @@ class ApiSocket {
             onIssued?: () => void;
         },
     ): Promise<R> {
-        const machineEncryption = this.encryption!.getMachineEncryption(machineId);
+        const machineEncryption = this.encryption?.getMachineEncryption(machineId);
         if (!machineEncryption) {
-            throw new Error(`Machine encryption not found for ${machineId}`);
+            throw createRpcCallError({ error: t('errors.machineRpcDecryptionFailed'), errorCode: 'machine_rpc_context_unavailable' });
         }
 
         const result: any = await this.emitWithAck(
             SOCKET_RPC_EVENTS.CALL,
             buildSocketRpcCallPayload({
                 method: `${machineId}:${method}`,
-                payload: await machineEncryption.encryptRaw(params),
+                payload: await machineEncryption.encodeRpcPayload(params),
                 timeoutMs: options?.timeoutMs,
                 authorization: options?.authorization,
             }),
@@ -433,7 +434,7 @@ class ApiSocket {
         );
 
         if (result.ok) {
-            return await machineEncryption.decryptRaw(result.result) as R;
+            return await machineEncryption.decodeRpcResult(result.result) as R;
         }
         throw createRpcCallError({
             error: typeof result.error === 'string' ? result.error : 'RPC call failed',

@@ -217,7 +217,7 @@ import {
     isTerminalTaskLifecycleEventType,
     type TaskLifecycleEvent,
 } from '@/sync/engine/sessions/taskLifecycle';
-import { initializeTracking, tracking } from '@/track';
+import { initializeTracking, tracking, trackLogout } from '@/track';
 import { applyCrashReportsOptOut } from '@/utils/system/sentry';
 import { parseToken } from '@/utils/auth/parseToken';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -968,7 +968,7 @@ class Sync {
 
         encryption!: Encryption;
         serverID!: string;
-        anonID!: string;
+        anonID: string | null = null;
         private credentials!: AuthCredentials;
         private pauseController = new PauseController();
         private syncTuning: SyncTuning = loadSyncTuning();
@@ -1633,6 +1633,8 @@ class Sync {
       }
 
       private configureEncryptionRuntime(encryption: Encryption, accountId: string): void {
+          if (encryption.anonID) initializeTracking(encryption.anonID);
+          else trackLogout();
           const serverId = String(getActiveServerSnapshot().serverId ?? '').trim() || null;
           encryption.configureAesBatchConcurrencyLimit(this.syncTuning.encryptionAesBatchConcurrencyLimit);
           // Routing is NOT set here. It arrives with the instance: Encryption resolves it
@@ -4175,15 +4177,13 @@ class Sync {
             getCurrentSessionListRenderable: (sessionId) => storage.getState().sessionListRenderables[sessionId] ?? null,
             cachedSessionListEntries,
             shouldContinue,
-            applySessionListRenderables: (sessions, applyOptions) => {
+            applySessionListRenderables: (sessions) => {
                 if (!shouldContinue()) return;
                 if (isAppend) {
                     storage.getState().mergeSessionListRenderables(sessions);
                     return;
                 }
-                storage.getState().replaceSessionListRenderables(sessions, {
-                    coversWholeList: applyOptions?.coversWholeList === true,
-                });
+                storage.getState().replaceSessionListRenderables(sessions);
             },
             applySessionListRenderablePatches: (patches) => {
                 if (!shouldContinue()) return;
@@ -5079,6 +5079,7 @@ class Sync {
         await fetchAndApplyMachines({
             credentials: this.credentials,
             encryption: this.encryption,
+            getAccountEncryptionMode: async () => (await fetchAccountEncryptionMode(this.credentials, { retry: 'none' })).mode,
             machineDataKeys: this.machineDataKeys,
             throwOnError: false,
             getExistingMachine: (machineId) => storage.getState().machines[machineId] ?? null,
@@ -7872,6 +7873,7 @@ class Sync {
           await handleSocketUpdate({
               update,
               encryption: this.encryption,
+              getAccountEncryptionMode: async () => (await fetchAccountEncryptionMode(this.credentials, { retry: 'none' })).mode,
               settingsScope: this.pendingSettingsScope,
               getPendingSettings: () => this.pendingSettings,
               sourceServerId,
@@ -7968,11 +7970,20 @@ class Sync {
             getSession: (sessionId) => storage.getState().sessions[sessionId],
             applyMessages: (sessionId, messages) => this.applyMessages(sessionId, messages, { notifyVoice: false, notifyActivity: true }),
             updateDirectSessionTranscript: (ephemeralUpdate) => this.handleDirectSessionTranscriptEphemeralUpdate(ephemeralUpdate),
-            applyActionOperationRevision: (ephemeralUpdate) => {
+            applyActionOperationRevision: async (ephemeralUpdate) => {
                 if (!this.encryption || !shouldContinue()) return;
+                const machineEncryption = this.encryption.getMachineEncryption(ephemeralUpdate.machineId);
+                if (!machineEncryption) {
+                    this.machinesSync.invalidate();
+                    return;
+                }
+                if (machineEncryption.mode === 'plain' && (await fetchAccountEncryptionMode(this.credentials, { retry: 'none' })).mode !== 'plain') return;
+                if (!shouldContinue()) return;
                 const snapshot = openActionOperationRevisionEphemeral({
                     update: ephemeralUpdate,
-                    machineKey: this.encryption.getContentPrivateKey(),
+                    machineKey: machineEncryption.mode === 'plain' ? null : this.encryption.getContentPrivateKey(),
+                    machineMode: machineEncryption.mode,
+                    accountId: this.serverID,
                 });
                 if (!snapshot || !shouldContinue()) return;
                 actionOperationStore.merge(snapshot);
@@ -8413,9 +8424,6 @@ async function syncInit(credentials: AuthCredentials, restore: boolean) {
 
     // Initialize sync engine
     const encryption = await createEncryptionFromAuthCredentials(credentials);
-
-    // Initialize tracking
-    initializeTracking(encryption.anonID);
 
     // Initialize socket connection
     apiSocket.initialize({ endpoint: getActiveServerSnapshot().serverUrl, token: credentials.token }, encryption);
