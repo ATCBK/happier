@@ -68,6 +68,59 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
 }
 
 describe('PermissionRequestCoordinator', () => {
+    it.each(['admitted', 'failed'] as const)('preserves a replacement occurrence after an older cancelAll is %s', async (outcome) => {
+        const { coordinator, session } = createHarness();
+        const original = coordinator.requestDecision(bashRequest);
+        const originalRejected = expect(original).rejects.toThrow('retired old request');
+        let admit!: () => void;
+        let fail!: (error: Error) => void;
+        session.updateAgentStateRequestSettlement = async (updater) => {
+            updater(session.agentState); // Capture before disk admission; replay still uses current state.
+            await new Promise<void>((resolve, reject) => { admit = resolve; fail = reject; });
+            // Non-ACK admission does not run the later transport replay here.
+        };
+        const cancellation = coordinator.cancelAll('old reset');
+        const cancellationResult = outcome === 'admitted'
+            ? expect(cancellation).resolves.toBeUndefined()
+            : expect(cancellation).rejects.toThrow('journal unavailable');
+        coordinator.cancelRequest(bashRequest.requestId, 'retired old request');
+        await originalRejected;
+        const replacement = coordinator.requestDecision({ ...bashRequest, toolInput: { command: ['echo replacement'] }, createdAt: 101 });
+        void replacement.catch(() => undefined);
+        if (outcome === 'admitted') admit();
+        else fail(new Error('journal unavailable'));
+        await cancellationResult;
+        expect(coordinator.getResponseContext(bashRequest.requestId)).toMatchObject({ status: 'live', createdAt: 101 });
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        expect(await coordinator.completeRpcResponse({ context, completion: { result: approve(), completedRequest: { status: 'approved' } } })).toBe(true);
+        await expect(replacement).resolves.toEqual(approve());
+    });
+
+    it.each(['toolu_test', 'next-turn'] as const)('retains the newer %s cached decision when an older cancellation completes', async (nextId) => {
+        const { coordinator, session } = createHarness();
+        const original = coordinator.requestDecision(bashRequest);
+        const originalRejected = expect(original).rejects.toThrow('retired old request');
+        let admit!: () => void;
+        session.updateAgentStateRequestSettlement = async (updater) => {
+            updater(session.agentState); // Capture before disk admission; replay still uses current state.
+            await new Promise<void>((resolve) => { admit = resolve; });
+            // Non-ACK admission does not run the later transport replay here.
+        };
+        const cancellation = coordinator.cancelAll('old reset');
+        coordinator.cancelRequest(bashRequest.requestId, 'retired old request');
+        await originalRejected;
+        const request = { ...bashRequest, requestId: nextId, createdAt: 101, toolInput: { command: ['echo next'] } };
+        const next = coordinator.requestDecision(request);
+        const context = coordinator.getResponseContext(nextId)!;
+        await coordinator.completeRpcResponse({ context, completion: { result: approve(nextId), completedRequest: { status: 'approved' } } });
+        await expect(next).resolves.toEqual(approve(nextId));
+        admit();
+        await cancellation;
+        const cached = coordinator.requestDecision(request);
+        expect(coordinator.getLocallyOwnedLiveResponseContext(nextId)).toBeNull();
+        await expect(cached).resolves.toEqual(approve(nextId));
+    });
+
     it('does not detach a replacement waiter when an older concurrent cancellation admission fails', async () => {
         const { coordinator, session } = createHarness();
         const original = coordinator.requestDecision(bashRequest);

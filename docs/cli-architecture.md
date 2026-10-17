@@ -1722,8 +1722,15 @@ Cancellation rejects local waiters even if admission fails, retaining the detach
 occurrence for a retirement retry and reporting the failure. Local bridge disposal
 waits for cancellation admission rather than a server round trip. Single-request
 lifecycle cancellation invalidates in-flight UI decisions while retirement is
-pending. Local hook expiry uses the same admission boundary before returning its
-default response. Automatic history
+pending. Shared provider Stop orchestration reports cancellation admission failures
+on the default file log and continues aborting the provider and its controller;
+the coordinator keeps the detached occurrence available for a later retirement
+attempt. Asynchronous reset cleanup retires only the routing entries it captured,
+and does not clear a subsequent turn's requests or cached decisions. Local hook
+expiry uses the same admission boundary before returning its
+default response. A disposed local bridge stops admitting hooks, including a
+missing-id hook whose transcript read was already in flight; captured cancellation
+retirements retain their existing retry behavior. Automatic history
 first uses the normal
 acknowledged Agent-state write; if that fails, the same journal retains its exact
 completion delta. Existing `{ t: 'encrypted', c }` entries retain the canonical

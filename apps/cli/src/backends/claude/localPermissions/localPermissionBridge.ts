@@ -115,6 +115,7 @@ export class ClaudeLocalPermissionBridge {
     private permissionModeUpdatedAt: number = 0;
     private metadataWatcherAbort: AbortController | null = null;
     private localWaiterSequence = 0;
+    private disposed = false;
 
     constructor(session: Session, opts?: { responseTimeoutMs?: number | null; providerHookCeilingMs?: number }) {
         this.session = session;
@@ -170,6 +171,7 @@ export class ClaudeLocalPermissionBridge {
     }
 
     dispose(): void {
+        this.disposed = true;
         if (this.metadataWatcherAbort) {
             try {
                 this.metadataWatcherAbort.abort('claude-local-permission-bridge:dispose');
@@ -218,9 +220,11 @@ export class ClaudeLocalPermissionBridge {
     }
 
     async handlePermissionHook(data: PermissionHookData): Promise<PermissionHookResponse> {
+        if (this.disposed) return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
         this.syncPermissionModeFromMetadataSnapshot();
         const hookRequestId = this.resolveRequestId(data);
         const transcriptRequestId = !hookRequestId ? await this.resolveRequestIdFromTranscript(data) : null;
+        if (this.disposed) return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
         const requestId = hookRequestId ?? transcriptRequestId ?? this.generateRequestId();
 
         if (!hookRequestId && transcriptRequestId) {

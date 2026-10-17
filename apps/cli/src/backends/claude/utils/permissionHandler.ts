@@ -944,6 +944,7 @@ export class PermissionHandler {
             decision?: 'abort';
         },
     ): void {
+        const pendingSnapshot = [...this.pendingRequestMetadata.entries()];
         // Resumed Agent-state requests have no coordinator waiter. Retire that
         // source-owned subset through the same exact, durable settlement owner.
         const requests = this.session.client.getAgentStateSnapshot?.()?.requests ?? {};
@@ -959,7 +960,11 @@ export class PermissionHandler {
             });
         }
         void this.permissionCoordinator.cancelAll(reason).then(() => {
-            this.pendingRequestMetadata.clear();
+            for (const [requestId, pending] of pendingSnapshot) {
+                if (this.pendingRequestMetadata.get(requestId) === pending) {
+                    this.pendingRequestMetadata.delete(requestId);
+                }
+            }
         }).catch(() => logger.infoFile('[Claude] Cancellation request settlement admission failed'));
     }
 

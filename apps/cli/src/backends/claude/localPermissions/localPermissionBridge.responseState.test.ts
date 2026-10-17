@@ -1,3 +1,6 @@
+import * as fsBoundary from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred } from '@/testkit/async/deferred';
 
@@ -7,6 +10,11 @@ import {
 } from '../utils/permissionHandler.testkit';
 import { ClaudeLocalPermissionBridge, DEFAULT_PROVIDER_HOOK_CEILING_MS } from './localPermissionBridge';
 
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
+
 describe('ClaudeLocalPermissionBridge (response state)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -14,6 +22,48 @@ describe('ClaudeLocalPermissionBridge (response state)', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('does not admit a missing-id hook whose transcript read resumes after disposal', async () => {
+    vi.useRealTimers();
+    const directory = await fsBoundary.mkdtemp(join(tmpdir(), 'happier-disposed-hook-'));
+    const transcript = join(directory, 'transcript.jsonl');
+    await fsBoundary.writeFile(transcript, JSON.stringify({ message: { content: [{
+      type: 'tool_use', id: 'late-transcript-request', name: 'Bash', input: { command: 'echo late' },
+    }] } }) + '\n');
+    const enteredRead = createDeferred<void>();
+    const releaseRead = createDeferred<void>();
+    const open = fsBoundary.open;
+    const disk = vi.spyOn(fsBoundary, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]) === transcript) {
+        enteredRead.resolve();
+        await releaseRead.promise;
+      }
+      return await open(...args);
+    });
+    const { session, client } = createPermissionHandlerSessionStub('disposed-transcript-hook');
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: null });
+    bridge.activate();
+    const pending = bridge.handlePermissionHook({ hook_event_name: 'PermissionRequest', transcript_path: transcript, tool_name: 'Bash', tool_input: { command: 'echo late' } });
+    try {
+      await enteredRead.promise;
+      bridge.dispose();
+      releaseRead.resolve();
+      // File I/O and transcript matching remain real; observe completion through the hook.
+      let settled = false;
+      void pending.then(() => { settled = true; });
+      await expect.poll(() => settled || Object.keys(client.agentState.requests).length > 0).toBe(true);
+      expect(Object.keys(client.agentState.requests)).toEqual([]);
+      await expect(pending).resolves.toMatchObject({ suppressOutput: true });
+      await expect(bridge.handlePermissionHook({ hook_event_name: 'PermissionRequest', tool_use_id: 'after-disposal', tool_name: 'Write', tool_input: { file_path: '/tmp/late' } })).resolves.toMatchObject({ suppressOutput: true });
+      expect(Object.keys(client.agentState.requests)).toEqual([]);
+    } finally {
+      releaseRead.resolve();
+      disk.mockRestore();
+      bridge.dispose();
+      await pending;
+      await fsBoundary.rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('auto-approves pending requests immediately when a permission response switches mode to yolo', async () => {

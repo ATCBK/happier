@@ -6,6 +6,42 @@ import { PermissionHandler } from './permissionHandler';
 import { createPermissionHandlerSessionStub } from './permissionHandler.testkit';
 
 describe('PermissionHandler (dispose)', () => {
+    it.each(['old-request', 'next-turn'] as const)('keeps %s structured answers routable after an older reset admission', async (nextId) => {
+        const { session, client } = createPermissionHandlerSessionStub('claude-reset-routing');
+        const handler = new PermissionHandler(session);
+        const original = handler.handleToolCall('Bash', { command: 'echo old' }, { permissionMode: 'default' } as never, {
+            signal: new AbortController().signal, toolUseId: 'old-request',
+        });
+        const rejected = expect(original).rejects.toThrow('Session reset');
+        const admissions: (() => void)[] = [];
+        client.updateAgentStateRequestSettlement = async (updater) => {
+            updater(client.agentState); // Real journal capture precedes asynchronous disk admission.
+            await new Promise<void>((resolve) => { admissions.push(resolve); });
+        };
+        handler.reset();
+        handler.reset();
+        admissions[0]!();
+        await rejected;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const input = { questions: [{ question: 'Next?', options: [{ label: 'Yes' }] }], providerMarker: 'keep-original-provider-input' };
+        const next = handler.handleToolCall('AskUserQuestion', input, { permissionMode: 'default' } as never, {
+            signal: new AbortController().signal, toolUseId: nextId,
+        });
+        void next.catch(() => undefined);
+        admissions[1]!();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        try {
+            const rpc = client.rpcHandlerManager.getHandler('permission');
+            await rpc?.({ id: nextId, approved: true, structuredAnswersV1: { 'Next?': ['Yes'] } });
+            expect(client.agentState.completedRequests[nextId]).toMatchObject({ status: 'approved' });
+            await expect(next).resolves.toMatchObject({ behavior: 'allow', updatedInput: { ...input, answers: { 'Next?': 'Yes' } } });
+        } finally {
+            client.updateAgentStateRequestSettlement = async (updater) => { client.agentState = updater(client.agentState); };
+            handler.dispose();
+            await next.catch(() => undefined);
+        }
+    });
+
     it.each(['abort', 'reset', 'dispose'] as const)('retires resumed remote-only requests during %s while preserving other owners and claims', async (action) => {
         const { session, client } = createPermissionHandlerSessionStub(`orphan-${action}`);
         const handler = new PermissionHandler(session);

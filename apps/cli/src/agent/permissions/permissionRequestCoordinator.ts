@@ -428,13 +428,14 @@ export class PermissionRequestCoordinator<TResult> {
     }
 
     async cancelAll(reason: string): Promise<void> {
-        const requestIds = [...this.pendingRequests.keys()].filter((requestId) => !this.isRequestClaimed(requestId));
+        const entries = [...this.pendingRequests.entries()];
+        const requestIds = entries.filter(([requestId]) => !this.isRequestClaimed(requestId)).map(([requestId]) => requestId);
         for (const requestId of requestIds) this.invalidatedDecisionRequestIds.add(requestId);
         for (const requestId of this.cachedDecisions.keys()) {
             this.invalidatedDecisionRequestIds.add(requestId);
         }
-        const results = await Promise.allSettled([...this.pendingRequests.keys()].map(async (requestId) => {
-            const entry = this.pendingRequests.get(requestId);
+        this.cachedDecisions.clear();
+        const results = await Promise.allSettled(entries.map(async ([requestId, entry]) => {
             if (entry && !this.isRequestClaimed(requestId)) {
                 entry.completionInProgress = true;
                 try {
@@ -442,15 +443,18 @@ export class PermissionRequestCoordinator<TResult> {
                         completedRequest: { status: 'canceled', decision: 'abort', reason },
                     }));
                 } catch (error) {
-                    this.detachCanceledWaiters(entry, reason);
+                    if (this.pendingRequests.get(requestId) === entry) {
+                        this.detachCanceledWaiters(entry, reason);
+                    }
                     throw error;
                 } finally {
                     entry.completionInProgress = false;
                 }
             }
-            this.cancelRequest(requestId, reason);
+            if (this.pendingRequests.get(requestId) === entry) {
+                this.cancelRequest(requestId, reason);
+            }
         }));
-        this.cachedDecisions.clear();
         const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
         if (failed) throw failed.reason;
     }

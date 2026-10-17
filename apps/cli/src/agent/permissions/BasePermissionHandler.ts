@@ -668,10 +668,12 @@ export abstract class BasePermissionHandler {
      * This method is idempotent - safe to call multiple times.
      */
     private async cancelPendingRequests(params: Readonly<{ reason: string; decision?: 'abort' }>): Promise<void> {
-        const pendingSnapshot = Array.from(this.pendingRequests.values());
+        const pendingSnapshot = Array.from(this.pendingRequests.entries());
         await this.requestCoordinator.cancelAll(params.reason);
-        this.pendingRequests.clear();
-        for (const pending of pendingSnapshot) {
+        for (const [requestId, pending] of pendingSnapshot) {
+            if (this.pendingRequests.get(requestId) === pending) {
+                this.pendingRequests.delete(requestId);
+            }
             if (pending.coordinatorManaged) continue;
             try {
                 pending.reject(new Error(params.reason));
@@ -682,7 +684,13 @@ export abstract class BasePermissionHandler {
     }
 
     async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {
-        await this.cancelPendingRequests({ reason, decision: 'abort' });
+        try {
+            await this.cancelPendingRequests({ reason, decision: 'abort' });
+        } catch (error) {
+            // The coordinator retains the exact detached cancellation for retry.
+            // A failed history write must not prevent the caller from stopping the provider.
+            logger.infoFile(`${this.getLogPrefix()} Stop request settlement admission failed; continuing provider abort`, error);
+        }
         try {
             await this.session.flush?.();
         } catch (error) {

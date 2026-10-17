@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { SessionPermissionRpcRouter } from './sessionPermissionRpcRouter';
 import { BasePermissionHandler, type PermissionResult } from './BasePermissionHandler';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { PUBLIC_RPC_HANDLER_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
@@ -65,6 +67,49 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
 }
 
 describe('BasePermissionHandler allowlist', () => {
+  it.each(['old', 'new'] as const)('keeps the %s-id next-turn question routable after an older reset admission', async (newId) => {
+    const session = new FakeSession();
+    const router = new SessionPermissionRpcRouter(session.rpcHandlerManager);
+    Object.assign(session, { getOrCreatePermissionRpcRouter: () => router });
+    const handler = new TestPermissionHandler(session as unknown as ApiSessionClient);
+    const original = handler.request('old', 'Bash', { command: ['echo old'] });
+    const originalRejected = expect(original).rejects.toThrow('Session reset');
+    const admissions: (() => void)[] = [];
+    session.updateAgentStateRequestSettlement = async (updater) => {
+      updater(session.agentState); // Capture the exact journal intent before asynchronous disk admission.
+      await new Promise<void>((resolve) => { admissions.push(resolve); });
+      // Admission completes before the journal's separate transport replay.
+    };
+    handler.reset();
+    handler.reset();
+    admissions[0]!();
+    await originalRejected;
+    const input = { questions: [{ question: 'new question', options: [{ label: 'yes' }] }] };
+    const next = handler.request(newId, 'AskUserQuestion', input);
+    void next.catch(() => undefined);
+    admissions[1]!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const rpc = session.rpcHandlerManager.handlers.get('permission')!;
+    await rpc({ id: newId, approved: true, answers: { 'new question': 'yes' } });
+    expect(await settledState(next)).toBe('fulfilled');
+    await expect(next).resolves.toMatchObject({ decision: 'approved', answers: { 'new question': ['yes'] } });
+  });
+
+  it('continues Stop after failed settlement admission and retains exact cancellation for retry', async () => {
+    const session = new FakeSession();
+    const handler = new TestPermissionHandler(session as unknown as ApiSessionClient);
+    const request = handler.request('stop-request', 'Bash', { command: ['echo pending'] });
+    const rejected = expect(request).rejects.toThrow('Aborted by user');
+    session.updateAgentStateRequestSettlement = async () => { throw Object.assign(new Error('journal disk full'), { code: 'ENOSPC' }); };
+    await expect(handler.abortPendingRequestsAndFlush()).resolves.toBeUndefined();
+    await rejected;
+    expect(session.agentState.requests['stop-request']).toBeDefined();
+    session.updateAgentStateRequestSettlement = async (updater) => { session.updateAgentState(updater); };
+    await handler.abortPendingRequestsAndFlush();
+    expect(session.agentState.requests['stop-request']).toBeUndefined();
+    expect(session.agentState.completedRequests['stop-request']).toMatchObject({ status: 'canceled', decision: 'abort' });
+  });
+
   it('records the request kind for interactive tool prompts vs permissions', async () => {
     const session = new FakeSession();
     const handler = new TestPermissionHandler(session as any);

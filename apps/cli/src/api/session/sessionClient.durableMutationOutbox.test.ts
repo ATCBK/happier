@@ -1,3 +1,4 @@
+import * as fsBoundary from 'node:fs/promises';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -224,6 +225,11 @@ async function seedEncryptedSettlementWithFollowingTurn(sessionId: string, value
 const taskCompleteMessage = { type: 'task_complete', id: 'turn-1' } satisfies ACPMessageData;
 const reusableUnknownTurnId = ['primary', 'runtime'].join('-') + ':s1:unknown';
 
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
+
 describe('ApiSessionClient durable mutation outbox', () => {
   it('acknowledges a fast-start permission through the attached Deferred client before resolving its provider', async () => {
     const request = { tool: 'Write', arguments: {}, createdAt: 1 };
@@ -261,6 +267,70 @@ describe('ApiSessionClient durable mutation outbox', () => {
     } finally {
       coordinator.cancelRequest('permission', 'test cleanup');
       await client.close();
+    }
+  });
+
+  it('keeps a next-turn question routable across real reset journal admission', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'reset-account' })).toString('base64url')}.sig`;
+    const { writeCredentialsLegacy } = await import('@/persistence');
+    await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token });
+    let serverState: AgentState = {};
+    let version = 0;
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emit: (event, args) => {
+      const acknowledge = args.at(-1);
+      if (event === 'ping' && typeof acknowledge === 'function') acknowledge({ v: 1 });
+    }, emitWithAck: async (event, payload) => {
+      if (event !== 'update-state') return { ok: true };
+      const value = payload as { expectedVersion: number; agentState: string };
+      if (value.expectedVersion !== version) return { result: 'version-mismatch', version, agentState: JSON.stringify(serverState) };
+      serverState = JSON.parse(value.agentState);
+      return { result: 'success', version: ++version, agentState: value.agentState };
+    } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const { ProviderEnforcedPermissionHandler } = await import('@/agent/permissions/ProviderEnforcedPermissionHandler');
+    const { SESSION_RPC_METHODS } = await import('@happier-dev/protocol');
+    const client = new ApiSessionClient(token, createPlainSessionFixture({ id: 's-real-reset-routing' }));
+    const handler = new ProviderEnforcedPermissionHandler(client, { logPrefix: '[ResetTest]' });
+    const enteredDiskAdmission = createDeferred<void>();
+    const releaseDiskAdmission = createDeferred<void>();
+    const rename = fsBoundary.rename;
+    let held = false;
+    const disk = vi.spyOn(fsBoundary, 'rename').mockImplementation(async (from, to) => {
+      if (!held && String(to).endsWith('session-s-real-reset-routing.json')) {
+        held = true;
+        enteredDiskAdmission.resolve();
+        await releaseDiskAdmission.promise;
+      }
+      await rename(from, to);
+    });
+    const old = handler.handleToolCall('old-turn', 'AskUserQuestion', { questions: [{ question: 'Old?', options: [{ label: 'Yes' }] }] });
+    const oldRejected = expect(old).rejects.toThrow('Session reset');
+    let next: Promise<unknown> | undefined;
+    try {
+      await expect.poll(() => serverState.requests?.['old-turn']).toBeDefined();
+      handler.reset();
+      await enteredDiskAdmission.promise;
+      next = handler.handleToolCall('next-turn', 'AskUserQuestion', { questions: [{ question: 'Next?', options: [{ label: 'Yes' }] }] });
+      void next.catch(() => undefined);
+      // The normal ACK writer stays usable while the old journal's disk rename is held.
+      await expect.poll(() => serverState.requests?.['next-turn']).toBeDefined();
+      releaseDiskAdmission.resolve();
+      await oldRejected;
+      await client.flush();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(client.getAgentStateSnapshot()?.requests?.['next-turn']).toBeDefined();
+      await client.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_STRUCTURED_QUESTION_RESPOND_V1, {
+        id: 'next-turn', structuredAnswersV1: { 'Next?': ['Yes'] },
+      });
+      await expect(next).resolves.toMatchObject({ answers: { 'Next?': ['Yes'] } });
+    } finally {
+      releaseDiskAdmission.resolve();
+      disk.mockRestore();
+      await handler.abortPendingRequestsAndFlush('test cleanup');
+      await client.close();
+      await oldRejected;
+      await next?.catch(() => undefined);
     }
   });
 
