@@ -3,12 +3,15 @@ import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 const home = createHomeGovernanceHarness();
 const homeIdentityId = 'srv_counts';
 installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
 const { useMachinePresenceCounts } = await import('@/sync/domains/state/storage');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
@@ -16,6 +19,7 @@ const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, p
     await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 
 beforeEach(async () => {
+    await loadSyncSingletonForTests();
     await home.reset();
     await home.addHome({ name: 'Counts Home', serverUrl: 'https://counts.example.test',
         serverIdentityId: homeIdentityId, accountId: 'account' });
@@ -68,6 +72,27 @@ describe('useMachinePresenceCounts', () => {
         await act(async () => { vi.advanceTimersByTime(60_001); });
         expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
         await hook.unmount();
+    });
+
+    it('recovers on a real heartbeat after grace expiry even when the raw Machine containers retain their identity', async () => {
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        vi.setSystemTime(Date.now());
+        const serverId = getActiveServerSnapshot().serverId;
+        storage.getState().applyMachines([machine('laptop')], true, { sourceServerId: serverId, sourceAccountId: 'account' });
+        storage.getState().markMachineListSettled(serverId);
+        const hook = await renderHook(() => useMachinePresenceCounts());
+        try {
+            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
+            await act(async () => { vi.advanceTimersByTime(60_001); });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
+            const before = storage.getState();
+            await act(async () => {
+                storage.getState().applyMachines([machine('laptop')], false, { sourceServerId: serverId, sourceAccountId: 'account' });
+            });
+            expect(storage.getState().machines).toBe(before.machines);
+            expect(storage.getState().machineListByServerId).toBe(before.machineListByServerId);
+            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
+        } finally { await hook.unmount(); }
     });
 
     it('moves a machine offline on a failed request and does not recover on a subsequent heartbeat', async () => {
