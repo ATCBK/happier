@@ -5,6 +5,7 @@ import {
 } from 'react';
 
 import { usePluginHostApiResourceActive, usePluginHostApiResourceStore } from './context.js';
+export { usePluginHostReadiness, type PluginUiHostReadiness } from './readiness.public.js';
 import type {
   PluginUiResourceEntry,
   PluginUiResourceError,

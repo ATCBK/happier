@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { PluginUiWidgetAreaOperationV1, PluginUiWidgetAreaResultV1 } from '@happier-dev/protocol/plugins/ui';
+import { usePluginHostReadiness } from '@happier-dev/plugin-ui/hostApi';
 import { buildWidgetSurfaceArtifactIdV1, getWidgetLayoutItemIdV1, WidgetAreaLayoutV1Schema, WidgetSurfaceReadV1Schema, type WidgetAreaLayoutV1, type WidgetPlacementV1, type WidgetSurfaceReadV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { storage, useArtifact } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
@@ -97,6 +98,7 @@ function reconcile<C>(previous: WidgetAreaLayoutState<C>, next: WidgetAreaLayout
  * admitted context stay on screen; a refused write never discards them.
  */
 export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: WidgetAreaPort, context: C): WidgetAreaLayout<C> {
+    const hostReadiness = usePluginHostReadiness();
     const [state, setState] = React.useState<WidgetAreaLayoutState<C>>({ status: 'loading' });
     const displayed = React.useRef(state);
     displayed.current = state;
@@ -135,7 +137,8 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
             const isReadPending = () => hasAuthority() && (current !== generation.current || binding.current !== capturedBinding
                 || storage.getState().artifacts[admittedArtifactId] !== admittedPublication);
             const refusedReason = refused !== null ? failureReason(result, refused) : undefined;
-            next = refused !== null ? { status: 'unavailable', reasonCode: refused, ...(refusedReason ? { reason: refusedReason } : {}) }
+            next = refused === 'plugin_surface_connection_pending' ? { status: 'loading' }
+                : refused !== null ? { status: 'unavailable', reasonCode: refused, ...(refusedReason ? { reason: refusedReason } : {}) }
                 : parsed?.success && area?.success ? { status: 'ready', surface: area.data.surface, items: area.data.items,
                     placements: parsed.data.instances, canEdit: parsed.data.canEdit,
                     isShared: parsed.data.isShared === true, admittedViewer, context, isCurrent, isReadPending, documentState: parsed.data.state ?? 'present',
@@ -146,14 +149,17 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         }
         if (!mounted.current || signal?.aborted || current !== generation.current || binding.current !== capturedBinding) return;
         if (admittedLifetime && !admittedLifetime.isCurrent()) next = { status: 'unavailable', reasonCode: 'widget_area_scope_retired' };
-        setState(previous => reconcile(previous, next));
+        setState(previous => next.status === 'loading' && previous.status === 'ready' && previous.isCurrent()
+            ? previous : reconcile(previous, next));
     }, [context, port]);
 
+    // The native Host API keeps its identity through Machine readiness changes. Re-observe its
+    // area on settlement/re-admission, including a settled outage that does not advance revision.
     React.useEffect(() => {
         const controller = new AbortController();
         void read(controller.signal);
         return () => controller.abort();
-    }, [read]);
+    }, [read, hostReadiness.pending, hostReadiness.revision]);
 
     React.useEffect(() => {
         if (!artifactId) return;

@@ -3455,8 +3455,9 @@ function PluginSurfaceHostMount(props: Readonly<(
     );
     // A declarative page's `widgetArea` nodes reach its declared areas through this mount's facade.
     const renderDeclarativeWidgetArea = React.useMemo<DeclarativeWidgetAreaRender | undefined>(() => (controller.widgetArea
-        ? createDeclarativeWidgetAreaRender({ dispatch: controller.widgetArea, surfaceName: projectedBrand?.displayName ?? mountedPluginId })
-        : undefined), [controller.widgetArea, mountedPluginId, projectedBrand?.displayName]);
+        ? createDeclarativeWidgetAreaRender({ dispatch: controller.widgetArea, surfaceName: projectedBrand?.displayName ?? mountedPluginId,
+            machineConnectionPending, machineExecutionReady: controllerFacts.daemonInteractionEnabled })
+        : undefined), [controller.widgetArea, mountedPluginId, projectedBrand?.displayName, machineConnectionPending, controllerFacts.daemonInteractionEnabled]);
     const brandTargetPresentation = React.useMemo(
         () => resolveBrandTarget
             ? Object.freeze({

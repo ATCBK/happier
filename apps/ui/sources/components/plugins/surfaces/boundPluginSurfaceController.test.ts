@@ -424,7 +424,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         controller.dispose();
         renewed.dispose();
     });
-    it.each([true, false])('installs a declared page area independently of Machine availability and preserves Action custody (target available: %s)', async (targetAvailable) => {
+    it.each(['available', 'pending', 'unavailable'] as const)('installs a declared page area independently of Machine availability and preserves Action custody (target: %s)', async (targetState) => {
         const scope = CURRENT_ACCOUNT_LIFETIME.scope;
         let row: Awaited<ReturnType<HomeHubArtifactTransportV1['read']>> = null;
         let onRead: (() => void) | undefined;
@@ -444,7 +444,8 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             container: 'appPage', target: { kind: 'app' }, rendererId: 'native', instancePolicy: 'singleton' });
         if (!destination) throw new Error('Destination admission failed');
         const facts = { ...FACTS,
-            ...(!targetAvailable ? { occurrenceId: null, executionOrigin: null, daemonInteractionEnabled: false } : {}),
+            ...(targetState !== 'available' ? { occurrenceId: null, executionOrigin: null, daemonInteractionEnabled: false } : {}),
+            isDaemonConnectionPending: () => targetState === 'pending',
             pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, surfacePlacementsById: {
             [FACTS.surfaceId]: { id: FACTS.surfaceId, pluginId: FACTS.pluginId, occurrenceId: FACTS.occurrenceId,
                 contributionKind: 'surfacePlacement' as const, descriptorId: FACTS.contributionId, binding: destination,
@@ -460,8 +461,11 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             session: { kind: 'value', value: { serverId: scope.serverId, sessionId: 'readable-session' } },
         } };
         const added = await controller.hostApi.handleRequest(request('widgetArea', { area: 'pinned', operation: { actionId: 'widgets.item.add', instance } }));
-        if (!targetAvailable) {
-            expect(added).toMatchObject({ ok: false, errorCode: 'plugin_mounted_caller_unavailable' });
+        if (targetState !== 'available') {
+            const errorCode = targetState === 'pending' ? 'plugin_surface_connection_pending' : 'plugin_mounted_caller_unavailable';
+            expect(await controller.hostApi.handleRequest(request('widgetArea', { area: 'pinned', operation: { actionId: 'widgets.item.list' } })))
+                .toMatchObject({ ok: false, errorCode });
+            expect(added).toMatchObject({ ok: false, errorCode });
             expect(row).toBeNull();
             expect(controller.interactive).toBe(true);
             controller.dispose();

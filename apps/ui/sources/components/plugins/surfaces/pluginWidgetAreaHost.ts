@@ -10,6 +10,8 @@ import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 export function createPluginWidgetAreaHostHandler(input: Readonly<{
     facts: BoundPluginSurfaceFacts; isCurrent(): boolean; lifetimeSignal: AbortSignal;
     hostAction: PluginSurfaceHostActionBinding; callerBinding: PluginSurfaceActionMountedBinding | null;
+    /** The same mounted-host readiness decision used by ordinary Host API failures. */
+    isConnectionPending?: (reason: string) => boolean;
     /** The mount's own words for a Machine-owned refusal (names the Run-on Machine); the code stays the code. */
     describeUnavailable?: (reason: string) => string | undefined;
 }>): PluginSurfaceHostApiMethodHandler | null {
@@ -34,6 +36,11 @@ export function createPluginWidgetAreaHostHandler(input: Readonly<{
                     hostAction: { ...input.hostAction, context: { ...input.hostAction.context, ...context } },
                     isCurrent: input.isCurrent, ...(context.signal ? { signal: context.signal } : {}) });
                 if (outcome.ok) return { ok: true, result: outcome.result };
+                // Area results are nested payloads, so the generic Host API error enricher does
+                // not see their refusals. Preserve its pending fact without admitting the Action.
+                if (outcome.code === 'unavailable' && input.isConnectionPending?.(outcome.reason)) {
+                    return { ok: false, errorCode: 'plugin_surface_connection_pending', error: 'plugin_surface_connection_pending' };
+                }
                 const error = outcome.message
                     ?? (outcome.code === 'unavailable' ? input.describeUnavailable?.(outcome.reason) : undefined)
                     ?? outcome.reason;

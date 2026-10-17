@@ -11,8 +11,8 @@ import {
     buildWidgetDefinitionArtifactHeaderV1, WidgetDefinitionV1Schema, flattenWidgetLayoutWidgetsV1,
     type WidgetAreaLayoutV1, type WidgetAreaPresetV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeDeclarationV1,
 } from '@happier-dev/protocol/widgets';
-import { createPluginUiResourceStore, PluginHostApiProvider, PluginUiHostPresentationScope } from '@happier-dev/plugin-ui/advanced';
-import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
+import { createPluginUiResourceStore, PluginHostApiProvider, PluginUiHostPresentationScope, PluginUiProvider } from '@happier-dev/plugin-ui/advanced';
+import type { PluginUiHostApi, SurfaceContext } from '@happier-dev/plugin-sdk/ui';
 import { projectHappierUiEnvironment } from '@happier-dev/plugin-ui/environment';
 import { ScrollArea, WidgetSurface } from '@happier-dev/plugin-ui';
 
@@ -20,6 +20,7 @@ import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
+import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { createPluginUiPrivatePresentationHost } from '@/components/plugins/surfaces/pluginUiPrivatePresentationHost';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
@@ -32,7 +33,7 @@ import type { WidgetSetup, WidgetSetupSubmitResult } from '@/components/widgets/
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
 
 import { DeclarativePluginSurface } from '@/components/plugins/surfaces/DeclarativePluginSurface';
-import { createDeclarativeWidgetAreaRender } from '@/components/plugins/surfaces/declarativeWidgetArea';
+import { createDeclarativeWidgetAreaRender, DeclarativeWidgetArea } from '@/components/plugins/surfaces/declarativeWidgetArea';
 import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol';
 
 import { PluginPageWidgetArea } from './PluginPageWidgetArea';
@@ -194,6 +195,49 @@ function page(hostApi: PluginUiHostApi, repository: unknown, content?: React.Rea
         </AppShellPluginUiProjectionValueProvider>
     );
 }
+
+it.each(['available', 'unavailable'] as const)('rechecks the area when the same mounted host finishes connecting (%s)', async outcome => {
+    const fixture = createArea();
+    let pending = true;
+    let publish: ((context: SurfaceContext) => void) | undefined;
+    const initial = createPluginSurfaceContextFixture({ machineConnectionPending: true, machineExecutionReady: false });
+    const hostApi: PluginUiHostApi = { ...fixture.hostApi,
+        context: async () => initial,
+        watchContext: async listener => { publish = listener; return { dispose() {} }; },
+        widgetArea: async (raw, options) => pending
+            ? { ok: false, errorCode: 'plugin_surface_connection_pending', error: 'plugin_surface_connection_pending' }
+            : outcome === 'unavailable'
+                ? { ok: false, errorCode: 'plugin_mounted_caller_unavailable', error: 'plugin_mounted_caller_unavailable' }
+                : fixture.hostApi.widgetArea(raw, options),
+    };
+    const screen = await renderScreen(<PluginUiProvider hostApi={hostApi} context={initial}>{page(hostApi, 'repo-a')}</PluginUiProvider>);
+    await flushHookEffects({ cycles: 8 });
+    // Finishing readiness must re-read even when the mounted Host API's identity stays the same.
+    pending = false;
+    await act(async () => { publish?.(createPluginSurfaceContextFixture({ machineConnectionPending: false, machineExecutionReady: outcome === 'available' })); });
+    await flushHookEffects({ cycles: 8 });
+    expect(screen.findByTestId('prs.pinned.loading') !== null).toBe(false);
+    expect(screen.findByTestId(outcome === 'available' ? 'prs.pinned.empty' : 'prs.pinned.unavailable')).not.toBeNull();
+});
+
+it.each(['available', 'unavailable'] as const)('rechecks a declarative area when its host finishes connecting (%s)', async outcome => {
+    const fixture = createArea();
+    let pending = true;
+    const dispatch = async (raw: unknown, options?: { signal?: AbortSignal }) => pending
+        ? StrictJsonValueSchema.parse({ ok: false, errorCode: 'plugin_surface_connection_pending', error: 'plugin_surface_connection_pending' })
+        : outcome === 'unavailable'
+            ? StrictJsonValueSchema.parse({ ok: false, errorCode: 'plugin_mounted_caller_unavailable', error: 'plugin_mounted_caller_unavailable' })
+            : StrictJsonValueSchema.parse(await fixture.hostApi.widgetArea(raw as never, options));
+    const render = () => page(fixture.hostApi, 'repo-a', <DeclarativeWidgetArea area="pinned" context={{ repository: 'repo-a' }} testID="prs.pinned"
+        binding={{ dispatch, surfaceName: 'PRs & Issues', machineConnectionPending: pending, machineExecutionReady: !pending && outcome === 'available' }} />);
+    const screen = await renderScreen(render());
+    await flushHookEffects({ cycles: 8 });
+    pending = false;
+    await screen.update(render());
+    await flushHookEffects({ cycles: 8 });
+    expect(screen.findByTestId('prs.pinned.loading') !== null).toBe(false);
+    expect(screen.findByTestId(outcome === 'available' ? 'prs.pinned.empty' : 'prs.pinned.unavailable')).not.toBeNull();
+});
 
 it('retries the same edited area after a failed layout read without resetting its saved widgets', async () => {
     let fail = false;

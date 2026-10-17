@@ -9,6 +9,51 @@ import { useWidgetAreaLayout, type WidgetAreaPort } from './useWidgetAreaLayout'
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
+it('keeps a connecting plugin area loading, retains authorized data, and clears it on a terminal refusal', async () => {
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://area-connection-pending.test', accountId: 'actor' });
+    const surface: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'pluginArea', pluginId: 'acme.widgets', pageId: 'overview', area: 'pinned', layoutId: 'default' } };
+    const transport: HomeHubArtifactTransportV1 = {
+        read: async () => null,
+        create: async () => { throw new Error('Unexpected create'); },
+        update: async () => { throw new Error('Unexpected update'); },
+    };
+    const area = createWidgetAreaActionPortV1(() => createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true,
+        presets: [{ id: 'default', name: 'Pinned', items: [{ kind: 'widget', instance: {
+            v: 1, id: 'vitals', definition: { kind: 'builtin', id: 'machine_vitals' }, bindings: {},
+        } }] }],
+    }));
+    let readiness: 'pending' | 'ready' | 'denied' = 'pending';
+    let retireOnRead = false;
+    const port: WidgetAreaPort = { execute: async () => {
+        if (retireOnRead) retireActiveServerAccountScopeLifetime();
+        return readiness === 'ready'
+            ? PluginUiWidgetAreaResultV1Schema.parse({ ok: true, result: await area.read(surface, {}) })
+            : { ok: false, errorCode: readiness === 'pending' ? 'plugin_surface_connection_pending' : 'plugin_action_caller_forbidden', error: readiness };
+    } };
+    const context = {};
+    const hook = await renderHook(() => useWidgetAreaLayout(port, context));
+    try {
+        await flushHookEffects();
+        expect(hook.getCurrent().state).toEqual({ status: 'loading' });
+        readiness = 'ready';
+        await act(async () => { await hook.getCurrent().reload(); });
+        const admitted = hook.getCurrent().state;
+        expect(admitted).toMatchObject({ status: 'ready', surface, placements: [{ instance: { id: 'vitals' } }] });
+        readiness = 'pending';
+        await act(async () => { await hook.getCurrent().reload(); });
+        expect(hook.getCurrent().state).toBe(admitted);
+        readiness = 'denied';
+        await act(async () => { await hook.getCurrent().reload(); });
+        expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'plugin_action_caller_forbidden' });
+        readiness = 'pending';
+        await act(async () => { await hook.getCurrent().reload(); });
+        expect(hook.getCurrent().state).toEqual({ status: 'loading' });
+        retireOnRead = true;
+        await act(async () => { await hook.getCurrent().reload(); });
+        expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_scope_retired' });
+    } finally { await hook.unmount(); await connection.dispose(); }
+});
+
 it('distinguishes a pending observation from retired Account authority and rejects its late completion', async () => {
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://area-pending-retirement.test', accountId: 'actor' });
     const surface: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'work' } };

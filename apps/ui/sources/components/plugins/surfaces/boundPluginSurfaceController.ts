@@ -1171,6 +1171,8 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                 return method.success && isDaemonOwnedPluginSurfaceMethod(method.data);
             });
     };
+    const isConnectionPending = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1) =>
+        input.facts.isDaemonConnectionPending?.() === true && isMachineUnavailable(diagnostics, request);
     let machineNoticeLent = false;
     const describeMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): string | undefined => {
         const daemonUnavailable = isMachineUnavailable(diagnostics, request);
@@ -1195,6 +1197,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             : undefined;
     };
     const widgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent, lifetimeSignal: mountLifetime.signal, hostAction, callerBinding,
+        isConnectionPending: reason => isConnectionPending([reason]),
         describeUnavailable: (reason) => describeMachineUnavailable([reason]) });
     const hostApi = createPluginSurfaceActionHostApi({
         pluginUiProjection: input.facts.pluginUiProjection,
@@ -1222,8 +1225,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             }
             return sentence;
         },
-        isConnectionPending: (error, request) => input.facts.isDaemonConnectionPending?.() === true
-            && isMachineUnavailable(error.diagnostics, request),
+        isConnectionPending: (error, request) => isConnectionPending(error.diagnostics, request),
         isContributedActionAvailable: isDaemonInteractionEnabled,
         isCurrent,
         resourceLifetimeSignal: mountLifetime.signal,
