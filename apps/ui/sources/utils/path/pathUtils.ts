@@ -79,3 +79,10 @@ export function resolveAbsolutePath(path: string, homeDir?: string): string {
     // Handle ~username paths (not supported, return original)
     return path;
 }
+
+/** The last folder of an absolute path ("/home/dev/dp2-fixture" is "dp2-fixture"), or null for an empty path. */
+export function leafFolderName(path: string | null | undefined): string | null {
+    if (!path) return null;
+    const segments = path.split(/[\\/]+/).filter(Boolean);
+    return segments[segments.length - 1] ?? null;
+}

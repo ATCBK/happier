@@ -21,7 +21,10 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { HAPPIER_TREE_ROW_METRICS as TREE_ROW_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
-import { usePaneHeaderSlotContent } from '@/components/appShell/panes/paneHeaderSlot';
+import { usePaneHeaderSlotContent, type PaneHeaderLine, type PaneHeaderLineSegment } from '@/components/appShell/panes/paneHeaderSlot';
+import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
+import { leafFolderName } from '@/utils/path/pathUtils';
+import { formatExactCount } from '@/components/ui/navigation/tabBadge/tabBadgeModel';
 import { RepositoryTreeCreateMenu } from '@/components/workspaces/files/repositoryTree/RepositoryTreeCreateMenu';
 
 const styles = StyleSheet.create({
@@ -85,6 +88,21 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
         kind: 'sessionDetails', params: { id: props.sessionId, ...(serverId ? { serverId } : {}),
             ...serializeSessionPaneUrlState({ details: { kind: 'file', path } }) },
     }), [props.sessionId, serverId]);
+    // The pane header's live line: where this Session works ("folder on machine"), then how many files changed (the Git pane's words).
+    const rootPath = scope?.rootPath ?? null;
+    const repoChangedCount = React.useMemo(() => scmSnapshot?.repo.isRepo ? selectScmChangedFiles(scmSnapshot).length : null, [scmSnapshot]);
+    const paneHeaderLine = React.useMemo((): PaneHeaderLine | null => {
+        const folder = withoutFolder ? null : leafFolderName(rootPath);
+        const place = folder && machineName ? t('sessionGitPane.header.folderOnMachine', { folder, machine: machineName }) : folder ?? machineName;
+        if (!place) return null;
+        const segments: PaneHeaderLineSegment[] = [place];
+        if (repoChangedCount !== null) {
+            segments.push(repoChangedCount > 0
+                ? t('sessionGitPane.header.changed', { count: formatExactCount(repoChangedCount) })
+                : t('sessionGitPane.flow.header.noChanges'));
+        }
+        return { segments };
+    }, [machineName, repoChangedCount, rootPath, withoutFolder]);
     const scrollFades = useScrollEdgeFades({ enabledEdges: { top: true, bottom: true }, overflowThreshold: 1, edgeThreshold: 1 });
     const scrollProps = React.useMemo(() => ({ onLayout: scrollFades.onViewportLayout, onContentSizeChange: scrollFades.onContentSizeChange,
         onScroll: scrollFades.onScroll, scrollEventThrottle: 16 }), [scrollFades.onViewportLayout, scrollFades.onContentSizeChange, scrollFades.onScroll]);
@@ -106,6 +124,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
             rootHeading={withoutFolder ? <SessionFilesRootHeading label={rootLabel} /> : null}
             machineName={machineName}
             createMenuPlacement="paneHeader"
+            paneHeaderLine={paneHeaderLine}
             scrollProps={scrollProps}
             scrollOverlay={<><ScrollEdgeFades color={theme.colors.surface.base} size={18} edges={scrollFades.visibility} />
                 <ScrollEdgeIndicators edges={scrollFades.visibility} color={theme.colors.text.secondary} size={14} opacity={0.35} /></>}

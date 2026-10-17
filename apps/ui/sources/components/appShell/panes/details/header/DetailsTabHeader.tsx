@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_ICON_BUTTON_SIZE, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import { PaneHeader, type PaneHeaderLineSegment } from '@/components/appShell/panes/PaneHeader';
 import { useClaimedStackHeaderActions } from '@/components/navigation/stackHeaderActions';
@@ -89,45 +89,126 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
     const testID = props.testID ?? 'details-tab-header';
     const segments = React.useMemo(() => toLineSegments(props.meta), [props.meta]);
 
-    const buttons = props.buttons && props.buttons.length > 0 ? props.buttons.map((button) => (
-        <ToolbarButton
-            key={button.testID ?? button.label}
-            testID={button.testID}
-            label={button.label}
-            accessibilityLabel={button.accessibilityLabel}
-            onPress={button.disabled || button.busy ? undefined : button.onPress}
-            disabled={button.disabled || button.busy}
-            busy={button.busy}
-            tone={button.tone ?? 'default'}
-            size={phone ? 'md' : 'sm'}
-        />
-    )) : null;
-    const menu = props.menu ?? (props.menuActions && props.menuActions.length > 0 ? (
-        <PageHeaderMenu testID={`${testID}.menu`} actions={props.menuActions} />
-    ) : null);
     // The pane's own controls (⤢, close), when the pane showing this tab has no bar of its own.
     const paneControls = useClaimedStackHeaderActions({ scopeOnly: true });
     // The view controls sit on the facts line while they leave the facts at least as much room as they
     // take; a narrower band would push them over its actions, so they take their own row beneath it.
-    const [band, setBand] = React.useState({ root: 0, actions: 0, controls: 0 });
-    const measure = (key: keyof typeof band) => (event: LayoutChangeEvent) => {
+    const [band, setBand] = React.useState({ root: 0, actions: 0, controls: 0, trailing: 0, trailingMenu: false });
+    const measure = (key: 'root' | 'actions' | 'controls') => (event: LayoutChangeEvent) => {
         const width = Math.round(event.nativeEvent.layout.width);
         setBand((current) => current[key] === width ? current : { ...current, [key]: width });
     };
-    const lineRoom = band.root - metrics.paddingStartPx - metrics.paddingEndPx - band.actions;
+    // Each button's natural width, kept while it sits in `⋯`, so folding never feeds back into the fit.
+    const [buttonWidths, setButtonWidths] = React.useState<Readonly<Record<string, number>>>({});
+    const measureButton = (key: string) => (event: LayoutChangeEvent) => {
+        const width = Math.round(event.nativeEvent.layout.width);
+        setButtonWidths((current) => current[key] === width ? current : { ...current, [key]: width });
+    };
+    const buttonList = props.buttons ?? [];
+    const keyOf = (button: DetailsTabHeaderAction) => button.testID ?? button.label;
+    const buttonsMeasured = buttonList.every((button) => (buttonWidths[keyOf(button)] ?? 0) > 0);
+    const sum = (widths: readonly number[], gap: number) => widths.length === 0 ? 0
+        : widths.reduce((total, width) => total + width, 0) + gap * (widths.length - 1);
+    // The actions at their natural one-row width: the quiet toggles, then every button.
+    const actionsWidth = (visible: readonly DetailsTabHeaderAction[], withIcons = true) => sum([
+        ...(props.actions && withIcons ? [band.actions] : []),
+        ...visible.map((button) => buttonWidths[keyOf(button)] ?? 0),
+    ], theme.space.s4);
+    const naturalActions = buttonsMeasured ? actionsWidth(buttonList) : 0;
+    const rowRoom = band.root - metrics.paddingStartPx - metrics.paddingEndPx;
+    // `⋯` and the pane's own controls stay in the band beside the title, so the title never has their room.
+    // The trailing group is measured with or without a `⋯`; the fit below counts it explicitly either way.
+    const menuSlot = HAPPIER_ICON_BUTTON_SIZE + theme.space.s4;
+    const menuForced = props.menu !== undefined || (props.menuActions?.length ?? 0) > 0;
+    const roomBesideTitle = rowRoom - (band.trailing - (band.trailingMenu ? menuSlot : 0));
+    const bandRoom = roomBesideTitle - (menuForced ? menuSlot : 0);
     // The actions keep their place beside the title while they leave it at least as much room as they
     // take; in a narrower pane they would cut the name to a few letters, so they move to the row beneath.
-    const actionsBelow = !phone && band.root > 0 && band.actions > 0 && lineRoom < band.actions;
+    const besideFits = (width: number, room: number) => width > 0 && room - width >= width;
+    // The quieter buttons (first to last; never the last, never a primary) move into `⋯` until the rest `fits`.
+    const foldQuietButtons = (fits: (visible: readonly DetailsTabHeaderAction[]) => boolean): ReadonlySet<string> => {
+        const folded = new Set<string>();
+        const visible = () => buttonList.filter((button) => !folded.has(keyOf(button)));
+        for (const button of buttonList.slice(0, -1)) {
+            if (fits(visible())) break;
+            if (button.tone !== 'primary') folded.add(keyOf(button));
+        }
+        return folded;
+    };
+    // Beneath the band the view controls and the actions share one row, and the quieter buttons fold into `⋯`
+    // until it fits. When even the buttons that stay (the last, and a primary) would still break that row in two,
+    // a button alone on a row of its own reads as an afterthought: the staying buttons keep their place beside
+    // the title instead, and the quiet toggles and the other buttons wait in `⋯`.
+    const foldedRoom = roomBesideTitle - menuSlot;
+    const controlsWidth = props.controls ? band.controls + theme.space.s6 : 0;
+    const foldedAll = foldQuietButtons(() => false);
+    const rowBelowHoldsStaying = controlsWidth + actionsWidth(buttonList.filter((button) => !foldedAll.has(keyOf(button))), false) <= rowRoom;
+    const besideFolded = !phone && band.root > 0 && props.menu === undefined && Boolean(props.actions) && band.actions > 0
+        && buttonsMeasured && !besideFits(naturalActions, bandRoom) && !rowBelowHoldsStaying
+        ? foldQuietButtons((visible) => besideFits(actionsWidth(visible, false), foldedRoom)) : null;
+    const besideWidth = besideFolded ? actionsWidth(buttonList.filter((button) => !besideFolded.has(keyOf(button))), false) : 0;
+    const togglesFoldBesideTitle = besideFolded !== null && besideFits(besideWidth, foldedRoom);
+    const lineRoom = togglesFoldBesideTitle ? foldedRoom - besideWidth : bandRoom - naturalActions;
+    const actionsBelow = !phone && band.root > 0 && naturalActions > 0 && !besideFits(naturalActions, bandRoom) && !togglesFoldBesideTitle;
     const controlsBelow = !phone && Boolean(props.controls) && band.root > 0 && (actionsBelow || lineRoom < band.controls * 2);
+    // Beneath the band the one row folds the same way, and when it still runs out the quiet toggles follow into `⋯`,
+    // so the row never breaks in two.
+    const actionsInRow = phone || actionsBelow;
+    let folded: ReadonlySet<string> = togglesFoldBesideTitle ? besideFolded! : new Set<string>();
+    let iconsFolded = togglesFoldBesideTitle;
+    if (actionsInRow && buttonsMeasured && band.root > 0 && props.menu === undefined) {
+        const rowFits = (visible: readonly DetailsTabHeaderAction[]) => controlsWidth + actionsWidth(visible) <= rowRoom;
+        folded = foldQuietButtons(rowFits);
+        iconsFolded = Boolean(props.actions) && band.actions > 0
+            && !rowFits(buttonList.filter((button) => !folded.has(keyOf(button))));
+    }
+    const buttons = buttonList.length > 0 ? buttonList.map((button) => {
+        const key = keyOf(button);
+        return folded.has(key) ? null : (
+            <View key={key} style={styles.measured} onLayout={measureButton(key)}>
+                <ToolbarButton
+                    testID={button.testID}
+                    label={button.label}
+                    accessibilityLabel={button.accessibilityLabel}
+                    onPress={button.disabled || button.busy ? undefined : button.onPress}
+                    disabled={button.disabled || button.busy}
+                    busy={button.busy}
+                    tone={button.tone ?? 'default'}
+                    size={phone ? 'md' : 'sm'}
+                />
+            </View>
+        );
+    }) : null;
+    const foldedActions: PageHeaderMenuAction[] = buttonList.filter((button) => folded.has(keyOf(button))).map((button) => ({
+        id: `button:${keyOf(button)}`,
+        title: button.label,
+        ...(button.testID ? { testID: button.testID } : {}),
+        ...(button.disabled ? { disabled: true } : {}),
+        ...(button.busy ? { loading: true } : {}),
+        onSelect: button.onPress,
+    }));
+    const menuActions = [...foldedActions, ...(props.menuActions ?? [])];
+    const menu = props.menu ?? (menuActions.length > 0 || iconsFolded ? (
+        <PageHeaderMenu testID={`${testID}.menu`} actions={menuActions}
+            content={iconsFolded ? <View testID={`${testID}.foldedIcons`} style={styles.foldedIcons}>{props.actions}</View> : undefined} />
+    ) : null);
+    // Whether the measured group held a `⋯` is read from the render that drew it, so the fit never double counts it.
+    const measureTrailing = (event: LayoutChangeEvent) => {
+        const width = Math.round(event.nativeEvent.layout.width);
+        const trailingMenu = menu !== null && menu !== undefined;
+        setBand((current) => current.trailing === width && current.trailingMenu === trailingMenu ? current : { ...current, trailing: width, trailingMenu });
+    };
     const controls = props.controls ? (
         <View testID={`${testID}.controls`} style={styles.controlsMeasure} onLayout={measure('controls')}>{props.controls}</View>
     ) : null;
+    // The quiet toggles, measured at their natural width wherever they sit.
+    const iconActions = props.actions && !iconsFolded ? (
+        <View testID={`${testID}.icons`} style={styles.measured} onLayout={measure('actions')}>{props.actions}</View>
+    ) : null;
     // A phone recomposes: only `⋯` stays beside the title; the toggles and buttons move beneath it.
-    // Measured at its natural one-row width in the band; beneath the title the row may wrap, so it is not re-measured there.
-    const wideActions = props.actions || buttons ? (
-        <View testID={`${testID}.actions`} style={actionsBelow ? [styles.bandActions, styles.actionsWrap] : styles.bandActions}
-            onLayout={actionsBelow ? undefined : measure('actions')}>
-            {props.actions}
+    const wideActions = iconActions || buttons ? (
+        <View testID={`${testID}.actions`} style={actionsBelow ? [styles.bandActions, styles.actionsWrap] : styles.bandActions}>
+            {iconActions}
             {buttons}
         </View>
     ) : null;
@@ -136,15 +217,19 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
         : wideActions || menu || paneControls ? (
             <View style={styles.bandActions}>
                 {actionsBelow ? null : wideActions}
-                {menu}
-                {paneControls}
+                {menu || paneControls ? (
+                    <View testID={`${testID}.trailing`} style={styles.bandActions} onLayout={measureTrailing}>
+                        {menu}
+                        {paneControls}
+                    </View>
+                ) : null}
             </View>
         ) : undefined;
     const phoneToolbar = phone && (props.controls || props.actions || buttons || paneControls) ? (
         <View style={styles.controls}>
             {controls}
             <View style={styles.grow} />
-            {props.actions}
+            {iconActions}
             {buttons}
             {paneControls}
         </View>
@@ -236,6 +321,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexShrink: 0,
+    },
+    measured: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 0,
+        gap: theme.space.s4,
+    },
+    foldedIcons: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s4,
     },
     body: {
         ...Typography.default(),

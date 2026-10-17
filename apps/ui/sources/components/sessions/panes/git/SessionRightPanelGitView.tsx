@@ -35,6 +35,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { formatExactCount } from '@/components/ui/navigation/tabBadge/tabBadgeModel';
 import { selectScmChangedFiles, selectScmConflictFiles } from '@/scm/scmStatusFiles';
+import { leafFolderName } from '@/utils/path/pathUtils';
 import { isFileSelectedForCommit } from '@/scm/operations/commitSelectionHints';
 import { inferRemoteTargetFromSnapshot, resolveForceWithLeaseTarget } from '@/scm/operations/remoteTarget';
 import { resolveSessionGitPaneActions, resolveSessionGitPaneHeaderFacts, type SessionGitPaneActionKey } from './sessionGitPaneHeader';
@@ -474,12 +475,10 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
         () => <Icon name="laptop" size={13} color={headerLineLeadingColor} />,
         [headerLineLeadingColor],
     );
-    const workspaceFolderName = React.useMemo(() => {
-        const root = effectiveScmSnapshot?.repo.rootPath ?? sessionPath;
-        if (!root) return null;
-        const segments = root.split(/[\\/]+/).filter(Boolean);
-        return segments[segments.length - 1] ?? null;
-    }, [effectiveScmSnapshot?.repo.rootPath, sessionPath]);
+    const workspaceFolderName = React.useMemo(
+        () => leafFolderName(effectiveScmSnapshot?.repo.rootPath ?? sessionPath),
+        [effectiveScmSnapshot?.repo.rootPath, sessionPath],
+    );
     const headerLine = React.useMemo(() => {
         if (effectiveScmSnapshot && isRepo) {
             const branch = effectiveScmSnapshot.branch;

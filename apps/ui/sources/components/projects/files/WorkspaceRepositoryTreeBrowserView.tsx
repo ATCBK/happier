@@ -26,7 +26,7 @@ import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprov
 import { createActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { usePaneHeaderSlotContent } from '@/components/appShell/panes/paneHeaderSlot';
+import { usePaneHeaderSlotContent, type PaneHeaderLine } from '@/components/appShell/panes/paneHeaderSlot';
 import { CheckoutReachabilityLine, CheckoutReachabilityScope, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { useIsWidgetFrameBody } from '@/components/widgets/frame/widgetFrameBody';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
@@ -93,6 +93,8 @@ export type WorkspaceRepositoryTreeBrowserViewProps = Readonly<{
     rootHeading?: React.ReactNode;
     machineName?: string | null;
     createMenuPlacement?: 'toolbar' | 'paneHeader';
+    /** With `paneHeader` placement: what this pane is about, on the pane header's live line beside the + menu. */
+    paneHeaderLine?: PaneHeaderLine | null;
     onRefreshScm?: () => void;
     scrollProps?: Pick<ScrollViewProps, 'onLayout' | 'onContentSizeChange' | 'onScroll' | 'scrollEventThrottle'>;
     scrollOverlay?: React.ReactNode;
@@ -125,8 +127,8 @@ export type WorkspaceRepositoryTreeBrowserViewProps = Readonly<{
 const FILL_BODY_STYLE = { flex: 1, minHeight: 0 } as const;
 const COMPOSED_BODY_STYLE = { flexGrow: 0, flexShrink: 1, minHeight: 0 } as const;
 
-function BrowserHeaderAction(props: Readonly<{ action: React.ReactNode }>) {
-    usePaneHeaderSlotContent(React.useMemo(() => ({ action: props.action }), [props.action]));
+function BrowserPaneHeader(props: Readonly<{ action: React.ReactNode; line?: PaneHeaderLine | null }>) {
+    usePaneHeaderSlotContent(React.useMemo(() => ({ action: props.action, line: props.line }), [props.action, props.line]));
     return null;
 }
 
@@ -725,7 +727,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         <CheckoutReachabilityScope scope={workspaceScope}>
         <View style={{ flex: 1, minHeight: 0 }}>
             {actionApproval.approvalId && !composed ? approvalNotice('row') : null}
-            {props.createMenuPlacement === 'paneHeader' ? <BrowserHeaderAction action={createMenu} /> : null}
+            {props.createMenuPlacement === 'paneHeader' ? <BrowserPaneHeader action={createMenu} line={props.paneHeaderLine} /> : null}
             {(showSearchBar || folderPage) && !widget && !composed ? (
                 <RepositoryTreeToolbar
                     testIDPrefix={props.createMenuPlacement === 'paneHeader' ? 'repository-tree' : 'workspace-repository-tree'}

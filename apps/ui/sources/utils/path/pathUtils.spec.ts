@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAbsolutePath, resolvePath } from './pathUtils';
+import { leafFolderName, resolveAbsolutePath, resolvePath } from './pathUtils';
 
 describe('pathUtils', () => {
     describe('resolveAbsolutePath', () => {
@@ -225,6 +225,20 @@ describe('pathUtils', () => {
             expect(resolveAbsolutePath('~/Documents/Projects', macHomeDir)).toBe('/Users/steve/Documents/Projects');
             expect(resolveAbsolutePath('/absolute/path', macHomeDir)).toBe('/absolute/path');
             expect(resolveAbsolutePath('./relative', macHomeDir)).toBe('./relative');
+        });
+    });
+
+    describe('leafFolderName', () => {
+        it('names the last folder of a POSIX or Windows path, whatever trails it', () => {
+            expect(leafFolderName('/home/dev/dp2-fixture')).toBe('dp2-fixture');
+            expect(leafFolderName('/home/dev/dp2-fixture/')).toBe('dp2-fixture');
+            expect(leafFolderName('C:\\Users\\alice\\repo')).toBe('repo');
+        });
+
+        it('has no name for an empty path', () => {
+            expect(leafFolderName('')).toBeNull();
+            expect(leafFolderName(null)).toBeNull();
+            expect(leafFolderName('/')).toBeNull();
         });
     });
 });

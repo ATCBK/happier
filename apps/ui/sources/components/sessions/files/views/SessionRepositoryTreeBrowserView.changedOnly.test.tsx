@@ -7,7 +7,7 @@ import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesVie
 
 installSessionFilesViewBoundaries();
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit')).createExpoVectorIconsMock());
-vi.mock('@/text', async () => (await import('@/dev/testkit')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/text', async () => (await import('@/dev/testkit')).createTextModuleMock({ translate: (key, params) => params ? `${key}:${JSON.stringify(params)}` : key }));
 
 const changedEntries = ['src/a.ts', 'src/b.ts', 'README.md', 'scratch/'].map(path => ({
     path, previousPath: null, kind: path.endsWith('/') ? 'untracked' as const : 'modified' as const,
@@ -66,7 +66,7 @@ describe('Session shared browser changed-only, header and View menu', () => {
         expect(screen.findByTestId(rowId('other-home.ts'))).toBeNull();
     });
 
-    it('publishes only a stable create action to the pane header, with no live line', async () => {
+    it('publishes the create action and the project context line to the pane header, both stable', async () => {
         const { PaneHeaderSlotProvider, PaneHeaderSlotScope, usePublishedPaneHeaderContent } = await import('@/components/appShell/panes/paneHeaderSlot');
         const { SessionRepositoryTreeBrowserView } = await import('./SessionRepositoryTreeBrowserView');
         let content: ReturnType<typeof usePublishedPaneHeaderContent>;
@@ -76,10 +76,14 @@ describe('Session shared browser changed-only, header and View menu', () => {
         </PaneHeaderSlotScope></PaneHeaderSlotProvider>;
         const screen = await fixture.render(body);
         const action = content!.action;
+        const line = content!.line;
         expect(action).toBeTruthy();
-        expect(content!.line ?? null).toBeNull();
+        // The folder this Session works in, then how many files changed (the Git pane's vocabulary).
+        expect(line?.segments[0]).toContain(`changed-browser-${fixtureIndex}`);
+        expect(line?.segments.at(-1)).toBe('sessionGitPane.header.changed:{"count":"3"}');
         await screen.pressByTestIdAsync('repository-tree-filter-changed');
         expect(content!.action).toBe(action);
+        expect(content!.line).toBe(line);
     });
 
     it('collapses the Session-owned expansion and keeps Size/date and Refresh in the View menu', async () => {
