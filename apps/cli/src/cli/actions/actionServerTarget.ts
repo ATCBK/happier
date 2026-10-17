@@ -1,5 +1,5 @@
 import type { StoredCredentials } from '@/persistence';
-import type { ServerProfile } from '@/server/serverProfiles';
+import { refreshServerProfileHomeConnectionDescriptor, type ServerProfile } from '@/server/serverProfiles';
 import { configuration } from '@/configuration';
 import { ACTION_CLI_SERVER_ID_FLAG } from './parseCommandInput';
 
@@ -69,13 +69,26 @@ export async function resolveActionCliCredentialTarget(params: Readonly<{
   fixedServer: ActionCliFixedServerTarget | null;
   serverIdentityId?: string;
 }>> {
+  const prepareProfile = async (profile: ServerProfile | null, credentials: StoredCredentials | null): Promise<ServerProfile | null> => {
+    if (!profile || !credentials || readExactHomeIdentity(profile)) return profile;
+    // Restored identities can have credentials and a URL-only profile. Establish
+    // its binding at the existing authenticated descriptor owner before Actions
+    // apply their saved-Home currentness checks.
+    const refreshed = await refreshServerProfileHomeConnectionDescriptor({ profileId: profile.id,
+      serverUrl: profile.localServerUrl ?? profile.serverUrl, token: credentials.token,
+    }).catch(() => 'unavailable' as const);
+    return refreshed === 'unavailable' ? profile : await params.deps.getServerProfileFn(profile.id);
+  };
   if (params.requestedServerId === null) {
-    const profile = await params.deps.getServerProfileFn(configuration.activeServerId).catch(() => null);
+    const credentials = await params.deps.readCredentialsFn();
+    const profile = await prepareProfile(await params.deps.getServerProfileFn(configuration.activeServerId).catch(() => null), credentials);
     const serverIdentityId = readExactHomeIdentity(profile);
-    return { credentials: await params.deps.readCredentialsFn(), fixedServer: null,
+    return { credentials, fixedServer: null,
       ...(serverIdentityId ? { serverIdentityId } : {}) };
   }
-  const profile = await params.deps.getServerProfileFn(params.requestedServerId);
+  const selectedProfile = await params.deps.getServerProfileFn(params.requestedServerId);
+  const credentials = await params.deps.readCredentialsForServerIdFn(selectedProfile.id);
+  const profile = await prepareProfile(selectedProfile, credentials) ?? selectedProfile;
   const serverIdentityId = readExactHomeIdentity(profile);
   if (params.requireServerIdentityId && !serverIdentityId) {
     throw Object.assign(
@@ -84,7 +97,7 @@ export async function resolveActionCliCredentialTarget(params: Readonly<{
     );
   }
   return {
-    credentials: await params.deps.readCredentialsForServerIdFn(profile.id),
+    credentials,
     ...(serverIdentityId ? { serverIdentityId } : {}),
     fixedServer: {
       serverId: profile.id,
