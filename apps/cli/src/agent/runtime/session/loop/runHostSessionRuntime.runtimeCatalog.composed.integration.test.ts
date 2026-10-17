@@ -3782,11 +3782,16 @@ describe('runHostSessionRuntime', () => {
       identity: { runtimeDescriptor: null, runtimeCapabilities: null, runtimeFacets: null },
     });
     Object.assign(harness.config, wrapped.config);
+    const userInputs: string[] = [];
+    Object.assign(harness.session, { enqueueUserTextMessageCommitted: async (text: string) => {
+      userInputs.push(text);
+      return { persisted: true as const, delivered: true as const };
+    } });
     harness.session.enqueueAgentMessageCommitted = vi.fn(async () => ({ persisted: true, delivered: true }));
     harness.deps.runPermissionModePromptLoopFn = async () => undefined;
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
     const committed = JSON.stringify(harness.session.enqueueAgentMessageCommitted.mock.calls);
-    expect.soft(committed).toContain('EXTENSION_STARTUP_INPUT');
+    expect.soft(userInputs).toEqual(['EXTENSION_STARTUP_INPUT']);
     expect.soft(committed).toContain('EXTENSION_STARTUP_ANSWER');
     expect(runtime.readSessionIdentity()).toEqual({ sessionId: 'startup-native-session' });
     expect(listeners.size).toBe(0);

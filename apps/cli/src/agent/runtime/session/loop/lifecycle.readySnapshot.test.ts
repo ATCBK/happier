@@ -101,6 +101,11 @@ describe('host ready after a provider successor starts', () => {
       turnAssistantTextSnapshotStore: snapshots,
       getTurnAssistantTextSnapshotStore: () => snapshots,
       getLastObservedMessageSeq: () => observedSeq,
+      enqueueUserTextMessageCommitted: async (text: string) => {
+        committedMessages.push({ role: 'user', text });
+        observedSeq += 1;
+        return { persisted: true as const, delivered: true as const };
+      },
       getCommittedUserMessageSeq: (localId: string) => localId === 'host-input' ? 1 : localId === 'host-input-2' ? secondHostSeq : null,
       enqueueSessionTurnMutation: async () => undefined,
       enqueueAgentMessageCommitted: async (
