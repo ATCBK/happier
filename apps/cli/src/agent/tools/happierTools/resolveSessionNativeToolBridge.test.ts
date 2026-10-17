@@ -79,6 +79,23 @@ describe('resolveSessionNativeToolDescriptors', () => {
     expect(tools.map((tool) => tool.name)).toContain('session_presentation_apply');
   });
 
+  it('projects settings parity and mounted tab opening into the real Session Agent tool catalog', () => {
+    const tools = resolveSessionNativeToolDescriptors({
+      accountSettings: {},
+      profileId: null,
+      sessionId: 'session-1',
+      sessionMachineId: 'machine-1',
+      memoryRecallGuidanceEnabled: false,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      'settings_get',
+      'settings_set',
+      'settings_reset',
+      'workspace_tabs_open',
+    ]));
+  });
+
   it('admits Board tools only when the exact Home feature and shared Action policy both allow them', () => {
     const resolve = (overrides: Partial<Parameters<typeof resolveSessionNativeToolDescriptors>[0]> = {}) => (
       resolveSessionNativeToolDescriptors({

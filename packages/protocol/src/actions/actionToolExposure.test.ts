@@ -38,6 +38,21 @@ import {
 } from './actionToolExposure.js';
 
 describe('actionToolExposure', () => {
+  it('publishes settings parity and mounted tab opening as direct Session Agent tools', () => {
+    for (const actionId of [
+      'settings.get',
+      'settings.set',
+      'settings.reset',
+      'workspace.tabs.open',
+    ] as const) {
+      const spec = getActionSpec(actionId);
+      expect(spec.surfaces, actionId).toMatchObject({ agent: true, mcp: true });
+      expect(spec.bindings?.mcpToolName, actionId).toBe(actionId.replaceAll('.', '_'));
+      expect(isActionDirectToolExposedOn(spec, 'agent'), actionId).toBe(true);
+      expect(isActionDirectToolExposedOn(spec, 'mcp'), actionId).toBe(true);
+    }
+  });
+
   it('delivers resource guidance through the same closed Action definition agents discover', () => {
     const definition = projectActionDefinitionForExternalDiscovery(actionSpecToActionDefinitionV1(getActionSpec('machines.storage.trash.move')));
     expect(definition.prompting).toMatchObject({ agentGuidance: expect.any(String) });

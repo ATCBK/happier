@@ -4991,6 +4991,9 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
   ...ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING,
   ...SETTINGS_DECLARATION_ACTION_IDS_V1.map((id): PreNormalizedActionSpec => ({
     id, approval: { result: 'required' }, originalExecution: { accountRoot: 'allowed', terminalRoot: 'host' }, title: id === 'settings.list' ? 'List declared settings' : id === 'settings.get' ? 'Read a declared setting' : id === 'settings.reset' ? 'Reset a declared setting' : id === 'settings.invoke' ? 'Invoke a declared settings operation' : 'Change a declared setting',
+    ...(id === 'settings.get' || id === 'settings.set' || id === 'settings.reset'
+      ? { toolExposure: { agent: 'direct' as const } }
+      : {}),
     description: 'Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.',
     safety: id === 'settings.set' || id === 'settings.reset' ? 'danger' : 'safe',
     sideEffectClass: id === 'settings.set' || id === 'settings.reset' || id === 'settings.invoke' ? 'write' : 'read',

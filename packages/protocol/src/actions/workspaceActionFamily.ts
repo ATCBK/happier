@@ -170,6 +170,7 @@ function row<const TId extends WorkspaceActionId>(actionId: TId, title: string,
   description = 'Operate on the mounted client workspace in its current Home, Account and window. A headless host without that workspace returns unsupported_action.') {
   return {
     id: actionId, approval: { result: 'required' }, title,
+    ...(actionId === 'workspace.tabs.open' ? { toolExposure: { agent: 'direct' as const } } : {}),
     description,
     safety: 'safe', sideEffectClass: actionId === 'workspace.tabs.list' || actionId === 'workspace.tabs.closed.list' ? 'read' : 'external',
     executionPlacement: 'client', placements: [],
