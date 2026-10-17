@@ -1243,7 +1243,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('keeps an active service pending until ownership appears beyond both readiness windows', async () => {
+  it.each(['linux', 'darwin', 'win32'] as const)('settles %s service readiness from active evidence beyond both readiness windows', async (platform) => {
     await withTempDir('happier-service-start-delayed-owner-', async (homeDir) => {
       const daemonOwner = spawnDaemonLifecycleOwner();
       let ownerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1257,7 +1257,7 @@ describe('runDaemonServiceCliCommand', () => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
         HAPPIER_HOME_DIR: happierHomeDir,
-        HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+        HAPPIER_DAEMON_SERVICE_PLATFORM: platform,
         HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
         HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
         HAPPIER_DAEMON_START_WAIT_TIMEOUT_MS: '50',
@@ -1273,10 +1273,25 @@ describe('runDaemonServiceCliCommand', () => {
         return {
           ...actual,
           spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+            if (isHappierTaskFolderListing(command, args)) {
+              return { status: 0, stdout: Buffer.from('[]'), stderr: Buffer.from('') };
+            }
             if (command === 'systemctl' && args.includes('is-active')) {
               return { status: 0, stdout: Buffer.from('active'), stderr: Buffer.from('') };
             }
-            if (command === 'systemctl' && (args.includes('start') || args.includes('restart')) && ownerTimer === null) ownerTimer = setTimeout(() => {
+            // Native status queries can succeed for loaded but inactive services.
+            if (command === 'launchctl' && args[0] === 'print') {
+              return { status: 0, stdout: Buffer.from('state = waiting'), stderr: Buffer.from('') };
+            }
+            if (command === 'schtasks' && args[0] === '/Query') {
+              return { status: 0, stdout: Buffer.from('Status: Ready\nScheduled Task State: Enabled\n'), stderr: Buffer.from('') };
+            }
+            const startsService = (command === 'systemctl' && (args.includes('start') || args.includes('restart')))
+              || (command === 'launchctl' && (args[0] === 'bootstrap' || args[0] === 'kickstart'))
+              || (command === 'schtasks' && args[0] === '/Run');
+            // A late owner also lets the incorrect indefinite native wait settle,
+            // so its RED is a wrong success rather than a test-runner timeout.
+            if (startsService && ownerTimer === null) ownerTimer = setTimeout(() => {
               writeDaemonStateImpl?.({
                 pid: daemonOwner.pid,
                 httpPort: 43123,
@@ -1318,10 +1333,13 @@ describe('runDaemonServiceCliCommand', () => {
 
       const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
       try {
-        await runDaemonServiceCliCommand({ argv: ['start', '--json'] });
-        const payload = output.json();
-        expect(payload.ok).toBe(true);
-        expect(payload.platform).toBe('linux');
+        const start = runDaemonServiceCliCommand({ argv: ['start', '--json'] });
+        if (platform === 'linux') {
+          await start;
+          expect(output.json()).toMatchObject({ ok: true, platform });
+        } else {
+          await expect(start).rejects.toThrow(/did not become the active daemon/);
+        }
       } finally {
         output.restore();
       }
