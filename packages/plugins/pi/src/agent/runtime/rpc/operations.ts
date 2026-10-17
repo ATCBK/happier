@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createSecureTempDirectorySync, writeAtomicTextFile } from '@happier-dev/plugin-sdk/fs';
 import { buildPiModelDiscoveryExtensionSource, parsePiModelDiscoveryRecord } from '../../models/discoveryExtension.js';
@@ -481,13 +481,15 @@ function createPiExecSpec(
 }
 
 /**
- * Deterministic message id for provider-observed user prompts (extension-injected
- * prompts such as Pi background-bash completion reminders). Repeats of the same text
- * commit the same row identity so the host transcript dedupes instead of duplicating.
+ * Occurrence-unique message id for provider-observed user prompts (extension-injected
+ * prompts such as Pi background-bash completion reminders). Pi message events carry no
+ * provider id, and a text-derived id would collapse legitimate repeats of identical
+ * prompt text (e.g. two "continue" injections) into one transcript row. One id is
+ * generated per observed event; the runtime event is published once, so retries of its
+ * transcript commit reuse the same captured id and stay idempotent.
  */
-function buildProviderUserPromptLocalId(text: string): string {
-  const digest = createHash('sha256').update(text).digest('hex').slice(0, 24);
-  return `provider-user-prompt:${digest}`;
+function buildProviderUserPromptLocalId(): string {
+  return `provider-user-prompt:${randomUUID()}`;
 }
 
 function createRuntimeOperations(params: Readonly<{
@@ -547,12 +549,17 @@ function createRuntimeOperations(params: Readonly<{
     return true;
   }
 
+  function discardHostPromptEcho(text: string): void {
+    const echoIndex = awaitingPromptEchoTexts.indexOf(text);
+    if (echoIndex !== -1) awaitingPromptEchoTexts.splice(echoIndex, 1);
+  }
+
   function publishProviderUserPromptText(text: string): void {
     params.publishRuntimeEvent({
       kind: 'transcript-message-committed',
       sessionId: params.sessionId,
       emittedAtMs: Date.now(),
-      messageId: buildProviderUserPromptLocalId(text),
+      messageId: buildProviderUserPromptLocalId(),
       role: 'user',
       text,
       ...(activeTurn ? { turnId: activeTurn.turnId } : {}),
@@ -729,6 +736,13 @@ function createRuntimeOperations(params: Readonly<{
     if (type === 'message_end') {
       const userPromptText = extractPiUserPromptText(record.message);
       if (userPromptText !== null) {
+        // Between our own prompt's acceptance and that run's agent_start, any user
+        // message_end is the echo of the prompt we sent: exact text for plain prompts, or
+        // the template-expanded text for slash commands (pi expands templates in the RPC
+        // prompt command before the user message exists). Extension injections arrive
+        // idle — before their OWN agent_start, with no active host turn — or mid-turn
+        // after agent_start, never inside this window.
+        if (activeTurn !== null && !activeTurnStartObserved) return;
         if (consumeHostPromptEcho(userPromptText)) return;
         publishProviderUserPromptText(userPromptText);
         return;
@@ -981,6 +995,12 @@ function createRuntimeOperations(params: Readonly<{
         }
       } catch (error) {
         const promptError = error instanceof Error ? error : new Error(String(error));
+        const rejectedBeforeProviderEffect = promptError instanceof PiRpcNegativeAcknowledgementError;
+        if (rejectedBeforeProviderEffect) {
+          // No provider effect occurred, so no user-message echo will arrive; drop the
+          // queued echo text so a later extension injection with identical text surfaces.
+          discardHostPromptEcho(prompt);
+        }
         if (admission.bufferFailure !== null) {
           admission.bufferedRecords.dispose();
           pendingPromptAdmission = null;

@@ -526,14 +526,29 @@ describe('createPiRuntimeOperations', () => {
 
     const parsedEvents = parseEvents(events);
     const injectedText = '<system-reminder>\n[BACKGROUND BASH COMPLETED]\n- task bash-1 (exit 0)\n</system-reminder>';
-    expect(parsedEvents).toEqual(expect.arrayContaining([
+    const committed = parsedEvents.filter(
+      (event) => event.kind === 'transcript-message-committed' && event.role === 'user',
+    );
+    expect(committed).toEqual([
       expect.objectContaining({
         kind: 'transcript-message-committed',
         role: 'user',
         text: injectedText,
-        messageId: expect.stringMatching(/^provider-user-prompt:[0-9a-f]{24}$/),
+        messageId: expect.stringMatching(/^provider-user-prompt:/),
       }),
-    ]));
+    ]);
+    // A second observation of identical text commits a distinct row: the id is
+    // per-occurrence, so legitimate repeats do not collapse into one transcript row.
+    await emit(capture, {
+      type: 'message_end',
+      message: { role: 'user', content: [{ type: 'text', text: injectedText }] },
+    });
+    const committedAfterRepeat = events.filter(
+      (event): event is Extract<AgentSessionRuntimeEvent, { kind: 'transcript-message-committed' }> =>
+        event.kind === 'transcript-message-committed' && event.role === 'user',
+    );
+    expect(committedAfterRepeat).toHaveLength(2);
+    expect(committedAfterRepeat[1]!.messageId).not.toBe(committedAfterRepeat[0]!.messageId);
     const turnStart = parsedEvents.find((event) => event.kind === 'turn-start');
     expect(turnStart).toMatchObject({ kind: 'turn-start', startedBy: 'provider' });
     const turnComplete = parsedEvents.find((event) => event.kind === 'turn-complete');
@@ -609,6 +624,66 @@ describe('createPiRuntimeOperations', () => {
     expect(committed.map((event) => (event as { text?: string }).text)).toEqual([
       '<system-reminder>[BG BASH STILL RUNNING]</system-reminder>',
     ]);
+
+    await runtime.dispose();
+  });
+
+  it('suppresses the template-expanded echo of a slash-command prompt before agent_start', async () => {
+    const capture: Capture = { specs: [], written: [] };
+    const runtime = await createRuntime(capture);
+    const events: AgentSessionRuntimeEvent[] = [];
+    runtime.watch((event) => events.push(event));
+
+    const submission = sendPrompt(runtime, '/review concurrency');
+    await waitForWrittenCount(capture, 1);
+    await ackLastCommand(capture);
+    await expect(submission).resolves.toEqual({ status: 'admitted' });
+
+    // Pi expands the /review template before the user message exists, so the echo text
+    // differs from the raw RPC prompt text; it is still our own echo and must not surface.
+    await emit(capture, {
+      type: 'message_end',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'EXPANDED TEMPLATE BODY: review the concurrency of src/index.ts carefully.' }],
+      },
+    });
+    await emit(capture, { type: 'agent_start' });
+    await emit(capture, {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'ok' },
+    });
+    await emit(capture, { type: 'agent_end' });
+
+    expect(parseEvents(events).filter(
+      (event) => event.kind === 'transcript-message-committed' && event.role === 'user',
+    )).toEqual([]);
+
+    await runtime.dispose();
+  });
+
+  it('surfaces a later injection whose text matches a prompt rejected before effect', async () => {
+    const capture: Capture = { specs: [], written: [] };
+    const runtime = await createRuntime(capture);
+    const events: AgentSessionRuntimeEvent[] = [];
+    runtime.watch((event) => events.push(event));
+
+    const rejectedText = 'continue the interrupted work';
+    const submission = sendPrompt(runtime, rejectedText);
+    await waitForWrittenCount(capture, 1);
+    await failLastCommand(capture);
+    await expect(submission).resolves.toEqual({ status: 'rejected', diagnostic: expect.anything() });
+
+    // An extension later injects a prompt with the identical text; it must surface.
+    await emit(capture, {
+      type: 'message_end',
+      message: { role: 'user', content: [{ type: 'text', text: rejectedText }] },
+    });
+
+    const committed = parseEvents(events).filter(
+      (event) => event.kind === 'transcript-message-committed' && event.role === 'user',
+    );
+    expect(committed.map((event) => (event as { text?: string }).text)).toEqual([rejectedText]);
 
     await runtime.dispose();
   });
