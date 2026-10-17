@@ -132,6 +132,16 @@ when the server explicitly supports it; that format and token-only client suppor
 are unreleased. Converting encrypted Machine history still requires its genuine
 old keys.
 
+### Auto-redirect (OIDC-only deployments)
+
+If an OIDC provider is your only supported login/signup flow, you can enable auto-redirect so users don’t have to tap the button:
+
+```bash
+HAPPIER_FEATURE_AUTH_UI__AUTO_REDIRECT_ENABLED=1
+HAPPIER_FEATURE_AUTH_UI__AUTO_REDIRECT_PROVIDER_ID=<providerId>
+AUTH_ANONYMOUS_SIGNUP_ENABLED=0
+```
+
 ### Token exchange for headless machines
 
 A machine that already holds a user's access token from your IdP can trade it for a Happier token on that user's account, with no browser and no pairing step. Dev-box platforms that keep a per-user IdP token in each workspace (for example a Coder external auth) use this to attach a new workspace to its owner's account.
@@ -192,16 +202,6 @@ Limits:
 - The Happier token does not expire with the IdP token. Revocation works as for any other Happier token: disable the account or rely on offboarding checks.
 - The response carries only an API token, no content key. Development-source CLI credentials can be token-only, but the CLI has no command that consumes an exchanged token yet. Historical encrypted content still requires its genuine old key.
 - Requests share the `oauthExternal.authParams` per-IP rate limit (see [Rate limits](/self-hosting/rate-limits)).
-
-### Auto-redirect (OIDC-only deployments)
-
-If an OIDC provider is your only supported login/signup flow, you can enable auto-redirect so users don’t have to tap the button:
-
-```bash
-HAPPIER_FEATURE_AUTH_UI__AUTO_REDIRECT_ENABLED=1
-HAPPIER_FEATURE_AUTH_UI__AUTO_REDIRECT_PROVIDER_ID=<providerId>
-AUTH_ANONYMOUS_SIGNUP_ENABLED=0
-```
 
 ## Step-by-step: add a new OIDC provider
 
