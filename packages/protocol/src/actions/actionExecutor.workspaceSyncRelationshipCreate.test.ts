@@ -92,7 +92,7 @@ describe('workspace.sync.relationship.create Action', () => {
     } satisfies ActionExecutorDeps);
 
     const context = {
-      surface: 'ui', authority: 'present_user', serverId: 'home-1', actionRequestId: 'link-request-1',
+      surface: 'ui', authority: 'present_user', serverId: 'home-profile', serverIdentityId: 'home-1', actionRequestId: 'link-request-1',
     } as const;
     const response = await executor.execute('workspace.sync.relationship.create', input, context);
 
@@ -102,6 +102,7 @@ describe('workspace.sync.relationship.create Action', () => {
       targetPath: '/work/existing',
       destinationIntent: 'use_existing',
       activatesExactMirror: false,
+      serverId: 'home-1',
       operationId: 'link-request-1',
       effectActionId: 'workspace.sync.relationship.create',
       context,
@@ -109,7 +110,7 @@ describe('workspace.sync.relationship.create Action', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       input,
       operationId: 'link-request-1',
-      serverId: 'home-1',
+      serverId: 'home-profile',
       context,
     }));
   });

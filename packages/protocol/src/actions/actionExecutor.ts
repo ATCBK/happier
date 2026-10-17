@@ -3859,7 +3859,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       const targetMachineId = normalizeId(data.targetMachineId);
       const targetServerId = sessionId
         ? resolveServerIdForSession(deps, ctx, sessionId)
-        : normalizeId(ctx.serverId) || null;
+        : normalizeId(ctx.serverIdentityId) || normalizeId(ctx.serverId) || null;
       const operationId = normalizeId(ctx.handoffTargetReplacementApproval?.operationId)
         || normalizeId(ctx.actionRequestId);
       if ((actionId === 'session.handoff' && !sessionId) || !targetMachineId || !operationId) {
