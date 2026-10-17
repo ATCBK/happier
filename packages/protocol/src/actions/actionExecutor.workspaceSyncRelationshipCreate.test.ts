@@ -103,6 +103,7 @@ describe('workspace.sync.relationship.create Action', () => {
       destinationIntent: 'use_existing',
       activatesExactMirror: false,
       operationId: 'link-request-1',
+      effectActionId: 'workspace.sync.relationship.create',
       context,
     }));
     expect(create).toHaveBeenCalledWith(expect.objectContaining({

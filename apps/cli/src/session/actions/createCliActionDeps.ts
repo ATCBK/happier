@@ -4986,6 +4986,7 @@ export function createCliActionDeps(params: Readonly<{
       destinationIntent,
       serverId,
       operationId,
+      effectActionId,
       context,
       signal,
     }) => {
@@ -5013,7 +5014,7 @@ export function createCliActionDeps(params: Readonly<{
             ...(destinationIntent ? { destinationIntent } : {}),
           },
           context,
-          effectActionId: 'workspace.sync.relationship.create',
+          effectActionId,
           exactMachine: true,
           ...(signal ? { signal } : {}),
         }));

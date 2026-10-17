@@ -238,6 +238,9 @@ describe('createActionExecutor (session.handoff)', () => {
     }, { surface: 'ui', authority: 'present_user', serverId: 'server_a' });
     expect(decision).toMatchObject({ ok: true, result: { execution: { ok: true } } });
     expect(preflight).toHaveBeenCalledTimes(2);
+    expect(preflight).toHaveBeenCalledWith(expect.objectContaining({
+      effectActionId: 'session.handoff',
+    }));
     expect(sessionHandoffStart).toHaveBeenCalledWith(expect.objectContaining({
       actionRequestId: 'handoff-action-1',
       handoffTargetReplacementApproval: approval,

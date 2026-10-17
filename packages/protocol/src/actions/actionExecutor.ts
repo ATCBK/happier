@@ -3884,6 +3884,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             : {}),
           ...(targetServerId ? { serverId: targetServerId } : {}),
           operationId,
+          effectActionId: actionId === 'session.handoff' ? actionId : 'workspace.sync.relationship.create',
           context: ctx,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });

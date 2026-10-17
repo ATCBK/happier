@@ -1381,6 +1381,7 @@ export type ActionExecutorDeps = Readonly<{
     destinationIntent?: 'use_existing' | 'materialize_from_source_workspace';
     serverId?: string | null;
     operationId: string;
+    effectActionId: 'session.handoff' | 'workspace.sync.relationship.create';
     /** Admitted root custody for the exact Machine-targeted preflight. */
     context: ActionExecutorContext;
     signal?: AbortSignal;
