@@ -2,7 +2,7 @@ import React from 'react';
 import { act, ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
-import { installLocalTtsCommonModuleMocks } from './localTtsTestHelpers';
+import { installLocalTtsCommonModuleMocks } from '../localTts/localTtsTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -36,17 +36,12 @@ vi.mock('@/voice/modelPacks/installer.native', () => ({
   removeModelPack: vi.fn(),
 }));
 
-vi.mock('@/voice/modelPacks/formatBuildLabel', () => ({
-  formatModelPackBuildLabel: () => null,
-}));
-
-type HookState = { prepareModel: () => Promise<void>; cancelPrepare: () => void; checkForUpdates: () => void; modelStatus: string };
-
 function createHarness(
-  useHook: (props: { packId: string; manifestUrl: string | null; networkTimeoutMs: number }) => HookState,
+  useHook: typeof import('./useNativeModelPackState.native').useNativeModelPackState,
+  role: 'stt' | 'tts' = 'tts',
 ) {
   return function Harness(props: { packId: string; manifestUrl: string | null; networkTimeoutMs: number }) {
-    const state = useHook(props);
+    const state = useHook({ ...props, role });
     return React.createElement('Harness', {
       onPrepare: state.prepareModel, onCancel: state.cancelPrepare, onCheckForUpdates: state.checkForUpdates,
       modelStatus: state.modelStatus,
@@ -54,7 +49,7 @@ function createHarness(
   };
 }
 
-describe('useLocalNeuralModelPackState (native)', () => {
+describe('useNativeModelPackState (native)', () => {
   beforeEach(() => {
     modalAlertSpy.mockClear();
     prepareKokoroTtsSpy.mockClear();
@@ -65,8 +60,8 @@ describe('useLocalNeuralModelPackState (native)', () => {
   it('surfaces prepare errors via Modal.alert', async () => {
     prepareKokoroTtsSpy.mockRejectedValueOnce(new Error('kokoro_native_module_unavailable'));
 
-    const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
-    const Harness = createHarness(useLocalNeuralModelPackState);
+    const { useNativeModelPackState } = await import('./useNativeModelPackState.native');
+    const Harness = createHarness(useNativeModelPackState);
 
     let tree!: ReactTestRenderer;
     tree = (await renderScreen(React.createElement(Harness, { packId: 'dummy-pack', manifestUrl: null, networkTimeoutMs: 1000 }))).tree;
@@ -81,7 +76,7 @@ describe('useLocalNeuralModelPackState (native)', () => {
     expect(String(modalAlertSpy.mock.calls[0]?.[1] ?? '')).toContain('kokoro_native_module_unavailable');
   });
 
-  it('reports the still-installed pack as ready after a failed update', async () => {
+  it.each(['stt', 'tts'] as const)('reports the still-installed %s pack as ready after a failed update', async (role) => {
     const installedSummary = { installed: true, packDirUri: 'file:///packs', manifest: null };
     getModelPackInstallSummarySpy.mockResolvedValue(installedSummary);
     checkModelPackUpdateAvailableSpy.mockResolvedValueOnce({
@@ -89,8 +84,8 @@ describe('useLocalNeuralModelPackState (native)', () => {
     });
     ensureModelPackInstalledSpy.mockRejectedValueOnce(new Error('model_pack_download_failed:503'));
 
-    const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
-    const Harness = createHarness(useLocalNeuralModelPackState);
+    const { useNativeModelPackState } = await import('./useNativeModelPackState.native');
+    const Harness = createHarness(useNativeModelPackState, role);
     const tree = (await renderScreen(React.createElement(Harness, {
       packId: 'dummy-pack', manifestUrl: 'https://example.com/manifest.json', networkTimeoutMs: 1000,
     }))).tree;
@@ -111,8 +106,8 @@ describe('useLocalNeuralModelPackState (native)', () => {
       opts.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
     }));
 
-    const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
-    const Harness = createHarness(useLocalNeuralModelPackState);
+    const { useNativeModelPackState } = await import('./useNativeModelPackState.native');
+    const Harness = createHarness(useNativeModelPackState);
     const tree = (await renderScreen(React.createElement(Harness, {
       packId: 'dummy-pack', manifestUrl: 'https://example.com/manifest.json', networkTimeoutMs: 1000,
     }))).tree;

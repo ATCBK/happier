@@ -24,7 +24,7 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function parseFileCounts(obj: any): DownloadProgressInfo['files'] {
+function parseFileCounts(obj: Record<string, unknown>): DownloadProgressInfo['files'] {
   const done = obj?.filesDone;
   const total = obj?.filesTotal;
   if (!isFiniteNumber(done) || !isFiniteNumber(total) || total <= 0) return null;
@@ -40,7 +40,7 @@ export function parseDownloadProgress(progress: unknown): DownloadProgressInfo {
 
   if (!progress || typeof progress !== 'object') return { percent: null, label: null, bytes: null, files: null };
 
-  const obj = progress as any;
+  const obj = progress as Record<string, unknown>;
 
   const rawName =
     typeof obj?.name === 'string'

@@ -1,3 +1,4 @@
+import type { Directory as ExpoDirectory, File as ExpoFile } from 'expo-file-system';
 import { parseModelPackManifest, type ModelPackManifest } from '@/voice/modelPacks/manifest';
 
 import { downloadManifestFiles } from './installer/download.native';
@@ -27,7 +28,7 @@ function manifestsEqual(a: ModelPackManifest, b: ModelPackManifest): boolean {
   return true;
 }
 
-async function readInstalledManifest(meta: any): Promise<ModelPackManifest | null> {
+async function readInstalledManifest(meta: Pick<ExpoFile, 'exists' | 'text'>): Promise<ModelPackManifest | null> {
   if (!meta.exists) return null;
   try {
     const parsed = JSON.parse(await meta.text());
@@ -38,40 +39,27 @@ async function readInstalledManifest(meta: any): Promise<ModelPackManifest | nul
 }
 
 function deletePack(fs: InstallerFs, id: string): void {
-  try {
-    getPackRootDir(fs, id).delete({ idempotent: true });
-  } catch {
-    // ignore
-  }
+  const rootDir = getPackRootDir(fs, id);
+  if (rootDir.exists) rootDir.delete();
   removePackUpdateDir(fs, id);
 }
 
 function removePackUpdateDir(fs: InstallerFs, id: string): void {
-  try {
-    getPackUpdateDir(fs, id).delete({ idempotent: true });
-  } catch {
-    // ignore
-  }
+  const stagingDir = getPackUpdateDir(fs, id);
+  if (stagingDir.exists) stagingDir.delete();
 }
 
-function writeInstalledManifest(meta: any, manifest: ModelPackManifest): void {
-  try {
-    meta.create?.();
-  } catch {
-    // ignore
-  }
-  try {
-    meta.write(JSON.stringify({ manifest }));
-  } catch {
-    // ignore
-  }
+function writeInstalledManifest(meta: Pick<ExpoFile, 'write'>, manifest: ModelPackManifest): void {
+  // Expo File.write creates a missing file. Publishing the receipt is part of installation,
+  // so a write failure must reach the caller instead of reporting an unusable pack as ready.
+  meta.write(JSON.stringify({ manifest }));
 }
 
 async function applyPackUpdate(opts: {
   fs: InstallerFs;
   id: string;
-  rootDir: any;
-  meta: any;
+  rootDir: Pick<ExpoDirectory, 'uri'>;
+  meta: Pick<ExpoFile, 'exists' | 'delete' | 'write'>;
   installed: ModelPackManifest;
   remote: ModelPackManifest;
   signal: AbortSignal;
@@ -83,11 +71,7 @@ async function applyPackUpdate(opts: {
     installedSha.get(f.path) !== f.sha256.toLowerCase() || !getPackFile(opts.fs, opts.rootDir, f.path).exists
   ));
   const stagingDir = getPackUpdateDir(opts.fs, opts.id);
-  try {
-    stagingDir.create({ intermediates: true, idempotent: true });
-  } catch {
-    // ignore
-  }
+  stagingDir.create({ intermediates: true, idempotent: true });
   // The installed pack stays untouched until every changed file is verified; staged files survive a
   // failed attempt, so retrying the update resumes instead of starting over.
   await downloadManifestFiles({
@@ -100,11 +84,7 @@ async function applyPackUpdate(opts: {
 
   // While files move the pack is not installed, so an interrupted swap reinstalls instead of loading a
   // mix of builds; the reinstall reuses files that already verify.
-  try {
-    opts.meta.delete();
-  } catch {
-    // ignore
-  }
+  if (opts.meta.exists) opts.meta.delete();
   // Dropped files go first: a new build may turn a dropped file's path into a directory, or a dropped
   // directory's path into a file.
   const remotePaths = new Set(opts.remote.files.map((f) => f.path));
@@ -142,21 +122,13 @@ export async function ensureModelPackInstalled(
   const id = normalizePackId(opts.packId);
   const rootDir = getPackRootDir(fs, id);
 
-  try {
-    rootDir.create({ intermediates: true, idempotent: true });
-  } catch {
-    // ignore
-  }
+  rootDir.create({ intermediates: true, idempotent: true });
 
   const meta = getMetaFile(fs, rootDir);
   const installed = await readInstalledManifest(meta);
   if (!installed && meta.exists) {
     // An unreadable record cannot describe the pack; reinstalling re-verifies files already on disk.
-    try {
-      meta.delete();
-    } catch {
-      // ignore
-    }
+    meta.delete();
   }
   if (installed) {
     if (opts.updatePolicy !== 'manual_update_if_available') {
@@ -267,7 +239,7 @@ export async function checkModelPackUpdateAvailable(
   };
 }
 
-function directoryBytes(dir: any): number {
+function directoryBytes(dir: Pick<ExpoDirectory, 'size'>): number {
   try {
     // expo-file-system sums contained files recursively and reports null for a missing directory.
     const size: unknown = dir.size;

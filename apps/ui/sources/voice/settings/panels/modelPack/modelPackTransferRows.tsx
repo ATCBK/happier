@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { ProgressBar } from '@/components/ui/feedback/ProgressBar';
+import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { formatByteSize } from '@/utils/files/formatByteSize';
@@ -34,6 +34,13 @@ export function readPartialDownloadBytes(summary: Readonly<{ installed: boolean;
     return summary.partialBytes ?? 0;
 }
 
+function ModelPackProgressBar(props: Readonly<{ progress: number }>) {
+    const { theme } = useUnistyles();
+    return <MeterBar tone="neutral" height={4} animated fillFraction={props.progress}
+        fillColor={theme.colors.text.link}
+        progressAccessibilityLabel={t('settingsVoice.local.modelPackDownload.progressAccessibilityLabel')} />;
+}
+
 function describeDownloading(progress: unknown): ModelPackRowPresentation {
     const info = parseDownloadProgress(progress);
     const detail = info.percent != null ? `${info.percent}%` : t('settingsVoice.local.kokoro.modelStatus.downloading');
@@ -49,10 +56,7 @@ function describeDownloading(progress: unknown): ModelPackRowPresentation {
         subtitle: (
             <>
                 <View style={styles.bar}>
-                    <ProgressBar
-                        progress={info.bytes.loaded / info.bytes.total}
-                        accessibilityLabel={t('settingsVoice.local.modelPackDownload.progressAccessibilityLabel')}
-                    />
+                    <ModelPackProgressBar progress={info.bytes.loaded / info.bytes.total} />
                 </View>
                 {line}
             </>

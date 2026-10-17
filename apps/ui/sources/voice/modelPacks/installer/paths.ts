@@ -40,11 +40,7 @@ export function getPackFile(fs: InstallerFs, rootDir: any, path: string, opts: {
     dir = new fs.Directory(dir, p);
   }
   if (opts.createParents) {
-    try {
-      dir.create({ intermediates: true, idempotent: true });
-    } catch {
-      // ignore
-    }
+    dir.create({ intermediates: true, idempotent: true });
   }
   return new fs.File(dir, parts[parts.length - 1]!);
 }
@@ -54,9 +50,20 @@ export function getMetaFile(fs: InstallerFs, rootDir: any): any {
 }
 
 export function assertManifestPathsSafe(manifest: ModelPackManifest): void {
+  const destinations = new Set<string>();
   for (const f of manifest.files) {
-    // This will throw model_pack_invalid_path on invalid paths.
-    filePathParts(f.path);
+    // Use the same normalization as getPackFile. Case folding also protects iOS filesystems.
+    const path = filePathParts(f.path).join('/').toLowerCase();
+    if (path === 'pack.json' || path.startsWith('pack.json/')) throw new Error('model_pack_reserved_path');
+    if (destinations.has(path)) throw new Error('model_pack_path_alias');
+    destinations.add(path);
+  }
+  for (const path of destinations) {
+    const parts = path.split('/');
+    for (let length = 1; length < parts.length; length++) {
+      if (destinations.has(parts.slice(0, length).join('/'))) {
+        throw new Error('model_pack_path_file_directory_conflict');
+      }
+    }
   }
 }
-

@@ -9,23 +9,15 @@ import { Modal } from '@/modal';
 import type { VoiceLocalSttSettings } from '@/sync/domains/settings/voiceLocalSttSettings';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import {
-  checkModelPackUpdateAvailable,
-  ensureModelPackInstalled,
-  getModelPackInstallSummary,
-  removeModelPack,
-  type ModelPackDownloadProgress,
-} from '@/voice/modelPacks/installer.native';
+import { useNativeModelPackState } from '@/voice/settings/panels/modelPack/useNativeModelPackState.native';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { getSherpaStreamingSttPackOptions } from '@/voice/sherpa/stt/sherpaStreamingSttPacks';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
-  confirmDiscardPartialDownload,
   readPartialDownloadBytes,
   resolveModelPackTransferRow,
   resolvePartialDownloadRemoveRow,
-  type ModelPackRowStatus,
 } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 
 export function LocalNeuralSttSettings(props: {
@@ -55,193 +47,12 @@ export function LocalNeuralSttSettings(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectivePackId, props.cfg.localNeural.assetId, props.cfg.provider]);
 
-  const [modelStatus, setModelStatus] = React.useState<ModelPackRowStatus>('idle');
-  const [progress, setProgress] = React.useState<ModelPackDownloadProgress | null>(null);
-  const prepareAbortRef = React.useRef<AbortController | null>(null);
-  const [installed, setInstalled] = React.useState(false);
-  const [installSummary, setInstallSummary] = React.useState<null | Awaited<ReturnType<typeof getModelPackInstallSummary>>>(null);
-  const [updateCheckedRemote, setUpdateCheckedRemote] = React.useState<null | { build: string | null; updateAvailable: boolean }>(null);
-
-  const refreshInstalled = React.useCallback(async () => {
-    if (!effectivePackId) return;
-    try {
-      const summary = await getModelPackInstallSummary({ packId: effectivePackId });
-      setInstalled(summary.installed);
-      setInstallSummary(summary);
-      setModelStatus((cur) => {
-        if (cur === 'downloading') return cur;
-        return summary.installed ? 'ready' : 'idle';
-      });
-      setUpdateCheckedRemote(null);
-    } catch {
-      setInstalled(false);
-      setInstallSummary(null);
-      setUpdateCheckedRemote(null);
-    }
-  }, [effectivePackId]);
-
-  React.useEffect(() => {
-    void refreshInstalled();
-  }, [refreshInstalled]);
-
-  const cancelPrepare = React.useCallback(() => {
-    try {
-      prepareAbortRef.current?.abort();
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const prepareModel = React.useCallback(async () => {
-    if (!effectivePackId) return;
-    if (modelStatus === 'downloading') return;
-
-    const manifestUrl = resolveModelPackManifestUrl({ packId: effectivePackId });
-    if (!manifestUrl) {
-      await Modal.alert(
-        t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
-        t('settingsVoice.local.kokoro.alerts.missingManifest.body'),
-      );
-      return;
-    }
-
-    const abortController = new AbortController();
-    prepareAbortRef.current = abortController;
-    setModelStatus('downloading');
-    setProgress(null);
-
-    try {
-      await ensureModelPackInstalled({
-        packId: effectivePackId,
-        mode: 'download_if_missing',
-        manifestUrl,
-        timeoutMs: 120_000,
-        signal: abortController.signal,
-        onProgress: (p) => setProgress(p),
-      });
-      setModelStatus('ready');
-      await refreshInstalled();
-    } catch (error) {
-      if (abortController.signal.aborted) {
-        // Cancelling discards the partial pack; report what is on disk now.
-        setModelStatus('idle');
-        await refreshInstalled();
-      } else {
-        // Verified files stay on disk after a failure; read them so the row can offer resume or discard.
-        await refreshInstalled();
-        setModelStatus('error');
-        await Modal.alert(
-          t('settingsVoice.local.localNeuralStt.alerts.downloadFailedTitle'),
-          t('settingsVoice.local.localNeuralStt.alerts.downloadFailedBody', { message: String((error as any)?.message ?? error) }),
-        );
-      }
-    } finally {
-      if (prepareAbortRef.current === abortController) prepareAbortRef.current = null;
-      setProgress(null);
-    }
-  }, [effectivePackId, modelStatus, refreshInstalled]);
-
-  const clearAssets = React.useCallback(async () => {
-    if (!effectivePackId) return;
-    // Removing files under an in-flight install or update would leave a pack recorded with files missing.
-    if (modelStatus === 'downloading') return;
-    const partialBytes = readPartialDownloadBytes(installSummary);
-    const ok = partialBytes > 0
-      ? await confirmDiscardPartialDownload(partialBytes)
-      : await Modal.confirm(
-        t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmTitle'),
-        t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmBody'),
-        { confirmText: t('common.remove'), destructive: true },
-      );
-    if (!ok) return;
-    await removeModelPack({ packId: effectivePackId });
-    setInstalled(false);
-    setModelStatus('idle');
-    await refreshInstalled();
-  }, [effectivePackId, installSummary, modelStatus, refreshInstalled]);
-
-  const checkForUpdates = React.useCallback(async () => {
-    if (!effectivePackId) return;
-    if (modelStatus === 'downloading') return;
-
-    const manifestUrl = resolveModelPackManifestUrl({ packId: effectivePackId });
-    if (!manifestUrl) {
-      await Modal.alert(
-        t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
-        t('settingsVoice.local.kokoro.alerts.missingManifest.body'),
-      );
-      return;
-    }
-
-    const abortController = new AbortController();
-    try {
-      const status = await checkModelPackUpdateAvailable({
-        packId: effectivePackId,
-        manifestUrl,
-        timeoutMs: 30_000,
-        signal: abortController.signal,
-      });
-      if (!status.installed) {
-        await Modal.alert(
-          t('settingsVoice.local.localNeuralStt.alerts.notInstalledTitle'),
-          t('settingsVoice.local.localNeuralStt.alerts.notInstalledBody'),
-        );
-        return;
-      }
-      const remoteBuild = formatModelPackBuildLabel(status.remoteManifest);
-      setUpdateCheckedRemote({ build: remoteBuild, updateAvailable: status.updateAvailable });
-      if (!status.updateAvailable) {
-        await Modal.alert(
-          t('settingsVoice.local.kokoro.updates.upToDate'),
-          t('settingsVoice.local.localNeuralStt.alerts.upToDateBody'),
-        );
-        return;
-      }
-
-      const ok = await Modal.confirm(
-        t('settingsVoice.local.kokoro.updates.updateAvailable'),
-        t('settingsVoice.local.localNeuralStt.alerts.updateAvailableBody', { remoteBuild }),
-        {
-        confirmText: t('common.update'),
-        },
-      );
-      if (!ok) return;
-
-      setModelStatus('downloading');
-      setProgress(null);
-      prepareAbortRef.current = abortController;
-
-      await ensureModelPackInstalled({
-        packId: effectivePackId,
-        mode: 'download_if_missing',
-        updatePolicy: 'manual_update_if_available',
-        manifestUrl,
-        timeoutMs: 120_000,
-        signal: abortController.signal,
-        onProgress: (p) => setProgress(p),
-      });
-
-      setModelStatus('ready');
-      await refreshInstalled();
-      await Modal.alert(
-        t('settingsVoice.local.localNeuralStt.alerts.updatedTitle'),
-        t('settingsVoice.local.localNeuralStt.alerts.updatedBody'),
-      );
-    } catch (error) {
-      if (!abortController.signal.aborted) {
-        await Modal.alert(
-          t('settingsVoice.local.localNeuralStt.alerts.updateFailedTitle'),
-          t('settingsVoice.local.localNeuralStt.alerts.updateFailedBody', { message: String((error as any)?.message ?? error) }),
-        );
-      }
-      // A failed or cancelled update leaves the installed pack in place; report what is on disk.
-      setModelStatus('idle');
-      await refreshInstalled();
-    } finally {
-      prepareAbortRef.current = null;
-      setProgress(null);
-    }
-  }, [effectivePackId, modelStatus, refreshInstalled]);
+  const { modelStatus, downloadProgress: progress, installed, installSummary, updateCheckedRemote,
+    prepareModel, cancelPrepare, clearAssets, checkForUpdates } = useNativeModelPackState({
+    role: 'stt',
+    packId: effectivePackId,
+    manifestUrl: resolveModelPackManifestUrl({ packId: effectivePackId }),
+  });
 
   const languageOptions = React.useMemo(
     () => {

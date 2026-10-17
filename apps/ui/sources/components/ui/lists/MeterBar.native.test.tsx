@@ -5,8 +5,8 @@ import { renderScreen } from '@/dev/testkit';
 
 /**
  * React Native's native animation driver only animates transform and opacity; a native-driven
- * animation bound to a layout property such as `width` throws on device. The stub below mirrors
- * that rule and settles every timing at its target, so the tests can read the fill a user sees.
+ * animation bound to a layout property such as `width` throws on device. The boundary
+ * settles timing at its target; readFill separately checks the bound properties and visible value.
  */
 
 const boundary = vi.hoisted(() => ({
@@ -59,7 +59,7 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 type Screen = Awaited<ReturnType<typeof renderScreen>>;
 
 function readFill(screen: Screen) {
-    const [fill] = screen.findAllByType('Animated.View' as never);
+    const fill = screen.findHostByTestId('bar:fill');
     const style = flattenStyle(fill!.props.style);
     const animatedLayoutKeys = Object.entries(style)
         .filter(([key, value]) => key !== 'transform' && key !== 'opacity' && isAnimatedNode(value))
@@ -72,10 +72,10 @@ function readFill(screen: Screen) {
 const mounted: Screen[] = [];
 
 async function renderBar(progress: number) {
-    const { ProgressBar } = await import('./ProgressBar');
-    const screen = await renderScreen(<ProgressBar testID="bar" progress={progress} />);
+    const { MeterBar } = await import('./MeterBar');
+    const screen = await renderScreen(<MeterBar testID="bar" tone="neutral" animated fillFraction={progress} progressAccessibilityLabel="Download progress" />);
     mounted.push(screen);
-    return { screen, ProgressBar };
+    return { screen, MeterBar };
 }
 
 afterEach(async () => {
@@ -84,7 +84,7 @@ afterEach(async () => {
     boundary.timings.length = 0;
 });
 
-describe('ProgressBar (native)', () => {
+describe('MeterBar (native)', () => {
     it('exposes its value to assistive technology', async () => {
         const { screen } = await renderBar(0.456);
         const bar = screen.findHostByTestId('bar')!;
@@ -93,19 +93,19 @@ describe('ProgressBar (native)', () => {
     });
 
     it('animates the fill only through properties the native driver supports', async () => {
-        const { screen, ProgressBar } = await renderBar(0.2);
-        await screen.update(<ProgressBar testID="bar" progress={0.7} />);
+        const { screen, MeterBar } = await renderBar(0.2);
+        await screen.update(<MeterBar testID="bar" tone="neutral" animated fillFraction={0.7} progressAccessibilityLabel="Download progress" />);
 
         expect(boundary.timings.at(-1)).toEqual({ toValue: 0.7, useNativeDriver: true });
         expect(readFill(screen)).toEqual({ animatedLayoutKeys: [], fraction: 0.7 });
     });
 
     it('moves the fill without animating when the user prefers reduced motion', async () => {
-        const { screen, ProgressBar } = await renderBar(0.2);
+        const { screen, MeterBar } = await renderBar(0.2);
         act(() => boundary.reducedMotionListener?.(true));
         boundary.timings.length = 0;
 
-        await screen.update(<ProgressBar testID="bar" progress={0.8} />);
+        await screen.update(<MeterBar testID="bar" tone="neutral" animated fillFraction={0.8} progressAccessibilityLabel="Download progress" />);
 
         expect(boundary.timings).toEqual([]);
         expect(readFill(screen).fraction).toBe(0.8);

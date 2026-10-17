@@ -2,8 +2,8 @@ import * as React from 'react';
 
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { prepareKokoroTts } from '@/voice/kokoro/runtime/synthesizeKokoroWav';
 import { checkModelPackUpdateAvailable, ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
+import { isModelPackCancellation } from '@/voice/modelPacks/installer/network';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import {
@@ -14,11 +14,45 @@ import {
 
 type ModelStatus = ModelPackRowStatus;
 
-export function useLocalNeuralModelPackState(params: {
-  packId: string;
+const ttsCopy = {
+  prepareFailedTitle: 'common.error',
+  removeTitle: 'settingsVoice.local.kokoro.removeAssets.confirmTitle',
+  removeBody: 'settingsVoice.local.kokoro.removeAssets.confirmBody',
+  removeButton: 'settingsVoice.local.kokoro.removeAssets.confirmButton',
+  notInstalledTitle: 'settingsVoice.local.kokoro.alerts.notInstalledTitle',
+  notInstalledBody: 'settingsVoice.local.kokoro.alerts.notInstalledBody',
+  upToDateTitle: 'settingsVoice.local.kokoro.alerts.upToDateTitle',
+  upToDateBody: 'settingsVoice.local.kokoro.alerts.upToDateBody',
+  updateAvailableTitle: 'settingsVoice.local.kokoro.alerts.updateAvailableTitle',
+  updateAvailableBody: 'settingsVoice.local.kokoro.alerts.updateAvailableBody',
+  updatedTitle: 'settingsVoice.local.kokoro.alerts.updatedTitle',
+  updatedBody: 'settingsVoice.local.kokoro.alerts.updatedBody',
+  updateFailedTitle: 'settingsVoice.local.kokoro.alerts.updateFailedTitle',
+  updateFailedBody: 'settingsVoice.local.kokoro.alerts.updateFailedBody',
+} as const;
+
+const sttCopy = {
+  prepareFailedTitle: 'settingsVoice.local.localNeuralStt.alerts.downloadFailedTitle',
+  removeTitle: 'settingsVoice.local.localNeuralStt.removeModelFiles.confirmTitle',
+  removeBody: 'settingsVoice.local.localNeuralStt.removeModelFiles.confirmBody',
+  removeButton: 'common.remove',
+  notInstalledTitle: 'settingsVoice.local.localNeuralStt.alerts.notInstalledTitle',
+  notInstalledBody: 'settingsVoice.local.localNeuralStt.alerts.notInstalledBody',
+  upToDateTitle: 'settingsVoice.local.kokoro.updates.upToDate',
+  upToDateBody: 'settingsVoice.local.localNeuralStt.alerts.upToDateBody',
+  updateAvailableTitle: 'settingsVoice.local.kokoro.updates.updateAvailable',
+  updateAvailableBody: 'settingsVoice.local.localNeuralStt.alerts.updateAvailableBody',
+  updatedTitle: 'settingsVoice.local.localNeuralStt.alerts.updatedTitle',
+  updatedBody: 'settingsVoice.local.localNeuralStt.alerts.updatedBody',
+  updateFailedTitle: 'settingsVoice.local.localNeuralStt.alerts.updateFailedTitle',
+  updateFailedBody: 'settingsVoice.local.localNeuralStt.alerts.updateFailedBody',
+} as const;
+
+/** One install lifecycle for native STT files and Kokoro TTS files plus runtime warmup. */
+export function useNativeModelPackState(params: {
+  packId: string | null;
   manifestUrl: string | null;
-  networkTimeoutMs: number;
-}): Readonly<{
+} & ({ role: 'stt' } | { role: 'tts'; networkTimeoutMs: number })): Readonly<{
   modelStatus: ModelStatus;
   downloadProgress: unknown | null;
   installed: boolean;
@@ -30,6 +64,9 @@ export function useLocalNeuralModelPackState(params: {
   clearAssets: () => void;
   checkForUpdates: () => void;
 }> {
+  const isStt = params.role === 'stt';
+  const copy = isStt ? sttCopy : ttsCopy;
+  const networkTimeoutMs = params.role === 'tts' ? params.networkTimeoutMs : 0;
   const [modelStatus, setModelStatus] = React.useState<ModelStatus>('idle');
   const [downloadProgress, setDownloadProgress] = React.useState<unknown | null>(null);
   const prepareAbortRef = React.useRef<AbortController | null>(null);
@@ -38,6 +75,7 @@ export function useLocalNeuralModelPackState(params: {
   const [updateCheckedRemote, setUpdateCheckedRemote] = React.useState<null | { build: string | null; updateAvailable: boolean }>(null);
 
   const refreshInstallState = React.useCallback(async () => {
+    if (!params.packId) return;
     try {
       const summary = await getModelPackInstallSummary({ packId: params.packId });
       setInstallSummary(summary);
@@ -57,27 +95,44 @@ export function useLocalNeuralModelPackState(params: {
   }, [refreshInstallState]);
 
   const prepareModel = React.useCallback(async () => {
-    if (modelStatus === 'downloading') return;
+    if (!params.packId || modelStatus === 'downloading') return;
+    if (isStt && !params.manifestUrl) {
+      await Modal.alert(
+        t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
+        t('settingsVoice.local.kokoro.alerts.missingManifest.body'),
+      );
+      return;
+    }
 
+    const abortController = new AbortController();
     try {
       setModelStatus('downloading');
       setDownloadProgress(null);
-      const abortController = new AbortController();
       prepareAbortRef.current = abortController;
 
-      await prepareKokoroTts({
-        assetSetId: params.packId,
-        timeoutMs: Math.max(60000, params.networkTimeoutMs),
-        signal: abortController.signal,
-        onProgress: (progress) => {
-          setDownloadProgress(progress);
-        },
-      });
+      if (isStt) {
+        await ensureModelPackInstalled({
+          packId: params.packId,
+          mode: 'download_if_missing',
+          manifestUrl: params.manifestUrl,
+          timeoutMs: 120_000,
+          signal: abortController.signal,
+          onProgress: setDownloadProgress,
+        });
+      } else {
+        const { prepareKokoroTts } = await import('@/voice/kokoro/runtime/synthesizeKokoroWav');
+        await prepareKokoroTts({
+          assetSetId: params.packId,
+          timeoutMs: Math.max(60_000, networkTimeoutMs),
+          signal: abortController.signal,
+          onProgress: setDownloadProgress,
+        });
+      }
 
       setModelStatus('ready');
       await refreshInstallState();
     } catch (error) {
-      if (prepareAbortRef.current?.signal?.aborted) {
+      if (isModelPackCancellation(error, abortController.signal)) {
         // Cancelling discards the partial pack; report what is on disk now.
         setModelStatus('idle');
         await refreshInstallState();
@@ -86,11 +141,16 @@ export function useLocalNeuralModelPackState(params: {
       // Verified files stay on disk after a failure; read them so the screen can offer resume or discard.
       await refreshInstallState();
       setModelStatus('error');
-      await Modal.alert(t('common.error'), error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      await Modal.alert(
+        t(copy.prepareFailedTitle),
+        isStt ? t('settingsVoice.local.localNeuralStt.alerts.downloadFailedBody', { message }) : message,
+      );
     } finally {
       prepareAbortRef.current = null;
+      setDownloadProgress(null);
     }
-  }, [modelStatus, params.networkTimeoutMs, params.packId, refreshInstallState]);
+  }, [copy, isStt, modelStatus, params.manifestUrl, networkTimeoutMs, params.packId, refreshInstallState]);
 
   const cancelPrepare = React.useCallback(() => {
     const controller = prepareAbortRef.current;
@@ -104,26 +164,26 @@ export function useLocalNeuralModelPackState(params: {
 
   const clearAssets = React.useCallback(() => {
     fireAndForget((async () => {
-      if (modelStatus === 'downloading') return;
+      if (!params.packId || modelStatus === 'downloading') return;
       const partialBytes = readPartialDownloadBytes(installSummary);
       const confirmed = partialBytes > 0
         ? await confirmDiscardPartialDownload(partialBytes)
         : await Modal.confirm(
-          t('settingsVoice.local.kokoro.removeAssets.confirmTitle'),
-          t('settingsVoice.local.kokoro.removeAssets.confirmBody'),
-          { confirmText: t('settingsVoice.local.kokoro.removeAssets.confirmButton') },
+          t(copy.removeTitle),
+          t(copy.removeBody),
+          { confirmText: t(copy.removeButton), ...(isStt ? { destructive: true } : {}) },
         );
       if (!confirmed) return;
       await removeModelPack({ packId: params.packId });
       setModelStatus('idle');
       setDownloadProgress(null);
       await refreshInstallState();
-    })(), { tag: 'useLocalNeuralModelPackState.confirm.clearAssets' });
-  }, [installSummary, modelStatus, params.packId, refreshInstallState]);
+    })(), { tag: 'useNativeModelPackState.confirm.clearAssets' });
+  }, [copy, installSummary, isStt, modelStatus, params.packId, refreshInstallState]);
 
   const checkForUpdates = React.useCallback(() => {
     fireAndForget((async () => {
-      if (modelStatus === 'downloading') return;
+      if (!params.packId || modelStatus === 'downloading') return;
       if (!params.manifestUrl) {
         await Modal.alert(
           t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
@@ -137,14 +197,14 @@ export function useLocalNeuralModelPackState(params: {
         const status = await checkModelPackUpdateAvailable({
           packId: params.packId,
           manifestUrl: params.manifestUrl,
-          timeoutMs: Math.max(30_000, params.networkTimeoutMs),
+          timeoutMs: Math.max(30_000, networkTimeoutMs),
           signal: abortController.signal,
         });
 
         if (!status.installed) {
           await Modal.alert(
-            t('settingsVoice.local.kokoro.alerts.notInstalledTitle'),
-            t('settingsVoice.local.kokoro.alerts.notInstalledBody'),
+            t(copy.notInstalledTitle),
+            t(copy.notInstalledBody),
           );
           return;
         }
@@ -152,15 +212,15 @@ export function useLocalNeuralModelPackState(params: {
         setUpdateCheckedRemote({ build: remoteBuild, updateAvailable: status.updateAvailable });
         if (!status.updateAvailable) {
           await Modal.alert(
-            t('settingsVoice.local.kokoro.alerts.upToDateTitle'),
-            t('settingsVoice.local.kokoro.alerts.upToDateBody'),
+            t(copy.upToDateTitle),
+            t(copy.upToDateBody),
           );
           return;
         }
 
         const ok = await Modal.confirm(
-          t('settingsVoice.local.kokoro.alerts.updateAvailableTitle'),
-          t('settingsVoice.local.kokoro.alerts.updateAvailableBody', { remoteBuild }),
+          t(copy.updateAvailableTitle),
+          t(copy.updateAvailableBody, { remoteBuild }),
           {
             confirmText: t('common.update'),
           },
@@ -176,24 +236,22 @@ export function useLocalNeuralModelPackState(params: {
           mode: 'download_if_missing',
           updatePolicy: 'manual_update_if_available',
           manifestUrl: params.manifestUrl,
-          timeoutMs: Math.max(120_000, params.networkTimeoutMs),
+          timeoutMs: Math.max(120_000, networkTimeoutMs),
           signal: abortController.signal,
-          onProgress: (p) => {
-            setDownloadProgress(p);
-          },
+          onProgress: setDownloadProgress,
         });
 
         setModelStatus('ready');
         await refreshInstallState();
         await Modal.alert(
-          t('settingsVoice.local.kokoro.alerts.updatedTitle'),
-          t('settingsVoice.local.kokoro.alerts.updatedBody'),
+          t(copy.updatedTitle),
+          t(copy.updatedBody),
         );
       } catch (error) {
-        if (!abortController.signal.aborted) {
+        if (!isModelPackCancellation(error, abortController.signal)) {
           await Modal.alert(
-            t('settingsVoice.local.kokoro.alerts.updateFailedTitle'),
-            t('settingsVoice.local.kokoro.alerts.updateFailedBody', { message: String((error as any)?.message ?? error) }),
+            t(copy.updateFailedTitle),
+            t(copy.updateFailedBody, { message: error instanceof Error ? error.message : String(error) }),
           );
         }
         // A failed or cancelled update leaves the installed pack in place; report what is on disk.
@@ -203,8 +261,8 @@ export function useLocalNeuralModelPackState(params: {
         prepareAbortRef.current = null;
         setDownloadProgress(null);
       }
-    })(), { tag: 'useLocalNeuralModelPackState.checkForUpdates' });
-  }, [modelStatus, params.manifestUrl, params.networkTimeoutMs, params.packId, refreshInstallState]);
+    })(), { tag: 'useNativeModelPackState.checkForUpdates' });
+  }, [copy, modelStatus, params.manifestUrl, networkTimeoutMs, params.packId, refreshInstallState]);
 
   return {
     modelStatus,

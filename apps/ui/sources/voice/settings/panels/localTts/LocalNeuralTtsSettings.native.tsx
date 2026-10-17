@@ -22,7 +22,7 @@ import {
 } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 
 import { useLocalNeuralKokoroVoiceCatalog } from './useLocalNeuralKokoroVoiceCatalog.native';
-import { useLocalNeuralModelPackState } from './useLocalNeuralModelPackState.native';
+import { useNativeModelPackState } from '@/voice/settings/panels/modelPack/useNativeModelPackState.native';
 import { Icon } from '@/components/ui/icons/Icon';
 
 export function LocalNeuralTtsSettings(props: {
@@ -43,7 +43,8 @@ export function LocalNeuralTtsSettings(props: {
   const manifestUrl = React.useMemo(() => resolveModelPackManifestUrl({ packId: effectiveAssetSetId }), [effectiveAssetSetId]);
 
   const { modelStatus, downloadProgress, installed, installSummary, updateCheckedRemote, prepareModel, cancelPrepare, clearAssets, checkForUpdates } =
-    useLocalNeuralModelPackState({
+    useNativeModelPackState({
+      role: 'tts',
       packId: effectiveAssetSetId,
       manifestUrl,
       networkTimeoutMs: props.networkTimeoutMs,

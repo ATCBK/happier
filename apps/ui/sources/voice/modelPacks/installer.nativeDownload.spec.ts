@@ -58,9 +58,12 @@ async function createHarness(options: { status?: number; pending?: boolean; fail
   }
   class Directory {
     uri: string;
-    exists = true;
     constructor(...parts: Array<string | { uri: string }>) { this.uri = uri(parts); }
+    get exists() { return [...files.keys()].some((path) => path.startsWith(`${this.uri}/`)); }
     create() {}
+    delete() {
+      for (const path of files.keys()) if (path.startsWith(`${this.uri}/`)) files.delete(path);
+    }
   }
   class File {
     uri: string;

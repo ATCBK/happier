@@ -403,6 +403,25 @@ describe('modelPacks installer (native)', () => {
     })).rejects.toThrow('model_pack_invalid_path');
   });
 
+  it.each([
+    { paths: ['lang/en', 'lang//en'], code: 'model_pack_path_alias' },
+    { paths: ['lang/en', 'lang/ en '], code: 'model_pack_path_alias' },
+    { paths: ['lang/en', 'LANG/en'], code: 'model_pack_path_alias' },
+    { paths: ['data', 'data/model.bin'], code: 'model_pack_path_file_directory_conflict' },
+    { paths: ['pack.json'], code: 'model_pack_reserved_path' },
+  ])('rejects conflicting manifest destinations before downloading: $paths', async ({ paths, code }) => {
+    const fs = createFs();
+    const bytes = new Uint8Array([1]);
+    useNativeDownloads(fs, () => bytes);
+    const hash = await sha256Hex(bytes);
+    await expect(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+      fs, fetch: fetchManifest(manifest(paths.map((path) => ({
+        path, url: 'https://example.com/file.bin', sha256: hash, sizeBytes: 1,
+      })))),
+    })).rejects.toThrow(code);
+    expect([...fs.files.keys()]).toEqual([]);
+  });
+
   it('refreshes an installed pack when a requested manual update has a different remote manifest', async () => {
     const fs = createFs();
     const oldManifest = manifest([
@@ -650,5 +669,64 @@ describe('modelPacks installer (native)', () => {
 
   it('removes without throwing when the directory is missing', async () => {
     await expect(removeModelPack({ packId: 'example' }, { fs: createFs() })).resolves.toBeUndefined();
+  });
+});
+
+describe('filesystem mutation failures', () => {
+  beforeEach(() => nativeDownload.mockReset());
+  afterEach(() => vi.useRealTimers());
+
+  it('rejects installation when the installed receipt cannot be written', async () => {
+    const fs = createFs();
+    const BaseFile = fs.File;
+    class FailingReceiptFile extends BaseFile {
+      override write(value: string | Uint8Array) {
+        if (this.uri.endsWith('/pack.json')) throw new Error('ENOSPC_receipt_write');
+        super.write(value);
+      }
+    }
+    const bytes = new Uint8Array([1, 2, 3]);
+    useNativeDownloads(fs, () => bytes);
+    const remote = manifest([{ path: 'model.bin', url: 'https://example.com/model.bin', sha256: await sha256Hex(bytes), sizeBytes: bytes.length }]);
+    await expect(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+      fs: { ...fs, File: FailingReceiptFile }, fetch: fetchManifest(remote),
+    })).rejects.toThrow('ENOSPC_receipt_write');
+  });
+
+  it('leaves installed bytes intact when the old receipt cannot be invalidated', async () => {
+    const fs = createFs();
+    const before = new Uint8Array([1]);
+    const after = new Uint8Array([2]);
+    const old = manifest(await Promise.all(['a.bin', 'b.bin'].map(async (path) => ({ path, url: `https://example.com/v1/${path}`, sha256: await sha256Hex(before), sizeBytes: 1 }))));
+    for (const path of ['a.bin', 'b.bin']) fs.files.set(`${PACK_URI}/${path}`, before);
+    new fs.File(PACK_URI, 'pack.json').write(JSON.stringify({ manifest: old }));
+    const BaseFile = fs.File;
+    class UndeletableReceiptFile extends BaseFile {
+      override delete() {
+        if (this.uri.endsWith('/pack.json')) throw new Error('EACCES_receipt_delete');
+        super.delete();
+      }
+      override move(destination: { uri: string }) {
+        if (this.uri.includes('/modelPackUpdates/') && this.uri.endsWith('/b.bin')) throw new Error('EIO_second_file_move');
+        super.move(destination);
+      }
+    }
+    useNativeDownloads(fs, () => after);
+    const remote = manifest(await Promise.all(['a.bin', 'b.bin'].map(async (path) => ({ path, url: `https://example.com/v2/${path}`, sha256: await sha256Hex(after), sizeBytes: 1 }))), 'v2');
+    const injectedFs = { ...fs, File: UndeletableReceiptFile };
+    const attempt = ensureModelPackInstalled({ ...installOptions, updatePolicy: 'manual_update_if_available', signal: new AbortController().signal }, {
+      fs: injectedFs, fetch: fetchManifest(remote),
+    });
+    await expect(attempt).rejects.toThrow('EACCES_receipt_delete');
+    expect(fs.files.get(`${PACK_URI}/a.bin`)).toEqual(before);
+  });
+
+  it('reports failure when removing a partial pack cannot delete its directory', async () => {
+    const fs = createFs(new Map([[`${PACK_URI}/model.bin`, new Uint8Array([1])]]));
+    const BaseDirectory = fs.Directory;
+    class UndeletableDirectory extends BaseDirectory {
+      override delete() { throw new Error('EACCES_directory_delete'); }
+    }
+    await expect(removeModelPack({ packId: 'example' }, { fs: { ...fs, Directory: UndeletableDirectory } })).rejects.toThrow('EACCES_directory_delete');
   });
 });

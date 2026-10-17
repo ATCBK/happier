@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { ProgressBar } from '@/components/ui/feedback/ProgressBar';
+import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -81,7 +81,7 @@ function UploadRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { stat
                     <Icon name="x" size={16} color={theme.colors.text.secondary} />
                 </Pressable>
             </View>
-            {props.state.status === 'uploading' ? <ProgressBar progress={progress} /> : null}
+            {props.state.status === 'uploading' ? <MeterBar tone="neutral" height={4} animated fillFraction={progress} fillColor={theme.colors.text.link} progressAccessibilityLabel={label} /> : null}
         </View>
     );
 }
@@ -112,7 +112,7 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
                     <Icon name="x" size={16} color={theme.colors.text.secondary} />
                 </Pressable> : <View style={{ width: styles.cancelButton.width, height: styles.cancelButton.height }} />}
             </View>
-            <ProgressBar progress={progress} />
+            <MeterBar tone="neutral" height={4} animated fillFraction={progress} fillColor={theme.colors.text.link} progressAccessibilityLabel={label} />
         </View>
     );
 }
