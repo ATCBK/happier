@@ -13,11 +13,43 @@ import { rootCertificates } from 'node:tls';
 import { createServer } from 'node:http';
 import { createServer as createSocketServer } from 'node:net';
 import { resolveQaBrowserUrl, runQaBrowserSession, runQaBrowserWorker, stopQaBrowsers, stopStackQaBrowsers } from './qa_browser.mjs';
-import { resolveRemoteStackStatePaths } from './remote_commands.mjs';
+import { buildRemoteQaBrowserStopCommand, resolveRemoteStackStatePaths } from './remote_commands.mjs';
 import { runCaptureResult, spawnProc, killProcessTree } from '../proc/proc.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { resolveMutagenSessionName } from './mutagen_project.mjs';
+import { captureDevTargetSyncFixture } from '../../testkit/core/dev_target_sync.mjs';
 import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { parseVoiceWavContainer } from '../../../../../packages/tests/src/testkit/voice/voiceWavParser.mjs';
+
+test('source control refuses a missing mirror before dispatching its browser helper', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-browser-missing-mirror-' });
+  const stackName = 'fixture-missing-mirror';
+  const sourceDir = join(root, 'source');
+  const env = { ...process.env, HAPPIER_STACK_STORAGE_DIR: root,
+    HAPPIER_STACK_RUNTIME_BUILD_AUTHORITY_STACK: stackName, HAPPIER_STACK_ENV_FILE: join(root, stackName, 'env'),
+    HAPPIER_STACK_NO_DEV_TARGETS: '' };
+  await mkdir(join(root, stackName));
+  await writeFile(join(root, stackName, 'dev-targets.json'), JSON.stringify({ version: 3,
+    targets: [{ name: 'self-stale', platform: 'posix', ssh: 'self-stale', repoDir: '/stale/mirror', cliHomeDir: '/fixture' }],
+  }));
+  let dispatched = false;
+  const result = await stopStackQaBrowsers({ stackName, baseDir: join(root, stackName), sourceDir, env }, {
+    capture: async (command, args) => {
+      if (command === 'ssh') {
+        dispatched = true;
+        return { ok: true, exitCode: 0, out: JSON.stringify({ stackName, pids: [] }) };
+      }
+      assert.ok(args.includes('mutagen'));
+      assert.equal(args.includes(resolveMutagenSessionName('self-stale', sourceDir)), true);
+      return { ok: true, exitCode: 0, out: '[]' };
+    },
+  });
+  assert.equal(dispatched, false, 'an unsynchronized mirror cannot supply executable source helpers');
+  assert.equal(result.remote.length, 0);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].code, 'browser_cleanup_unconfirmed:self-stale');
+  assert.match(result.warnings[0].error, /synchronization is missing/);
+});
 
 // Real CDP transport at the external Chromium boundary; the worker's launch,
 // executable adaptation and cleanup remain real.
@@ -72,6 +104,26 @@ if(process.env.QA_BROWSER_CLOSE_FAIL)process.exit(1);
   await access(neighbor);
 });
 
+test('remote browser retirement uses authored source without an inherited controller preload', { skip: process.platform === 'win32' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-qa-browser-source-' });
+  const loader = join(root, 'stale-installed-package.mjs');
+  await writeFile(loader, `
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier.startsWith('@happier-dev/cli-common/')) throw new Error('fixture: stale installed cli-common');
+  return nextResolve(specifier, context);
+}
+`);
+  const stackName = `fixture-source-retirement-${process.pid}`;
+  const target = { name: 'fixture', platform: 'posix', cliHomeDir: root,
+    repoDir: fileURLToPath(new URL('../../../../../', import.meta.url)),
+    remotePath: [dirname(process.execPath)] };
+  const result = await runCaptureResult('/bin/bash', ['-c', buildRemoteQaBrowserStopCommand(target, { stackName })], {
+    env: { ...process.env, NODE_OPTIONS: `--experimental-loader=${loader}` },
+  });
+  assert.equal(result.ok, true, result.err);
+  assert.deepEqual(JSON.parse(result.out), { stackName, pids: [] });
+});
+
 test('browser cleanup reuses SSH and recovers a refused channel before dispatching cleanup', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-browser-cleanup-ssh-' });
   const stackName = `fixture-ssh-cleanup-${process.pid}`;
@@ -88,6 +140,8 @@ test('browser cleanup reuses SSH and recovers a refused channel before dispatchi
       // The external SSH boundary refuses before dispatch; real cleanup policy,
       // configuration resolution and canonical transport recovery remain active.
       capture: async (command, args) => {
+        const sync = captureDevTargetSyncFixture(command, args);
+        if (sync) return sync;
         assert.equal(command, 'ssh');
         transports.push(args.includes('ControlPath=none'));
         if (refuse && transports.length === 1) return { ok: false, exitCode: 255,
@@ -102,6 +156,8 @@ test('browser cleanup reuses SSH and recovers a refused channel before dispatchi
   const transports = [];
   const unconfirmed = await stopStackQaBrowsers({ stackName, baseDir: join(root, stackName), sourceDir: '/repo', env }, {
     capture: async (command, args) => {
+      const sync = captureDevTargetSyncFixture(command, args);
+      if (sync) return sync;
       assert.equal(command, 'ssh');
       transports.push(args.includes('ControlPath=none'));
       return { ok: false, exitCode: 255, err: 'Connection to nl1 closed by remote host.' };
@@ -120,6 +176,15 @@ for (const ownerSignal of ['SIGINT', 'SIGKILL']) test(`${ownerSignal} owner exit
   const trustCertPath = join(root, 'leaf.crt');
   await writeFile(trustCertPath, rootCertificates[0]);
   const spkiHash = createHash('sha256').update(new X509Certificate(rootCertificates[0]).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
+  const staleInstalledLoader = join(root, 'stale-installed-package.mjs');
+  await writeFile(staleInstalledLoader, `
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier.startsWith('@happier-dev/cli-common/')) {
+    throw new Error('fixture: remote installed cli-common is stale');
+  }
+  return nextResolve(specifier, context);
+}
+`);
   const { binDir } = writeFakeBin({ root, name: 'agent-browser', content: `#!${process.execPath}
 const fs=require('node:fs');const path=require('node:path');const a=process.argv.slice(2);
 if(a.includes('open')){
@@ -152,7 +217,10 @@ await runQaBrowserSession({
     // cleanup remain real, including the executor's group-cancellation grace.
     spawnProcess: (label, _command, args, env, options) => {
       if (label.startsWith('browser-forward:')) return tunnel;
-      return spawnProc(label, '/bin/bash', ['-c', args.at(-1)], env, options);
+      // SSH does not inherit the controller's source preload. A stale
+      // installed package must not prevent this source-tool worker loading.
+      return spawnProc(label, '/bin/bash', ['-c', args.at(-1)],
+        { ...env, NODE_OPTIONS: ${JSON.stringify(`--experimental-loader=${staleInstalledLoader}`)} }, options);
     },
     stopProcess: async child => {
       if (child !== tunnel) return await killProcessTree(child, 'SIGINT');

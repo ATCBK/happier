@@ -116,6 +116,13 @@ async function addFixtureBrand(fixture) {
 test('the UI prebuild owns one universal exact app-preseed registry from canonical artifact manifests', async () => {
   const fixture = await createFixture();
   try {
+    const manifestPath = join(fixture.repoRoot, 'packages/plugins/fixture/.happier-plugin/plugin.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const collection = { id: 'notes', schemaVersion: 1,
+      schema: { type: 'object', properties: { id: { type: 'string', maxLength: 256 } }, required: ['id'], additionalProperties: false },
+      rowIdField: 'id', serverReadable: [], indexes: [], uiQueries: [], relations: [], readableSchemaVersions: [1] };
+    manifest.contributes.accountCollections = [collection];
+    await writeFile(manifestPath, JSON.stringify(manifest));
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'write' });
 
     const outputPath = resolveBundledPluginUiArtifactsOutputPath(fixture.repoRoot);
@@ -136,6 +143,10 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     const declaration = JSON.parse(output.match(/const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 = (.+);/)[1]);
     assert.equal(declaration.pluginId, 'happier.fixture');
     assert.equal(declaration.packageName, '@happier-dev/plugins-fixture');
+    const { normalizePluginAccountCollectionContractV1 } = await import('@happier-dev/protocol/plugins/data/collectionsV1');
+    const compiled = normalizePluginAccountCollectionContractV1({ pluginId: manifest.id, contribution: collection });
+    assert.deepEqual(declaration.collectionContracts, [{ pluginId: manifest.id, collectionId: collection.id,
+      schemaVersion: collection.schemaVersion, contractDigest: compiled.contractDigest }]);
     assert.equal(declaration.entriesById['reactNativeBundle:happier.fixture:fixture'].artifactGraph.digest, graph.digest);
     assert.equal(declaration.entriesById['surfacePlacement:happier.fixture:fixture'].availability.state, 'available');
     assert.match(output, /uiDeclaration: BUNDLED_PLUGIN_UI_APP_DECLARATION_0,/);

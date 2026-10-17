@@ -55,7 +55,7 @@ export function resolveSourcePluginUiBuildInputPaths(repoDir) {
 /** Plugin UI can bundle declared build dependencies as well as runtime ones.
  * Host applications are not plugin source inputs; their test dependencies must
  * not make a CLI-only edit rebuild every UI artifact. */
-export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, compiler = false, packages }) {
+export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, compiler = false, packages, includeDirectories = false }) {
   packages ??= await readWorkspacePackages(repoDir);
   const roots = compiler ? ['@happier-dev/plugin-sdk'] : [`@happier-dev/plugins-${pluginDirectory}`];
   // Remove host nodes before traversal: a CLI test dependency must not visit
@@ -65,7 +65,7 @@ export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, 
   const files = new Set();
   for (const name of closure) {
     const { root } = packages.get(name);
-    for (const path of readWorkspaceBuildInputs(root, { excludeGeneratedPluginArtifacts: true })) {
+    for (const path of readWorkspaceBuildInputs(root, { excludeGeneratedPluginArtifacts: true, includeDirectories })) {
       files.add(relative(repoDir, join(root, path)).split(sep).join('/'));
     }
   }
@@ -111,9 +111,12 @@ export async function readSourceComponentBuildInputs({ repoDir, component }) {
       excludeGeneratedPluginArtifacts: path.startsWith('packages/plugins/'),
       sourceRoots: component === 'daemon' && path === 'apps/ui' ? ['scripts'] : SOURCE_ROOTS,
       additionalInputPaths: root === repoDir ? ['apps/cli/scripts/buildPublication.mjs']
-        : path === 'apps/ui' && component === 'expo' ? ['index.ts', 'public', 'plugins', 'modules', 'sources/dev/testkit']
+        // Expo preparation imports the authored tools tree, including nested
+        // postinstall modules. Capture and invalidate it with the same owner.
+        : path === 'apps/ui' && component === 'expo' ? ['index.ts', 'public', 'plugins', 'modules', 'tools', 'sources/dev/testkit']
           : path === 'apps/cli' ? ['native/processcustody', 'assets']
-            : path === 'apps/server' ? ['prisma'] : [],
+            : path === 'apps/server' ? ['prisma']
+              : component === 'daemon' && path.startsWith('packages/plugins/') ? ['managed-runtime'] : [],
     };
     const inputs = readWorkspaceBuildInputs(root, options);
     for (const input of inputs) {

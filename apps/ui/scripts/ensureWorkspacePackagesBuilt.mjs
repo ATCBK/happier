@@ -1,6 +1,6 @@
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { WORKSPACE_BUILD_MODE_ENV, resolveWorkspaceBuildMode } from '../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
 
 import {
@@ -17,6 +17,81 @@ import {
 } from './generateBundledPluginUiArtifacts.mjs';
 
 const uiDir = dirname(dirname(fileURLToPath(import.meta.url)));
+
+export async function prepareUiSourcePluginInventory({ uiPackageDir = uiDir, env = process.env, signal } = {}) {
+  const repoRoot = resolve(uiPackageDir, '../..');
+  const { prepareSourcePluginUiInventory } = await import('../../stack/scripts/build/build_source_web_ui.mjs');
+  const requestedInventory = String(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY ?? '').trim();
+  if (requestedInventory && !isAbsolute(requestedInventory)) {
+    throw new Error('HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY must be an absolute path');
+  }
+  const parent = requestedInventory ? dirname(requestedInventory) : resolve(uiPackageDir, '.expo/hstack/plugin-ui-inputs');
+  await mkdir(parent, { recursive: true });
+  // Startup, source edits and explicit preparation publish through one owner.
+  // Retain prior inputs for requests still consuming the previous inventory.
+  const outputDir = await mkdtemp(resolve(parent, 'preparation-'));
+  const outputPath = requestedInventory || resolve(outputDir, 'inputs/inventory.js');
+  await prepareSourcePluginUiInventory({ repoDir: repoRoot, outputDir, inventoryPath: outputPath, env, signal });
+  return { ok: true, built: [], skipped: [], outputPath };
+}
+
+/** Consume Metro's already-batched changes; do not create another file watcher
+ * or debounce clock. The canonical compiler reuses unchanged plugin entries. */
+export function watchUiSourcePluginInventory({ metroServer, uiPackageDir = uiDir, env = process.env, logger = console }) {
+  env = { ...env };
+  const repoRoot = resolve(uiPackageDir, '../..');
+  const watcher = metroServer.getBundler().getBundler().getWatcher();
+  const cancellation = new AbortController();
+  let closed = false;
+  let queued = false;
+  let pending = Promise.resolve();
+  let inputsPromise;
+  const report = error => { if (!closed) logger.error('[plugin-ui] source inventory refresh failed:', error); };
+  const inputs = () => inputsPromise ??= (async () => {
+    const { readWorkspacePackages } = await import('../../../packages/cli-common/sourceRuntimeEntries.mjs');
+    const { readSourcePluginUiBuildInputs } = await import('../../stack/scripts/utils/fs/workspaceBuildInputs.mjs');
+    const packages = await readWorkspacePackages(repoRoot);
+    const cli = JSON.parse(await readFile(resolve(repoRoot, 'apps/cli/package.json'), 'utf8'));
+    const groups = await Promise.all([
+      readSourcePluginUiBuildInputs({ repoDir: repoRoot, compiler: true, packages, includeDirectories: true }),
+      ...(cli.bundledDependencies ?? []).filter(name => name.startsWith('@happier-dev/plugins-'))
+        .map(name => readSourcePluginUiBuildInputs({ repoDir: repoRoot,
+          pluginDirectory: name.slice('@happier-dev/plugins-'.length), packages, includeDirectories: true })),
+    ]);
+    return new Set([...groups.flat(), 'apps/cli/package.json', 'apps/ui/package.json'].map(path => resolve(repoRoot, path)));
+  })().catch(error => { inputsPromise = null; throw error; });
+  const onChange = ({ eventsQueue }) => {
+    void inputs().then(async paths => {
+      const { isWorkspaceBuildInputIgnoredPath } = await import('../../stack/scripts/utils/fs/workspaceBuildInputs.mjs');
+      const changed = eventsQueue.some(({ filePath }) => {
+        let path = resolve(filePath);
+        if (paths.has(path)) return true;
+        if (isWorkspaceBuildInputIgnoredPath(relative(repoRoot, path))) return false;
+        while (dirname(path) !== path) {
+          path = dirname(path);
+          if (paths.has(path)) return true;
+        }
+        return false;
+      });
+      if (closed || !changed || queued) return;
+      queued = true;
+      pending = pending.then(async () => {
+        queued = false;
+        if (closed) return;
+        await prepareUiSourcePluginInventory({ uiPackageDir, env, signal: cancellation.signal });
+        inputsPromise = null;
+      }).catch(report);
+    }).catch(report);
+  };
+  watcher.on('change', onChange);
+  void inputs().catch(report);
+  return { async close() {
+    closed = true;
+    watcher.off('change', onChange);
+    cancellation.abort();
+    await pending;
+  } };
+}
 
 export async function publishBundledPluginProjectionWithFailures({ repoRoot, env, pluginFailures, publicationMode = 'live' }) {
   const { runCanonicalBundledPluginArtifactPublisher } = await import('../../cli/scripts/buildSharedDeps.mjs');
@@ -85,8 +160,10 @@ export async function ensureUiWorkspacePackagesBuilt({
     const tasks = resolveUiPostinstallTasks({ env });
     const retainLastGreen = env[WORKSPACE_BUILD_MODE_ENV] !== 'strict';
     const { buildPasswordKdfWorker } = await import('../tools/password/buildPasswordKdfWorker.mjs');
+    const { buildCryptoWorker } = await import('../tools/crypto/buildCryptoWorker.mjs');
     const { buildAtmosphereRenderers } = await import('../tools/atmosphere/buildAtmosphereRenderers.mjs');
     if (tasks.includes('vendor-password-kdf-worker')) await buildPasswordKdfWorker({ uiDirectory: uiPackageDir, retainLastGreen });
+    if (tasks.includes('vendor-crypto-worker')) await buildCryptoWorker({ uiDirectory: uiPackageDir, retainLastGreen });
     if (tasks.includes('prepare-atmosphere-renderers')) await buildAtmosphereRenderers({ uiDirectory: uiPackageDir,
       web: tasks.includes('vendor-password-kdf-worker'), retainLastGreen });
     const { buildUiSourceAsset } = await import('../tools/sourceAsset.mjs');
@@ -102,20 +179,7 @@ export async function ensureUiWorkspacePackagesBuilt({
         outputs: [resolve(uiPackageDir, 'sources/components/markdown/mermaidWebViewBundle.generated.ts')],
         build: () => buildMermaidWebViewBundle({ expoAppDir: uiPackageDir }) });
     }
-    const { prepareSourcePluginUiInventory } = await import('../../stack/scripts/build/build_source_web_ui.mjs');
-    const requestedInventory = String(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY ?? '').trim();
-    if (requestedInventory && !isAbsolute(requestedInventory)) {
-      throw new Error('HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY must be an absolute path');
-    }
-    const parent = requestedInventory ? dirname(requestedInventory) : resolve(uiPackageDir, '.expo/hstack/plugin-ui-inputs');
-    await mkdir(parent, { recursive: true });
-    // Retain these bytes even if the worker is interrupted after publication.
-    // Each consumer owns its inventory and inputs. Another preparation/export
-    // must never replace Metro's inventory in the shared source tree.
-    const outputDir = await mkdtemp(resolve(parent, 'preparation-'));
-    const outputPath = requestedInventory || resolve(outputDir, 'inputs/inventory.js');
-    await prepareSourcePluginUiInventory({ repoDir: repoRoot, outputDir, inventoryPath: outputPath, env });
-    return { ok: true, built: [], skipped: [], outputPath };
+    return await prepareUiSourcePluginInventory({ uiPackageDir, env });
   }
   const result = await ensureWorkspacePackagesBuiltForComponent(uiPackageDir, {
     quiet: false,

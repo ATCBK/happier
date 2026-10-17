@@ -110,6 +110,7 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     '.playwright-cli',
     'packages/brand/brand',
     'packages/plugins/*/.happier-plugin',
+    'packages/plugin-sdk/fixtures/qa-plugin-authoring/created/qa-*/.happier-plugin',
     '.project',
     '.happier',
     'coverage',

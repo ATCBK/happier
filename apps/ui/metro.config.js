@@ -1133,4 +1133,21 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   );
 };
 
+// A source Expo owns its inventory for its entire serving lifetime. Reuse
+// Metro's change feed and the startup producer for managed and standalone dev.
+const enhanceMiddleware = config.server.enhanceMiddleware;
+config.server.enhanceMiddleware = (middleware, metroServer) => {
+  const enhanced = enhanceMiddleware ? enhanceMiddleware(middleware, metroServer) : middleware;
+  if (privatePluginUiInventory) {
+    const refresh = import(require('node:url').pathToFileURL(path.join(__dirname, 'scripts/ensureWorkspacePackagesBuilt.mjs')).href)
+      .then(({ watchUiSourcePluginInventory }) => watchUiSourcePluginInventory({ metroServer, uiPackageDir: __dirname }));
+    void refresh.catch(error => console.error('[plugin-ui] source inventory watcher failed:', error));
+    const end = metroServer.end.bind(metroServer);
+    metroServer.end = async () => {
+      try { await (await refresh).close(); } finally { await end(); }
+    };
+  }
+  return enhanced;
+};
+
 module.exports = config;

@@ -128,6 +128,7 @@ export function listBundledPluginUiArtifactExports(packageJson) {
 export async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFailures = [], artifactRoots, pluginManifests = {}, artifactOutputDirs = {}) {
   const { PluginPortableReleaseManifestV1Schema } = await import('@happier-dev/protocol/plugins/availability');
   const { projectPluginPortableUiDeclarationsV1 } = await import('@happier-dev/protocol/plugins/contributions/ui');
+  const { normalizePluginAccountCollectionContractsV1 } = await import('@happier-dev/protocol/plugins/data/collectionsV1');
   const {
     PluginUiArtifactsManifestV2Schema,
     computePluginUiArtifactFileSetSha256DigestV1,
@@ -206,6 +207,9 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
       pluginId, pluginVersion: packageVersion, packageName,
       displayName: typeof declaration.data.displayName === 'string' ? declaration.data.displayName : declaration.data.displayName.fallback,
       entriesById: projectPluginPortableUiDeclarationsV1({ ...declaration.data, version: packageVersion }, parsedManifest.data.entries),
+      collectionContracts: normalizePluginAccountCollectionContractsV1({ pluginId,
+        contributions: declaration.data.contributes.accountCollections }).map(({ pluginId, collectionId, schemaVersion, contractDigest }) =>
+        ({ pluginId, collectionId, schemaVersion, contractDigest })),
     } : undefined;
     const pluginSources = [];
     const pluginFiles = [];

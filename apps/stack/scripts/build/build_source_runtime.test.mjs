@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmod, cp, mkdtemp, mkdir, writeFile, readFile, realpath, rename, symlink, rm, access, readdir, stat } from 'node:fs/promises';
-import { existsSync, watch } from 'node:fs';
+import { chmod, cp, mkdtemp, mkdir, writeFile, readFile, realpath, rename, symlink, rm, access, readdir, stat, utimes } from 'node:fs/promises';
+import { existsSync, readFileSync, watch } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -15,7 +17,7 @@ import { prepareSourceComponent, resolveSourceComponentWatchPaths } from '../uti
 import { runSourceBuildCommand } from '../utils/proc/runSourceBuildCommand.mjs';
 import { applyServerHostDatabaseProviderEnv } from '../utils/server/apply_runtime_server_database_env.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
-import { installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
 import { runServerRuntimeMigration } from '../runtime/launch/runServerRuntimeMigration.mjs';
 import { resolveServerRuntimeLaunchSpec } from '../runtime/launch/resolveServerRuntimeLaunchSpec.mjs';
 import { matchesNativeTypeScriptInputVersion, resolveTypeScriptCliInvocation } from '../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
@@ -27,6 +29,83 @@ import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs'
 import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { startDevServer, createDevServerReloadExecutor } from '../utils/dev/server.mjs';
 import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
+
+test('source edits refresh the inventory module consumed by a running Metro', async (t) => {
+  const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
+  const require = createRequire(join(sourceRepo, 'apps/ui/package.json'));
+  const fixture = await createTempFixture(t, { prefix: 'happier-plugin-ui-live-', registerCleanup: false });
+  let metro;
+  t.after(async () => {
+    await metro?.end();
+    await fixture.cleanup();
+  });
+  const repoRoot = fixture.path('repo');
+  await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoRoot });
+  await cp(join(sourceRepo, 'apps/ui/tools'), join(repoRoot, 'apps/ui/tools'), { recursive: true });
+  await cp(join(sourceRepo, 'apps/stack/bin'), join(repoRoot, 'apps/stack/bin'), { recursive: true });
+  const cliManifestPath = join(repoRoot, 'apps/cli/package.json');
+  const cliManifest = JSON.parse(await readFile(cliManifestPath, 'utf8'));
+  await writeFile(cliManifestPath, JSON.stringify({ ...cliManifest,
+    bundledDependencies: ['@happier-dev/plugins-inspector', '@happier-dev/plugins-channels'] }));
+  const uiPackageDir = join(repoRoot, 'apps/ui');
+  const source = join(repoRoot, 'packages/plugins/inspector/src/ui/renderSurface.tsx');
+  await writeFile(source, 'export function renderSurface() { return "live-before"; }\n');
+  // Keep the current Channels collection definition real; only the fixture's
+  // presentation is reduced so the compiled consumer can expose its contract.
+  await writeFile(join(repoRoot, 'packages/plugins/channels/src/ui/renderSurface.tsx'),
+    'import { CHANNEL_STATE_COLLECTION } from "../collections.js";\nexport function renderSurface() { return CHANNEL_STATE_COLLECTION; }\n');
+  const inventoryPath = fixture.path('consumer/inventory.js');
+  withPatchedProcessEnv(t, {
+    HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath,
+    HAPPIER_UI_VENDOR_WEB_ASSETS: '0',
+    HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1',
+    HAPPIER_WORKSPACE_BUILD_MODE: null,
+    HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: null,
+    npm_lifecycle_event: null,
+  });
+  const { ensureUiWorkspacePackagesBuilt } = await import(pathToFileURL(join(uiPackageDir, 'scripts/ensureWorkspacePackagesBuilt.mjs')));
+  await ensureUiWorkspacePackagesBuilt({ uiPackageDir, source: true });
+  const consumeInventory = () => {
+    const module = { exports: {} };
+    const { code } = require('esbuild').transformSync(readFileSync(inventoryPath, 'utf8'), { format: 'cjs' });
+    runInNewContext(code, { module, exports: module.exports, require: asset => readFileSync(asset, 'utf8') });
+    return module.exports.BUNDLED_PLUGIN_UI_APP_ARTIFACTS;
+  };
+  const before = consumeInventory().find(entry => entry.artifactId === 'inspector-app-native');
+  assert.ok(before);
+  const config = require(join(uiPackageDir, 'metro.config.js'));
+  config.projectRoot = uiPackageDir;
+  config.watchFolders = [join(repoRoot, 'packages'), dirname(inventoryPath)];
+  config.maxWorkers = 2;
+  config.fileMapCacheDirectory = fixture.path('cache');
+  await mkdir(config.fileMapCacheDirectory);
+  config.reporter = { update() {} };
+  metro = await require('metro').createConnectMiddleware(config, { watch: true, waitForBundler: true });
+  const graph = await metro.metroServer.getBundler().getBundler().getDependencyGraph();
+  const indexedAsset = (asset, platform) => graph.resolveDependency(inventoryPath, {
+    name: asset, data: { key: asset, asyncType: null, isESMImport: false, locs: [] },
+  }, platform, { dev: true }).filePath;
+  await writeFile(source, 'export function renderSurface() { return "live-after"; }\n');
+  await t.waitFor(() => {
+    const entries = consumeInventory();
+    const after = entries.find(entry => entry.artifactId === 'inspector-app-native');
+    assert.notEqual(after.artifactGraph.digest, before.artifactGraph.digest,
+      'editing plugin source must replace the running consumer inventory');
+    for (const file of after.files) {
+      const asset = [...readFileSync(inventoryPath, 'utf8').matchAll(/require\(("(?:[^"\\]|\\.)*")\)/g)]
+        .map(match => JSON.parse(match[1])).find(path => path.replaceAll('\\', '/').endsWith(file.relativePath));
+      for (const platform of ['web', 'android']) assert.equal(indexedAsset(asset, platform), asset);
+    }
+    assert.ok(after.files.some(file => file.asset.includes('live-after')));
+    const channels = entries.find(entry => entry.artifactId === 'channels-app-native');
+    const channelsModule = { exports: {} };
+    runInNewContext(channels.files.find(file => file.relativePath.endsWith('/entry.cjs.bundle')).asset,
+      { module: channelsModule, exports: channelsModule.exports, require, TextEncoder, TextDecoder });
+    const contract = channelsModule.exports.renderSurface();
+    assert.equal(contract.id, 'channel-state');
+    assert.equal(contract.schemaVersion, 9, 'the refreshed Channels consumer must carry the current writer contract');
+  }, { timeout: 120_000, interval: 100 });
+});
 
 test('development server starts the retained coherent graph while source and workspace publication advance', { timeout: 30000 }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-dev-server-skew-', registerCleanup: false });
@@ -1015,14 +1094,18 @@ test('source reload validates replacement health on scratch data while preservin
     { entrypoint: server.entrypoint });
 });
 
-test('source reload rejects a replacement server that exits before health without changing the loaded runtime', async t => {
+for (const provider of ['sqlite', 'postgres']) {
+test(`source reload rejects a ${provider} replacement server that exits before health without changing the loaded runtime`, async t => {
   const graph = await reloadFixtureGraph(t, 'export {};');
   const server = await reloadServerGraph(graph, 'throw new ReferenceError("reload-server-boot-broken");');
+  server.dbProvider = provider;
+  server.env.HAPPIER_DB_PROVIDER = provider;
   await assert.rejects(admitSourceRuntimeReload({ stackBaseDir: graph.stackBaseDir, components: { server }, pending: graph.pending,
     env: { ...process.env, HAPPIER_STACK_REPO_DIR: fileURLToPath(new URL('../../../../', import.meta.url)) } }), /reload-server-boot-broken/);
   assert.deepEqual(JSON.parse(await readFile(graph.runtimePath, 'utf8')), graph.runtime);
   await assert.rejects(access(join(graph.stackBaseDir, 'source-runtime/selected-server.json')), { code: 'ENOENT' });
 });
+}
 
 for (const broken of [false, true]) {
 test(`source reload browser boot ${broken ? 'rejects entry exceptions' : 'admits rendered entry content'}`, async t => {
@@ -1073,8 +1156,7 @@ async function installSourceAdmissionFixture(root) {
   await mkdir(join(root,'bin'));
   await writeFile(join(root,'bin/awk'),`#!/bin/sh\ncase "$*" in\n  */proc/meminfo*) printf '16777216 16777216\\n' ;;\n  */proc/loadavg*|*/proc/pressure/*) printf '0\\n' ;;\n  *) exec /usr/bin/awk "$@" ;;\nesac\n`);
   await chmod(join(root,'bin/awk'),0o755);
-  const env = {...process.env,PATH:`${join(root,'bin')}:/usr/bin:/bin`,HAPPIER_DEV_TARGET_EXECUTION:'1'};
-  for(const key of Object.keys(env)) if(key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_') || key.startsWith('HAPPIER_WORKSPACE_DIST_BUILD_LOCK_')) delete env[key];
+  const env = {...buildNativeAdmissionFixtureEnv(),PATH:`${join(root,'bin')}:/usr/bin:/bin`,HAPPIER_DEV_TARGET_EXECUTION:'1'};
   return {...native,runtimePath,build,runSourceCommand,env};
 }
 
@@ -1106,6 +1188,91 @@ test('source daemon stages current native custody source instead of borrowing st
   assert.equal(await readFile(stale, 'utf8'), 'stale helper lacking disk-measure');
 });
 
+test('source daemon stages its bundled CPX executable from captured current source without installed tools', async context => {
+  const fixture = await createTempFixture(context, { prefix: 'happier-source-cpx-', registerCleanup: false });
+  context.after(async () => { await setBundleReadOnly(fixture.root, false); await fixture.cleanup(); });
+  const repoDir = await createReloadDaemonRepo(fixture, 'export const ready = true;');
+  const canonicalRepo = fileURLToPath(new URL('../../../../', import.meta.url));
+  const cliDir = join(repoDir, 'apps/cli');
+  const pluginDir = join(repoDir, 'packages/plugins/cliproxyapi');
+  const nativeDir = join(pluginDir, 'managed-runtime');
+  const managedBuildScript = JSON.parse(await readFile(join(canonicalRepo, 'packages/plugins/cliproxyapi/package.json'), 'utf8'))
+    .scripts['managed-runtime:build'];
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'] }));
+  await symlink(join(canonicalRepo, 'node_modules'), join(repoDir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  const commonRoot = join(canonicalRepo, 'packages/cli-common');
+  await captureBuildInputFiles({ sourceDir: commonRoot, captureDir: join(repoDir, 'packages/cli-common'),
+    readPaths: () => readWorkspaceBuildInputs(commonRoot) });
+  await mkdir(join(pluginDir, 'src'), { recursive: true });
+  await mkdir(join(nativeDir, 'cmd/happier-cliproxyapi-managed'), { recursive: true });
+  await mkdir(join(nativeDir, 'tools/build'), { recursive: true });
+  await mkdir(join(nativeDir, 'licenses'), { recursive: true });
+  await writeFile(join(cliDir, 'package.json'), JSON.stringify({ name: '@happier-dev/cli', type: 'module', exports: {},
+    bundledDependencies: ['@happier-dev/plugins-cliproxyapi'] }));
+  await writeFile(join(pluginDir, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-cliproxyapi', version: '0.0.0',
+    type: 'module', exports: { '.': { 'happier-source': './src/index.ts', default: './dist/index.js' } },
+    scripts: { 'managed-runtime:build': managedBuildScript } }));
+  await writeFile(join(pluginDir, 'src/index.ts'), 'export function activate() {}');
+  await mkdir(join(cliDir, 'src/plugins/projection/registry/sources'), { recursive: true });
+  await writeFile(join(cliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts'),
+    `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS=${JSON.stringify([{ daemonEntryPath: './dist/index.js',
+      sourceSpec: { locator: '@happier-dev/plugins-cliproxyapi' }, manifest: { id: 'happier.provider.cliproxyapi', runtime: { apiVersion: 1 }, entrypoints: { daemon: './dist/index.js' } } }])};`);
+  // Native compilation is the real OS boundary. This fixture's tiny module
+  // follows the package build CLI while keeping upstream network/servers out.
+  await writeFile(join(nativeDir, 'go.mod'), 'module fixture\n\ngo 1.20\n');
+  await writeFile(join(nativeDir, 'go.sum'), '');
+  await writeFile(join(nativeDir, 'licenses/CLIProxyAPI-LICENSE'), 'fixture license');
+  await writeFile(join(nativeDir, 'licenses/THIRD-PARTY-NOTICES'), 'fixture notices');
+  await writeFile(join(nativeDir, 'tools/build/main.go'), `package main
+import ("flag"; "os"; "os/exec"; "strings")
+func main() { target:=flag.String("target","",""); output:=flag.String("output","",""); flag.Parse(); parts:=strings.Split(*target,"-"); command:=exec.Command("go","build","-trimpath","-buildvcs=false","-o",*output,"./cmd/happier-cliproxyapi-managed"); command.Env=append(os.Environ(),"CGO_ENABLED=0","GOOS="+parts[0],"GOARCH="+parts[1]); command.Stdout=os.Stdout; command.Stderr=os.Stderr; if err:=command.Run();err!=nil { panic(err) } }
+`);
+  const entry = join(nativeDir, 'cmd/happier-cliproxyapi-managed/main.go');
+  const writeVersion = version => writeFile(entry, `package main\nimport "fmt"\nfunc main() { fmt.Print(${JSON.stringify(version)}) }\n`);
+  await writeVersion('current-source-v1');
+  const native = process.platform === 'linux' ? await installSourceAdmissionFixture(fixture.root) : null;
+  const build = native?.build ?? buildSourceRuntimeBundle;
+  const options = { repoDir, stackBaseDir: fixture.path('stacks/consumer'), component: 'daemon',
+    env: native ? { ...native.env, PATH: `${native.env.PATH}:${process.env.PATH}` } : process.env };
+  const first = await build(options);
+  const executable = join(first.runtimeDir, 'tools/unpacked', `happier-cliproxyapi-managed${process.platform === 'win32' ? '.exe' : ''}`);
+  const { stdout } = await promisify(execFile)(executable, []);
+  assert.equal(stdout, 'current-source-v1');
+  const consumingRoot = fixture.path('consumer/apps/cli');
+  const resolverPath = join(consumingRoot, 'src/chunks/source-executable-resolver.mjs');
+  const consumedExecutable = join(consumingRoot, 'tools/unpacked', basename(executable));
+  await mkdir(dirname(consumedExecutable), { recursive: true });
+  await cp(executable, consumedExecutable);
+  await writeFile(join(consumingRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/cli', type: 'module' }));
+  await createRequire(import.meta.url)('esbuild').build({
+    entryPoints: [join(canonicalRepo, 'apps/cli/src/providers/lifecycle/resolveManagedProviderRuntimeLaunch.ts')],
+    outfile: resolverPath, bundle: true, platform: 'node', format: 'esm', conditions: ['happier-source'],
+    tsconfig: join(canonicalRepo, 'apps/cli/tsconfig.runtime.json'), logLevel: 'silent',
+    banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
+  });
+  const previousRoot = process.env.HAPPIER_STACK_CLI_ROOT_DIR;
+  try {
+    process.env.HAPPIER_STACK_CLI_ROOT_DIR = consumingRoot;
+    const { resolveManagedProviderRuntimeExecutable } = await import(pathToFileURL(resolverPath));
+    assert.equal(await resolveManagedProviderRuntimeExecutable({ kind: 'packaged-runtime-binary',
+      directorySegments: ['tools', 'unpacked'], executableBaseName: 'happier-cliproxyapi-managed' }), await realpath(consumedExecutable));
+  } finally {
+    if (previousRoot === undefined) delete process.env.HAPPIER_STACK_CLI_ROOT_DIR;
+    else process.env.HAPPIER_STACK_CLI_ROOT_DIR = previousRoot;
+  }
+  const firstRecord = JSON.parse(await readFile(join(first.runtimeDir, '../../source-bundle.json'), 'utf8'));
+  for (const path of ['go.mod', 'go.sum', 'tools/build/main.go', 'cmd/happier-cliproxyapi-managed/main.go', 'licenses/CLIProxyAPI-LICENSE', 'licenses/THIRD-PARTY-NOTICES']) {
+    assert.match(firstRecord.sourceInputDigests[`packages/plugins/cliproxyapi/managed-runtime/${path}`] ?? '', /^[a-f0-9]{64}$/);
+  }
+  await assert.rejects(access(join(cliDir, 'tools/unpacked/happier-cliproxyapi-managed')), { code: 'ENOENT' });
+  assert.equal((await build(options)).entrypoint, first.entrypoint, 'unchanged current native inputs reuse their source graph');
+  await writeVersion('current-source-v2');
+  const second = await build(options);
+  assert.notEqual(first.entrypoint, second.entrypoint, 'native source edits invalidate the retained runtime');
+  assert.notEqual(first.identity, second.identity);
+  assert.equal((await promisify(execFile)(join(second.runtimeDir, 'tools/unpacked', basename(executable)), [])).stdout, 'current-source-v2');
+});
+
 test('shared source daemon preparation rejoins joint admission after a queued launcher cutover',
   { skip: process.platform !== 'linux' }, async context => {
   const fixture = await createTempFixture(context, { prefix: 'happier-source-native-admission-', registerCleanup: false });
@@ -1122,6 +1289,12 @@ test('shared source daemon preparation rejoins joint admission after a queued la
   for (const name of ['packages', 'node_modules']) await symlink(join(canonicalRepo, name), join(repoDir, name), 'dir');
   await cp(join(canonicalRepo, 'apps/cli/native/processcustody'), join(cliDir, 'native/processcustody'), { recursive: true });
   await installSourcePreparationInputs(repoDir, 'daemon');
+  // Warm reuse requires unchanged authored inputs. Keep installed tools shared,
+  // but own package sources so unrelated lanes cannot invalidate this fixture.
+  const inputsDir = fixture.path('captured-inputs');
+  await captureSourceWebBuildInputs({ repoDir, outputDir: inputsDir, component: 'daemon' });
+  await rm(join(repoDir, 'packages'));
+  await symlink(join(inputsDir, 'packages'), join(repoDir, 'packages'), 'dir');
   const env = { ...native.env, PATH: `${native.env.PATH}:${process.env.PATH}` };
   const statePath = fixture.path('native-owner/apps/stack/scripts/utils/proc/native_host_admission_state.sh');
   const currentState = await readFile(statePath, 'utf8');
@@ -1166,7 +1339,8 @@ esac
   await pressure;
   // The parent has parsed the old root while queued; its newly launched
   // preparation children read the current root and find its mutex occupied.
-  await writeFile(statePath, currentState);
+  await writeFile(`${statePath}.next`, currentState);
+  await rename(`${statePath}.next`, statePath);
   await writeFile(available, '16777216');
   const outcome = await completion;
   assert.equal(outcome.error, undefined);
@@ -1690,8 +1864,7 @@ test('concurrent stacks share one read-only source bundle and retain selected bu
   await installSourcePreparationInputs(repoDir, 'daemon');
   const native = process.platform === 'linux' ? await installSourceAdmissionFixture(root) : null;
   const build = native?.build ?? buildSourceRuntimeBundle;
-  const buildEnv = {...process.env};
-  for (const key of Object.keys(buildEnv)) if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_') || key.startsWith('HAPPIER_WORKSPACE_DIST_BUILD_LOCK_')) delete buildEnv[key];
+  const buildEnv = {...(native ? buildNativeAdmissionFixtureEnv() : process.env)};
   if(native) {
     buildEnv.PATH = native.env.PATH;
     buildEnv.HAPPIER_DEV_TARGET_EXECUTION = native.env.HAPPIER_DEV_TARGET_EXECUTION;
@@ -1732,9 +1905,26 @@ test('concurrent stacks share one read-only source bundle and retain selected bu
   const fourth = await build({repoDir, stackBaseDir:stacks[0], component:'daemon',env:buildEnv});
   await access(third.entrypoint); // Live runtime retains its old launch independently of selection.
   await writeFile(join(cliDir, 'src/index.ts'), 'export const ready = 1;');
+  const retentionBasis = await Promise.all([results[0], third, fourth].map(async built => {
+    const directory = resolve(dirname(built.entrypoint), '../../..');
+    const recordPath = join(directory, 'source-bundle.json');
+    return { directory, directoryMtime: (await stat(directory)).mtimeMs,
+      completionMtime: (await stat(recordPath)).mtimeMs,
+      component: JSON.parse(await readFile(recordPath, 'utf8')).component };
+  }));
+  // Allocation-directory timestamps are mutable OS metadata, not completion
+  // order. Re-adoption must preserve the newest immutable completion record.
+  const directoryTouchTime = new Date(Math.max(...retentionBasis.flatMap(item => [item.directoryMtime, item.completionMtime])) + 1);
+  await utimes(retentionBasis[0].directory, directoryTouchTime, directoryTouchTime);
+  retentionBasis[0].directoryMtime = (await stat(retentionBasis[0].directory)).mtimeMs;
   const readopted = await build({repoDir, stackBaseDir:stacks[0], component:'daemon',env:buildEnv});
   assert.equal(readopted.entrypoint, results[0].entrypoint);
-  await access(fourth.entrypoint); // The newest built bundle survives adopting an older selected bundle.
+  try {
+    await access(fourth.entrypoint); // The newest built bundle survives adopting an older selected bundle.
+  } catch (error) {
+    context.diagnostic(`Source retention basis before adoption: ${JSON.stringify(retentionBasis)}`);
+    throw error;
+  }
 });
 
 test('source CLI commands preserve a pending start selection across source changes and peer reclamation',
@@ -1948,8 +2138,7 @@ case "$*" in
 esac
 `);
   await chmod(fixture.path('bin/awk'),0o755);
-  const env = {...process.env,PATH:`${fixture.path('bin')}:/usr/bin:/bin`,HAPPIER_DEV_TARGET_EXECUTION:'1'};
-  for(const key of Object.keys(env)) if(key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_') || key.startsWith('HAPPIER_WORKSPACE_DIST_BUILD_LOCK_')) delete env[key];
+  const env = {...buildNativeAdmissionFixtureEnv(),PATH:`${fixture.path('bin')}:/usr/bin:/bin`,HAPPIER_DEV_TARGET_EXECUTION:'1'};
   const repoDir = fixture.path('repo');
   const cliDir = join(repoDir,'apps/cli');
   await mkdir(join(cliDir,'src'),{recursive:true});
@@ -2049,40 +2238,56 @@ test('one-shot source builds retire their real preparation process after success
   await writeFile(join(serverDir, 'scripts/migrate.sqlite.deploy.ts'),
     `export {runSqliteMigrationDeploy} from ${JSON.stringify(fileURLToPath(new URL('../../../server/scripts/migrate.sqlite.deploy.ts', import.meta.url)))};`);
   await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')), join(serverDir, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
-  // Observe the real OS process boundary in an isolated host so no other build
-  // can own the installed esbuild service. All spawn calls still execute.
-  const script = `
-    import {createRequire} from 'node:module';
-    import {writeFile} from 'node:fs/promises';
-    import {join} from 'node:path';
-    const require=createRequire(import.meta.url), cp=require('node:child_process');
-    const spawn=cp.spawn, services=[];
+  // Preparation runs beneath foreground custody. Observe the real spawn
+  // boundary in every descendant, not only the long-lived caller.
+  const observedProcessesPath = join(repoDir, 'observed-processes.jsonl');
+  const observerPath = join(repoDir, 'observe-processes.cjs');
+  await writeFile(observerPath, `
+    const cp=require('node:child_process'), fs=require('node:fs');
+    const spawn=cp.spawn;
     cp.spawn=function(command,args,options){
       const child=spawn.call(this,command,args,options);
-      if(args?.some(arg=>arg.startsWith('--service=') || arg.endsWith('build_source_runtime.mjs'))) services.push(child);
+      const preparation=args?.some(arg=>arg.endsWith('build_source_runtime.mjs'));
+      const service=args?.some(arg=>arg.startsWith('--service='));
+      if((preparation || service) && child.pid) {
+        fs.appendFileSync(${JSON.stringify(observedProcessesPath)},
+          JSON.stringify({pid:child.pid,preparation})+'\\n');
+      }
       return child;
     };
+    require('node:module').syncBuiltinESMExports();
+  `);
+  const script = `
+    import {createRequire} from 'node:module';
+    import {readFile,writeFile} from 'node:fs/promises';
+    import {join} from 'node:path';
+    const require=createRequire(import.meta.url);
     const {buildSourceRuntimeBundle}=await import(${JSON.stringify(new URL('./build_source_runtime.mjs', import.meta.url).href)});
+    const {observeProcessLivenessSync}=await import(${JSON.stringify(new URL('../../../../packages/cli-common/processInstance.mjs', import.meta.url).href)});
     const repoDir=process.argv[1], results=[];
+    const readObserved=async()=>(await readFile(${JSON.stringify(observedProcessesPath)},'utf8')
+      .catch(error=>{if(error.code==='ENOENT')return '';throw error;})).trim().split('\\n').filter(Boolean).map(line=>JSON.parse(line));
     try {
       for(const failure of [false,true]) {
         if(failure) await writeFile(join(repoDir,'apps/server/sources/main.light.ts'),'import "./missing-source";');
+        const before=(await readObserved()).length;
         let rejected=false;
         try {await buildSourceRuntimeBundle({repoDir,outputDir:join(repoDir,failure?'failure':'success'),component:'server'});}
         catch(error){if(!failure) throw error; rejected=true;}
-        const child=services.at(-1);
-        if(!child) throw new Error('real source preparation process was not observed');
-        const retired=await new Promise(resolve=>{
-          if(child.exitCode!==null || child.signalCode!==null) return resolve(true);
-          const timer=setTimeout(()=>resolve(false),1000);
-          child.once('exit',()=>{clearTimeout(timer);resolve(true);});
-        });
+        const observed=(await readObserved()).slice(before);
+        if(!observed.some(child=>child.preparation))
+          throw new Error('real source preparation process was not observed');
+        const retired=observed.every(child=>observeProcessLivenessSync(child.pid).status==='dead');
+        if(!retired) throw new Error('observed preparation children: '+JSON.stringify(observed.map(event=>
+          ({...event,liveness:observeProcessLivenessSync(event.pid)}))));
         results.push({failure,rejected,retired});
       }
       console.log(JSON.stringify(results));
     } finally {require(join(repoDir,'apps/server/node_modules/esbuild')).stop();}
   `;
-  const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', script, repoDir]);
+  const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', script, repoDir], {
+    env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --require ${JSON.stringify(observerPath)}` },
+  });
   assert.deepEqual(JSON.parse(stdout.trim()), [
     { failure: false, rejected: false, retired: true },
     { failure: true, rejected: true, retired: true },

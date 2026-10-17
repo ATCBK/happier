@@ -76,6 +76,9 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   // Keep this install exclusion narrow so authored SDK examples and test fixtures
   // with checked-in `.happier-plugin` manifests continue to reach the replica.
   'packages/plugins/*/.happier-plugin',
+  // Public-workflow QA scaffolds also emit their cold manifest on the worker.
+  // Source replication must not delete it between daemon and UI compilation.
+  'packages/plugin-sdk/fixtures/qa-plugin-authoring/created/qa-*/.happier-plugin',
   'apps/ui/sources/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts.js',
   // Prisma clients and the docs static export are generated on each target.
   // Keep these package-owned outputs local without excluding authored generated sources.
