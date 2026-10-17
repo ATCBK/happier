@@ -163,6 +163,14 @@ test.describe('ui e2e: plaintext mode + public share', () => {
     await mkdir(testDir, { recursive: true });
 
     const diagnostics = collectBrowserDiagnostics({ page });
+    const daemonEnv = {
+      ...process.env,
+      HAPPIER_SERVER_URL: server.baseUrl,
+      HAPPIER_WEBAPP_URL: uiBaseUrl,
+      HAPPIER_CLAUDE_PATH: fakeClaudeFixturePath(),
+      HAPPIER_VARIANT: 'dev',
+      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
+    };
 
     let daemon: StartedDaemon | null = null;
     let thrown: unknown = null;
@@ -173,9 +181,7 @@ test.describe('ui e2e: plaintext mode + public share', () => {
         cliHomeDir,
         serverUrl: server.baseUrl,
         uiBaseUrl,
-        extraEnv: {
-          HAPPIER_CLAUDE_PATH: fakeClaudeFixturePath(),
-        },
+        extraEnv: daemonEnv,
       });
 
       await page.goto(`${uiBaseUrl}/settings/account`, { waitUntil: 'domcontentloaded' });

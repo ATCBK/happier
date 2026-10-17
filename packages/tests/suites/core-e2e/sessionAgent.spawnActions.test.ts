@@ -20,8 +20,11 @@ import type { Metadata } from '../../../../apps/cli/src/api/types';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from '../../../../apps/cli/src/api/encryption';
 import { SpawnDaemonSessionRequestSchema, type SpawnDaemonSessionRequest } from '../../../../apps/cli/src/rpc/handlers/spawnSessionOptionsContract';
 import { createApiSessionSocketStub } from '../../../../apps/cli/src/testkit/backends/apiSessionSocketHarness';
+import { resolveServerHttpBaseUrl } from '../../../../apps/cli/src/api/client/serverHttpBaseUrl';
+import type { AccountMachineInventoryRow } from '../../../../apps/cli/src/api/machine/fetchAccountMachines';
 
 const {
+  axiosGet,
   fetchSessionById,
   resolveDaemonSpawnSessionByNonce,
   spawnDaemonSession,
@@ -29,6 +32,7 @@ const {
   io,
   updateSessionMetadataWithRetry,
 } = vi.hoisted(() => ({
+  axiosGet: vi.fn<(url: string) => Promise<{ status: number; data: { machine: AccountMachineInventoryRow } }>>(),
   fetchSessionById: vi.fn(),
   resolveDaemonSpawnSessionByNonce: vi.fn(),
   spawnDaemonSession: vi.fn(),
@@ -36,6 +40,10 @@ const {
   io: vi.fn(),
   updateSessionMetadataWithRetry: vi.fn(),
 }));
+
+// HTTP is a network boundary, like the Socket.IO transport below. Keep the
+// real machine row parser, encryption selection and legacy cryptography beneath it.
+vi.mock('axios', () => ({ default: { get: axiosGet } }));
 
 vi.mock('socket.io-client', async (importOriginal) => ({
   ...await importOriginal<typeof import('socket.io-client')>(),
@@ -207,6 +215,14 @@ async function createSessionAgentMcpScenario(params?: Readonly<{
 
 describe('core e2e: session-agent spawn actions', () => {
   beforeEach(() => {
+    axiosGet.mockReset();
+    axiosGet.mockImplementation(async (url) => {
+      if (url !== `${resolveServerHttpBaseUrl()}/v1/machines/machine-local`) {
+        throw new Error(`Unexpected HTTP request: ${url}`);
+      }
+      const machine = { id: 'machine-local', dataEncryptionKey: null } satisfies AccountMachineInventoryRow;
+      return { status: 200, data: { machine } };
+    });
     fetchSessionById.mockReset();
     resolveDaemonSpawnSessionByNonce.mockReset();
     spawnDaemonSession.mockReset();
