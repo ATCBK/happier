@@ -312,14 +312,16 @@ export class PermissionRequestCoordinator<TResult> {
         result: TResult;
         reason: string;
     }>): Promise<boolean> {
+        const entry = this.pendingRequests.get(params.context.requestId);
         try {
             return await this.completeResponseWithAdmission({
                 context: params.context,
                 completion: { result: params.result, completedRequest: { status: 'canceled', reason: params.reason } },
             });
         } catch (error) {
-            const entry = this.pendingRequests.get(params.context.requestId);
-            if (entry) this.detachCanceledWaiters(entry, params.reason);
+            if (entry && this.pendingRequests.get(params.context.requestId) === entry) {
+                this.detachCanceledWaiters(entry, params.reason);
+            }
             throw error;
         }
     }
@@ -334,8 +336,10 @@ export class PermissionRequestCoordinator<TResult> {
         const { context, completion } = params;
         if (this.isRequestClaimed(context.requestId)) return false;
         const entry = this.pendingRequests.get(context.requestId);
+        const isLifecycleCancellation = completion.completedRequest.status === 'canceled' && params.requireAck !== true;
+        if (entry && isLifecycleCancellation) this.invalidatedDecisionRequestIds.add(context.requestId);
         if (entry && this.isInvalidatedDecision(context.requestId, params.completion.completedRequest.status)) return false;
-        if (entry?.completionInProgress && params.observedCompletion !== true) return false;
+        if (entry?.completionInProgress && params.observedCompletion !== true && !isLifecycleCancellation) return false;
         if (!entry && !this.store.hasOutstandingRequest(context.requestId)) return false;
         if (entry) entry.completionInProgress = true;
         try {

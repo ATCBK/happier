@@ -1720,7 +1720,10 @@ existing durable mutation journal. PostToolUse is the explicit evidence that a n
 tool already ran; the journal never replays an unapplied UI or provider approval.
 Cancellation rejects local waiters even if admission fails, retaining the detached
 occurrence for a retirement retry and reporting the failure. Local bridge disposal
-waits for cancellation admission rather than a server round trip. Automatic history
+waits for cancellation admission rather than a server round trip. Single-request
+lifecycle cancellation invalidates in-flight UI decisions while retirement is
+pending. Local hook expiry uses the same admission boundary before returning its
+default response. Automatic history
 first uses the normal
 acknowledged Agent-state write; if that fails, the same journal retains its exact
 completion delta. Existing `{ t: 'encrypted', c }` entries retain the canonical

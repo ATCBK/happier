@@ -68,6 +68,74 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
 }
 
 describe('PermissionRequestCoordinator', () => {
+    it('does not detach a replacement waiter when an older concurrent cancellation admission fails', async () => {
+        const { coordinator, session } = createHarness();
+        const original = coordinator.requestDecision(bashRequest);
+        const admissions: { admit: () => void; fail: () => void }[] = [];
+        session.updateAgentStateRequestSettlement = async (updater) => {
+            const updated = updater(session.agentState);
+            await new Promise<void>((resolve, reject) => {
+                admissions.push({ admit: resolve, fail: () => reject(new Error('journal unavailable')) });
+            });
+            session.agentState = updated;
+        };
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        const first = coordinator.completeCancellationResponse({ context, result: { decision: 'abort' }, reason: 'stopped' });
+        const second = coordinator.completeCancellationResponse({ context, result: { decision: 'abort' }, reason: 'stopped' });
+        const secondFailure = expect(second).rejects.toThrow('journal unavailable');
+        expect(admissions).toHaveLength(2);
+        admissions[0]!.admit();
+        await expect(first).resolves.toBe(true);
+        await expect(original).resolves.toEqual({ decision: 'abort' });
+
+        const replacement = coordinator.requestDecision({ ...bashRequest, createdAt: 101 });
+        let replacementSettled = false;
+        void replacement.then(() => { replacementSettled = true; }, () => { replacementSettled = true; });
+        admissions[1]!.fail();
+        await secondFailure;
+        expect(coordinator.getResponseContext(bashRequest.requestId)).toMatchObject({ status: 'live', createdAt: 101 });
+        expect(replacementSettled).toBe(false);
+        expect(session.agentState.requests?.[bashRequest.requestId]?.createdAt).toBe(101);
+        coordinator.cancelRequest(bashRequest.requestId, 'test cleanup');
+        await expect(replacement).rejects.toThrow('test cleanup');
+    });
+
+    it('does not grant an in-flight UI approval while a single lifecycle cancellation is admitted', async () => {
+        const { coordinator, session } = createHarness();
+        const provider = coordinator.requestDecision(bashRequest);
+        let acknowledge!: () => void;
+        const acknowledgement = new Promise<void>((resolve) => { acknowledge = resolve; });
+        let admitCancellation!: () => void;
+        const cancellationAdmission = new Promise<void>((resolve) => { admitCancellation = resolve; });
+        session.updateAgentState = async (updater) => {
+            const updated = updater(session.agentState);
+            await acknowledgement;
+            session.agentState = updated;
+        };
+        session.updateAgentStateRequestSettlement = async (updater) => {
+            updater(session.agentState);
+            await cancellationAdmission;
+        };
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        let granted = false;
+        const approval = coordinator.completeRpcResponse({
+            context,
+            completion: { result: approve(), completedRequest: { status: 'approved' } },
+            onAdmitted: () => { granted = true; },
+        });
+        const canceled = { decision: 'abort' };
+        const cancellation = coordinator.completeCancellationResponse({ context, result: canceled, reason: 'stopped' });
+        acknowledge();
+        try {
+            await approval;
+            expect(granted).toBe(false);
+        } finally {
+            admitCancellation();
+            await cancellation;
+        }
+        await expect(provider).resolves.toEqual(canceled);
+    });
+
     it('does not apply an approval after cancellation retired its pending entry', async () => {
         const { coordinator, session } = createHarness();
         const pending = coordinator.requestDecision(bashRequest);

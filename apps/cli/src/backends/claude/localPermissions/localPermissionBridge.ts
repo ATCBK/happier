@@ -8,7 +8,7 @@ import { cloneStringKeyedRecordToNullProto } from '@/api/session/agentStateRecor
 import { resolveAgentRequestKind } from '@/agent/permissions/requestKind';
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import { createPermissionRequestCoordinator } from '@/agent/permissions/permissionRequestCoordinator';
-import type { PermissionRequestCoordinatorStore } from '@/agent/permissions/permissionRequestCoordinator';
+import type { PermissionRequestCoordinatorContext, PermissionRequestCoordinatorStore } from '@/agent/permissions/permissionRequestCoordinator';
 
 import type { Session } from '../session';
 import type { PermissionHookData, PermissionHookResponse, SessionHookData } from '../utils/startHookServer';
@@ -333,20 +333,12 @@ export class ClaudeLocalPermissionBridge {
                 }
                 return response;
             },
-            (error) => {
+            async (error) => {
                 const remaining = this.finishLocalWaiter(requestId, waiter.id);
                 if (waiter.wasTimedOut()) {
                     if (remaining === 0) {
-                        this.completeRequest({
-                            requestId,
-                            toolName,
-                            toolInput,
-                            createdAt,
-                            status: 'canceled',
-                            reason: PERMISSION_TIMED_OUT_REASON,
-                            hookResponse: this.buildDefaultHookResponse(hookEventName),
-                        });
-                        this.permissionCoordinator.cancelRequest(requestId, PERMISSION_TIMED_OUT_REASON);
+                        const context = this.permissionCoordinator.getResponseContext(requestId);
+                        if (context) await this.expireRequestByContext(context, PERMISSION_TIMED_OUT_REASON);
                     }
                     return this.buildDefaultHookResponse(hookEventName);
                 }
@@ -730,7 +722,7 @@ export class ClaudeLocalPermissionBridge {
 
         const pending = this.pendingRequests.get(requestId);
         if (pending && this.isProviderHookExpired(pending)) {
-            this.expirePendingRequest(pending);
+            await this.expirePendingRequest(pending);
             return { status: 'expired' };
         }
 
@@ -742,7 +734,7 @@ export class ClaudeLocalPermissionBridge {
         if (!pending) {
             const context = this.permissionCoordinator.getResponseContext(requestId);
             if (context && this.isProviderHookCeilingExceeded(context.createdAt)) {
-                this.expireRequestByContext(context);
+                await this.expireRequestByContext(context);
                 return { status: 'expired' };
             }
         }
@@ -870,17 +862,9 @@ export class ClaudeLocalPermissionBridge {
         return Date.now() > this.computeProviderHookExpiry(createdAt);
     }
 
-    private expirePendingRequest(pending: PendingPermissionRequest): void {
-        this.completeRequest({
-            requestId: pending.id,
-            toolName: pending.toolName,
-            toolInput: pending.toolInput,
-            createdAt: pending.createdAt,
-            status: 'canceled',
-            reason: PERMISSION_EXPIRED_REASON,
-            hookResponse: this.buildDefaultHookResponse(pending.hookEventName),
-        });
-        this.permissionCoordinator.cancelRequest(pending.id, PERMISSION_EXPIRED_REASON);
+    private async expirePendingRequest(pending: PendingPermissionRequest): Promise<void> {
+        const context = this.permissionCoordinator.getResponseContext(pending.id);
+        if (context) await this.expireRequestByContext(context);
     }
 
     /**
@@ -889,18 +873,17 @@ export class ClaudeLocalPermissionBridge {
      * late answer is never approved into a dead socket. Mirrors `expirePendingRequest` but resolves the
      * tool facts and hook-event shape from the coordinator response context.
      */
-    private expireRequestByContext(context: { requestId: string; toolName: string; toolInput: unknown; createdAt: number }): void {
+    private async expireRequestByContext(
+        context: PermissionRequestCoordinatorContext,
+        reason = PERMISSION_EXPIRED_REASON,
+    ): Promise<void> {
         const hookEventName = this.pendingRequests.get(context.requestId)?.hookEventName ?? 'PermissionRequest';
-        this.completeRequest({
-            requestId: context.requestId,
-            toolName: context.toolName,
-            toolInput: context.toolInput,
-            createdAt: context.createdAt,
-            status: 'canceled',
-            reason: PERMISSION_EXPIRED_REASON,
-            hookResponse: this.buildDefaultHookResponse(hookEventName),
+        const handled = await this.permissionCoordinator.completeCancellationResponse({
+            context,
+            result: this.buildDefaultHookResponse(hookEventName),
+            reason,
         });
-        this.permissionCoordinator.cancelRequest(context.requestId, PERMISSION_EXPIRED_REASON);
+        if (handled) this.pendingRequests.delete(context.requestId);
     }
 
     private clearPlanModeMetadataBestEffort(): void {
