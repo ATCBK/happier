@@ -224,6 +224,9 @@ projection. Host input keeps its existing recording owner; raw user-message
 echoes do not create additional rows. A recorded submission may be transformed,
 handled or cancelled later and does not prove final model delivery. Provider-started
 turns continue through the existing Pi runtime and host turn invariant.
+The same event-publication owner retains startup events until the first host
+consumer attaches, then delivers them in order. Internal observers do not consume
+that startup history; later observers retain the existing metadata catch-up.
 
 In 0.3 development source, prompt Artifact preparation uses the admitted Session
 HTTP route for the active Home; a saved descriptor supplies Home identity rather

@@ -24,7 +24,7 @@ import {
   PI_REQUEST_AUTH_PRODUCER_VERSION_ENV,
   resolvePiRequestAuthExtensionPath,
 } from '../../auth/services/requestAuth/index.js';
-import { buildPiCompletedContextCompactionPayload } from './events.js';
+import { buildPiCompletedContextCompactionPayload, type PiRuntimeEvent } from './events.js';
 import { createPiExecutionRunConversation, createPiRuntimeOperations } from './operations.js';
 
 type Capture = {
@@ -325,6 +325,94 @@ function configuration(options: Readonly<Record<string, string>>): AgentSessionC
 describe('createPiRuntimeOperations', () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it.each(['session', 'executionRun'])('retains extension startup output until the first %s consumer watches', async (kind) => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100);
+    const capture: Capture = { specs: [], written: [] };
+    const params = { ...createRuntimeContext(capture), cwd: '/tmp/pi-workspace', env: {}, eagerStart: true };
+    const opening = kind === 'session'
+      ? createPiRuntimeOperations({ ...params, sessionId: 'startup-host-session' })
+      : createPiExecutionRunConversation(params);
+    await waitForWrittenCount(capture, 1);
+    expect(capture.written[0]).toMatchObject({ type: 'get_state' });
+    const observedAtMs = Date.now();
+    await emit(capture, extensionUserInput('extension startup input'));
+    await emit(capture, { type: 'agent_start' });
+    await emit(capture, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'startup answer' } });
+    await emit(capture, { type: 'agent_end' });
+    await ackLastCommand(capture, { sessionId: 'startup-native-session' });
+    const runtime = await opening;
+    try {
+      clock.mockReturnValue(observedAtMs + 1_000);
+      const events: PiRuntimeEvent[] = [];
+      runtime.watch((event) => events.push(event));
+      const conversation = events.filter((event) => ['transcript-message-committed', 'turn-start', 'message-delta', 'turn-complete'].includes(event.kind));
+      expect(conversation).toEqual([
+        expect.objectContaining({ kind: 'transcript-message-committed', role: 'user', text: 'extension startup input', emittedAtMs: observedAtMs }),
+        expect.objectContaining({ kind: 'turn-start', startedBy: 'provider' }),
+        expect.objectContaining({ kind: 'message-delta', text: 'startup answer' }),
+        expect.objectContaining({ kind: 'turn-complete' }),
+      ]);
+      await vi.waitFor(() => expect(events.filter((event) => event.kind === 'available-commands')).toHaveLength(1));
+      expect(events.filter((event) => event.kind === 'provider-session-id')).toHaveLength(1);
+      expect(events.filter((event) => event.kind === 'available-commands')).toHaveLength(1);
+      const laterEvents: PiRuntimeEvent[] = [];
+      runtime.watch((event) => laterEvents.push(event));
+      expect(laterEvents.map((event) => event.kind)).toEqual(['provider-session-id', 'available-commands']);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('orders a reentrant consumer event after the retained startup events', async () => {
+    const capture: Capture = { specs: [], written: [] };
+    const opening = createPiRuntimeOperations({ ...createRuntimeContext(capture), cwd: '/tmp/pi-workspace', env: {},
+      sessionId: 'startup-host-session', eagerStart: true });
+    await waitForWrittenCount(capture, 1);
+    await emit(capture, extensionUserInput('first startup input'));
+    await emit(capture, { type: 'agent_start' });
+    await emit(capture, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'startup answer' } });
+    await emit(capture, { type: 'agent_end' });
+    await ackLastCommand(capture, { sessionId: 'startup-native-session' });
+    const runtime = await opening;
+    try {
+      const events: AgentSessionRuntimeEvent[] = [];
+      runtime.watch((event) => {
+        events.push(event);
+        if (event.kind === 'transcript-message-committed' && event.text === 'first startup input') {
+          void emit(capture, extensionUserInput('reentrant input'));
+        }
+      });
+      expect(events.filter((event) => event.kind === 'transcript-message-committed' || event.kind === 'message-delta')).toEqual([
+        expect.objectContaining({ kind: 'transcript-message-committed', text: 'first startup input' }),
+        expect.objectContaining({ kind: 'message-delta', text: 'startup answer' }),
+        expect.objectContaining({ kind: 'transcript-message-committed', text: 'reentrant input' }),
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('stops startup replay when its first consumer disposes the runtime', async () => {
+    const capture: Capture = { specs: [], written: [] };
+    const opening = createPiRuntimeOperations({ ...createRuntimeContext(capture), cwd: '/tmp/pi-workspace', env: {},
+      sessionId: 'startup-host-session', eagerStart: true });
+    await waitForWrittenCount(capture, 1);
+    await emit(capture, extensionUserInput('startup input'));
+    await emit(capture, { type: 'agent_start' });
+    await ackLastCommand(capture, { sessionId: 'startup-native-session' });
+    const runtime = await opening;
+    const events: AgentSessionRuntimeEvent[] = [];
+    let disposal: Promise<void> | undefined;
+    runtime.watch((event) => {
+      events.push(event);
+      disposal = Promise.resolve(runtime.dispose());
+    });
+    await disposal;
+    expect(events).toEqual([expect.objectContaining({ kind: 'transcript-message-committed', text: 'startup input' })]);
+    expect(capture.handleDisposeCount).toBe(1);
   });
 
   it.each(['session', 'executionRun'])('prepares the input bridge for a native %s without host tools or MCP', async (kind) => {
