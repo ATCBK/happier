@@ -349,7 +349,8 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       ...hookRuntimeForCallbacks,
       beginTurnLifecycle: hookRuntimeForCallbacks.beginTurnLifecycle.bind(hookRuntimeForCallbacks),
       waitForTurnCompletion: hookRuntimeForCallbacks.waitForTurnCompletion.bind(hookRuntimeForCallbacks),
-      subscribeRuntimeEvents: hookRuntimeForCallbacks.subscribeRuntimeEvents.bind(hookRuntimeForCallbacks),
+      // The decorated operations own event normalization; native hooks retain controls.
+      subscribeRuntimeEvents: params.runtime.subscribeRuntimeEvents.bind(params.runtime),
       cancelTurn: hookRuntimeForCallbacks.cancelTurn.bind(hookRuntimeForCallbacks),
       readSessionIdentity: hookRuntimeForCallbacks.readSessionIdentity.bind(hookRuntimeForCallbacks),
       updateSessionRuntimeConfig: hookRuntimeForCallbacks.updateSessionRuntimeConfig.bind(hookRuntimeForCallbacks),

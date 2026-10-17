@@ -235,6 +235,13 @@ answer even if a provider successor has already produced text. Working state
 continues to follow the canonical Session turn lifecycle, so host-loop cleanup
 cannot mark an active provider successor idle.
 
+In 0.3 development source, the [Session lifecycle](../apps/cli/src/agent/runtime/session/loop/lifecycle.ts)
+activates the decorated runtime event stream for transcript projection. Delivery
+outcome and typed identity registration are passive. The same lifecycle event
+fanout supplies Runtime Activity and provider-session identity metadata, preserving
+provider startup output until the transcript reader attaches. Native runtime
+hooks continue to own prompt delivery, cancellation and turn completion.
+
 In 0.3 development source, prompt Artifact preparation uses the admitted Session
 HTTP route for the active Home; a saved descriptor supplies Home identity rather
 than overriding that route with its HTTPS endpoint. Optional prompt entries with
