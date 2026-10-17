@@ -38,7 +38,7 @@ vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOrigina
 }));
 
 installDisconnectedServerSocketBoundary();
-const { scopedPluginSettingsAdapter } = await import('./scopedPluginSettingsRuntime');
+const { scopedPluginSettingsStorageAdapterForTests: scopedPluginSettingsAdapter } = await import('./scopedPluginSettingsRuntime');
 const tokenA = createAccountTokenForTests('account-a');
 const tokenB = createAccountTokenForTests('account-b');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;

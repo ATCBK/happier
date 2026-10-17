@@ -24,6 +24,8 @@ import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
+import { setPluginMachineExecutionOriginPreference } from '@/sync/domains/machines/administration/selectionPreferences';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -66,7 +68,7 @@ describe('plugin surface execution requirement', () => {
         const sourceCustody = { kind: 'development' as const, registeredRootId: 'surface-source-root' };
         const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_surface_source',
             sourceRef: { machineId, pluginId, sourceCustody } });
-        const project = (occurrenceId: string, generation: number) => {
+        const project = (occurrenceId: string, generation: number, phase: 'current' | 'establishing' | 'unavailable' = 'current') => {
             const model = normalizePluginUiProjection({ v: 2, generation, agentsById: {}, actionsById: {}, toolsById: {},
                 commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
                 installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Source surface', version: '1.0.0',
@@ -80,7 +82,7 @@ describe('plugin surface execution requirement', () => {
                 } } } },
             });
             const union = unionPluginUiProjections([{ machineId, serverId: connection.home.id, serverIdentityId: 'srv_surface_source',
-                phase: 'current', interactionEnabled: true, projection: model }]).pluginUiProjection;
+                phase, interactionEnabled: phase === 'current', projection: model }]).pluginUiProjection;
             if (!union) throw new Error('Source projection failed admission');
             if (!union.surfacePlacementsById[entryId]) throw new Error('Source placement failed canonical admission');
             return union;
@@ -110,10 +112,11 @@ describe('plugin surface execution requirement', () => {
                     React.createElement(ContextPort), children)))) });
         }
         try {
+            let projectionForRender = initialProjection;
             let pageEntryForRender = initialProjection.surfacePlacementsById[entryId];
-            const hook = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId, projection: initialProjection,
+            const hook = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId, projection: projectionForRender,
                 entry: pageEntryForRender, enabled: isPluginSurfaceMachineBound({
-                    pluginId, projection: initialProjection, renderer: pageEntryForRender!.renderer,
+                    pluginId, projection: projectionForRender, surface: pageEntryForRender!,
                 }) }), { wrapper: Wrapper });
             // The cold HTTP fixture finishes restoration with no machine
             // inventory. Publish this test's live observation after that turn.
@@ -129,6 +132,45 @@ describe('plugin surface execution requirement', () => {
             await hook.rerender();
             expect(hook.getCurrent().selection.state).toBe(mounted.selection.state);
             expect(hook.getCurrent().selection.selectedOrigin).toBe(mounted.selection.selectedOrigin);
+            // Availability can be settled while this exact Machine's producer
+            // is still establishing. An unavailable producer is not pending.
+            await act(async () => {
+                replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                    availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+                } });
+            });
+            committedProjection = projectionForRender = project('occurrence-a', 1, 'establishing');
+            pageEntryForRender = projectionForRender.surfacePlacementsById[entryId];
+            await hook.rerender();
+            expect(hook.getCurrent().selection.storedTarget).toBeNull();
+            // The same selection feeds the page/Settings Run-on chip: an
+            // establishing producer cannot be presented as an empty census.
+            expect(hook.getCurrent().selection.loading).toBe(true);
+            await act(async () => {
+                storage.setState({ settings: { ...storage.getState().settings,
+                    machineAdministrationTargetsLocalV1: setPluginMachineExecutionOriginPreference({}, pluginId, executionOrigin) } });
+            });
+            for (const phase of ['establishing', 'unavailable'] as const) {
+                committedProjection = projectionForRender = project('occurrence-a', 1, phase);
+                pageEntryForRender = projectionForRender.surfacePlacementsById[entryId];
+                await hook.rerender();
+                expect(hook.getCurrent().selection.loading).toBe(phase === 'establishing');
+                expect(hook.getCurrent().selection.canExecute).toBe(false);
+            }
+            const unavailableSupply = readPluginUiContributionSupplies(pageEntryForRender)[0]!;
+            pageEntryForRender = { ...pageEntryForRender!, hostSupplies: [unavailableSupply, {
+                ...unavailableSupply, machineId: 'unrelated-establishing-machine', phase: 'establishing',
+                executionOrigin: PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_surface_source',
+                    sourceRef: { machineId: 'unrelated-establishing-machine', pluginId, sourceCustody } }),
+            }] };
+            await hook.rerender();
+            expect(hook.getCurrent().selection.loading).toBe(false);
+            committedProjection = projectionForRender = initialProjection;
+            pageEntryForRender = initialProjection.surfacePlacementsById[entryId];
+            clearPluginAccountAvailabilityProjection();
+            await act(async () => storage.setState({ settings: { ...storage.getState().settings,
+                machineAdministrationTargetsLocalV1: {} } }));
+            await hook.rerender();
             // A presence flap withdraws executable authority, not the exact
             // producer that already supplied this mounted page.
             const offlineMachine = { ...machine, active: false, activeAt: 0 };
@@ -255,39 +297,47 @@ describe('plugin surface execution requirement', () => {
             await act(async () => { storage.setState({ settingsScope: { ...scope, accountId: 'other-account' } }); });
             expect(hook.getCurrent().isExecutionOriginCurrent()).toBe(false);
             await hook.unmount();
-        } finally { await connection.dispose(); }
+        } finally { clearPluginAccountAvailabilityProjection(); await connection.dispose(); }
     });
     it('keeps local presentation machine-free but recognizes packaged renderer daemon methods', () => {
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
-            renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['context', 'openSurface'] } })).toBe(false);
+            surface: { renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['context', 'openSurface'] } } })).toBe(false);
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
-            renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['readResource', 'watchResource'] } })).toBe(false);
+            surface: { renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['readResource', 'watchResource'] } } })).toBe(false);
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
-            renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: [] },
-            resourceCapability: { readable: false, dynamic: true } })).toBe(false);
+            surface: { renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: [] },
+                runtime: { resourceCapability: { readable: false, dynamic: true } } } })).toBe(false);
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
-            renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['selectActionInput'] } })).toBe(true);
+            surface: { renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['selectActionInput'] } } })).toBe(true);
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: {
             ...EMPTY_PLUGIN_UI_PROJECTION,
             reactNativeBundlesById: { 'reactNativeBundle:acme.panel:home': {
                 id: 'reactNativeBundle:acme.panel:home', pluginId: 'acme.panel', contributionKind: 'reactNativeBundle',
                 contributionId: 'home', requiredHostMethods: [],
             } },
-        }, renderer: { kind: 'reactNative', contributionId: 'home' },
-            resourceCapability: { readable: true, dynamic: false } })).toBe(true);
+        }, surface: { renderer: { kind: 'reactNative', contributionId: 'home' },
+            runtime: { resourceCapability: { readable: true, dynamic: false } } } })).toBe(true);
+    });
+    it('derives Resource execution requirements from the selected surface descriptor', () => {
+        const surface = {
+            renderer: { kind: 'hostedHtml', contributionId: 'settings', requiredHostMethods: [] },
+            runtime: { resourceCapability: { readable: true, dynamic: false } },
+        };
+        expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
+            surface })).toBe(true);
     });
     it('leaves malformed host requirements to renderer admission without attempting execution selection', () => {
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel', projection: EMPTY_PLUGIN_UI_PROJECTION,
-            renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['not-a-host-method'] },
-            resourceCapability: { readable: true, dynamic: true } })).toBe(false);
+            surface: { renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['not-a-host-method'] },
+                runtime: { resourceCapability: { readable: true, dynamic: true } } } })).toBe(false);
     });
     it('recognizes a header-only daemon declaration before an execution supplier is selected', () => {
         const action = { id: 'refresh', pluginId: 'acme.panel', occurrenceId: 'header-action-occurrence', title: 'Refresh', scopes: ['session'],
             surfaces: ['ui'], execution: { target: 'daemon' }, dangerLevel: 'safe', available: false } satisfies PluginProjectedActionV2;
         expect(isPluginSurfaceMachineBound({ pluginId: 'acme.panel',
             projection: { ...EMPTY_PLUGIN_UI_PROJECTION, actionsById: { 'acme.panel/refresh': action } },
-            renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['context'] },
-            headerActions: [{ command: { kind: 'executeAction', action: { pluginId: 'acme.panel', localId: 'refresh' } } }],
+            surface: { renderer: { kind: 'hostedHtml', contributionId: 'home', requiredHostMethods: ['context'] },
+                headerActions: [{ command: { kind: 'executeAction', action: { pluginId: 'acme.panel', localId: 'refresh' } } }] },
         })).toBe(true);
     });
 });

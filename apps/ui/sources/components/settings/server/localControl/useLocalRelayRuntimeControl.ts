@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { SystemTaskResult, SystemTaskSpec } from '@happier-dev/protocol';
 import { redactSensitiveSystemTaskJsonValue } from '@happier-dev/cli-common/systemTasks';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { getDefaultSystemTaskRunner, useSystemTaskSnapshot, waitForSystemTaskResult } from '@/components/systemTasks';
 import type { SystemTaskPromptContinuation, SystemTaskRunState, SystemTaskRunner } from '@/components/systemTasks/types';
@@ -259,6 +260,9 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
             setLastErrorMessage(null);
             return { status: 'started', taskId, spec };
         } catch (error) {
+            if (error instanceof Error && 'code' in error && isActionApprovalDeclinedErrorCode(error.code)) {
+                return { status: 'failed', message: error.message };
+            }
             const message = readSystemTaskStartErrorMessage(error);
             const unavailable = isSystemTaskBridgeUnavailableError(error);
             const failure = unavailable
@@ -508,6 +512,7 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
     }, [refreshInspection, refreshStatus]);
 
     return {
+        requiresAction: mountedAction.requiresAction,
         approval: mountedAction.approval,
         activeTaskSnapshot,
         /**
@@ -637,7 +642,8 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
                 const taskId = await (options.startSpec ? options.startSpec(spec) : mountedAction.runSignedOutDraft(() => runner.start(spec)));
                 if (options.promptContinuation) {
                     const continuation = spec.kind === 'remote.ssh.manageHost.v1'
-                        && spec.params?.action === 'personalHome.relocate'
+                        && spec.params !== null && typeof spec.params === 'object'
+                        && 'action' in spec.params && spec.params.action === 'personalHome.relocate'
                         ? bindPersonalHomeRelocationTaskContinuation(options.promptContinuation,
                             createSshSystemTaskPromptContinuation(runner, taskId))
                         : options.promptContinuation;

@@ -349,3 +349,21 @@ it('writes the displayed Artifact rather than the newly selected same-id copy wh
         expect(flattenWidgetLayoutWidgetsV1(selected.items)[0]!.instance.displayName).toBe('Selected');
     } finally { await act(async () => { release?.(); }); await hook.unmount(); }
 });
+
+it('keeps the host\'s sentence for a refused area, so the area can say which Machine cannot answer', async () => {
+    // D1: a plugin page's widget area whose Run-on Machine is unreachable is refused with a code and the
+    // host's sentence naming that Machine. The area keeps both; a sentence that only repeats the code is not a reason.
+    let error = 'This operation is unavailable on studio-mac. Reconnect it or choose another machine with Run on.';
+    const port: WidgetAreaPort = { execute: async () => ({ ok: false, errorCode: 'plugin_mounted_caller_unavailable', error }) };
+    const hook = await renderHook(() => useWidgetAreaLayout(port, {}));
+    try {
+        await flushHookEffects();
+        expect(hook.getCurrent().state).toEqual({ status: 'unavailable', reasonCode: 'plugin_mounted_caller_unavailable', reason: error });
+    } finally { await hook.unmount(); }
+    error = 'plugin_mounted_caller_unavailable';
+    const bare = await renderHook(() => useWidgetAreaLayout(port, {}));
+    try {
+        await flushHookEffects();
+        expect(bare.getCurrent().state).toEqual({ status: 'unavailable', reasonCode: 'plugin_mounted_caller_unavailable' });
+    } finally { await bare.unmount(); }
+});

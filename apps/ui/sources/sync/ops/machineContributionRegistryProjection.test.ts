@@ -10,6 +10,7 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
 let serverAId = '';
+let restoreBrowserRuntime: (() => void) | undefined;
 
 const mountedTarget = {
     pluginId: 'acme.preview',
@@ -111,11 +112,16 @@ describe('machine contribution registry projection ops', () => {
     });
     afterEach(async () => {
         vi.useRealTimers();
-        const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
-        const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
-        await serverScopedRpcSocketPool.stopAll();
-        resetScopedMachineTransportCacheForTests();
-        await network.dispose();
+        try {
+            const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+            const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+            await serverScopedRpcSocketPool.stopAll();
+            resetScopedMachineTransportCacheForTests();
+            await network.dispose();
+        } finally {
+            restoreBrowserRuntime?.();
+            restoreBrowserRuntime = undefined;
+        }
     });
     afterAll(async () => { await network.dispose(); });
 
@@ -170,10 +176,9 @@ describe('machine contribution registry projection ops', () => {
         }));
         if (platform === 'web') {
             // The real capability owner probes a physical browser iframe.
-            vi.stubGlobal('document', {
-                body: { appendChild: vi.fn(), removeChild: vi.fn() },
-                createElement: (tag: string) => ({ nodeName: tag.toUpperCase(), contentWindow: {}, setAttribute: vi.fn() }),
-            });
+            const { installBrowserRuntimeForTests } = await import('@/dev/testkit/harness/browserRuntimeHarness');
+            const browser = await installBrowserRuntimeForTests({ url: 'https://projection.test/' });
+            restoreBrowserRuntime = browser.restore;
         }
         network = await installSessionOpsNetworkBoundary();
         await configureNetworkForCase();
@@ -224,6 +229,41 @@ describe('machine contribution registry projection ops', () => {
         machineRpcWithServerScopeMock.mockRejectedValueOnce(new Error('socket closed'));
         await expect(machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a' }))
             .resolves.toEqual({ supported: false, reason: 'error' });
+    });
+
+    it('classifies a scoped Machine admission timeout and allows a fresh targeted read after recovery', async () => {
+        const { machinePluginUiTargetedContributionsRead } = await import('./machineContributionRegistryProjection');
+        let rowStarted = false;
+        network.setHttpResponder(async (input, init) => {
+            if (new URL(String(input)).pathname !== '/v1/machines/machine-1') return null;
+            rowStarted = true;
+            // HTTP is the genuine boundary: the real scoped setup owner must
+            // cancel its unanswered GET and expose its canonical typed timeout.
+            return await new Promise<Response>((_resolve, reject) => {
+                const abort = () => reject(new DOMException('Request aborted', 'AbortError'));
+                init?.signal?.addEventListener('abort', abort, { once: true });
+                if (init?.signal?.aborted) abort();
+            });
+        });
+        const input = {
+            serverId: serverAId,
+            pluginId: mountedTarget.pluginId,
+            accountLifetime: { scope: { serverId: serverAId, accountId: 'account-a' } },
+        };
+        vi.useFakeTimers();
+        const pending = machinePluginUiTargetedContributionsRead('machine-1', input);
+        await vi.waitFor(() => expect(rowStarted).toBe(true));
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(pending).resolves.toEqual({ supported: false, reason: 'timeout' });
+
+        network.setHttpResponder(async (request) => new URL(String(request)).pathname === '/v1/account/encryption'
+            ? Response.json({ mode: 'plain', updatedAt: 0 })
+            : null);
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            status: 'current', targetedContributions: targetedSnapshot(), targetedSurfaceMounts: [],
+        });
+        await expect(machinePluginUiTargetedContributionsRead('machine-1', input))
+            .resolves.toMatchObject({ supported: true, targetedContributions: targetedSnapshot() });
     });
 
     it.each(['targeted', 'schemas', 'resource', 'action', 'settings', 'secret'] as const)(
@@ -397,6 +437,25 @@ describe('machine contribution registry projection ops', () => {
             method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
             payload: expect.objectContaining({ machineId: 'machine-1', pluginId: 'acme.preview' }),
         }));
+    });
+
+    it('does not read a mounted target using credentials from a successor Account', async () => {
+        const { machinePluginUiTargetedContributionsRead } = await import('./machineContributionRegistryProjection');
+        const accountLifetime = { scope: { serverId: serverAId, accountId: 'account-a' } };
+        machineRpcWithServerScopeMock.mockResolvedValue({
+            status: 'current',
+            targetedContributions: targetedSnapshot(),
+            targetedSurfaceMounts: [],
+        });
+        const input = { serverId: serverAId, pluginId: mountedTarget.pluginId, accountLifetime };
+        await expect(machinePluginUiTargetedContributionsRead('machine-1', input))
+            .resolves.toMatchObject({ supported: true });
+        expect(network.requests).toHaveLength(1);
+
+        await network.setAccount('https://server-a', 'account-b');
+        await expect(machinePluginUiTargetedContributionsRead('machine-1', input))
+            .resolves.toEqual({ supported: false, reason: 'error' });
+        expect(network.requests).toHaveLength(1);
     });
 
     it('never shows a target slice that answers for another plugin, and reports a daemon unavailable answer', async () => {

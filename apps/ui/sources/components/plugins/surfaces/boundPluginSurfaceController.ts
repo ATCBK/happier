@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { randomUUID } from '@/platform/randomUUID';
+import { t } from '@/text';
 import { createPluginWidgetAreaHostHandler } from './pluginWidgetAreaHost';
 import { createPluginUiResourceStore, type PluginUiResourceStore } from '@happier-dev/plugin-ui/advanced';
 import { createPluginDeclaredResourceStore } from './PluginContextualResourceStoreProvider';
@@ -16,7 +17,10 @@ import type {
     PluginResourceContextV1,
     PluginUiResourceBindingCapabilityV1,
 } from '@happier-dev/protocol';
+import { PluginInvocableActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import {
+    PLUGIN_UI_HOST_METHODS_V1,
+    PluginUiExecuteActionRequestV1Schema,
     PluginUiApplyComposerRequestV1Schema,
     PluginUiHostMethodV1Schema,
     PluginUiJsonValueV1Schema,
@@ -43,7 +47,13 @@ import {
     useEndpointStatus,
     useMachineCliDetectionTarget,
 } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { readMachineName } from '@/utils/sessions/machineDisplayNames';
+import { readCurrentPluginMachineExecutionTargetPreference } from '@/sync/domains/machines/administration/selectionPreferences';
+import { resolveFreshMachineAdministrationExecutionTarget } from '@/sync/domains/machines/administration/useTargetSelection';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
@@ -83,6 +93,7 @@ import { createPluginOpenNewSessionHostApiHandler } from './pluginOpenNewSession
 import { createPluginSurfaceSessionHandlers } from './pluginSurfaceSessionState';
 import { createPluginSurfaceStoredImageOwner, type PluginStoredImageReadTransport } from './pluginSurfaceStoredImage';
 import { createPluginSurfaceLiveStreamOwner } from './pluginSurfaceLiveStream';
+import { WidgetFrameBodyNoticeContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
 
 /**
  * The bound surface controller (§3.1).
@@ -115,8 +126,8 @@ import { createPluginSurfaceLiveStreamOwner } from './pluginSurfaceLiveStream';
  * the mount distinguish a local-only facade from an offline exact target;
  * `daemonReachable` is their endpoint-plus-addressed-machine transport fact.
  * `enabled` additionally requires projection admission for daemon-owned
- * Action/Resource semantics. `daemonStateVersion` rides along because the same
- * observation is the authority generation a declarative surface writes against.
+ * Action/Resource semantics. `daemonStateVersion` is runtime metadata; declaration
+ * currentness belongs to the supplying catalog's projection generation.
  */
 export function usePluginSurfaceDaemonInteraction(input: Readonly<{
     machineId?: string | null;
@@ -256,11 +267,18 @@ export type BoundPluginSurfaceFacts = Readonly<{
      */
     daemonInteractionEnabled: boolean;
     /**
+     * Told, on this mount's first Machine-owned refusal, how to word it from then on (`undefined` once
+     * the Machine answers); a widget frame says it once above the body.
+     */
+    onMachineUnavailable?: (describe: () => string | undefined) => void;
+    /**
      * The hook-owned live form of daemon availability. It narrows the already
      * bound daemon handlers during connectivity/projection refresh without
      * becoming a controller identity or lifecycle owner.
      */
     isDaemonInteractionEnabled?: () => boolean;
+    /** Positive loading fact from the physical host, distinct from settled unavailability. */
+    isDaemonConnectionPending?: () => boolean;
     /** Live projection admission narrows interaction without retiring this physical mount. */
     isInteractionEnabled?: () => boolean;
 }>;
@@ -908,7 +926,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         && binding?.isExecutionOriginCurrent?.() !== false;
     // Home-family Actions and borrowed Resources share the exact same target scope.
     const homeFamilyScope = accountLifetime
-        && (!input.facts.serverId || input.facts.serverId === accountLifetime.scope.serverId)
+        && (!input.facts.serverId || areServerProfileIdentifiersEquivalent(input.facts.serverId, accountLifetime.scope.serverId))
         ? accountLifetime.scope
         : null;
     const canAdmitHostReads = Boolean(homeFamilyScope && callerBinding && !isOpenableContentViewer
@@ -1133,15 +1151,79 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                 } finally { account.dispose(); }
             },
         }) : declaredResourceStore;
-    const widgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent, lifetimeSignal: mountLifetime.signal, hostAction, callerBinding });
+    // The one sentence for a Machine-owned part that cannot run now: it names this mount's Run-on
+    // Machine and the next step. Every host method that refuses for that reason reuses it.
+    const isMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): boolean => {
+        if (isDaemonInteractionEnabled()) return false;
+        if (request?.method === 'executeAction') {
+            // Account/local host Actions share caller custody, but Machine
+            // readiness is not their lifecycle.
+            const payload = PluginUiExecuteActionRequestV1Schema.safeParse(request.payload);
+            if (payload.success && PluginInvocableActionIdSchema.safeParse(payload.data.action).success) return false;
+        }
+        return diagnostics.includes('plugin_mounted_caller_unavailable')
+            || diagnostics.includes('plugin_surface_contributed_action_unavailable')
+            || diagnostics.includes('plugin_resource_transport_unavailable')
+            || diagnostics.some((diagnostic) => {
+                const prefix = 'host_api_method_unavailable:';
+                if (!diagnostic.startsWith(prefix)) return false;
+                const method = PluginUiHostMethodV1Schema.safeParse(diagnostic.slice(prefix.length));
+                return method.success && isDaemonOwnedPluginSurfaceMethod(method.data);
+            });
+    };
+    let machineNoticeLent = false;
+    const describeMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): string | undefined => {
+        const daemonUnavailable = isMachineUnavailable(diagnostics, request);
+        if (!daemonUnavailable || input.facts.isDaemonConnectionPending?.() === true) return undefined;
+        const machineId = input.facts.machineId?.trim();
+        if (!machineId) {
+            if (!daemonUnavailable) return undefined;
+            // A Machine the person chose with Run on that cannot answer is the cause, not "choose where it runs".
+            const chosen = readCurrentPluginMachineExecutionTargetPreference(input.facts.pluginId);
+            if (!chosen || resolveFreshMachineAdministrationExecutionTarget(chosen)) return t('settingsPlugins.targetSelection.selectionRequired');
+            const machine = resolveServerScopedMachine(storage.getState(), chosen.serverIdentityId, chosen.machineId);
+            // A name still loading is "this machine" in a sentence, never "Loading…".
+            return t('settingsPlugins.surfaces.machineCapabilityUnavailable', {
+                machine: readMachineName(machine) ?? t('machine.thisMachineInSentence'),
+            });
+        }
+        // A Machine whose name has not loaded yet is "this machine" in a sentence, never its raw id.
+        // A Machine whose name has not loaded yet is "this machine" in a sentence, never its raw id.
+        const machine = input.facts.machineDisplayName?.trim() || t('machine.thisMachineInSentence');
+        return daemonUnavailable
+            ? t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine })
+            : undefined;
+    };
+    const widgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent, lifetimeSignal: mountLifetime.signal, hostAction, callerBinding,
+        describeUnavailable: (reason) => describeMachineUnavailable([reason]) });
     const hostApi = createPluginSurfaceActionHostApi({
         pluginUiProjection: input.facts.pluginUiProjection,
         surfaceContext,
+        // The generic host owns these methods even before an execution target
+        // exists. Resource declarations retain their own capability ceiling;
+        // opaque viewers retain only their concrete file binding's methods.
+        admissionMethods: isOpenableContentViewer ? [] : PLUGIN_UI_HOST_METHODS_V1.filter(method => {
+            if (!isDaemonOwnedPluginSurfaceMethod(method)
+                || method === 'statOpenableContent' || method === 'readOpenableContent') return false;
+            if (method === 'readResource') return canReadResource;
+            if (method === 'watchResource') return canWatchResource;
+            return true;
+        }),
         ...(targetedContributions
             ? { callerSourceCustody: targetedContributions.target.sourceCustody }
             : {}),
         ...(interactionRequester ? { interactionRequester } : {}),
         isMethodAvailable,
+        resolveUnavailableMessage: (error, request) => {
+            const sentence = describeMachineUnavailable(error.diagnostics, request);
+            if (sentence && !machineNoticeLent) {
+                machineNoticeLent = true;
+                input.facts.onMachineUnavailable?.(() => describeMachineUnavailable(error.diagnostics, request));
+            }
+            return sentence;
+        },
+        isConnectionPending: (error, request) => input.facts.isDaemonConnectionPending?.() === true
+            && isMachineUnavailable(error.diagnostics, request),
         isContributedActionAvailable: isDaemonInteractionEnabled,
         isCurrent,
         resourceLifetimeSignal: mountLifetime.signal,
@@ -1263,6 +1345,8 @@ export function useBoundPluginSurfaceController(input: Readonly<{
 }>): BoundPluginSurfaceController {
     const facts = input.facts;
     const binding = input.binding;
+    const machineDisplayNameRef = React.useRef(facts.machineDisplayName);
+    machineDisplayNameRef.current = facts.machineDisplayName;
     const interactionEnabledRef = React.useRef(facts.interactionEnabled);
     interactionEnabledRef.current = facts.interactionEnabled;
     const isInteractionEnabled = React.useCallback(() => interactionEnabledRef.current, []);
@@ -1276,22 +1360,33 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     const executionOriginCurrentRef = React.useRef(binding?.isExecutionOriginCurrent);
     executionOriginCurrentRef.current = binding?.isExecutionOriginCurrent;
     const isExecutionOriginCurrent = React.useCallback(() => executionOriginCurrentRef.current?.() !== false, []);
+    // A widget mount's frame says the Machine sentence once; any other mount has no frame to lend it to.
+    const lendMachineNotice = React.useContext(WidgetFrameBodyNoticeContext);
+    const lendMachineNoticeRef = React.useRef(lendMachineNotice);
+    lendMachineNoticeRef.current = lendMachineNotice;
+    const onMachineUnavailable = React.useCallback(
+        (describe: () => string | undefined) => lendMachineNoticeRef.current?.(describe), [],
+    );
     const daemonInteractionEnabledRef = React.useRef(facts.daemonInteractionEnabled);
     daemonInteractionEnabledRef.current = facts.daemonInteractionEnabled;
     const isDaemonInteractionEnabled = React.useCallback(
         () => daemonInteractionEnabledRef.current,
         [],
     );
+    const daemonConnectionPendingRef = React.useRef(input.facts.isDaemonConnectionPending);
+    daemonConnectionPendingRef.current = input.facts.isDaemonConnectionPending;
+    const isDaemonConnectionPending = React.useCallback(() => daemonConnectionPendingRef.current?.() === true, []);
     // Projection producers replace these read-only snapshots on semantic
     // changes. Reuse their existing complete key during unrelated host renders.
+    const actionInputTranslationsByPluginId = facts.pluginUiProjection?.translationsByPluginId;
     const actionInputSelectionFactsKey = React.useMemo(
         () => serializePluginActionInputSelectionFacts({
             pluginProjectionById: facts.pluginProjectionById,
-            pluginUiProjection: facts.pluginUiProjection,
+            translationsByPluginId: actionInputTranslationsByPluginId,
             targetedContributions: facts.targetedContributions,
             targetPluginId: facts.pluginId,
         }),
-        [facts.pluginProjectionById, facts.pluginUiProjection, facts.targetedContributions, facts.pluginId],
+        [facts.pluginProjectionById, actionInputTranslationsByPluginId, facts.targetedContributions, facts.pluginId],
     );
     const resourceFactsKey = React.useMemo(() => stableJsonStringify(Object.fromEntries(
         Object.entries(facts.pluginUiProjection?.resourcesById ?? {}).map(([key, entry]) => {
@@ -1301,7 +1396,8 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     )), [facts.pluginUiProjection?.resourcesById]);
     const controller = React.useMemo(
         () => createBoundPluginSurfaceController({
-            facts: { ...facts, isDaemonInteractionEnabled, isInteractionEnabled,
+            facts: { ...facts, get machineDisplayName() { return machineDisplayNameRef.current; },
+                isDaemonInteractionEnabled, isDaemonConnectionPending, isInteractionEnabled, onMachineUnavailable,
                 resolveContributedAction: hasContributedActionResolver ? resolveContributedAction : undefined },
             binding: { ...binding, isExecutionOriginCurrent },
         }),
@@ -1347,6 +1443,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             binding?.createMountedHostApiHandlers,
         ],
     );
+    React.useEffect(() => () => lendMachineNoticeRef.current?.(null), [controller]);
     React.useInsertionEffect(() => (
         // StrictMode replays layout effects without recreating this memoized
         // controller. Insertion cleanup therefore only fences the exact

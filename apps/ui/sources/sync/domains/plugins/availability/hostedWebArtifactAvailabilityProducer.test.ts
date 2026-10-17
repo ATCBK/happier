@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const activeAccountHostedArtifactSource = vi.hoisted(() => ({
     create: vi.fn(),
-    publish: vi.fn(async (_input: unknown) => undefined),
+    publish: vi.fn<(input: unknown) => Promise<unknown>>(async () => undefined),
 }));
 
 const bundledAppExactArtifactSource = vi.hoisted(() => ({
@@ -16,6 +16,9 @@ const availabilityProjectionFixture = vi.hoisted(() => ({
 
 vi.mock('@/sync/api/plugins/availability/activePluginAccountHostedArtifactRead', () => ({
     createActivePluginAccountHostedArtifactSourceCandidate: (input: unknown) => (
+        activeAccountHostedArtifactSource.create(input)
+    ),
+    createActivePluginAccountHostedArtifactTargetSourceCandidate: (input: unknown) => (
         activeAccountHostedArtifactSource.create(input)
     ),
     publishActivePluginAccountHostedArtifact: (input: unknown) => (
@@ -549,8 +552,10 @@ describe('hosted-web Artifact availability producer', () => {
         if (second.kind === 'available') second.handle.dispose();
     });
 
-    it('publishes the verified hosted-web archive to Account hosting when the slot has no committed link', async () => {
+    it.each([false, true])('returns a native handle before hosting completes and preserves mount cancellation (cancel: %s)', async (cancel) => {
         const current = fixture();
+        const acquisitionCancellation = new AbortController();
+        const mountCancellation = new AbortController();
         const custodyEvents: string[] = [];
         const persistent = createNativePersistentStore();
         const registry = createPluginNativeArtifactResourceRegistry({
@@ -593,18 +598,37 @@ describe('hosted-web Artifact availability producer', () => {
             fetch: async () => null,
         }));
         activeAccountHostedArtifactSource.publish.mockClear();
-        activeAccountHostedArtifactSource.publish.mockImplementationOnce(async () => {
+        let finishPublication = () => {};
+        activeAccountHostedArtifactSource.publish.mockImplementationOnce((input) => new Promise((resolve) => {
             custodyEvents.push('published');
-        });
+            const signal = input && typeof input === 'object' && 'signal' in input
+                && input.signal instanceof AbortSignal ? input.signal : undefined;
+            finishPublication = () => resolve(signal?.aborted
+                ? { kind: 'unavailable', code: 'operation_cancelled' }
+                : { kind: 'published', value: { outcome: 'created' } });
+        }));
 
-        const acquired = await producer.acquire({
+        let settled = false;
+        const acquisition = producer.acquire({
             reader: createReader(snapshotWithoutHostedLink(current)),
             artifactGraph: current.graph,
             cacheIdentity: current.cacheIdentity,
             accountLifetime: lifetime,
             isCurrent: () => true,
             hostedWebPolicy: hostedWebPolicy(current.graph),
+            signal: acquisitionCancellation.signal,
+            accountHostingSignal: mountCancellation.signal,
+        }).then((result) => {
+            settled = true;
+            return result;
         });
+        try {
+            await vi.waitFor(() => expect(settled).toBe(true));
+        } catch (error) {
+            finishPublication();
+            throw error;
+        }
+        const acquired = await acquisition;
 
         expect(acquired.kind).toBe('available');
         expect(activeAccountHostedArtifactSource.publish).toHaveBeenCalledOnce();
@@ -612,6 +636,7 @@ describe('hosted-web Artifact availability producer', () => {
         // both the verified graph and its Account-hosted link.
         expect(activeAccountHostedArtifactSource.publish).toHaveBeenCalledWith(expect.objectContaining({
             accountLifetime: lifetime,
+            signal: mountCancellation.signal,
             release: { pluginId: slot.pluginId, version: '1.2.3' },
             slot: expect.objectContaining({
                 contributionId: slot.contributionId,
@@ -629,7 +654,19 @@ describe('hosted-web Artifact availability producer', () => {
         expect(published?.files.map((file) => file.relativePath))
             .toEqual(current.graph.files.map((file) => file.relativePath));
         expect(custodyEvents).toEqual(['fetched', 'published']);
-        if (acquired.kind === 'available') acquired.handle.dispose();
+        if (acquired.kind === 'available') {
+            acquisitionCancellation.abort();
+            acquired.handle.dispose();
+            expect(mountCancellation.signal.aborted).toBe(false);
+            if (cancel) mountCancellation.abort();
+            finishPublication();
+            await expect(acquired.handle.accountHosting).resolves.toMatchObject(cancel
+                ? { kind: 'unavailable', code: 'operation_cancelled' }
+                : { kind: 'published' });
+            for (const file of published?.files ?? []) {
+                expect(file.bytes).toEqual(current.bytesByPath.get(file.relativePath));
+            }
+        }
     });
 
     it('cancels hosted-web Account publication when the Account lifetime retires during verification', async () => {

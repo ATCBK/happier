@@ -10,6 +10,8 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
+import { projectPluginUiTheme } from '../surfaces/pluginUiThemeProjection';
+import { darkTheme } from '@/theme';
 import type { PluginUiPrivatePresentationHost } from '../surfaces/pluginUiPrivatePresentationHost';
 import type { PluginReactNativeSurfaceModule } from './PluginReactNativeSurface';
 import { createCanonicalPluginReactNativeHostApiAdapter } from './hostApi';
@@ -108,6 +110,22 @@ describe('PluginReactNativeSurface', () => {
             && node.props.testID.startsWith('plugin-rn-ui-unavailable-diagnostic-')
             && node.props.testID.includes('feature_disabled')).length).toBeGreaterThan(0);
         expect(screen.getTextContent()).not.toContain('feature_disabled');
+    });
+
+    it('says the machine is offline, not that the view may still be starting, when nothing loaded from an offline runtime', async () => {
+        const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
+
+        const screen = await renderScreen(<PluginReactNativeSurface
+            surfaceId="surface_1"
+            renderContext={defaultRenderContext}
+            decision={{ state: 'load', reason: 'compatible', diagnostics: [] }}
+            interactionEnabled={false}
+                    />);
+
+        const text = screen.getTextContent();
+        expect(text).toContain('pluginSurfaces.state.offline.titleNothingLoaded');
+        expect(text).not.toContain('pluginReactNative.unavailable');
+        expect(text).not.toContain('pluginRuntime.unavailableGeneric');
     });
 
     it('renders a compatible loaded module through the boundary', async () => {
@@ -500,6 +518,69 @@ describe('PluginReactNativeSurface', () => {
             expect(spinnerStrip().props.style.animationName).toBe('happierActivitySpinnerFilmstrip');
             expect(screen.findByTestId('plugin-native-private-generation:generation-a')).toBeTruthy();
             expect(module.renderSurface).toHaveBeenCalledTimes(1);
+        } finally {
+            adapter.dispose();
+        }
+    });
+
+    it('follows the current theme while an offline snapshot retains the last interactive context', async () => {
+        const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
+        const lightSurface = createPluginSurfaceContextFixture({
+            target: { kind: 'session', sessionId: 'session-1' },
+            colorScheme: 'light',
+        });
+        const darkSurface = createPluginSurfaceContextFixture({
+            target: { kind: 'session', sessionId: 'session-1' },
+            colorScheme: 'dark',
+            theme: projectPluginUiTheme(darkTheme),
+        });
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({
+            surface: lightSurface,
+            requestSurface: surfaceContext,
+            requestIdPrefix: 'rn-v2:retained-theme',
+            handleRequest: vi.fn(async () => ({ accepted: true })),
+            installedMethods: PLUGIN_UI_HOST_METHODS_V1,
+        });
+        const renderContext = (surface: typeof lightSurface, subPath: string) => Object.freeze({
+            plugin: Object.freeze({ id: 'acme.preview', version: '2.1.0' }),
+            surface,
+            hostApi: adapter.api,
+            signal: new AbortController().signal,
+            subPath,
+        });
+        const seen: RenderContext[] = [];
+        const module: PluginReactNativeSurfaceModule = {
+            renderSurface: vi.fn((context: RenderContext) => {
+                seen.push(context);
+                return React.createElement('PluginNativeSurface', { testID: 'plugin-native-theme' });
+            }),
+        };
+        const element = (input: Readonly<{ renderContext: ReturnType<typeof renderContext>; interactionEnabled: boolean }>) => (
+            <PluginReactNativeSurface
+                surfaceId="surface_1"
+                decision={{ state: 'load', reason: 'compatible', diagnostics: [] }}
+                module={module}
+                renderContext={input.renderContext}
+                interactionEnabled={input.interactionEnabled}
+            />
+        );
+
+        try {
+            const screen = await renderScreen(element({
+                renderContext: renderContext(lightSurface, 'interactive-view'),
+                interactionEnabled: true,
+            }));
+            await screen.update(element({
+                renderContext: renderContext(darkSurface, 'offline-successor-view'),
+                interactionEnabled: false,
+            }));
+
+            // The mounted tree stays the last interactive generation (same
+            // subPath), but how it is painted is a current host fact.
+            const retained = seen[seen.length - 1]!;
+            expect(retained.subPath).toBe('interactive-view');
+            expect(retained.surface.colorScheme).toBe('dark');
+            expect(retained.surface.theme).toBe(darkSurface.theme);
         } finally {
             adapter.dispose();
         }
@@ -1304,8 +1385,7 @@ describe('PluginReactNativeSurface', () => {
         expect(screen.findByTestId('plugin-native-first')).toBeTruthy();
         const firstRenderCountBeforeCacheKeyChange = firstRender.mock.calls.length;
 
-        await act(async () => {
-            screen.tree.update(<PluginReactNativeSurface
+        await screen.update(<PluginReactNativeSurface
                 surfaceId="surface_1"
                 renderContext={defaultRenderContext}
                 decision={{ state: 'load', reason: 'compatible', diagnostics: [] }}
@@ -1313,8 +1393,7 @@ describe('PluginReactNativeSurface', () => {
                 loadPolicy={{ source: 'installedArtifact' }}
                 cacheKey="cache_2"
                 recoveryAction={{ label: 'route fallback', onPress: managePlugin }}
-                            />);
-        });
+            />);
         await flushHookEffects({ cycles: 1, turns: 1 });
 
         expect(secondLoad).toHaveBeenCalledTimes(1);

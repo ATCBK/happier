@@ -112,6 +112,9 @@ import {
   type ConversationPairingResourceV1,
   ConversationSessionLastDeliveryV1Schema,
   type ConversationSessionLastDeliveryV1,
+  type ConversationSessionLastDeliveryOutcomeV1,
+  ConversationDeliveryReadResultV1Schema,
+  ConversationStartResultV1Schema,
 } from '@happier-dev/channels-protocol/v1';
 
 import {
@@ -846,7 +849,7 @@ function useAccountLocalMutation<TInput, TResult extends Readonly<{ kind: string
   input: Readonly<{
     signal: AbortSignal;
     onCommitted: () => void;
-    commit: (write: TInput, signal: AbortSignal) => Promise<TResult>;
+    commit: (write: TInput, signal: AbortSignal) => Promise<TResult | null>;
     describeFailure: (error: unknown) => PluginActionExecution;
   }>,
 ): AccountLocalMutationOperation<TInput> {
@@ -868,8 +871,8 @@ function useAccountLocalMutation<TInput, TResult extends Readonly<{ kind: string
     let settled: PluginActionExecution;
     try {
       const result = await input.commit(write, input.signal);
-      settled = { status: 'success', result };
-      if (result.kind !== 'unchanged' && !input.signal.aborted) input.onCommitted();
+      settled = result === null ? { status: 'idle' } : { status: 'success', result };
+      if (result !== null && result.kind !== 'unchanged' && !input.signal.aborted) input.onCommitted();
     } catch (error) {
       settled = input.describeFailure(error);
     }
@@ -916,12 +919,18 @@ function useAccountLocalBindingPolicy(input: Readonly<{
   onCommitted: () => void;
 }>): BindingPolicyOperation {
   const { collection } = input;
+  const host = usePluginHostApi();
+  const t = usePluginTranslation();
   const commit = React.useCallback(async (
     write: BindingPolicyInput,
     signal: AbortSignal,
-  ): Promise<ConversationBindingEnablementResult> => (
-    await updateConversationBindingPolicyInAccountCollection({ collection, ...write, signal })
-  ), [collection]);
+  ): Promise<ConversationBindingEnablementResult | null> => {
+    if (!await host.confirm(t('plugins.channels.surface.bindingEditSave', 'Save binding'), {
+      action: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate,
+      signal,
+    })) return null;
+    return await updateConversationBindingPolicyInAccountCollection({ collection, ...write, signal });
+  }, [collection, host, t]);
   return useAccountLocalMutation({
     signal: input.signal,
     onCommitted: input.onCommitted,
@@ -1539,7 +1548,15 @@ function pollRetryDueDescription(t: Translate): string {
   );
 }
 
-function pollBlockedDescription(t: Translate): string {
+function pollBlockedDescription(connection: ChannelsConnection, t: Translate): string {
+  const evidence = connection.attention.pollFailure?.evidence;
+  if (evidence?.kind === 'action' && evidence.message) return evidence.message;
+  if (evidence?.kind === 'action' && evidence.code === 'plugin_action_caller_unavailable') {
+    return t(
+      'plugins.channels.surface.pollCallerUnavailableDescription',
+      'Reload the integration on the selected machine, then retry polling.',
+    );
+  }
   return t(
     'plugins.channels.surface.pollBlockedDescription',
     'Happier stopped retrying this connection poll. Retry polling after reviewing the current connection policy.',
@@ -1572,7 +1589,7 @@ function connectionContinuityDescriptions(connection: ChannelsConnection, t: Tra
     descriptions.push(pollRetryDueDescription(t));
   }
   if (connection.attention.ingressConflict === null && connection.attention.pollFailure?.phase === 'blocked') {
-    descriptions.push(pollBlockedDescription(t));
+    descriptions.push(pollBlockedDescription(connection, t));
   }
   if (connection.attention.outwardDelivery.retryDue) {
     descriptions.push(deliveryRetryDueDescription(t));
@@ -1736,7 +1753,7 @@ function ConnectionContinuityDisclosures(props: Readonly<{
           testID="channels-poll-blocked-disclosure"
           tone="warning"
           title={props.t('plugins.channels.surface.pollBlockedTitle', 'Conversation polling needs attention')}
-          description={pollBlockedDescription(props.t)}
+          description={pollBlockedDescription(props.connection, props.t)}
         />
       ) : null}
       {outwardDelivery.retryDue ? (
@@ -1885,61 +1902,6 @@ function BindingEnablementFailureNotice(props: Readonly<{
         )}
     />
   );
-}
-
-type DestructiveConfirmation = Readonly<{
-  open: boolean;
-  openerFocusTarget: PluginUiFocusTarget;
-  confirmationFocusTarget: PluginUiFocusTarget;
-  /** Open the confirmation and move logical focus into it. */
-  request: () => void;
-  /** User-driven cancel or confirm: close it and return focus to its opener. */
-  dismiss: () => void;
-  /** State-driven close, such as the confirmed subject changing underneath. */
-  close: () => void;
-}>;
-
-/**
- * The one destructive-confirmation focus contract in this surface: opening a
- * confirmation transfers logical focus into it, and cancelling or confirming
- * returns focus to the control that opened it. A confirmation closed because
- * its subject changed underneath is not a user dismissal and does not move
- * focus.
- */
-function useDestructiveConfirmation(): DestructiveConfirmation {
-  const openerFocusTarget = usePluginUiFocusTarget();
-  const confirmationFocusTarget = usePluginUiFocusTarget();
-  const [open, setOpen] = React.useState(false);
-  const restoreOpenerFocusRef = React.useRef(false);
-
-  React.useEffect(() => {
-    if (open) {
-      confirmationFocusTarget.focus();
-      return;
-    }
-    if (!restoreOpenerFocusRef.current) return;
-    restoreOpenerFocusRef.current = false;
-    openerFocusTarget.focus();
-  }, [confirmationFocusTarget, open, openerFocusTarget]);
-
-  const request = React.useCallback(() => { setOpen(true); }, []);
-  const dismiss = React.useCallback(() => {
-    restoreOpenerFocusRef.current = true;
-    setOpen(false);
-  }, []);
-  const close = React.useCallback(() => {
-    restoreOpenerFocusRef.current = false;
-    setOpen(false);
-  }, []);
-
-  return React.useMemo(() => ({
-    open,
-    openerFocusTarget,
-    confirmationFocusTarget,
-    request,
-    dismiss,
-    close,
-  }), [close, confirmationFocusTarget, dismiss, open, openerFocusTarget, request]);
 }
 
 /**
@@ -2144,6 +2106,17 @@ function RouterThreadsSection(props: Readonly<{
   const { binding, t } = props;
   const detail = useRouterDetail(binding.bindingId, binding.revision);
   const [starting, setStarting] = React.useState(false);
+  const onOpenThread = props.onOpenThread;
+  const renderThread = React.useCallback((child: BindingPresentation) => (
+    <List.Item
+      testID={`channels-router-thread-${child.binding.bindingId}`}
+      title={bindingEndpointLabel(child.binding, t)}
+      subtitle={child.binding.enabled
+        ? t('plugins.channels.page.routerThreadActive', 'Own session')
+        : t('plugins.channels.column.paused', 'Paused')}
+      onPress={() => onOpenThread(child.binding.bindingId)}
+    />
+  ), [onOpenThread, t]);
   return (
     <Stack gap="large">
       <ItemGroup
@@ -2174,16 +2147,26 @@ function RouterThreadsSection(props: Readonly<{
         )}
       </ItemGroup>
 
+      {starting && detail.kind === 'ready' ? (
+        <ConversationStartForm
+          routerBindingId={binding.bindingId}
+          groups={detail.target.principalGroups}
+          threadCount={props.threadChildren.length}
+          onClose={() => setStarting(false)}
+          t={t}
+        />
+      ) : null}
+
       <ItemGroup
         testID="channels-page-router-threads"
         title={t('plugins.channels.page.routerThreads', 'Threads')}
         description={t('plugins.channels.page.routerThreadsDescription', 'Each thread has its own session and only hears from the person who started it.')}
-        action={(
+        action={starting ? undefined : (
           <Button
             testID={`channels-router-start-${binding.bindingId}`}
             variant="plain"
             title={t('plugins.channels.page.routerStart', 'Start a conversation')}
-            disabled={props.mutationLocked || starting || detail.kind !== 'ready' || !binding.enabled}
+            disabled={props.mutationLocked || detail.kind !== 'ready' || !binding.enabled}
             onPress={() => setStarting(true)}
           />
         )}
@@ -2193,50 +2176,70 @@ function RouterThreadsSection(props: Readonly<{
             title={t('plugins.channels.page.routerNoThreads', 'No threads yet')}
             subtitle={t('plugins.channels.page.routerNoThreadsDescription', 'A thread appears here when an allowed sender writes in, or when you start one.')}
           />
-        ) : props.threadChildren.map((child) => (
-          <Item
-            key={child.binding.bindingId}
-            testID={`channels-router-thread-${child.binding.bindingId}`}
-            title={bindingEndpointLabel(child.binding, t)}
-            subtitle={child.binding.enabled
-              ? t('plugins.channels.page.routerThreadActive', 'Own session')
-              : t('plugins.channels.column.paused', 'Paused')}
-            onPress={() => props.onOpenThread(child.binding.bindingId)}
+        ) : (
+          // Thread bindings are retained until someone deletes them, so a
+          // long-lived mailbox can hold any number of them: the shared List
+          // mounts only the rows in its viewport (REV-D-06).
+          <List<BindingPresentation>
+            testID="channels-router-thread-list"
+            accessibilityLabel={t('plugins.channels.page.routerThreads', 'Threads')}
+            items={props.threadChildren}
+            keyForItem={routerThreadKey}
+            renderItem={renderThread}
+            style={{ maxHeight: EMBEDDED_LIST_VIEWPORT_PX }}
           />
-        ))}
+        )}
       </ItemGroup>
-
-      {starting && detail.kind === 'ready' ? (
-        <ConversationStartForm
-          routerBindingId={binding.bindingId}
-          groups={detail.target.principalGroups}
-          onClose={() => setStarting(false)}
-          t={t}
-        />
-      ) : null}
     </Stack>
   );
 }
 
 /**
+ * The viewport of a list that sits inside a page section (thread rows, target
+ * candidates): rows scroll inside it, so only the visible ones mount.
+ */
+const EMBEDDED_LIST_VIEWPORT_PX = 320;
+
+function routerThreadKey(child: BindingPresentation): string {
+  return child.binding.bindingId;
+}
+
+type ConversationStartStatus =
+  | Readonly<{ kind: 'idle' }>
+  | Readonly<{ kind: 'failed'; message?: string }>
+  | Readonly<{ kind: 'unknown' }>
+  | Readonly<{
+    kind: 'accepted';
+    custodyId: string;
+    /** The custody owner's own delivery outcome; absent until the first read settles. */
+    outcome?: ConversationSessionLastDeliveryOutcomeV1;
+    readFailed: boolean;
+  }>;
+
+/**
  * Starting a conversation (plan §3.2) through the incumbent
  * `conversation/start-v1` Action: the audience is one of the router's groups,
- * and replies come back to the chosen session.
+ * and replies come back to the chosen session. A successful Action only means
+ * the delivery custody accepted the message; what happened to it afterwards is
+ * read from that custody through `delivery/read-v1`, never assumed.
  */
 function ConversationStartForm(props: Readonly<{
   routerBindingId: string;
   groups: ConversationThreadRouterBindingTargetV1['principalGroups'];
+  /** The router's thread count: a new thread is the cue to reread the delivery. */
+  threadCount: number;
   onClose: () => void;
   t: Translate;
 }>): React.ReactElement {
   const { t } = props;
   const startAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart);
+  const deliveryRead = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.deliveryRead);
   const sessionPages = useSessionCandidatePages();
   const [groupId, setGroupId] = React.useState(props.groups[0]?.id ?? '');
   const [subject, setSubject] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [sessionId, setSessionId] = React.useState<string | undefined>();
-  const [outcome, setOutcome] = React.useState<'sent' | 'failed' | 'unknown' | undefined>();
+  const [status, setStatus] = React.useState<ConversationStartStatus>({ kind: 'idle' });
   const loadSessions = sessionPages.load;
   React.useEffect(() => {
     void loadSessions();
@@ -2245,95 +2248,252 @@ function ConversationStartForm(props: Readonly<{
   React.useEffect(() => {
     setSessionId((current) => current ?? sessions[0]?.id);
   }, [sessions]);
+
+  const executeRead = deliveryRead.execute;
+  const custodyId = status.kind === 'accepted' ? status.custodyId : undefined;
+  const readDelivery = React.useCallback(() => {
+    if (custodyId === undefined) return;
+    void executeRead({ custodyId }).then((settled) => {
+      const parsed = settled.status === 'success'
+        ? ConversationDeliveryReadResultV1Schema.safeParse(settled.result)
+        : undefined;
+      setStatus((current) => {
+        if (current.kind !== 'accepted' || current.custodyId !== custodyId) return current;
+        if (parsed?.success && parsed.data.kind === 'ready') {
+          return { ...current, outcome: parsed.data.delivery.lastOutcome, readFailed: false };
+        }
+        return { ...current, readFailed: true };
+      });
+    }).catch(() => {
+      setStatus((current) => (current.kind === 'accepted' && current.custodyId === custodyId
+        ? { ...current, readFailed: true }
+        : current));
+    });
+  }, [custodyId, executeRead]);
+  // Read once on acceptance, then again whenever the router gains a thread:
+  // the child binding is created only after the custody owner saw delivery.
+  React.useEffect(() => {
+    readDelivery();
+  }, [readDelivery, props.threadCount]);
+
   const pending = startAction.execution.status === 'pending';
+  const accepted = status.kind === 'accepted';
+  const locked = pending || accepted;
   const ready = groupId !== '' && subject.trim() !== '' && message.trim() !== '' && sessionId !== undefined;
   const audience = props.groups.find((group) => group.id === groupId);
+  const sessionOptions = sessions.map((session) => ({ value: session.id, label: session.label }));
+  const reading = deliveryRead.execution.status === 'pending';
   return (
-    <ItemGroup
-      testID="channels-router-start-form"
-      title={t('plugins.channels.page.routerStart', 'Start a conversation')}
-      description={t('plugins.channels.page.routerStartDescription', 'Sends a new message to everyone in a group. Their replies come back to the session you choose.')}
-    >
-      <Stack gap="medium">
-        <Form.Select
-          label={t('plugins.channels.page.routerStartAudience', 'To')}
-          options={props.groups.map((group) => ({
-            value: group.id,
-            label: t('plugins.channels.page.routerStartAudienceOption', '{group} ({count} people)', {
-              group: group.id,
-              count: group.principalIds.length,
-            }),
-          }))}
-          value={groupId}
-          disabled={pending}
-          onChange={(value) => {
-            const selected = readActionInputOptionValue(value);
-            if (typeof selected === 'string') setGroupId(selected);
-          }}
+    <Stack gap="medium" testID="channels-router-start-form">
+      <ItemGroup
+        title={t('plugins.channels.page.routerStart', 'Start a conversation')}
+        description={t('plugins.channels.page.routerStartDescription', 'Sends a new message to everyone in a group. Their replies come back to the session you choose.')}
+      >
+        <Item
+          title={t('plugins.channels.page.routerStartAudience', 'To')}
+          subtitle={audience === undefined || audience.principalIds.length === 0
+            ? t('plugins.channels.page.routerStartAudienceEmpty', 'Nobody is in this group yet')
+            : audience.principalIds.join(', ')}
+          fieldAccessory
+          accessoryOutsidePressable
+          accessory={(
+            <Form.Select
+              testID="channels-router-start-audience"
+              presentation="field"
+              label={t('plugins.channels.page.routerStartAudience', 'To')}
+              options={props.groups.map((group) => ({
+                value: group.id,
+                label: t('plugins.channels.page.routerStartAudienceOption', '{group} ({count} people)', {
+                  group: group.id,
+                  count: group.principalIds.length,
+                }),
+              }))}
+              value={groupId}
+              disabled={locked}
+              onChange={(value) => {
+                const selected = readActionInputOptionValue(value);
+                if (typeof selected === 'string') setGroupId(selected);
+              }}
+            />
+          )}
         />
-        {audience === undefined ? null : (
-          <Text tone="secondary" value={audience.principalIds.join(', ')} />
+        <Item
+          title={t('plugins.channels.page.routerStartSession', 'Replies go to')}
+          subtitle={sessionPages.unavailable
+            ? t('plugins.channels.page.routerStartSessionsFailed', 'Could not load your sessions')
+            : !sessionPages.loaded
+              ? t('plugins.channels.page.routerStartSessionsLoading', 'Loading your sessions…')
+              : sessions.length === 0
+                ? t('plugins.channels.page.routerStartNoSessions', 'Replies need a session to go to. Start one, then come back.')
+                : t('plugins.channels.page.routerStartSessionDescription', 'This session answers when someone replies.')}
+          fieldAccessory
+          accessoryOutsidePressable
+          accessory={sessionPages.unavailable ? (
+            <Action.Refresh
+              testID="channels-router-start-sessions-retry"
+              title={t('plugins.channels.surface.retry', 'Retry')}
+              onRefresh={() => { void sessionPages.retry(); }}
+            />
+          ) : (
+            <Form.Select
+              testID="channels-router-start-session"
+              presentation="field"
+              label={t('plugins.channels.page.routerStartSession', 'Replies go to')}
+              options={sessionOptions}
+              value={sessionId ?? ''}
+              disabled={locked || sessions.length === 0}
+              onChange={(value) => {
+                const selected = readActionInputOptionValue(value);
+                if (typeof selected === 'string') setSessionId(selected);
+              }}
+            />
+          )}
+        />
+        {sessionPages.nextCursor === undefined || sessionPages.unavailable ? null : (
+          <Item
+            testID="channels-router-start-sessions-more"
+            title={t('plugins.channels.surface.bindingCreateSessionLoadMore', 'Show more Sessions')}
+            busy={sessionPages.loading}
+            disabled={locked || sessionPages.loading}
+            onPress={() => { void sessionPages.load(sessionPages.nextCursor); }}
+          />
         )}
+      </ItemGroup>
+      <Stack gap="medium">
         <Form.TextField
           label={t('plugins.channels.page.routerStartSubject', 'Subject')}
           value={subject}
-          disabled={pending}
+          disabled={locked}
           onChange={setSubject}
         />
         <Form.TextField
           label={t('plugins.channels.page.routerStartMessage', 'Message')}
           value={message}
           multiline
-          disabled={pending}
+          disabled={locked}
           onChange={setMessage}
         />
-        <Form.Select
-          label={t('plugins.channels.page.routerStartSession', 'Replies go to')}
-          options={(sessions ?? []).map((session) => ({ value: session.id, label: session.label }))}
-          value={sessionId ?? ''}
-          disabled={pending || sessionPages.loading || sessions.length === 0}
-          onChange={(value) => {
-            const selected = readActionInputOptionValue(value);
-            if (typeof selected === 'string') setSessionId(selected);
-          }}
-        />
-        {outcome === 'sent' ? (
-          <Banner tone="neutral" title={t('plugins.channels.page.routerStartSent', 'Sent. The thread appears here once the provider confirms it.')} />
-        ) : outcome === 'failed' ? (
-          <Banner tone="danger" title={t('plugins.channels.page.routerStartFailed', 'The message was not sent. Nothing was delivered; you can try again.')} />
-        ) : outcome === 'unknown' ? (
-          <Banner tone="warning" title={t('plugins.channels.page.routerStartUnknown', 'It is not yet known whether the message was sent. Check the bot’s delivery attention before sending again.')} />
-        ) : null}
+        <ConversationStartStatusLine status={status} reading={reading} onReread={readDelivery} t={t} />
         <Row gap="small">
+          {accepted ? null : (
+            <Button
+              testID="channels-router-start-send"
+              variant="primary"
+              title={t('plugins.channels.page.routerStartSend', 'Send')}
+              busy={pending}
+              disabled={!ready || pending}
+              onPress={() => {
+                if (!ready || sessionId === undefined) return;
+                setStatus({ kind: 'idle' });
+                void startAction.execute({
+                  routerBindingId: props.routerBindingId,
+                  audienceGroupId: groupId,
+                  subject: subject.trim(),
+                  content: { text: message },
+                  sessionId,
+                }).then((settled) => {
+                  if (settled.status === 'success') {
+                    const result = ConversationStartResultV1Schema.safeParse(settled.result);
+                    setStatus(result.success
+                      ? { kind: 'accepted', custodyId: result.data.custodyId, readFailed: false }
+                      : { kind: 'unknown' });
+                    return;
+                  }
+                  setStatus(settled.status === 'outcomeUnknown' ? { kind: 'unknown' }
+                    : { kind: 'failed', ...(settled.status === 'error' ? { message: settled.message } : {}) });
+                }).catch(() => setStatus({ kind: 'failed' }));
+              }}
+            />
+          )}
           <Button
-            testID="channels-router-start-send"
-            variant="primary"
-            title={t('plugins.channels.page.routerStartSend', 'Send')}
-            busy={pending}
-            disabled={!ready || pending || outcome === 'sent'}
-            onPress={() => {
-              if (!ready || sessionId === undefined) return;
-              setOutcome(undefined);
-              void startAction.execute({
-                routerBindingId: props.routerBindingId,
-                audienceGroupId: groupId,
-                subject: subject.trim(),
-                content: { text: message },
-                sessionId,
-              }).then((settled) => {
-                setOutcome(settled.status === 'success' ? 'sent' : settled.status === 'outcomeUnknown' ? 'unknown' : 'failed');
-              }).catch(() => setOutcome('failed'));
-            }}
-          />
-          <Button
-            variant="plain"
-            title={outcome === 'sent' ? t('plugins.channels.page.done', 'Done') : t('plugins.channels.surface.cancel', 'Cancel')}
+            testID="channels-router-start-close"
+            variant={accepted ? 'secondary' : 'plain'}
+            title={accepted ? t('plugins.channels.page.done', 'Done') : t('plugins.channels.surface.cancel', 'Cancel')}
             disabled={pending}
             onPress={props.onClose}
           />
         </Row>
       </Stack>
-    </ItemGroup>
+    </Stack>
+  );
+}
+
+/**
+ * One line for where a started conversation stands. Acceptance is never
+ * "sent": only the custody owner's `delivered` outcome is.
+ */
+function ConversationStartStatusLine(props: Readonly<{
+  status: ConversationStartStatus;
+  reading: boolean;
+  onReread: () => void;
+  t: Translate;
+}>): React.ReactElement | null {
+  const { status, t } = props;
+  const reread = (
+    <Action.Refresh
+      testID="channels-router-start-status-refresh"
+      title={t('plugins.channels.surface.refresh', 'Refresh')}
+      onRefresh={props.onReread}
+    />
+  );
+  if (status.kind === 'idle') return null;
+  if (status.kind === 'failed') {
+    return (
+      <Banner
+        testID="channels-router-start-status"
+        tone="danger"
+        title={t('plugins.channels.page.routerStartUnknown', 'It is not yet known whether the message was sent. Check the bot’s delivery attention before sending again.')}
+        description={status.message}
+      />
+    );
+  }
+  if (status.kind === 'unknown') {
+    return (
+      <Banner
+        testID="channels-router-start-status"
+        tone="warning"
+        title={t('plugins.channels.page.routerStartUnknown', 'It is not yet known whether the message was sent. Check the bot’s delivery attention before sending again.')}
+      />
+    );
+  }
+  if (status.outcome === 'delivered') {
+    return (
+      <Banner
+        testID="channels-router-start-status"
+        tone="neutral"
+        title={t('plugins.channels.page.routerStartDelivered', 'Sent. Replies come back to the session you chose.')}
+      />
+    );
+  }
+  if (status.outcome === 'notDelivered') {
+    return (
+      <Banner
+        testID="channels-router-start-status"
+        tone="danger"
+        title={t('plugins.channels.page.routerStartNotDelivered', 'The message could not be delivered')}
+        description={t('plugins.channels.page.routerStartNotDeliveredDescription', 'Nothing reached the group. Check the bot, then start the conversation again.')}
+      />
+    );
+  }
+  if (status.outcome === 'unknown') {
+    return (
+      <Banner
+        testID="channels-router-start-status"
+        tone="warning"
+        title={t('plugins.channels.page.routerStartOutcomeUnknown', 'It is not known whether the message arrived')}
+        description={t('plugins.channels.page.routerStartOutcomeUnknownDescription', 'Happier will not send it again on its own. Decide what happened in the bot’s delivery attention.')}
+      />
+    );
+  }
+  return (
+    <Banner
+      testID="channels-router-start-status"
+      tone="neutral"
+      title={status.readFailed
+        ? t('plugins.channels.page.routerStartQueuedUnread', 'Queued. Its delivery could not be checked just now.')
+        : t('plugins.channels.page.routerStartQueued', 'Queued. It is sent as soon as the bot can reach the mailbox.')}
+      action={props.reading ? undefined : reread}
+    />
   );
 }
 
@@ -2371,7 +2531,6 @@ function ConversationDetail(props: Readonly<{
   const providerDisplayName = usePluginBrandDisplayName(providerPluginId)
     ?? t('plugins.channels.surface.providerFallback', 'Integration provider');
   const editFocusTarget = usePluginUiFocusTarget();
-  const deleteConfirmation = useDestructiveConfirmation();
   const enablementFailure = props.enablementFailure?.bindingId === binding.bindingId
     ? props.enablementFailure
     : undefined;
@@ -2380,13 +2539,7 @@ function ConversationDetail(props: Readonly<{
   const deleteOutcomeUnknown = deleteExecution?.status === 'outcomeUnknown';
   const enablementBusy = props.execution.status === 'pending' && props.activeBindingId === binding.bindingId;
   const deleteBusy = deleteExecution?.status === 'pending' && props.activeDeletedBindingId === binding.bindingId;
-  const { close: closeDeleteConfirmation } = deleteConfirmation;
-  React.useEffect(() => {
-    closeDeleteConfirmation();
-  }, [binding.bindingId, binding.deletionState, binding.revision, closeDeleteConfirmation]);
-
-  const mutationLocked = deleteConfirmation.open
-    || props.execution.status === 'pending'
+  const mutationLocked = props.execution.status === 'pending'
     || enablementOutcomeUnknown
     || deleteExecution?.status === 'pending'
     || deleteOutcomeUnknown;
@@ -2564,7 +2717,7 @@ function ConversationDetail(props: Readonly<{
                 ? t('plugins.channels.page.unlinkAutomationDescription', 'The automation stops hearing from this conversation. The bot stays connected.')
                 : t('plugins.channels.page.unlinkSessionDescription', 'The session stops hearing from this conversation. The bot stays connected.')}
             accessoryOutsidePressable
-            accessory={deleteConfirmation.open ? undefined : (
+            accessory={(
               <Button
                 testID={`channels-binding-delete-${binding.bindingId}`}
                 variant="secondary"
@@ -2573,45 +2726,12 @@ function ConversationDetail(props: Readonly<{
                   : t('plugins.channels.page.unlinkAction', 'Unlink…')}
                 busy={deleteBusy}
                 disabled={deleteUnavailable}
-                focusTarget={deleteConfirmation.openerFocusTarget}
-                onPress={deleteConfirmation.request}
+                onPress={() => { void props.onDelete?.(binding); }}
               />
             )}
           />
         )}
       </ItemGroup>
-
-      {deleteConfirmation.open ? (
-        <Stack gap="small" testID={`channels-binding-delete-confirmation-${binding.bindingId}`}>
-          <Banner
-            tone="danger"
-            title={t('plugins.channels.page.unlinkConfirmTitle', 'Unlink this conversation?')}
-            description={t(
-              'plugins.channels.page.unlinkConfirmDescription',
-              'Messages from it stop reaching the session, and its settings are removed. The bot stays connected, and you can link the conversation again later.',
-            )}
-          />
-          <Row gap="small">
-            <Button
-              testID={`channels-binding-delete-confirm-${binding.bindingId}`}
-              variant="primary"
-              title={t('plugins.channels.page.unlinkConfirm', 'Unlink')}
-              disabled={deleteBusy || deleteOutcomeUnknown}
-              focusTarget={deleteConfirmation.confirmationFocusTarget}
-              onPress={() => {
-                deleteConfirmation.dismiss();
-                void props.onDelete?.(binding);
-              }}
-            />
-            <Button
-              title={t('plugins.channels.surface.cancel', 'Cancel')}
-              variant="plain"
-              disabled={deleteBusy || deleteOutcomeUnknown}
-              onPress={deleteConfirmation.dismiss}
-            />
-          </Row>
-        </Stack>
-      ) : null}
 
       {needsUnknownEnablementRefresh ? (
         <Banner
@@ -2768,6 +2888,34 @@ function ConversationBotGroup(props: Readonly<{
  * conversation (lab E2). Each says what Channels is for and offers the one
  * next step.
  */
+/** "Telegram, Discord or Email" in the reader's locale. */
+function formatProviderNameList(names: readonly string[]): string {
+  try {
+    return new Intl.ListFormat(undefined, { type: 'disjunction', style: 'long' }).format(names);
+  } catch {
+    return names.join(', ');
+  }
+}
+
+/**
+ * The brand names of the conversation providers installed for this surface, so
+ * invitations never name a fixed list and a new provider (email) is never left out.
+ */
+function useInstalledProviderNames(): readonly string[] {
+  const surface = useSurfaceContext();
+  const resolveProviderName = usePluginBrandDisplayNameResolver();
+  return React.useMemo(() => {
+    const contributions = surface.targetedContributions;
+    const operations = contributions === undefined
+      ? []
+      : currentProviderSetupOperations(contributions, contributions.target.pluginId);
+    const names = [...new Set(operations.map((operation) => operation.contributor.pluginId))]
+      .map((pluginId) => resolveProviderName(pluginId))
+      .filter((name): name is string => typeof name === 'string' && name.trim() !== '');
+    return [...new Set(names)];
+  }, [resolveProviderName, surface.targetedContributions]);
+}
+
 function ConversationsEmptyPage(props: Readonly<{
   connections: readonly ChannelsConnection[];
   onConnectBot: () => void;
@@ -2775,6 +2923,7 @@ function ConversationsEmptyPage(props: Readonly<{
   t: Translate;
 }>): React.ReactElement {
   const { t } = props;
+  const providerNames = useInstalledProviderNames();
   const bots = props.connections.filter((connection) => connection.deletionState === 'none');
   if (bots.length === 0) {
     return (
@@ -2782,10 +2931,14 @@ function ConversationsEmptyPage(props: Readonly<{
         testID="channels-page-no-bots"
         layout="page"
         icon="conversations"
-        title={t('plugins.channels.page.noBotsTitle', 'Talk to your sessions from Telegram, Discord or GitHub')}
+        title={providerNames.length === 0
+          ? t('plugins.channels.page.noBotsTitleGeneric', 'Talk to your sessions from the apps your team already uses')
+          : t('plugins.channels.page.noBotsTitleProviders', 'Talk to your sessions from {providers}', {
+            providers: formatProviderNameList(providerNames),
+          })}
         description={t(
-          'plugins.channels.page.noBotsDescription',
-          'Link a chat, a channel or an issue to a session. People there can ask the agent for help and get its replies, without installing Happier. You’ll need a bot token or a GitHub account.',
+          'plugins.channels.page.noBotsLinkDescription',
+          'Link a chat, a mailbox, a channel or an issue to a session. People there can ask the agent for help and get its replies, without installing Happier.',
         )}
         action={(
           <Button
@@ -2820,8 +2973,9 @@ function ConversationsEmptyPage(props: Readonly<{
       />
       <Stack gap="small">
         <Step marker={{ kind: 'number', value: 1 }} title={t('plugins.channels.page.linkStepConversation', 'Choose the conversation and who may talk in it.')} />
-        <Step marker={{ kind: 'number', value: 2 }} title={t('plugins.channels.page.linkStepPairing', 'Send the pairing code to the bot in a private message, to prove it’s you.')} />
-        <Step marker={{ kind: 'number', value: 3 }} title={t('plugins.channels.page.linkStepTarget', 'Choose the session, review, and turn it on.')} />
+        {/* A pairing code is not a step every provider has: the link journey asks for one only when the
+            provider requires it (a mailbox already knows who wrote), so the overview never promises it. */}
+        <Step marker={{ kind: 'number', value: 2 }} title={t('plugins.channels.page.linkStepTarget', 'Choose the session, review, and turn it on.')} />
       </Stack>
     </Stack>
   );
@@ -2856,7 +3010,7 @@ function ConversationsIndexPage(props: Readonly<{
     <Stack gap="large" testID="channels-page-index">
       <PageHeader
         title={t('plugins.channels.page.title', 'Channels')}
-        description={t('plugins.channels.page.description', 'Conversations in Telegram, Discord and GitHub that talk to your sessions.')}
+        description={t('plugins.channels.page.description', 'Chats, mailboxes and issues that talk to your sessions.')}
         {...(props.onLink === undefined ? {} : {
           actions: (
             <Button
@@ -2935,6 +3089,7 @@ type BindingCreateStage = 'closed' | 'endpoint' | 'principal' | 'target' | 'poli
 type BindingCreateActiveStage = Exclude<BindingCreateStage, 'closed'>;
 type BindingCreateTarget =
   | Readonly<{ kind: 'session'; sessionId: string; label: string }>
+  | Readonly<{ kind: 'threadRouter'; label: string }>
   | Readonly<{
     kind: 'automation';
     automationId: string;
@@ -3004,10 +3159,7 @@ type BindingEditorFeedback =
 type BindingEditorAudienceSelection = Readonly<{
   expectedConnectionRevision: number;
   endpointSelection: BindingCreateEndpointSelection;
-  principalSelection: Readonly<{
-    query: string;
-    selected: readonly Readonly<{ id: string; kind: 'human' | 'bot' }>[];
-  }>;
+  principalSelection: BindingCreatePrincipalSelection;
 }>;
 type BindingEditorPrincipalCandidate = Readonly<{
   id: string;
@@ -3080,70 +3232,9 @@ function bindingEditorTargetFromBinding(binding: ConversationBindingV1): Binding
   };
 }
 
-/** Outgoing-message admission breadth; a higher rank admits more senders. */
-const BINDING_INPUT_MODE_BREADTH: Readonly<Record<BindingInputMode, number>> = Object.freeze({
-  directMentionsOnly: 0,
-  addressedMessages: 1,
-  allAllowedMessages: 2,
-});
-
 /**
- * The ONE authority comparison for binding edits, so a widening change can
- * never pass one editor unconfirmed while the other requires confirmation.
- *
- * The cold-offline editor consults it to decide when its draft must pass the
- * shared confirmation boundary; the daemon-backed editor routes every change
- * through that boundary, which confirms a superset of what this comparison
- * requires.
- *
- * A change widens authority unless every changed fact is a provable pure
- * narrowing (fewer senders, a smaller audience, a pause). Facts this surface
- * cannot rank — in particular any permission-ceiling change — are confirmed
- * rather than classified here, so the safer question is always asked.
- */
-function bindingEditWidensAuthority(previous: BindingEditorDraft, next: BindingEditorDraft): boolean {
-  if (!previous.enabled && next.enabled) return true;
-  if (!previous.allowBotSenders && next.allowBotSenders) return true;
-  if (BINDING_INPUT_MODE_BREADTH[next.inputMode] > BINDING_INPUT_MODE_BREADTH[previous.inputMode]) return true;
-  if (next.allowedPrincipalIds.some((principalId) => (
-    !previous.allowedPrincipalIds.includes(principalId)
-  ))) return true;
-  if (previous.target.kind !== next.target.kind) return true;
-  if (previous.target.kind === 'session' && next.target.kind === 'session') {
-    const previousPolicy = previous.target.policy;
-    const nextPolicy = next.target.policy;
-    if (previousPolicy.deliveryMode === 'repliesOnly' && nextPolicy.deliveryMode === 'mirrorSession') return true;
-    if (previousPolicy.permissionCeiling !== nextPolicy.permissionCeiling) return true;
-    if (previousPolicy.approvals.kind === 'off' && nextPolicy.approvals.kind === 'enabled') return true;
-    if (previousPolicy.approvals.kind === 'enabled' && nextPolicy.approvals.kind === 'enabled') {
-      if (previousPolicy.approvals.maximumScope === 'request'
-        && nextPolicy.approvals.maximumScope === 'session') return true;
-      const previousApprovalIds = previousPolicy.approvals.principalIds;
-      if (previousApprovalIds !== undefined
-        && nextPolicy.approvals.principalIds?.some((principalId) => (
-          !previousApprovalIds.includes(principalId)
-        ))) return true;
-    }
-    if (previousPolicy.newSession.kind === 'off' && nextPolicy.newSession.kind === 'enabled') return true;
-    return false;
-  }
-  if (previous.target.kind === 'automation' && next.target.kind === 'automation') {
-    return previous.target.policy.resultDelivery === 'none'
-      && next.target.policy.resultDelivery === 'finalResult';
-  }
-  // Route order is precedence and every route carries its own Session policy,
-  // so this surface cannot rank a router edit as a pure narrowing.
-  if (previous.target.kind === 'threadRouter' && next.target.kind === 'threadRouter') {
-    return JSON.stringify(previous.target) !== JSON.stringify(next.target);
-  }
-  return false;
-}
-
-/**
- * The one confirmation boundary both binding editors present before a widening
- * change is saved: destination, admitted principals, execution machine,
- * permission scope, and consequence. The create journey's review summary is
- * the same presentation for a new binding.
+ * Both binding editors show the destination, admitted principals, execution
+ * machine, permission scope and consequence. Action policy owns approval.
  */
 function BindingEditConfirmationSummary(props: Readonly<{
   draft: BindingEditorDraft;
@@ -3667,15 +3758,16 @@ function ThreadRouterControls(props: Readonly<{
 
   return (
     <Stack gap="large">
-      <Stack gap="small">
-        <Heading level={3} value={t('plugins.channels.surface.routerGroupsTitle', 'Sender groups')} />
-        <Text
-          tone="secondary"
-          value={t(
-            'plugins.channels.surface.routerGroupsDescription',
-            'Only people in a group can start a thread. Routes and new conversations address a group by name.',
-          )}
-        />
+      <ItemGroup
+        testID="channels-router-groups"
+        surface="none"
+        title={t('plugins.channels.surface.routerGroupsTitle', 'Sender groups')}
+        description={t(
+          'plugins.channels.surface.routerGroupsDescription',
+          'Only people in a group can start a thread. Routes and new conversations address a group by name.',
+        )}
+      >
+        <Stack gap="small">
         {target.principalGroups.map((group) => {
           const usedByRoute = target.routes.some((route) => route.when.group === group.id);
           return (
@@ -3738,17 +3830,19 @@ function ThreadRouterControls(props: Readonly<{
             }}
           />
         </Row>
-      </Stack>
+        </Stack>
+      </ItemGroup>
 
-      <Stack gap="small">
-        <Heading level={3} value={t('plugins.channels.surface.routerRoutesTitle', 'Routes')} />
-        <Text
-          tone="secondary"
-          value={t(
-            'plugins.channels.surface.routerRoutesDescription',
-            'A new thread starts a session from the first route that matches it. Mail no route matches is dropped.',
-          )}
-        />
+      <ItemGroup
+        testID="channels-router-routes"
+        surface="none"
+        title={t('plugins.channels.surface.routerRoutesTitle', 'Routes')}
+        description={t(
+          'plugins.channels.surface.routerRoutesDescription',
+          'A new thread starts a session from the first route that matches it. Mail no route matches is dropped.',
+        )}
+      >
+        <Stack gap="small">
         {target.routes.map((route, index) => (
           <Stack key={route.id} gap="small" testID={`channels-router-route-${route.id}`}>
             <Row gap="small" align="center">
@@ -3852,7 +3946,8 @@ function ThreadRouterControls(props: Readonly<{
             recipeSelection.select();
           }}
         />
-      </Stack>
+        </Stack>
+      </ItemGroup>
     </Stack>
   );
 }
@@ -3958,14 +4053,71 @@ function bindingCreateEndpointSelection(
   return { query, selected: parentId === undefined ? { kind, audience, id } : { kind, audience, id, parentId } };
 }
 
+type BindingPrincipalChoice = Readonly<{ id: string; kind: string; label?: string }>;
+
+/**
+ * The allowed-sender choice for both the link journey and the conversation
+ * editor: one multiple Select whose options are the senders already chosen
+ * (kept from earlier searches, so each stays visible and can be unchecked)
+ * followed by this search's other results.
+ */
+function BindingPrincipalChoices<Choice extends BindingPrincipalChoice>(props: Readonly<{
+  testID: string;
+  label: string;
+  candidates: readonly Choice[];
+  selected: readonly BindingPrincipalChoice[];
+  disabled: boolean;
+  onToggle: (choice: Choice) => void;
+}>): React.ReactElement | null {
+  const keyOf = (choice: BindingPrincipalChoice) => `${choice.kind}:${choice.id}`;
+  const selectedKeys = new Set(props.selected.map(keyOf));
+  const choices: readonly BindingPrincipalChoice[] = [
+    ...props.selected,
+    ...props.candidates.filter((candidate) => !selectedKeys.has(keyOf(candidate))),
+  ];
+  if (choices.length === 0) return null;
+  return (
+    <Form.Select
+      testID={props.testID}
+      label={props.label}
+      multiple
+      presentation="inline"
+      disabled={props.disabled}
+      options={choices.map((choice) => ({
+        value: keyOf(choice),
+        label: choice.label ?? choice.id,
+        // A person's name leads; the address they write from is the fact that tells two apart.
+        ...(choice.label !== undefined && choice.label !== choice.id ? { description: choice.id } : {}),
+      }))}
+      value={[...selectedKeys]}
+      onChange={(next) => {
+        const nextKeys = new Set(Array.isArray(next) ? next.map(String) : [String(next)]);
+        const changed = choices.find((choice) => nextKeys.has(keyOf(choice)) !== selectedKeys.has(keyOf(choice)));
+        if (changed === undefined) return;
+        // A retained sender may not be in this search's results; it toggles off by its own identity.
+        props.onToggle(props.candidates.find((entry) => keyOf(entry) === keyOf(changed)) ?? (changed as Choice));
+      }}
+    />
+  );
+}
+
 function bindingCreatePrincipalSelection(
   query: string,
   candidate: BindingCreatePrincipalCandidate,
+  previous?: BindingCreatePrincipalSelection,
 ): BindingCreatePrincipalSelection | undefined {
   if (candidate.kind !== 'human' && candidate.kind !== 'bot') return undefined;
+  const selected = previous !== undefined && previous.selected.some((principal) => principal.id === candidate.id)
+    ? previous.selected.filter((principal) => principal.id !== candidate.id)
+    : [...(previous?.selected ?? []), {
+      id: candidate.id,
+      kind: candidate.kind,
+      ...(previous === undefined || previous.query === query ? {} : { query }),
+    }];
+  if (selected.length === 0) return undefined;
   return {
-    query,
-    selected: [{ id: candidate.id, kind: candidate.kind }],
+    query: previous?.query ?? query,
+    selected,
   };
 }
 
@@ -4749,7 +4901,8 @@ function BindingCreateJourney(props: Readonly<{
   const [principalQuery, setPrincipalQuery] = React.useState('');
   const [principalCandidates, setPrincipalCandidates] = React.useState<readonly BindingCreatePrincipalCandidate[]>([]);
   const [principalSelection, setPrincipalSelection] = React.useState<BindingCreatePrincipalSelection | undefined>();
-  const [principalLabel, setPrincipalLabel] = React.useState<string | undefined>();
+  // Names of the chosen senders, kept across searches so each stays visible and removable.
+  const [principalLabels, setPrincipalLabels] = React.useState<Readonly<Record<string, string>>>({});
   const [pairingRequired, setPairingRequired] = React.useState(false);
   const [pairingContext, setPairingContext] = React.useState<BindingCreatePairingContext | undefined>();
   const [pairingCreateRequest, setPairingCreateRequest] = React.useState<BindingCreatePairingRequest | undefined>();
@@ -4762,6 +4915,8 @@ function BindingCreateJourney(props: Readonly<{
   const [automationCandidates, setAutomationCandidates] = React.useState<readonly BindingCreateAutomationCandidate[]>([]);
   const [automationNextCursor, setAutomationNextCursor] = React.useState<string | undefined>();
   const [target, setTarget] = React.useState<BindingCreateTarget | undefined>();
+  // A router's groups and routes, edited by the same owner the router editor uses.
+  const [routerDraft, setRouterDraft] = React.useState<ConversationThreadRouterBindingTargetV1 | undefined>();
   const [newSessionDraft, setNewSessionDraft] = React.useState<unknown>();
   const [allowBotSenders, setAllowBotSenders] = React.useState(false);
   const [inputModeOverride, setInputModeOverride] = React.useState<BindingInputMode | undefined>();
@@ -4807,11 +4962,10 @@ function BindingCreateJourney(props: Readonly<{
     : deliverableInputModes[0]!;
   const selectedPrincipalSummary = principalSelection === undefined
     ? props.t('plugins.channels.surface.bindingCreatePrincipalFallback', 'Person')
-    : principalSelection.selected.map((principal, index) => (
-      index === 0 && principalLabel !== undefined && principalLabel !== principal.id
-        ? `${principalLabel} (${principal.id})`
-        : principal.id
-    )).join(', ');
+    : principalSelection.selected.map((principal) => {
+      const label = principalLabels[principal.id];
+      return label !== undefined && label !== principal.id ? `${label} (${principal.id})` : principal.id;
+    }).join(', ');
   const admittedPrincipalIds = principalSelection?.selected.map((principal) => principal.id) ?? [];
   const bindingCreateOutcomeUnknown = createAction.execution.status === 'outcomeUnknown';
   const pairingCreateOutcomeUnknown = pairingAction.execution.status === 'outcomeUnknown';
@@ -4867,7 +5021,7 @@ function BindingCreateJourney(props: Readonly<{
     setPrincipalQuery('');
     setPrincipalCandidates([]);
     setPrincipalSelection(undefined);
-    setPrincipalLabel(undefined);
+    setPrincipalLabels({});
     setPairingRequired(false);
     setPairingContext(undefined);
     setPairingCreateRequest(undefined);
@@ -4875,6 +5029,7 @@ function BindingCreateJourney(props: Readonly<{
     setAutomationCandidates([]);
     setAutomationNextCursor(undefined);
     setTarget(undefined);
+    setRouterDraft(undefined);
     setNewSessionDraft(undefined);
     setAllowBotSenders(false);
     setInputModeOverride(undefined);
@@ -4981,11 +5136,12 @@ function BindingCreateJourney(props: Readonly<{
     setEndpointLabel(undefined);
     setPrincipalCandidates([]);
     setPrincipalSelection(undefined);
-    setPrincipalLabel(undefined);
+    setPrincipalLabels({});
     setPairingRequired(false);
     setAutomationCandidates([]);
     setAutomationNextCursor(undefined);
     setTarget(undefined);
+    setRouterDraft(undefined);
     setNewSessionDraft(undefined);
     setInputModeOverride(undefined);
     setFeedback(undefined);
@@ -5152,8 +5308,9 @@ function BindingCreateJourney(props: Readonly<{
         policy: { resultDelivery: automationResultDelivery },
       };
     }
+    if (target.kind === 'threadRouter') return routerDraft;
     return createSessionTarget;
-  }, [automationResultDelivery, createSessionTarget, target]);
+  }, [automationResultDelivery, createSessionTarget, routerDraft, target]);
 
   const createBinding = React.useCallback(async () => {
     if (currentConnection === undefined
@@ -5387,14 +5544,17 @@ function BindingCreateJourney(props: Readonly<{
 
   return (
     <Stack gap="medium" testID="channels-binding-create">
-      <Button
-        testID="channels-binding-create-open"
-        title={props.t('plugins.channels.surface.bindingCreateAction', 'Add binding')}
-        variant="secondary"
-        focusTarget={openerFocusTarget}
-        disabled={actionLocked || pairingContext !== undefined || availableConnections.length === 0}
-        onPress={openJourney}
-      />
+      {/* A link needs a connection first: say so rather than offer a button that cannot succeed. */}
+      {availableConnections.length === 0 ? null : (
+        <Button
+          testID="channels-binding-create-open"
+          title={props.t('plugins.channels.surface.bindingCreateAction', 'Add binding')}
+          variant="secondary"
+          focusTarget={openerFocusTarget}
+          disabled={actionLocked || pairingContext !== undefined}
+          onPress={openJourney}
+        />
+      )}
       {availableConnections.length === 0 ? (
         <Text
           tone="secondary"
@@ -5457,7 +5617,7 @@ function BindingCreateJourney(props: Readonly<{
                         setPrincipalQuery('');
                         setPrincipalCandidates([]);
                         setPrincipalSelection(undefined);
-                        setPrincipalLabel(undefined);
+                        setPrincipalLabels({});
                         setPairingRequired(false);
                         setAutomationCandidates([]);
                         setAutomationNextCursor(undefined);
@@ -5496,34 +5656,27 @@ function BindingCreateJourney(props: Readonly<{
                 disabled={actionLocked || principalQuery.trim() === ''}
                 onPress={searchPrincipals}
               />
-              {principalCandidates.length > 0 ? (
-                <ItemGroup
-                  accessibilityRole="radiogroup"
-                  accessibilityLabel={props.t('plugins.channels.surface.bindingCreatePrincipalCandidates', 'Allowed sender candidates')}
-                >
-                  {principalCandidates.flatMap((candidate) => {
-                    const selection = bindingCreatePrincipalSelection(principalQuery, candidate);
-                    if (selection === undefined) return [];
-                    return [(
-                      <List.Item
-                        key={candidate.id}
-                        title={candidate.label ?? props.t('plugins.channels.surface.bindingCreatePrincipalFallback', 'Person')}
-                        accessibilityRole="radio"
-                        selected={principalSelection?.selected.some((principal) => (
-                          principal.id === candidate.id && principal.kind === candidate.kind
-                        )) === true}
-                        disabled={actionLocked}
-                        onPress={() => {
-                          setPrincipalSelection(selection);
-                          setPrincipalLabel(candidate.label ?? candidate.id);
-                          setAllowBotSenders(candidate.kind === 'bot');
-                          setFeedback(undefined);
-                        }}
-                      />
-                    )];
-                  })}
-                </ItemGroup>
-              ) : null}
+              <BindingPrincipalChoices
+                testID="channels-binding-create-principal-candidates"
+                label={props.t('plugins.channels.surface.bindingCreatePrincipalCandidates', 'Allowed sender candidates')}
+                candidates={principalCandidates.flatMap((candidate) => (
+                  bindingCreatePrincipalSelection(principalQuery, candidate) === undefined ? [] : [candidate]
+                ))}
+                selected={(principalSelection?.selected ?? []).map((principal) => ({
+                  id: principal.id,
+                  kind: principal.kind,
+                  ...(principalLabels[principal.id] === undefined ? {} : { label: principalLabels[principal.id] }),
+                }))}
+                disabled={actionLocked}
+                onToggle={(candidate) => {
+                  const next = bindingCreatePrincipalSelection(principalQuery, candidate, principalSelection);
+                  setPrincipalSelection(next);
+                  const label = candidate.label;
+                  if (label !== undefined) setPrincipalLabels((current) => ({ ...current, [candidate.id]: label }));
+                  setAllowBotSenders(next?.selected.some((principal) => principal.kind === 'bot') === true);
+                  setFeedback(undefined);
+                }}
+              />
               <Button
                 title={props.t('plugins.channels.surface.bindingCreateContinue', 'Continue')}
                 disabled={actionLocked || principalSelection === undefined}
@@ -5554,6 +5707,40 @@ function BindingCreateJourney(props: Readonly<{
                   )}
                 />
               ) : null}
+              {pairingRequired || endpointAudience !== 'direct' ? null : (
+                <ItemGroup
+                  testID="channels-binding-create-router-option"
+                  title={props.t('plugins.channels.surface.bindingCreateRouterTitle', 'A session for each thread')}
+                  description={props.t(
+                    'plugins.channels.surface.bindingCreateRouterDescription',
+                    'For a mailbox: every new thread from an allowed sender starts its own session, chosen by routes you set next.',
+                  )}
+                >
+                  <Item
+                    testID="channels-binding-target-router"
+                    icon={<Icon name="conversations" />}
+                    title={props.t('plugins.channels.surface.bindingCreateRouter', 'Route new threads')}
+                    subtitle={props.t(
+                      'plugins.channels.surface.bindingCreateRouterSubtitle',
+                      'Everyone you allowed starts in one sender group',
+                    )}
+                    disabled={actionLocked}
+                    onPress={() => {
+                      setTarget({
+                        kind: 'threadRouter',
+                        label: props.t('plugins.channels.surface.bindingCreateRouter', 'Route new threads'),
+                      });
+                      setRouterDraft((current) => current ?? {
+                        kind: 'threadRouter',
+                        principalGroups: [{ id: 'senders', principalIds: admittedPrincipalIds }],
+                        routes: [],
+                      });
+                      setNewSessionDraft(undefined);
+                      setStage('policies');
+                    }}
+                  />
+                </ItemGroup>
+              )}
               <BindingTargetCandidateList
                 sessionCandidates={sessionCandidates}
                 automationCandidates={automationCandidates}
@@ -5657,6 +5844,17 @@ function BindingCreateJourney(props: Readonly<{
                     t={props.t}
                   />
                 )
+              ) : null}
+              {target.kind === 'threadRouter' && routerDraft !== undefined ? (
+                <ThreadRouterControls
+                  target={routerDraft}
+                  admittedPrincipalIds={admittedPrincipalIds}
+                  disabled={actionLocked}
+                  signal={props.signal}
+                  onChange={(transform) => setRouterDraft((current) => (current === undefined ? current : transform(current)))}
+                  onRecipeUnavailable={() => setFeedback('newSessionUnavailable')}
+                  t={props.t}
+                />
               ) : null}
               {target.kind === 'automation' ? (
                 <Form.Select
@@ -5839,6 +6037,18 @@ function BindingCreateJourney(props: Readonly<{
                         value: newSessionDraft === undefined
                           ? props.t('plugins.channels.surface.bindingCreateNewSessionDisabled', 'Do not create a new Session')
                           : props.t('plugins.channels.surface.bindingCreateNewSessionEnabled', 'Create a new Session'),
+                      },
+                    ] : target.kind === 'threadRouter' ? [
+                      {
+                        label: props.t('plugins.channels.surface.routerGroupsTitle', 'Sender groups'),
+                        value: (routerDraft?.principalGroups ?? [])
+                          .map((group) => `${group.id} (${group.principalIds.length})`).join(', '),
+                      },
+                      {
+                        label: props.t('plugins.channels.surface.routerRoutesTitle', 'Routes'),
+                        value: routerDraft === undefined || routerDraft.routes.length === 0
+                          ? props.t('plugins.channels.page.routerNoRoutes', 'No routes yet')
+                          : routerDraft.routes.map((route) => routerRouteSummary(route, props.t)).join('; '),
                       },
                     ] : [
                       {
@@ -6126,7 +6336,7 @@ function BindingEditJourney(props: Readonly<{
   const [endpointLabel, setEndpointLabel] = React.useState<string | undefined>();
   const [principalQuery, setPrincipalQuery] = React.useState('');
   const [principalCandidates, setPrincipalCandidates] = React.useState<readonly BindingCreatePrincipalCandidate[]>([]);
-  const [selectedPrincipals, setSelectedPrincipals] = React.useState<readonly BindingEditorPrincipalCandidate[]>([]);
+  const [selectedPrincipals, setSelectedPrincipals] = React.useState<readonly (BindingEditorPrincipalCandidate & Readonly<{ query: string }>)[]>([]);
   const [audienceResolution, setAudienceResolution] = React.useState<BindingEditorAudienceResolution>('none');
   const {
     candidates: sessionCandidates,
@@ -6400,7 +6610,7 @@ function BindingEditJourney(props: Readonly<{
   const searchPrincipals = React.useCallback(async () => {
     if (currentConnection === undefined
       || endpointSelection === undefined
-      || audienceResolution !== 'endpoint'
+      || audienceResolution === 'none'
       || actionLocked
       || principalQuery.trim() === ''
       || props.signal.aborted) {
@@ -6419,7 +6629,6 @@ function BindingEditJourney(props: Readonly<{
     }
     setFeedback(undefined);
     setPrincipalCandidates([]);
-    setSelectedPrincipals([]);
     const settled = await resolveAction.execute(input.data);
     if (!mountedRef.current || props.signal.aborted) return;
     if (settled.status !== 'success') {
@@ -6450,17 +6659,21 @@ function BindingEditJourney(props: Readonly<{
   }, [actionLocked, audienceResolution, currentConnection, endpointSelection, principalQuery, props.signal, resolveAction]);
 
   const applyAudienceSelection = React.useCallback(() => {
+    const query = selectedPrincipals[0]?.query;
     if (currentConnection === undefined
       || endpointSelection === undefined
       || endpointLabel === undefined
-      || selectedPrincipals.length === 0
+      || query === undefined
       || audienceResolution !== 'principal'
       || actionLocked) {
       return;
     }
     const principalSelection = {
-      query: principalQuery,
-      selected: selectedPrincipals.map((principal) => ({ id: principal.id, kind: principal.kind })),
+      query,
+      selected: selectedPrincipals.map((principal) => ({
+        id: principal.id, kind: principal.kind,
+        ...(principal.query === query ? {} : { query: principal.query }),
+      })),
     } as const;
     setDraft((current) => current === undefined ? current : {
       ...current,
@@ -6476,7 +6689,7 @@ function BindingEditJourney(props: Readonly<{
     setRequiresReresolution(false);
     setFeedback(undefined);
     setStage('policies');
-  }, [actionLocked, audienceResolution, currentConnection, endpointLabel, endpointSelection, principalQuery, selectedPrincipals]);
+  }, [actionLocked, audienceResolution, currentConnection, endpointLabel, endpointSelection, selectedPrincipals]);
 
   // "Link another session" opens the editor on its target step, once its
   // detail has been read and while a target change is possible at all.
@@ -6959,30 +7172,18 @@ function BindingEditJourney(props: Readonly<{
             disabled={actionLocked || !providerControlsAvailable || finalizingDelete || principalQuery.trim() === ''}
             onPress={() => { void searchPrincipals(); }}
           />
-          {principalCandidates.length === 0 ? null : (
-            <Stack gap="small">
-              {principalCandidates.filter(isBindingEditorPrincipalCandidate).map((candidate) => {
-                const selected = selectedPrincipals.some((principal) => (
-                  principal.id === candidate.id && principal.kind === candidate.kind
-                ));
-                return (
-                  <Form.Toggle
-                    key={`${candidate.kind}:${candidate.id}`}
-                    label={candidate.label ?? candidate.id}
-                    value={selected}
-                    disabled={actionLocked || !providerControlsAvailable || finalizingDelete}
-                    onChange={(nextSelected) => {
-                      setSelectedPrincipals((current) => nextSelected
-                        ? current.some((principal) => principal.id === candidate.id && principal.kind === candidate.kind)
-                          ? current
-                          : [...current, candidate]
-                        : current.filter((principal) => !(principal.id === candidate.id && principal.kind === candidate.kind)));
-                    }}
-                  />
-                );
-              })}
-            </Stack>
-          )}
+          <BindingPrincipalChoices
+            testID="channels-binding-edit-principal-candidates"
+            label={props.t('plugins.channels.surface.bindingCreatePrincipalCandidates', 'Allowed sender candidates')}
+            candidates={principalCandidates.filter(isBindingEditorPrincipalCandidate)}
+            selected={selectedPrincipals}
+            disabled={actionLocked || !providerControlsAvailable || finalizingDelete}
+            onToggle={(candidate) => {
+              setSelectedPrincipals((current) => current.some((principal) => principal.id === candidate.id && principal.kind === candidate.kind)
+                ? current.filter((principal) => !(principal.id === candidate.id && principal.kind === candidate.kind))
+                : [...current, { ...candidate, query: principalQuery }]);
+            }}
+          />
           <Button
             title={props.t('plugins.channels.surface.bindingEditUseAudience', 'Use selected conversation and senders')}
             disabled={actionLocked || finalizingDelete || selectedPrincipals.length === 0}
@@ -7295,27 +7496,12 @@ function BindingsContent(props: BindingsContentProps): React.ReactElement {
     : props.presentations.find((presentation) => presentation.binding.bindingId === props.location.bindingId);
   const liveBots = props.connections.some((connection) => connection.deletionState === 'none');
 
-  const body = (() => {
-    if (props.location.step === 'link') {
-      return (
-        <Stack gap="large" testID="channels-page-link-flow">
-          <PageHeader
-            title={props.t('plugins.channels.column.link', 'Link a conversation')}
-            description={props.t('plugins.channels.page.linkDescription', 'Choose a chat and the session it should talk to.')}
-          />
-          {sectionAvailable ? props.bindingCreateContent : null}
-        </Stack>
-      );
-    }
+  const sectionUnavailableContent = (() => {
     if (sectionState.kind === 'loading') {
       return (
         <LoadingState
           testID="channels-bindings-loading"
           title={props.t('plugins.channels.page.loadingTitle', 'Loading conversations')}
-          description={props.t(
-            'plugins.channels.surface.bindingsLoadingDescription',
-            'Reading the current binding policy from your Account.',
-          )}
         />
       );
     }
@@ -7335,6 +7521,22 @@ function BindingsContent(props: BindingsContentProps): React.ReactElement {
         />
       );
     }
+    return null;
+  })();
+
+  const body = (() => {
+    if (props.location.step === 'link') {
+      return (
+        <Stack gap="large" testID="channels-page-link-flow">
+          <PageHeader
+            title={props.t('plugins.channels.column.link', 'Link a conversation')}
+            description={props.t('plugins.channels.page.linkDescription', 'Choose a chat and the session it should talk to.')}
+          />
+          {sectionUnavailableContent ?? props.bindingCreateContent}
+        </Stack>
+      );
+    }
+    if (sectionUnavailableContent) return sectionUnavailableContent;
     if (props.location.bindingId !== undefined) {
       if (selectedPresentation === undefined) {
         return (
@@ -7379,10 +7581,11 @@ function BindingsContent(props: BindingsContentProps): React.ReactElement {
         />
       );
     }
+    // Conversations are listed under their bots: until the bots are known no row has its place yet.
+    if (props.connectionsState === 'loading') {
+      return <LoadingState testID="channels-bindings-loading" title={props.t('plugins.channels.page.loadingTitle', 'Loading conversations')} />;
+    }
     if (props.presentations.length === 0) {
-      if (props.connectionsState === 'loading') {
-        return <LoadingState testID="channels-bindings-loading" title={props.t('plugins.channels.page.loadingTitle', 'Loading conversations')} />;
-      }
       return (
         <ConversationsEmptyPage
           connections={props.connections}
@@ -7398,7 +7601,7 @@ function BindingsContent(props: BindingsContentProps): React.ReactElement {
           testID="channels-page-no-selection"
           layout="page"
           title={props.t('plugins.channels.surface.bindingCreateEndpoint', 'Choose a conversation')}
-          description={props.t('plugins.channels.page.description', 'Conversations in Telegram, Discord and GitHub that talk to your sessions.')}
+          description={props.t('plugins.channels.page.description', 'Chats, mailboxes and issues that talk to your sessions.')}
         />
       );
     }
@@ -7415,7 +7618,8 @@ function BindingsContent(props: BindingsContentProps): React.ReactElement {
 
   return (
     <Screen testID="channels-surface" safeArea>
-      <ScrollArea contentContainerStyle={{ padding: theme.spacing.large, paddingBottom: theme.spacing.large * 2 }}>
+      {/* The page column owns the side edge; a plugin-drawn gutter would sit a second edge beside the host's. */}
+      <ScrollArea contentContainerStyle={{ paddingTop: theme.spacing.large, paddingBottom: theme.spacing.large * 2 }}>
         <Stack gap="large" testID="channels-bindings-content">
           {resourceFreshnessNoticeApplies(props.resource) ? (
             <ResourceFreshnessNotice
@@ -7718,11 +7922,7 @@ function BindingTargetCandidateList(props: Readonly<{
       />
     )
   ), [props.disabled, props.onAutomation, props.onSession]);
-  const filterTarget = React.useCallback((row: BindingTargetCandidateRow, query: string) => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
-    return normalizedQuery === ''
-      || row.candidate.label.toLocaleLowerCase().includes(normalizedQuery);
-  }, []);
+  const targetSearchText = React.useCallback((row: BindingTargetCandidateRow) => ({ label: row.candidate.label }), []);
   return (
     <List
       sections={sections}
@@ -7734,11 +7934,11 @@ function BindingTargetCandidateList(props: Readonly<{
         label: props.t('plugins.channels.surface.bindingCreateTargetSearch', 'Search loaded targets'),
         placeholder: props.t('plugins.channels.surface.bindingCreateTargetSearchPlaceholder', 'Search Sessions and Automations'),
         testID: 'channels-binding-target-search',
-        filter: filterTarget,
+        text: targetSearchText,
       }}
       accessibilityLabel={props.t('plugins.channels.surface.bindingCreateTarget', 'Choose a target')}
       testID="channels-binding-target-candidates"
-      style={{ height: 320 }}
+      style={{ height: EMBEDDED_LIST_VIEWPORT_PX }}
     />
   );
 }
@@ -7767,7 +7967,6 @@ function AccountLocalBindingPolicyEditor(props: Readonly<{
   const [draft, setDraft] = React.useState<BindingEditorDraft | undefined>();
   const [detailPending, setDetailPending] = React.useState(true);
   const [feedback, setFeedback] = React.useState<AccountLocalBindingEditorFeedback | undefined>();
-  const [reviewing, setReviewing] = React.useState(false);
   const mountedRef = React.useRef(true);
   const initialReadStartedRef = React.useRef(false);
 
@@ -7864,18 +8063,6 @@ function AccountLocalBindingPolicyEditor(props: Readonly<{
     || finalizingDelete
     || summaryChanged;
 
-  // The same authority comparison the daemon-backed editor consults decides
-  // when a draft must pass the shared confirmation boundary. A provable pure
-  // narrowing (or an unchanged draft) stays immediately savable — the offline
-  // path never adds confirmation friction to reducing a binding's authority.
-  const widensAuthority = detail !== undefined && draft !== undefined
-    && bindingEditWidensAuthority(bindingEditorDraftFromBinding(detail.binding), draft);
-
-  React.useEffect(() => {
-    if (!reviewing) return;
-    stageFocusTarget.focus();
-  }, [reviewing, stageFocusTarget]);
-
   // Reload is the exit from an ambiguous outcome, so it must stay available
   // while that state is latched; only an in-flight read or write blocks it.
   const reloadLocked = detailPending || saving;
@@ -7931,10 +8118,8 @@ function AccountLocalBindingPolicyEditor(props: Readonly<{
     if (settled.status === 'success') {
       props.onRefresh();
       // The saved confirmation is reported from the authoritative reread, so it
-      // never claims a change the Account has not returned. The editor also
-      // leaves the review boundary: the change it summarized is saved.
+      // never claims a change the Account has not returned.
       if (await readDetail({ preserveDraft: false }) === 'ready' && mountedRef.current) {
-        setReviewing(false);
         setFeedback('updated');
       }
       return;
@@ -8171,45 +8356,18 @@ function AccountLocalBindingPolicyEditor(props: Readonly<{
           )}
         />
       )}
-      {reviewing ? (
-        <BindingEditConfirmationSummary
-          draft={draft}
-          connection={props.presentation?.connection}
-          t={props.t}
-        />
-      ) : null}
-      {reviewing ? (
-        <Button
-          testID="channels-account-local-binding-save"
-          title={props.t('plugins.channels.surface.bindingEditSave', 'Save binding')}
-          busy={saving}
-          disabled={saveLocked}
-          onPress={() => { void submit(); }}
-        />
-      ) : widensAuthority ? (
-        <Button
-          testID="channels-account-local-binding-review"
-          title={props.t('plugins.channels.surface.bindingEditReview', 'Review changes')}
-          disabled={actionLocked || finalizingDelete || debounceMs === undefined}
-          onPress={() => setReviewing(true)}
-        />
-      ) : (
-        <Button
-          testID="channels-account-local-binding-save"
-          title={props.t('plugins.channels.surface.bindingEditSave', 'Save binding')}
-          busy={saving}
-          disabled={saveLocked}
-          onPress={() => { void submit(); }}
-        />
-      )}
-      {reviewing ? (
-        <Button
-          title={props.t('plugins.channels.surface.bindingCreateBack', 'Back')}
-          variant="plain"
-          disabled={saving}
-          onPress={() => setReviewing(false)}
-        />
-      ) : null}
+      <BindingEditConfirmationSummary
+        draft={draft}
+        connection={props.presentation?.connection}
+        t={props.t}
+      />
+      <Button
+        testID="channels-account-local-binding-save"
+        title={props.t('plugins.channels.surface.bindingEditSave', 'Save binding')}
+        busy={saving}
+        disabled={saveLocked}
+        onPress={() => { void submit(); }}
+      />
       <Button
         title={props.t('plugins.channels.surface.cancel', 'Cancel')}
         variant="plain"
@@ -8274,8 +8432,10 @@ function useAccountLocalChannels(signal: AbortSignal, t: Translate) {
 function AccountLocalChannelsPageSurface(props: Readonly<{
   signal: AbortSignal;
   subPath: string | undefined;
+  machineUnavailableReason?: string;
 }>): React.ReactElement {
   const t = usePluginTranslation();
+  const navigation = useChannelsPageNavigation();
   const channels = useAccountLocalChannels(props.signal, t);
   const { collection, deliveriesCollection } = channels;
   const { bindings, resource, refresh } = channels.bindingsRead;
@@ -8323,6 +8483,15 @@ function AccountLocalChannelsPageSurface(props: Readonly<{
       location={location}
       connections={channels.sortedConnections}
       connectionsState={channels.connectionState}
+      bindingCreateContent={(
+        <ErrorState
+          testID="channels-link-unavailable"
+          kind="unavailable"
+          title={t('plugins.channels.surface.providerActionsUnavailableTitle', 'Provider actions need your selected machine')}
+          description={props.machineUnavailableReason}
+          action={<Button variant="secondary" title={t('plugins.channels.page.showAll', 'Show all conversations')} onPress={navigation.openRoot} />}
+        />
+      )}
       sectionState={sectionState}
       savedPendingMachineReconciliation={savedPendingMachineReconciliation}
       onEdit={editor.openEditor}
@@ -8654,11 +8823,12 @@ function ConnectionRow(props: Readonly<{
       <List.Item
         testID={`channels-connection-${props.connection.connectionId}`}
         title={label}
-        subtitle={`${props.t('plugins.channels.surface.provider', 'Provider')}: ${provider}`}
+        subtitle={provider}
+        // A healthy row is quiet: it says where it runs, and only a paused policy is named. The transport
+        // mechanism stays in the connection's detail.
         detail={[
-          connectionPolicyLabel(props.connection, props.t),
+          ...(props.connection.enabled ? [] : [connectionPolicyLabel(props.connection, props.t)]),
           connectionMachinePlacementLabel(props.connection, props.t),
-          transportLabel(props.connection.selectedTransport, props.t),
         ].join(' · ')}
         icon={(
           <BrandMark
@@ -8668,7 +8838,7 @@ function ConnectionRow(props: Readonly<{
             testID={`channels-provider-brand-${props.connection.connectionId}`}
           />
         )}
-        accessory={(
+        accessory={status.tone === 'secondary' || status.tone === 'neutral' ? undefined : (
           <Status
             testID={`channels-connection-status-${props.connection.connectionId}`}
             tone={status.tone}
@@ -9088,7 +9258,6 @@ function ConnectionHistoryGapBaselineControls(props: Readonly<{
   const baselineAction = useExecutePluginAction(
     CONVERSATION_MANAGEMENT_ACTION_IDS_V1.streamBaselineAccept,
   );
-  const confirmation = useDestructiveConfirmation();
   const historyGap = props.connection.attention.historyGap;
   const outcomeUnknown = baselineAction.execution.status === 'outcomeUnknown';
   const resourceCurrent = props.resource.pending === 'idle'
@@ -9101,19 +9270,6 @@ function ConnectionHistoryGapBaselineControls(props: Readonly<{
     onReconciled: baselineAction.reset,
   });
 
-  const { close: closeStaleConfirmation } = confirmation;
-  React.useEffect(() => {
-    closeStaleConfirmation();
-  }, [
-    closeStaleConfirmation,
-    props.connection.authorityEpoch,
-    props.connection.connectionId,
-    props.connection.revision,
-    historyGap?.reason,
-    historyGap?.reportedAt,
-  ]);
-
-  const closeConfirmation = confirmation.dismiss;
   const acceptBaseline = React.useCallback(async () => {
     if (historyGap === null
       || !resourceCurrent
@@ -9121,7 +9277,6 @@ function ConnectionHistoryGapBaselineControls(props: Readonly<{
       || baselineAction.execution.status === 'outcomeUnknown') {
       return;
     }
-    closeConfirmation();
     const settled = await baselineAction.execute({
       connectionId: props.connection.connectionId,
       expectedRevision: props.connection.revision,
@@ -9129,7 +9284,6 @@ function ConnectionHistoryGapBaselineControls(props: Readonly<{
     if (settled.status === 'success') props.onRefresh();
   }, [
     baselineAction,
-    closeConfirmation,
     historyGap,
     props.connection.connectionId,
     props.connection.revision,
@@ -9140,7 +9294,7 @@ function ConnectionHistoryGapBaselineControls(props: Readonly<{
   if (historyGap === null) return null;
 
   const busy = baselineAction.execution.status === 'pending';
-  const unavailable = !resourceCurrent || busy || outcomeUnknown || confirmation.open;
+  const unavailable = !resourceCurrent || busy || outcomeUnknown;
   return (
     <Stack testID="channels-history-gap-baseline-controls" gap="small">
       <Button
@@ -9154,41 +9308,8 @@ function ConnectionHistoryGapBaselineControls(props: Readonly<{
         )}
         busy={busy}
         disabled={unavailable}
-        focusTarget={confirmation.openerFocusTarget}
-        onPress={confirmation.request}
+        onPress={() => { void acceptBaseline(); }}
       />
-      {confirmation.open ? (
-        <Stack testID="channels-history-gap-baseline-confirmation" gap="small">
-          <Banner
-            tone="danger"
-            title={props.t(
-              'plugins.channels.surface.historyGapBaselineConfirmTitle',
-              'Accept a new conversation history baseline?',
-            )}
-            description={props.t(
-              'plugins.channels.surface.historyGapBaselineConfirmDescription',
-              'This resumes the saved connection from the provider’s current baseline without replaying unavailable history.',
-            )}
-          />
-          <Button
-            testID="channels-history-gap-baseline-confirm"
-            title={props.t(
-              'plugins.channels.surface.historyGapBaselineConfirm',
-              'Confirm new history baseline',
-            )}
-            disabled={busy || outcomeUnknown || !resourceCurrent}
-            focusTarget={confirmation.confirmationFocusTarget}
-            onPress={() => { void acceptBaseline(); }}
-          />
-          <Button
-            testID="channels-history-gap-baseline-cancel"
-            title={props.t('plugins.channels.surface.cancel', 'Cancel')}
-            variant="plain"
-            disabled={busy || outcomeUnknown}
-            onPress={closeConfirmation}
-          />
-        </Stack>
-      ) : null}
       {baselineAction.execution.status === 'error' ? (
         <Banner
           testID="channels-history-gap-baseline-error"
@@ -9264,7 +9385,6 @@ function ConnectionLifecycleControls(props: Readonly<{
       || props.connection.attention.acceptedPossibleLoss
       || mayRepairEndpointRetarget);
   const activeAction = mayAbandon ? abandonAction : deleteAction;
-  const confirmation = useDestructiveConfirmation();
   const outcomeUnknown = activeAction.execution.status === 'outcomeUnknown';
   const requestRefresh = useExplicitFreshRereadAfterUnknownOutcome({
     outcomeUnknown,
@@ -9272,18 +9392,6 @@ function ConnectionLifecycleControls(props: Readonly<{
     onRefresh: props.onRefresh,
     onReconciled: activeAction.reset,
   });
-
-  const { close: closeStaleConfirmation } = confirmation;
-  React.useEffect(() => {
-    closeStaleConfirmation();
-  }, [
-    closeStaleConfirmation,
-    mayAbandon,
-    mayDelete,
-    props.connection.authorityEpoch,
-    props.connection.connectionId,
-    props.connection.revision,
-  ]);
 
   const execute = React.useCallback(async () => {
     if ((!mayAbandon && !mayDelete)
@@ -9302,12 +9410,6 @@ function ConnectionLifecycleControls(props: Readonly<{
       props.onRefresh();
     }
   }, [activeAction, mayAbandon, mayDelete, props.connection, props.onRefresh, props.onSettled]);
-
-  const { dismiss: dismissConfirmation } = confirmation;
-  const confirm = React.useCallback(async () => {
-    dismissConfirmation();
-    await execute();
-  }, [dismissConfirmation, execute]);
 
   const repairBusy = abandonAction.execution.status === 'pending';
   const repairEndpointRetarget = React.useCallback(async () => {
@@ -9336,18 +9438,6 @@ function ConnectionLifecycleControls(props: Readonly<{
   const title = mayAbandon
     ? props.t('plugins.channels.surface.acceptPossibleLoss', 'Accept possible loss')
     : props.t('plugins.channels.surface.delete', 'Delete connection');
-  const confirmationTitle = mayAbandon
-    ? props.t('plugins.channels.surface.acceptPossibleLossConfirmTitle', 'Accept possible loss?')
-    : props.t('plugins.channels.surface.connectionDeleteConfirmTitle', 'Delete this connection?');
-  const confirmationDescription = mayAbandon
-    ? props.t(
-      'plugins.channels.surface.acceptPossibleLossConfirmDescription',
-      'This allows the connection lifecycle to continue without claiming the old physical transport stopped.',
-    )
-    : props.t(
-      'plugins.channels.surface.connectionDeleteConfirmDescription',
-      'This disables the connection and waits for exact transport-stop proof before cleanup.',
-    );
   return (
     <Stack testID="channels-connection-lifecycle-controls" gap="small">
       {mayRepairEndpointRetarget ? (
@@ -9359,8 +9449,7 @@ function ConnectionLifecycleControls(props: Readonly<{
           accessibilityLabel={repairTitle}
           busy={repairBusy}
           disabled={repairBusy
-            || abandonAction.execution.status === 'outcomeUnknown'
-            || confirmation.open}
+            || abandonAction.execution.status === 'outcomeUnknown'}
           onPress={() => { void repairEndpointRetarget(); }}
         />
       ) : null}
@@ -9390,39 +9479,9 @@ function ConnectionLifecycleControls(props: Readonly<{
           : title}
         accessibilityLabel={title}
         busy={busy}
-        disabled={busy || outcomeUnknown || confirmation.open}
-        focusTarget={confirmation.openerFocusTarget}
-        onPress={confirmation.request}
+        disabled={busy || outcomeUnknown}
+        onPress={() => { void execute(); }}
       />
-      {confirmation.open ? (
-        <Stack testID="channels-connection-lifecycle-confirmation" gap="small">
-          <Banner
-            tone="danger"
-            title={confirmationTitle}
-            description={confirmationDescription}
-          />
-          <Button
-            testID={mayAbandon
-              ? 'channels-connection-accept-loss-confirm'
-              : 'channels-connection-delete-confirm'}
-            title={mayAbandon
-              ? props.t(
-                'plugins.channels.surface.acceptPossibleLossConfirm',
-                'Confirm accepting possible loss',
-              )
-              : props.t('plugins.channels.surface.connectionDeleteConfirm', 'Confirm deletion')}
-            disabled={busy || outcomeUnknown}
-            focusTarget={confirmation.confirmationFocusTarget}
-            onPress={() => { void confirm(); }}
-          />
-          <Button
-            title={props.t('plugins.channels.surface.cancel', 'Cancel')}
-            variant="plain"
-            disabled={busy || outcomeUnknown}
-            onPress={confirmation.dismiss}
-          />
-        </Stack>
-      ) : null}
       {activeAction.execution.status === 'error' ? (
         <Banner
           testID="channels-connection-lifecycle-error"
@@ -10245,10 +10304,7 @@ function ConnectionPollRetryControls(props: Readonly<{
           testID="channels-poll-retry-error"
           tone="warning"
           title={props.t('plugins.channels.surface.pollRetryFailedTitle', 'Could not retry polling')}
-          description={props.t(
-            'plugins.channels.surface.pollRetryFailedDescription',
-            'The blocked poll state may have changed. Refresh connection details before trying again.',
-          )}
+          description={retryAction.execution.message}
           action={(
             <Action.Refresh
               title={props.t('plugins.channels.surface.refresh', 'Refresh')}
@@ -10392,10 +10448,7 @@ function useConnectionRetest(props: ConnectionRetestProps): Readonly<{
             testID="channels-connection-retest-error"
             tone="warning"
             title={props.t('plugins.channels.surface.connectionRetestFailedTitle', 'Could not test the connection')}
-            description={props.t(
-              'plugins.channels.surface.connectionRetestFailedDescription',
-              'The saved connection may have changed. Refresh connection details before trying again.',
-            )}
+            description={retestAction.execution.message}
             action={(
               <Action.Refresh
                 title={props.t('plugins.channels.surface.refresh', 'Refresh')}
@@ -10552,20 +10605,9 @@ function IngressAttentionControls(props: Readonly<{
   const loading = attentionRows.resource.pending !== 'idle';
   const initialLoading = attentionRows.rows === undefined && loading;
   const canLoadMore = attentionRows.nextCursor !== undefined;
+  // Healthy is quiet: the section appears only when an incoming message needs the reader.
   if (!initialLoading && rows.length === 0 && !canLoadMore && attentionRows.resource.error === undefined) {
-    return (
-      <EmptyState
-        testID="channels-ingress-attention-empty"
-        title={props.t(
-          'plugins.channels.surface.ingressAttentionEmptyTitle',
-          'No incoming messages need attention',
-        )}
-        description={props.t(
-          'plugins.channels.surface.ingressAttentionEmptyDescription',
-          'Incoming messages that need your action will appear here.',
-        )}
-      />
-    );
+    return null;
   }
 
   return (
@@ -10763,6 +10805,9 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
   );
   const action = props.resolveOperation ?? resolveAction;
   const [activeCustodyId, setActiveCustodyId] = React.useState<string | undefined>();
+  // A started conversation whose send result was lost has no thread identity
+  // yet: accepting it needs the thread the person confirmed was created.
+  const [createdThreadIds, setCreatedThreadIds] = React.useState<Readonly<Record<string, string>>>({});
   const hasAmbiguousDelivery = props.connection.attention.outwardDelivery.partial
     || props.connection.attention.outwardDelivery.outcomeUnknown
     || props.connection.attention.outwardDelivery.archiveRecovery;
@@ -10777,10 +10822,21 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
     setActiveCustodyId(row.custodyId);
     let outcomeUnknown = false;
     try {
+      const createdThreadId = createdThreadIds[row.custodyId]?.trim() ?? '';
       const settled = await action.execute({
         custodyId: row.custodyId,
         expectedRevision: row.revision,
         resolution,
+        ...(resolution === 'accepted' && row.createdThreadEndpointRequired !== undefined && createdThreadId !== ''
+          ? {
+            endpoint: {
+              kind: 'thread' as const,
+              audience: 'direct' as const,
+              id: createdThreadId,
+              parentId: row.createdThreadEndpointRequired.parentId,
+            },
+          }
+          : {}),
       });
       outcomeUnknown = settled.status === 'outcomeUnknown';
       if (outcomeUnknown) {
@@ -10793,7 +10849,7 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
     } finally {
       if (!outcomeUnknown) setActiveCustodyId(undefined);
     }
-  }, [action.execute, actionUnavailable, deliveryRows, props.onRefresh]);
+  }, [action.execute, actionUnavailable, createdThreadIds, deliveryRows, props.onRefresh]);
 
   const reconcileDeliveryRows = React.useCallback(() => {
     deliveryRows.refresh();
@@ -10917,6 +10973,27 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
             gap="small"
           >
             <Status tone="danger" label={label} />
+            {row.createdThreadEndpointRequired === undefined ? null : (
+              <Form.TextField
+                testID={`channels-delivery-resolution-thread-${row.custodyId}`}
+                label={props.t('plugins.channels.surface.deliveryResolutionThreadId', 'Started thread ID')}
+                placeholder={props.t('plugins.channels.surface.deliveryResolutionThreadIdPlaceholder', 'For email, the sent message’s Message-ID')}
+                value={createdThreadIds[row.custodyId] ?? ''}
+                autoCapitalize="none"
+                autoCorrect={false}
+                disabled={actionUnavailable}
+                onChange={(value) => setCreatedThreadIds((current) => ({ ...current, [row.custodyId]: value }))}
+              />
+            )}
+            {row.createdThreadEndpointRequired === undefined ? null : (
+              <Text
+                tone="secondary"
+                value={props.t(
+                  'plugins.channels.surface.deliveryResolutionThreadIdDescription',
+                  'This started a new conversation. If it arrived, enter the ID of the thread it created so replies reach the session. Without it, only Discard is possible.',
+                )}
+              />
+            )}
             <Button
               testID={`channels-delivery-resolution-accept-${row.custodyId}`}
               title={busy && activeCustodyId === row.custodyId
@@ -10927,7 +11004,9 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
                 'Accept as sent',
               )} (${deliveryRowName(row.custodyId)})`}
               busy={busy}
-              disabled={actionUnavailable}
+              disabled={actionUnavailable
+                || (row.createdThreadEndpointRequired !== undefined
+                  && (createdThreadIds[row.custodyId]?.trim() ?? '') === '')}
               onPress={() => resolve(row, 'accepted')}
             />
             <Button
@@ -11024,11 +11103,13 @@ function ProviderSetupButton(props: Readonly<{
   const providerDisplayName = usePluginBrandDisplayName(props.operation.contributor.pluginId)
     ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider');
   const testIdSuffix = `${props.operation.contributor.pluginId}-${props.operation.contributor.contributionId}`;
+  // A navigation row: the provider's mark and name open its setup. The
+  // accessible name keeps the verb the visible row leaves to the section title.
   return (
-    <Button
+    <Item
       testID={`channels-provider-setup-${testIdSuffix}`}
-      variant="secondary"
-      title={`${props.t('plugins.channels.surface.providerSetupAction', 'Set up')} ${providerDisplayName}`}
+      title={providerDisplayName}
+      accessibilityRole="button"
       accessibilityLabel={`${props.t('plugins.channels.surface.providerSetupAction', 'Set up')} ${providerDisplayName}`}
       icon={(
         <BrandMark
@@ -11887,29 +11968,27 @@ function ProviderSetupPicker(props: Readonly<{
 
   return (
     <Stack gap="small" testID="channels-provider-setup-picker">
-      <Heading
-        level={3}
-        value={props.t('plugins.channels.surface.providerSetupTitle', 'Add a conversation provider')}
-      />
-      <Text
-        value={props.t(
+      <ItemGroup
+        title={props.t('plugins.channels.surface.providerSetupTitle', 'Add a conversation provider')}
+        description={props.t(
           'plugins.channels.surface.providerSetupDescription',
           'Choose an installed provider to begin setup.',
         )}
-      />
-      {operations.map((operation) => {
-        const operationKey = pluginUiTargetedContributionOperationKey(operation);
-        return (
-          <ProviderSetupButton
-            key={operationKey}
-            operation={operation}
-            busy={selectionPending && activeOperationKey === operationKey}
-            disabled={actionUnavailable}
-            onPress={selectProvider}
-            t={props.t}
-          />
-        );
-      })}
+      >
+        {operations.map((operation) => {
+          const operationKey = pluginUiTargetedContributionOperationKey(operation);
+          return (
+            <ProviderSetupButton
+              key={operationKey}
+              operation={operation}
+              busy={selectionPending && activeOperationKey === operationKey}
+              disabled={actionUnavailable}
+              onPress={selectProvider}
+              t={props.t}
+            />
+          );
+        })}
+      </ItemGroup>
       {feedback === 'selectionUnavailable' ? (
         <Banner
           testID="channels-provider-setup-selection-unavailable"
@@ -11926,7 +12005,7 @@ function ProviderSetupPicker(props: Readonly<{
           testID="channels-provider-setup-preparation-unavailable"
           tone="warning"
           title={props.t('plugins.channels.surface.providerPreparationUnavailableTitle', 'Could not prepare the provider')}
-          description={props.t(
+          description={prepareAction.execution.status === 'error' ? prepareAction.execution.message : props.t(
             'plugins.channels.surface.providerPreparationUnavailableDescription',
             'The provider did not return a usable setup result. Try again after refreshing this page.',
           )}
@@ -12268,27 +12347,108 @@ function ConnectionsContent(props: Readonly<{
     setAnnounceDeletedConnection(true);
   }, [pendingDeletedConnectionId, props.connections, props.resource]);
 
+  // The page's identity leads: the Account's connections (or the quiet line
+  // saying there are none), with Refresh as the section's one compact action;
+  // the providers that add a connection follow as rows.
   return (
     <Stack gap="large">
-      <Heading level={2} value={props.t('plugins.channels.surface.connections', 'Conversation connections')} />
-      {announceDeletedConnection ? (
-        <Status
-          testID="channels-connection-deleted-announcement"
-          tone="secondary"
-          label={props.t('plugins.channels.surface.connectionDeleted', 'Connection deleted.')}
-        />
-      ) : null}
-
-      {props.targetPluginId === undefined ? null : (
-        <ProviderSetupPicker
-          signal={props.signal}
-          targetPluginId={props.targetPluginId}
-          resource={props.resource}
-          onRefresh={props.onRefresh}
-          onConnectionCreated={props.onConnectionCreated}
-          t={props.t}
-        />
-      )}
+      <ItemGroup
+        testID="channels-connections-section"
+        surface="none"
+        title={props.t('plugins.channels.surface.connections', 'Conversation connections')}
+        action={hasExpandedConnection ? undefined : (
+          <Action.Refresh
+            testID="channels-resource-refresh"
+            title={props.t('plugins.channels.surface.refresh', 'Refresh')}
+            onRefresh={props.onRefresh}
+          />
+        )}
+      >
+        <Stack gap="medium">
+          {announceDeletedConnection ? (
+            <Status
+              testID="channels-connection-deleted-announcement"
+              tone="secondary"
+              label={props.t('plugins.channels.surface.connectionDeleted', 'Connection deleted.')}
+            />
+          ) : null}
+          {hasExpandedConnection ? null : (
+            <ResourceFreshnessNotice resource={props.resource} onRefresh={props.onRefresh} t={props.t} />
+          )}
+          {props.connectionState === 'loading' ? (
+            <LoadingState
+              testID="channels-connections-loading"
+              title={props.t('plugins.channels.surface.loadingTitle', 'Loading conversation connections')}
+              description={props.t(
+                'plugins.channels.surface.loadingDescription',
+                'Reading the current connection policy from your Account.',
+              )}
+            />
+          ) : props.connectionState === 'error' ? (
+            <ErrorState
+              testID="channels-connections-error"
+              title={props.t('plugins.channels.surface.errorTitle', 'Connection details are unavailable')}
+              description={props.t(
+                'plugins.channels.surface.errorDescription',
+                'Refresh to try reading the current Account connection policy again.',
+              )}
+              action={(
+                <Action.Refresh
+                  testID="channels-connections-retry"
+                  title={props.t('plugins.channels.surface.tryAgain', 'Try again')}
+                  onRefresh={props.onRefresh}
+                />
+              )}
+            />
+          ) : props.connections.length === 0 ? (
+            <EmptyState
+              testID="channels-connections-empty"
+              layout="line"
+              title={props.t('plugins.channels.surface.emptyTitle', 'No conversation connections yet')}
+              description={props.t(
+                'plugins.channels.surface.emptyDescription',
+                'Connections created for this Account will appear here.',
+              )}
+            />
+          ) : (
+            <List
+              accessibilityLabel={props.t('plugins.channels.surface.connections', 'Conversation connections')}
+              testID="channels-connections-list"
+            >
+              {props.connections.map((connection) => (
+                props.accountLocalPolicy === undefined ? (
+                  <ConnectionRow
+                    key={connection.connectionId}
+                    connection={connection}
+                    expanded={connection.connectionId === props.expandedConnectionId}
+                    signal={props.signal}
+                    resource={props.resource}
+                    targetPluginId={props.targetPluginId}
+                    onLifecycleSettled={onLifecycleSettled}
+                    onExpand={() => props.onExpand(connection.connectionId)}
+                    onRefresh={props.onRefresh}
+                    t={props.t}
+                  />
+                ) : (
+                  <AccountLocalConnectionRow
+                    key={connection.connectionId}
+                    collection={props.accountLocalPolicy.collection}
+                    deliveriesCollection={props.accountLocalPolicy.deliveriesCollection}
+                    connection={connection}
+                    expanded={connection.connectionId === props.expandedConnectionId}
+                    signal={props.signal}
+                    resource={props.resource}
+                    onCommitted={props.accountLocalPolicy.onCommitted}
+                    onExpand={() => props.onExpand(connection.connectionId)}
+                    onRefresh={props.onRefresh}
+                    t={props.t}
+                  />
+                )
+              ))}
+            </List>
+          )}
+        </Stack>
+      </ItemGroup>
 
       {/*
         First setup must not dead-end after the connection exists. The two
@@ -12318,87 +12478,15 @@ function ConnectionsContent(props: Readonly<{
         </Stack>
       )}
 
-      {!hasExpandedConnection ? (
-        <>
-          <Action.Refresh
-            testID="channels-resource-refresh"
-            title={props.t('plugins.channels.surface.refresh', 'Refresh')}
-            onRefresh={props.onRefresh}
-          />
-          <ResourceFreshnessNotice resource={props.resource} onRefresh={props.onRefresh} t={props.t} />
-        </>
-      ) : null}
-
-      {props.connectionState === 'loading' ? (
-        <LoadingState
-          testID="channels-connections-loading"
-          title={props.t('plugins.channels.surface.loadingTitle', 'Loading conversation connections')}
-          description={props.t(
-            'plugins.channels.surface.loadingDescription',
-            'Reading the current connection policy from your Account.',
-          )}
+      {props.targetPluginId === undefined ? null : (
+        <ProviderSetupPicker
+          signal={props.signal}
+          targetPluginId={props.targetPluginId}
+          resource={props.resource}
+          onRefresh={props.onRefresh}
+          onConnectionCreated={props.onConnectionCreated}
+          t={props.t}
         />
-      ) : props.connectionState === 'error' ? (
-        <ErrorState
-          testID="channels-connections-error"
-          title={props.t('plugins.channels.surface.errorTitle', 'Connection details are unavailable')}
-          description={props.t(
-            'plugins.channels.surface.errorDescription',
-            'Refresh to try reading the current Account connection policy again.',
-          )}
-          action={(
-            <Action.Refresh
-              testID="channels-connections-retry"
-              title={props.t('plugins.channels.surface.tryAgain', 'Try again')}
-              onRefresh={props.onRefresh}
-            />
-          )}
-        />
-      ) : props.connections.length === 0 ? (
-        <EmptyState
-          testID="channels-connections-empty"
-          title={props.t('plugins.channels.surface.emptyTitle', 'No conversation connections yet')}
-          description={props.t(
-            'plugins.channels.surface.emptyDescription',
-            'Connections created for this Account will appear here.',
-          )}
-        />
-      ) : (
-        <List
-          accessibilityLabel={props.t('plugins.channels.surface.connections', 'Conversation connections')}
-          testID="channels-connections-list"
-        >
-          {props.connections.map((connection) => (
-            props.accountLocalPolicy === undefined ? (
-              <ConnectionRow
-                key={connection.connectionId}
-                connection={connection}
-                expanded={connection.connectionId === props.expandedConnectionId}
-                signal={props.signal}
-                resource={props.resource}
-                targetPluginId={props.targetPluginId}
-                onLifecycleSettled={onLifecycleSettled}
-                onExpand={() => props.onExpand(connection.connectionId)}
-                onRefresh={props.onRefresh}
-                t={props.t}
-              />
-            ) : (
-              <AccountLocalConnectionRow
-                key={connection.connectionId}
-                collection={props.accountLocalPolicy.collection}
-                deliveriesCollection={props.accountLocalPolicy.deliveriesCollection}
-                connection={connection}
-                expanded={connection.connectionId === props.expandedConnectionId}
-                signal={props.signal}
-                resource={props.resource}
-                onCommitted={props.accountLocalPolicy.onCommitted}
-                onExpand={() => props.onExpand(connection.connectionId)}
-                onRefresh={props.onRefresh}
-                t={props.t}
-              />
-            )
-          ))}
-        </List>
       )}
     </Stack>
   );
@@ -12534,6 +12622,22 @@ function DaemonChannelsSurface(props: Readonly<{
               )}
             />
           </Stack>
+          <ConnectionsContent
+            connections={channels.connections}
+            connectionState={channels.connectionState}
+            signal={props.signal}
+            targetPluginId={props.targetPluginId}
+            resource={channels.connectionsResource}
+            expandedConnectionId={expandedConnectionId}
+            onExpand={(connectionId) => {
+              setExpandedConnectionId((current) => current === connectionId ? undefined : connectionId);
+            }}
+            onConnectionCreated={onConnectionCreated}
+            createdConnectionId={pendingBindingConnectionId}
+            onContinueCreatedConnection={onContinueCreatedConnection}
+            onRefresh={refresh}
+            t={t}
+          />
           <ItemGroup
             testID="channels-settings-conversations"
             surface="none"
@@ -12567,22 +12671,6 @@ function DaemonChannelsSurface(props: Readonly<{
           <IngressAttentionControls
             signal={props.signal}
             recoveryActionsAvailable
-            t={t}
-          />
-          <ConnectionsContent
-            connections={channels.connections}
-            connectionState={channels.connectionState}
-            signal={props.signal}
-            targetPluginId={props.targetPluginId}
-            resource={channels.connectionsResource}
-            expandedConnectionId={expandedConnectionId}
-            onExpand={(connectionId) => {
-              setExpandedConnectionId((current) => current === connectionId ? undefined : connectionId);
-            }}
-            onConnectionCreated={onConnectionCreated}
-            createdConnectionId={pendingBindingConnectionId}
-            onContinueCreatedConnection={onContinueCreatedConnection}
-            onRefresh={refresh}
             t={t}
           />
         </Stack>
@@ -12862,7 +12950,6 @@ function SessionConversationActions(props: Readonly<{
   const title = bindingEndpointLabel(binding, t);
   const setEnabled = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingSetEnabled);
   const remove = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingDelete);
-  const [confirmingUnlink, setConfirmingUnlink] = React.useState(false);
   const paused = props.row.group === 'paused';
   const toggle = React.useCallback(async () => {
     const settled = await setEnabled.execute({
@@ -12879,34 +12966,6 @@ function SessionConversationActions(props: Readonly<{
   const failed = setEnabled.execution.status === 'error' || setEnabled.execution.status === 'outcomeUnknown'
     || remove.execution.status === 'error' || remove.execution.status === 'outcomeUnknown';
 
-  if (confirmingUnlink) {
-    return (
-      <Stack gap="small" testID={`channels-session-conversation-unlink-confirm:${binding.bindingId}`}>
-        <Text
-          variant="micro"
-          tone="secondary"
-          value={t(
-            'plugins.channels.session.unlinkConfirm',
-            '{name} stops talking to this session. The chat itself is not changed.',
-            { name: title },
-          )}
-        />
-        <Row gap="small" align="center">
-          <Button
-            variant="destructive"
-            title={t('plugins.channels.session.unlink', 'Unlink')}
-            busy={remove.execution.status === 'pending'}
-            onPress={() => unlink()}
-          />
-          <Button
-            variant="plain"
-            title={t('plugins.channels.session.cancel', 'Cancel')}
-            onPress={() => { setConfirmingUnlink(false); }}
-          />
-        </Row>
-      </Stack>
-    );
-  }
   return (
     <Stack gap="small">
       <Row gap="small" align="center">
@@ -12930,7 +12989,8 @@ function SessionConversationActions(props: Readonly<{
           variant="plain"
           title={t('plugins.channels.session.unlink', 'Unlink')}
           accessibilityLabel={t('plugins.channels.session.unlinkNamed', 'Unlink {name}', { name: title })}
-          onPress={() => { setConfirmingUnlink(true); }}
+          busy={remove.execution.status === 'pending'}
+          onPress={() => { void unlink(); }}
         />
       </Row>
       {failed ? (
@@ -13143,15 +13203,20 @@ function SessionConversationsEmpty(props: Readonly<{
 }>): React.ReactElement {
   const { t } = props;
   const page = useOpenChannelsPage();
+  const providerNames = useInstalledProviderNames();
   const bots = (props.connections ?? []).filter((connection) => connection.deletionState === 'none');
   return (
     <EmptyState
       testID="channels-session-conversations-empty"
       icon="conversations"
-      title={t('plugins.channels.session.emptyInviteTitle', 'Talk to this session from your chats')}
+      title={providerNames.length === 0
+        ? t('plugins.channels.session.emptyInviteTitle', 'Talk to this session from your chats')
+        : t('plugins.channels.session.emptyInviteTitleProviders', 'Talk to this session from {providers}', {
+          providers: formatProviderNameList(providerNames),
+        })}
       description={t(
-        'plugins.channels.session.emptyInviteDescription',
-        'Link a Telegram, Discord or GitHub conversation to this session. Messages arrive here, and replies go back.',
+        'plugins.channels.session.emptyInviteLinkDescription',
+        'Link a chat, a mailbox, a channel or an issue to this session. Messages arrive here, and replies go back.',
       )}
       action={(
         <Button
@@ -13394,7 +13459,7 @@ function ChannelsPageAvailabilitySurface(props: Readonly<{
 }>): React.ReactElement {
   const { resource } = useLivePluginResource(CHANNELS_BINDINGS_RESOURCE);
   return isHostMethodCurrentlyUnavailable(resource.error)
-    ? <AccountLocalChannelsPageSurface signal={props.signal} subPath={props.subPath} />
+    ? <AccountLocalChannelsPageSurface signal={props.signal} subPath={props.subPath} machineUnavailableReason={resource.error?.message} />
     : <DaemonChannelsPageSurface signal={props.signal} subPath={props.subPath} />;
 }
 

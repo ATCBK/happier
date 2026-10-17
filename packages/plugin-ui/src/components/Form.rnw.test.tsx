@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { ActionInputHints } from '@happier-dev/plugin-sdk/actions';
 
 import { HAPPIER_FIELD_BOX_METRICS } from '../presentation/form/FieldBox.js';
+import { HAPPIER_SMALL_BUTTON_HEIGHT } from '../presentation/interaction/buttonChrome.js';
 import { HAPPIER_SWITCH_METRICS } from '../presentation/form/Switch.js';
 import { resolveHappierTypeScale } from '../presentation/text/typeScale.js';
 import { HappierSelect, HappierValidationMessage } from '../presentation/form/Fields.js';
@@ -57,6 +58,60 @@ function mountForm(element: React.ReactElement, context = createSurfaceContext()
 }
 
 describe('canonical Action Form presentation', () => {
+  it('renders and submits author defaults once while preserving explicit values and later replacements', async () => {
+    const defaultHints: FormProps['hints'] = { fields: [
+      { path: 'settings.name', title: 'Name', widget: 'text', defaultValue: 'Daily report' },
+      { path: 'settings.label', title: 'Label', widget: 'text', defaultValue: 'Fallback label' },
+      { path: 'settings.count', title: 'Count', widget: 'integer', defaultValue: 5 },
+      { path: 'enabled', title: 'Enabled', widget: 'boolean', defaultValue: true },
+      { path: 'scheduled', title: 'Scheduled', widget: 'boolean', defaultValue: true },
+      { path: 'details', title: 'Details', widget: 'text', visibleWhen: { op: 'truthy', path: 'scheduled' } },
+    ] };
+    const initial = { settings: { label: '', count: 0 }, enabled: false };
+    const seeded = { settings: { name: 'Daily report', label: '', count: 0 }, enabled: false, scheduled: true };
+    const onChange = vi.fn();
+    const onSubmit = vi.fn();
+    const context = createSurfaceContext();
+    const renderForm = (value: FormProps['value'], key = 'first') => (
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <Form key={key} hints={defaultHints} value={value} onChange={onChange} onSubmit={onSubmit} />
+      </PluginUiProvider>
+    );
+    const mount = mountThroughReactNativeWeb(renderForm(initial));
+    const input = (label: string) => mount.container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+    const submit = () => mount.container.querySelector<HTMLElement>('[role="button"]')?.click();
+
+    expect(input('Name')?.value).toBe('Daily report');
+    expect(input('Label')?.value).toBe('');
+    expect(input('Count')?.value).toBe('0');
+    expect([...mount.container.querySelectorAll('[role="switch"]')].map(node => node.getAttribute('aria-checked')))
+      .toEqual(['false', 'true']);
+    expect(input('Details')).not.toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    await mount.render(renderForm({ settings: { ...initial.settings }, enabled: false }));
+    expect(input('Name')?.value).toBe('Daily report');
+    await act(async () => { submit(); });
+    expect(onSubmit).toHaveBeenLastCalledWith(seeded);
+    expect(initial).toEqual({ settings: { label: '', count: 0 }, enabled: false });
+
+    await act(async () => { mount.container.querySelectorAll<HTMLElement>('[role="switch"]')[1]?.click(); });
+    const edited = { ...seeded, scheduled: false };
+    expect(onChange).toHaveBeenLastCalledWith(edited);
+    await mount.render(renderForm({ ...edited, settings: { ...edited.settings, name: '' } }));
+    expect(input('Name')?.value).toBe('');
+    expect(input('Details')).toBeNull();
+    await act(async () => { submit(); });
+    expect(onSubmit).toHaveBeenLastCalledWith({ ...edited, settings: { ...edited.settings, name: '' } });
+
+    await mount.render(renderForm({}));
+    expect(input('Name')?.value).toBe('');
+    await act(async () => { submit(); });
+    expect(onSubmit).toHaveBeenLastCalledWith({});
+    await mount.render(renderForm({}, 'reopened'));
+    expect(input('Name')?.value).toBe('Daily report');
+    mount.unmount();
+  });
+
   it('uses the optional prompt for visible and accessible field labels, falling back to the noun title', () => {
     const mount = mountForm(<Form hints={{ fields: [
       { path: 'repository', title: 'Repository', prompt: 'Which repository?', widget: 'text' },
@@ -899,6 +954,10 @@ describe('standalone Select presentation', () => {
     const trigger = mount.container.querySelector<HTMLElement>('[aria-haspopup="menu"]');
     expect(trigger?.textContent).toContain('Order');
     expect(trigger?.textContent).toContain('Newest');
+    // A toolbar picker reads like the toolbar's other pickers (Views, Filters): quiet words with a caret, not a
+    // button face, so a sort order beside them is not the loudest thing in the row.
+    expect(getComputedStyle(trigger!).minHeight).not.toBe(`${HAPPIER_SMALL_BUTTON_HEIGHT}px`);
+    expect(trigger!.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0);
 
     await act(async () => { trigger?.click(); });
     const items = [...mount.container.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];

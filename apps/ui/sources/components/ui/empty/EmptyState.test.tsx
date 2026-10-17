@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { collectRenderedTestIds, renderScreen } from '@/dev/testkit';
+import { HAPPIER_MENU_ROW_METRICS, HAPPIER_STATE_LINE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { EmptyState } from './EmptyState';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
@@ -155,6 +156,25 @@ describe('EmptyState', () => {
         await screen.pressByTestIdAsync('line-archived');
         expect(showAll).toHaveBeenCalledTimes(1);
         expect(archived).toHaveBeenCalledTimes(1);
+    });
+
+    it('draws a list line through the one shared state line: its geometry, and a loading ring at the line\'s glyph size', async () => {
+        const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style)
+            ? Object.assign({}, ...style.flat(Infinity).filter(Boolean).map(flatten))
+            : (style && typeof style === 'object' ? style as Record<string, unknown> : {});
+        const hostStyle = (screen: Awaited<ReturnType<typeof renderScreen>>, testID: string) => flatten(
+            screen.tree.root.findAll((node) => typeof node.type === 'string' && node.props?.testID === testID)[0]?.props.style,
+        );
+
+        const list = await renderScreen(<EmptyState layout="line" testID="line" lineLoading title="Looking for sessions" />);
+        expect(hostStyle(list, 'line').minHeight).toBe(HAPPIER_STATE_LINE_METRICS.minHeightPx);
+        const ring = list.tree.root.findAll((node) => typeof node.type !== 'string' && node.props?.testID === 'line-loading-spinner')[0];
+        // A row's density never re-sizes the line's quiet ring into a row glyph.
+        expect(ring?.props.size).toBe(HAPPIER_STATE_LINE_METRICS.glyphPx - 2);
+
+        // Among menu rows the line keeps the menu's density.
+        const menu = await renderScreen(<EmptyState layout="line" testID="menu-line" lineDensity="menu" title="No matches" />);
+        expect(hostStyle(menu, 'menu-line').minHeight).toBe(HAPPIER_MENU_ROW_METRICS.minHeightPx);
     });
 
     it('keeps a list line\'s explanation whole instead of cutting it to one line', async () => {

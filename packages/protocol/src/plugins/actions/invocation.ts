@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { evaluateInputPredicate } from '../../inputs/inputPredicates.js';
 import { AgentRuntimeJsonValueV1Schema } from '../../runtime/agentSessionV1.js';
 import {
   PluginDiagnosticDataV1Schema,
@@ -27,8 +28,10 @@ import {
 } from './policy.js';
 import type {
   PluginActionConfirmationV2,
+  PluginActionConfirmationWhenV2,
   PluginActionDangerLevelV2,
 } from './v2.js';
+import type { ActionRequiredAuthority } from '../../actions/metadata.js';
 
 const PLUGIN_ACTION_FAILURE_FALLBACK_CODE = 'plugin_action_execution_failed';
 const PLUGIN_ACTION_FAILURE_FALLBACK_MESSAGE = 'Plugin operation failed';
@@ -515,6 +518,8 @@ export type PluginActionPresentUserGatePolicy = Readonly<{
   scopes: readonly string[];
   surfaces: readonly string[];
   confirmation?: PluginActionConfirmationV2;
+  /** Conditional default only; explicit user policy and host authority remain separate. */
+  confirmationWhen?: PluginActionConfirmationWhenV2;
   /**
    * Host-stamped Action-settings policy. This is deliberately distinct from
    * plugin-declared confirmation: a plugin cannot manufacture user consent by
@@ -592,14 +597,29 @@ function isPresentUserResolutionCurrent<TAction>(
  * sending a daemon Action.
  */
 export function pluginActionRequiresPresentUserIntent(
-  policy: Pick<PluginActionPresentUserGatePolicy, 'dangerLevel' | 'confirmation' | 'approvalRequiredByActionSettings'>,
+  policy: Pick<PluginActionPresentUserGatePolicy, 'dangerLevel' | 'confirmation' | 'confirmationWhen' | 'approvalRequiredByActionSettings'>,
   invocationSurface: string,
+  input?: unknown,
+  invocationAuthority?: ActionRequiredAuthority,
 ): boolean {
   // A host-stamped Ask-first setting is explicit user policy and must not be
   // bypassed merely because the caller is a Plugin. If no current-intent
   // requester is available, the gate fails closed rather than executing.
   if (typeof policy.approvalRequiredByActionSettings === 'boolean') {
     return policy.approvalRequiredByActionSettings;
+  }
+  const condition = policy.confirmationWhen;
+  if (condition !== undefined) {
+    // A scoped declaration cannot turn a UI route into human authority. Every
+    // other requester retains the incumbent danger/confirmation default.
+    const predicate = 'presentUserUi' in condition
+      ? invocationSurface === 'ui' && invocationAuthority === 'present_user'
+        ? condition.presentUserUi : undefined
+      : condition;
+    // Catalog reads cannot evaluate input predicates. Scoped boolean defaults
+    // need no input; execution predicates see the parsed handler input only.
+    if (predicate === false || (typeof predicate === 'object' && input !== undefined
+      && !evaluateInputPredicate(predicate, input))) return false;
   }
 
   // Plugin/background execution otherwise has no present user to ask. Every
@@ -614,9 +634,9 @@ export function pluginActionRequiresPresentUserIntent(
 
 function evaluatePresentUserPolicy(
   policy: PluginActionPresentUserGatePolicy,
-  args: Readonly<{ surface: string; invocationSurface: string; sessionId?: string }>,
+  args: Readonly<{ surface: string; invocationSurface: string; invocationAuthority?: ActionRequiredAuthority; sessionId?: string; input?: unknown }>,
 ): Readonly<{ outcome: 'visible' | 'disabled' | 'denied' | 'unavailable'; code: string; requiresCurrentIntent: boolean }> {
-  const requiresCurrentIntent = pluginActionRequiresPresentUserIntent(policy, args.invocationSurface);
+  const requiresCurrentIntent = pluginActionRequiresPresentUserIntent(policy, args.invocationSurface, args.input, args.invocationAuthority);
   if (!policy.surfaces.includes(args.surface)) {
     return Object.freeze({
       outcome: 'unavailable',
@@ -643,6 +663,7 @@ export function fingerprintPluginActionCurrentIntent(params: Readonly<{
   input: unknown;
   surface: string;
   invocationSurface: string;
+  invocationAuthority?: ActionRequiredAuthority;
   sessionId?: string;
 }>): string {
   return computeCanonicalDomainSeparatedHexDigest(
@@ -653,6 +674,7 @@ export function fingerprintPluginActionCurrentIntent(params: Readonly<{
       ...(params.input === undefined ? {} : { input: params.input }),
       surface: params.surface,
       invocationSurface: params.invocationSurface,
+      ...(params.invocationAuthority === undefined ? {} : { invocationAuthority: params.invocationAuthority }),
       ...(params.sessionId === undefined ? {} : { sessionId: params.sessionId }),
       dangerLevel: params.policy.dangerLevel,
       scopes: params.policy.scopes,
@@ -660,6 +682,7 @@ export function fingerprintPluginActionCurrentIntent(params: Readonly<{
       ...(params.policy.confirmation === undefined
         ? {}
         : { confirmation: params.policy.confirmation }),
+      ...(params.policy.confirmationWhen === undefined ? {} : { confirmationWhen: params.policy.confirmationWhen }),
       ...(params.policy.approvalRequiredByActionSettings === undefined
         ? {}
         : { approvalRequiredByActionSettings: params.policy.approvalRequiredByActionSettings }),
@@ -688,6 +711,8 @@ export function createPluginActionPresentUserGate<TAction>(deps: Readonly<{
     input: unknown;
     surface: string;
     invocationSurface: string;
+    /** Host-stamped credential authority, never author input or a surface inference. */
+    invocationAuthority?: ActionRequiredAuthority;
     sessionId?: string;
     signal?: AbortSignal;
     /** Host-only replay fence for an already-approved durable intent. */
@@ -736,6 +761,7 @@ export function createPluginActionPresentUserGate<TAction>(deps: Readonly<{
           input: args.input,
           surface: args.surface,
           invocationSurface: args.invocationSurface,
+          ...(args.invocationAuthority === undefined ? {} : { invocationAuthority: args.invocationAuthority }),
           ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
         });
       } catch {
@@ -781,6 +807,7 @@ export function createPluginActionPresentUserGate<TAction>(deps: Readonly<{
           input: args.input,
           surface: args.surface,
           invocationSurface: args.invocationSurface,
+          ...(args.invocationAuthority === undefined ? {} : { invocationAuthority: args.invocationAuthority }),
           ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
         });
       } catch {

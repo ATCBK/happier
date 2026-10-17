@@ -7,6 +7,8 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { waitForNetworkResponseForTests } from '@/dev/testkit/mocks/runtimeFetch';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { RenderScreenResult } from '@/dev/testkit/render/renderScreen';
 import {
@@ -22,12 +24,14 @@ import { SESSION_DRAFT_V2_ROUTE_LIST, SessionDraftListResponseV2Schema } from '@
 import {
     PluginAvailabilityActionHttpPathsV1,
     PluginAvailabilityIntentReadActionOutputV1Schema,
+    normalizePluginReleaseFactsV1,
 } from '@happier-dev/protocol/plugins/availability';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { ChangesCursorScope } from '@/sync/domains/state/persistence';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { FeedResponseSchema } from '@/sync/domains/social/feedTypes';
+import type { InvalidateSync } from '@/utils/sessions/sync';
 
 import {
     installLocalStorageMock,
@@ -132,6 +136,13 @@ const changesResponse = vi.hoisted(() => vi.fn());
 const profileResponseGate = vi.hoisted(() => vi.fn<() => Promise<void>>());
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let authScreen: RenderScreenResult | undefined;
+let syncRuntime: typeof import('./syncEngine').sync | undefined;
+let syncBridge: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined;
+
+async function loadTestSync(): Promise<void> {
+    syncBridge = await loadSyncSingletonForTests();
+    syncRuntime = (await import('./syncEngine')).sync;
+}
 
 async function restoreTestAccount(options: {
     mountAuth?: boolean;
@@ -140,18 +151,18 @@ async function restoreTestAccount(options: {
     draftsEnabled?: boolean;
     onRequest?: (path: string) => void;
 } = {}): Promise<void> {
-    await loadSyncSingletonForTests();
+    await loadTestSync();
     const { profileDefaults } = await import('./domains/profiles/profile');
     let bootstrapping = true;
     account = await restoreServerAccountForTest({
         serverUrl: 'http://localhost:53288',
         accountId: ACCOUNT_ID,
         credentials: options.credentials ?? { token: ACCOUNT_TOKEN },
-        request: async (url, init) => {
+        request: (url, init) => waitForNetworkResponseForTests((async () => {
             const path = new URL(String(url)).pathname;
             options.onRequest?.(path);
             if (path === '/health') return jsonResponse({});
-            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({
                 features: { sessions: { drafts: { enabled: options.draftsEnabled === true } } },
             }));
             if (path === '/v1/account/encryption') return jsonResponse({ mode: options.accountMode ?? 'plain', updatedAt: 1 });
@@ -179,19 +190,37 @@ async function restoreTestAccount(options: {
             if (path === '/v1/feed') return jsonResponse(FeedResponseSchema.parse({ items: [], hasMore: false }));
             if (bootstrapping && path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) return jsonResponse({ availabilityCursor: 0, snapshots: [] });
             if (bootstrapping && path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']) return jsonResponse({ availabilityCursor: 0, pluginIds: [], intentReads: [], failedPluginIds: [] });
+            // Account bootstrap continues after core readiness. Its independent
+            // inventory reads need real empty protocol replies throughout the test.
+            if (path === '/v2/session-organization' || path === '/v2/sessions/metadata-upgrades' || path === '/v1/account/pets') {
+                return createEmptyAccountBootstrapHttpResponse(path, init)!;
+            }
             if (path === '/v2/cursor') return jsonResponse({ cursor: 0, changesFloor: 0 });
             if (path === '/v2/changes') {
                 const page = await changesResponse({ url: String(url), init });
                 return jsonResponse({ changes: page?.changes ?? [], nextCursor: Number(page?.nextCursor ?? 0) });
             }
             return domainHttp({ url: String(url), init });
-        },
+        })(), init?.signal),
     });
     const { storage } = await import('./domains/state/storage');
     await waitForHomeGovernance(() => {
         expect(storage.getState().isDataReady).toBe(true);
         expect(storage.getState().profile.id).toBe(ACCOUNT_ID);
     });
+    const { sync } = await import('./syncEngine');
+    const bootstrap = sync as unknown as {
+        sessionsSync: Pick<InvalidateSync, 'awaitQueue'>;
+        pluginAvailabilitySync: Pick<InvalidateSync, 'awaitQueue'>;
+        resumeInFlight: Promise<void> | null;
+        ensureSessionDraftRepositoryRuntimeReady(): Promise<void>;
+    };
+    await sync.awaitBootstrapForegroundAcquisition();
+    // Core readiness deliberately precedes the independent background readers.
+    // Finish their initial empty census before a case installs held domain replies.
+    await bootstrap.ensureSessionDraftRepositoryRuntimeReady();
+    await Promise.all([bootstrap.sessionsSync.awaitQueue(), bootstrap.pluginAvailabilitySync.awaitQueue()]);
+    await bootstrap.resumeInFlight;
     bootstrapping = false;
     if (!options.mountAuth) return;
     const { AuthProvider } = await import('@/auth/context/AuthContext');
@@ -301,7 +330,7 @@ describe('sync AccountChange catch-up projection', () => {
         webLocks = installWebLockManagerMock();
         sockets.length = 0;
         domainHttp.mockReset();
-        domainHttp.mockResolvedValue(Response.json({}, { status: 404 }));
+        domainHttp.mockImplementation(async () => Response.json({}, { status: 404 }));
         changesResponse.mockReset();
         profileResponseGate.mockReset();
         profileResponseGate.mockResolvedValue(undefined);
@@ -310,17 +339,26 @@ describe('sync AccountChange catch-up projection', () => {
     afterEach(async () => {
         await authScreen?.unmount();
         authScreen = undefined;
+        // Retire the fixture's runtime before its HTTP/credential boundary.
+        // Do not import a new Engine during cleanup of a failed import.
+        syncRuntime?.disposeEmbedSession();
+        syncRuntime?.disconnectServer();
+        const { abortServerFetches } = await import('./http/client');
+        abortServerFetches();
         await account?.dispose();
         account = undefined;
-        const { sync } = await import('./syncEngine');
-        sync.disposeEmbedSession();
+        // A reset while a background reader is still importing can strand the
+        // next Engine import in a half-retired module graph.
+        await vi.dynamicImportSettled();
+        syncBridge?.dispose();
+        syncBridge = undefined;
+        syncRuntime = undefined;
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
         localStorage?.restore();
         localStorage = null;
         webLocks?.restore();
         webLocks = null;
-        vi.resetModules();
         vi.clearAllMocks();
         vi.unstubAllGlobals();
     });
@@ -332,7 +370,7 @@ describe('sync AccountChange catch-up projection', () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const storedCredentialRead = vi.spyOn(TokenStorage, 'getCredentials');
         const scopedCredentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
-        await loadSyncSingletonForTests();
+        await loadTestSync();
         const { sync } = await import('./syncEngine');
         const { apiSocket } = await import('@/sync/api/session/apiSocket');
         const apiRequest = vi.spyOn(apiSocket, 'request');
@@ -643,8 +681,87 @@ describe('sync AccountChange catch-up projection', () => {
         syncHarness.disconnectServer();
     });
 
+    it.each(['disable', 'release'] as const)('refreshes an open external plugin after an Account intent change supersedes an in-flight Availability read (%s)', async (change) => {
+        const harness = await prepareAccountChangeWakeSchedulingHarness();
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const { readPluginAccountAvailability, replacePluginAccountAvailabilityProjection } = await import('./domains/plugins/availability/projection');
+        const scope = getActiveServerAccountScope()!;
+        const slot = { pluginId: AVAILABILITY_PLUGIN_ID, contributionId: 'page', tier: 'hostedWeb' as const, platform: 'web' as const };
+        const intentResponse = (version: string, enabled: boolean, cursor: number) => PluginAvailabilityIntentReadActionOutputV1Schema.parse({
+            ...availabilityIntentValue(AVAILABILITY_PLUGIN_ID), availabilityCursor: cursor,
+            intent: { ...availabilityIntentValue(AVAILABILITY_PLUGIN_ID).intent, desiredVersion: version, enabled, revision: String(cursor) },
+            release: normalizePluginReleaseFactsV1({
+                ref: { pluginId: AVAILABILITY_PLUGIN_ID, version }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                normalizedManifest: { schemaVersion: 2, id: AVAILABILITY_PLUGIN_ID, version, displayName: 'External plugin',
+                    runtime: { apiVersion: 1 }, contributes: {} },
+                collectionContracts: [], uiSlots: [{ contributionId: slot.contributionId, tier: slot.tier, platform: slot.platform,
+                    artifactId: 'page', artifactDigest: `sha256:${(cursor === 0 ? 'a' : 'b').repeat(64)}`, hostUiApiRange: '^1.0.0' }],
+                packageAssetArchive: { archiveDigestSha256: `sha256:${'c'.repeat(64)}`, resources: [] },
+            }),
+        });
+        const successor = intentResponse(change === 'release' ? '2.0.0' : '1.2.3', change !== 'disable', 2);
+        replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+            availabilityCursor: 0, materializations: [], snapshots: [],
+            intentReads: [{ pluginId: AVAILABILITY_PLUGIN_ID, response: intentResponse('1.2.3', true, 0) }],
+        } });
+        const reader = readPluginAccountAvailability(scope);
+        expect(reader.readCurrentArtifact(slot)).toMatchObject({ kind: 'available', artifact: { releaseVersion: '1.2.3' } });
+        const firstReadStarted = createDeferred<void>();
+        const releaseFirstRead = createDeferred<void>();
+        let readCount = 0;
+        domainHttp.mockImplementation(async ({ url }) => {
+            const path = new URL(url).pathname;
+            if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) {
+                readCount += 1;
+                if (readCount === 1) {
+                    firstReadStarted.resolve();
+                    await releaseFirstRead.promise;
+                }
+                return jsonResponse({ availabilityCursor: 2, snapshots: [] });
+            }
+            if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']) {
+                return jsonResponse({ availabilityCursor: 2, pluginIds: [AVAILABILITY_PLUGIN_ID], failedPluginIds: [],
+                    intentReads: [{ pluginId: AVAILABILITY_PLUGIN_ID, response: successor }],
+                });
+            }
+            if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.set']) {
+                return jsonResponse({ intent: successor.intent });
+            }
+            return jsonResponse({});
+        });
+        const changePage = (cursor: number) => ({ changes: [{ cursor, kind: 'pluginDomain',
+            entityId: `pluginDomain/${AVAILABILITY_PLUGIN_ID}/availability`, changedAt: cursor,
+            hint: { pluginDomain: 'availability', pluginId: AVAILABILITY_PLUGIN_ID } }], nextCursor: String(cursor) });
+        changesResponse.mockResolvedValueOnce(changePage(1)).mockResolvedValueOnce(changePage(2));
+        try {
+            await harness.handleUpdate(accountChangeWake('availability-first'));
+            await firstReadStarted.promise;
+            await waitForHomeGovernance(() => expect(harness.resumeInFlight).toBeNull());
+            if (change === 'release') {
+                const { setActivePluginAccountAvailabilityIntent } = await import('./api/plugins/availability/setActivePluginAccountAvailabilityIntent');
+                const { revision: _revision, ...intent } = successor.intent!;
+                await expect(setActivePluginAccountAvailabilityIntent({ ...intent, expectedRevision: '0' }))
+                    .resolves.toMatchObject({ kind: 'updated', intent: { desiredVersion: '2.0.0' } });
+            }
+            await harness.handleUpdate(accountChangeWake('availability-disabled'));
+            await waitForHomeGovernance(() => expect(harness.changesCursor).toBe('2'));
+            releaseFirstRead.resolve();
+            const queue = harness as typeof harness & { pluginAvailabilitySync: { awaitQueue(): Promise<unknown> } };
+            await queue.pluginAvailabilitySync.awaitQueue();
+            expect(reader.readMaterializations()).toMatchObject({ kind: 'available', availabilityCursor: 2,
+                intentReads: [{ pluginId: AVAILABILITY_PLUGIN_ID, response: { intent: successor.intent } }],
+            });
+            expect(reader.readCurrentArtifact(slot)).toMatchObject(change === 'disable'
+                ? { kind: 'unavailable', code: 'artifact_not_current' }
+                : { kind: 'available', artifact: { releaseVersion: '2.0.0', digest: `sha256:${'b'.repeat(64)}` } });
+        } finally {
+            releaseFirstRead.resolve();
+            harness.disconnectServer();
+        }
+    });
+
     it.each(['present', 'malformed', 'absent', 'deleted'] as const)('materializes a cold Session draft from one change page without transcript or Account collection reads (%s)', async status => {
-        await loadSyncSingletonForTests();
+        await loadTestSync();
         // Prior cases retain device-local drafts. The restored empty Home census
         // confirms those rows absent through the genuine exact-read boundary.
         domainHttp.mockImplementation(async ({ url }) => new URL(url).pathname === '/v2/account/session-drafts/read'
@@ -675,19 +792,18 @@ describe('sync AccountChange catch-up projection', () => {
         if (!scope) throw new Error('Restoration must establish the Account scope');
         const { sync } = await import('./syncEngine');
         const syncHarness = sync as unknown as SyncAccountChangeCatchUpHarness & {
-            encryption: InstanceType<typeof Encryption>;
+            encryption: Awaited<ReturnType<typeof Encryption.create>>;
             ensureSessionDraftRepositoryRuntimeReady(): Promise<void>;
         };
         // Complete the real Account draft bootstrap before measuring one change page.
         await syncHarness.ensureSessionDraftRepositoryRuntimeReady();
-        await syncHarness.encryption.initializeSessions(new Map([[address.sessionId, null]]), {
-            accountId: scope.accountId, serverId: scope.serverId,
-        });
         storage.getState().applyServerScopedSessionListRows(scope.serverId, [createSessionListRenderableSessionFixture({
-            id: address.sessionId, encryptionMode: 'e2ee', serverId: scope.serverId,
+            id: address.sessionId, encryptionMode: 'e2ee',
         })], { source: 'ordinary', mode: 'append' });
         expect(storage.getState().sessions[address.sessionId]).toBeUndefined();
-        expect(syncHarness.encryption.getSessionEncryption(address.sessionId)).not.toBeNull();
+        // Keep the reader cold: only the remote author has the Session cipher.
+        // Catch-up must acquire its exact encryption context without full hydration.
+        expect(syncHarness.encryption.getSessionEncryption(address.sessionId)).toBeNull();
         author.writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: { text: 'retained draft' } });
         const document = author.getSessionDraftSnapshot(scope, address)!.document;
         const content = await cipher.seal(address, document);
@@ -785,14 +901,14 @@ describe('sync AccountChange catch-up projection', () => {
         if (!lifetime || !harness.credentials) throw new Error('Restoration must establish the Account');
         const credentials = harness.credentials;
         const isCurrent = () => lifetime.isCurrent();
-        const disclosures: Array<'plain' | 'e2ee' | null> = [];
+        const disclosures: Array<ReturnType<typeof usePluginSurfaceAccountEncryptionMode>> = [];
         const hook = await renderHook(() => {
             const mode = usePluginSurfaceAccountEncryptionMode({ accountLifetime: lifetime, credentials, isCurrent });
             disclosures.push(mode);
             return mode;
         });
         try {
-            await waitForHomeGovernance(() => expect(hook.getCurrent()).toBe('plain'));
+            await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' }));
             disclosures.length = 0;
             const revision = getAccountEncryptionModeCacheRevision();
             changesResponse.mockResolvedValueOnce({
@@ -805,9 +921,9 @@ describe('sync AccountChange catch-up projection', () => {
             await act(async () => {
                 await expect(harness.resumeViaChanges({ accountId: ACCOUNT_ID })).resolves.toMatchObject({ status: 'ok' });
             });
-            expect(disclosures).not.toContain(null);
+            expect(disclosures.every(disclosure => disclosure.status === 'ready' && disclosure.mode === 'plain')).toBe(true);
             expect(getAccountEncryptionModeCacheRevision()).toBe(revision);
-            expect(hook.getCurrent()).toBe('plain');
+            expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' });
             expect(harness.changesCursor).toBe('2');
             // A migration changes both Settings and mode. Its extra hint must
             // not be mistaken for an ordinary Settings write.
@@ -820,9 +936,9 @@ describe('sync AccountChange catch-up projection', () => {
             await act(async () => {
                 await expect(harness.resumeViaChanges({ accountId: ACCOUNT_ID })).resolves.toMatchObject({ status: 'ok' });
             });
-            expect(disclosures).toContain(null);
+            expect(disclosures).toContainEqual({ status: 'loading' });
             expect(getAccountEncryptionModeCacheRevision()).toBeGreaterThan(revision);
-            await waitForHomeGovernance(() => expect(hook.getCurrent()).toBe('plain'));
+            await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' }));
         } finally {
             await hook.unmount();
         }

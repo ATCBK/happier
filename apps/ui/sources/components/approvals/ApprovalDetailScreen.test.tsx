@@ -412,7 +412,7 @@ function createApiTargetActionApprovalArtifact() {
       createdBy: { surface: 'system' },
       requestedSurface: 'api',
       replayPlacement: {
-        serverId: 'server-exact',
+        serverId: 'cli-A',
         machineId: 'machine-exact',
         defaultSessionId: 'session-1',
       },
@@ -421,7 +421,8 @@ function createApiTargetActionApprovalArtifact() {
         authority: 'account_automation',
         surface: 'api',
         caller: { kind: 'host' },
-        serverId: 'server-exact',
+        serverId: 'cli-A',
+        serverIdentityId: 'stable-home-a',
         accountId: 'account-1',
         principalId: 'principal-1',
         credentialId: 'credential-1',
@@ -434,7 +435,8 @@ function createApiTargetActionApprovalArtifact() {
     }),
     header: {
       ...targetApproval.header,
-      serverId: 'server-exact',
+      serverId: 'cli-A',
+      serverIdentityId: 'stable-home-a',
       machineId: 'machine-exact',
     },
   };
@@ -714,7 +716,15 @@ installApprovalCommonModuleMocks({
   },
   text: async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key: string) => key });
+    const { t } = await vi.importActual<typeof import('@/text')>('@/text');
+    return createTextModuleMock({ translate: (key: string, params) => {
+      if ((key === 'actionPresentation.title' || key === 'actionPresentation.summary')
+        && typeof params?.actionId === 'string' && typeof params.source === 'string') {
+        return t(key, { actionId: params.actionId, source: params.source,
+          subject: typeof params.subject === 'string' ? params.subject : null });
+      }
+      return key;
+    } });
   },
   modal: async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -788,35 +798,22 @@ vi.mock('@/components/ui/buttons/RoundButton', async (importOriginal) => {
 
 vi.mock('@/sync/sync', () => ({
   sync: {
+    // A requester the list does not hold is read from its Home: this Home answers "not there".
+    ensureSessionVisibleForMessageRoute: async (sessionId: string) => ({ kind: 'missing', sessionId, cause: 'not_found' }),
     getCredentials: () => ({ token: 'test' }),
     fetchArtifactWithBody: fetchArtifactWithBodySpy,
     updateArtifactWithHeader: updateArtifactWithHeaderSpy,
   },
 }));
 
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
+vi.mock('@/sync/ops/actions/defaultActionExecutor', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/sync/ops/actions/defaultActionExecutor')>()),
   createDefaultActionExecutor: (opts?: unknown) => {
     createDefaultActionExecutorSpy(opts);
     return { execute: executeSpy };
   },
   replayApprovalRequestAtExactDaemon: (args: unknown) =>
     replayApprovalRequestAtExactDaemonSpy(args),
-  requiresExactDaemonApprovalReplay: (
-    approval: ApprovalRequestV2 | ApprovalRequestV1,
-  ) => approval.v === 2 && approval.executionOriginV1.surface !== 'ui',
-  resolveApprovalReplayRoute: (
-    approval: ApprovalRequestV2 | ApprovalRequestV1 | null,
-  ) =>
-    approval?.v === 2 &&
-    portableProfileResolution.kind === 'resolved' &&
-    portableProfileResolution.profile.serverIdentityId ===
-      approval.executionOriginV1.serverIdentityId
-      ? {
-          serverId: portableProfileResolution.profile.id,
-          serverIdentityId: approval.executionOriginV1.serverIdentityId,
-          originServerId: approval.executionOriginV1.serverId,
-        }
-      : null,
 }));
 
 vi.mock(
@@ -912,6 +909,67 @@ describe('ApprovalDetailScreen', () => {
     currentArtifact = createApprovalArtifact();
   });
 
+  it('keeps a CLI delete target readable when the target is also the requesting Session', async () => {
+    const artifact = createBuiltInApprovalArtifact({
+      actionId: 'session.delete',
+      actionArgs: { sessionId: 'session-1' },
+      summary: 'Delete session',
+      serverId: 'server-cache',
+      executedResult: { success: true },
+    });
+    const request = ApprovalRequestV2Schema.parse({
+      ...JSON.parse(artifact.body),
+      createdBy: { surface: 'cli', sessionId: 'session-1' },
+      requestedSurface: 'cli',
+      executionOriginV1: {
+        ...JSON.parse(artifact.body).executionOriginV1,
+        surface: 'cli',
+      },
+    });
+    currentArtifact = {
+      ...artifact,
+      header: buildApprovalRequestArtifactHeaderV1(request),
+      body: JSON.stringify(request),
+    };
+    sessionFixturesByServerId = {
+      'ui-A': {
+        'session-1': createSessionFixture({
+          id: 'session-1',
+          metadata: {
+            name: 'Release cleanup',
+            host: 'build.test',
+            path: '/workspace/release',
+            machineId: 'machine-delete',
+          },
+        }),
+      },
+    };
+    machineFixturesByServerId = {
+      'ui-A': {
+        'machine-delete': createMachineFixture({
+          id: 'machine-delete',
+          metadata: {
+            displayName: 'Build Mac',
+            host: 'build.test',
+            platform: 'darwin',
+            happyCliVersion: '0.0.0-test',
+            happyHomeDir: '/Users/tester/.happier',
+            homeDir: '/Users/tester',
+          },
+        }),
+      },
+    };
+
+    const screen = await renderScreen(
+      <approvalDetailScreenModule.ApprovalDetailScreen artifactId="artifact-1" />,
+    );
+    const text = await readRenderedTextWithRowContent(screen);
+
+    expect(text).toContain('Release cleanup');
+    expect(text).toContain('contextBar.machine Build Mac');
+    expect(text).toContain('…ession-1');
+  });
+
   it('keeps an executed preset refusal visible as failure without completion navigation', async () => {
     currentArtifact = createBuiltInApprovalArtifact({
       actionId: 'machines.presets.archive',
@@ -923,12 +981,70 @@ describe('ApprovalDetailScreen', () => {
     const screen = await renderScreen(
       <ApprovalDetailScreen artifactId="artifact-1" completionHref="/" />,
     );
-    expect(
-      screen.findByTestId('approvals.execution-failure')?.props.subtitle,
-    ).toBe('provider_unavailable');
+    // The readable reason leads; its typed code waits in the technical disclosure.
+    const reason = screen.findByTestId('approvals.execution-failure')?.props.subtitle;
+    expect(typeof reason).toBe('string');
+    expect(reason).not.toContain('provider_unavailable');
+    const { ApprovalTechnicalDetails } = await import('./ActionApprovalFieldsCard');
+    expect(screen.findAllByType(ApprovalTechnicalDetails as never).map((node) => node.props.lines)).toEqual([
+      [{ key: 'failure-code', label: 'common.error', value: 'provider_unavailable' }],
+    ]);
     expect(readRenderedText(screen)).toContain('approvals.status.failed');
     expect(readRenderedText(screen)).not.toContain('approvals.status.executed');
     expect(dismissToSpy).not.toHaveBeenCalled();
+  });
+
+  it('shows the bound Browser open operation beside an executed receipt that only accepted it', async () => {
+    const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+    const { ActionOperationSnapshotV1Schema } = await import('@happier-dev/protocol/actions/operations/v1');
+    const base = createBuiltInApprovalArtifact({
+      actionId: 'browser.view.open',
+      actionArgs: { kind: 'openView', commandId: 'c1', browserSessionId: 'bs', viewId: 'v1', platform: 'web',
+        target: { kind: 'externalUrl', targetId: 't', url: 'http://localhost:5173/login' } },
+      summary: 'Open browser view',
+      executedResult: { v: 1, status: 'in_progress', phase: 'browser_runtime_provisioning', commandId: 'c1',
+        browserSessionId: 'bs', viewId: 'v1', operationId: 'open-1' },
+    });
+    const request = ApprovalRequestV2Schema.parse(JSON.parse(base.body));
+    const machineId = 'machine-open';
+    const withOrigin = ApprovalRequestV2Schema.parse({ ...request, executionOriginV1: {
+      ...request.executionOriginV1, accountId: 'account-open', machineId, target: { kind: 'machine', machineId } } });
+    currentArtifact = { ...base, header: buildApprovalRequestArtifactHeaderV1(withOrigin), body: JSON.stringify(withOrigin) };
+    const operation = (overrides: Record<string, unknown>) => ActionOperationSnapshotV1Schema.parse({
+      version: 1, operationId: 'open-1', revision: 1, actionId: 'browser.view.open', state: 'running',
+      title: 'Open browser view', createdAt: 1, startedAt: 2, cancellation: 'unsupported',
+      scope: { accountId: 'account-open', machineId, sessionId: 'session-1' }, ...overrides });
+    const { ApprovalDetailScreen } = approvalDetailScreenModule;
+    try {
+      actionOperationStore.mergeSnapshots({ serverId: 'ui-A', snapshots: [operation({
+        progress: { kind: 'phase', phase: 'browser_runtime_provisioning', label: 'Preparing' } })] });
+      const preparing = await renderScreen(<ApprovalDetailScreen artifactId="artifact-1" />);
+      expect(preparing.findByTestId('approvals.browser-open')?.props.subtitle).toBe('browserPresence.stream.preparingTitle');
+      // Accepted is not opened: the receipt still reads Executed while the operation is live.
+      expect(readRenderedText(preparing)).toContain('approvals.status.executed');
+
+      await act(async () => {
+        actionOperationStore.mergeSnapshots({ serverId: 'ui-A', snapshots: [operation({ revision: 2 })] });
+      });
+      expect(preparing.findByTestId('approvals.browser-open')?.props.subtitle).toBe('browserPresence.stream.openingPage');
+
+      await act(async () => {
+        actionOperationStore.mergeSnapshots({ serverId: 'ui-A', snapshots: [operation({ revision: 3, state: 'succeeded', settledAt: 4,
+          result: { v: 1, commandId: 'c1', status: 'dispatched', adapterKind: 'chromiumSidecar', events: [] } })] });
+      });
+      expect(preparing.findByTestId('approvals.browser-open')?.props.subtitle).toBe('browserPresence.stream.pageOpened');
+      // No sandbox is allowed to open a page that is open; a blocked sandbox has its one Allow control.
+      expect(preparing.findAllByTestId('approvals.browser-open-allow-sandbox')).toHaveLength(0);
+
+      await act(async () => {
+        actionOperationStore.mergeSnapshots({ serverId: 'ui-A', snapshots: [operation({ revision: 4, state: 'succeeded', settledAt: 5,
+          result: { v: 1, commandId: 'c1', status: 'failed', adapterKind: 'chromiumSidecar',
+            error: { code: 'sandbox_unavailable', message: 'Managed Chromium sandbox is unavailable.' } } })] });
+      });
+      expect(preparing.findByTestId('approvals.browser-open-allow-sandbox')?.props.title).toBe('browserPresence.stream.sandboxAllow');
+    } finally {
+      actionOperationStore.reset();
+    }
   });
 
   it('keeps settled capability review fields readable without offering another approval', async () => {
@@ -1050,10 +1166,10 @@ describe('ApprovalDetailScreen', () => {
     expect(text).toContain(
       'This publishes the approved release notes to the configured remote.',
     );
-    expect(text).toContain('acme.publisher');
-    expect(text).toContain('releases/publish');
+    expect(text).not.toContain('acme.publisher');
+    expect(text).not.toContain('releases/publish');
     expect(text).toContain('v1.2.3-public-release');
-    expect(text).toContain('bundled_first_party');
+    expect(text).not.toContain('bundled_first_party');
     expect(text).not.toContain('must-not-render');
     expect(text).not.toContain('account-secret');
     expect(text).not.toContain('resource-secret');
@@ -1124,9 +1240,10 @@ describe('ApprovalDetailScreen', () => {
       artifactId: 'target-api-artifact-1',
       decision: 'approve',
       executionTarget: {
-        serverId: 'server-exact',
+        serverId: 'ui-A',
         machineId: 'machine-exact',
-        defaultSessionId: 'session-1',
+        serverIdentityId: 'stable-home-a',
+        originServerId: 'cli-A',
       },
     });
     expect(updateArtifactWithHeaderSpy).not.toHaveBeenCalled();
@@ -1148,9 +1265,10 @@ describe('ApprovalDetailScreen', () => {
       artifactId: 'target-api-artifact-1',
       decision: 'reject',
       executionTarget: {
-        serverId: 'server-exact',
+        serverId: 'ui-A',
         machineId: 'machine-exact',
-        defaultSessionId: 'session-1',
+        serverIdentityId: 'stable-home-a',
+        originServerId: 'cli-A',
       },
     });
     expect(updateArtifactWithHeaderSpy).not.toHaveBeenCalled();
@@ -1208,9 +1326,10 @@ describe('ApprovalDetailScreen', () => {
       artifactId: 'target-api-artifact-1',
       decision: 'approve',
       executionTarget: {
-        serverId: 'server-exact',
+        serverId: 'ui-A',
         machineId: 'machine-exact',
-        defaultSessionId: 'session-1',
+        serverIdentityId: 'stable-home-a',
+        originServerId: 'cli-A',
       },
     });
     expect(fetchArtifactWithBodySpy).toHaveBeenCalledWith(
@@ -1245,8 +1364,9 @@ describe('ApprovalDetailScreen', () => {
     );
 
     expect(readRenderedText(screen)).toContain('api');
+    // The Home has no name of its own, but this device is signed in to it: the sentence names it.
     expect(readRenderedText(screen)).toContain(
-      'actionConfirmations.homeTarget',
+      'detailPages.approval.sessionOnHome',
     );
     expect(readRenderedText(screen)).not.toContain('principal-1');
     expect(readRenderedText(screen)).not.toContain('credential-1');
@@ -1345,8 +1465,10 @@ describe('ApprovalDetailScreen', () => {
     );
 
     const text = readRenderedText(screen);
-    // The Home has no name of its own, so the session is "not on this device" rather than "on <address>".
-    expect(text).toContain('detailPages.approval.sessionElsewhere');
+    // The Home has no name of its own but is this device's Home: the session is on "this Home", never "on <address>"
+    // and never "not on this device".
+    expect(text).toContain('detailPages.approval.sessionOnHome');
+    expect(text).not.toContain('detailPages.approval.sessionElsewhere');
     expect(text).not.toContain('localhost:3021');
     expect(text).toContain('detailPages.approval.origin.api');
     expect(
@@ -1446,8 +1568,8 @@ describe('ApprovalDetailScreen', () => {
 
     const text = readRenderedText(screen);
     expect(text).toContain('Create 1 proposed review comment');
-    expect(text).toContain('acme.review');
-    expect(text).toContain('reviews.comments.create');
+    expect(text).not.toContain('acme.review');
+    expect(text).not.toContain('reviews.comments.create');
     expect(text).toContain('approvals.proposedComments');
     expect(text).toContain('Use the canonical owner.');
     expect(text).not.toContain('project-1');
@@ -2289,7 +2411,7 @@ describe('ApprovalDetailScreen', () => {
     expect(readRenderedText(screen)).not.toContain('Private cached title');
     expect(readRenderedText(screen)).not.toContain('secret-project');
     expect(readRenderedText(screen)).toContain(
-      'actionConfirmations.homeTarget',
+      'detailPages.approval.sessionOnHome',
     );
     expect(screen.findByTestId('approvals.approve')?.props.disabled).toBe(
       false,

@@ -43,6 +43,7 @@ import {
 } from './artifactDaemonSource';
 import {
     publishVerifiedPluginArtifactToAccountHosting,
+    type PluginAccountHostedArtifactPublicationResult,
 } from './accountHostedArtifactPublication';
 import type {
     PluginNativeArtifactResourceAcquireResult,
@@ -74,8 +75,12 @@ export type PluginHostedWebArtifactLeaseInput = Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime;
     persistent?: PluginHostedWebArtifactLeasePersistentScope;
     signal?: AbortSignal;
+    /** Mount cancellation when acquisition belongs to a shorter-lived adoption. */
+    accountHostingSignal?: AbortSignal;
     /** Daemon route for an Account-release selection (the mount's machine). */
     daemon?: PluginArtifactDaemonTransport;
+    /** Other suppliers of this selected digest, never execution targets. */
+    daemons?: readonly PluginArtifactDaemonTransport[];
     /** Daemon RPC boundary; production uses the canonical machine-RPC transport. */
     fetchDaemonArtifactBytes?: PluginArtifactDaemonByteFetcher;
     appExact?: PluginArtifactSourceCandidate & Readonly<{ kind: 'appExact' }>;
@@ -119,9 +124,10 @@ export async function acquirePluginHostedWebArtifactLease(
         sources.push(createPluginArtifactPersistentSource({ scope: input.persistent }));
     }
     const daemonTransport = input.daemonProjectionSelection?.transport ?? input.daemon;
-    if (daemonTransport) {
+    const daemonTransports = [...(daemonTransport ? [daemonTransport] : []), ...(input.daemons ?? [])];
+    if (daemonTransports.length > 0) {
         sources.push(createPluginArtifactDaemonSource({
-            transport: daemonTransport,
+            transports: daemonTransports,
             family: 'hostedWeb',
             ...(input.fetchDaemonArtifactBytes ? { fetchArtifactBytes: input.fetchDaemonArtifactBytes } : {}),
         }));
@@ -227,7 +233,12 @@ export type PluginHostedWebArtifactAvailabilityInput = Omit<
 
 /** A host consumer can receive only this opaque handle or a typed unavailable state. */
 export type PluginHostedWebArtifactAvailability =
-    | Readonly<{ kind: 'available'; handle: PluginNativeArtifactResourceHandle }>
+    | Readonly<{
+        kind: 'available';
+        handle: PluginNativeArtifactResourceHandle & Readonly<{
+            accountHosting?: Promise<PluginAccountHostedArtifactPublicationResult>;
+        }>;
+    }>
     | PluginHostedWebArtifactAvailabilityUnavailable;
 
 export type PluginHostedWebArtifactAvailabilityProducer = Readonly<{
@@ -422,6 +433,7 @@ export function createPluginHostedWebArtifactAvailabilityProducer(
                         ),
                     }),
                     ...(input.daemon ? { daemon: input.daemon } : {}),
+                    ...(input.daemons ? { daemons: input.daemons } : {}),
                     ...(input.daemonProjectionSelection
                         ? { daemonProjectionSelection: input.daemonProjectionSelection }
                         : {}),
@@ -438,10 +450,11 @@ export function createPluginHostedWebArtifactAvailabilityProducer(
                 // reach while every daemon is offline, and this frame's tier is
                 // no exception: these verified bytes are the only copy this
                 // process holds beside a current Account authority.
-                await publishVerifiedPluginArtifactToAccountHosting({
+                const publication = await publishVerifiedPluginArtifactToAccountHosting({
                     reader: input.reader,
                     accountLifetime: input.accountLifetime,
                     lease: selected.lease,
+                    signal: input.accountHostingSignal ?? input.signal,
                 });
                 if (!operation.isCurrent()) {
                     selected.lease.dispose();
@@ -462,7 +475,12 @@ export function createPluginHostedWebArtifactAvailabilityProducer(
                     persistentStore,
                 });
                 if (result.kind !== 'available') selected.lease.dispose();
-                return result;
+                return result.kind === 'available' && publication
+                    ? Object.freeze({
+                        ...result,
+                        handle: Object.freeze({ ...result.handle, accountHosting: publication.completion }),
+                    })
+                    : result;
             } finally {
                 operation.release();
             }

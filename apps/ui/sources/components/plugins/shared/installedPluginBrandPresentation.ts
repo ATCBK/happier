@@ -130,6 +130,23 @@ function neutralFallback(input: InstalledPluginBrandPresentationInput): Installe
     return Object.freeze({ displayName: installedPackage.displayName });
 }
 
+/** Undefined alone means an admitted Resource still needs asynchronous acquisition. */
+function readImmediateInstalledPluginBrandPresentation(
+    input: InstalledPluginBrandPresentationInput,
+): InstalledPluginBrandPresentation | null | undefined {
+    const installedPackage = input.installedPackage;
+    const fallback = neutralFallback(input);
+    if (installedPackage && isCurrent(input)
+        && (!fallback || installedPackage.source.kind === 'bundled' || installedPackage.brand?.state !== 'available')) {
+        readAccountBrandRequests(input, false)?.requests.delete(requestSlot(input));
+    }
+    if (!installedPackage || !fallback) return null;
+    if (installedPackage.source.kind === 'bundled') {
+        return readInstalledBundledBrandPresentation(installedPackage) ?? fallback;
+    }
+    return installedPackage.brand?.state === 'available' ? undefined : fallback;
+}
+
 function presentationKey(input: InstalledPluginBrandPresentationInput): string {
     const installedPackage = input.installedPackage;
     const brand = installedPackage?.brand;
@@ -218,7 +235,6 @@ async function resolveInstalledPluginBrandPresentation(
     const fallback = neutralFallback(input);
     const installedPackage = input.installedPackage;
     if (!fallback || !installedPackage) return fallback;
-    if (installedPackage.source.kind === 'bundled') return readInstalledBundledBrandPresentation(installedPackage) ?? fallback;
     if (installedPackage.brand?.state !== 'available') return fallback;
 
     const brand = installedPackage.brand;
@@ -278,6 +294,7 @@ async function resolveInstalledPluginBrandPresentation(
 }
 
 type SharedBrandRequest = Readonly<{
+    key: string;
     packageAssets: InstalledPluginBrandPackageAssets | null | undefined;
     result: Promise<InstalledPluginBrandPresentation | null>;
 }>;
@@ -290,7 +307,11 @@ type AccountBrandRequests = Readonly<{
 }>;
 const accountBrandRequests = new Map<ActiveServerAccountScopeLifetime | string, AccountBrandRequests>();
 
-function readAccountBrandRequests(input: InstalledPluginBrandPresentationInput): AccountBrandRequests | null {
+function requestSlot(input: InstalledPluginBrandPresentationInput): string {
+    return JSON.stringify([input.installedPackage?.id, readRequiredString(input.machineId), input.serverId ?? null]);
+}
+
+function readAccountBrandRequests(input: InstalledPluginBrandPresentationInput, create = true): AccountBrandRequests | null {
     let lifetime = input.accountLifetime;
     if (!lifetime) return null;
     const credentialScope = input.credentialAccountScope;
@@ -302,6 +323,7 @@ function readAccountBrandRequests(input: InstalledPluginBrandPresentationInput):
     const key = routed ? serverAccountScopeKeySuffix(credentialScope) : lifetime;
     const retained = accountBrandRequests.get(key);
     if (retained) return retained;
+    if (!create) return null;
 
     let subscribeRetirement: (retire: () => void) => void;
     if (routed) {
@@ -341,29 +363,35 @@ function readAccountBrandRequests(input: InstalledPluginBrandPresentationInput):
 export async function readInstalledPluginBrandPresentation(
     input: InstalledPluginBrandPresentationInput,
 ): Promise<InstalledPluginBrandPresentation | null> {
+    const immediate = readImmediateInstalledPluginBrandPresentation(input);
+    if (immediate !== undefined) return immediate;
     const fallback = neutralFallback(input);
     const brand = input.installedPackage?.brand;
-    if (!fallback) return fallback;
-    if (input.installedPackage?.source.kind === 'bundled') return readInstalledBundledBrandPresentation(input.installedPackage) ?? fallback;
-    if (brand?.state !== 'available') return fallback;
+    if (!fallback || brand?.state !== 'available') return fallback;
     if (input.packageAssets && !readDeclaredPortableBrandPath({
         packageAssets: input.packageAssets,
         pluginId: input.installedPackage!.id,
         resourceId: brand.resource.localId,
         digest: brand.digest,
-    })) return fallback;
+    })) {
+        readAccountBrandRequests(input, false)?.requests.delete(requestSlot(input));
+        return fallback;
+    }
 
     const owned = readAccountBrandRequests(input);
     if (!owned) return null;
     const { lifetime, requests } = owned;
     const key = presentationKey(input);
-    let request = requests.get(key);
+    const slot = requestSlot(input);
+    let request = requests.get(slot);
     if (!request
+        || request.key !== key
         || request.packageAssets?.reader !== input.packageAssets?.reader
         || request.packageAssets?.source !== input.packageAssets?.source) {
         const controller = new AbortController();
         const retirement = lifetime.onRetire(() => controller.abort());
         request = {
+            key,
             packageAssets: input.packageAssets,
             result: resolveInstalledPluginBrandPresentation({
                 ...input,
@@ -372,7 +400,9 @@ export async function readInstalledPluginBrandPresentation(
                 isCurrent: () => lifetime.isCurrent(),
             }).finally(() => retirement.dispose()),
         };
-        requests.set(key, request);
+        // Replacement drops only the owner's retention. Captured pending callers
+        // may still settle, and Account retirement still aborts every acquisition.
+        requests.set(slot, request);
     }
     const presentation = await new Promise<InstalledPluginBrandPresentation | null>((resolve) => {
         const abort = () => {
@@ -427,6 +457,7 @@ export function useInstalledPluginBrandPresentation(
         let retired = false;
         const capturedInput = effectiveInput;
         const capturedFallback = neutralFallback(capturedInput);
+        const immediate = readImmediateInstalledPluginBrandPresentation(capturedInput);
         // Bundled/neutral identity marks have no admitted package to resolve
         // or withdraw. Do not dispatch one empty state update per mounted row.
         if (capturedFallback === null) return;
@@ -450,15 +481,26 @@ export function useInstalledPluginBrandPresentation(
                 && isCurrent(inputRef.current);
         };
         const publish = (presentation: InstalledPluginBrandPresentation | null) => {
-            setState((current) => isCapturedCurrent()
-                ? {
+            setState((current) => {
+                if (!isCapturedCurrent()) return current;
+                // Resolution may return the same neutral identity as the initial
+                // state. Preserve it rather than scheduling a render per row.
+                if (current.key === capturedState.key
+                    && current.accountLifetime === capturedState.accountLifetime
+                    && current.signal === capturedState.signal
+                    && current.packageAssets?.reader === capturedState.packageAssets?.reader
+                    && current.packageAssets?.source === capturedState.packageAssets?.source
+                    && current.presentation?.displayName === presentation?.displayName
+                    && current.presentation?.bytes === presentation?.bytes
+                    && current.presentation?.monochrome === presentation?.monochrome) return current;
+                return {
                     key: capturedState.key,
                     accountLifetime: capturedState.accountLifetime,
                     signal: capturedState.signal,
                     packageAssets: capturedState.packageAssets,
                     presentation,
-                }
-                : current);
+                };
+            });
         };
         const retire = () => {
             if (retired) return;
@@ -479,17 +521,22 @@ export function useInstalledPluginBrandPresentation(
             ));
         };
 
-        publish(capturedFallback);
+        // Bundled bytes and neutral identities have no asynchronous Resource
+        // boundary. Admit them in this commit instead of scheduling one Promise
+        // publication per newly mounted mark.
+        publish(immediate === undefined ? capturedFallback : immediate);
         const retirement = capturedInput.accountLifetime?.onRetire(retire);
         capturedInput.signal.addEventListener('abort', retire, { once: true });
         if (capturedInput.signal.aborted) retire();
 
-        void readInstalledPluginBrandPresentation({
-            ...capturedInput,
-            isCurrent: isCapturedCurrent,
-        }).then((presentation) => {
-            if (isCapturedCurrent()) publish(presentation);
-        });
+        if (immediate === undefined) {
+            void readInstalledPluginBrandPresentation({
+                ...capturedInput,
+                isCurrent: isCapturedCurrent,
+            }).then((presentation) => {
+                if (isCapturedCurrent()) publish(presentation);
+            });
+        }
 
         return () => {
             retired = true;

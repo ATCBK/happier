@@ -10,7 +10,7 @@ import { z } from "zod/mini";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
-import { readMaterializedPluginCollectionContract } from "./contracts";
+import { findExactMaterializedPluginCollectionContractTx, readMaterializedPluginCollectionContract } from "./contracts";
 import { readPluginCollectionIndexEntriesByRawOrdinalKey } from "./rawOrdinalIndex";
 
 const COLLECTION_CURSOR_VERSION = 1;
@@ -538,25 +538,7 @@ async function resolveCurrentContract(input: Readonly<{
     ));
     if (!writer) throw new PluginCollectionUiQueryOperationError("collection_unavailable");
 
-    const persisted = await database.pluginCollectionContract.findFirst({
-        where: {
-            pluginId: writer.pluginId,
-            collectionId: writer.collectionId,
-            schemaVersion: writer.schemaVersion,
-            contractDigest: writer.contractDigest,
-        },
-        select: {
-            id: true,
-            pluginId: true,
-            collectionId: true,
-            schemaVersion: true,
-            contractDigest: true,
-            normalizedSchema: true,
-            indexes: true,
-            relations: true,
-            privacyProjection: true,
-        },
-    });
+    const persisted = await findExactMaterializedPluginCollectionContractTx({ tx: database, ref: writer });
     if (!persisted) throw new PluginCollectionUiQueryOperationError("collection_unavailable");
     try {
         const currentWriter = readMaterializedPluginCollectionContract(persisted);
@@ -586,29 +568,11 @@ async function resolveCurrentContract(input: Readonly<{
         }
         const requestedRow = refsMatch(currentWriter, requestedRef)
             ? persisted
-            : await database.pluginCollectionContract.findFirst({
-                where: {
-                    pluginId: requestedRef.pluginId,
-                    collectionId: requestedRef.collectionId,
-                    schemaVersion: requestedRef.schemaVersion,
-                    contractDigest: requestedRef.contractDigest,
-                },
-                select: {
-                    id: true,
-                    pluginId: true,
-                    collectionId: true,
-                    schemaVersion: true,
-                    contractDigest: true,
-                    normalizedSchema: true,
-                    indexes: true,
-                    relations: true,
-                    privacyProjection: true,
-                },
-            });
-        if (!requestedRow) throw new PluginCollectionReadOperationError("collection_unavailable");
+            : await findExactMaterializedPluginCollectionContractTx({ tx: database, ref: requestedRef });
+        if (!requestedRow) throw new PluginCollectionReadOperationError("collection_update_required");
         const requested = readMaterializedPluginCollectionContract(requestedRow);
         const access = resolvePluginCollectionContractAccessV1({ currentWriter, requested });
-        if (!access) throw new PluginCollectionReadOperationError("collection_unavailable");
+        if (!access) throw new PluginCollectionReadOperationError("collection_update_required");
         return {
             account: currentAccount,
             storageContractId: persisted.id,

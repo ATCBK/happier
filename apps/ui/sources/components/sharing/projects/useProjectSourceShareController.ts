@@ -12,7 +12,6 @@ import { useShareViewerProfile } from '../useShareViewerProfile';
 const NO_TEAMS: readonly [] = [];
 const IDLE: ShareOperationModel = { kind: 'idle' };
 const EMPTY_OPERATIONS: Readonly<Record<string, ShareOperationModel>> = {};
-const EMPTY_CONFIRMING: ReadonlySet<string> = new Set();
 
 /** Audience intents use the selected Source's acknowledged revision and its one update Action. */
 export function useProjectSourceShareController(input: Readonly<{
@@ -26,19 +25,17 @@ export function useProjectSourceShareController(input: Readonly<{
     const source = sourceState.current;
     const [query, setQuery] = React.useState('');
     const [operations, setOperations] = React.useState(EMPTY_OPERATIONS);
-    const [confirming, setConfirming] = React.useState<ReadonlySet<string>>(new Set());
     const [notice, setNotice] = React.useState<ShareUiReason | undefined>();
     const lastIntent = React.useRef(new Map<string, Readonly<{ principal: PrincipalRefV1; add: boolean }>>());
     const identity = serverAccountScopedResourceKey(scope, source?.id ?? '');
     const operationIdentity = React.useRef(identity);
     const scopedOperations = operationIdentity.current === identity ? operations : EMPTY_OPERATIONS;
-    const scopedConfirming = operationIdentity.current === identity ? confirming : EMPTY_CONFIRMING;
     const directory = useSessionAccessDirectory({ scope, availability: 'available', contextTeams: NO_TEAMS,
         operations: scopedOperations, revision: source?.revision ?? 0,
         enabled: input.enabled && sourceState.canManage && sourceState.detailStatus === 'ready' && source !== null });
     const currentIdentity = React.useRef(identity);
     currentIdentity.current = identity;
-    React.useEffect(() => { operationIdentity.current = identity; setOperations(EMPTY_OPERATIONS); setConfirming(EMPTY_CONFIRMING);
+    React.useEffect(() => { operationIdentity.current = identity; setOperations(EMPTY_OPERATIONS);
         lastIntent.current.clear(); setQuery(''); setNotice(undefined); }, [identity]);
 
     const mutate = React.useCallback(async (principal: PrincipalRefV1, add: boolean) => {
@@ -52,7 +49,6 @@ export function useProjectSourceShareController(input: Readonly<{
         const audience = add ? [...remaining, { principal, level: 'view' as const }] : remaining;
         const result = await controller.updateSource({ audience }).catch(() => null);
         if (currentIdentity.current !== captured) return;
-        setConfirming((previous) => { const next = new Set(previous); next.delete(key); return next; });
         if (result?.ok) {
             lastIntent.current.delete(key);
             setOperations((previous) => { const { [key]: _done, ...next } = previous; return next; });
@@ -74,10 +70,10 @@ export function useProjectSourceShareController(input: Readonly<{
                 profile: grant.principal.kind === 'account' && grant.principal.accountId === scope.accountId ? viewerProfile : null });
             return { grant: grant.principal, principal,
                 level: { kind: 'editable', value: 'view', options: ['view'] },
-                removal: scopedConfirming.has(principal.key) ? { kind: 'confirming', consequences: [] } : { kind: 'allowed' },
+                removal: { kind: 'allowed' },
                 operation: scopedOperations[principal.key] ?? IDLE };
         });
-    }, [source?.audience, scopedConfirming, scopedOperations, directory.sections, scope.accountId, viewerProfile]);
+    }, [source?.audience, scopedOperations, directory.sections, scope.accountId, viewerProfile]);
     const ownerRef = source ? { kind: 'account' as const, accountId: source.createdByAccountId } : null;
     const model: ShareSheetModel = {
         revision: source?.revision ?? 0, editable: sourceState.canManage && sourceState.detailStatus === 'ready'
@@ -91,9 +87,9 @@ export function useProjectSourceShareController(input: Readonly<{
         addPrincipal: (principal) => { void mutate(principal, true); },
         retryMutation: (principal) => { const intent = lastIntent.current.get(sessionAccessSubjectKey(principal)); if (intent) void mutate(intent.principal, intent.add); },
         setAccessLevel: () => {},
-        requestRemove: (principal) => setConfirming((previous) => new Set([...previous, sessionAccessSubjectKey(principal)])),
+        requestRemove: (principal) => { void mutate(principal, false); },
         confirmRemove: (principal) => { void mutate(principal, false); },
-        cancelRemove: (principal) => setConfirming((previous) => { const next = new Set(previous); next.delete(sessionAccessSubjectKey(principal)); return next; }),
+        cancelRemove: () => {},
         explain: setNotice,
     };
     return { model, actions, notice: operationIdentity.current === identity ? notice : undefined };

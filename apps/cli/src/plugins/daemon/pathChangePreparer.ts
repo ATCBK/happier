@@ -39,6 +39,7 @@ import {
 import { bindPluginRuntimeSourceAuthority } from '@/plugins/runtime/sourceAuthority';
 import { isPluginDevelopmentDependencyInputPath } from '@/plugins/authoring/developmentDependencyInputs';
 import {
+  isPluginAuthorRootMaterialized,
   runPluginUiArtifactBuild,
   type PluginUiArtifactBuildResult,
 } from '@/plugins/authoring/toolchain';
@@ -194,7 +195,7 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
         );
       }
       const expectedPluginId = request.kind === 'development'
-        ? request.pluginId
+        ? request.pluginId ?? trustedDevelopmentPluginId ?? undefined
         : trustedDevelopmentPluginId ?? undefined;
       const entry = authoringSource.kind === 'code'
         ? authoringSource.entry
@@ -210,8 +211,11 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
         throw new Error('Plugin development source did not resolve to a local path identity');
       }
       const changedPaths = request.kind === 'development' ? request.changedPaths : undefined;
+      const refreshDependencies = changedPaths?.some(isPluginDevelopmentDependencyInputPath) === true
+        || (request.kind === 'development' && typeof request.sdkRegistryOrigin === 'string');
       const prepareDependencies = (entry?.kind ?? 'packageRoot') === 'packageRoot'
-        && !isSourceOnlyDevelopmentBatch({ expectedPluginId, changedPaths });
+        && (refreshDependencies || (!isSourceOnlyDevelopmentBatch({ expectedPluginId, changedPaths })
+          && !await isPluginAuthorRootMaterialized(sourceRootPath)));
       const preparedRoot = await preparePluginDevelopmentRoot({
         sourceRootPath,
         prepareDependencies,

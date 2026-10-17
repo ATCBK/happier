@@ -1,8 +1,11 @@
 import { useMemo, type ReactElement, type ReactNode } from 'react';
+import { View } from 'react-native';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { useWidgetAreaPort } from '../hostApi/widgetArea.public.js';
+import { HappierColumnEdgeContext, useHappierColumnEdgeRemainder } from '../presentation/layout/columnEdge.js';
+import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 
 export type WidgetSurfaceProps = Readonly<{
   /** One of the areas this page declares (`widgetAreas` on its `appPage` View). */
@@ -38,6 +41,8 @@ const NO_CONTEXT: Readonly<Record<string, JsonValue>> = Object.freeze({});
 export function WidgetSurface({ area, context, title, description, fallback, testID }: WidgetSurfaceProps): ReactElement | null {
   const port = useWidgetAreaPort(area);
   const renderWidgetArea = useOptionalPluginUiPresentationHost()?.renderWidgetArea;
+  // The area's heading, tabs and frames stand on the page's text edge, under the page title and section titles.
+  const edgePx = useHappierColumnEdgeRemainder(HAPPIER_PAGE_METRICS.pageTextInsetPx);
   const request = useMemo(() => Object.freeze({
     area,
     context: context ?? NO_CONTEXT,
@@ -47,5 +52,8 @@ export function WidgetSurface({ area, context, title, description, fallback, tes
     ...(testID === undefined ? {} : { testID }),
   }), [area, context, description, port, testID, title]);
   if (!renderWidgetArea) return <>{fallback}</>;
-  return <>{renderWidgetArea(request)}</>;
+  // The page's column edge ends here: widget bodies in the area's frames lay out in their own frame.
+  return <View style={{ paddingHorizontal: edgePx }}>
+    <HappierColumnEdgeContext.Provider value={0}>{renderWidgetArea(request)}</HappierColumnEdgeContext.Provider>
+  </View>;
 }

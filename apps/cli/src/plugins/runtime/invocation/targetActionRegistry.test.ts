@@ -101,6 +101,89 @@ function createRegistry(
 }
 
 describe('target action invocation registry', () => {
+    it('uses the authored reversible own-UI default without weakening automation or explicit Ask', async () => {
+        const { createCollectionDetailPlugin } = await import('../../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-collection-detail/index');
+        const module = createCollectionDetailPlugin();
+        const plugin = await createPluginTestkit({ manifest: module.manifest, module });
+        const declaration = module.manifest.contributes?.actions?.find(candidate => candidate.id === 'set-complete');
+        if (!declaration) throw new Error('Collection completion declaration missing');
+        const handler = plugin.registration('actions', declaration.id);
+        if (!handler) throw new Error('Collection completion handler missing');
+        const contexts: PluginInvocationContext[] = [];
+        const caller = {
+            kind: 'plugin', pluginId: module.manifest.id,
+            contribution: { id: 'reviews', qualifiedId: `${module.manifest.id}/ui.views/reviews` },
+            occurrenceId: '7', sourceCustody: createManagedPluginSourceCustody('qa-collection-generation'),
+            originSurface: 'ui',
+        } as const;
+        const registry = createRegistry({ actions: [{
+            ...action(), pluginId: module.manifest.id, localId: declaration.id,
+            sourceCustody: caller.sourceCustody,
+            definition: { ...declaration, inputSchema: declaration.inputSchema },
+            handler: (input, context) => { contexts.push(context); return handler(input, context); },
+        }] });
+        const read = async () => {
+            const resource = plugin.registration('resources', 'rows');
+            if (!resource) throw new Error('Rows Resource missing');
+            return JSON.parse(String(await resource.read({ context: { kind: 'global' }, signal: new AbortController().signal })));
+        };
+        const invoke = (surface: 'ui' | 'agent' | 'mcp', completed: boolean, ask?: boolean,
+            invocationAuthority: 'present_user' | 'account_automation' = surface === 'ui' ? 'present_user' : 'account_automation') => registry.invoke({
+            pluginId: module.manifest.id, localId: declaration.id, surface,
+            invocationAuthority,
+            ...(surface === 'ui' ? { caller } : {}),
+            input: { rowId: 'release-guide', completed },
+            isApprovalRequiredByActionSettings: manifestDefault => ask ?? manifestDefault,
+        });
+        try {
+            expect(await invoke('ui', true)).toMatchObject({ status: 'executed', value: { row: { completed: true } } });
+            expect((await read()).rows[0].completed).toBe(true);
+            expect(await invoke('ui', false, undefined, 'account_automation'))
+                .toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+            expect((await read()).rows[0].completed).toBe(true);
+            for (const surface of ['agent', 'mcp', 'ui'] as const) {
+                expect(await invoke(surface, false, surface === 'ui' ? true : undefined))
+                    .toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+                expect((await read()).rows[0].completed).toBe(true);
+            }
+            expect(await invoke('ui', false)).toMatchObject({ status: 'executed', value: { row: { completed: false } } });
+            expect((await read()).rows[0].completed).toBe(false);
+            expect(contexts).toHaveLength(2);
+            for (const context of contexts) {
+                expect(context).toMatchObject({ surface: 'ui', caller,
+                    contribution: { qualifiedId: `${module.manifest.id}/actions/set-complete` } });
+            }
+        } finally { registry.dispose(); await plugin.dispose(); }
+    });
+
+    it('classifies normalized external Action input while preserving required approvals and replay admission', async () => {
+        const registry = createRegistry({ actions: [{
+            ...action({
+                inputSchema: {}, resultSchema: {}, dangerLevel: 'writesLocal',
+                confirmation: { title: 'Change bindings?' },
+                confirmationWhen: { op: 'not', predicate: { op: 'eq', path: 'kind', value: 'list' } },
+            }),
+            inputParser: input => ({ success: true, data: { kind: isJsonRecord(input) ? input.normalizedKind : null } }),
+            handler: async input => input,
+        }] });
+        const base = { pluginId: 'acme.alpha', localId: 'run', surface: 'cli' as const };
+        try {
+            const listed = await registry.invoke({ ...base, input: { kind: 'attach', normalizedKind: 'list' },
+                isApprovalRequiredByActionSettings: manifestDefault => manifestDefault,
+            });
+            expect(listed, JSON.stringify(listed)).toMatchObject({ status: 'executed', value: { kind: 'list' } });
+            expect(await registry.invoke({ ...base, input: { kind: 'list', normalizedKind: 'attach' },
+                isApprovalRequiredByActionSettings: manifestDefault => manifestDefault,
+            })).toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+            expect(await registry.invoke({ ...base, input: { normalizedKind: 'list' },
+                isApprovalRequiredByActionSettings: () => true,
+            })).toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+            expect(await registry.invoke({ ...base, input: { kind: 'list' }, requireCurrentIntent: true,
+                isApprovalRequiredByActionSettings: () => false,
+            })).toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+        } finally { registry.dispose(); }
+    });
+
     it.each((['agent', 'mcp', 'cli'] as const).flatMap(surface =>
         (['handler', 'result'] as const).map(phase => ({ surface, phase })),
     ))('keeps raw confidential operands classified after normalization for $phase on $surface', async ({ surface, phase }) => {

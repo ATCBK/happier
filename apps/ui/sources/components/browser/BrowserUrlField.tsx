@@ -228,10 +228,12 @@ export function BrowserUrlField(props: BrowserUrlFieldProps): React.ReactElement
     draftRef.current = rawDraft;
     const editIntent = React.useRef({ key: props.editIntentKey, started: false });
 
-    // Keep the editable draft in sync with the authoritative value while blurred so navigations
-    // driven elsewhere (redirects, programmatic loads) are reflected on the next focus without
-    // clobbering an in-progress edit.
+    // External navigations update a blurred draft. A focus transition alone must not reset it:
+    // clicking Go blurs the input before the button's release submits the typed address.
+    const observedValue = React.useRef(props.value);
     React.useEffect(() => {
+        if (observedValue.current === props.value) return;
+        observedValue.current = props.value;
         if (!focused) {
             setRawDraft(props.value);
             draftRef.current = props.value;

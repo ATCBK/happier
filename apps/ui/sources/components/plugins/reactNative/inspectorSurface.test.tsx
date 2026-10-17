@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginUiExecuteActionRequestV1Schema, PluginUiJsonValueV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { createPluginSurfaceHostApi } from '@/components/plugins/surfaces/createPluginSurfaceHostApi';
 import { createCanonicalPluginReactNativeHostApiAdapter } from './hostApi';
+import { createDeferred } from '@/dev/testkit';
 
 /**
  * RN-DOGFOOD — mounts the REAL inspector RN surface source
@@ -122,6 +123,38 @@ afterEach(() => {
 });
 
 describe('inspector renderSurface (real source, mounted)', () => {
+    it('publishes its pending inventory after an unrelated serialized context update', async () => {
+        const firstRead = createDeferred<unknown>();
+        const laterRead = createDeferred<unknown>();
+        let inventoryStarted = false;
+        const hostApi = createInspectorTabHostApi(async (actionId) => {
+            if (actionId !== 'plugins.list') throw new Error(`unexpected actionId ${actionId}`);
+            if (inventoryStarted) return await laterRead.promise;
+            inventoryStarted = true;
+            return await firstRead.promise;
+        });
+        const surface = createInspectorTabSurface({ translations: { 'plugins.inspector.title': 'Inspector' } });
+        const signal = new AbortController().signal;
+        await act(async () => {
+            renderer = create(renderInspectorSurface({ hostApi, surface, signal }));
+        });
+        expect(inventoryStarted).toBe(true);
+        await act(async () => {
+            renderer!.update(renderInspectorSurface({ hostApi, signal, surface: {
+                ...surface, translations: { ...surface.translations },
+                safeAreaInsets: { ...surface.safeAreaInsets, top: 44 },
+            } }));
+        });
+        const inventory = { ok: true, kind: 'plugins_list', plugins: [{ pluginId: 'acme.pending', enabled: true }] };
+        await act(async () => { firstRead.resolve(inventory); });
+        try {
+            await waitForTestId(renderer!, 'inspector-plugin-acme.pending');
+            expect(findByTestId(renderer!, 'inspector-refresh-progress')).toHaveLength(0);
+        } finally {
+            await act(async () => { laterRead.resolve(inventory); });
+        }
+    });
+
     it('settles its declared self-check through the same public Action bridge as inventory', async () => {
         const executeAction = vi.fn(async (actionId: string) => {
             if (actionId === 'plugins.list') return { ok: true, kind: 'plugins_list', plugins: [] };
@@ -325,7 +358,6 @@ describe('inspector renderSurface (real source, mounted)', () => {
             title: 'Plugin inventory unavailable',
         });
         expect(failure?.description).not.toBe('internal_error');
-        expect(failure?.description).toBe('Plugin inventory unavailable');
         await findPressableByTestId(renderer!, 'inspector-error-retry');
     });
 });

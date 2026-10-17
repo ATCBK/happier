@@ -34,6 +34,8 @@ import type { ExecutionRunPromptResponseTarget } from '@/components/tools/shell/
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 import { useTranscriptFindRow } from '@/components/sessions/transcript/find/TranscriptFindContext';
 import { sliceFindRanges } from '@/components/ui/text/FindHighlightedText';
+import { isSessionActionConfirmationRequest } from '@happier-dev/protocol/sessions/metadata/sessionActionConfirmationsV1';
+import { SessionActionConfirmationPromptCard } from '@/components/tools/shell/userActions/SessionActionConfirmationPromptCard';
 
 type ToolInlineBodyMode = 'card' | 'timeline';
 type DisplayCode = Readonly<{
@@ -180,6 +182,30 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
             <TextSelectabilityScope selectable>
                 <ToolError message={errorDisplay.override} messageId={props.messageId} blockId="tool-error-override" />
             </TextSelectabilityScope>
+        );
+    }
+
+    // A host confirmation is also materialized as a transcript tool row. Its
+    // request is deduplicated there, so that row must retain the decision card.
+    if (props.sessionId && !props.executionRun && tool.permission?.status === 'pending'
+        && tool.permission.kind === 'user_action' && isSessionActionConfirmationRequest(tool.permission)) {
+        return (
+            <SessionActionConfirmationPromptCard
+                request={{
+                    id: tool.permission.id,
+                    tool: tool.name,
+                    kind: 'user_action',
+                    source: tool.permission.source,
+                    arguments: tool.input,
+                    createdAt: tool.createdAt,
+                    turnId: tool.permission.turnId,
+                }}
+                sessionId={props.sessionId}
+                serverId={props.serverId}
+                canApprovePermissions={props.interaction?.canApprovePermissions === true}
+                disabledReason={props.interaction?.permissionDisabledReason}
+                chrome={props.mode === 'timeline' ? 'inline' : 'card'}
+            />
         );
     }
 

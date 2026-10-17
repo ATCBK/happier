@@ -962,6 +962,11 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
                 return withoutScopedPluginSettingsWriteSnapshot(result);
             }
             const resultSnapshot = 'snapshot' in result ? result.snapshot : undefined;
+            if (result.status === 'declined') {
+                state = { ...state, writePending: pendingWriteCount > 0, error: null };
+                notify();
+                return result;
+            }
             if (
                 resultSnapshot !== undefined
                 && (
@@ -1420,6 +1425,21 @@ function useScopedPluginSettingsFieldModels(
             };
             draftsRef.current = next;
             setDrafts(next);
+            return result;
+        }
+        if (result?.status === 'declined') {
+            if (field.control === 'switch' || field.control === 'select' || field.control === 'multiSelect') {
+                const next = { ...draftsRef.current };
+                delete next[field.key];
+                draftsRef.current = next;
+                setDrafts(next);
+            }
+            setErrors((previous) => {
+                if (!Object.prototype.hasOwnProperty.call(previous, field.key)) return previous;
+                const next = { ...previous };
+                delete next[field.key];
+                return next;
+            });
             return result;
         }
         if (result?.status === 'ready' || result?.status === 'applied') {

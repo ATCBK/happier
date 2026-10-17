@@ -1,7 +1,9 @@
 import { storage } from '@/sync/domains/state/storage';
+import { shallow } from 'zustand/vanilla/shallow';
+import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { resolveMachineForActiveServerFromState, resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
-import { resolveVoiceExecutionMachineSelectionFromState } from '@/voice/settings/executionMachine';
+import { resolveVoiceExecutionMachineIdFromState, resolveVoiceExecutionMachineSelectionFromState } from '@/voice/settings/executionMachine';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/accountSettingsScope';
@@ -39,17 +41,27 @@ export function resolveVoiceExecutionMachinePresentationFromState(state: ReturnT
  * The single UI projection of the selected voice execution machine.
  * Credential settings use this for both display and request invalidation.
  */
-export function useVoiceExecutionMachinePresentation(): VoiceExecutionMachinePresentation {
+function useVoiceExecutionMachineState<Value>(select: (state: ReturnType<typeof storage.getState>) => Value): Value {
   const scope = useAccountSettingsScope();
   useVoiceTargetStore((state) => scope
     ? state.autoTargetMachineByScope[accountSettingsScopeKeySuffix(scope)]
     : undefined);
-  const selectionKind = storage((state) => resolveVoiceExecutionMachineSelectionFromState(state).kind);
-  const selectedMachineId = storage((state) => {
-    const selection = resolveVoiceExecutionMachineSelectionFromState(state);
-    return selection.kind === 'none' ? null : selection.machineId;
-  });
-  const machineId = selectionKind === 'resolved' ? selectedMachineId : null;
-  const machineLabel = storage((state) => machineLabelFromState(state, selectedMachineId));
+  // Cache selection by the stable storage snapshot: presence can expire
+  // between React's reads without the storage object changing.
+  // A fresh selector on render also observes local auto-target and scope wakes.
+  return useStoreWithEqualityFn(storage, state => select(state), shallow);
+}
+
+/** Execution consumers subscribe to selection, without machine label presentation. */
+export function useVoiceExecutionMachineId(): string | null {
+  return useVoiceExecutionMachineState(resolveVoiceExecutionMachineIdFromState);
+}
+
+export function useVoiceExecutionMachinePresentation(): VoiceExecutionMachinePresentation {
+  const selection = useVoiceExecutionMachineState(resolveVoiceExecutionMachineSelectionFromState);
+  const selectionKind = selection.kind;
+  const selectedMachineId = selection.kind === 'none' ? null : selection.machineId;
+  const machineId = selection.kind === 'resolved' ? selectedMachineId : null;
+  const machineLabel = useStoreWithEqualityFn(storage, state => machineLabelFromState(state, selectedMachineId));
   return { selectedMachineId, machineId, machineLabel, selectionKind };
 }

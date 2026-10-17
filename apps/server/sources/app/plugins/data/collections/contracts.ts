@@ -144,14 +144,11 @@ function canonicalizeWritableContractRefs(input: Readonly<{
  * Reads one exact immutable contract fact for Data-owned readiness and query
  * callers. It intentionally knows nothing about release selection.
  */
-async function readExactMaterializedPluginCollectionContractTx(input: Readonly<{
-    tx: Tx;
+export async function findExactMaterializedPluginCollectionContractTx(input: Readonly<{
+    tx: Pick<Tx, 'pluginCollectionContract'>;
     ref: PluginCollectionContractRefV1;
-}>): Promise<Readonly<{
-    id: string;
-    contract: NormalizedPluginAccountCollectionContractV1;
-}>> {
-    const persisted = await input.tx.pluginCollectionContract.findFirst({
+}>): Promise<(StoredPluginCollectionContractRow & Readonly<{ id: string }>) | null> {
+    return await input.tx.pluginCollectionContract.findFirst({
         where: {
             pluginId: input.ref.pluginId,
             collectionId: input.ref.collectionId,
@@ -170,6 +167,16 @@ async function readExactMaterializedPluginCollectionContractTx(input: Readonly<{
             privacyProjection: true,
         },
     });
+}
+
+async function readExactMaterializedPluginCollectionContractTx(input: Readonly<{
+    tx: Tx;
+    ref: PluginCollectionContractRefV1;
+}>): Promise<Readonly<{
+    id: string;
+    contract: NormalizedPluginAccountCollectionContractV1;
+}>> {
+    const persisted = await findExactMaterializedPluginCollectionContractTx(input);
     if (!persisted) {
         throw new PluginCollectionWriterReadinessError("collection_writer_contract_unavailable");
     }

@@ -10,7 +10,6 @@ import {
 } from '../presentation/interaction/pressFeedback.js';
 import type { HappierPortableStyle } from '../presentation/portableTypes.js';
 import {
-  HAPPIER_BUTTON_DISABLED_OPACITY,
   resolveHappierButtonChrome,
   useHappierButtonMaterial,
 } from '../presentation/interaction/buttonChrome.js';
@@ -147,6 +146,9 @@ export function Button({
   );
 }
 
+// In a stretching column a labelled button keeps its own width on the leading edge (`isHappierInlineControl`).
+Button.happierInlineControl = true as const;
+
 // Page chrome consumes the same semantic operation from source and separately bundled plugins.
 // The public adapter owns its author vocabulary; the host owns phone placement and row ordering.
 Button.happierPageOperation = (
@@ -180,17 +182,24 @@ export function useButtonFace(variant: ButtonVariant, size: ButtonSize, disabled
   const palette = useOptionalHappierUiPalette(theme);
   const nativeMinimumTarget = useHappierNativeMinimumInteractiveTargetSize();
   const { foreground } = resolveHappierButtonChrome({ theme, variant, disabled, focused: false, ...material });
-  const style = (state: HappierPressableStyleState): HappierPortableStyle => ({
-    ...resolveHappierButtonChrome({
+  const style = (state: HappierPressableStyleState): HappierPortableStyle => {
+    const chrome = resolveHappierButtonChrome({
       theme, variant, size, nativeMinimumTarget, disabled: state.disabled, focused: state.focused,
       pressed: state.pressed, gloss: palette?.accentGloss, ...material,
-    }).style,
-    opacity: state.disabled && !state.busy ? HAPPIER_BUTTON_DISABLED_OPACITY : 1,
-    // The shared press vocabulary: a discrete control scales under the finger
-    // (an opacity dip under reduced motion), eased on web.
-    ...happierDiscretePressStyle(state.pressed && !state.disabled, reducedMotion),
-    ...happierPressTransitionStyle(state.pressed, ['transform', 'opacity'], reducedMotion),
-  });
+    });
+    return {
+      ...chrome.style,
+      // A button never runs past its container: in a narrow pane its label wraps
+      // instead of overflowing the card or the pane edge.
+      flexShrink: 1,
+      maxWidth: '100%',
+      opacity: state.disabled && !state.busy ? chrome.disabledOpacity : 1,
+      // The shared press vocabulary: a discrete control scales under the finger
+      // (an opacity dip under reduced motion), eased on web.
+      ...happierDiscretePressStyle(state.pressed && !state.disabled, reducedMotion),
+      ...happierPressTransitionStyle(state.pressed, ['transform', 'opacity'], reducedMotion),
+    };
+  };
   const renderContent = (
     state: HappierPressableStyleState,
     content: Readonly<{ icon?: ReactNode; children: ReactNode; spinnerTestID?: string }>,
@@ -210,9 +219,9 @@ export function useButtonFace(variant: ButtonVariant, size: ButtonSize, disabled
         that resizes under the pointer is the reason a second press lands
         somewhere else.
       */}
-      <View style={state.busy ? { opacity: 0 } : undefined}>
+      <View style={state.busy ? { opacity: 0, flexShrink: 1 } : { flexShrink: 1 }}>
         {typeof content.children === 'string' || content.children === undefined ? (
-          <HappierText variant="label" style={{ color: foreground }}>
+          <HappierText variant="label" style={{ color: foreground, textAlign: 'center' }}>
             {content.children}
           </HappierText>
         ) : content.children}

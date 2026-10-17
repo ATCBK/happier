@@ -126,6 +126,10 @@ export type ResolvedWorkflowContribution = ResolvedTargetUiContribution<PluginWo
 export type ResolvedInputTypeContribution = ResolvedTargetUiContribution<PluginInputTypeContributionV1>;
 export type ResolvedAtmospherePictureContribution = ResolvedTargetUiContribution<PluginAtmospherePictureContributionV1>;
 export type ResolvedRegistrySourceContribution = ResolvedTargetUiContribution<import('@happier-dev/protocol').PluginRegistrySourceContributionV1>;
+export type ResolvedSkillContribution = ResolvedTargetUiContribution<import('@happier-dev/protocol').PluginSkillContributionV1> & Readonly<{
+    pluginRootPath: string;
+    pluginName?: string;
+}>;
 export type ResolvedMachineProvisionerContribution = ResolvedTargetUiContribution<MachineProvisionerContributionV1>;
 export type ResolvedClientExecutableContribution<T> = ResolvedTargetUiContribution<T> & Readonly<{
     pluginRootPath: string;
@@ -423,6 +427,7 @@ type ResolvedActionDefinitionBase = Readonly<
 >;
 
 type ResolvedActionPresentation = Readonly<{
+    confirmationWhen?: PluginActionContributionV2['confirmationWhen'];
     /** Manifest Action icon retained for host-rendered catalog consumers. */
     icon?: PluginActionContributionV2['icon'];
     /** Canonical V2 semantic bindings retained through the legacy passthrough shell. */
@@ -461,8 +466,8 @@ type ResolvedContributedActionDefinition = Readonly<
 >;
 
 export type ResolvedActionDefinition =
-    | LegacyResolvedActionDefinition
-    | ResolvedContributedActionDefinition;
+    (LegacyResolvedActionDefinition | ResolvedContributedActionDefinition)
+    & Readonly<Pick<PluginActionContributionV2, 'connectedAccountPurposeBindings'>>;
 
 export type ResolvedToolDefinition = Readonly<PluginToolContributionV2 & {
     kindVersion: 1;
@@ -861,6 +866,7 @@ export type ResolvedContributionInputs = Readonly<{
     inputTypes?: readonly ResolvedInputTypeContribution[];
     atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
     registrySources?: readonly ResolvedRegistrySourceContribution[];
+    skills?: readonly ResolvedSkillContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];
@@ -925,6 +931,7 @@ export type ResolvedContributionRegistry = Readonly<{
     inputTypes?: readonly ResolvedInputTypeContribution[];
     atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
     registrySources?: readonly ResolvedRegistrySourceContribution[];
+    skills?: readonly ResolvedSkillContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];

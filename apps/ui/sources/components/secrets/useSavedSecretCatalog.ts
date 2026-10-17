@@ -26,9 +26,11 @@ import {
 } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import {
     deleteSavedSecretResource,
+    updateSavedSecretResource,
     type SavedSecretCreationResult,
     type SavedSecretResourceDeleteResult,
 } from '@/sync/ops/settings/savedSecretResourceOperations';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 type SavedSecretCatalogCorruptOwnerEntry = Extract<
     SavedSecretCatalogCorruptEntryV1,
@@ -58,6 +60,8 @@ export type SavedSecretCatalogProjection = Readonly<{
     collisionMigrationStatus: 'not_required' | 'migrating' | 'failed';
     entries: readonly SavedSecretCatalogEntryV1[];
     sharedEntries: readonly SavedSecretCatalogEntryV1[];
+    /** All resources keep their storage/access management metadata, including private resources. */
+    updateResource: (input: Omit<Parameters<typeof updateSavedSecretResource>[0], 'scope'>) => ReturnType<typeof updateSavedSecretResource>;
     /** Selection rows retain private editing without reclassifying resource-management targets. */
     picker: Readonly<{
         personalSecrets: readonly SavedSecret[];
@@ -142,7 +146,6 @@ export function useSavedSecretCatalog(options?: Readonly<{
             resourceId: entry.repair.resourceId,
             expectedRevision: entry.repair.expectedRevision,
             expectedSettingsVersion: settingsVersion,
-            confirmedByPresentUser: true,
         });
         if (!result.ok && result.reason === 'outcome_unknown') {
             await refreshSavedSecretCatalog(scope).catch(() => undefined);
@@ -159,9 +162,7 @@ export function useSavedSecretCatalog(options?: Readonly<{
                 || entry.revision === null || entry.materialStatus !== 'ready'
                 || (change.nextName !== undefined && !entry.capabilities.rename)
                 || (change.nextValue !== undefined && !entry.capabilities.rotate)) return false;
-            const result = await runTeamAction({scope,actionId:'secrets.update',input:{secretId:reference.resourceId,expectedUpdatedAt:entry.revision,
-                ...(change.nextName===undefined?{}:{name:change.nextName}),...(change.nextValue===undefined?{}:{value:change.nextValue})},
-                parse:value=>PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.update'].parse(value)});
+            const result = await updatePrivateResource(scope, { resourceId: reference.resourceId, expectedRevision: entry.revision, ...change });
             if (result.kind==='failed' && result.failure.kind==='outcome_unknown') await refreshSavedSecretCatalog(scope).catch(() => undefined);
             return result.kind==='succeeded';
         } catch (error) {
@@ -177,7 +178,7 @@ export function useSavedSecretCatalog(options?: Readonly<{
         if (!name || input.value.length === 0) return null;
         if (!scope || !scopeIsActive || !catalogEnabled) return null;
         const noteDeclinedApproval = (code: string | null | undefined) => {
-            if (code === 'approval_rejected' || code === 'approval_canceled') approval?.onApprovalDeclined?.();
+            if (isActionApprovalDeclinedErrorCode(code)) approval?.onApprovalDeclined?.();
         };
         const execute = async (callbacks?: Readonly<{
             onApprovalSucceeded: (result: Extract<SavedSecretCreationResult, { ok: true }>) => void;
@@ -241,12 +242,6 @@ export function useSavedSecretCatalog(options?: Readonly<{
         return updateResource(secret, { nextValue: value });
     }, [updateResource]);
     const deletePersonal = React.useCallback(async (secret: SavedSecret) => {
-        const confirmed = await Modal.confirm(
-            t('secrets.prompts.deleteTitle'),
-            t('secrets.prompts.deleteConfirm', { name: secret.name }),
-            { cancelText: t('common.cancel'), confirmText: t('common.delete'), destructive: true },
-        );
-        if (!confirmed) return false;
         if (!scope || !scopeIsActive || !catalogEnabled || settingsVersion === null) return false;
         const reference = parseSavedSecretRefV1(secret.id);
         const entry = sharedEntries.find(candidate => candidate.ref === secret.id);
@@ -281,6 +276,20 @@ export function useSavedSecretCatalog(options?: Readonly<{
     }, [personalSecrets, sharedEntries]);
     const picker = React.useMemo(() => Object.freeze({ personalSecrets, sharedEntries: displayedSharedEntries }),
         [personalSecrets, displayedSharedEntries]);
+    const updateCatalogResource = React.useCallback(async (input: Omit<Parameters<typeof updateSavedSecretResource>[0], 'scope'>) => {
+        if (!scope || !scopeIsActive) return { ok: false as const, reason: 'unavailable' as const };
+        const secret = personalSecrets.find(secret => {
+            const reference = parseSavedSecretRefV1(secret.id);
+            return reference.kind === 'shared_resource' && reference.resourceId === input.resourceId;
+        });
+        // Privacy is decided once by this catalog projection. Storage conversion
+        // retains the resource Action, with its separate disclosure and review.
+        if (!secret || input.toMode !== undefined) return updateSavedSecretResource({ ...input, scope });
+        const result = await updatePrivateResource(scope, input);
+        return result.kind === 'succeeded' ? { ok: true as const } : { ok: false as const,
+            reason: result.failure.kind === 'outcome_unknown' ? 'outcome_unknown' as const
+                : result.failure.kind === 'conflict' ? 'changed' as const : 'failed' as const };
+    }, [personalSecrets, scope, scopeIsActive]);
     const resolveReference = React.useCallback(
         (ref: string) => {
             return resolveSavedSecretReference(scope, EMPTY_MATERIALIZED_SECRETS, ref);
@@ -290,13 +299,14 @@ export function useSavedSecretCatalog(options?: Readonly<{
 
     return Object.freeze({
         sharedEnabled,
-        personalSecrets: EMPTY_MATERIALIZED_SECRETS,
+        personalSecrets,
         personalMutationsAvailable: scopeIsActive && catalogEnabled,
         personalMutations,
         collisionMigrationStatus: 'not_required',
         entries,
-        sharedEntries,
+        sharedEntries: displayedSharedEntries,
         picker,
+        updateResource: updateCatalogResource,
         corruptEntries,
         deleteCorruptResource,
         materializedSecrets: getMaterializedSavedSecrets(scope),
@@ -313,3 +323,12 @@ const EMPTY_SHARED_ENTRIES: readonly SavedSecretCatalogEntryV1[] = Object.freeze
 const EMPTY_CORRUPT_ENTRIES: readonly SavedSecretCatalogCorruptEntryV1[] = Object.freeze([]);
 const EMPTY_MATERIALIZED_SECRETS: readonly SavedSecret[] = Object.freeze([]);
 const subscribeNoop = () => () => undefined;
+
+function updatePrivateResource(scope: AccountSettingsScope, input: Pick<Parameters<typeof updateSavedSecretResource>[0],
+    'resourceId' | 'expectedRevision' | 'nextName' | 'nextValue'>) {
+    return runTeamAction({ scope, actionId: 'secrets.update', input: {
+        secretId: input.resourceId, expectedUpdatedAt: input.expectedRevision,
+        ...(input.nextName === undefined ? {} : { name: input.nextName }),
+        ...(input.nextValue === undefined ? {} : { value: input.nextValue }),
+    }, parse: value => PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.update'].parse(value) });
+}

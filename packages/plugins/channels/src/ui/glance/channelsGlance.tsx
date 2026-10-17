@@ -138,6 +138,9 @@ function ChannelsColumn(props: Readonly<{
         testID: 'channels-column-bots',
       }}
     >
+      {props.snapshot.state === 'loading' ? (
+        <LoadingState testID="channels-column-loading" title={t('plugins.channels.page.loadingTitle', 'Loading conversations')} rows={3} />
+      ) : null}
       {props.snapshot.state === 'ready' && bindings.length === 0 ? (
         <EmptyState
           testID="channels-column-empty"
@@ -168,7 +171,7 @@ function ChannelsColumn(props: Readonly<{
             mark: <BrandMark pluginId={group.providerPluginId} size="small" externallyLabelled />,
           })}
           {...(group.botAttention === undefined ? {} : {
-            status: { kind: 'attention' as const, label: t('plugins.channels.column.botNeedsYou', 'Bot needs you') },
+            status: { kind: 'attention' as const, label: group.botAttention.label },
           })}
         >
           {group.rows.map((row) => {
@@ -279,7 +282,7 @@ function ChannelsHomeWidget(props: Readonly<{ snapshot: ChannelsConversationSnap
         title={props.snapshot.state === 'error'
           ? t('plugins.channels.column.unavailable', 'Conversations can’t be read right now.')
           : noBots
-            ? t('plugins.channels.widget.noBots', 'Connect a bot to talk to your sessions from Telegram, Discord or GitHub.')
+            ? t('plugins.channels.widget.noBotsAnyProvider', 'Connect a bot to talk to your sessions from a chat, a mailbox, a channel or an issue.')
             : t('plugins.channels.widget.noConversations', 'Link a conversation to a session.')}
       />
     );

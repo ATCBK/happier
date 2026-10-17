@@ -13,6 +13,7 @@ import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '../account/settings/sessionAgentSpawnPolicyV1.js';
 import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 import { ActionDefinitionV1Schema } from './actionDefinitionV1.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 
 const canonicalInput = {
   creationKey: 'plugin-operation-7',
@@ -76,6 +77,36 @@ function createExternalSpawnApprovalContext(requestId: string) {
 
 describe('session.spawn_new canonical execution', () => {
   const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
+
+  it.each([false, true])('resolves inherited Machine and Agent choices before parsing an installed Session spawn (observed=%s)', async observed => {
+    // Native Session creation is the process boundary; inheritance and admission stay real.
+    const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => ({
+      type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted',
+    }));
+    const executor = createActionExecutor({ sessionSpawnNew,
+      // Installed-plugin observation is an external notification boundary.
+      ...(observed ? { observeActionExecution: async () => {} } : {}),
+    } as unknown as ActionExecutorDeps);
+    const result = await executor.execute('session.spawn_new', {
+      creationKey: 'inherited-session-child',
+      directory: { kind: 'path', path: '/workspace/project' },
+      initialInput: { text: 'Reply READY, then idle.' },
+    }, {
+      surface: 'agent', authority: 'account_automation',
+      serverId: 'server-1', runtimeAccountId: 'account-1', defaultSessionId: 'parent-session',
+      actionCaller: { kind: 'session', sessionId: 'parent-session', starterDepth: 0, turnDepth: 0 },
+      agentStartContext, callerPermissionMode: 'default',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+      sessionInputSource: { sourceSessionId: 'parent-session', sourceTurnId: 'parent-turn-1', via: 'action' },
+      sessionAgentSpawnPolicyV1: DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'pending', outcome: 'accepted' } });
+    expect(sessionSpawnNew.mock.calls[0]?.[0]).toMatchObject({
+      executionTarget: { serverId: 'server-1', machineId: 'parent-machine' },
+      agentTarget: canonicalInput.agentTarget,
+      reportsTo: { sessionId: 'parent-session' },
+    });
+  });
 
   it('carries attestation only for the host-stamped plugin spawn caller', async () => {
     const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => ({
@@ -1167,6 +1198,49 @@ describe('session.spawn_new canonical execution', () => {
       status: 'failed',
       execution: { ok: false, errorCode: 'approval_stale' },
     });
+  });
+
+  it.each([
+    { surface: 'ui', authority: 'present_user', ask: false, waived: false },
+    { surface: 'rpc', authority: 'present_user', ask: false, waived: false },
+    { surface: 'ui', authority: 'present_user', ask: true, waived: false },
+    { surface: 'rpc', authority: 'present_user', ask: true, waived: false },
+    { surface: 'agent', authority: 'account_automation', ask: false, waived: false },
+    { surface: 'agent', authority: 'account_automation', ask: false, waived: true },
+  ] as const)('resolves missing-directory spawn through Action policy for $surface/$authority (Ask=$ask, waived=$waived)', async ({ surface, authority, ask, waived }) => {
+    const directoryApproval = { v: 1 as const, executionTarget: canonicalInput.executionTarget,
+      directory: canonicalInput.directory.path };
+    const effects: Parameters<ActionExecutorDeps['sessionSpawnNew']>[0][] = [];
+    const requests: unknown[] = [];
+    // Target inspection/spawn and the Account Artifact store are process/storage
+    // boundaries. The executor, declaration, policy and request codec stay real.
+    const deps = {
+      sessionSpawnNewDirectoryApprovalPreflight: async () => ({ type: 'approval_required' as const, approval: directoryApproval }),
+      sessionSpawnNew: async (input) => {
+        effects.push(input);
+        return { type: 'pending' as const, retryWithSameCreationKey: true as const, outcome: 'accepted' as const };
+      },
+      approvalsCreate: async ({ request }) => { requests.push(request); return { artifactId: 'directory-policy-approval' }; },
+      resolveAgentStartContext: async () => agentStartContext,
+    } satisfies Partial<ActionExecutorDeps>;
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
+    const requiresApproval = ask || (surface === 'agent' && !waived);
+    const result = await executor.execute('session.spawn_new', canonicalInput, {
+      surface, authority, actionCaller: surface === 'agent' ? agentStartContext.caller : { kind: 'host' },
+      serverId: 'server-1', runtimeAccountId: 'account-1',
+      ...(surface === 'agent' ? { defaultSessionId: 'parent-session' } : {}),
+      actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: ask ? { 'session.spawn_new': { approvalRequiredSurfaces: [surface] } } : {},
+        ...(waived ? { approvalWaivedSurfaces: { 'session.spawn_new': [surface] } } : {}),
+      }),
+    });
+    expect(result).toMatchObject(requiresApproval
+      ? { ok: true, result: { kind: 'approval_request_created', actionId: 'session.spawn_new' } }
+      : { ok: true, result: { type: 'pending', outcome: 'accepted' } });
+    expect(effects).toHaveLength(requiresApproval ? 0 : 1);
+    if (!requiresApproval) expect(effects[0]).toMatchObject({ sessionCreationDirectoryApproval: directoryApproval,
+      context: { authority }, actionCaller: surface === 'agent' ? agentStartContext.caller : { kind: 'host' },
+    });
+    expect(requests).toHaveLength(requiresApproval ? 1 : 0);
   });
 
   it('requires a target-owned directory approval before spawning and carries that exact proof into replay', async () => {

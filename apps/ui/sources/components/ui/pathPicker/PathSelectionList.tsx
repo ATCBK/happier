@@ -491,7 +491,8 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
                 // dynamic section reports notFound).
                 const errorMessage = result.error ?? '';
                 if (isPathNotFoundErrorMessage(errorMessage)) {
-                    return { options: [], notFound: true };
+                    // A path that doesn't exist yet is still usable: Enter commits it as typed.
+                    return { options: [], notFound: true, notFoundHint: t('newSession.pathPicker.emptyNewFolder') };
                 }
                 // Sanitized: drop the raw OS-style traceback (which contains
                 // the absolute path and looks alarming). The orchestrator
@@ -566,7 +567,8 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
                 });
             return {
                 options,
-                emptyHint: t('newSession.pathPicker.emptyInThisFolder'),
+                // Enter commits the typed path whether or not it exists yet; the empty state says so.
+                emptyHint: t('newSession.pathPicker.emptyNewFolder'),
             };
         },
         // Empty deps — the closure is anchored at mount and reads volatile
@@ -646,6 +648,8 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
         return {
             id: 'path-root',
             inputPlaceholder: t('newSession.pathPicker.enterPathPlaceholder'),
+            // Nothing matches (a new folder name): Enter still uses the path as typed.
+            emptyStateLabel: t('newSession.pathPicker.emptyNewFolder'),
             sections,
             footerHints: [
                 { id: 'navigate', label: '↑↓', description: t('newSession.pathPicker.hints.navigate') },

@@ -158,10 +158,8 @@ describe('SelectionList dynamic-section state rendering (Phase 2.2 mapping)', ()
         const firstEventKey = statusEventKey(screen);
         expect(statusText(screen)).toBe('1 · SESSIONS');
 
+        await screen.update(<SelectionList {...defaultProps(root)} inputValue="second" />);
         await act(async () => {
-            screen.tree.update(
-                <SelectionList {...defaultProps(root)} inputValue="second" />,
-            );
             await Promise.resolve();
             await Promise.resolve();
         });
@@ -328,6 +326,8 @@ describe('SelectionList dynamic-section state rendering (Phase 2.2 mapping)', ()
         });
         expect(screen.getTextContent()).toContain('Searching messages…');
         expect(screen.findByTestId('sl:section:dyn:loading:row-0')).toBeNull();
+        // The line is the app's in-list state line: it leads with the quiet working ring.
+        expect(screen.findByTestId('sl:section:dyn:loading:hint-loading-spinner')).not.toBeNull();
     });
 
     it('renders a localized inline error without exposing the resolver message', async () => {
@@ -478,5 +478,65 @@ describe('SelectionList dynamic-section state rendering (Phase 2.2 mapping)', ()
         } | null;
         expect(updatedInput?.props.value).toBe('~/Documents/Projects/');
         expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    // One cause once: sections that fail for the same named cause say it in one line under the first of them,
+    // and the section's own Retry link re-runs every section that line stands for.
+    it('says a shared failure cause once and retries every section behind that line', async () => {
+        const { act } = await import('react-test-renderer');
+        const { SelectionListSectionFailure } = await import('../selectionListSectionFailure');
+        const calls = { a: 0, b: 0, c: 0 };
+        const failing = (id: 'a' | 'b' | 'c', failure: () => Error): SelectionListDynamicSection => ({
+            id, title: id.toUpperCase(), debounceMs: 0, retryLabel: 'Retry',
+            resolve: async () => { calls[id] += 1; throw failure(); },
+        });
+        const root: SelectionListStep = {
+            id: 'root',
+            inputPlaceholder: 'Search',
+            sections: [
+                { kind: 'dynamic', ...failing('a', () => new SelectionListSectionFailure({ hint: 'Folder is gone', causeKey: 'folder' })) },
+                { kind: 'dynamic', ...failing('b', () => new SelectionListSectionFailure({ hint: 'Folder is gone', causeKey: 'folder' })) },
+                { kind: 'dynamic', ...failing('c', () => new SelectionListSectionFailure({ hint: 'C failed' })) },
+            ],
+        };
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(<SelectionList {...defaultProps(root)} inputValue="x" />);
+        await act(async () => {
+            vi.advanceTimersByTime(1);
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        expect(screen.findByTestId('sl:section:a:error')).not.toBeNull();
+        expect(screen.findByTestId('sl:section:b:error')).toBeNull();
+        expect(screen.findByTestId('sl:section:c:error')).not.toBeNull();
+        const text = screen.getTextContent();
+        expect(text.split('Folder is gone')).toHaveLength(2);
+        expect(text).toContain('C failed');
+        expect(calls).toEqual({ a: 1, b: 1, c: 1 });
+
+        await act(async () => screen.pressByTestId('sl:section:a:error:retry'));
+        await act(async () => {
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        expect(calls).toEqual({ a: 2, b: 2, c: 1 });
+    });
+
+    it('offers no retry link for a failure that is not retryable', async () => {
+        const { act } = await import('react-test-renderer');
+        const { SelectionListSectionFailure } = await import('../selectionListSectionFailure');
+        const root = makeStep({
+            id: 'dyn', title: 'DYN', debounceMs: 0, retryLabel: 'Retry',
+            resolve: async () => { throw new SelectionListSectionFailure({ hint: 'Folder is gone', retryable: false }); },
+        });
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(<SelectionList {...defaultProps(root)} inputValue="x" />);
+        await act(async () => {
+            vi.advanceTimersByTime(1);
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        expect(screen.getTextContent()).toContain('Folder is gone');
+        expect(screen.findByTestId('sl:section:dyn:error:retry')).toBeNull();
     });
 });

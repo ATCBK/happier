@@ -885,56 +885,6 @@ describe('IdentityConnectionDetailScreen test return', () => {
         );
     });
 
-    it('names the target Team Group and the people a Group mapping moves before asking to confirm', async () => {
-        // The external Group id alone never said where those people were about
-        // to land, or how many of them there are. Both facts are already on the
-        // rows behind the confirmation.
-        groupBindingRowsMock.current = [{
-            id: 'binding-1',
-            externalGroupId: 'external-engineering',
-            target: { teamGroupId: 'team-group-opaque-id', name: 'Platform Engineering', archivedAt: null },
-        }];
-        nativeGroupsMock.current = [{ id: 'team-group-opaque-id', name: 'Platform Engineering', memberCount: 12 }];
-        const { Modal } = await import('@/modal');
-        vi.mocked(Modal.confirm).mockClear();
-        // Declining keeps this test on the confirmation contract: what the
-        // person is told before anything is written.
-        vi.mocked(Modal.confirm).mockResolvedValue(false);
-        const screen = await renderScreen(<IdentityConnectionDetailScreen
-            serverId="home-1"
-            teamId="team-1"
-            connectionId="connection-1"
-        />);
-
-        await screen.pressByTestIdAsync('identity-group-binding:binding-1');
-
-        expect(Modal.confirm).toHaveBeenCalledWith(
-            t('identityAdministration.removeMapping'),
-            ['external-engineering',
-                `${t('identityAdministration.mappedTo')}: Platform Engineering`,
-                t('teams.groups.memberCount', { count: 12 })].join('\n'),
-            expect.objectContaining({ destructive: true }),
-        );
-
-        vi.mocked(Modal.confirm).mockClear();
-        screen.changeTextByTestId('identity-external-group-id', 'external-design');
-        await screen.pressByTestIdAsync('identity-group-map-existing');
-        await screen.pressByTestIdAsync('identity-group-native-target:team-group-opaque-id');
-
-        expect(Modal.confirm).toHaveBeenCalledWith(
-            t('identityAdministration.chooseGroup'),
-            ['external-design',
-                `${t('identityAdministration.mappedTo')}: Platform Engineering`,
-                t('teams.groups.memberCount', { count: 12 })].join('\n'),
-            expect.any(Object),
-        );
-        expect(executeBindingMock).not.toHaveBeenCalledWith(
-            'teams.externalGroupBindings.set',
-            expect.anything(),
-            expect.anything(),
-        );
-    });
-
     it('names the Teams that accept a Home sign-in connection, and says so when none do', async () => {
         const homeWorkos = {
             ...identityStateMock.current.items[0]!,

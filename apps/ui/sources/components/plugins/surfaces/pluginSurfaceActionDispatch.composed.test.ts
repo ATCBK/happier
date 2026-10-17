@@ -83,6 +83,11 @@ import { dispatchPluginResolvedSemanticCommand } from './dispatchPluginResolvedS
 import { getPluginUiEphemeralSharedScope } from './pluginUiEphemeralSharedScope';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { getCurrentAuth, setCurrentAuth } from '@/auth/context/currentAuth';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 import { createPluginEntityDragDropBinding, executeMountedPluginEntityDropAction, settlePluginEntityDropActionResult } from './entityDragDrop/pluginEntityDragDropBinding';
 import { createActionOperationRunner } from '../../../../../cli/src/daemon/actionOperations/actionOperationRunner';
@@ -367,6 +372,14 @@ function createClientActionActivation(input: Readonly<{
     const projectedAction = Object.freeze({
         ...action,
         occurrenceId: input.occurrenceId ?? `occurrence-${pluginId}`,
+        authorization: {
+            ...CLIENT_ACTION_AUTHORIZATION,
+            generation: {
+                targetGeneration: input.occurrenceId ?? `occurrence-${pluginId}`,
+                desiredGeneration: input.occurrenceId ?? `occurrence-${pluginId}`,
+                appliedGeneration: input.occurrenceId ?? `occurrence-${pluginId}`,
+            },
+        },
         executionOrigin,
         [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin,
     });
@@ -1253,6 +1266,14 @@ describe('plugin-surface action branch selection', () => {
             accountLifetime,
             occurrenceId: 'triage-cold-search-generation',
         });
+        machineRpcWithServerScopeMock.mockImplementation(async (request: Readonly<{ method: string }>) => (
+            request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
+                ? { status: 'current', targetedContributions: PluginUiTargetedContributionsV1Schema.parse({
+                    target: { pluginId: activation.action.pluginId, occurrenceId: activation.action.occurrenceId,
+                        sourceCustody: TARGET_SOURCE_CUSTODY }, points: [],
+                }), targetedSurfaceMounts: [] }
+                : answerActionSchemasRead(request)
+        ));
         const entryRef = testkitEntryRef();
         const result = TriageListEntriesResultV1Schema.parse({
             v: 1,
@@ -1316,7 +1337,7 @@ describe('plugin-surface action branch selection', () => {
                 accountLifetime,
                 execute: transport,
             });
-            expect(outcome.ok).toBe(true);
+            expect(outcome).toMatchObject({ ok: true });
             if (!outcome.ok || !('result' in outcome)) throw new Error('Cold Triage Search did not execute');
             expect(PluginSearchResultV1Schema.parse(outcome.result)).toMatchObject({
                 items: [{ title: 'Replace the duplicated normalizer', command: { kind: 'openSurface' } }],
@@ -2742,6 +2763,123 @@ function resolveConfirmedDaemonTargetAction(
 // the UI asks the person, then carries the settled intent on the daemon RPC.
 // No daemon or server round trip may stand in for that local decision.
 describe('present-user confirmation for daemon-target Actions', () => {
+    it('uses the selected Home credential for authored UI confirmation rather than the focused Home', async () => {
+        const previousAuth = getCurrentAuth();
+        const terminalToken = `header.${Buffer.from(JSON.stringify({ sub: 'terminal-account', tokenEpoch: 0,
+            provenance: AuthTokenProvenanceSchema.parse({ v: 1, kind: 'terminal', authority: 'account_automation' }),
+        })).toString('base64url')}.signature`;
+        const homes = await serveAccountHomes({ homes: [
+            { key: 'target', serverUrl: 'https://plugin-target.example.test', accountId: 'terminal-account', credentials: { token: terminalToken } },
+            { key: 'focused', serverUrl: 'https://plugin-focused.example.test', accountId: 'focused-account', currentAccount: true },
+        ], route: () => undefined });
+        const focusedHome = homes.homes.focused!;
+        const focusedCredentials = await TokenStorage.getCredentialsForServerUrl(focusedHome.serverUrl, { serverId: focusedHome.id });
+        if (!focusedCredentials) throw new Error('Focused Home credential missing');
+        setCurrentAuth({ isAuthenticated: true, credentials: focusedCredentials,
+            credentialAuthorityKind: readCredentialAuthorityKind(focusedCredentials.token),
+            login: async () => { throw new Error('Unused auth boundary'); },
+            loginWithCredentials: async () => { throw new Error('Unused auth boundary'); },
+            logout: async () => { throw new Error('Unused auth boundary'); }, refreshFromActiveServer: async () => {},
+        });
+        const requestCurrentIntent = vi.fn(async ({ fingerprint }: Readonly<{ fingerprint: string }>) => ({ status: 'approved' as const, fingerprint }));
+        const contributed = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
+            supported: true, result: { ok: true, result: { completed: true } },
+        }));
+        clientActionSchemasByQualifiedId.set('qa.collection-detail/set-complete', { inputSchema: { type: 'object' } });
+        try {
+            expect(await dispatchPluginSurfaceAction({
+                action: { pluginId: 'qa.collection-detail', localId: 'set-complete' }, input: { completed: true },
+                resolveContributedAction: identity => PluginProjectedActionV2Schema.parse({
+                    ...resolveConfirmedDaemonTargetAction(identity), dangerLevel: 'writesLocal',
+                    confirmationWhen: { presentUserUi: false },
+                }), requestCurrentIntent,
+                contributedAction: { machineId: 'machine-1', serverId: homes.homes.target!.id, execute: contributed },
+            })).toMatchObject({ ok: true });
+            expect(requestCurrentIntent).toHaveBeenCalledOnce();
+            expect(contributed.mock.calls[0]?.[1].presentUserIntent).toBe('confirmed');
+        } finally { setCurrentAuth(previousAuth); await homes.dispose(); }
+    });
+
+    it.each([
+        { ask: false, authority: 'present_user', confirms: false },
+        { ask: true, authority: 'present_user', confirms: true },
+        { ask: false, authority: 'account_automation', confirms: true },
+    ] as const)('honors authored UI confirmation with $authority and explicit Ask=$ask', async ({ ask, authority, confirms }) => {
+        const storage = getStorage();
+        const previous = storage.getState();
+        const qualifiedId = 'qa.collection-detail/actions/set-complete';
+        storage.setState(state => ({ ...state, settings: { ...state.settings,
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                actions: ask ? { [qualifiedId]: { approvalRequiredSurfaces: ['ui'] } } : {},
+            }),
+        } }));
+        const requestCurrentIntent = vi.fn(async ({ fingerprint }: Readonly<{ fingerprint: string }>) => ({
+            status: 'approved' as const, fingerprint,
+        }));
+        const contributed = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
+            supported: true, result: { ok: true, result: { completed: true } },
+        }));
+        try {
+            const { createCollectionDetailPlugin } = await import('../../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-collection-detail/index');
+            const declaration = createCollectionDetailPlugin().manifest.contributes?.actions?.find(action => action.id === 'set-complete');
+            if (!declaration) throw new Error('Collection completion declaration missing');
+            if (declaration.inputSchema) clientActionSchemasByQualifiedId.set('qa.collection-detail/set-complete', { inputSchema: declaration.inputSchema });
+            expect(await dispatchPluginSurfaceAction({
+                action: { pluginId: 'qa.collection-detail', localId: 'set-complete' },
+                input: { rowId: 'release-guide', completed: true },
+                hostAction: { execute: vi.fn(), context: { authority } },
+                resolveContributedAction: identity => PluginProjectedActionV2Schema.parse({
+                    ...resolveConfirmedDaemonTargetAction(identity),
+                    dangerLevel: declaration.dangerLevel,
+                    confirmation: declaration.confirmation,
+                    confirmationWhen: declaration.confirmationWhen,
+                }),
+                requestCurrentIntent, contributedAction: { machineId: 'machine-1', execute: contributed },
+            })).toEqual({ ok: true, result: { completed: true } });
+            expect(requestCurrentIntent).toHaveBeenCalledTimes(confirms ? 1 : 0);
+            expect(contributed.mock.calls[0]?.[1]).toMatchObject({ executionSurface: 'ui' });
+            expect(contributed.mock.calls[0]?.[1].presentUserIntent).toBe(confirms ? 'confirmed' : undefined);
+        } finally { storage.setState(previous); }
+    });
+
+    it.each([false, true])('uses a declared read default while respecting explicit Ask-first=%s', async required => {
+        const storage = getStorage();
+        const previous = storage.getState();
+        const qualifiedId = 'acme.bindings/actions/manage';
+        storage.setState(state => ({ ...state, settings: { ...state.settings,
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                actions: required ? { [qualifiedId]: { approvalRequiredSurfaces: ['ui'] } } : {},
+            }),
+        } }));
+        clientActionSchemasByQualifiedId.set('acme.bindings/manage', { inputSchema: {
+            type: 'object', properties: { kind: { type: 'string', enum: ['list', 'attach'] } },
+            required: ['kind'], additionalProperties: false,
+        } });
+        const requestCurrentIntent = vi.fn(async ({ fingerprint }: Readonly<{ fingerprint: string }>) => ({
+            status: 'approved' as const, fingerprint,
+        }));
+        const contributed = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
+            supported: true, result: { ok: true, result: { bindings: [] } },
+        }));
+        try {
+            const dispatch = (input: PluginUiJsonValueV1) => dispatchPluginSurfaceAction({
+                action: { pluginId: 'acme.bindings', localId: 'manage' }, input,
+                resolveContributedAction: identity => PluginProjectedActionV2Schema.parse({
+                    ...resolveConfirmedDaemonTargetAction(identity),
+                    confirmationWhen: { op: 'not', predicate: { op: 'eq', path: 'kind', value: 'list' } },
+                }),
+                requestCurrentIntent, contributedAction: { machineId: 'machine-1', execute: contributed },
+            });
+            expect(await dispatch({ kind: 'list' })).toEqual({ ok: true, result: { bindings: [] } });
+            expect(requestCurrentIntent).toHaveBeenCalledTimes(required ? 1 : 0);
+            expect(contributed.mock.calls[0]?.[1].presentUserIntent).toBe(required ? 'confirmed' : undefined);
+            expect(await dispatch({ kind: 'list', extra: 'invalid' })).toMatchObject({ ok: false, reason: 'plugin_action_input_schema_invalid' });
+            expect(contributed).toHaveBeenCalledTimes(1);
+            expect(await dispatch({ kind: 'attach' })).toEqual({ ok: true, result: { bindings: [] } });
+            expect(contributed.mock.calls[1]?.[1].presentUserIntent).toBe('confirmed');
+        } finally { storage.setState(previous); }
+    });
+
     it('sends a waived dangerous Action without asking or manufacturing present-user intent', async () => {
         const storage = getStorage();
         const previous = storage.getState();
@@ -3264,7 +3402,7 @@ function composedRealmHref(): string {
 
 type ComposedSettlement =
     | Readonly<{ settled: 'fulfilled'; result: unknown }>
-    | Readonly<{ settled: 'rejected'; code: string; diagnostics: readonly string[] }>;
+    | Readonly<{ settled: 'rejected'; code: string; message?: string; diagnostics: readonly string[] }>;
 
 async function settleComposed(pending: Promise<unknown>): Promise<ComposedSettlement> {
     return pending.then(
@@ -3272,11 +3410,13 @@ async function settleComposed(pending: Promise<unknown>): Promise<ComposedSettle
         (error: unknown): ComposedSettlement => {
             const data = error as Readonly<{
                 code?: unknown;
+                message?: string;
                 diagnostics?: readonly Readonly<{ code?: unknown }>[];
             }>;
             return {
                 settled: 'rejected',
                 code: typeof data.code === 'string' ? data.code : 'unknown',
+                message: data.message,
                 diagnostics: (data.diagnostics ?? [])
                     .map((diagnostic) => diagnostic.code)
                     .filter((code): code is string => typeof code === 'string'),
@@ -3609,7 +3749,7 @@ describe('composed public SDK client to canonical plugin-surface dispatcher', ()
         contributedActionExecute.mockClear();
         contributedActionExecute.mockResolvedValueOnce({
             supported: true as const,
-            result: { ok: false as const, code: 'plugin_action_surface_unavailable' },
+            result: { ok: false as const, code: 'plugin_action_surface_unavailable', message: 'Reconnect the integration account before continuing.' },
         });
 
         const settlement = await settleComposed(client.executeAction('refresh-index', {}));
@@ -3617,6 +3757,8 @@ describe('composed public SDK client to canonical plugin-surface dispatcher', ()
         expect(settlement.settled).toBe('rejected');
         expect(settlement.settled === 'rejected' ? settlement.diagnostics : [])
             .toContain('plugin_action_surface_unavailable');
+        expect(settlement).toMatchObject({ message: 'Reconnect the integration account before continuing.' });
+        await expect(client.executeAction('refresh-index', {})).resolves.toEqual({ refreshed: true });
     });
 
     it('preserves canonical contributed-action remediation on the generic dispatch outcome', async () => {
@@ -3815,7 +3957,7 @@ describe('composed React Native host API to canonical plugin-surface dispatcher'
             })),
             contributedActionExecute: vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
                 supported: true as const,
-                result: { ok: false as const, code: 'plugin_action_surface_unavailable' },
+                result: { ok: false as const, code: 'plugin_action_surface_unavailable', message: 'Reconnect the integration account before continuing.' },
             })),
         });
 
@@ -3827,6 +3969,7 @@ describe('composed React Native host API to canonical plugin-surface dispatcher'
         });
         await expect(adapter.api.executeAction('refresh-index', {})).rejects.toMatchObject({
             code: 'unavailable',
+            message: 'Reconnect the integration account before continuing.',
             diagnostics: [{ code: 'plugin_action_surface_unavailable', severity: 'error' }],
         });
     });

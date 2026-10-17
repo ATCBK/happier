@@ -1,0 +1,63 @@
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { buildApprovalPreviewSummary } from '@happier-dev/protocol/actions/actionExecutor';
+import { describeApprovalActionFields, type ApprovalActionReference } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { resolveActionSummary, resolveActionTitle } from '@/text/actionTitles';
+import { t } from '@/text';
+import { getPreferredLanguage } from '@/text/i18n';
+import type { RoleCatalogEntry } from '@/sync/domains/roles/roleCatalog';
+import { RoleActionInputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
+
+export type ActionApprovalPresentationInput = Readonly<{
+    actionId: string;
+    actionArgs?: unknown;
+    preview?: unknown;
+    authoredTitle?: string | null;
+    authoredSummary?: string | null;
+    subject?: string | null;
+    role?: RoleCatalogEntry | null;
+}>;
+
+/** Only the Account override Actions name an Account catalog Role. */
+export function readActionApprovalRoleId(input: ActionApprovalPresentationInput): string | null {
+    if (input.actionId !== 'roles.override.set' && input.actionId !== 'roles.override.reset') return null;
+    const parsed = RoleActionInputSchemasV1[input.actionId].safeParse(input.actionArgs);
+    return parsed.success ? parsed.data.roleId : null;
+}
+
+/** The existing Protocol reference projection owns subject identity, never a caller's id guess. */
+export function readActionApprovalSubject(input: ActionApprovalPresentationInput): ApprovalActionReference | undefined {
+    return describeApprovalActionFields({ ...input, actionArgs: input.actionArgs }).rows.flatMap(row => row.kind === 'value'
+        ? [...(row.reference ? [row.reference] : []), ...(row.entries?.flatMap(entry => entry.reference ? [entry.reference] : []) ?? [])]
+        : [])[0];
+}
+
+/** One UI copy boundary for confirmation, Inbox, page and preview; authored plugin copy stays authored. */
+export function presentActionApproval(input: ActionApprovalPresentationInput): Readonly<{ title: string | null; summary: string | null }> {
+    const parsed = ActionIdSchema.safeParse(input.actionId);
+    if (!parsed.success) return { title: input.authoredTitle?.trim() || null, summary: input.authoredSummary?.trim() || null };
+    const spec = getActionSpec(parsed.data);
+    const role = input.role?.roleId === readActionApprovalRoleId(input) ? input.role : null;
+    const roleKind = role ? role.source === 'built_in' ? t('roles.settings.sourceBuiltIn')
+        : role.source === 'user' ? t('roles.settings.sourceYours')
+        : role.source === 'shared' ? t('roles.settings.sourceShared') : t('roles.settings.groupPlugins') : null;
+    const roleIdentity = role && roleKind ? { name: role.role.name, kind: roleKind } : undefined;
+    const english = getPreferredLanguage() === 'en';
+    const titleSource = roleIdentity || !english ? resolveActionTitle(spec.id, spec) : spec.title;
+    const summarySource = buildApprovalPreviewSummary(spec, input.actionArgs);
+    const authoredSummary = input.authoredSummary?.trim();
+    const distinctAuthoredSummary = authoredSummary && authoredSummary !== summarySource ? authoredSummary : null;
+    const summary = distinctAuthoredSummary ? distinctAuthoredSummary
+        : t('actionPresentation.summary', { actionId: spec.id,
+            source: summarySource === `${spec.title}.` ? `${titleSource}.`
+                : english ? summarySource : resolveActionSummary(spec.id, summarySource), subject: input.subject, role: roleIdentity });
+    const visibleSummary = !distinctAuthoredSummary && summarySource === `${spec.title}.`
+        && (summary === titleSource || summary === `${titleSource}.`) ? null : summary;
+    // Backup authority follows the Action into both confirmation and Inbox, including authored previews.
+    const disclosure = spec.id === 'relay.runtime.personal_home.backup' ? t('personalHome.settings.backupDisclosureBody') : null;
+    return {
+        title: t('actionPresentation.title', { actionId: spec.id, source: titleSource,
+            subject: roleIdentity ? `${roleIdentity.name} · ${roleIdentity.kind}` : input.subject }),
+        summary: disclosure ? [visibleSummary, disclosure].filter(Boolean).join('\n\n') : visibleSummary,
+    };
+}

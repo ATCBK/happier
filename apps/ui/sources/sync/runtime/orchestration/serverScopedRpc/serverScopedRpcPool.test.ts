@@ -28,6 +28,92 @@ function readAuthorizationHeader(headers: RequestInit['headers']): string {
 }
 
 describe('resolveScopedMachineTransport', () => {
+    it('keeps concurrent openings of the same authenticated Machine key available across scoped crypto instances', async () => {
+        const first = await Encryption.create(new Uint8Array(32).fill(17));
+        const second = await Encryption.create(new Uint8Array(32).fill(17));
+        const dataKey = new Uint8Array(32).fill(23);
+        const envelope = encodeBase64(await first.encryptEncryptionKey(dataKey), 'base64');
+        const opening = createDeferred<void>();
+        const release = createDeferred<void>();
+        let metadataVersion = 1;
+        vi.stubGlobal('fetch', vi.fn(async () => Response.json({ machine: {
+            id: 'same-key-machine', dataEncryptionKey: envelope, metadataVersion,
+        } })));
+        const scope = { serverId: 'same-key-home', serverUrl: 'https://same-key.example.test',
+            token: 'same-key-token', machineId: 'same-key-machine' };
+        const pending = resolveScopedMachineTransport({ ...scope, encryption: first,
+            // Hold the device crypto boundary after the authenticated row arrives.
+            decryptEncryptionKey: async (value) => {
+                const key = await first.decryptEncryptionKey(value);
+                opening.resolve(); await release.promise; return key;
+            },
+        });
+        try {
+            await opening.promise;
+            metadataVersion = 2;
+            // Separate callers reach row setup with independently reduced budgets.
+            const next = await resolveScopedMachineTransport({ ...scope, encryption: second, timeoutMs: 29_999,
+                decryptEncryptionKey: second.decryptEncryptionKey.bind(second) });
+            expect(next).toMatchObject({ mode: 'e2ee', dataKey });
+            release.resolve();
+            const original = await pending;
+            expect(original).toMatchObject({ mode: 'e2ee', dataKey });
+            expect(original?.context?.isCurrent()).toBe(true);
+            expect(next?.context?.isCurrent()).toBe(true);
+            metadataVersion = 1;
+            expect(await resolveScopedMachineTransport({ ...scope, encryption: second,
+                decryptEncryptionKey: second.decryptEncryptionKey.bind(second) })).toBeNull();
+        } finally { release.resolve(); await pending; }
+    });
+    it('preserves a Machine-row transport failure instead of reporting missing encryption', async () => {
+        const failure = new TypeError('Failed to fetch');
+        const homeCarrier = {
+            endpointId: 'a'.repeat(64), readObservedPath: () => 'relay' as const,
+            request: async () => { throw failure; },
+            createWebSocket: () => { throw new Error('No socket needed'); },
+        };
+        await expect(resolveScopedMachineTransport({
+            serverId: 'home-fetch-failure', serverUrl: 'https://home-fetch-failure.example.test',
+            token: 'token', machineId: 'machine', homeCarrier,
+        })).rejects.toBe(failure);
+    });
+
+    it('reports the expired Machine-row request budget as a transport timeout', async () => {
+        vi.useFakeTimers();
+        const entered = createDeferred<void>();
+        const homeCarrier = {
+            endpointId: 'a'.repeat(64), readObservedPath: () => 'relay' as const,
+            request: async (_url: string, init: RequestInit) => {
+                entered.resolve();
+                await new Promise<void>((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true }));
+                return Response.json({});
+            },
+            createWebSocket: () => { throw new Error('No socket needed'); },
+        };
+        try {
+            const outcome = resolveScopedMachineTransport({
+                serverId: 'home-row-timeout', serverUrl: 'https://home-row-timeout.example.test',
+                token: 'token', machineId: 'machine', homeCarrier, timeoutMs: 100,
+            }).then(value => ({ value }), error => ({ error: error as unknown }));
+            await entered.promise;
+            await vi.advanceTimersByTimeAsync(100);
+            expect(await outcome).toMatchObject({ error: { rpcErrorCode: 'MACHINE_RPC_TIMEOUT' } });
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('keeps a Home HTTP failure distinct from a missing Machine row', async () => {
+        let status = 503;
+        const homeCarrier = {
+            endpointId: 'a'.repeat(64), readObservedPath: () => 'relay' as const,
+            request: async () => Response.json({}, { status }),
+            createWebSocket: () => { throw new Error('No socket needed'); },
+        };
+        const input = { serverId: 'home-http-failure', serverUrl: 'https://home-http-failure.example.test',
+            token: 'token', machineId: 'machine', homeCarrier };
+        await expect(resolveScopedMachineTransport(input)).rejects.toMatchObject({ status: 503, kind: 'server' });
+        status = 404;
+        await expect(resolveScopedMachineTransport(input)).resolves.toBeNull();
+    });
     it('shares a pending authenticated row across independently constructed RPC deadlines and refreshes after settlement', async () => {
         const entered = createDeferred<void>();
         const release = createDeferred<void>();
@@ -85,9 +171,10 @@ describe('resolveScopedMachineTransport', () => {
         try {
             const first = resolveScopedMachineTransport({ ...scope, timeoutMs: 5_000 });
             await entered.promise;
-            const joined = resolveScopedMachineTransport({ ...scope, timeoutMs: 100 });
+            const joined = resolveScopedMachineTransport({ ...scope, timeoutMs: 100 })
+                .then(value => ({ value }), error => ({ error: error as unknown }));
             await vi.advanceTimersByTimeAsync(100);
-            expect(await joined).toBeNull();
+            expect(await joined).toMatchObject({ error: { rpcErrorCode: 'MACHINE_RPC_TIMEOUT' } });
             release.resolve();
             expect(await first).toMatchObject({ mode: 'plain' });
             expect(machineReads).toBe(1);
@@ -247,12 +334,13 @@ describe('resolveScopedMachineTransport', () => {
             homeCarrier,
         };
         try {
-            const short = resolveScopedMachineTransport({ ...input, timeoutMs: firstBudget });
+            const short = resolveScopedMachineTransport({ ...input, timeoutMs: firstBudget })
+                .then(value => ({ value }), error => ({ error: error as unknown }));
             await entered.promise;
             await vi.advanceTimersByTimeAsync(elapsed);
             const long = resolveScopedMachineTransport({ ...input, timeoutMs: nextBudget });
             await vi.advanceTimersByTimeAsync(firstBudget - elapsed);
-            await expect(short).resolves.toBeNull();
+            expect(await short).toMatchObject({ error: { rpcErrorCode: 'MACHINE_RPC_TIMEOUT' } });
             await expect(long).resolves.toMatchObject({ mode: 'plain' });
             expect(machineReads).toBe(2);
         } finally { vi.useRealTimers(); }
@@ -644,7 +732,7 @@ describe('resolveScopedMachineTransport', () => {
 
         const decryptSpy = vi.fn(async () => new Uint8Array([1]));
 
-        const result = await resolveScopedMachineTransport({
+        const result = resolveScopedMachineTransport({
             serverId: 'server-b',
             serverUrl: 'https://server-b.example.test',
             token: 'token-b',
@@ -653,7 +741,7 @@ describe('resolveScopedMachineTransport', () => {
             timeoutMs: 1_000,
         });
 
-        expect(result).toBeNull();
+        await expect(result).rejects.toMatchObject({ status: 503, kind: 'server' });
         expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/v1/machines')).length).toBe(1);
     });
 
@@ -793,7 +881,7 @@ describe('resolveScopedMachineTransport', () => {
             machineId: 'machine-1',
             decryptEncryptionKey: decryptSpy,
             timeoutMs: 50,
-        })).resolves.toBeNull();
+        })).rejects.toMatchObject({ rpcErrorCode: 'MACHINE_RPC_TIMEOUT' });
 
         expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/v1/machines')).length).toBe(0);
         expect(decryptSpy).not.toHaveBeenCalled();

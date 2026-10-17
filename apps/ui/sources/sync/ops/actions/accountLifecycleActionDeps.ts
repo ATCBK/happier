@@ -28,6 +28,9 @@ export function createUiAccountLifecycleAction(account: LazyActionAccountContext
         const beforeCredentialRemoval = async () => {
             account.assertCurrent();
             context.signal?.throwIfAborted();
+            // Auth invokes this only after its first-key custody guard allows
+            // leaving; retire the signed-in page before removing credentials.
+            await leave();
         };
         let completed = false;
         if (actionId !== 'account.delete') {
@@ -35,13 +38,8 @@ export function createUiAccountLifecycleAction(account: LazyActionAccountContext
                 run: () => actionId === 'account.credentials.forgetAll'
                     ? auth.logout({ scope: 'all-credentials', beforeMutation: beforeCredentialRemoval })
                     : auth.logout({ target, expectedCredentials: account.credentials, beforeMutation: beforeCredentialRemoval }),
-                onCompleted: async () => {
+                onCompleted: () => {
                     completed = true;
-                    try { await leave(); }
-                    catch (error) {
-                        // Credential custody already settled; navigation cannot retract that receipt.
-                        console.warn('[accountLifecycle] Navigation failed after credential removal', error);
-                    }
                 },
             });
             return { ok: true, result: { status: completed

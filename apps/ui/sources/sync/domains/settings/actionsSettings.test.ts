@@ -1,9 +1,49 @@
 import { describe, expect, it } from 'vitest';
+import { isActionEnabledInState, isActionApprovalRequiredByAccountSettings, isActionApprovalRequiredInState, resolveActionsSettingsV1FromState } from './actionsSettings';
 
 describe('actionsSettings', () => {
-    it('treats per-action overrides as disabled and supports per-surface gating', async () => {
-        const { isActionEnabledInState } = await import('./actionsSettings');
+    it('resolves admitted UI confirmation defaults against the current Account waiver and Ask-first policy', () => {
+        const actionId = 'widgets.item.move';
+        const context = { surface: 'ui', authority: 'present_user' } as const;
+        const defaults = { defaultUiConfirmation: true };
+        expect(isActionApprovalRequiredByAccountSettings(actionId, {}, context, defaults)).toBe(true);
+        const waived = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } } };
+        expect(isActionApprovalRequiredByAccountSettings(actionId, waived, context, defaults)).toBe(false);
+        const ask = { actionsSettingsV1: { ...waived.actionsSettingsV1,
+            actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } } };
+        expect(isActionApprovalRequiredByAccountSettings(actionId, ask, context, defaults)).toBe(true);
+    });
 
+    it('reuses the normalized policy across checks and immediately admits a replacement revision', () => {
+        const state = {
+            settings: {
+                actionsSettingsV1: {
+                    v: 1,
+                    actions: { 'session.stop': { enabled: false, approvalRequiredSurfaces: ['ui'] } },
+                },
+            },
+        };
+        const initial = resolveActionsSettingsV1FromState(state);
+        expect(isActionEnabledInState(state, 'session.stop', { surface: 'ui' })).toBe(false);
+        expect(isActionApprovalRequiredInState(state, 'session.stop', { surface: 'ui', authority: 'present_user' })).toBe(true);
+        expect(resolveActionsSettingsV1FromState({ settings: { ...state.settings } })).toBe(initial);
+
+        const changed = {
+            settings: {
+                actionsSettingsV1: {
+                    v: 1,
+                    actions: { 'session.stop': { enabled: true } },
+                    approvalWaivedSurfaces: { 'session.stop': ['ui'] },
+                },
+            },
+        };
+        expect(isActionEnabledInState(changed, 'session.stop', { surface: 'ui' })).toBe(true);
+        expect(isActionApprovalRequiredInState(changed, 'session.stop', { surface: 'ui', authority: 'present_user' })).toBe(false);
+        expect(resolveActionsSettingsV1FromState(changed)).not.toBe(initial);
+        expect(resolveActionsSettingsV1FromState(state)).toBe(initial);
+    });
+
+    it('treats per-action overrides as disabled and supports per-surface gating', () => {
         const state: any = {
             settings: {
                 experiments: true,
@@ -23,8 +63,7 @@ describe('actionsSettings', () => {
         expect(isActionEnabledInState(state, 'subagents.plan.start' as any, { surface: 'mcp' } as any)).toBe(false);
     });
 
-    it('preserves valid sibling policy when one Action row is malformed', async () => {
-        const { isActionEnabledInState } = await import('./actionsSettings');
+    it('preserves valid sibling policy when one Action row is malformed', () => {
         const state: any = {
             settings: {
                 actionsSettingsV1: {
@@ -41,9 +80,7 @@ describe('actionsSettings', () => {
         expect(isActionEnabledInState(state, 'session.stop', { surface: 'cli' } as any)).toBe(false);
     });
 
-    it('treats review.start as an execution-runs-gated action', async () => {
-        const { isActionEnabledInState } = await import('./actionsSettings');
-
+    it('treats review.start as an execution-runs-gated action', () => {
         const disabledState: any = {
             settings: {
                 experiments: false,

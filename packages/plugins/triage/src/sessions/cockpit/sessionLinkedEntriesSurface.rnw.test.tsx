@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import * as React from 'react';
 import { act, cloneElement, type ReactElement } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -22,6 +23,9 @@ import { TRIAGE_SESSION_LINKED_ENTRIES_UI_QUERY_ID_V1 } from './linkedEntriesQue
 import { renderSurface as renderSessionLinkedEntriesSurface } from './sessionLinkedEntriesSurface.js';
 import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1 } from '../../composer/openEntryDetails.js';
 import type { PluginUiEphemeralSharedScope } from '@happier-dev/plugin-ui';
+import { Text, defineUiSurface } from '@happier-dev/plugin-ui';
+import { useLinkedPullRequestStatus } from './useLinkedPullRequestStatus.js';
+import { projectTriageSessionLinkedEntrySummary } from './linkedEntrySummary.js';
 import type { TriagePullRequestStatusV1 } from '@happier-dev/triage-protocol/v1';
 import { testkitObservation, testkitSnapshot } from '../../corpus/testkit/observations.test-support.js';
 import { acquireTriageListWindow, refreshTriageListWindow } from '../../ui/window/mountedWindow.js';
@@ -263,6 +267,9 @@ async function mountCockpit(
             surfaceContext,
             adapter: createCockpitAdapter(accountReachable ? harness.client : null, statusFixture?.scope),
             handlers: {
+                confirm: async () => true,
+                // Direct Account writes use the host's Action admission boundary.
+                admitAction: async () => true,
                 executeAction: async ({ action, input }) => {
                     actionCalls.push({ action: String(action), input });
                     if (listEntries !== undefined && String(action) === 'entries/list-v1') {
@@ -303,6 +310,34 @@ async function openRow(fixture: PluginUiTestkit, name: string): Promise<void> {
 }
 
 describe('expanded PR status from the exact linked source observation', () => {
+    it('uses shared host pending and re-admission for an expanded source read', async () => {
+        const observation = testkitObservation({ entryRef: linkRow().entryRef, outcome: {
+            kind: 'present', locator: { v: 1, displayPath: 'example/repository#42' },
+            snapshot: testkitSnapshot(), viewer: { involvement: [] },
+        } });
+        const row = foldTriageListWindow({ observations: [observation], lanes: [],
+            activeSourceInstanceIds: [observation.sourceInstanceId], configuredSourcesStatus: 'complete',
+            lens: TRIAGE_LIST_DEFAULT_LENS_V1, assembledAtMs: observation.observedAtMs }).rows[0]!;
+        const entry = projectTriageSessionLinkedEntrySummary(row, 'pullRequest');
+        expect(entry?.detailSource).toBeTruthy();
+        let withdrawn = true;
+        const initial = { ...createSurfaceContextFixture(), machineConnectionPending: true, machineExecutionReady: false };
+        const surface = defineUiSurface(() => <Text value={useLinkedPullRequestStatus(entry, true, 0).phase} />);
+        const fixture = await createPluginUiTestkit({ identity: { instanceId: 'status-read', mountNonce: 'status-read-nonce' },
+            authorPlugin: { id: PLUGIN_ID, version: '0.0.0' }, surface, surfaceContext: initial,
+            adapter: createPluginUiRnwSemanticSurfaceAdapter(), handlers: { executeAction: async () => {
+                if (withdrawn) throw new Error('The mounted host has withdrawn Machine reads.');
+                return { kind: 'status', observedAtMs: observation.observedAtMs,
+                    checks: null, review: null, merge: null, branch: null, facts: [] };
+            } },
+        });
+        mounted.push(fixture);
+        await expect(fixture.getByText('reading')).resolves.toBeDefined();
+        withdrawn = false;
+        await act(async () => { await fixture.updateSurface({ ...initial, machineConnectionPending: false, machineExecutionReady: true }); });
+        await expect(fixture.getByText('ready')).resolves.toBeDefined();
+    });
+
     it('loads only on expansion and retains source facts across collapse and failed refresh, then recovers', async () => {
         const scope = createTriageEphemeralSharedScopeFixture();
         const link = linkRow();
@@ -386,10 +421,9 @@ describe('expanded PR status from the exact linked source observation', () => {
     });
 });
 
-async function unlinkThroughConfirm(fixture: PluginUiTestkit, name: string): Promise<void> {
+async function unlinkThroughSharedPolicy(fixture: PluginUiTestkit, name: string): Promise<void> {
     await openRow(fixture, name);
     await act(async () => { await fixture.press(await fixture.findByRole('button', { name: `Unlink ${name}` })); });
-    await act(async () => { await fixture.press(await fixture.findByRole('button', { name: 'Unlink' })); });
     await act(async () => { await Promise.resolve(); });
 }
 
@@ -424,7 +458,7 @@ describe('the Session tab, round 2', () => {
         expect((await fixture.queryAllByRole('button')).filter((button) => button.name === 'Unlink')).toHaveLength(0);
     });
 
-    it('opens a linked row in place, with Open as its primary and Unlink behind a confirm', async () => {
+    it('opens a linked row in place and submits Unlink through the shared Action policy without a second local step', async () => {
         const harness = createDataHarness({
             snapshot: { rows: [queryRow('link-a', 2_000)], hasMore: false, status: 'ready' },
             rowsById: new Map([['link-a', linkRow({ displayPathAtLink: 'example/repository#42' })]]),
@@ -439,8 +473,6 @@ describe('the Session tab, round 2', () => {
         expect(surfaceOpens[0]).toMatchObject({ view: TRIAGE_ENTRY_DETAIL_DESTINATION_V1 });
 
         await act(async () => { await fixture.press(await fixture.findByRole('button', { name: 'Unlink example/repository#42' })); });
-        expect(harness.deletes).toHaveLength(0);
-        await act(async () => { await fixture.press(await fixture.findByRole('button', { name: 'Unlink' })); });
         await act(async () => { await Promise.resolve(); });
         expect(harness.deletes).toHaveLength(1);
     });
@@ -498,7 +530,7 @@ describe('the mounted Session cockpit', () => {
         await expect(fixture.getByText('example/repository#51')).resolves
             .toEqual({ content: 'example/repository#51' });
 
-        await unlinkThroughConfirm(fixture, 'example/repository#51');
+        await unlinkThroughSharedPolicy(fixture, 'example/repository#51');
 
         const link51 = rowsById.get('link-51')!;
         expect(harness.identityRequests).toContainEqual({
@@ -929,8 +961,8 @@ describe('undoing a link from the mounted cockpit', () => {
             { v: 1, status: 'unlinked' },
         );
 
-        // Unlink is addressed by the row it was opened from: the open row's own control, behind a confirm.
-        await unlinkThroughConfirm(fixture, 'example/repository#42');
+        // Unlink is addressed by the open row and admitted by the shared Action policy.
+        await unlinkThroughSharedPolicy(fixture, 'example/repository#42');
 
         // The mounted surface can reach Account Collections directly, so it
         // removes through that canonical transport rather than needlessly
@@ -960,7 +992,7 @@ describe('undoing a link from the mounted cockpit', () => {
             { v: 1, status: 'failed' },
         );
 
-        await unlinkThroughConfirm(fixture, 'example/repository#42');
+        await unlinkThroughSharedPolicy(fixture, 'example/repository#42');
 
         // The row is still the link it was. Presenting a refused delete as a
         // removal would tell the reader their mistake is undone while the

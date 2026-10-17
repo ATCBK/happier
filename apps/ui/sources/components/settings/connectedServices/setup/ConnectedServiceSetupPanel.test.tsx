@@ -12,6 +12,7 @@ import { ConnectedServicesIndexView } from '../index/ConnectedServicesIndexView'
 import { presentConnectedAccountIdentity } from '@/sync/domains/connectedServices/maskAccountEmail';
 import { QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol';
 import { selectNewPoolServices } from '../collection/NewPoolMenu';
+import { Item } from '@/components/ui/lists/Item';
 
 const phoneNavigation = vi.hoisted(() => ({ push: vi.fn(), width: 390 }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
@@ -120,14 +121,15 @@ describe('ConnectedServiceSetupPanel tools disclosure', () => {
         expect(reconnect).not.toHaveBeenCalled();
     });
 
-    it('renders the service diagnostic in grid even when a known service has no accounts', async () => {
+    it.each(['list', 'grid'] as const)('uses the model verdict in %s diagnostics even when a known service has no accounts', async (presentation) => {
+        const model = staleServiceModel();
         const screen = await renderScreen(<ConnectedServicesIndexView
-            model={staleServiceModel()} labelsByKey={{}}
+            model={{ ...model, sheets: model.sheets.map(sheet => ({ ...sheet, supportDetails: STALE_DIAGNOSTIC })) }} labelsByKey={{}}
             present={(input) => presentConnectedAccountIdentity({
                 hidden: false, label: input.label ?? null, labelKind: input.labelKind,
                 email: input.email ?? null, accountId: input.accountId ?? null,
             })}
-            now={0} presentation="grid" onPresentationChange={() => {}} compact={false}
+            now={0} presentation={presentation} onPresentationChange={() => {}} compact={false}
             summary={{ needsYouCount: 0, asOf: null }} connectMore={null}
             fixProminence="primary" settled={null}
             renderAccount={() => { throw new Error('No account exists in this diagnostic sheet'); }}
@@ -136,6 +138,9 @@ describe('ConnectedServiceSetupPanel tools disclosure', () => {
             onOpenAccount={() => {}} onOpenPool={() => {}}
         />);
         expect(screen.getTextContent()).toContain(STALE_DIAGNOSTIC);
+        const details = screen.tree.findAllByType(Item).find(row =>
+            row.props.testID === 'connected-services-index:happier.agent.codex/openai-codex:support-details');
+        expect(details?.props.subtitle).toBe(model.sheets[0]?.statusLine);
     });
 
     it('opens the known-service catalog when every service is non-executable', async () => {

@@ -113,6 +113,7 @@ async function mountGlance(input: Readonly<{
   view: 'column' | 'widget';
   subPath?: string;
   bindings?: ResourceContent;
+  readResource?: NonNullable<PluginUiTestkitHostHandlers['readResource']>;
   openSurface: (input: PluginUiTestkitOpenSurfaceInput) => void;
 }>): Promise<PluginUiTestkit> {
   let fixture!: PluginUiTestkit;
@@ -134,7 +135,7 @@ async function mountGlance(input: Readonly<{
       adapter: createPluginUiRnwSemanticSurfaceAdapter(),
       ...(input.subPath === undefined ? {} : { subPath: input.subPath }),
       handlers: {
-        readResource: readResource(input.bindings),
+        readResource: input.readResource ?? readResource(input.bindings),
         openSurface: input.openSurface,
       },
     });
@@ -176,6 +177,28 @@ describe('the Channels column', () => {
       ['connections', ''],
       ['conversations', 'link'],
     ]);
+  });
+
+  it('waits for its bots before grouping, so a conversation never moves between groups on arrival', async () => {
+    let releaseConnections!: () => void;
+    const connectionsArrive = new Promise<void>((resolve) => { releaseConnections = resolve; });
+    const slowConnections = readResource();
+    const column = await mountGlance({
+      view: 'column',
+      openSurface: () => undefined,
+      readResource: async (request) => {
+        const localId = typeof request.resource === 'string' ? request.resource : 'localId' in request.resource ? request.resource.localId : '';
+        if (localId === 'connections-v1') await connectionsArrive;
+        return slowConnections(request);
+      },
+    });
+    // The bindings are in, but no row is drawn under a placeholder group while their bots are unknown.
+    await vi.waitFor(() => { expect(document.querySelector('[data-testid="channels-column"]')).not.toBeNull(); });
+    expect(document.body.textContent).not.toContain('Other conversations');
+    expect(document.body.textContent).not.toContain('happier-dev');
+    await act(async () => { releaseConnections(); });
+    await vi.waitFor(async () => { await column.getByRole('button', { name: 'happier-dev' }); });
+    expect(document.body.textContent).not.toContain('Other conversations');
   });
 
   it('says once when nothing is linked yet', async () => {

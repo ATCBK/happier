@@ -67,6 +67,8 @@ import {
     type PendingPluginChangeListing,
     type PluginMarketplaceActionRequest,
 } from './model/pluginMarketplaceModel';
+import type { DevelopmentStartUnavailableReason } from './development/developmentStartAvailability';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 
 /** Grid (cards, the default) or List (rows) — the Plugins page's two presentations of one collection. */
 export type PluginsCollectionPresentation = 'grid' | 'list';
@@ -419,7 +421,7 @@ function projectInstalledPluginRows(
             statusLabel: coverage ?? (locked && !observedOnly && entry.enabled && !needsDecision && !offline ? null : statusLabel),
             statusTone,
             control: locked || observedOnly ? null : control,
-            byline: group === 'included' || observedOnly ? null : presentation.sourceLabel,
+            byline: group === 'included' ? null : presentation.sourceLabel,
         };
     };
     return [...added.map((entry) => project(entry, 'added')), ...included.map((entry) => project(entry, 'included'))];
@@ -511,23 +513,26 @@ export function PendingPluginChangesSection(props: Readonly<{
                 {props.pendingChanges.map((entry) => {
                     const pendingChangeId = readPendingPluginChangeListingId(entry);
                     const busy = props.isPluginActionInFlight(pendingChangeId);
-                    const presentationEntry: PendingPluginChangeListing = busy
-                        ? { kind: 'applying', pendingChangeId }
-                        : entry;
-                    const decidable = !busy && entry.kind !== 'applying';
+                    // Local flight suppresses duplicate interaction only. The
+                    // daemon listing is the sole owner of apply state.
+                    const applying = entry.kind === 'applying';
+                    const decidable = !applying;
                     return (
                         <Item
                             key={pendingChangeId}
                             testID={`settings.plugins.management.pendingChanges.${pendingChangeId}`}
-                            title={formatPendingPluginChangeTitle(presentationEntry)}
-                            subtitle={formatPendingPluginChangeSubtitle(presentationEntry)}
+                            title={formatPendingPluginChangeTitle(entry)}
+                            subtitle={entry.kind === 'applying'
+                                ? undefined
+                                : formatPendingPluginChangeSubtitle(entry)}
                             subtitleLines={0}
                             icon={<Icon
-                                name={presentationEntry.kind === 'applying' ? 'arrow-clockwise' : 'shield-check'}
+                                name="shield-check"
                                 size={20}
-                                color={presentationEntry.kind === 'applying' ? theme.colors.text.secondary : theme.colors.state.info.foreground}
+                                color={applying ? theme.colors.text.secondary : theme.colors.state.info.foreground}
                             />}
                             showChevron={false}
+                            loading={applying}
                             mode="info"
                             accessoryLayout="adaptive"
                             rightElementOutsidePressable
@@ -611,11 +616,20 @@ export function RegistryDiagnosticsSection(props: Readonly<{
     );
 }
 
+const DEVELOPMENT_START_UNAVAILABLE_COPY = {
+    waitingForMachine: 'settingsPlugins.developmentStartWaiting',
+    notOffered: 'settingsPlugins.developmentStartNotOffered',
+} as const satisfies Record<DevelopmentStartUnavailableReason, string>;
+
 export function DevelopmentPluginsSection(props: Readonly<{
     developmentPlugins: readonly DevelopmentPluginEntry[];
+    /** No machine is chosen: nothing was asked, so the empty list must not claim the machine reported nothing. */
+    noTarget?: boolean;
     createAvailable: boolean;
     sourceInstallAvailable: boolean;
     canRunActions: boolean;
+    /** Why the ways to start can't be used right now, said once above them (`developmentStartAvailability`). */
+    startUnavailableReason?: DevelopmentStartUnavailableReason | null;
     /**
      * The selected machine's home directory, so a development root reads
      * `~/projects/...` exactly like an ordinary Session working directory.
@@ -631,7 +645,7 @@ export function DevelopmentPluginsSection(props: Readonly<{
     onCreateWithAgentFromCreated: (created: Readonly<{ pluginId: string; sourceRootPath: string }>) => void;
     onDevelopSourceRoot: () => void;
     onEditWithAgent: (pluginId: string) => void;
-    onRunAction: (action: 'test' | 'pack' | 'unregister', pluginId: string) => void;
+    onRunAction: (action: 'test' | 'pack' | 'unregister', sourceRootPath: string) => void;
 }>) {
     const { theme } = useUnistyles();
     const createdPlugin = props.createdPlugin;
@@ -641,7 +655,10 @@ export function DevelopmentPluginsSection(props: Readonly<{
           * Three ways to start, as tiles: each one opens its own flow, and none
           * is a setting. What this machine is already developing follows.
           */}
-        <ItemGroup surface="none">
+        <ItemGroup
+            surface="none"
+            description={props.startUnavailableReason ? t(DEVELOPMENT_START_UNAVAILABLE_COPY[props.startUnavailableReason]) : undefined}
+        >
             <SelectionTiles
                 variant="action"
                 accessibilityLabel={t('settingsPlugins.developmentTitle')}
@@ -734,17 +751,25 @@ export function DevelopmentPluginsSection(props: Readonly<{
               * has to traverse and reassemble per plugin.
               */}
             {props.developmentPlugins.length > 0 ? props.developmentPlugins.map((entry) => {
-                const pluginId = entry.installed.pluginId;
+                // The root is the source's identity: a source the daemon could not load has no
+                // installed plugin, and may not even have an id yet.
+                const sourceRootPath = entry.sourceRootPath;
+                const rowId = entry.installed?.pluginId ?? entry.pluginId ?? sourceRootPath;
+                const editPluginId = entry.installed?.pluginId ?? null;
                 const presentation = projectDevelopmentPluginPresentation(entry, props.machineHomeDir);
-                const busy = props.isPluginActionInFlight(pluginId);
+                const busy = props.isPluginActionInFlight(sourceRootPath);
                 return (
                     <Item
-                        key={pluginId}
-                        testID={`settings.plugins.management.development.${pluginId}`}
-                        title={entry.installed.title}
+                        key={sourceRootPath}
+                        testID={`settings.plugins.management.development.${rowId}`}
+                        title={presentation.title}
                         subtitle={(
+                            // Selectable so the folder and diagnostic can be copied; it keeps the row's
+                            // secondary subtitle role (as plain Text it rendered as primary body ink).
                             <Text
-                                testID={`settings.plugins.management.development.${pluginId}.details`}
+                                testID={`settings.plugins.management.development.${rowId}.details`}
+                                variant="body"
+                                style={{ color: theme.colors.text.secondary }}
                                 selectable
                             >
                                 {presentation.sourcePathLabel}
@@ -754,55 +779,57 @@ export function DevelopmentPluginsSection(props: Readonly<{
                         subtitleLines={0}
                         subtitleAccessory={(
                             <StatusPill
-                                testID={`settings.plugins.management.development.${pluginId}.status`}
+                                testID={`settings.plugins.management.development.${rowId}.status`}
                                 chrome="plain"
                                 labelVariant="phrase"
                                 variant={presentation.status.variant}
                                 label={presentation.status.label}
                             />
                         )}
-                        detail={entry.installed.version}
-                        icon={<PluginMark title={entry.installed.title} />}
+                        detail={entry.installed?.version}
+                        icon={<PluginMark title={presentation.title} />}
                         iconBoxSize={36}
                         showChevron={false}
                         mode="info"
                         rightElementOutsidePressable
                         rightElement={(
                             <ItemRowActions
-                                title={entry.installed.title}
+                                title={presentation.title}
                                 compactActionIds={['editWithAgent']}
-                                overflowTriggerTestID={`settings.plugins.management.development.${pluginId}.actions.overflow`}
+                                overflowTriggerTestID={`settings.plugins.management.development.${rowId}.actions.overflow`}
                                 actions={[
-                                    {
+                                    // Editing resolves an installed plugin's source; a source that
+                                    // never loaded is fixed in its folder, then tested.
+                                    ...(editPluginId === null ? [] : [{
                                         id: 'editWithAgent',
                                         title: t('settingsPlugins.developmentEditWithAgent'),
                                         accessibilityLabel: buildActionRowAccessibilityLabel([
                                             t('settingsPlugins.developmentEditWithAgent'),
-                                            entry.installed.title,
+                                            presentation.title,
                                         ]),
                                         subtitle: t('settingsPlugins.developmentEditWithAgentSubtitle'),
-                                        icon: 'sparkle',
-                                        inlineTestID: `settings.plugins.management.development.${pluginId}.action.editWithAgent`,
+                                        icon: 'sparkle' as const,
+                                        inlineTestID: `settings.plugins.management.development.${rowId}.action.editWithAgent`,
                                         disabled: !props.canRunActions,
-                                        onPress: () => props.onEditWithAgent(pluginId),
-                                    },
+                                        onPress: () => props.onEditWithAgent(editPluginId),
+                                    }]),
                                     {
                                         id: 'test',
                                         title: t('settingsPlugins.developmentTest'),
                                         subtitle: t('settingsPlugins.developmentTestSubtitle'),
                                         icon: 'checks',
-                                        inlineTestID: `settings.plugins.management.development.${pluginId}.action.test`,
+                                        inlineTestID: `settings.plugins.management.development.${rowId}.action.test`,
                                         disabled: !props.canRunActions || !entry.actions.test || busy,
-                                        onPress: () => props.onRunAction('test', pluginId),
+                                        onPress: () => props.onRunAction('test', sourceRootPath),
                                     },
                                     {
                                         id: 'pack',
                                         title: t('settingsPlugins.developmentPack'),
                                         subtitle: t('settingsPlugins.developmentPackSubtitle'),
                                         icon: 'cube',
-                                        inlineTestID: `settings.plugins.management.development.${pluginId}.action.pack`,
+                                        inlineTestID: `settings.plugins.management.development.${rowId}.action.pack`,
                                         disabled: !props.canRunActions || !entry.actions.pack || busy,
-                                        onPress: () => props.onRunAction('pack', pluginId),
+                                        onPress: () => props.onRunAction('pack', sourceRootPath),
                                     },
                                     ...(entry.actions.unregister ? [{
                                         id: 'unregister',
@@ -810,23 +837,35 @@ export function DevelopmentPluginsSection(props: Readonly<{
                                         subtitle: entry.sourceRootPath,
                                         icon: 'trash' as const,
                                         destructive: true,
-                                        inlineTestID: `settings.plugins.management.development.${pluginId}.action.unregister`,
+                                        inlineTestID: `settings.plugins.management.development.${rowId}.action.unregister`,
                                         disabled: !props.canRunActions || busy,
-                                        onPress: () => props.onRunAction('unregister', pluginId),
+                                        onPress: () => props.onRunAction('unregister', sourceRootPath),
                                     }] : []),
                                 ]}
                             />
                         )}
                     />
                 );
-            }) : (
-                <Item
-                    testID="settings.plugins.management.development.empty"
-                    title={t('settingsPlugins.developmentEmpty')}
-                    subtitle={t('settingsPlugins.developmentEmptySubtitle')}
-                    showChevron={false}
-                    mode="info"
-                />
+            }) : props.startUnavailableReason === 'waitingForMachine' ? (
+                // Not answered yet: nothing is known, so the rows wait rather than claim none were reported.
+                <SkeletonRows rows={3} />
+            ) : (
+                props.noTarget ? (
+                    <Item
+                        testID="settings.plugins.management.development.noTarget"
+                        title={t('settingsPlugins.surfaces.chooseMachineInstalled')}
+                        showChevron={false}
+                        mode="info"
+                    />
+                ) : (
+                    <Item
+                        testID="settings.plugins.management.development.empty"
+                        title={t('settingsPlugins.developmentEmpty')}
+                        subtitle={t('settingsPlugins.developmentEmptySubtitle')}
+                        showChevron={false}
+                        mode="info"
+                    />
+                )
             )}
         </ItemGroup>
         </>

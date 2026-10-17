@@ -1,8 +1,13 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { WidgetLayoutFragmentActionIdV1Schema, readWidgetLayoutFragmentApprovalNameV1 } from '@happier-dev/protocol/widgets';
+import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 
 import { t } from '@/text';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
+import { buildApprovalPreviewSummary } from '@happier-dev/protocol/actions/actionExecutor';
+import { presentActionApproval, readActionApprovalSubject } from './actionApprovalPresentation';
+import { useApprovalReferenceReading } from './approvalReferenceReading';
 
 /**
  * The one title rule for an approval request, shared by its Inbox row and its page.
@@ -19,6 +24,7 @@ export function resolveApprovalRequestTitle(
     qualifiedActionId?: string | null;
     actionArgs?: unknown;
     preview?: unknown;
+    subject?: string | null;
     /** Session ids the request carries; a legacy " — <id>" suffix naming one of them is dropped. */
     sessionIds?: ReadonlyArray<string | null | undefined>;
   }>,
@@ -30,6 +36,7 @@ export function resolveApprovalRequestTitle(
   const actionId = input.actionId?.trim() ?? '';
   const qualifiedActionId = input.qualifiedActionId?.trim() ?? '';
   const actionTitle = readApprovalActionTitle(actionId);
+  const presentation = presentActionApproval({ ...input, actionId, subject: input.subject });
   const [firstLineRaw, ...rest] = String(input.storedTitle ?? '').split('\n');
   let firstLine = (firstLineRaw ?? '').trim();
   for (const sessionId of input.sessionIds ?? []) {
@@ -42,14 +49,24 @@ export function resolveApprovalRequestTitle(
   const isRawId =
     firstLine !== '' &&
     (firstLine === actionId || firstLine === qualifiedActionId);
-  const libraryName = WidgetLayoutFragmentActionIdV1Schema.safeParse(actionId).success
-    ? readWidgetLayoutFragmentApprovalNameV1(input.actionArgs, input.preview) : null;
-  const title = libraryName && actionTitle ? `${actionTitle} · ${libraryName}` :
-    isRawId || firstLine === ''
-      ? (actionTitle ?? t('inbox.work.rows.approvalUntitled'))
+  let isSpecCopy = false;
+  try {
+    const spec = getActionSpec(actionId as ActionId);
+    isSpecCopy = firstLine === spec.title || firstLine === buildApprovalPreviewSummary(spec, input.actionArgs);
+  } catch { /* Authored/plugin requests retain their copy. */ }
+  const subjectName = actionId === 'plugins.install'
+    ? readPluginInstallApprovalPendingReview(input.preview)?.review.displayName.trim() || null
+    : WidgetLayoutFragmentActionIdV1Schema.safeParse(actionId).success
+      ? readWidgetLayoutFragmentApprovalNameV1(input.actionArgs, input.preview) : null;
+  const title = subjectName && actionTitle ? `${actionTitle} · ${subjectName}` :
+    isRawId || isSpecCopy || firstLine === ''
+      ? (presentation.title ?? actionTitle ?? t('inbox.work.rows.approvalUntitled'))
       : firstLine;
   const detail = rest.join('\n').trim();
-  return { title, actionTitle, detail: detail || null };
+  // A generated title already identifies the Action, including its named subject.
+  // The Inbox facts and page Action row must not repeat it beside that title.
+  const titleNamesAction = Boolean(subjectName && actionTitle) || isRawId || isSpecCopy || firstLine === '';
+  return { title, actionTitle: titleNamesAction ? null : actionTitle, detail: detail || null };
 }
 
 /** A person-facing name for a built-in Action, or none: a raw Action id is never shown as copy. */
@@ -59,9 +76,17 @@ export function readApprovalActionTitle(
   const actionId = actionIdRaw?.trim() ?? '';
   if (!actionId) return null;
   try {
-    const specTitle = getActionSpec(actionId as ActionId).title.trim();
+    const specTitle = presentActionApproval({ actionId }).title?.trim();
     return specTitle && specTitle !== actionId ? specTitle : null;
   } catch {
     return null;
   }
+}
+
+/** Row and page resolve the same declared subject through the same scoped reference reader. */
+export function useApprovalRequestTitle(input: Parameters<typeof resolveApprovalRequestTitle>[0], serverId: string | null) {
+  usePreferredLanguage();
+  const reference = readActionApprovalSubject({ ...input, actionId: input.actionId ?? '' });
+  const reading = useApprovalReferenceReading(reference, reference?.id ?? '', serverId);
+  return resolveApprovalRequestTitle({ ...input, subject: reading.named ? reading.text : null });
 }

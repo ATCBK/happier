@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import { resolveHref } from 'expo-router/build/link/href';
+import { matchWorkspaceDestinationRoute, workspaceRouteHref } from './workspaceRoutes';
 import { randomUUID } from '@/platform/randomUUID';
 
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
@@ -27,6 +28,7 @@ import { useOptionalAppPaneFindSeedContext } from '../panes/AppPaneProvider';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { BROWSER_HISTORY_NAVIGATION_CHANGED } from '@/utils/navigation/browserHistoryNavigation';
 import { WorkspaceWindowTitle } from './WorkspaceWindowTitle';
+import { clearRouteAnchorSessionId, getSessionSurfaceVisibilityResetVersion, setRouteAnchorSessionId, subscribeSessionSurfaceVisibilityReset } from '@/sync/domains/session/sessionSurfaceVisibility';
 
 function readBrowserHref(): string | null {
     return Platform.OS === 'web' && typeof window !== 'undefined'
@@ -81,16 +83,27 @@ export function WorkspaceProvider(props: Readonly<{
     // Browser history is authoritative even when readiness changes before Expo updates its mirror.
     const routeHref = (() => {
         if (browserHref !== null) return browserHref;
-        const query = new URLSearchParams();
-        for (const [key, value] of Object.entries(params)) {
-            if (typeof value === 'string') query.set(key, value);
-        }
-        return `${pathname}${query.size ? `?${query}` : ''}`;
+        return workspaceRouteHref(pathname, params);
     })();
     const phone = props.phone === true && !props.enabled;
     const entry = props.entry === true && Platform.OS === 'web';
     // Width changes presentation, never the owner or lifetime of an admitted web destination.
     const routeDestination = resolveDestinationRefFromHref(props.catalog, routeHref);
+    const routeMatch = routeDestination ? matchWorkspaceDestinationRoute(routeHref.split(/[?#]/)[0]!) : null;
+    const routeSessionId = routeDestination?.kind === 'session' || routeDestination?.kind === 'sessionDetails'
+        ? routeDestination.params.id
+        : routeMatch?.routeKey.startsWith('session/') ? routeMatch.params.id : undefined;
+    // Unqualified routes retain their existing membership/ambiguity resolution
+    // in the Session body; a focused Home cannot choose their exact-read target.
+    const routeServerId = routeDestination?.params.serverId || null;
+    const visibilityResetVersion = React.useSyncExternalStore(subscribeSessionSurfaceVisibilityReset, getSessionSurfaceVisibilityResetVersion, getSessionSurfaceVisibilityResetVersion);
+    // Publish demand before core readiness admits the retained body. Sync uses
+    // this same route-priority owner for exact acquisition and list hydration.
+    React.useLayoutEffect(() => {
+        if (!routeSessionId) return;
+        setRouteAnchorSessionId(routeSessionId, routeServerId);
+        return () => clearRouteAnchorSessionId(routeSessionId);
+    }, [routeServerId, routeSessionId, visibilityResetVersion]);
     // Deferred web admission precedes shell presentation during onboarding
     // teardown. Lending an editable body to Expo while the shell is absent
     // would consume its handoff before the retained host can take custody.

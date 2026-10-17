@@ -104,12 +104,14 @@ describe('createPluginAccountDataEraseRecoveryController', () => {
         expect(harness.execute).not.toHaveBeenCalled();
     });
 
-    it('does not dispatch an erase Action when the present user cancels confirmation', async () => {
-        const harness = createHarness({ confirmResults: [false] });
+    it('stays silent when the erase Action owner returns a declined confirmation', async () => {
+        const harness = createHarness({ executeResults: [{ ok: false, error: 'approval_canceled', errorCode: 'approval_canceled' }] });
 
         await harness.controller.eraseKnownPlugin('example.plugin');
 
-        expect(harness.execute).not.toHaveBeenCalled();
+        expect(harness.execute).toHaveBeenCalledOnce();
+        expect(harness.modal.confirm).not.toHaveBeenCalled();
+        expect(harness.modal.alert).not.toHaveBeenCalled();
     });
 
     it('presents a transition-cleanup pending result without re-executing the Action, then allows a distinct later invocation', async () => {
@@ -141,7 +143,7 @@ describe('createPluginAccountDataEraseRecoveryController', () => {
         const firstContext = harness.execute.mock.calls[0]?.[2];
         expect(firstContext).not.toHaveProperty('actionRequestId');
         expect(harness.modal.alert).toHaveBeenCalledTimes(1);
-        expect(harness.modal.confirm).toHaveBeenCalledTimes(1);
+        expect(harness.modal.confirm).not.toHaveBeenCalled();
         expect(harness.controller.isPending()).toBe(false);
 
         await harness.controller.eraseKnownPlugin('example.plugin');
@@ -151,7 +153,7 @@ describe('createPluginAccountDataEraseRecoveryController', () => {
         expect(retryContext).not.toHaveProperty('actionRequestId');
     });
 
-    it('dispatches each independently confirmed erase without a completion nonce', async () => {
+    it('dispatches each independent erase intent without a completion nonce', async () => {
         const harness = createHarness({ confirmResults: [true, true] });
 
         await harness.controller.eraseKnownPlugin('example.plugin');
@@ -180,7 +182,7 @@ describe('createPluginAccountDataEraseRecoveryController', () => {
         await harness.controller.eraseKnownPlugin('example.plugin');
 
         expect(harness.execute).toHaveBeenCalledTimes(1);
-        expect(harness.modal.confirm).toHaveBeenCalledTimes(1);
+        expect(harness.modal.confirm).not.toHaveBeenCalled();
         expect(harness.modal.alert).toHaveBeenCalledTimes(1);
         expect(harness.controller.isPending()).toBe(false);
     });

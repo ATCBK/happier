@@ -207,7 +207,6 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.accounts.delete', approval: {result: 'required'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Delete Home Account',
     description: 'Erase one Account through the Home\'s single erasure owner. Incomplete cleanup is reported explicitly.',
     safety: 'danger',
@@ -220,7 +219,6 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.accounts.signOutEverywhere', approval: {result: 'required'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Sign a Home Account out everywhere',
     description: 'End every signed-in session of one Account. API tokens stay valid until the Account is disabled.',
     safety: 'danger',
@@ -356,8 +354,11 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     id: 'home.reachability.iroh.set', approval: {result: 'required'},
     approvalPolicy: {
       uiConfirmation: 'direct',
-      // Enable is reversible; disable already reviews permanent identity retirement.
-      uiConfirmationForInput: (input) => !HomeReachabilityIrohSetInputV1Schema.safeParse(input).success,
+      // Enable is reversible; disable permanently retires the current identity.
+      uiConfirmationForInput: (input) => {
+        const parsed = HomeReachabilityIrohSetInputV1Schema.safeParse(input);
+        return !parsed.success || parsed.data.mode === 'disabled';
+      },
     },
     title: 'Turn direct connections on or off',
     description: 'Turning direct (Iroh) connections off retires the current direct-connection identity for good; turning them on creates a new one. Addresses and sign-ins stay the same.',

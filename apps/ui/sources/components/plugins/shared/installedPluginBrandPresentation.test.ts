@@ -10,7 +10,8 @@ import {
     openPackageAssetArchiveV1,
     type PackageAssetArchiveOpenedV1,
 } from '@happier-dev/protocol/plugins/availability';
-import { act } from 'react-test-renderer';
+import { createElement } from 'react';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
@@ -230,6 +231,53 @@ describe('installed package brand presentation', () => {
     });
     afterEach(() => browserStorage.restore());
 
+    it('admits bundled artwork in the mount commit without waiting for an asynchronous resource read', () => {
+        const input = readInput({
+            installedPackage: PluginProjectionInstalledPackageV2Schema.parse({
+                id: 'happier.inspector', displayName: 'Inspector', version: '0.0.0', enabled: true,
+                source: { kind: 'bundled', locator: '@happier-dev/plugins-inspector' },
+            }),
+        });
+        let presentation: ReturnType<typeof useInstalledPluginBrandPresentation> = null;
+        function Probe() {
+            presentation = useInstalledPluginBrandPresentation(input);
+            return null;
+        }
+        // A synchronous commit is intentional: bundled assets have no asynchronous boundary.
+        let tree: ReactTestRenderer | undefined;
+        try {
+            act(() => { tree = create(createElement(Probe)); });
+            expect(presentation).toMatchObject({ displayName: 'Inspector', bytes: createValidPluginBrandPngFixture() });
+            expect(rpc.read).not.toHaveBeenCalled();
+        } finally {
+            act(() => tree?.unmount());
+        }
+    });
+
+    it.each(['server-a', 'other-home'])('uses only the already-applied Home lifetime for immediate brand admission (%s)', async (serverId) => {
+        const active = await activateStorageAccountScope({ serverId: 'server-a', accountId: 'account-a' });
+        const { useServerInstalledPluginBrand } = await import('@/components/settings/plugins/PluginMark');
+        const seen: Array<ReturnType<typeof useServerInstalledPluginBrand>> = [];
+        const input = {
+            installedPackage: installedPackage({ brand: { state: 'missing' } }),
+            machineId: 'machine-a',
+            serverId,
+        };
+        const hook = await renderHook(() => {
+            const presentation = useServerInstalledPluginBrand(input);
+            seen.push(presentation);
+            return presentation;
+        });
+        try {
+            expect(seen[0]).toEqual(serverId === 'server-a' ? { displayName: 'Acme Brand' } : null);
+            await act(async () => active.dispose());
+            expect(hook.getCurrent()).toBeNull();
+        } finally {
+            await hook.unmount();
+            active.dispose();
+        }
+    });
+
     it('admits bundled non-Agent marks through the same owner without Account archive or daemon reads', async () => {
         const bundledPackage = PluginProjectionInstalledPackageV2Schema.parse({
             id: 'happier.inspector', displayName: 'Inspector', version: '0.0.0', enabled: true,
@@ -392,6 +440,103 @@ describe('installed package brand presentation', () => {
             installedPackage: installedPackage({ brand: availableBrand(), occurrenceId: 'replacement-occurrence' }),
         }));
         expect(rpc.read).toHaveBeenCalledTimes(2);
+    });
+
+    it('retains only the current external mark per plugin and Machine after repeated occurrence replacement', async () => {
+        const lifetime = createLifetime();
+        type Request = { result: Promise<Awaited<ReturnType<typeof readInstalledPluginBrandPresentation>>> };
+        let requests: Map<unknown, Request> | undefined;
+        const originalSet = Map.prototype.set;
+        // Call through the real owner; inspect only its request map, without a
+        // production inspection export or treating total process heap as cache bytes.
+        const writes = vi.spyOn(Map.prototype, 'set').mockImplementation(function (this: Map<unknown, unknown>, key, value) {
+            if (value && typeof value === 'object' && 'packageAssets' in value && 'result' in value && value.result instanceof Promise) {
+                requests = this as Map<unknown, Request>;
+            }
+            return originalSet.call(this, key, value);
+        });
+        rpc.read.mockImplementation(async () => brandReadResult());
+        const occurrenceInput = (machineId: string, occurrence: number) => readInput({
+            accountLifetime: lifetime.lifetime,
+            machineId,
+            installedPackage: installedPackage({ brand: availableBrand(), occurrenceId: `replacement-${occurrence}` }),
+        });
+        try {
+            for (let occurrence = 0; occurrence < 24; occurrence++) {
+                await readInstalledPluginBrandPresentation(occurrenceInput(occurrence % 2 === 0 ? 'machine-a' : 'machine-b', occurrence));
+            }
+            expect(requests).toBeDefined();
+            const retained = await Promise.all([...requests!.values()].map((request) => request.result));
+            expect({
+                requests: requests!.size,
+                bytes: retained.reduce((total, presentation) => total + (presentation?.bytes?.byteLength ?? 0), 0),
+            }).toEqual({ requests: 2, bytes: 2 * createValidPluginBrandPngFixture().byteLength });
+            await readInstalledPluginBrandPresentation(occurrenceInput('machine-b', 23));
+            expect(rpc.read).toHaveBeenCalledTimes(24);
+            await readInstalledPluginBrandPresentation(occurrenceInput('machine-a', 0));
+            expect(rpc.read).toHaveBeenCalledTimes(25);
+            await readInstalledPluginBrandPresentation(occurrenceInput('machine-b', 23));
+            expect(rpc.read).toHaveBeenCalledTimes(25);
+            lifetime.retire();
+            expect(requests!.size).toBe(0);
+        } finally {
+            writes.mockRestore();
+            lifetime.retire();
+        }
+    });
+
+    it('lets superseded pending callers settle without replacing the newer shared result', async () => {
+        const lifetime = createLifetime();
+        const resolvers: Array<(result: MachinePluginUiResourceReadResult) => void> = [];
+        const signals: AbortSignal[] = [];
+        rpc.read.mockImplementation((_machine, options: { signal: AbortSignal }) => {
+            signals.push(options.signal);
+            return new Promise<MachinePluginUiResourceReadResult>((resolve) => resolvers.push(resolve));
+        });
+        const firstInput = readInput({ accountLifetime: lifetime.lifetime });
+        const replacementInput = readInput({ accountLifetime: lifetime.lifetime,
+            installedPackage: installedPackage({ brand: availableBrand(), occurrenceId: 'replacement' }) });
+        const first = readInstalledPluginBrandPresentation(firstInput);
+        const replacement = readInstalledPluginBrandPresentation(replacementInput);
+        const peer = readInstalledPluginBrandPresentation(replacementInput);
+        expect(rpc.read).toHaveBeenCalledTimes(2);
+        expect(signals.every((signal) => !signal.aborted)).toBe(true);
+        resolvers[1]!(brandReadResult());
+        const current = await replacement;
+        expect(await peer).toBe(current);
+        resolvers[0]!(brandReadResult());
+        expect((await first)?.bytes).toEqual(createValidPluginBrandPngFixture());
+        expect(await readInstalledPluginBrandPresentation(replacementInput)).toBe(current);
+        expect(rpc.read).toHaveBeenCalledTimes(2);
+
+        const pendingOld = readInstalledPluginBrandPresentation(firstInput);
+        const pendingNew = readInstalledPluginBrandPresentation(replacementInput);
+        expect(rpc.read).toHaveBeenCalledTimes(4);
+        lifetime.retire();
+        expect(signals.slice(2).every((signal) => signal.aborted)).toBe(true);
+        resolvers[2]!(brandReadResult());
+        resolvers[3]!(brandReadResult());
+        await expect(pendingOld).resolves.toBeNull();
+        await expect(pendingNew).resolves.toBeNull();
+    });
+
+    it.each(['reader', 'hook'] as const)('withdraws retained external bytes when a package becomes neutral (%s)', async (surface) => {
+        const lifetime = createLifetime();
+        rpc.read.mockResolvedValue(brandReadResult());
+        const input = readInput({ accountLifetime: lifetime.lifetime });
+        const neutral = { ...input, installedPackage: installedPackage({ brand: { state: 'missing' }, occurrenceId: 'unbranded-replacement' }) };
+        if (surface === 'hook') {
+            const hook = await renderHook((props: typeof input) => useInstalledPluginBrandPresentation(props), { initialProps: input });
+            await hook.rerender(neutral);
+            expect(hook.getCurrent()).toEqual({ displayName: 'Acme Brand' });
+            await hook.unmount();
+        } else {
+            await readInstalledPluginBrandPresentation(input);
+            expect(await readInstalledPluginBrandPresentation(neutral)).toEqual({ displayName: 'Acme Brand' });
+        }
+        await readInstalledPluginBrandPresentation(input);
+        expect(rpc.read).toHaveBeenCalledTimes(2);
+        lifetime.retire();
     });
 
     it('reads the admitted same-plugin PNG through the canonical contextual Resource authority', async () => {
@@ -656,6 +801,22 @@ describe('installed package brand presentation', () => {
 
         expect(hook.getCurrent()).toBeNull();
         expect(renders).toBe(before);
+        expect(rpc.read).not.toHaveBeenCalled();
+        await hook.unmount();
+    });
+
+    it('retains a neutral package presentation without publishing redundant mount updates', async () => {
+        const input = readInput({ installedPackage: installedPackage({ brand: { state: 'missing' } }) });
+        const presentations: unknown[] = [];
+        const hook = await renderHook(() => {
+            const presentation = useInstalledPluginBrandPresentation(input);
+            presentations.push(presentation);
+            return presentation;
+        });
+        expect(hook.getCurrent()).toEqual({ displayName: 'Acme Brand' });
+        expect(presentations).toHaveLength(1);
+        await hook.rerender();
+        expect(hook.getCurrent()).toBe(presentations[0]);
         expect(rpc.read).not.toHaveBeenCalled();
         await hook.unmount();
     });

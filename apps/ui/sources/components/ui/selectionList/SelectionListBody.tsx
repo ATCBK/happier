@@ -59,9 +59,10 @@ import {
 import { SelectionListBodyScrollFrame } from './SelectionListBodyScrollFrame';
 import {
     renderSelectionListSectionNodes,
+    SelectionListStateLine,
     type SelectionListSectionRenderContext,
 } from './SelectionListDynamicSectionRows';
-import { SelectionListEmptyState } from './SelectionListEmptyState';
+import { t } from '@/text';
 import {
     advanceSelectionListBodyRendererLatch,
     applyLatchedVirtualizationToPlan,
@@ -374,14 +375,14 @@ function SelectionListBodyPlannedContent(props: SelectionListBodyProps & Readonl
     const emptyNode = isMeasure ? null : (() => {
         const emptyStateGroupA11y = buildSelectionListSectionGroupA11yProps({ pattern: a11yPattern });
         return emptyStateGroupA11y === null ? (
-            <SelectionListEmptyState
-                label={props.step.emptyStateLabel}
+            <SelectionListStateLine
+                label={props.step.emptyStateLabel ?? t('selectionList.emptyMatch')}
                 testID={selectionListTestId(props.rootTestID, 'empty')}
             />
         ) : (
             <View role="group" {...emptyStateGroupA11y}>
-                <SelectionListEmptyState
-                    label={props.step.emptyStateLabel}
+                <SelectionListStateLine
+                    label={props.step.emptyStateLabel ?? t('selectionList.emptyMatch')}
                     testID={selectionListTestId(props.rootTestID, 'empty')}
                 />
             </View>
@@ -550,14 +551,14 @@ function SelectionListBodyDirectVirtualizedSource(props: SelectionListBodyProps 
                 {...(bodyHostAccessibilityHide ?? {})}
             >
                 {isMeasure ? null : emptyStateGroupA11y === null ? (
-                    <SelectionListEmptyState
-                        label={props.step.emptyStateLabel}
+                    <SelectionListStateLine
+                        label={props.step.emptyStateLabel ?? t('selectionList.emptyMatch')}
                         testID={selectionListTestId(props.rootTestID, 'empty')}
                     />
                 ) : (
                     <View role="group" {...emptyStateGroupA11y}>
-                        <SelectionListEmptyState
-                            label={props.step.emptyStateLabel}
+                        <SelectionListStateLine
+                            label={props.step.emptyStateLabel ?? t('selectionList.emptyMatch')}
                             testID={selectionListTestId(props.rootTestID, 'empty')}
                         />
                     </View>

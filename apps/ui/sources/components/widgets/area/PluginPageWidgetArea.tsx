@@ -147,9 +147,10 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
     const listed = layouts.state.dashboards;
     const defaultId = base ? buildWidgetSurfaceArtifactIdV1(base) : 'default';
     const options = React.useMemo(() => [
-        ...(!listed.some(row => row.artifactId === defaultId) ? [{ id: defaultId, name: t('projects.dashboard.default'), isDefault: true }] : []),
+        // The stock layout carries the area's own name: with no other layout its one tab is the area's heading.
+        ...(!listed.some(row => row.artifactId === defaultId) ? [{ id: defaultId, name: props.title ?? t('widgetAdd.areaPinned'), isDefault: true }] : []),
         ...listed.map(row => ({ id: row.artifactId, name: row.name, isDefault: row.isDefault || row.artifactId === defaultId, edited: row.isEdited })),
-    ], [defaultId, listed]);
+    ], [defaultId, listed, props.title]);
     const selectedId = ready ? ready.surface.artifactId ?? buildWidgetSurfaceArtifactIdV1(ready.surface) : defaultId;
     const selectLayout = React.useCallback(async (id: string) => {
         const summary = listed.find(row => row.artifactId === id);
@@ -198,8 +199,11 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
     const testID = props.testID ?? `widget-area.${props.area}`;
     return (
         <>
-        {ready ? <WidgetAreaLayoutBar layouts={options} selectedId={selectedId} onSelect={id => { void selectLayout(id); }}
-            onCreate={ready.canEdit ? () => { void create(); } : null} actions={actions} labels={labels} testID={`${testID}.layouts`} /> : null}
+        {/* One header: the layout tabs name the area (lab `p-overview`, as on Usage and a Project), so the
+            area below draws no second title and adds through its one dashed line. Held while loading so
+            nothing moves on arrival. */}
+        <WidgetAreaLayoutBar layouts={options} selectedId={selectedId} onSelect={id => { void selectLayout(id); }}
+            onCreate={ready?.canEdit ? () => { void create(); } : null} actions={actions} labels={labels} testID={`${testID}.layouts`} />
         {ready?.preset?.isEdited ? <WidgetAreaPresetLine preset={ready.preset} surface={ready.surface} testID={`${testID}.preset`}
             presetActions={{ resetPreset: async (surface = ready.surface) => {
                 const admitted = { surface, context: ready.context };
@@ -213,8 +217,8 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
             context={context}
             geometry="grid"
             title={props.title ?? t('widgetAdd.areaPinned')}
-            meta={props.description ?? t('widgetAdd.areaPinnedMeta')}
             surfaceName={props.surfaceName}
+            dashboard={{ addLabel: t('widgetAdd.areaEmptyAction'), emptyTitle: props.description ?? t('widgetAdd.areaEmptyReason') }}
             testID={testID}
         />
         </>

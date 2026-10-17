@@ -20,7 +20,6 @@ import { motionTokens, StepTransitionFrame } from '@/components/ui/motion';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { t } from '@/text';
@@ -34,7 +33,6 @@ import {
 import { buildApiTokenCreateRestorePath } from './apiTokenCreateResume';
 import { ApiTokenExpiryChoiceItem } from './ApiTokenExpiryChoiceItem';
 import { ApiTokenRevealBody, ApiTokenRevealDone } from './ApiTokenReveal';
-import { confirmForCapturedAccount } from './confirmForCapturedAccount';
 import { resolveApiTokenOperationErrorMessageKey } from './apiTokenSettingsPresentation';
 import { ApiTokenGrantEditor, ApiTokenGrantPickerDone, useApiTokenGrantPicker } from './grant/ApiTokenGrantEditor';
 import { API_TOKEN_LIMITED_GRANT_START_V1, areApiTokenGrantsEqual, isApiTokenGrantDraftSendable } from './grant/apiTokenGrantDraft';
@@ -383,13 +381,8 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                             action={async () => {
                                 const tokenId = state.recoveryTokenId;
                                 if (!tokenId) return;
-                                const target = await confirmForCapturedAccount(props.controller, () => Modal.confirm(
-                                    t('settingsApiTokens.revoke.title', { label: state.createDraft.label || tokenId }),
-                                    t('settingsApiTokens.revoke.body'),
-                                    { cancelText: t('common.cancel'), confirmText: t('settingsApiTokens.revoke.confirm'), destructive: true },
-                                ));
-                                if (target && props.controller.getState().recoveryTokenId === tokenId) {
-                                    await props.controller.revokeToken(tokenId, target);
+                                if (props.controller.getState().recoveryTokenId === tokenId) {
+                                    await props.controller.revokeToken(tokenId);
                                 }
                             }} />
                     </View>

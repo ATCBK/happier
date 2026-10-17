@@ -6,6 +6,7 @@ import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import {
@@ -216,6 +217,30 @@ describe('ConnectedAccountSetupController real ownership', () => {
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
                 approvalWaivedSurfaces: { 'connectedServices.configuration.replace': ['ui'] } }),
         }, 2);
+    }
+
+    function installApprovalBoundary() {
+        const approvals: ApprovalRequestV2[] = [];
+        handleHttp = async (rawUrl, init) => {
+            const url = new URL(String(rawUrl));
+            if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (url.pathname === '/v1/artifacts' && init?.method === 'POST') {
+                // The real executor and Artifact owner produce the request; HTTP is the boundary.
+                const create = JSON.parse(String(init.body)) as ArtifactCreateRequest;
+                const content = decodePlainArtifactStoredContent(create.body);
+                if (!content || typeof content !== 'object' || !('body' in content) || typeof content.body !== 'string') throw new Error('Missing approval Artifact body');
+                const request = StoredApprovalRequestSchema.parse(JSON.parse(content.body));
+                if (request.v !== 2) throw new Error('Missing current approval authority');
+                approvals.push(request);
+                return Response.json({ ...create, ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
+                    headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+            }
+            if (url.pathname === '/v1/artifacts') return Response.json([]);
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        };
+        return approvals;
     }
 
     function installAccountLabelBoundary(targetAccount: QualifiedConnectedAccountProfileV4, beforeWrite?: () => Promise<void>) {
@@ -450,6 +475,46 @@ describe('ConnectedAccountSetupController real ownership', () => {
             { operation: 'submitManual', attemptId: 'attempt-1', fields: { token: 'secret-token' } },
             { operation: 'cancel', attemptId: 'attempt-1' },
         ]);
+        expect(platform.confirm).not.toHaveBeenCalled();
+    });
+
+    it('keeps one explicit Ask for credentials pending without repeating the connect intent, then cancels on close', async () => {
+        storage.getState().applySettings({ ...storage.getState().settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'connectedServices.authentication.submitManual': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        }, 2);
+        const approvals = installApprovalBoundary();
+        const screen = await manualScreen();
+        await act(async () => screen.changeTextByTestId('connected-account-manual:token', 'secret-token'));
+        const submission = screen.pressByTestIdAsync('connected-account-manual:submit');
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        expect(approvals[0]).toMatchObject({ actionId: 'connectedServices.authentication.submitManual', status: 'open' });
+        expect(authenticationCommands).toEqual([{ operation: 'beginConnect', service, modeId: 'manual' }]);
+        expect(platform.confirm).not.toHaveBeenCalled();
+        await screen.unmount();
+        await submission;
+        expect(authenticationCommands.filter(command => command.operation === 'submitManual')).toEqual([]);
+        expect(onConnected).not.toHaveBeenCalled();
+    });
+
+    it('retains one initial explicit Ask across setup rerenders without beginning an unapproved attempt', async () => {
+        storage.getState().applySettings({ ...storage.getState().settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'connectedServices.authentication.beginConnect': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        }, 2);
+        const approvals = installApprovalBoundary();
+        const screen = await renderScreen(element());
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        await screen.update(element());
+        expect(approvals).toHaveLength(1);
+        expect(approvals[0]).toMatchObject({ actionId: 'connectedServices.authentication.beginConnect', status: 'open' });
+        expect(authenticationCommands).toEqual([]);
+        expect(platform.confirm).not.toHaveBeenCalled();
+        await screen.unmount();
+        expect(authenticationCommands).toEqual([]);
+        expect(onConnected).not.toHaveBeenCalled();
     });
 
     it('submits a declared native import source choice through the qualified selected-machine attempt', async () => {
@@ -1259,27 +1324,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
         };
         const bindings = await seedPurposeDefaults({ kind: 'account', account: targetAccount.ref });
         installDescription({ ...described, accounts: [targetAccount] });
-        const approvals: ApprovalRequestV2[] = [];
-        handleHttp = async (rawUrl, init) => {
-            const url = new URL(String(rawUrl));
-            if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
-            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-            if (url.pathname === '/v1/artifacts' && init?.method === 'POST') {
-                // The persisted approval is produced by the real executor and
-                // Artifact owner; only their HTTP boundary is replaced.
-                const create = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                const content = decodePlainArtifactStoredContent(create.body);
-                if (!content || typeof content !== 'object' || !('body' in content) || typeof content.body !== 'string') throw new Error('Missing approval Artifact body');
-                const request = StoredApprovalRequestSchema.parse(JSON.parse(content.body));
-                if (request.v !== 2) throw new Error('Missing current approval authority');
-                approvals.push(request);
-                return Response.json({ ...create, ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
-                    headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
-            }
-            if (url.pathname === '/v1/artifacts') return Response.json([]);
-            return Response.json({ error: 'not_found' }, { status: 404 });
-        };
+        const approvals = installApprovalBoundary();
         handleControl = command => command.operation === 'revokeAccount'
             ? { status: 'revoked', account: targetAccount.ref, remoteStatus: 'remoteUnsupported' }
             : command.operation === 'listPendingAttempts' ? { status: 'pendingAttempts', attempts: [] } : description;
@@ -1503,6 +1548,69 @@ describe('ConnectedAccountSetupController real ownership', () => {
         expect(controlCommands).toEqual([]);
     });
 
+    it.each([
+        ['default', 'row'], ['ask', 'row'], ['default', 'selection'], ['ask', 'selection'],
+    ] as const)('uses only Action policy for pool member removal (%s, %s)', async (mode, entry) => {
+        let group = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1,
+            ref: { service, groupId: 'work-pool' }, incarnation: 'pool-life', displayName: 'Work pool',
+            policy: {}, activeConnectedAccountId: null, generation: 1, runtimeStateRevision: 0,
+            state: {}, createdAt: 0, updatedAt: 0,
+            members: [{ v: 1, connectedAccountId: 'account-1', priority: 0, enabled: true, state: {}, createdAt: 0, updatedAt: 0 }],
+        });
+        if (mode === 'ask') storage.getState().applySettings({ ...storage.getState().settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'connectedServices.pools.members.remove': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        }, 3);
+        const approvals = installApprovalBoundary();
+        const approvalHttp = handleHttp;
+        const removed: URL[] = [];
+        handleHttp = async (url, init) => {
+            const request = new URL(String(url));
+            if (request.pathname === '/v4/connect/qualified/groups') return Response.json({ groups: [group] });
+            if (request.pathname === '/v4/connect/qualified/group/member' && init?.method === 'DELETE') {
+                removed.push(request);
+                group = { ...group, members: [], generation: group.generation + 1 };
+                return Response.json({ group });
+            }
+            if (request.pathname === '/v4/connect/qualified/group') return Response.json({ group });
+            return approvalHttp(url, init);
+        };
+        resetServerFeaturesClientForTests();
+        primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse({
+            features: { connectedServices: { enabled: true, accountGroups: { enabled: true } } },
+            capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } } },
+        }) } });
+        platform.params = { ...service, groupId: group.ref.groupId };
+        platform.confirm.mockResolvedValue(false);
+        const screen = await renderScreen(<InjectedAuthProvider credentials={account.credentials}><ConnectedAccountServiceView /></InjectedAuthProvider>);
+        await vi.waitFor(() => expect(screen.findByTestId('connected-services-pool-detail:member:account-1')).not.toBeNull());
+        if (entry === 'row') {
+            const row = screen.tree.root.findAll(node => node.props.testID === 'connected-services-pool-detail:member:account-1'
+                && Array.isArray(node.props.actions))[0];
+            const action = (row?.props.actions as ItemAction[]).find(candidate => candidate.id.endsWith(':remove'));
+            expect(action?.onPress).toBeTypeOf('function');
+            await act(async () => { action!.onPress!(); });
+        } else {
+            const selection = screen.tree.root.findAll(node => node.props.testID === 'connected-services-pool-detail:members-select'
+                && Array.isArray(node.props.selectedIds) && typeof node.props.onCommit === 'function')[0];
+            expect(selection).toBeDefined();
+            await act(async () => { await selection!.props.onCommit([]); });
+        }
+        if (mode === 'default') {
+            await vi.waitFor(() => expect(removed).toHaveLength(1));
+            expect(group.members).toEqual([]);
+            expect(approvals).toEqual([]);
+        } else {
+            await vi.waitFor(() => expect(approvals).toHaveLength(1));
+            expect(approvals[0]).toMatchObject({ actionId: 'connectedServices.pools.members.remove', status: 'open' });
+            expect(removed).toEqual([]);
+            expect(group.members).toHaveLength(1);
+        }
+        expect(platform.confirm).not.toHaveBeenCalled();
+        await screen.unmount();
+    });
+
     it.each(['cancelled', 'deleted', 'failed'] as const)('clears exact pool purpose defaults only after confirmed successful deletion (%s)', async (outcome) => {
         const group = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1,
             ref: { service, groupId: 'work-pool' }, incarnation: 'pool-life', displayName: 'Work pool',
@@ -1552,7 +1660,10 @@ describe('ConnectedAccountSetupController real ownership', () => {
         if (outcome === 'failed') await vi.waitFor(() => expect(screen.findHostByTestId('connected-services-pool-detail:error')).not.toBeNull());
         await vi.waitFor(() => expect(purposeBoundary!.readBindings())
             .toEqual(outcome === 'deleted' ? bindings.slice(2) : bindings));
-        if (outcome === 'cancelled') expect(deletedRequests).toEqual([]);
+        if (outcome === 'cancelled') {
+            expect(deletedRequests).toEqual([]);
+            expect(screen.findHostByTestId('connected-services-pool-detail:error')).toBeNull();
+        }
     });
 
     it('reads the exact account quota even when V4 pools are disabled and their transport fails', async () => {

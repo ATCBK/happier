@@ -12,6 +12,7 @@ import type {
   PluginInputTypeContributionV1,
   PluginAtmospherePictureContributionV1,
   PluginRegistrySourceContributionV1,
+  PluginSkillContributionV1,
   PluginDragSourceContributionV1,
   PluginDropTargetContributionV1,
   PluginEventContributionV1,
@@ -177,6 +178,7 @@ export type PluginContributionRegistry = Readonly<{
   inputTypes: readonly PluginOwnedContribution<PluginInputTypeContributionV1>[];
   atmospherePictures: readonly PluginOwnedContribution<PluginAtmospherePictureContributionV1>[];
   registrySources: readonly PluginOwnedContribution<PluginRegistrySourceContributionV1>[];
+  skills: readonly PluginOwnedContribution<PluginSkillContributionV1>[];
   machineProvisioners: readonly PluginOwnedContribution<MachineProvisionerContributionV1>[];
   dragSources: readonly PluginOwnedClientExecutableContribution<PluginDragSourceContributionV1>[];
   dropTargets: readonly PluginOwnedClientExecutableContribution<PluginDropTargetContributionV1>[];
@@ -282,8 +284,12 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
       plugin: definition.surfaces.includes('plugin'),
     },
     inputHints: normalizePluginActionInputHintsV2(definition.inputHints) ?? null,
+    ...(definition.connectedAccountPurposeBindings === undefined ? {} : {
+      connectedAccountPurposeBindings: definition.connectedAccountPurposeBindings,
+    }),
     ...(definition.inputSchema === undefined ? {} : { inputSchema: definition.inputSchema }),
     ...(definition.contextualDefaults ? { contextualDefaults: definition.contextualDefaults } : {}),
+    ...(definition.confirmationWhen === undefined ? {} : { confirmationWhen: definition.confirmationWhen }),
     ...(definition.resultSchema ? { outputSchema: definition.resultSchema } : {}),
     ...(definition.operation ? { operation: definition.operation } : {}),
     scopes: definition.scopes,
@@ -293,6 +299,7 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
     hostAccess: definition.hostAccess,
     priority: definition.priority,
   } satisfies Omit<ActionDefinitionV1, 'execution' | 'inputSchema'> & Readonly<{
+    confirmationWhen?: PluginActionContributionV2['confirmationWhen'];
     inputSchema?: PluginActionContributionV2['inputSchema'];
     execution: PluginActionContributionV2['execution'];
   }>;
@@ -426,6 +433,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
   const inputTypes: PluginOwnedContribution<PluginInputTypeContributionV1>[] = [];
   const atmospherePictures: PluginOwnedContribution<PluginAtmospherePictureContributionV1>[] = [];
   const registrySources: PluginOwnedContribution<PluginRegistrySourceContributionV1>[] = [];
+  const skills: PluginOwnedContribution<PluginSkillContributionV1>[] = [];
   const machineProvisioners: PluginOwnedContribution<MachineProvisionerContributionV1>[] = [];
   const dragSources: PluginOwnedClientExecutableContribution<PluginDragSourceContributionV1>[] = [];
   const dropTargets: PluginOwnedClientExecutableContribution<PluginDropTargetContributionV1>[] = [];
@@ -1089,6 +1097,15 @@ export function buildPluginContributionRegistry(params: Readonly<{
         sourceSpec: plugin.sourceSpec, definition,
       });
     }
+    for (const definition of readSemanticDefinitions<PluginSkillContributionV1>('skills')) {
+      skills.push({
+        pluginId: plugin.pluginId, pluginVersion: plugin.manifest.version,
+        identity: createPluginContributionIdentity({ pluginId: plugin.pluginId, localId: definition.id }),
+        pluginRootPath: plugin.pluginRootPath, manifestPath: plugin.manifestPath,
+        daemonEntryPath: plugin.daemonEntryPath, devDaemonEntryPath: plugin.devDaemonEntryPath,
+        sourceSpec: plugin.sourceSpec, definition,
+      });
+    }
     for (const definition of readSemanticDefinitions<PluginAtmospherePictureContributionV1>('atmospherePictures')) {
       atmospherePictures.push({
         pluginId: plugin.pluginId, pluginVersion: plugin.manifest.version,
@@ -1200,6 +1217,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
     inputTypes: Object.freeze(inputTypes),
     atmospherePictures: Object.freeze(atmospherePictures),
     registrySources: Object.freeze(registrySources),
+    skills: Object.freeze(skills),
     machineProvisioners: Object.freeze(machineProvisioners),
     dragSources: Object.freeze(dragSources),
     dropTargets: Object.freeze(dropTargets),

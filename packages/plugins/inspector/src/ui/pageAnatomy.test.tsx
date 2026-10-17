@@ -61,12 +61,14 @@ describe('Inspector page anatomy', () => {
     }
   });
 
-  it('keeps the compact heading stack in a pane placement', async () => {
+  it('leaves naming to the host pane header in a pane placement', async () => {
     const fixture = await mount('rightSidebarTab');
     try {
       await expect(fixture.getByText('No plugins installed.')).resolves.toEqual({ content: 'No plugins installed.' });
       expect(document.querySelector('[data-testid="inspector-page-header"]')).toBeNull();
-      expect(document.querySelector('[data-testid="inspector-title"]')).not.toBeNull();
+      // The host pane header already says "Plugin Inspector"; the pane opens on its purpose.
+      expect(document.querySelector('[data-testid="inspector-title"]')).toBeNull();
+      expect(document.querySelector('[data-testid="inspector-pane-description"]')).not.toBeNull();
     } finally {
       await fixture.dispose();
     }

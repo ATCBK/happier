@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { EmptySlot } from '@/components/ui/empty/EmptySlot';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { useOptionalPluginUiScrollActivityTracker } from '@happier-dev/plugin-ui/advanced';
@@ -185,6 +185,9 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
     const organizing = props.organize?.active ?? localOrganizing;
     const setOrganizing = props.organize?.onChange ?? setLocalOrganizing;
     const state = layout.state;
+    const scopeRefused = state.status === 'unavailable' && (state.reasonCode === 'widget_scope_unavailable'
+        || state.reasonCode === 'widget_area_scope_retired' || state.reasonCode === 'account_target_mismatch'
+        || state.reasonCode === 'server_target_mismatch');
     const ready = state.status === 'ready' ? state : null;
     const canAdd = ready?.canEdit === true;
     // Organize is where a group shows its bar (grip, name, width, ⋯): the options route of an untitled
@@ -276,7 +279,9 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     size="line"
                     layout="inline"
                     title={t('widgetAdd.areaUnavailableTitle')}
+                    {...(state.reason || scopeRefused ? { reason: state.reason ?? t('widgetAdd.areaScopeRecovery') } : {})}
                     diagnosticCode={state.reasonCode}
+                    {...(!scopeRefused ? { action: { label: t('common.retry'), onPress: layout.reload, testID: `${props.testID}.retry` } } : {})}
                 />
             ) : ready && ready.placements.length === 0 && props.dashboard ? (
                 <Text testID={`${props.testID}.empty`} style={styles.dashboardEmpty}>{props.dashboard.emptyTitle}</Text>
@@ -945,7 +950,8 @@ const styles = StyleSheet.create((theme) => ({
     meta: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, flexShrink: 1, minWidth: 0 },
     grow: { flex: 1 },
     column: { gap: theme.space.s12 },
-    dashboardEmpty: { ...Typography.default(), ...happierPageTextMetrics('sectionDescription'), color: theme.colors.text.secondary },
+    // Below the layout tabs' rule the line keeps a section header's breath, as a description under a title does.
+    dashboardEmpty: { ...Typography.default(), ...happierPageTextMetrics('sectionDescription'), color: theme.colors.text.secondary, paddingTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx },
     // The frame fills its grid cell, so cards in one row share a height.
     cell: { flexGrow: 1 },
 }));

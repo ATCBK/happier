@@ -220,6 +220,17 @@ export type DeclarativeNodeRenderContext = Readonly<{
      */
     renderField: (node: RecordValue) => React.ReactNode;
     /**
+     * A `group` whose children are all settings fields is a settings section: a mounted surface
+     * draws it as the host's own section (title, description above, one sheet of rows) so
+     * declared preferences read like Happier's settings. Without it the group stays a free-form stack.
+     */
+    renderFieldGroup?: (input: Readonly<{
+        key: string;
+        title: string | undefined;
+        description: string | undefined;
+        children: React.ReactNode;
+    }>) => React.ReactNode;
+    /**
      * Account Collection data is mounted-surface-only. The renderer keeps the
      * node vocabulary closed while each consumer supplies its real Data seam.
      */
@@ -282,8 +293,21 @@ function withoutGeometry(presentation: NonNullable<DeclarativeNodeRenderContext[
     return rest;
 }
 
-/** `stack` and `group` are one free-form container with two spellings. */
+function isDeclarativeFieldGroup(node: RecordValue): boolean {
+    return node.kind === 'group'
+        && Array.isArray(node.children)
+        && node.children.length > 0
+        && node.children.every((child) => readDeclarativeRecord(child)?.kind === 'field');
+}
+
+/** `stack` and `group` are one free-form container with two spellings; a group of settings fields is a settings section. */
 const renderDeclarativeContainer: DeclarativeNodeRenderer = (node, context) => (
+    context.renderFieldGroup && isDeclarativeFieldGroup(node) ? context.renderFieldGroup({
+        key: readDeclarativePath(node, context.nodePath),
+        title: readDisplayText(context, 'title') || undefined,
+        description: readDisplayText(context, 'description') || undefined,
+        children: renderDeclarativeChildren(node, context),
+    }) :
     <HappierStack
         key={readDeclarativePath(node, context.nodePath)}
         testID={`plugin-declarative-${String(node.kind)}`}
@@ -297,7 +321,10 @@ const renderDeclarativeContainer: DeclarativeNodeRenderer = (node, context) => (
         {readDisplayText(context, 'title') ? (
             <HappierHeading level={3} theme={context.presentationTheme}>{renderDisplayText(context, 'title')}</HappierHeading>
         ) : null}
-        {readDisplayText(context, 'description') ? <context.host.Text>{renderDisplayText(context, 'description')}</context.host.Text> : null}
+        {readDisplayText(context, 'description') ? (
+            // Supporting copy reads in the secondary ink; an uncoloured host Text fell back to the platform's black.
+            <context.host.Text style={{ color: context.presentationTheme.colors.secondaryText }}>{renderDisplayText(context, 'description')}</context.host.Text>
+        ) : null}
         {/* Children share the body: only a node that is the whole body may fill its height (a chart). */}
         {renderDeclarativeChildren(node, context.widgetPresentation?.geometry
             ? { ...context, widgetPresentation: withoutGeometry(context.widgetPresentation) } : context)}
@@ -439,7 +466,7 @@ const DECLARATIVE_NODE_RENDERERS = Object.freeze({
                 titleContent={context.renderText ? renderDisplayText(context, 'title') : undefined}
             >
                 {renderDeclarativeChildren(node, context)}
-                {footer ? <context.host.Text>{renderDisplayText(context, 'footer')}</context.host.Text> : null}
+                {footer ? <context.host.Text style={{ color: context.presentationTheme.colors.secondaryText }}>{renderDisplayText(context, 'footer')}</context.host.Text> : null}
             </HappierListSection>
         );
     }, true),
@@ -524,7 +551,7 @@ const DECLARATIVE_NODE_RENDERERS = Object.freeze({
                             ? context.host.renderIcon(iconToken, 'large', color, context.direction)
                             : undefined)}
                     title={<context.host.Text style={{ color }}>{renderDisplayText(context, 'title')}</context.host.Text>}
-                    description={description ? <context.host.Text>{renderDisplayText(context, 'description')}</context.host.Text> : undefined}
+                    description={description ? <context.host.Text style={{ color: context.presentationTheme.colors.secondaryText }}>{renderDisplayText(context, 'description')}</context.host.Text> : undefined}
                 />
             </HappierInfoState>
         );

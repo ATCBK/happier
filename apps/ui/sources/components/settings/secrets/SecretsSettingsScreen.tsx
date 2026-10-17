@@ -19,7 +19,6 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import {
     deleteSavedSecretResource,
     repairCustodiedSavedSecretResourceEnvelopesBestEffort,
-    updateSavedSecretResource,
     type SavedSecretResourceDeleteResult,
 } from '@/sync/ops/settings/savedSecretResourceOperations';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
@@ -71,7 +70,7 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
     };
     const accessEntry = accessSelection === null || accessSelection.scopeKey !== scopeKey
         ? null
-        : catalog.sharedEntries.find((entry) => entry.ref === accessSelection.ref) ?? null;
+        : catalog.entries.find((entry) => entry.ref === accessSelection.ref) ?? null;
     const approval = useActionApprovalContinuation({
         scopeKey: scopeKey ?? 'unbound:saved-secrets',
         serverId: scope?.serverId ?? '',
@@ -123,8 +122,7 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
             if (currentScopeKey.current !== requestedScopeKey) return;
             setSharedMutationPending(false);
         };
-        const result = await updateSavedSecretResource({
-            scope,
+        const result = await catalog.updateResource({
             resourceId: parsed.id,
             expectedRevision: entry.revision,
             ...update,
@@ -211,7 +209,7 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
             : t('secrets.catalog.operationFailed'));
     }, []);
 
-    const removeSharedResource = React.useCallback(async (resourceId: string, expectedRevision: number, name: string) => {
+    const removeSharedResource = React.useCallback(async (resourceId: string, expectedRevision: number) => {
         if (!scope) return;
         // Deleting runs the owner reference census, which reads the owner's own
         // current Account Settings; without a known version it cannot run.
@@ -221,12 +219,7 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
         if (!lifetime || !areServerAccountScopesEqual(lifetime.scope, scope) || !lifetime.isCurrent()) return;
         const requestedScopeKey = scopeKey;
         const isCurrent = () => lifetime.isCurrent() && currentScopeKey.current === requestedScopeKey;
-        const confirmed = await Modal.confirm(
-            t('secrets.prompts.deleteTitle'),
-            t('secrets.prompts.deleteConfirm', { name }),
-            { cancelText: t('common.cancel'), confirmText: t('common.delete'), destructive: true },
-        );
-        if (!confirmed || !isCurrent()) return;
+        if (!isCurrent()) return;
         setSharedMutationPending(true);
         const handleFailure = (cause: unknown) => {
             if (!isCurrent()) return;
@@ -240,7 +233,7 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
         try {
             const operation = {
                 scope, resourceId, expectedRevision,
-                expectedSettingsVersion: settingsVersion, confirmedByPresentUser: true,
+                expectedSettingsVersion: settingsVersion,
                 onApprovalSucceeded: () => {
                     if (!isCurrent()) return;
                     setSharedMutationPending(false);
@@ -283,13 +276,13 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
     const removeShared = React.useCallback(async (entry: SavedSecretCatalogEntryV1) => {
         const parsed = parseSavedSecretCatalogReferenceV1(entry.ref);
         if (parsed?.kind !== 'shared_resource' || entry.revision === null) return;
-        await removeSharedResource(parsed.id, entry.revision, entry.name ?? t('secrets.catalog.unavailableName'));
+        await removeSharedResource(parsed.id, entry.revision);
     }, [removeSharedResource]);
 
     const removeCorruptShared = React.useCallback(async (
         entry: Extract<SavedSecretCatalogCorruptEntryV1, { relationship: 'owner' }>,
     ) => {
-        await removeSharedResource(entry.repair.resourceId, entry.repair.expectedRevision, t('secrets.catalog.unavailableName'));
+        await removeSharedResource(entry.repair.resourceId, entry.repair.expectedRevision);
     }, [removeSharedResource]);
 
     const openApproval = approvalId && scope ? () => router.pushRetainingCurrent(
@@ -368,8 +361,10 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
         <SecretsSettingsPage
             key={scopeKey}
             onBeginEdit={clearEditors}
-            personalSecrets={catalog.personalSecrets}
-            sharedEntries={catalog.sharedEntries}
+            // Every current secret is a resource. Keep its storage and access
+            // controls; the catalog routes private edits to the personal Action.
+            personalSecrets={EMPTY_PERSONAL_SECRETS}
+            sharedEntries={catalog.entries}
             corruptEntries={catalog.corruptEntries}
             resolveSharedReference={catalog.resolveReference}
             sharedCatalogStatus={catalog.status}
@@ -404,3 +399,5 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
         />
     );
 });
+
+const EMPTY_PERSONAL_SECRETS: readonly SavedSecret[] = Object.freeze([]);

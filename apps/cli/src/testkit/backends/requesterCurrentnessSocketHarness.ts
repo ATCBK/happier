@@ -30,6 +30,7 @@ export async function createRequesterCurrentnessSocketHarness() {
         })));
     };
     return {
+        server,
         clients,
         async disconnect() {
             clients.forEach(client => client.disconnect());
@@ -44,8 +45,17 @@ export async function createRequesterCurrentnessSocketHarness() {
         async pushProfile(accountId: string) {
             await deliver(UpdateBodySchema.parse({ t: 'update-account', id: accountId, name: 'Changed profile' }));
         },
+        async pushSettings(accountId: string, settings: unknown, version: number) {
+            await deliver(UpdateBodySchema.parse({ t: 'update-account', id: accountId,
+                settingsV2: { content: { t: 'plain', v: settings }, version } }));
+        },
+        async hintSettings(settingsVersion: number) {
+            await deliver(UpdateBodySchema.parse({ t: 'account-settings-changed', settingsVersion }));
+        },
         pushInvalidCurrentness: async (accountId: string) => await deliver({ t: 'update-account', id: accountId,
             encryptionCurrentness: { mode: 'unknown' } }),
+        pushInvalidSettings: async (accountId: string) => await deliver({ t: 'update-account', id: accountId,
+            settingsV2: { version: 'invalid', content: { t: 'plain', v: {} } } }),
         async push(accountId: string, currentness: unknown) {
             const body = UpdateBodySchema.parse({ t: 'update-account', id: accountId,
                 encryptionCurrentness: currentness === null ? null : AccountEncryptionCurrentnessResponseSchema.parse(currentness) });

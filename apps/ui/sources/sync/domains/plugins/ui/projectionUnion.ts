@@ -1,5 +1,6 @@
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
+    resolvePluginUiClientExecutablePlatform,
     type PluginUiActionProjection,
     type PluginUiHostedWebProjection,
     type PluginUiProjectionModel,
@@ -17,14 +18,16 @@ import {
     type PluginUiInputTypeProjection,
     type PluginUiAtmospherePictureProjection,
     type PluginUiRegistrySourceProjection,
+    type PluginUiSkillProjection,
 } from './projection';
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, PluginMachineExecutionOriginV1Schema, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PluginSourceCustodyV1Schema, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 import { PluginDeclarativeProjectedModelV1Schema, projectPluginDeclarativeModelComparisonV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
 import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness';
-import { composePluginMachineExecutionOriginV1, type PluginMachineSourceExecutionOriginCandidateV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
+import { composePluginMachineExecutionOriginV1, type PluginMachineSourceExecutionOriginCandidateV1, type PluginMachineExecutionOriginRejectionV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolveFleetSupplyAgreement } from '@/sync/domains/machines/administration/fleetUnion';
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -40,6 +43,9 @@ export const PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY = 'hostOrigin';
 export type PluginUiContributionOriginV1 = Readonly<{
     machineId: string;
     serverId: string | null;
+    serverIdentityId?: string;
+    /** The currentness/activation owner's cause, independent of presence and release correspondence. */
+    unavailableReasonCode?: string;
     /** The ORIGIN machine's projection generation, not the union's. */
     generation: number | null;
     /**
@@ -87,36 +93,74 @@ export type PluginUiContributionSupplyV1 = PluginUiContributionOriginV1 & Readon
 
 // Availability publishes immutable declaration arrays; each machine's runtime
 // projection also keeps its identity until that owner replaces it. Reuse only
-// this merge's last input pair, leaving live authority to the union below.
+// this merge's last inputs, leaving live authority to the union below.
 const installedProjectionMerges = new WeakMap<readonly PluginUiProjectionModel[], Readonly<{
     runtime: PluginUiProjectionModel | null;
+    materializations: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined;
+    explicitOrigins: PluginUiProjectionUnionOriginSelections | undefined;
     projection: PluginUiProjectionModel;
 }>>();
+
+/** Installed release slots bind the graph omitted by portable manifest-only declarations. */
+function matchesInstalledArtifactSlot(
+    entry: unknown,
+    materializations: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined,
+): boolean {
+    const record = asRecord(entry);
+    const pluginId = readString(record?.pluginId);
+    const materialization = pluginId ? materializations?.[pluginId] : null;
+    if (!record || !materialization?.portableRelease || record.pluginVersion !== materialization.version
+        || !readString(record.occurrenceId)) return false;
+    const origin = readPluginUiProjectionEntryExecutionOrigin(record);
+    if (!origin || !arePluginMachineExecutionOriginsEqual(origin, composePluginMachineExecutionOriginV1(materialization))) return false;
+    const graph = PluginUiArtifactsManifestEntryV2Schema.safeParse(record.artifactGraph);
+    const tier = record.contributionKind === 'reactNativeBundle' ? 'reactNative'
+        : record.contributionKind === 'hostedWeb' ? 'hostedWeb' : null;
+    if (!graph.success || graph.data.tier !== tier) return false;
+    const platform = resolvePluginUiClientExecutablePlatform();
+    return materialization.uiArtifacts.some(slot => slot.contributionId === record.contributionId
+        && slot.artifactId === graph.data.artifactId && slot.tier === tier && slot.platform === platform
+        && slot.artifactDigest === graph.data.digest && slot.hostUiApiRange === graph.data.hostUiApiRange);
+}
 
 export function mergeInstalledPluginUiProjections(
     installed: readonly PluginUiProjectionModel[],
     runtime: PluginUiProjectionModel | null,
+    materializations?: Readonly<Record<string, PluginMachineMaterializationV1>>,
+    explicitOrigins?: PluginUiProjectionUnionOriginSelections,
 ): PluginUiProjectionModel | null {
     if (installed.length === 0) return runtime;
     const previous = installedProjectionMerges.get(installed);
-    if (previous?.runtime === runtime) return previous.projection;
+    if (previous?.runtime === runtime && previous.materializations === materializations
+        && previous.explicitOrigins === explicitOrigins) return previous.projection;
     const installedPluginIds = new Set(installed.flatMap(model => declarationMaps(model).flatMap(map =>
         Object.values(map).flatMap(entry => { const id = readString(asRecord(entry)?.pluginId); return id ? [id] : []; }))));
     const hostBundledPluginIds = new Set(installed.flatMap(model => Object.values(model.installedPackagesById)
         .filter(plugin => plugin.source.kind === 'bundled' && !plugin.occurrenceId).map(plugin => plugin.id)));
-    const merge = <T>(read: (model: PluginUiProjectionModel) => Readonly<Record<string, T>>) => {
+    const merge = <T>(read: (model: PluginUiProjectionModel) => Readonly<Record<string, T>>, artifactFacts = false) => {
         const declared: Record<string, T> = Object.assign({}, ...installed.map(read));
         for (const [key, entry] of Object.entries(runtime ? read(runtime) : {})) {
             const pluginId = readString(asRecord(entry)?.pluginId);
-            const packageSource = pluginId ? runtime?.installedPackagesById[pluginId]?.sourceCustody : null;
-            if (pluginId && hostBundledPluginIds.has(pluginId) && packageSource?.kind === 'development'
-                && readPluginUiContributionSupplies(entry).some(supply => supply.phase === 'current' && supply.interactionEnabled)) {
-                // A user-selected live source remains the authoring selector. Host
-                // bytes supply the bundled fallback when no such source is current.
+            const selectedOrigin = pluginId ? explicitOrigins?.get(pluginId) : undefined;
+            if (pluginId && hostBundledPluginIds.has(pluginId) && selectedOrigin && 'sourceRef' in selectedOrigin
+                && selectedOrigin.sourceRef.sourceCustody.kind === 'development'
+                && readPluginUiContributionSupplies(entry).some(supply => supply.phase === 'current' && supply.interactionEnabled
+                    && supply.executionOrigin && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, selectedOrigin))) {
+                // Only the explicitly selected live source overrides host bytes.
+                // Other suppliers remain byte routes and cannot select the UI.
                 declared[key] = entry;
                 continue;
             }
             const declaration = asRecord(declared[key]);
+            const executableOwner = asRecord(entry)?.generatedOwnerKind;
+            if (artifactFacts && (executableOwner === 'clientContribution' || executableOwner === 'voiceProvider')
+                && declaration?.generatedOwnerKind !== 'renderer') {
+                // Installed declarations retain renderer bytes. Executable graphs
+                // instead accompany the runtime Actions/Voice declarations whose
+                // exact occurrence and origin the executable resolver admits.
+                declared[key] = entry;
+                continue;
+            }
             if (declaration && Array.isArray(declaration.hostSupplies) && !declaration.occurrenceId) {
                 declared[key] = Object.freeze(Object.assign({}, declared[key], {
                     hostSupplies: readPluginUiContributionSupplies(entry),
@@ -127,6 +171,7 @@ export function mergeInstalledPluginUiProjections(
                 continue;
             }
             if (!pluginId || !installedPluginIds.has(pluginId)
+                || (artifactFacts && matchesInstalledArtifactSlot(entry, materializations))
                 || (declared[key] && stableContent(declarationContent(declared[key])) === stableContent(declarationContent(entry)))) {
                 declared[key] = entry;
             }
@@ -139,18 +184,22 @@ export function mergeInstalledPluginUiProjections(
         installedPackagesById: Object.freeze(Object.assign({}, ...installed.map(model => model.installedPackagesById), runtime?.installedPackagesById)),
         translationsByPluginId: merge(model => model.translationsByPluginId),
         sessionHeaderActionsById: merge(model => model.sessionHeaderActionsById),
-        searchProvidersById: merge(model => model.searchProvidersById),
-        hostedWebById: merge(model => model.hostedWebById),
-        reactNativeBundlesById: merge(model => model.reactNativeBundlesById),
+        // Search binds the runtime Action's occurrence and origin, like
+        // actionsById above. Portable renderer declarations omit this family
+        // and cannot withdraw an admitted runtime provider from Home.
+        searchProvidersById: runtime?.searchProvidersById ?? EMPTY_PLUGIN_UI_PROJECTION.searchProvidersById,
+        hostedWebById: merge(model => model.hostedWebById, true),
+        reactNativeBundlesById: merge(model => model.reactNativeBundlesById, true),
         surfacePlacementsById: merge(model => model.surfacePlacementsById),
         settingsGroupsById: merge(model => model.settingsGroupsById),
         settingsPagesById: merge(model => model.settingsPagesById),
         voiceProvidersById: merge(model => model.voiceProvidersById),
         atmospherePicturesById: merge(model => model.atmospherePicturesById),
         registrySourcesById: merge(model => model.registrySourcesById),
+        skillsById: merge(model => model.skillsById),
         unknownEntriesById: merge(model => model.unknownEntriesById),
     });
-    installedProjectionMerges.set(installed, { runtime, projection });
+    installedProjectionMerges.set(installed, { runtime, materializations, explicitOrigins, projection });
     return projection;
 }
 
@@ -244,6 +293,8 @@ export function readPluginUiContributionOrigin(entry: unknown): PluginUiContribu
     return Object.freeze({
         machineId,
         serverId: readString(origin.serverId),
+        ...(readString(origin.serverIdentityId) ? { serverIdentityId: readString(origin.serverIdentityId)! } : {}),
+        ...(readString(origin.unavailableReasonCode) ? { unavailableReasonCode: readString(origin.unavailableReasonCode)! } : {}),
         generation: typeof origin.generation === 'number' && Number.isFinite(origin.generation)
             ? origin.generation
             : null,
@@ -329,7 +380,7 @@ function declarationMaps(model: PluginUiProjectionModel): readonly Readonly<Reco
     return [model.translationsByPluginId, model.sessionHeaderActionsById, model.searchProvidersById,
         model.hostedWebById, model.reactNativeBundlesById, model.surfacePlacementsById,
         model.settingsGroupsById, model.settingsPagesById, model.actionsById, model.voiceProvidersById,
-        model.dragSourcesById, model.dropTargetsById, model.atmospherePicturesById, model.registrySourcesById, model.unknownEntriesById];
+        model.dragSourcesById, model.dropTargetsById, model.atmospherePicturesById, model.registrySourcesById, model.skillsById, model.unknownEntriesById];
 }
 
 /** Runtime identity and health are not portable declaration content. */
@@ -407,24 +458,26 @@ export function readPluginUiExecutionOriginCandidates(params: Readonly<{
 }>): Readonly<{
     sourceCandidates: readonly PluginMachineSourceExecutionOriginCandidateV1[];
     declaredDefaultOrigins: readonly PluginMachineExecutionOriginV1[];
+    machineRejections: readonly PluginMachineExecutionOriginRejectionV1[];
 }> {
     const entries = params.entry ? [params.entry] : params.projection
         ? declarationMaps(params.projection).flatMap(map => Object.values(map).filter(entry => asRecord(entry)?.pluginId === params.pluginId)) : [];
     const sourceCandidates: PluginMachineSourceExecutionOriginCandidateV1[] = [];
     const declaredDefaultOrigins: PluginMachineExecutionOriginV1[] = [];
+    const machineRejections: PluginMachineExecutionOriginRejectionV1[] = [];
     const packageSupplies: PluginUiContributionSupplyV1[] = [];
     for (const member of params.members ?? []) {
         if (!member.projection) continue;
         const installed = member.projection.installedPackagesById[params.pluginId];
-        if (!installed?.occurrenceId) continue;
+        if (!installed) continue;
         // Availability already supplies portable installations and owns their immutable-content
         // admission. A package occurrence must never introduce an alternate source for one.
         if (member.materializationsByPluginId?.[params.pluginId]?.portableRelease) continue;
         const origin = resolveMemberContributionOrigin({ ...member, projection: member.projection }, {
             pluginId: params.pluginId, occurrenceId: installed.occurrenceId, executionOrigin: installed.executionOrigin,
         });
-        if (!origin?.executionOrigin) continue;
-        packageSupplies.push({ ...origin, occurrenceId: installed.occurrenceId, pluginVersion: installed.version ?? null,
+        if (!origin || (!origin.executionOrigin && !origin.unavailableReasonCode)) continue;
+        packageSupplies.push({ ...origin, occurrenceId: installed.occurrenceId ?? null, pluginVersion: installed.version ?? null,
             sourceCustody: installed.sourceCustody ?? null,
             executionTargetDefault: installed.executionTarget?.default === 'installation' });
     }
@@ -435,6 +488,12 @@ export function readPluginUiExecutionOriginCandidates(params: Readonly<{
     for (const { conflict, supplies } of supplyGroups) {
         for (const supply of supplies) {
             const origin = supply.executionOrigin;
+            const reason = readPluginUiSupplyRejection(supply);
+            const serverIdentityId = origin?.serverIdentityId ?? supply.serverIdentityId;
+            if (reason && serverIdentityId && !machineRejections.some(entry => entry.serverIdentityId === serverIdentityId
+                && entry.machineId === supply.machineId)) {
+                machineRejections.push({ serverIdentityId, machineId: supply.machineId, reason });
+            }
             if (!origin || getPluginMachineExecutionOriginRef(origin).pluginId !== params.pluginId) continue;
             if (supply.executionTargetDefault && !conflict
                 && !declaredDefaultOrigins.some(candidate => arePluginMachineExecutionOriginsEqual(candidate, origin))) declaredDefaultOrigins.push(origin);
@@ -447,12 +506,26 @@ export function readPluginUiExecutionOriginCandidates(params: Readonly<{
                 // A machine-local source is selected by exact custody, not by
                 // correspondence with another Machine's portable release.
                 releaseContent: 'matched',
-                validation: supply.phase === 'current' && supply.interactionEnabled ? { kind: 'admitted' as const }
-                    : { kind: 'rejected' as const, reason: 'stale' as const },
+                validation: reason ? { kind: 'rejected' as const, reason }
+                    : supply.phase === 'current' && supply.interactionEnabled ? { kind: 'admitted' as const }
+                        : { kind: 'rejected' as const, reason: 'stale' as const },
             }));
         }
     }
-    return Object.freeze({ sourceCandidates: Object.freeze(sourceCandidates), declaredDefaultOrigins: Object.freeze(declaredDefaultOrigins) });
+    return Object.freeze({ sourceCandidates: Object.freeze(sourceCandidates), declaredDefaultOrigins: Object.freeze(declaredDefaultOrigins),
+        machineRejections: Object.freeze(machineRejections) });
+}
+
+function readPluginUiSupplyRejection(supply: PluginUiContributionOriginV1): PluginMachineExecutionOriginRejectionV1['reason'] | null {
+    switch (supply.unavailableReasonCode) {
+        case 'plugin_machine_unreachable': return 'home_unreachable';
+        case 'plugin_daemon_unsupported': return 'daemon_unsupported';
+        case 'plugin_daemon_invalid_response': return 'daemon_invalid_response';
+        case 'plugin_daemon_unavailable': return 'daemon_unavailable';
+        case 'plugin_activation_failed': return 'activation_refused';
+        case 'plugin_source_not_ready': return 'source_not_ready';
+        default: return null;
+    }
 }
 
 /** A Resource without a View still has its own producer and current runtime slot. */
@@ -499,7 +572,14 @@ function resolveMemberContributionOrigin(
     const pluginId = readString(entry.pluginId);
     if (!pluginId) return null;
     const observedInstallation = member.materializationsByPluginId?.[pluginId];
+    const activationRefused = member.phase === 'current' && member.projection.diagnostics?.some(diagnostic =>
+        diagnostic.plugin.id === pluginId && diagnostic.host === 'daemon' && diagnostic.resolution.state === 'current'
+        && diagnostic.data.code === 'plugin_activation_failed' && diagnostic.data.severity === 'error');
+    const unavailableReasonCode = member.unavailableReasonCode ?? (activationRefused ? 'plugin_activation_failed'
+        : member.phase === 'establishing' ? 'plugin_source_not_ready' : undefined);
     return Object.freeze({ machineId: member.machineId, serverId: member.serverId,
+        ...(member.serverIdentityId ? { serverIdentityId: member.serverIdentityId } : {}),
+        ...(unavailableReasonCode ? { unavailableReasonCode } : {}),
         generation: member.projection.generation, phase: member.phase,
         executionOrigin: resolveMemberEntryExecutionOrigin(member, entry, packageOriginsByPluginId),
         interactionEnabled: member.interactionEnabled && member.projection.generation !== null
@@ -652,6 +732,7 @@ export function unionPluginUiProjections(
     const inputTypesById: Record<string, PluginUiInputTypeProjection> = {};
     const atmospherePicturesById: Record<string, PluginUiAtmospherePictureProjection> = {};
     const registrySourcesById: Record<string, PluginUiRegistrySourceProjection> = {};
+    const skillsById: Record<string, PluginUiSkillProjection> = {};
     const unknownEntriesById: Record<string, UnknownRecord> = {};
 
     // Aggregate equivalent declarations without appointing a producer. Exact
@@ -809,6 +890,10 @@ export function unionPluginUiProjections(
             const origin = model.installedPackagesById[entry.pluginId]?.enabled === true ? originFor(entry) : null;
             if (origin) publishFirstAdmitted(registrySourcesById, id, stamp(entry, origin), origin);
         }
+        for (const [id, entry] of Object.entries(model.skillsById)) {
+            const origin = model.installedPackagesById[entry.pluginId]?.enabled === true ? originFor(entry) : null;
+            if (origin) publishFirstAdmitted(skillsById, id, stamp(entry, origin), origin);
+        }
         for (const [id, entry] of Object.entries(model.atmospherePicturesById)) {
             const origin = entryHasCurrentOccurrence(model, entry)
                 && (readPluginUiProjectionEntryExecutionOrigin(entry) === null
@@ -839,7 +924,7 @@ export function unionPluginUiProjections(
     // keep their reported supplies for Administration's origin picker.
     const publishedMaps: readonly Record<string, unknown>[] = [translationsByPluginId, sessionHeaderActionsById, searchProvidersById,
         hostedWebById, reactNativeBundlesById, surfacePlacementsById, settingsGroupsById, settingsPagesById, actionsById,
-        voiceProvidersById, dragSourcesById, dropTargetsById, atmospherePicturesById, registrySourcesById, unknownEntriesById, resourcesById, inputTypesById];
+        voiceProvidersById, dragSourcesById, dropTargetsById, atmospherePicturesById, registrySourcesById, skillsById, unknownEntriesById, resourcesById, inputTypesById];
     for (const [index, map] of publishedMaps.entries()) {
         for (const [key, entry] of Object.entries(map)) {
             const pluginId = readString(asRecord(entry)?.pluginId);
@@ -873,6 +958,7 @@ export function unionPluginUiProjections(
         + Object.keys(inputTypesById).length
         + Object.keys(atmospherePicturesById).length
         + Object.keys(registrySourcesById).length
+        + Object.keys(skillsById).length
         + Object.keys(unknownEntriesById).length;
 
     if (generation === null && entryCount === 0) {
@@ -918,6 +1004,7 @@ export function unionPluginUiProjections(
         inputTypesById: Object.freeze(inputTypesById),
         atmospherePicturesById: Object.freeze(atmospherePicturesById),
         registrySourcesById: Object.freeze(registrySourcesById),
+        skillsById: Object.freeze(skillsById),
         // Openable viewers are scoped to a session/project details host. There is
         // no app-union consumer, so do not make app scope a second projection
         // owner for them.

@@ -9,6 +9,35 @@ import {
 } from './presentConnectedServiceIndexDiagnostics';
 
 describe('Connected service index read diagnostics', () => {
+    it('keeps a service pending until negotiation and its descriptor read settle, then presents the actual verdict', () => {
+        const service = { pluginId: 'acme.service', localId: 'custom-service' };
+        const entry: ConnectedServiceRegistryEntry = {
+            serviceId: service.localId, service, connectCommand: '', supportsOauth: false,
+            executable: false, projectionStatus: 'loading',
+            availability: { state: 'blocked', reason: 'missing_runtime' }, diagnostics: ['missing_runtime'],
+        };
+        const project = (candidate: ConnectedServiceRegistryEntry, transport: 'indeterminate' | 'advertised-v4') =>
+            buildConnectedServicesIndexModel({
+                transport, entries: [candidate], qualifiedAccounts: [], qualifiedGroups: [], legacyServices: [],
+                defaultAccountByServiceKey: {}, resolveLabel: () => 'Custom service', resolveFallbackEntry: () => null,
+                loadingLabel: t('common.loading'),
+                presentDiagnostics: current => presentConnectedServiceIndexDiagnostics({ entry: current }),
+            });
+        expect(project(entry, 'advertised-v4').sheets[0]).toMatchObject({
+            statusLine: t('common.loading'), supportDetails: null, canAdd: false,
+        });
+        const settled = { ...entry, projectionStatus: 'ready' as const };
+        expect(project(settled, 'indeterminate').sheets[0]).toMatchObject({
+            statusLine: t('common.loading'), supportDetails: null, canAdd: false,
+        });
+        expect(project(settled, 'advertised-v4').sheets[0]).toMatchObject({
+            statusLine: t('common.blocked'), supportDetails: expect.any(String), canAdd: false,
+        });
+        const available: ConnectedServiceRegistryEntry = { ...settled, executable: true,
+            availability: { state: 'available', reason: 'resolved' }, diagnostics: [] };
+        expect(project(available, 'advertised-v4').connectable.map(candidate => candidate.service)).toEqual([service]);
+    });
+
     it('keeps an answered available service usable when its plugin reports an unrelated runtime diagnostic', () => {
         const entry: ConnectedServiceRegistryEntry = { serviceId: 'openai-codex',
             service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },

@@ -8,6 +8,8 @@ import { createWidgetInputActionDepsV1 } from './widgetInputActionDeps';
 import { createUiProjectWorkerActionV1 } from './projectWorkerAction';
 import { createUiRegistryActionExecuteV1, createUiRegistryHostV1 } from '@/registries/registryHostDeps';
 import { createUiSkillActionExecuteV1, refreshUiSkillActionAcknowledgements } from './skillActionDeps';
+import { readUiPluginSkillV1, readUiSkillLibraryCatalogV1 } from './pluginSkillActionDeps';
+import { isPluginSkillIdV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { readFoundSkillBundle } from '@/sync/domains/transfers/runtime/transferRuntime/families/foundSkillTransfers';
 import { SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { createUiProjectContextAction } from './projectContextAction';
@@ -33,10 +35,15 @@ import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeader
 import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { readOriginalAccountActionMachine } from '@/sync/api/externalActionAccountTransport';
-import { normalizeActionsSettingsV1, isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
+import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { sessionGoalGet, sessionGoalSet, sessionGoalClear } from '@/sync/ops/sessionGoals';
-import { buildApprovalPreviewSummary, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
+import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { presentActionApproval, readActionApprovalSubject, readActionApprovalRoleId } from '@/components/approvals/actionApprovalPresentation';
+import { buildRoleCatalog } from '@/sync/domains/roles/roleCatalog';
+import { readApprovalReferenceForConfirmation } from '@/components/approvals/approvalReferenceReading';
 import { CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, type CurrentSessionPresentationActionResultV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createUiProviderActionExecuteV1 } from './providerActionDeps';
@@ -72,11 +79,11 @@ import { SkillReadResultV1Schema, type SkillReadInputV1 } from '@happier-dev/pro
 import { resolvePromptDocCreateActionInputV1 } from '@happier-dev/protocol/prompts/library/promptDocV2';
 import { MEMORY_DOCUMENT_ACTION_IDS_V1, MemoryActionInputSchemasV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
-import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
 import { readSkillRulesForItemV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
 import { readSkillUsageCatalogV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
 import { readPromptLibraryCatalogProjectionInContext, mutatePromptLibraryRoleOverrideInContext } from '@/sync/api/account/apiPromptLibraryCatalog';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { resolveActionBackendTargetSelection } from '@happier-dev/protocol/actions/resolveActionBackendTargetSelection';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
@@ -92,11 +99,9 @@ import { RoleActionInputSchemasV1, RoleActionOutputSchemasV1 } from '@happier-de
 import { readUiPluginRoleSources } from '@/sync/ops/roles/roleSources';
 import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
-import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { isActionApprovalRequiredByAccountSettings, resolveActionsSettingsV1FromState } from '@/sync/domains/settings/actionsSettings';
 import { PluginWebhookActionHttpPathsV1, type PluginWebhookPresentUserActionIdV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
 import { projectPluginFailureText } from '@happier-dev/protocol/plugins/failureProjection';
-import { PluginChangePendingReviewResultSchema } from '@happier-dev/protocol/marketplace/internal';
-import { reviewMachinePluginInstallationAsPresentUser } from '@/sync/ops/machinePluginInstallDecision';
 import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Schema, type SessionModelTransitionRequestV1, type SessionModelTransitionResultV1 } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -140,6 +145,8 @@ import {
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { OpenProjectResultV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
+import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spawn/spawnSessionRpcTimeout';
+import { ExternalActionRequesterInvocationV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { t } from '@/text';
 import { HappyError } from '@/utils/errors/errors';
 import { isActionAccountScopeChangedError } from '@/sync/domains/scope/actionAccountScopeError';
@@ -152,6 +159,8 @@ import { createUiMcpServerActionExecuteV1 } from './mcpServerActionDeps';
 import { createUiRemoteHostActionExecuteV1 } from '@/sync/ops/remoteHosts/remoteHostOperations';
 import { createUiHomeRuntimeActionExecute } from './homeRuntimeActionDeps';
 import { createUiAccountLifecycleAction } from './accountLifecycleActionDeps';
+import { createUiNpmRegistryProfileAction } from './npmRegistryProfileActionDeps';
+import { createPluginAccountAdministrationActionDeps } from './pluginAccountAdministrationActionDeps';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
 import { createWidgetCatalogActionDepsV1 } from './widgetCatalogActionDeps';
 import { publishHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -203,6 +212,7 @@ import { createMachinePoolActionClient, MachinePoolActionError } from '@/sync/ap
 import { createMachinePresetActionClient, MachinePresetActionError } from '@/sync/api/machines/managedMachinePresets';
 import { createManagedMachineActionClient, ManagedMachineActionError } from '@/sync/api/machines/managedMachineActions';
 import { executeManagedMachineNativeAction, withManagedMachineNativeReadLifetime } from '@/sync/api/machines/managedMachineOrigination';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { createUiManagedMachineReferenceReader } from './managedMachineReferenceDeps';
 import { resolveActionOriginationPreferenceFailureV1 } from '@happier-dev/protocol/actions/executor/actionOriginationPreferences';
 import { ManagedMachineActionIdV1Schema, ManagedMachineActionInputSchemasV1, type ManagedMachineActionIdV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
@@ -248,6 +258,7 @@ import {
   startSessionHandoff as startSessionHandoffOp,
 } from '@/sync/ops/sessionHandoffs';
 import { createWorkspaceSyncRelationshipOnController } from '@/sync/ops/workspaceSyncRelationshipCreateRpc';
+import { listWorkspaceSyncRelationshipsOnController } from '@/sync/ops/workspaceSyncRelationshipsListRpc';
 import {
   disableWorkspaceSyncRelationship,
   enableWorkspaceSyncRelationship,
@@ -451,8 +462,11 @@ export function isApprovalExecutionOriginCurrentForAccountContext(input: Readonl
  */
 export { requiresExactDaemonApprovalReplay };
 
-export function resolveApprovalReplayRoute(approval: ApprovalRequest | null): ApprovalReplayRoute | null {
-  if (approval?.v !== 2) return null;
+export function resolveApprovalReplayRoute(approval: Readonly<{
+  v: number;
+  executionOriginV1?: Readonly<{ serverId: string; serverIdentityId?: string }>;
+}> | null): ApprovalReplayRoute | null {
+  if (!approval?.executionOriginV1) return null;
   const originServerId = approval.executionOriginV1.serverId.trim();
   const serverIdentityId = approval.executionOriginV1.serverIdentityId?.trim() ?? '';
   if (!originServerId || !serverIdentityId) return null;
@@ -489,7 +503,6 @@ export async function replayApprovalRequestAtExactDaemon(input: Readonly<{
     payload: {
       artifactId: input.artifactId,
       decision: input.decision,
-      serverId: input.executionTarget.serverId,
       ...(input.executionTarget.serverIdentityId
         ? { serverIdentityId: input.executionTarget.serverIdentityId }
         : {}),
@@ -550,9 +563,13 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   /** Private presentation leaf for this invocation; never enters Action custody. */
   openRoute?: (route: string) => void | Promise<void>;
   /** Mounted output host presentation; admission and operation lookup remain Action-owned. */
-  actionOperationOpenOutput?: (address: Readonly<{ serverId: string; machineId: string; operationId: string }>) => void | Promise<void>;
+  actionOperationOpenOutput?: (address: Readonly<{ serverId: string; machineId: string; operationId: string; operation: ActionOperationSnapshotV1 }>) => void | Promise<void>;
   /** Surface-local custody notification, fired only by the admitted Provider RPC transport. */
   onProviderRpcDispatched?: () => void;
+  /** Surface-local notification fired by the admitted SCM terminal just before its Machine RPC, after any in-place confirmation. */
+  onScmDispatched?: () => void;
+  /** Private native presentation; only the canonical Action policy decides whether to ask. */
+  presentUserActionConfirmation?: NonNullable<ActionExecutorDeps['presentUserActionConfirmation']>;
   /** An explicitly admitted API-token transport; Home owns grants and approvals. */
   apiTokenAction?: ApiTokenActionTransport;
   /** Private Machine reverse-RPC continuation: admission/approval happened in the daemon. */
@@ -571,8 +588,12 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   readContributedActionSchemas?: NonNullable<ActionExecutorDeps['readContributedActionSchemas']>;
   /** Optional surface-local policy composed with the canonical Action settings policy. */
   isActionEnabled?: NonNullable<ActionExecutorDeps['isActionEnabled']>;
+  /** Mounted device-setting lifetime guard, evaluated at the admitted persistence boundary. */
+  beforeLocalSettingCommit?: () => void;
   /** Optional delivery leaf used by a surface that needs specialized ingress semantics. */
   sessionSendMessage?: NonNullable<ActionExecutorDeps['sessionSendMessage']>;
+  /** Selected-Machine hook delivery; Action admission and approval stay in this executor. */
+  pluginSessionHookManagementAction?: NonNullable<ActionExecutorDeps['pluginSessionHookManagementAction']>;
   /** Trusted per-invocation precondition, evaluated on the metadata CAS candidate. */
   sessionStateMetadataPreprocess?: UiSessionStateMetadataPreprocess;
   /** Mounted host resolver carrying an explicitly complete selected-Home corpus. */
@@ -599,6 +620,12 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   scmActionExecute?: NonNullable<ActionExecutorDeps['scmActionExecute']>;
   /** One mounted filesystem reader/destination; this executor still owns policy and approval. */
   filesystemActionDelivery?: import('./filesystemActionDeps').UiFilesystemActionDelivery;
+  /** Mounted target and credential delivery remain private to the native host. */
+  npmRegistryProfileDelivery?: import('./npmRegistryProfileActionDeps').UiNpmRegistryProfileDelivery;
+  /** Original mounted Account administration intent retained by the incumbent approval waiter. */
+  pluginAccountAdministrationIsCurrent?: () => boolean;
+  /** Trusted raw projection already owned by the mounted administration surface. */
+  pluginAccountAdministrationProjection?: () => import('@happier-dev/protocol').PluginProjectionV2 | null;
   /** Exact mounted byte source; the captured library Account remains the write authority. */
   foundSkillSource?: Readonly<{
     target: import('@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1').MachineAdministrationTargetV1;
@@ -639,6 +666,20 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     readWidgetMovementAdmission(ref: WidgetInstanceRefV1, surface: WidgetSurfaceRefV1, context: ActionExecutorContext): ReturnType<typeof readWidgetEntityMovementAdmission>;
     readWidgetInputDescriptor(request: Parameters<NonNullable<ReturnType<typeof createWidgetInputActionDepsV1>['readWidgetInputDescriptor']>>[0]): ReturnType<NonNullable<ReturnType<typeof createWidgetInputActionDepsV1>['readWidgetInputDescriptor']>>;
   }> {
+  // Goal acknowledgements have no deadline. Signal-free UI/tool invocations belong to the
+  // captured Account; mounted editors may retire their own wait earlier.
+  const withGoalLifetime = async <T>(signal: AbortSignal | undefined, run: (signal?: AbortSignal) => Promise<T>): Promise<T> => {
+    if (!accountContext) return await run(signal);
+    const cancellation = new AbortController();
+    const retirement = accountContext.accountLifetime.onRetire(() => cancellation.abort());
+    const merged = mergeAbortSignals([cancellation.signal, signal]);
+    try {
+      return await run(merged.signal);
+    } finally {
+      merged.dispose();
+      retirement.dispose();
+    }
+  };
   const promptLibraryStore = accountContext ? createUiPromptLibraryArtifactStore(accountContext.workflowArtifacts, accountContext) : null;
   const withPromptLibraryStore = <T>(run: (store: PromptLibraryArtifactStore) => Promise<T>, signal?: AbortSignal): Promise<T> =>
     promptLibraryStore ? run(promptLibraryStore) : withUiPromptLibraryArtifactStore(run, { signal });
@@ -646,60 +687,52 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     const target = args.context.externalActionTarget;
     if (!accountContext || target?.kind !== 'machine' || !target.machineId.trim()) return { ok: false, errorCode: 'runtime_action_disabled', error: 'browser_automation_unavailable' };
     const result = await executeOriginalAccountMachineAction({ account: accountContext, actionId: args.actionId,
-      requestId: randomUUID(), machineId: target.machineId, input: args.input,
+      requestId: randomUUID(), machineId: target.machineId, machineTarget: target, input: args.input,
       actionCaller: args.context.actionCaller,
       authority: args.context.authority, signal: args.context.signal });
     return result.ok ? result.result : result;
   });
+  const isMachineOwnedPluginAction = (actionId: string, input: unknown) => {
+    const pluginActionId = actionId === 'approval.request.create' && input !== null && typeof input === 'object'
+      && 'actionId' in input && typeof input.actionId === 'string' ? input.actionId : actionId;
+    return isPluginDevLoopActionIdV1(pluginActionId) && getActionSpec(pluginActionId).executionPlacement === 'machine';
+  };
   const executeMachineOwnedPluginAction = async (args: Readonly<{
     actionId: string; input: unknown; context: ActionExecutorContext;
   }>) => {
     // Mounted surfaces supply this target through the admitted controller, not
     // Action input, presence ranking, or the UI's default Machine selection.
-    const requestedInstallMachineId = args.actionId === 'plugins.install'
-      && args.input !== null && typeof args.input === 'object'
-      && 'machineId' in args.input && typeof args.input.machineId === 'string'
-      ? args.input.machineId : undefined;
+    const pluginInput = args.actionId === 'approval.request.create' && args.input !== null && typeof args.input === 'object'
+      && 'actionArgs' in args.input ? args.input.actionArgs : args.input;
+    const machineOwnedPluginAction = isMachineOwnedPluginAction(args.actionId, args.input);
+    const requestedMachineId = pluginInput !== null && typeof pluginInput === 'object'
+      && 'machineId' in pluginInput && typeof pluginInput.machineId === 'string'
+      ? pluginInput.machineId : undefined;
     const mountedMachineId = args.context.executionRunTargetMachineId
       ?? (args.context.surface !== 'plugin' ? args.context.defaultSessionMachineId : undefined);
-    if (requestedInstallMachineId && mountedMachineId && requestedInstallMachineId !== mountedMachineId) {
+    if (requestedMachineId && mountedMachineId && requestedMachineId !== mountedMachineId) {
       return { ok: false, errorCode: 'target_mismatch', error: 'target_mismatch' };
     }
-    const machineId = requestedInstallMachineId ?? mountedMachineId;
+    const machineId = requestedMachineId ?? mountedMachineId;
     if (!accountContext || !machineId) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+    // Delegate admission with the original host origin. The receiving daemon
+    // owns the retained candidate, Action policy and sole approval Artifact.
+    // Mounted plugins have their own sealed pluginInvocation provenance. Do
+    // not reinterpret that surface as a host Agent/CLI requester invocation.
+    const invocation = machineOwnedPluginAction && args.context.surface !== 'ui' && args.context.surface !== 'plugin'
+      ? ExternalActionRequesterInvocationV1Schema.safeParse({
+          caller: args.context.actionCaller ?? { kind: 'host' }, surface: args.context.surface, authority: args.context.authority,
+          callerPermissionMode: args.context.callerPermissionMode, callerInputConstraints: args.context.callerInputConstraints,
+          workspaceWrites: args.context.workspaceWrites, defaultSessionId: args.context.defaultSessionId,
+        }) : null;
+    if (invocation && !invocation.success) return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
     const execution = await executeOriginalAccountMachineAction({ account: accountContext,
       actionId: args.actionId, input: args.input, machineId,
       requestId: args.context.actionRequestId ?? randomUUID(),
       actionCaller: args.context.actionCaller,
+      ...(invocation?.success ? { invocation: invocation.data } : {}),
       authority: args.context.authority, signal: args.context.signal });
-    if (!execution.ok) return execution;
-    const result = execution.result;
-    if (args.actionId !== 'plugins.install' || args.context.surface !== 'ui'
-      || args.context.authority !== 'present_user'
-      || (args.context.actionCaller && args.context.actionCaller.kind !== 'host')
-      || result === null || typeof result !== 'object' || !('pendingReview' in result)) return result;
-    const pending = PluginChangePendingReviewResultSchema.safeParse(result.pendingReview);
-    if (!pending.success || pending.data.reviewKind !== 'installation') return result;
-    if (!accountContext.accountLifetime.isCurrent()) return { ok: false,
-      errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
-    const decision = await reviewMachinePluginInstallationAsPresentUser(machineId, {
-      serverId: accountContext.serverId,
-      isAuthorityCurrent: () => accountContext.accountLifetime.isCurrent() && !args.context.signal?.aborted,
-      installationReview: pending.data,
-      target: { machine: machineId, server: accountContext.serverId },
-    });
-    if (!decision.supported) {
-      if (!accountContext.accountLifetime.isCurrent()) return { ok: false,
-        errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
-      return { ok: false, kind: 'plugins_install', outcome: 'failed',
-        change: { kind: decision.reason === 'not-supported' ? 'unavailable' : 'outcomeUnknown', detail: null },
-        diagnostics: [{ code: decision.reason === 'not-supported' ? 'plugin_install_decision_unavailable' : 'outcomeUnknown' }] };
-    }
-    // An acknowledged commit belongs to the original operation even if its
-    // Account subsequently retires. Never replace that fact with current UI scope.
-    if (decision.outcome.kind === 'reviewRequired') return { ...result, pendingReview: decision.outcome.change };
-    return { ok: decision.outcome.kind === 'committed', kind: 'plugins_install',
-      outcome: decision.outcome.kind === 'committed' ? 'applied' : 'failed', change: decision.outcome.change ?? decision.outcome };
+    return execution.ok ? execution.result : execution;
   };
     type AgentsBackendsListArgs = Readonly<{ includeDisabled?: boolean; limit?: number; machineId?: string }>;
   const resolveNativeInventoryProbeTarget = async (args: Readonly<{
@@ -741,12 +774,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     accountContext.assertCurrent();
     return catalog;
   };
-  const resolveActionsSettingsSnapshot = () => {
-    const raw = accountContext
-      ? (accountContext.readLiveSettings() ?? accountContext.settings)?.actionsSettingsV1
-      : storage.getState().settings?.actionsSettingsV1;
-    return normalizeActionsSettingsV1(raw);
-  };
+  const readAccountSettingsSnapshot = () => accountContext
+    ? (accountContext.readLiveSettings() ?? accountContext.settings)
+    : storage.getState().settings;
+  const resolveActionsSettingsSnapshot = () => resolveActionsSettingsV1FromState({ settings: readAccountSettingsSnapshot() });
   const executeReviewCommentAction = createReviewCommentsHttpActionExecutor(accountContext ? {
     request: accountContext.request,
     resolveEventStorageContext: async () => (await accountContext.resolveAccountEncryption()).accountMode === 'plain'
@@ -847,10 +878,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     ...(promptLibraryStore?.organization ? { artifactFolders: promptLibraryStore.organization, promptStacks: promptLibraryStore.organization,
       ...(accountContext ? { registryActionExecute: createUiRegistryActionExecuteV1(accountContext, promptLibraryStore.organization) } : {}),
       ...(accountContext ? { skillRules: { ...promptLibraryStore.organization,
+        // A rule intent is applied to the current row. A retained UI projection can
+        // miss another device's revision; CAS still refuses a race after this read.
+        readCatalog: (signal, key) => key === 'skill-rules'
+          ? readPromptLibraryCatalogProjectionInContext(accountContext, signal)
+          : promptLibraryStore.organization!.readCatalog(signal, key),
         listSkills: async (signal?: AbortSignal, skillIds?: readonly string[]) => {
           accountContext.assertCurrent(); signal?.throwIfAborted();
-          const skills = await readSkillLibraryCatalog({ list: options => accountContext.listArtifacts(options),
-            read: (id, options) => accountContext.readArtifactContent(id, options) }, signal, skillIds);
+          const skills = await readUiSkillLibraryCatalogV1(accountContext, signal, skillIds);
           accountContext.assertCurrent(); signal?.throwIfAborted();
           return skills;
         }, ruleWriteContext: () => ({ nowMs: Date.now(), newId: randomUUID }),
@@ -964,7 +999,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     connectedServiceAction,
     usageActions: accountContext ? createUiUsageActionPorts(accountContext, opts?.usageRecapRender) : undefined,
     usageSourceAction: accountContext ? createUiUsageSourceActionPort(accountContext, opts?.usageSourceDismiss) : undefined,
-    scmActionExecute: opts?.scmActionExecute ?? createUiScmAction(accountContext),
+    scmActionExecute: opts?.scmActionExecute ?? createUiScmAction(accountContext, { onDispatched: opts?.onScmDispatched }),
     appShellAction: createAppShellAction(accountContext),
     notificationConfigurationAction: createNotificationConfigurationAction(accountContext ?? null),
     bugReportSubmit: createBugReportSubmitAction(accountContext ?? null),
@@ -985,7 +1020,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       tauriDesktop: settingsHosts.tauriDesktop(settingsHost),
       readPageGate: readSettingsPageGate,
       canUseRuntimeContributions: () => Boolean(accountContext && accountContext.readLiveSettings() !== null),
-      isCurrent: () => accountContext?.accountLifetime.isCurrent() === true,
+      isCurrent: () => accountContext ? accountContext.accountLifetime.isCurrent() : getActiveServerAccountScope() === null,
       openHumanInteraction: async (href, signal) => {
         throwIfAborted(signal);
         if (!accountContext || accountContext.readLiveSettings() === null) return false;
@@ -1040,7 +1075,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       ...(accountContext ? { readAccountSettingsSnapshot: accountContext.readRawSettingsSnapshot,
         accountScope: accountContext.accountLifetime.scope } : {}),
       readLocalSettings: () => storage.getState().localSettings,
-      writeLocalSettings: (delta) => storage.getState().applyLocalSettings(delta, { source: 'ui' }),
+      writeLocalSettings: (delta) => {
+        opts?.beforeLocalSettingCommit?.();
+        storage.getState().applyLocalSettings(delta, { source: 'ui' });
+      },
       ...(accountContext ? { automationSettings: {
         read: () => accountContext.runPrepared(() => getAutomationSettings(accountContext.credentials, accountContext)),
         write: (settings: AutomationV3Settings) => accountContext.runPrepared(() => updateAutomationSettings(accountContext.credentials, settings, accountContext)),
@@ -1093,6 +1131,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     } } : {}),
     ...(accountContext ? createUiNotificationActionDeps({ account: accountContext }) : {}),
     pluginsDevLoopAction: executeMachineOwnedPluginAction,
+    ...(opts?.pluginSessionHookManagementAction ? { pluginSessionHookManagementAction: opts.pluginSessionHookManagementAction } : {}),
+    ...(accountContext ? { npmRegistryProfileAction: createUiNpmRegistryProfileAction(accountContext, opts?.npmRegistryProfileDelivery) } : {}),
+    ...(accountContext ? createPluginAccountAdministrationActionDeps(accountContext, opts?.pluginAccountAdministrationIsCurrent,
+      opts?.pluginAccountAdministrationProjection) : {}),
     ...(accountContext ? createPluginExecutionOriginActionDeps(accountContext) : {}),
     ...(accountContext ? { pluginSettingsAdministrationAction: createUiPluginSettingsAdministrationAction(accountContext) } : {}),
     automationConversationAction: async (args) => args.context
@@ -1314,20 +1356,20 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         const session = (storage.getState() as any)?.sessions?.[sessionId] ?? null;
         return isSessionModeActionAvailable(session);
       },
-    isActionApprovalRequired: (actionId, ctx, input) => {
+    isActionApprovalRequired: (actionId, ctx, input, defaultUiConfirmation?: boolean) => {
       const operationSettings = actionId === 'settings.invoke' ? accountContext?.readLiveSettings() : null;
       const anchor = input && typeof input === 'object' && 'anchor' in input && typeof input.anchor === 'string' ? input.anchor : '';
       const operationSafety = actionId === 'settings.invoke'
         ? operationSettings && !resolveSettingsDeclarationOperationApprovalRequired(anchor, operationSettings) ? 'safe' : 'danger'
         : undefined;
-      return isApprovalRequiredByActionsSettings(actionId, resolveActionsSettingsSnapshot(), {
+      return isActionApprovalRequiredByAccountSettings(actionId, readAccountSettingsSnapshot(), {
         surface: ctx.surface ?? null,
         authority: ctx.authority,
         actionCaller: ctx.actionCaller,
         presentUserConfirmation: ctx.presentUserConfirmation,
-      }, operationSafety, undefined, input);
+      }, { defaultSafety: operationSafety, defaultUiConfirmation, input });
     },
-    ...createUiExecutionRunActionDeps(accountContext?.accountLifetime.scope),
+    ...createUiExecutionRunActionDeps(accountContext?.accountLifetime.scope, accountContext),
     resolveSessionSpawnAgentInventorySelection: resolveSessionSpawnAgentInventorySelectionForActions,
     runtimeActionExecute: async (args) => {
       const featureId = getActionRequiredServerFeatureId(args.actionId, args.context);
@@ -1559,15 +1601,17 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         throw error;
       }
     },
-    sessionGoalGet: async ({ sessionId, serverId, signal }) => await sessionGoalGet(sessionId, { serverId, signal }),
+    sessionGoalGet: async ({ sessionId, serverId, signal }) => await withGoalLifetime(signal,
+      lifetime => sessionGoalGet(sessionId, { serverId, signal: lifetime })),
     sessionGoalSet: async ({ sessionId, objective, status, tokenBudget, resumeInactiveWithInitialGoal, serverId, signal }) =>
-      await sessionGoalSet(sessionId, {
+      await withGoalLifetime(signal, lifetime => sessionGoalSet(sessionId, {
         ...(objective !== undefined ? { objective } : {}),
         ...(status === 'active' || status === 'paused' || status === 'complete' ? { status } : {}),
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
         ...(resumeInactiveWithInitialGoal !== undefined ? { resumeInactiveWithInitialGoal } : {}),
-      }, { serverId, signal }),
-    sessionGoalClear: async ({ sessionId, serverId, signal }) => await sessionGoalClear(sessionId, { serverId, signal }),
+      }, { serverId, signal: lifetime })),
+    sessionGoalClear: async ({ sessionId, serverId, signal }) => await withGoalLifetime(signal,
+      lifetime => sessionGoalClear(sessionId, { serverId, signal: lifetime })),
     sessionOpen: async ({ sessionId, serverId, intent, resumeRequest, approvedNewDirectoryCreation, actionRequestId, tabId, destination, signal }) => {
       const comparison = destination ? scmReviewComparisonOfSource(destination.comparison, destination.comparisonId) : null;
       if (destination && !comparison) return { ok: false, errorCode: 'invalid_parameters', error: 'comparison_selector_unavailable' };
@@ -1832,6 +1876,41 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         ...(targetExecutionRunId ? { targetExecutionRunId } : {}),
       }) };
     },
+    sessionPendingMarkHandled: async ({ sessionId, localId, serverId }) => {
+      if (!accountContext) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+      accountContext.assertCurrent();
+      if (serverId !== undefined && !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId)) {
+        throw new Error('action_account_scope_changed');
+      }
+      await sync.markPendingDeliveryHandled(sessionId, localId, {
+        serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
+      });
+      return { ok: true };
+    },
+    sessionPendingDismiss: async ({ sessionId, localId, serverId, targetExecutionRunId }) => {
+      if (!accountContext) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+      accountContext.assertCurrent();
+      if (serverId !== undefined && !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId)) {
+        throw new Error('action_account_scope_changed');
+      }
+      await sync.dismissPendingDelivery(sessionId, localId, {
+        serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
+        ...(targetExecutionRunId ? { targetExecutionRunId } : {}),
+      });
+      return { ok: true };
+    },
+    sessionPendingSendAsNew: async ({ sessionId, localId, serverId, targetExecutionRunId }) => {
+      if (!accountContext) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+      accountContext.assertCurrent();
+      if (serverId !== undefined && !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId)) {
+        throw new Error('action_account_scope_changed');
+      }
+      const newLocalId = await sync.sendPendingDeliveryAsNew(sessionId, localId, {
+        serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
+        ...(targetExecutionRunId ? { targetExecutionRunId } : {}),
+      });
+      return { newLocalId };
+    },
     sessionPendingResetStartSet: async ({ sessionId, localId, serverId, reset, initialInput, context }) => {
       if (!accountContext) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
       accountContext.assertCurrent();
@@ -1924,6 +2003,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       ...(activatesExactMirror === undefined ? {} : { activatesExactMirror }),
       ...(destinationIntent ? { destinationIntent } : {}),
       ...(signal ? { signal } : {}),
+    }),
+
+    workspaceSyncRelationshipsList: async ({ input, signal }) => await listWorkspaceSyncRelationshipsOnController({
+      input, account: accountContext, ...(signal ? { signal } : {}),
     }),
 
     workspaceSyncRelationshipCreate: async ({
@@ -2087,9 +2170,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
           const execution = await executeOriginalAccountMachineAction({ account: accountContext,
             actionId: 'session.spawn_new', requestId: actionRequestId ?? context?.actionRequestId ?? randomUUID(),
             machineId: input.executionTarget.machineId,
+            // Requester HTTP and direct Machine RPC consume the same spawn owner's budget.
+            timeoutMs: readSpawnSessionRpcTimeoutMsFromEnv(),
             input: placementOrigin && supportsOrigin ? { ...exactInput, placementOrigin } : exactInput,
             actionCaller: _actionCaller, authority: context?.authority, ...(signal ? { signal } : {}) });
           accountContext.assertResultCurrent(getActionSpec('session.spawn_new').sideEffectClass);
+          if (!execution.ok && execution.errorCode === 'outcome_uncertain') {
+            return { type: 'pending' as const, retryWithSameCreationKey: true as const, outcome: 'unknown' as const };
+          }
           if (!execution.ok) throw Object.assign(new Error(execution.error), { code: execution.errorCode });
           return SessionSpawnNewResultV1Schema.parse(execution.result);
         }
@@ -2104,9 +2192,31 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     presentUserActionConfirmation: accountContext ? async ({ actionId, input, context }) => {
       accountContext.assertCurrent();
       context.signal?.throwIfAborted();
+      if (opts?.presentUserActionConfirmation) {
+        const confirmed = await opts.presentUserActionConfirmation({ actionId, input, context });
+        if (context.signal?.aborted) return false;
+        accountContext.assertCurrent();
+        return confirmed;
+      }
       const { Modal } = await import('@/modal');
-      const spec = getActionSpec(actionId);
-      const confirmed = await Modal.confirm(spec.title, buildApprovalPreviewSummary(spec, input));
+      const presentationInput = { actionId, actionArgs: input };
+      const reference = readActionApprovalSubject(presentationInput);
+      const reading = await readApprovalReferenceForConfirmation(reference, accountContext, context.signal);
+      const roleId = readActionApprovalRoleId(presentationInput);
+      const roleResult = roleId && accountRoleAction ? await accountRoleAction({ actionId: 'roles.get', input: { roleId }, context }) : null;
+      const roleEntry = roleResult ? RoleActionOutputSchemasV1['roles.get'].safeParse(roleResult) : null;
+      const role = roleEntry?.success ? buildRoleCatalog({ items: [roleEntry.data], overrides: {} })[0] : null;
+      context.signal?.throwIfAborted();
+      accountContext.assertCurrent();
+      const presentation = presentActionApproval({ ...presentationInput, subject: reading.named ? reading.text : null, role });
+      const confirmed = actionId === 'account.delete'
+        ? await Modal.prompt(t('settingsAccount.deleteAccountConfirmTitle'), t('settingsAccount.deleteAccountConfirmBody'), {
+          placeholder: 'DELETE', confirmText: t('settingsAccount.deleteAccount'),
+        }) === 'DELETE'
+        : await Modal.confirm(presentation.title ?? t('approvals.untitled'), presentation.summary ?? '');
+      // Let the Action owner project invocation cancellation before checking
+      // Account currentness, which also throws for an aborted invocation.
+      if (context.signal?.aborted) return false;
       accountContext.assertCurrent();
       return confirmed;
     } : undefined,
@@ -2131,6 +2241,17 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
           errorCode: 'approval_origin_unavailable',
           error: 'approval_origin_unavailable',
         };
+      }
+      if (request.actionId === 'plugins.install'
+        && readPluginInstallApprovalPendingReview(request.preview)) {
+        // The exact daemon retained and evaluated this install candidate. Replay
+        // its approved Artifact there directly; issuing another decision Action
+        // would create a second decision boundary and never settle the candidate.
+        return await replayApprovedApprovalRequestAtExactDaemon({
+          artifactId,
+          executionTarget: { ...replayRoute, machineId },
+          ...(signal === undefined ? {} : { signal }),
+        });
       }
       if (accountContext && request.v === 2 && !context.externalActionCredential
         && !context.externalActionExecutionAuthorization && !context.rpcSessionAuthorization
@@ -2230,6 +2351,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       const projection = await readPromptLibraryCatalogProjectionInContext(accountContext);
       const source = readPromptLibraryCatalogRecordV1({ ...projection, key: 'invocations' });
       return listPromptInvocationsForActions(args, { invocations: source.status === 'ready' ? source.record.value : null,
+        ...(source.status === 'ready' ? { revision: source.revision } : {}),
         assertCurrent: accountContext.assertCurrent });
     },
     promptInvocationResolve: async (args) => {
@@ -3086,6 +3208,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     }),
     sessionList: listSessionsForVoiceTool,
     sessionActivityGet: async (params) => await getSessionActivityForVoiceTool(params),
+    sessionEventsGet: async (_params, invocation) => {
+      if (!accountContext) return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
+      return await createUiAccountAction({ account: accountContext })(invocation);
+    },
     sessionTranscriptGet: async ({ sessionId, serverId, projection, limit, cursor, roles, maxCharsPerMessage }) =>
       await getSessionTranscriptForVoiceTool({
         sessionId,
@@ -3357,7 +3483,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     promptsLibraryList: async ({ signal, ...request }) => withPromptLibraryStore((store) => listPromptLibrary({ store, request, signal }), signal),
     promptDocUpdate: async ({ signal, ...request }) => withPromptLibraryStore((store) => updatePromptDocInLibrary({ store, request, signal }), signal),
 
-    skillsRead: async ({ signal, ...request }) => {
+    skillsRead: async ({ signal, ...request }, context) => {
+      if (!request.sessionId && 'skillId' in request && accountContext && isPluginSkillIdV1(request.skillId)) {
+        return readUiPluginSkillV1(accountContext, request, { ...context, signal });
+      }
       if (!request.sessionId) return withPromptLibraryStore(async store => {
         const usage = deps.skillRules ? await readSkillUsageCatalogV1(deps.skillRules, signal) : null;
         const result = await readSkillInLibrary({ store, request, usage: usage?.row, signal });
@@ -3479,6 +3608,23 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     };
   };
 
+  const executeMachinePluginAtDaemon = async (actionId: ActionId, input: unknown, context: ActionExecutorContext): Promise<ActionExecuteResult> => {
+    if (context.externalActionCredential || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization) {
+      return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
+    }
+    const spec = getActionSpec(actionId);
+    const parsed = spec.inputSchema.safeParse(input);
+    if (!parsed.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    const result = await executeMachineOwnedPluginAction({ actionId, input: parsed.data, context });
+    const failure = ActionExecuteFailureSchema.safeParse(result);
+    if (failure.success) return failure.data;
+    const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result);
+    if (approval.success && approval.data.actionId === actionId) return { ok: true, result: approval.data };
+    const output = spec.outputSchema?.safeParse(result);
+    return output?.success ? { ok: true, result: output.data }
+      : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+  };
+
   return {
     // A genuine present-user native invocation has one installed Action policy
     // and approval owner. Do not create a second local Ask before its relay.
@@ -3502,8 +3648,20 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     },
     readWidgetMovementAdmission: (ref: WidgetInstanceRefV1, surface: WidgetSurfaceRefV1, context: ActionExecutorContext) =>
       readWidgetEntityMovementAdmission(widgetInputDeps, ref, surface, resolveContext(context, { ref })),
-    prepare: async (actionId, input, context) => await executor.prepare(actionId, input, resolveContext(context, input, actionId)),
-    execute: async (actionId, input, context) => await executor.execute(actionId, input, resolveContext(context, input, actionId)),
+    prepare: async (actionId, input, context) => {
+      const resolved = resolveContext(context, input, actionId);
+      // The daemon owns both implicit and explicitly requested plugin review.
+      // Preparation must not create an app-local approval before that owner runs.
+      return resolved.surface !== 'plugin' && isMachineOwnedPluginAction(actionId, input)
+        ? { kind: 'ready', invocation: { run: () => executeMachinePluginAtDaemon(actionId, input, resolved) } }
+        : await executor.prepare(actionId, input, resolved);
+    },
+    execute: async (actionId, input, context) => {
+      const resolved = resolveContext(context, input, actionId);
+      return resolved.surface !== 'plugin' && isMachineOwnedPluginAction(actionId, input)
+        ? await executeMachinePluginAtDaemon(actionId, input, resolved)
+        : await executor.execute(actionId, input, resolved);
+    },
     replayApprovedApprovalRequest: async (args) => await executor.replayApprovedApprovalRequest(args),
   };
 }

@@ -447,7 +447,6 @@ describe('DocumentShareSheet', () => {
         expect(screen.findByTestId('document-share-copy-link')).toBeNull();
         await screen.pressByTestIdAsync('document-share-grant-team:studio');
         await screen.pressByTestIdAsync('document-share-remove:team:studio');
-        await screen.pressByTestIdAsync('document-share-remove-confirm:team:studio');
         await settle();
         expect(host.grants).toEqual([ana]);
         expect(host.documentUpdates).toEqual([]);
@@ -711,8 +710,6 @@ describe('DocumentShareSheet', () => {
 
         await screen.pressByTestIdAsync('document-share-grant-team:studio');
         await screen.pressByTestIdAsync('document-share-remove:team:studio');
-        expect(host.requests.at(-1)?.method).not.toBe('DELETE');
-        await screen.pressByTestIdAsync('document-share-remove-confirm:team:studio');
         await settle();
         expect(host.requests.at(-1)).toEqual({ method: 'DELETE',
             body: { artifactId: 'wf-1', principal: { kind: 'team', teamId: 'studio' } } });
@@ -743,7 +740,6 @@ describe('DocumentShareSheet', () => {
         expect(screen.findByTestId('document-share-grant-team:payments')).not.toBeNull();
         await screen.pressByTestIdAsync('document-share-grant-team:studio');
         await screen.pressByTestIdAsync('document-share-remove:team:studio');
-        await screen.pressByTestIdAsync('document-share-remove-confirm:team:studio');
         await settle();
         expect(screen.findByTestId('document-share-grant-team:studio')).toBeNull();
         expect(screen.findByTestId('document-share-grant-account:ana')).not.toBeNull();
@@ -778,7 +774,6 @@ describe('DocumentShareSheet', () => {
         await settle();
         await screen.pressByTestIdAsync('document-share-grant-account:owner');
         await screen.pressByTestIdAsync('document-share-remove:account:owner');
-        await screen.pressByTestIdAsync('document-share-remove-confirm:account:owner');
         await settle();
 
         expect(renderedTestIds(screen, 'document-share-grant-')).toEqual([]);

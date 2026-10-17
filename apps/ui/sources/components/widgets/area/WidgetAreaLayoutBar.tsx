@@ -153,8 +153,9 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
         testID={`${testID}.actions`}
       />
     ) : null;
-  // Selection can change the available menu, never the measured room for the tabs.
-  const actionSlot = (
+  // Selection can change the available menu, never the measured room for the tabs. With one layout and
+  // no menu nothing can be selected, so `+` stands on the trailing edge instead of beside an empty slot.
+  const actionSlot = actions === null && props.layouts.length < 2 ? null : (
     <View
       testID={`${testID}.actions-space`}
       style={{

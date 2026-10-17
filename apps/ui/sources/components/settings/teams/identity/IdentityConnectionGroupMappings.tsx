@@ -8,7 +8,6 @@ import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRo
 import { TEAM_IDENTITY_CONNECTION_SETTINGS } from './teamAuthenticationSettings';
 import { useTeamGroups } from '@/hooks/teams/useTeamGroups';
 import { useTeamPagedList } from '@/hooks/teams/useTeamPagedList';
-import { Modal } from '@/modal';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { identityAdministrationFailureMessage } from '@/components/settings/identity/identityAdministrationFailure';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
@@ -60,47 +59,11 @@ export const IdentityConnectionGroupMappings = React.memo(function IdentityConne
         loadPage,
     });
     const nativeGroups = useTeamGroups({ scope: props.scope, address: props.address, archived: 'active', enabled: choosingTarget && props.mutationsAvailable });
-    const nativeGroupById = React.useMemo(
-        () => new Map(nativeGroups.rows.map((group) => [group.id, group] as const)),
-        [nativeGroups.rows],
-    );
-    /**
-     * What this change does, in the facts already on the rows behind it.
-     *
-     * The external Group id alone never said where those people land. The
-     * destination Team Group and its current membership are the consequence an
-     * administrator is being asked to accept, so both are stated before the
-     * write rather than discovered afterwards.
-     */
-    const mappingImpactBody = React.useCallback((input: Readonly<{
-        externalGroupId: string;
-        teamGroupId: string | null;
-        teamGroupName: string | null;
-    }>): string => {
-        const group = input.teamGroupId === null ? undefined : nativeGroupById.get(input.teamGroupId);
-        const name = input.teamGroupName ?? group?.name ?? null;
-        return [
-            input.externalGroupId,
-            name === null
-                ? t('identityAdministration.mapCreate')
-                : `${t('identityAdministration.mappedTo')}: ${name}`,
-            group === undefined ? null : t('teams.groups.memberCount', { count: group.memberCount }),
-        ].filter((line): line is string => line !== null).join('\n');
-    }, [nativeGroupById]);
     const bind = React.useCallback(async (target: Parameters<typeof buildIdentityConnectionGroupMappingCommand>[0]['target']) => {
         const command = buildIdentityConnectionGroupMappingCommand({
             teamId: props.address.teamId, connectionId: props.connectionId, externalGroupId, target,
         });
         if (!command) { setFailure(t('identityAdministration.required')); return; }
-        if (!await Modal.confirm(
-            t('identityAdministration.chooseGroup'),
-            mappingImpactBody({
-                externalGroupId: command.externalGroupId,
-                teamGroupId: target.kind === 'native_target' ? target.teamGroupId : null,
-                teamGroupName: null,
-            }),
-            { cancelText: t('common.cancel'), confirmText: t('common.continue') },
-        )) return;
         const finishBinding = () => {
             setExternalGroupId('');
             setChoosingTarget(false);
@@ -118,17 +81,8 @@ export const IdentityConnectionGroupMappings = React.memo(function IdentityConne
             }
             await finishBinding();
         } finally { setPending(null); }
-    }, [bindings, client, externalGroupId, mappingImpactBody, props.address.teamId, props.connectionId, reportFailure]);
+    }, [bindings, client, externalGroupId, props.address.teamId, props.connectionId, reportFailure]);
     const remove = React.useCallback(async (binding: (typeof bindings.rows)[number]) => {
-        if (!await Modal.confirm(
-            t('identityAdministration.removeMapping'),
-            mappingImpactBody({
-                externalGroupId: binding.externalGroupId,
-                teamGroupId: binding.target.teamGroupId,
-                teamGroupName: binding.target.name,
-            }),
-            { cancelText: t('common.cancel'), confirmText: t('identityAdministration.removeMapping'), destructive: true },
-        )) return;
         const finishRemoval = () => {
             fireAndForget(bindings.reload(), { tag: 'IdentityConnectionGroupMappings.revalidate' });
         };
@@ -144,7 +98,7 @@ export const IdentityConnectionGroupMappings = React.memo(function IdentityConne
                 if (!('approvalPending' in result)) reportFailure(result.failure.code);
             } else await finishRemoval();
         } finally { setPending(null); }
-    }, [bindings, client, mappingImpactBody, props.address.teamId, reportFailure]);
+    }, [bindings, client, props.address.teamId, reportFailure]);
     return (
         <>
             <SettingAnchor setting={TEAM_IDENTITY_CONNECTION_SETTINGS.settings.groupMappings}><ItemGroup title={t('identityAdministration.directoryGroups')}>

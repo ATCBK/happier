@@ -9,6 +9,7 @@ export const english = {
         needsAttention: 'Needs attention',
     },
     developmentPhase: { observing: 'Watching', preparingDependencies: 'Preparing dependencies', compiling: 'Compiling', validating: 'Validating', active: 'Active', retainedIncumbent: 'Previous version active', unavailable: 'Unavailable' },
+    developmentDiagnostic: { manifestMissing: 'No plugin manifest in this folder. Add .happier-plugin/plugin.json, or choose the plugin’s own folder.', projectMissing: 'This folder is gone. Remove it from development, or choose where the plugin lives now.' },
     rowSource: {
         bundled: 'Included with Happier',
         npm: 'npm package',
@@ -88,6 +89,7 @@ export const english = {
         machinesCurrent: ({ current, total }: { current: number; total: number }) => `Current on ${current} of ${total} machines`,
         onMachines: ({ count }: { count: number }) => `On ${count} machines`,
         onMachine: ({ machine }: { machine: string }) => `On ${machine}`,
+        onMachineOffline: ({ machine }: { machine: string }) => `On ${machine} · offline`,
         addedGroup: 'Added',
         machinesRetained: 'A machine no longer on this Account',
         open: 'Open',
@@ -96,6 +98,7 @@ export const english = {
         allResults: 'All results',
         categoriesLabel: 'Categories',
         runOnNoneChosen: 'No machine chosen',
+        machineCapabilityUnavailable: ({ machine }: { machine: string }) => `This operation is unavailable on ${machine}. Reconnect it or choose another machine with Run on.`,
         runOnNoneAvailable: 'No machine can run it yet',
         runsEverywhere: 'On every machine running Happier',
         nothingAddedTitle: 'No plugins added yet',

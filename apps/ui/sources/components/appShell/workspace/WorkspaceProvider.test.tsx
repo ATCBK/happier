@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createSessionFixture, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { WORKSPACE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
-import { hrefForDestinationRef, resolveCompactAppDestinations, useDestinationInstanceTitles, type CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef, resolveCompactAppDestinations, useActivateAppDestination, useDestinationInstanceTitles, type CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
 import { useHydrateSessionForRoute, useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
+import { AppPaneProvider } from '../panes/AppPaneProvider';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { ConnectedAccountActionApprovalNotice } from '@/components/settings/connectedServices/ConnectedAccountActionApprovalNotice';
 import { t } from '@/text';
@@ -31,6 +32,10 @@ import { WorkspaceRootStack } from './WorkspaceRootStack';
 import { openInWorkspace } from './useWorkspaceOpenActions';
 import { applyCloseDetailsTab, applyOpenDetailsTab, createEmptyPaneDetailsState } from '../panes/details/workspace/detailsWorkspaceReducer';
 import { WorkspaceGroupTabs } from './titleBar/WorkspaceGroupTabs';
+import { usePhoneWorkspaceTabs } from './usePhoneWorkspaceTabs';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import type { ApprovalRequestV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 
 const boundary = vi.hoisted(() => ({ layouts: {} as Record<string, unknown>, mirrors: [] as string[], scope: { serverId: 'home-a', accountId: 'alice' }, dataReady: true,
     platform: 'ios', pathname: '/session/A1', params: { id: 'A1', serverId: 'home-a' } as Record<string, string | string[]>,
@@ -114,6 +119,11 @@ function HostedProbe() {
     return React.createElement('HostedIdentity', { params, next: () => router.push('/session/A2?serverId=home-a') });
 }
 
+function RailActivationProbe() {
+    const activate = useActivateAppDestination();
+    return React.createElement('RailActivation', { activate });
+}
+
 function CapabilityArrivalProbe() {
     const router = useDestinationRouter();
     return React.createElement('CapabilityArrival', {
@@ -137,6 +147,7 @@ function DestinationTitlesProbe(props: Readonly<{ navigation: WorkspaceNavigatio
     const entries = React.useMemo(() => Object.values(props.navigation.state.tabs).map(tab => ({ key: tab.id, ref: tab.target })), [props.navigation.state.tabs]);
     return React.createElement('DestinationTitles', { titles: useDestinationInstanceTitles(props.catalog, entries) });
 }
+
 function MissingSessionDataReader() {
     // Widgets without a Session input still call the shared hydration hook with an empty address.
     useHydrateSession('', 'destination-data-reader');
@@ -222,6 +233,82 @@ describe('consumed workspace navigation owner', () => {
         expect(titles.get(activeId)).toBe(expected === 'Home' ? t('common.home') : expected === 'Boards' ? t('boards.title') : expected);
         expect(document.title).toBe(titles.get(activeId));
     });
+    it.each(['clean', 'prepared', 'dirty', 'cancelled'] as const)('takes a %s editor departure from rail activation into the workspace', async scenario => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
+        const screen = await renderScreen(<AppPaneProvider><WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            const state = navigation.state;
+            const tab = state.tabs[state.groups[state.focusedGroupId].activeTabId];
+            return <>{React.createElement('WorkspaceOwner', { navigation })}
+                <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname="/session/A1" focused visible navigation={navigation.navigationForTab(tab.id)}>
+                    <RailActivationProbe />
+                </DestinationInstanceHost></>;
+        }}</WorkspaceProvider></AppPaneProvider>);
+        const guard: ActiveUnsavedChangesGuard = { isDirtyRef: { current: false }, tag: 'artifact-rail-exit',
+            requestDecision: vi.fn(async () => scenario === 'cancelled' ? 'keepEditing' : 'discard'),
+            ...(scenario === 'clean' ? {} : { prepareGuard: vi.fn(() => { guard.isDirtyRef.current = scenario === 'dirty' || scenario === 'cancelled'; }) }),
+        };
+        setActiveUnsavedChangesGuard(guard);
+        const inbox = catalog.find(destination => destination.id === 'inbox');
+        expect(inbox).toBeDefined();
+        await act(async () => { screen.root.findByType('RailActivation').props.activate(inbox); });
+        const navigation = screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const target = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId].target;
+        expect(target.kind).toBe(scenario === 'cancelled' ? 'session' : 'inbox');
+        expect(guard.requestDecision).toHaveBeenCalledTimes(scenario === 'dirty' || scenario === 'cancelled' ? 1 : 0);
+        if (guard.prepareGuard) expect(guard.prepareGuard).toHaveBeenCalledOnce();
+    });
+
+    it.each([false, true])('settles a retained approval tab from the live request lifecycle without mounting its page (phone=%s)', async phone => {
+        boundary.pathname = '/inbox/approvals/request-a';
+        boundary.params = { id: 'request-a', serverId: 'home-a' };
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: true, workflows: false, friends: false,
+        } });
+        const request: ApprovalRequestV1 = {
+            v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'system' }, actionId: 'session.title.set',
+            actionArgs: { sessionId: 'A1', title: 'Release notes' }, summary: 'Rename the release session',
+        };
+        const artifact = (status: ApprovalRequestV1['status']): DecryptedArtifact => ({
+            id: 'request-a', isDecrypted: true, title: request.summary,
+            header: buildApprovalRequestArtifactHeaderV1({ ...request, status }),
+            headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+        });
+        storage.setState({ artifacts: { 'request-a': artifact('open') } });
+        function PhoneTitles() {
+            return React.createElement('PhoneTitles', { tabs: usePhoneWorkspaceTabs() });
+        }
+        const screen = await renderScreen(<WorkspaceProvider enabled={!phone} phone={phone} catalog={catalog}>
+            {navigation => <>
+                {React.createElement('WorkspaceOwner', { navigation })}
+                <DestinationTitlesProbe navigation={navigation} catalog={catalog} />
+                <PhoneTitles />
+            </>}
+        </WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const tabId = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
+        const title = () => (screen.root.findByType('DestinationTitles').props.titles as ReadonlyMap<string, string>).get(tabId);
+        expect(title()).toBe(`${request.summary} · ${t('approvals.status.open')}`);
+        await act(async () => { navigation().publishDestinationTitle?.(tabId, navigation().state.tabs[tabId].target, 'Earlier page title'); });
+        for (const status of ['approved', 'executed', 'rejected', 'failed', 'canceled'] as const) {
+            await act(async () => storage.setState({ artifacts: { 'request-a': artifact(status) } }));
+            const settledTitle = `${request.summary} · ${t(`approvals.status.${status}`)}`;
+            expect(title()).toBe(settledTitle);
+            if (phone) expect(screen.root.findByType('PhoneTitles').props.tabs.tabs[0].title).toBe(settledTitle);
+        }
+        expect(navigation().state.tabs[tabId]).toBeDefined();
+        const locked: DecryptedArtifact = {
+            id: 'request-a', isDecrypted: false, title: null, storageMode: 'e2ee',
+            availability: { kind: 'locked', reason: 'encryption_material_unavailable' },
+            headerVersion: 2, seq: 2, createdAt: 1, updatedAt: 2,
+        };
+        await act(async () => storage.setState({ artifacts: { 'request-a': locked } }));
+        expect(title()).toBe(t('common.unavailable'));
+        await act(async () => storage.setState({ artifacts: { 'request-a': artifact('canceled') } }));
+        // Another Home's same Artifact id must never name the retained request.
+        await act(async () => { boundary.scope = { serverId: 'home-b', accountId: 'alice' }; });
+        expect([...screen.root.findByType('DestinationTitles').props.titles.values()]).not.toContain(`${request.summary} · ${t('approvals.status.canceled')}`);
+    });
     it('settles a deleted Session in the actual strip and window title without removing the closable tab', async () => {
         boundary.platform = 'web';
         boundary.pathname = '/session/gone';
@@ -237,7 +324,7 @@ describe('consumed workspace navigation owner', () => {
         </>}</WorkspaceProvider>);
         const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
         const tabId = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
-        expect(document.title).toBe(t('common.loading'));
+        expect(document.title).toBe(t('session.untitled'));
         await act(async () => storage.getState().deleteSession('gone', 'home-a'));
         expect(document.title).toBe(t('errors.sessionDeleted'));
         expect(screen.getTextContent()).toContain(t('errors.sessionDeleted'));
@@ -288,7 +375,7 @@ describe('consumed workspace navigation owner', () => {
         expect(hrefForDestinationRef(catalog, target)).toBe('/settings/teams/home-a/team-1');
         expect(location.pathname).toBe('/settings/teams/home-a/team-1');
     });
-    it('does not publish a generic chrome header as a loading screen identity', async () => {
+    it('does not promote a generic chrome header over the destination identity', async () => {
         boundary.pathname = '/session/A1/info';
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
             externalSessions: false, inbox: false, workflows: false, friends: false,
@@ -306,13 +393,15 @@ describe('consumed workspace navigation owner', () => {
         }}</WorkspaceProvider>;
         const screen = await renderScreen(element());
         const titles = () => screen.root.findByType('DestinationTitles').props.titles as ReadonlyMap<string, string>;
-        expect(titles().size).toBe(0);
+        expect([...titles().values()]).toEqual([t('session.untitled')]);
         options = { title: 'A named app page' };
         await screen.update(element());
         expect([...titles().values()]).toEqual(['A named app page']);
         options = { title: undefined, headerTitle: 'App page' };
         await screen.update(element());
-        expect(titles().size).toBe(0);
+        // Withdrawing a declaration preserves the last known name for this
+        // same destination; a chrome-only label does not replace that identity.
+        expect([...titles().values()]).toEqual(['A named app page']);
     });
     it('shares live page identity across tabs, keeps inactive names fresh and retires it before a new route loads without persisting title publication', async () => {
         boundary.pathname = '/workflows/deploy'; boundary.params = { id: 'deploy' };
@@ -340,8 +429,8 @@ describe('consumed workspace navigation owner', () => {
         expect(document.title).toBe('Deploy Lumen');
         names.set('deploy', '');
         await screen.update(element());
-        expect(titles().get(first)).toBeUndefined();
-        expect(document.title).toBe(t('common.loading'));
+        expect(titles().get(first)).toBe(t('workflows.title'));
+        expect(document.title).toBe(t('workflows.title'));
         names.set('deploy', 'Deploy Lumen');
         await screen.update(element());
         await act(async () => { navigation().openHref('/workflows/release', { mode: 'newTab' }); });
@@ -353,7 +442,7 @@ describe('consumed workspace navigation owner', () => {
         expect(titles().get(first)).toBe('Deploy renamed');
         expect(navigation().state.fallbackTitlesByTabId).toEqual({});
         await act(async () => { navigation().openHref('/workflows/not-loaded', { tabId: second }); });
-        expect(titles().get(second)).toBeUndefined();
+        expect(titles().get(second)).toBe(t('workflows.title'));
         expect(titles().get(first)).toBe('Deploy renamed');
         const latePublisher = navigation().publishDestinationTitle!;
         const oldTarget = navigation().state.tabs[first].target;
@@ -361,7 +450,7 @@ describe('consumed workspace navigation owner', () => {
         await act(async () => { boundary.scope = { ...boundary.scope, accountId: 'another-account' }; });
         await screen.update(element());
         await act(async () => { latePublisher(first, oldTarget, 'Old Account name'); });
-        expect(titles().size).toBe(0);
+        expect([...titles().values()]).toEqual([t('workflows.title')]);
     });
     it.each([false, true])('retains a Board source on cancelled navigation and hands it off on admission (phone=%s)', async phone => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: {

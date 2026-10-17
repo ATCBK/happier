@@ -1,12 +1,14 @@
 import * as React from 'react';
+import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 import type { CurrentUiCommandDeclarationV1 } from '@happier-dev/plugin-sdk/ui';
 import type { TriageSourceWorkflowSubjectV1, TriageLinkedSessionProjectionV1 } from '@happier-dev/triage-protocol/v1';
-import { TRIAGE_SOURCES_ADMINISTER_ACTION_LOCAL_ID_V1, TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
+import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
 import {
   Banner,
   Button,
   Collection,
+  CollectionToolbar,
   EmptyState,
   ErrorState,
   Heading,
@@ -17,7 +19,6 @@ import {
   Menu,
   Row,
   Screen,
-  Select,
   Stack,
   Status,
   useHappierCollection,
@@ -58,14 +59,13 @@ import { useTriageCurrentUiContextPublication } from '../currentContextPublicati
 import { bindTriageMountedUiActions } from '../mountedActions.js';
 import { useTriageSourcePanelActionsV1 } from '../useSourcePanelActions.js';
 import { triageSourcePanelActionIdV1 } from '@happier-dev/triage-sources/ui';
-import { TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, type TriageMountedUiOperationV1, type TriageMountedUiResultV1 } from '../../actions/mountedUiProtocol.js';
+import { TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, TriageMountedUiResultV1Schema, type TriageMountedUiOperationV1, type TriageMountedUiResultV1 } from '../../actions/mountedUiProtocol.js';
 import { planTriageDetailTabsV1 } from '../detail/tabs.js';
 import { projectTriageDetailHeaderV1 } from '../detail/header.js';
 import { useTriagePostMutationRow } from '../detail/useTriagePostMutationRow.js';
 import {
   renderTriageDetailHeaderV1,
   TriageDetailHeaderView,
-  TriageDetailInsetColumn,
   TriageDetailRegion,
 } from '../detail/region.js';
 import {
@@ -73,11 +73,12 @@ import {
   resolveTriageSourceWorkflowSubjectV1,
   readTriageSourceDescriptorV1,
 } from '../detail/sourceSurface.js';
-import { readTriageOrderOptionsV1, TriageFilterRail } from '../filters/rail.js';
+import { readTriageFilterSheetV1, readTriageOrderOptionsV1, TriageFilterRail } from '../filters/rail.js';
 import { planTriageFilterFacetsV1 } from '../filters/plan.js';
 import {
   TRIAGE_LIST_GROUPS_V1,
   planTriageListItemsV1,
+  readTriageSharedGroupReasonsV1,
   type TriageListGroupIdV1,
   type TriageListItemV1,
 } from '../list/sections.js';
@@ -99,6 +100,7 @@ import { planTriageListContinuationV1, readTriageWindowStatementV1 } from '../li
 import { useTriageListSessionActivityV1 } from '../list/useListSessionActivity.js';
 import {
   TriageListRowEnvironmentContext,
+  readTriageRowSaysReasonV1,
   useTriageListAnatomyV1,
   useTriageListRowActions,
 } from '../list/rows.js';
@@ -163,6 +165,7 @@ import {
 import { readTriageWindowLensV1 } from './lens.js';
 import {
   readTriageListFailureNotice,
+  readTriageSourcesUnreachableNotice,
   readTriageRefreshPacingNotice,
   resolveTriageListRefreshV1,
   resolveTriageListShellState,
@@ -330,9 +333,6 @@ const TRIAGE_FILL_STYLE_V1 = Object.freeze({
   overflow: 'hidden' as const,
 });
 const TRIAGE_LIST_STYLE_V1 = Object.freeze({ flex: 1, minHeight: 0 });
-/** The lens pickers take the toolbar's free width and wrap inside it. */
-const TRIAGE_TOOLBAR_LEAD_STYLE_V1 = Object.freeze({ flex: 1, minWidth: 0 });
-const TRIAGE_TOOLBAR_TRAIL_STYLE_V1 = Object.freeze({ maxWidth: '100%', minWidth: 0 });
 /**
  * The reader's own type size applied to the host's four measured text roles.
  *
@@ -392,7 +392,6 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   const configuredSources = useTriageConfiguredSources();
   const [editingActions, setEditingActions] = React.useState(false);
   const [editingSources, setEditingSources] = React.useState(false);
-  const [moreOpen, setMoreOpen] = React.useState(false);
   const [organizing, setOrganizing] = React.useState(false);
   /**
    * Whether the location this page OPENED at named a lens of its own.
@@ -469,7 +468,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   // Composer picker — which is not a producer — reaches nothing merely by
   // opening (`REQ-14`). The adapter emits only `view` demand; the mounted store
   // remains the one owner of coalescing, pacing and provider work.
-  useTriageListWindowViewDemand(surfaceActivity.active, window.refresh);
+  useTriageListWindowViewDemand(surfaceActivity.active, window.refresh, window.readiness);
   const pinHandlers = React.useMemo(() => ({
     busyKey: marks.busyKey,
     unavailableReason: marks.unavailableReason,
@@ -519,6 +518,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       ? planTriageListItemsV1({
           rows: listedWindow === null ? [] : listedWindow.rows,
           pins: marks.pins,
+          locale: surfaceContext.locale,
           workflowSubjectOf: (entryRef) => resolveTriageSourceWorkflowSubjectV1(
             surfaceContext.targetedContributions,
             entryRef,
@@ -529,34 +529,43 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           display: { text, stale: listedStale },
         })
       : NO_LIST_ITEMS),
-    [listedStale, listedWindow, listsItems, marks.pins, sessionActivity.agentStates, surfaceContext.targetedContributions, text],
+    [listedStale, listedWindow, listsItems, marks.pins, sessionActivity.agentStates, surfaceContext.locale, surfaceContext.targetedContributions, text],
   );
+  /**
+   * A suggestion every entry of a group shares ("Mentioned" on each of 52) is said once, beside the group's own
+   * line, instead of as the same chip on every row; a group whose reasons differ keeps them on the rows.
+   */
+  const sharedGroupReasons = React.useMemo(() => readTriageSharedGroupReasonsV1(items), [items]);
+  const groupDescription = React.useCallback((group: TriageListGroupIdV1, description: string) => {
+    const shared = sharedGroupReasons.get(group);
+    return shared === undefined ? description : `${shared} · ${description}`;
+  }, [sharedGroupReasons]);
   const groupAxis = React.useMemo(() => ({
     axis: [
       { key: 'pinned', title: text('plugins.triage.surface.section.pinned', 'Pinned') },
       {
         key: 'needsYou',
         title: text('plugins.triage.surface.group.needsYou.title', 'Needs you'),
-        description: text('plugins.triage.surface.group.needsYou.description', 'You act next'),
+        description: groupDescription('needsYou', text('plugins.triage.surface.group.needsYou.description', 'You act next')),
       },
       {
         key: 'withAgent',
         title: text('plugins.triage.surface.group.withAgent.title', 'With an agent'),
-        description: text('plugins.triage.surface.group.withAgent.description', 'A linked session is working'),
+        description: groupDescription('withAgent', text('plugins.triage.surface.group.withAgent.description', 'A linked session is working')),
       },
       {
         key: 'inReview',
         title: text('plugins.triage.surface.group.inReview.title', 'In review'),
-        description: text('plugins.triage.surface.group.inReview.description', 'Waiting on someone else'),
+        description: groupDescription('inReview', text('plugins.triage.surface.group.inReview.description', 'Waiting on someone else')),
       },
       {
         key: 'everythingElse',
         title: text('plugins.triage.surface.group.everythingElse.title', 'Everything else'),
-        description: text('plugins.triage.surface.group.everythingElse.description', 'Nobody is waiting on you'),
+        description: groupDescription('everythingElse', text('plugins.triage.surface.group.everythingElse.description', 'Nobody is waiting on you')),
       },
     ] satisfies readonly (HappierCollectionGroup & Readonly<{ key: TriageListGroupIdV1 }>)[],
     groupOf: readTriageListItemGroup,
-  }), [text]);
+  }), [groupDescription, text]);
 
   /**
    * Every listed entry by its key and the group it is filed under (the reducer's section identity), in the
@@ -978,8 +987,10 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
         ? {}
         : { facetCensus: window.snapshot.window.facetCensus }),
       filters: surface.filters,
+      readKindName: (source, kindId) => readTriageSourceDescriptorV1(surfaceContext, source)
+        ?.kinds.find((kind) => kind.id === kindId)?.displayName,
     }, text),
-    [surface.filters, text, window.snapshot.configuredSources, window.snapshot.window],
+    [surface.filters, surfaceContext, text, window.snapshot.configuredSources, window.snapshot.window],
   );
 
   /**
@@ -1484,16 +1495,32 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   React.useLayoutEffect(() => sharedScope === null || !surfaceActivity.active ? undefined : bindTriageMountedUiActions(
     sharedScope, mountId, (operation, signal) => mountedOperationRef.current(operation, signal),
   ), [mountId, sharedScope, surfaceActivity.active]);
+  const executeMountedOperation = React.useCallback((operation: TriageMountedUiOperationV1) => {
+    void hostApi.executeAction(TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, { mountId, operation }).then((value) => {
+      const result = TriageMountedUiResultV1Schema.parse(value);
+      if (result.status !== 'applied') throw new PluginError({
+        code: result.status === 'rejected' ? 'denied' : 'unavailable',
+        diagnostics: [{ code: `triage_mounted_ui_${result.status}`, severity: 'error' }],
+      });
+    }).catch((error: unknown) => {
+      const diagnostics = isPluginError(error) && error.diagnostics?.length
+        ? error.diagnostics
+        : [{ code: 'triage_mounted_ui_failed', severity: 'error' as const }];
+      for (const diagnostic of diagnostics) hostApi.diagnostic(diagnostic);
+      void hostApi.notify(isPluginError(error) && error.code === 'denied'
+        ? text('happier.plugin-ui.action.error.denied', 'This isn’t allowed here.')
+        : text('happier.plugin-ui.action.error.unavailable', 'This isn’t available right now. Try again in a moment.'),
+      { severity: 'error' }).catch(() => {
+        hostApi.diagnostic({ code: 'triage_mounted_ui_notification_unavailable', severity: 'warning' });
+      });
+    });
+  }, [hostApi, mountId, text]);
   const chooseLinkedSession = React.useCallback((sessionId: string) => {
-    void hostApi.executeAction(TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, {
-      mountId, operation: { kind: 'selectLinkedSession', sessionId },
-    }).catch(() => {});
-  }, [hostApi, mountId]);
+    executeMountedOperation({ kind: 'selectLinkedSession', sessionId });
+  }, [executeMountedOperation]);
   const loadMoreLinkedSessions = React.useCallback(() => {
-    void hostApi.executeAction(TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, {
-      mountId, operation: { kind: 'loadMore', section: 'linkedSessions' },
-    }).catch(() => {});
-  }, [hostApi, mountId]);
+    executeMountedOperation({ kind: 'loadMore', section: 'linkedSessions' });
+  }, [executeMountedOperation]);
   const mountedCommands = React.useMemo(() => {
     const command = (title: string, operation: TriageMountedUiOperationV1): CurrentUiCommandDeclarationV1 => ({
       title, command: { kind: 'executeAction', action: TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, input: { mountId, operation } },
@@ -1516,7 +1543,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
         text('plugins.triage.currentContext.selectTab', 'Select {tab} tab', { tab }), { kind: 'selectDetailTab', tab },
       ))),
       ...(detailSessions?.key !== selectedKey ? [] : detailSessions.sessions.map((session) => command(
-        text('plugins.triage.currentContext.selectLinkedSession', 'Select session {title}', { title: session.displayTitle ?? session.sessionId }),
+        text('plugins.triage.currentContext.selectLinkedSession', 'Select session {title}', { title: session.displayTitle ?? text('session.untitled', 'Untitled session') }),
         { kind: 'selectLinkedSession', sessionId: session.sessionId },
       ))),
       ...(refreshState.kind !== 'blocked' ? [command(text('plugins.triage.currentContext.refresh', 'Refresh PRs & Issues'), { kind: 'refresh' })] : []),
@@ -1552,7 +1579,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   const itemAnatomy = useTriageListAnatomyV1({
     withSignal: items.some((item) => item.signal !== null),
     withAgent: items.some((item) => item.agent !== null),
+    withReason: items.some((item) => readTriageRowSaysReasonV1(item, sharedGroupReasons)),
     organizing,
+    sharedGroupReasons,
   });
   const routeLens = React.useMemo(() => readTriageRouteLensV1(surface), [
     surface.order, surface.smartPolicy, surface.filters, surface.search.query, surface.selectedViewId, surface.selection,
@@ -1730,16 +1759,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
 
   const removeConfiguredSource = React.useCallback(async (
     sourceInstanceId: string,
-    displayLabel: string,
   ): Promise<void> => {
-    const confirmed = await hostApi.confirm(text(
-      'plugins.triage.surface.sources.remove.confirm',
-      'Remove {name} from PRs & Issues?',
-      { name: displayLabel },
-    ), { action: TRIAGE_SOURCES_ADMINISTER_ACTION_LOCAL_ID_V1 });
-    if (!confirmed) return;
     if (await configuredSources.remove(sourceInstanceId)) refresh();
-  }, [configuredSources, hostApi, refresh, text]);
+  }, [configuredSources, refresh]);
 
   /*
     `core/SURFACE.md` §6.5. The compact Views control names the lens the reader
@@ -1810,8 +1832,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   /**
    * The one calm toolbar row above the list (`core/SURFACE.md` §6): the lens
    * pickers lead — Views, one Filters trigger for the facets, Order — and the page's own controls trail: its freshness, Refresh, and an
-   * overflow holding the rare administration actions. The host navigation bar
-   * already titles the page, so the body carries no second title.
+   * overflow holding the rare administration actions. The page's name leads the row (`slots.title`), except where
+   * the host's navigation already shows it (a phone's header).
    *
    * It is the same toolbar before the first pass has answered, so Refresh and
    * the lens are reachable from the very first frame.
@@ -1826,89 +1848,93 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       // Healthy is said in words only, quietly: no dot for "fine" (DESIGN.md, status vocabulary).
       : { tone: 'muted' as const, pulsing: false, indicator: false, label: text('plugins.triage.surface.upToDate', 'Up to date') };
   const moreLabel = text('plugins.triage.surface.more', 'More');
+  const activeFilterCount = facets.reduce(
+    (count, facet) => count + facet.options.filter((option) => option.selected).length,
+    0,
+  );
   /**
-   * The page's one header row (lab `cbar`): the search with its tokens, the view and the filters as quiet words,
-   * then freshness, Refresh, More, List | Board and the machine the page runs on. Inside the Collection it receives
-   * the Collection's own pieces (`CollectionHeaderSlots`); placing `pageActions` here is what retires the host's
-   * separate machine band. Outside a Collection (the page could not be read) it is the same row without them.
+   * The page's one header (lab `cbar`), composed by the shared Collection toolbar for the width it is drawn at: the
+   * page's name, the search with its tokens, the view and the filters lead; freshness, Refresh, More and List | Board
+   * trail. On a phone the filters, order, freshness and Refresh fold behind its round Filters and ⋯ buttons. Inside the
+   * Collection it receives the Collection's own pieces (`CollectionHeaderSlots`); placing `pageActions` there is what
+   * retires the host's separate machine band. Outside a Collection (the page could not be read) it is the same toolbar
+   * without them.
    */
   const renderListToolbar = (slots?: CollectionHeaderSlots) => (
-    <Row gap="small" wrap align="center" justify="space-between">
-      <Row gap="small" wrap align="center" style={TRIAGE_TOOLBAR_LEAD_STYLE_V1}>
-        {slots?.search ?? null}
-        {views.control}
-        <TriageFilterRail
-          facets={facets}
-          order={surface.order}
-          smartPolicy={surface.smartPolicy}
-          filtered={narrowing.facets}
-          text={text}
-          onToggleFilterValue={toggleFilterValue}
-          onClearFilters={clearFilters}
-          onChangeOrder={changeOrder}
-          onChangeSmartPolicy={changeSmartPolicy}
-        />
-        {slots?.selection ?? null}
-      </Row>
-      {/* It wraps too: on a phone the List | Board switch otherwise runs off the right edge. Bounded by the
-          toolbar's width, or a wrapping row sized to its content never has a reason to wrap. */}
-      <Row gap="xsmall" wrap align="center" style={TRIAGE_TOOLBAR_TRAIL_STYLE_V1}>
-        {organizing ? (
-          <Button
-            titleKey="plugins.triage.sessionLinks.done"
-            title="Done"
-            variant="plain"
-            onPress={() => setOrganizing(false)}
+    <CollectionToolbar
+      {...(slots === undefined ? {} : { slots })}
+      lens={views.control}
+      refine={{
+        label: text('plugins.triage.surface.filters', 'Filters'),
+        activeCount: activeFilterCount,
+        render: () => (
+          <TriageFilterRail
+            facets={facets}
+            order={surface.order}
+            smartPolicy={surface.smartPolicy}
+            filtered={narrowing.facets}
+            text={text}
+            onToggleFilterValue={toggleFilterValue}
+            onClearFilters={clearFilters}
+            onChangeOrder={changeOrder}
+            onChangeSmartPolicy={changeSmartPolicy}
           />
-        ) : null}
-        {/*
-          Freshness is said, never implied by silence — but quietly while the
-          list is current, so the one thing that stands out is a list that is
-          not. Stale is the only warning-toned state.
-        */}
-        {freshness === null ? null : (
-          <Status tone={freshness.tone} pulsing={freshness.pulsing} indicator={freshness.indicator} label={freshness.label} />
-        )}
-        <IconButton
-          icon={<Icon name="refresh" />}
-          accessibilityLabel={text('plugins.triage.surface.refresh', 'Refresh')}
-          busy={refreshState.kind === 'running'}
-          disabled={refreshState.kind === 'blocked'}
-          onPress={refresh}
+        ),
+        sheet: readTriageFilterSheetV1({
+          facets,
+          order: surface.order,
+          smartPolicy: surface.smartPolicy,
+          filtered: narrowing.facets,
+          text,
+          resultCount: rowCount,
+          onToggleFilterValue: toggleFilterValue,
+          onClearFilters: clearFilters,
+          onChangeOrder: changeOrder,
+          onChangeSmartPolicy: changeSmartPolicy,
+        }),
+      }}
+      accessory={organizing ? (
+        <Button
+          titleKey="plugins.triage.sessionLinks.done"
+          title="Done"
+          variant="plain"
+          onPress={() => setOrganizing(false)}
         />
-        <Menu
-          open={moreOpen}
-          onOpenChange={setMoreOpen}
-          trigger={moreLabel}
-          triggerIcon="more"
-          triggerAccessibilityLabel={moreLabel}
-          items={[
-            ...(!organizing ? [{ id: 'organize-list', label: text('plugins.triage.surface.organizeList', 'Organize list') }] : []),
-            { id: 'configure-actions', label: text('plugins.triage.surface.actions.configure', 'Configure actions') },
-            { id: 'manage-sources', label: text('plugins.triage.surface.sources.manage', 'Manage sources') },
-          ]}
-          onSelect={(id) => {
-            if (id === 'organize-list') setOrganizing(true);
-            else if (id === 'configure-actions') setEditingActions(true);
-            else if (id === 'manage-sources') setEditingSources(true);
-          }}
-        />
-        {/* List | Board ends the row, after the page's own controls (the lab's placement). */}
-        <Select
-          label={text('plugins.triage.surface.view.label', 'View')}
-          presentation="segmented"
-          value={collectionView}
-          options={[
-            { value: 'list', label: text('plugins.triage.surface.view.list', 'List'), icon: 'list' },
-            { value: 'board', label: text('plugins.triage.surface.view.board', 'Board'), icon: 'board' },
-          ]}
-          onChange={(value) => {
-            if (value === 'list' || value === 'board') chooseCollectionView(value);
-          }}
-        />
-        {slots?.pageActions ?? null}
-      </Row>
-    </Row>
+      ) : null}
+      // Freshness is said, never implied by silence, but quietly while the list is current, so the one thing that
+      // stands out is a list that is not. Stale is the only warning-toned state.
+      freshness={freshness}
+      refresh={{
+        label: text('plugins.triage.surface.refresh', 'Refresh'),
+        busy: refreshState.kind === 'running',
+        disabled: refreshState.kind === 'blocked',
+        onPress: refresh,
+      }}
+      more={{
+        label: moreLabel,
+        items: [
+          ...(!organizing ? [{ id: 'organize-list', label: text('plugins.triage.surface.organizeList', 'Organize list') }] : []),
+          { id: 'configure-actions', label: text('plugins.triage.surface.actions.configure', 'Configure actions') },
+          { id: 'manage-sources', label: text('plugins.triage.surface.sources.manage', 'Manage sources') },
+        ],
+        onSelect: (id) => {
+          if (id === 'organize-list') setOrganizing(true);
+          else if (id === 'configure-actions') setEditingActions(true);
+          else if (id === 'manage-sources') setEditingSources(true);
+        },
+      }}
+      views={{
+        label: text('plugins.triage.surface.view.label', 'View'),
+        value: collectionView,
+        options: [
+          { value: 'list', label: text('plugins.triage.surface.view.list', 'List'), icon: 'list' },
+          { value: 'board', label: text('plugins.triage.surface.view.board', 'Board'), icon: 'board' },
+        ],
+        onChange: (value) => {
+          if (value === 'list' || value === 'board') chooseCollectionView(value);
+        },
+      }}
+    />
   );
 
   if (state.kind === 'unavailable') {
@@ -1956,6 +1982,44 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
    */
   const listWindow = state.kind === 'window' ? state : null;
   const empty = readTriageListEmptyState(state, rowCount, { narrowing, text });
+  /**
+   * The empty narrowed list's ways out, drawn from the one decision (`empty.next`): the first is the
+   * primary control and the rest follow it quietly. Read-further is the entries continuation the
+   * Collection footer offers, and is left out when the walk has nothing left to read.
+   */
+  const entriesContinuation = collectionWindow.kind === 'partial'
+    ? collectionWindow.continuations.find((continuation) => continuation.key === 'entries')
+    : undefined;
+  // Each next step is one Button, typed by the Button contract itself: the first is the primary control and
+  // the rest follow quietly.
+  const emptyNextButtons: React.ReactElement[] = [];
+  for (const step of empty?.next ?? []) {
+    const variant = emptyNextButtons.length === 0 ? 'secondary' : 'plain';
+    switch (step) {
+      case 'loadMore':
+        if (entriesContinuation !== undefined) {
+          emptyNextButtons.push(
+            <Button key={step} title={entriesContinuation.label} busy={entriesContinuation.busy} variant={variant} onPress={entriesContinuation.load} />,
+          );
+        }
+        break;
+      case 'clearSearch':
+        emptyNextButtons.push(
+          <Button key={step} titleKey="plugins.triage.surface.search.clear" title="Clear search" variant={variant} onPress={() => changeSearch('')} />,
+        );
+        break;
+      case 'clearFilters':
+        emptyNextButtons.push(
+          <Button key={step} titleKey="plugins.triage.surface.filters.clear" title="Clear filters" variant={variant} onPress={clearFilters} />,
+        );
+        break;
+    }
+  }
+  const [primaryNext, ...quietNext] = emptyNextButtons;
+  const emptyNextControls = {
+    ...(primaryNext === undefined ? {} : { action: primaryNext }),
+    ...(quietNext.length === 0 ? {} : { secondaryAction: <>{quietNext}</> }),
+  };
 
   /**
    * Which of the two ordinary causes reached the header, decided from the fact
@@ -2022,7 +2086,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
        * left them holding a sentence with no subject: they could not say
        * WHICH entry had gone, which is the one thing they were reading.
        */
-      <TriageDetailInsetColumn>
+      <Stack gap="small">
         <TriageDetailHeaderView
           headerHosted={headerHosted}
           header={lastKnownHeader}
@@ -2036,7 +2100,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           descriptionKey="plugins.triage.surface.entryGone.description"
           description="The current window no longer holds this entry, so there is nothing to open it with. It may return on the next refresh."
         />
-      </TriageDetailInsetColumn>
+      </Stack>
     ) : (
       /*
        * `core/SURFACE.md` §3.1 and §3.2: a selection the current window
@@ -2047,7 +2111,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
        * surface closed the detail by itself in the first case and like the
        * launch did nothing at all in the second.
        */
-      <TriageDetailInsetColumn>
+      <Stack gap="small">
         {headerHosted ? null : <Row justify="space-between" align="center">
           <Heading
             level={2}
@@ -2072,7 +2136,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
             ? 'The filters on this page do not include this entry, so there is nothing here to open. Clear them to see it in the list.'
             : 'The current window no longer holds this entry, so there is nothing to open it with. It may return on the next refresh.'}
         />
-      </TriageDetailInsetColumn>
+      </Stack>
     )
   );
 
@@ -2104,6 +2168,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     pins: marks.more || pinsLoadMore?.kind === 'failed' || pinsLoadMore?.kind === 'unresumable'
       ? planTriageListContinuationV1({ section: 'pins', state: pinsLoadMore, text })
       : null,
+    firstRead: state.kind === 'initial',
     text,
   });
 
@@ -2133,6 +2198,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           model={collection}
           anatomy={anatomy}
           accessibilityLabel={TRIAGE_DISPLAY_NAME}
+          title={TRIAGE_DISPLAY_NAME}
           presentation={collectionView === 'board' ? 'board' : 'table'}
           sort={{
             key: surface.order,
@@ -2156,27 +2222,28 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           loading={state.kind === 'initial'}
           header={(slots) => (
             <Stack gap="small">
+          {renderListToolbar(slots)}
+              {/* A partial read of linked Session activity is a note under the toolbar: the page's name leads. */}
               {listedEntryRefs.length === 0 || !sessionActivity.incomplete ? null : (
-                <Row gap="small" align="center" wrap>
-                  <Status
-                    tone={sessionActivity.unavailable ? 'warning' : 'muted'}
-                    labelKey={sessionActivity.unavailable
-                      ? 'plugins.triage.surface.sessionActivity.unavailable'
-                      : 'plugins.triage.surface.sessionActivity.reading'}
-                    label={sessionActivity.unavailable
-                      ? 'Some linked Session activity could not be read.'
-                      : 'Reading linked Session activity…'}
-                  />
-                  {sessionActivity.unavailable ? (
+                <Status
+                  tone={sessionActivity.unavailable ? 'warning' : 'muted'}
+                  labelKey={sessionActivity.unavailable
+                    ? 'plugins.triage.surface.sessionActivity.unavailable'
+                    : 'plugins.triage.surface.sessionActivity.reading'}
+                  label={sessionActivity.unavailable
+                    ? 'Some linked Session activity could not be read.'
+                    : 'Reading linked Session activity…'}
+                  // The sentence wraps beside its Retry, as the account notice's does, never above it on a line of its own.
+                  action={sessionActivity.unavailable ? (
                     <Button
-                      title={text('plugins.triage.surface.actions.retry', 'Retry')}
+                      titleKey="plugins.triage.surface.actions.retry"
+                      title="Retry"
                       variant="plain"
                       onPress={sessionActivity.retry}
                     />
-                  ) : null}
-                </Row>
+                  ) : undefined}
+                />
               )}
-          {renderListToolbar(slots)}
           {views.details}
           {accountNotice}
 
@@ -2236,10 +2303,11 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
             them.
           */}
           {state.kind !== 'sourcesUnreachable' ? null : (
-            <Banner
-              tone="warning"
-              title={text('plugins.triage.surface.sourcesUnreachable.title', 'Your sources could not be reached')}
-              description={text('plugins.triage.surface.sourcesUnreachable.description', 'Happier could not reach a machine for these sources, so nothing has been read yet. Your pins are still here, and Refresh tries again.')}
+            <Banner tone="warning" {...readTriageSourcesUnreachableNotice(state, text)}
+              action={state.retryable ? (
+                <Button titleKey="plugins.triage.surface.tryAgain" title="Try again" variant="secondary"
+                  busy={refreshState.kind === 'running'} disabled={refreshState.kind === 'blocked'} onPress={refresh} />
+              ) : undefined}
             />
           )}
 
@@ -2280,11 +2348,13 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
               {configuredSources.notice === null ? null : (
                 <Banner
                   tone="warning"
-                  title={text(
-                    'plugins.triage.surface.sources.changedTitle',
-                    'Configured sources changed',
-                  )}
-                  description={configuredSources.notice.message}
+                  title={configuredSources.notice.kind === 'refused'
+                    ? configuredSources.notice.message
+                    : text(
+                      'plugins.triage.surface.sources.changedTitle',
+                      'Configured sources changed',
+                    )}
+                  description={configuredSources.notice.kind === 'refused' ? undefined : configuredSources.notice.message}
                 />
               )}
               {configuredSources.sources.length === 0 ? (
@@ -2308,7 +2378,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
                           disabled={configuredSources.unavailableReason !== null}
                           busy={configuredSources.busySourceInstanceId === source.sourceInstanceId}
                           onPress={() => {
-                            void removeConfiguredSource(source.sourceInstanceId, source.displayLabel);
+                            void removeConfiguredSource(source.sourceInstanceId);
                           }}
                         />
                       )}
@@ -2437,6 +2507,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
               scene={readTriageListEmptyScene(empty.kind)}
               title={text(readTriageListEmptyStateKeys(empty.kind).title, empty.title)}
               description={text(readTriageListEmptyStateKeys(empty.kind).description, empty.description)}
+              {...emptyNextControls}
             />
           )}
         />

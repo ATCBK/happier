@@ -22,6 +22,8 @@ import { HOME_IDENTITY_ACTION_IDS_V1 } from '../teams/identity/actionIds.js';
 import { PLUGIN_SETTINGS_ADMINISTRATION_ACTION_IDS_V1 } from '../plugins/settingsAdministration.js';
 import { PLUGIN_WEBHOOK_ACTION_IDS_V1 } from '../plugins/webhooks/endpointV1.js';
 import { PLUGIN_EXECUTION_ORIGIN_ACTION_IDS } from './pluginExecutionOriginActionFamily.js';
+import { NPM_REGISTRY_PROFILE_ACTION_IDS_V1 } from './npmRegistryProfileActionIds.js';
+import { PLUGIN_ACCOUNT_ADMINISTRATION_ACTION_IDS } from './pluginAccountAdministrationActionIds.js';
 import { SESSION_BOARD_ACTION_IDS_V1 } from '../sessions/board/actionIds.js';
 import { SESSION_DISCUSSION_ACTION_IDS_V1 } from '../sessions/discussions/actionIds.js';
 import { SESSION_READ_STATE_ACTION_IDS_V1 } from '../sessions/readState/actionIds.js';
@@ -44,6 +46,7 @@ import { PROJECT_ACTION_IDS_V1 } from './projectActionIdsV1.js';
 import { PROJECT_DEFINITION_ACTION_IDS } from './projectDefinitionActionFamily.js';
 import { CONNECTED_SERVICE_CONFIGURATION_ACTION_IDS_V1 } from '../connect/configurationActionIdsV1.js';
 import { SETTINGS_DECLARATION_ACTION_IDS_V1 } from './settingsDeclarationActionFamily.js';
+import { ACTION_POLICY_ACTION_IDS } from './actionPolicyActionIds.js';
 import { APP_SHELL_ACTION_IDS } from './appShellActionFamily.js';
 import { SESSION_TERMINAL_ACTION_IDS } from './sessionTerminalActionFamily.js';
 import { SESSION_AGENT_TRANSITION_ACTION_IDS } from './sessionAgentTransitionActionFamily.js';
@@ -69,6 +72,7 @@ import { ACCOUNT_LIFECYCLE_ACTION_IDS } from './accountLifecycleActionFamily.js'
 import { ARTIFACT_FOLDER_ACTION_IDS_V1 } from '../prompts/library/artifactFolderActionIdsV1.js';
 import { USAGE_SOURCE_ACTION_IDS } from '../usage/usageSources.js';
 import { WORKFLOW_AUTHORING_ACTION_IDS } from './workflowAuthoringActionIds.js';
+import { PROMPT_INVOCATION_ACTION_IDS } from './promptInvocationActionIds.js';
 
 export const WORKFLOW_ACTION_IDS_V1 = [
   'workflow.validate', 'workflow.run.start', 'workflow.run.list', 'workflow.run.summaries', 'workflow.run.get', 'workflow.run.wait',
@@ -94,6 +98,11 @@ export const PLUGIN_DEV_LOOP_ACTION_IDS_V1 = [
   'plugins.scaffold',
   'plugins.install',
   'plugins.uninstall',
+  'plugins.enable',
+  'plugins.disable',
+  'plugins.rollback',
+  'plugins.trust.forget',
+  'plugins.update_policy.set',
   'plugins.dev.submit',
   'plugins.dev.unregister',
   'plugins.dev.install',
@@ -119,6 +128,8 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   registries: REGISTRY_ACTION_IDS_V1,
   personal_saved_secrets: PERSONAL_SAVED_SECRET_ACTION_IDS_V1,
   plugin_execution_origin: PLUGIN_EXECUTION_ORIGIN_ACTION_IDS,
+  npm_registry_profiles: NPM_REGISTRY_PROFILE_ACTION_IDS_V1,
+  plugin_account_administration: PLUGIN_ACCOUNT_ADMINISTRATION_ACTION_IDS,
   usage: [...USAGE_ACTION_IDS, ...USAGE_COACH_ACTION_IDS],
   project_sources: PROJECT_SOURCE_ACTION_IDS_V1,
   project_execution: PROJECT_ACTION_IDS_V1,
@@ -169,7 +180,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   session_authoring: ['session.authoring.open'],
   artifact_access: ARTIFACT_ACCESS_ACTION_IDS_V1,
   artifacts: ARTIFACT_ACTION_IDS_V1,
-  settings_declarations: SETTINGS_DECLARATION_ACTION_IDS_V1,
+  settings_declarations: [...SETTINGS_DECLARATION_ACTION_IDS_V1, ...ACTION_POLICY_ACTION_IDS],
   app_shell: APP_SHELL_ACTION_IDS,
   notifications: ['notifications.notify_me'],
   notification_configuration: NOTIFICATION_CONFIGURATION_ACTION_IDS,
@@ -264,6 +275,9 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'session.pending.resetStart.cancel',
     'session.pending.next',
     'session.pending.withdraw',
+    'session.pending.markHandled',
+    'session.pending.dismiss',
+    'session.pending.sendAsNew',
     'session.turn.cancel',
     'session.stop',
     'session.delete',
@@ -467,7 +481,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'agents.acp.backends.installFromRegistry',
   ],
   prompt_library: [
-    'prompts.invocation.create',
+    ...PROMPT_INVOCATION_ACTION_IDS,
     'prompts.stack.update',
     'prompt_doc.get',
     'prompt_doc.create',

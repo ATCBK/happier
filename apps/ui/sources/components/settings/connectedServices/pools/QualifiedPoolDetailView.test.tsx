@@ -775,17 +775,6 @@ describe('QualifiedPoolDetailView', () => {
         expect(setActiveAccount.mock.calls[0]?.[0]).toMatchObject({ group, account: { accountId: 'backup' } });
     });
 
-    it('confirms before removing a member and does not remove when declined', async () => {
-        const { screen } = await renderPoolDetail();
-        await press(memberAction(screen, 'backup', 'remove'));
-        expect(modalSpies.confirm).toHaveBeenCalledTimes(1);
-        expect(removeMember).not.toHaveBeenCalled();
-        modalSpies.confirm.mockResolvedValue(true);
-        await press(memberAction(screen, 'backup', 'remove'));
-        expect(removeMember).toHaveBeenCalledTimes(1);
-        expect(removeMember.mock.calls[0]?.[0]).toMatchObject({ account: { accountId: 'backup' } });
-    });
-
     it('Manage members adds the accounts checked in its list', async () => {
         const { screen } = await renderPoolDetail();
         await act(async () => { membersDropdown(screen).props.onOpenChange?.(true); });
@@ -913,16 +902,6 @@ describe('QualifiedPoolDetailView', () => {
         expect(screen.findByTestId('connected-services-pool-detail:switches-per-turn')).toBeNull();
         await pressRow(screen, 'connected-services-pool-detail:advanced:header');
         expect(screen.findByTestId('connected-services-pool-detail:switches-per-turn')).not.toBeNull();
-    });
-
-    it('confirms before deleting the pool', async () => {
-        const { screen, group } = await renderPoolDetail();
-        await pressRow(screen, 'connected-services-pool-detail:delete');
-        expect(modalSpies.confirm).toHaveBeenCalledTimes(1);
-        expect(deleteGroup).not.toHaveBeenCalled();
-        modalSpies.confirm.mockResolvedValue(true);
-        await pressRow(screen, 'connected-services-pool-detail:delete');
-        expect(deleteGroup).toHaveBeenCalledWith(group);
     });
 
     it('disables the fallback controls when automatic fallback is unavailable', async () => {

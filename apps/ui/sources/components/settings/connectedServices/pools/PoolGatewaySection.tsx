@@ -7,7 +7,6 @@ import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { Switch } from '@/components/ui/forms/Switch';
 import { Icon } from '@/components/ui/icons/Icon';
-import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
@@ -38,8 +37,7 @@ export type PoolGatewaySectionProps = Readonly<{
 /**
  * "Use in other agents" on a pool (lab `rgateway` PL1/PL2): one switch per gateway that can draw on
  * this pool's vendor. On, it shows what changes between the pool's own sign-in and the gateway, and
- * leads to the gateway. When another account or pool holds the gateway's slot the switch does not
- * flip: the row opens into the question instead, and only "Switch" writes.
+ * leads to the gateway. Replacing another account or pool uses the gateway Action's approval policy.
  *
  * It writes nothing itself; the gateway's slot is the one owner, through `usage.setEnabled`.
  */
@@ -48,7 +46,6 @@ export const PoolGatewaySection = React.memo(function PoolGatewaySection(
 ) {
   const { theme } = useUnistyles();
   const { usage } = props;
-  const [confirming, setConfirming] = React.useState<string | null>(null);
   const setEnabled = usage.setEnabled;
   const write = React.useCallback(
     (connectionId: string, enabled: boolean) => {
@@ -129,7 +126,6 @@ export const PoolGatewaySection = React.memo(function PoolGatewaySection(
           ? (props.presentTarget?.(choice.replacementTarget) ??
             t('common.unavailable'))
           : null;
-        const asking = confirming === choice.connectionId && held !== null;
         return (
           <React.Fragment key={`${choice.connectionId}/${choice.purpose}`}>
             <Item
@@ -170,66 +166,11 @@ export const PoolGatewaySection = React.memo(function PoolGatewaySection(
                   ].join(' ')}
                   value={choice.enabled}
                   disabled={!usage.ready || usage.pending}
-                  onValueChange={(next) => {
-                    if (next && choice.replacementTarget) {
-                      setConfirming(choice.connectionId);
-                      return;
-                    }
-                    setConfirming(null);
-                    write(choice.connectionId, next);
-                  }}
+                  onValueChange={(next) => write(choice.connectionId, next)}
                 />
               }
               rightElementOutsidePressable
             />
-            {asking && held !== null ? (
-              <SectionContentRow testID={`${rowTestID}:replace`} continuesRow>
-                <AttentionBanner
-                  testID={`${rowTestID}:replace:banner`}
-                  tone="neutral"
-                  placement="inline"
-                  icon={
-                    <Icon
-                      name="arrows-left-right"
-                      size={18}
-                      color={theme.colors.state.neutral.foreground}
-                    />
-                  }
-                  title={t(
-                    'settingsProvidersCollection.gateway.poolReplaceTitle',
-                    {
-                      gateway: choice.title,
-                      pool: props.poolTitle,
-                    },
-                  )}
-                  description={t(
-                    'settingsProvidersCollection.gateway.poolReplaceDescription',
-                    {
-                      pool: props.poolTitle,
-                      service: props.serviceLabel,
-                      current: held,
-                    },
-                  )}
-                  action={{
-                    testID: `${rowTestID}:replace:confirm`,
-                    label: t(
-                      'settingsProvidersCollection.gateway.poolReplaceConfirm',
-                    ),
-                    loading: usage.pending,
-                    onPress: () => {
-                      setConfirming(null);
-                      write(choice.connectionId, true);
-                    },
-                  }}
-                  secondaryAction={{
-                    testID: `${rowTestID}:replace:cancel`,
-                    label: t('common.cancel'),
-                    display: 'secondary',
-                    onPress: () => setConfirming(null),
-                  }}
-                />
-              </SectionContentRow>
-            ) : null}
             {choice.enabled ? (
               <>
                 <SectionContentRow testID={`${rowTestID}:comparison`}>

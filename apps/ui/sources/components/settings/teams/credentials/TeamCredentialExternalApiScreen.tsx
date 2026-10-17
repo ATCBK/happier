@@ -122,6 +122,12 @@ const ExternalApiContent = React.memo(function ExternalApiContent(props: Readonl
     const targetKey = `${context.scope.serverId}:${context.scope.accountId}:${context.address.teamId}:${resourceId}`;
     const targetPath = teamCredentialExternalApiPath(context.address, resourceId);
     const currentTargetKey = React.useRef(targetKey);
+    const actionLifetime = React.useRef<AbortController | null>(null);
+    React.useEffect(() => {
+        const controller = new AbortController();
+        actionLifetime.current = controller;
+        return () => controller.abort();
+    }, [targetKey]);
     const acceptedTarget = React.useRef({
         key: targetKey,
         path: targetPath,
@@ -361,22 +367,16 @@ const ExternalApiContent = React.memo(function ExternalApiContent(props: Readonl
         }
     }
 
-    async function revokeKey(key: TeamCredentialExternalApiKeySummaryV1, requireConfirmation = true) {
+    async function revokeKey(key: TeamCredentialExternalApiKeySummaryV1) {
         if (operationBusy) return;
-        if (requireConfirmation) {
-            const confirmed = await Modal.confirm(
-                t('teams.credentials.externalApi.revokeTitle', { name: key.label }),
-                t('teams.credentials.externalApi.revokeBody'),
-                { confirmText: t('common.remove'), destructive: true },
-            );
-            if (!confirmed) return;
-        }
+        const signal = actionLifetime.current?.signal;
+        if (!signal || signal.aborted) return;
         const requestedTargetKey = targetKey;
         setBusy(true);
         setNotice(null);
         try {
             const outcome = await revokeTeamCredentialExternalApiKey({
-                scope: context.scope, resourceId, keyId: key.keyId, confirmedByPresentUser: true,
+                scope: context.scope, resourceId, keyId: key.keyId, signal,
                 handlers: {
                     onApprovalSucceeded: (value) => {
                         if (currentTargetKey.current !== requestedTargetKey) return;
@@ -454,7 +454,7 @@ const ExternalApiContent = React.memo(function ExternalApiContent(props: Readonl
                     detail={t('common.remove')}
                     destructive
                     disabled={operationBusy}
-                    onPress={() => void revokeKey(reveal.replacedKey!, false)}
+                    onPress={() => void revokeKey(reveal.replacedKey!)}
                     showChevron={false}
                 />
             ) : null}
@@ -736,20 +736,13 @@ const ExternalApiContent = React.memo(function ExternalApiContent(props: Readonl
                         disabled={operationBusy}
                         onPress={async () => {
                             if (operationBusy) return;
-                            // Revoking the last key is what turns external access
-                            // off, so the consequence names that rather than
-                            // counting rows.
-                            const confirmed = await Modal.confirm(
-                                t('teams.credentials.externalApi.revokeAll'),
-                                t('teams.credentials.externalApi.revokeAllBody'),
-                                { confirmText: t('common.remove'), destructive: true },
-                            );
-                            if (!confirmed) return;
+                            const signal = actionLifetime.current?.signal;
+                            if (!signal || signal.aborted) return;
                             const requestedTargetKey = targetKey;
                             setBusy(true); setNotice(null);
                             try {
                                 const outcome = await revokeAllTeamCredentialExternalApiKeys({
-                                    scope: context.scope, resourceId, confirmedByPresentUser: true,
+                                    scope: context.scope, resourceId, signal,
                                     handlers: {
                                         onApprovalSucceeded: (value) => {
                                             if (currentTargetKey.current !== requestedTargetKey) return;

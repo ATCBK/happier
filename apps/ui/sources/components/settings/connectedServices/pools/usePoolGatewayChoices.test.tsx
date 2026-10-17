@@ -1,12 +1,14 @@
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { t } from '@/text';
 
@@ -14,6 +16,7 @@ const rpc = createProviderSettingsHarness({ machines: [] });
 installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 const { usePoolGatewayChoices } = await import('./usePoolGatewayChoices');
+const { PoolGatewaySection } = await import('./PoolGatewaySection');
 const { useProviderSettingsTarget } = await import('@/providers/hooks/targetMachine');
 const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
 const target = { kind: 'group' as const, service, groupId: 'pool-a' };
@@ -22,7 +25,12 @@ afterEach(async () => { standardCleanup(); await account.reset(); rpc.reset(); }
 
 describe('pool gateway Action wiring', () => {
     it('continues an approved first-gateway creation and slot removal through the real Account Action family exactly once', async () => {
-        const { serverId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [] });
+        const { serverId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [], settings: {
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'providers.connections.create_contribution': { approvalRequiredSurfaces: ['ui'] },
+                'providers.connections.update': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        } });
         const stored = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
         const resolveTarget = () => null;
         const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, accountServerId: account.serverId, accountAddressAvailable: true, resolveTarget }));
@@ -92,7 +100,11 @@ describe('pool gateway Action wiring', () => {
         const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, accountServerId: account.serverId, accountAddressAvailable: true, resolveTarget }));
         await vi.waitFor(() => expect(hook.getCurrent().choices).toHaveLength(1));
         expect(hook.getCurrent().ready).toBe(true);
-        await act(async () => { expect(await hook.getCurrent().setEnabled(gateway.id, true)).toBe(true); });
+        const screen = await renderScreen(<PoolGatewaySection testID="pool-gateway" usage={hook.getCurrent()}
+            poolTitle="Work pool" serviceLabel="Codex" nativeAgentTitles={[]} />);
+        await act(async () => { screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.onValueChange(true); });
+        await vi.waitFor(() => expect(catalog.connections[0]?.purposeBindingDefaults?.['openai-upstream']).toEqual(target));
+        expect(screen.findByTestId('pool-gateway:pc_gateway:replace')).toBeNull();
         expect(catalog.connections[0]?.purposeBindingDefaults?.['openai-upstream']).toEqual(target);
         expect(catalog.connections[0]?.revision).toBe(4);
         expect(catalog.connections[1]).toEqual(unavailable);

@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import type {
     PluginContributionIntrospectionProjectionV1,
     PluginDiagnosticRecordV1,
@@ -47,6 +48,7 @@ import { workflowsProjectionFamily } from '../workflows';
 import { inputTypesProjectionFamily } from '../inputTypes';
 import { atmospherePicturesProjectionFamily } from '../atmospherePictures';
 import { registrySourcesProjectionFamily } from '../registrySources';
+import { skillsProjectionFamily } from '../skills';
 import { machineProvisionersProjectionFamily } from '../machineProvisioners';
 import { dragSourcesProjectionFamily, dropTargetsProjectionFamily } from '../entityDragDrop';
 import {
@@ -266,7 +268,7 @@ function resolveActionScopes(
     // Scope is a manifest-declared semantic fact. Surface only controls where
     // an Action can be invoked; deriving scope from it silently rewrites the
     // current qualified Action's host context.
-    return PluginActionScopeV2Schema.array().min(1).parse(
+    return z.array(PluginActionScopeV2Schema).check(z.minLength(1)).parse(
         action.definition.scopes,
     );
 }
@@ -420,6 +422,9 @@ function collectPluginContributionMetadata(
     }
     for (const source of registry.registrySources ?? []) {
         upsert(source);
+    }
+    for (const skill of registry.skills ?? []) {
+        upsert(skill);
     }
 
     return metadata;
@@ -757,6 +762,7 @@ function buildActionsById(
             ...(inputHints ? { inputHints } : {}),
             ...(action.definition.priority === undefined ? {} : { priority: action.definition.priority }),
             dangerLevel: action.definition.dangerLevel,
+            ...(action.definition.confirmationWhen === undefined ? {} : { confirmationWhen: action.definition.confirmationWhen }),
             ...(action.definition.confirmation
                 ? { confirmation: action.definition.confirmation }
                 : {}),
@@ -965,6 +971,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         inputTypesProjectionFamily,
         atmospherePicturesProjectionFamily,
         registrySourcesProjectionFamily,
+        skillsProjectionFamily,
         machineProvisionersProjectionFamily,
         dragSourcesProjectionFamily,
         dropTargetsProjectionFamily,
@@ -1009,6 +1016,42 @@ export function buildPluginProjectionV2(params: Readonly<{
             }));
         },
     }, familyDescriptors);
+
+    // Generated UI admission already decided these refusals for this client.
+    // Publish that same evidence through the diagnostic records Details reads;
+    // do not revalidate artifacts or retain a separate plugin health snapshot.
+    const pluginUi = familiesById.pluginUi;
+    if (pluginUi?.family === 'pluginUi') {
+        for (const entry of Object.values(pluginUi.entriesById)) {
+            if (!('contributionKind' in entry)
+                || (entry.contributionKind !== 'reactNativeBundle' && entry.contributionKind !== 'hostedWeb')) continue;
+            const runtime = entry.runtime;
+            if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime)) continue;
+            const codes: unknown = Reflect.get(runtime, 'diagnostics');
+            if (!Array.isArray(codes) || codes.length === 0) continue;
+            const pluginId = readOptionalString(entry.pluginId);
+            const localId = readOptionalString(entry.contributionId);
+            if (!pluginId || !localId) continue;
+            diagnosticMetadataByPluginId ??= collectPluginDiagnosticMetadata({ registry: params.registry, installedPackages });
+            const plugin = diagnosticMetadataByPluginId.get(pluginId);
+            // Partial catalog-free projections can omit attribution metadata.
+            // Keep their renderer result without inventing a plugin version/source.
+            if (!plugin) continue;
+            for (const code of new Set(codes)) {
+                if (typeof code !== 'string' || !code) continue;
+                diagnostics.push(enrichPluginDiagnosticRecord({
+                    code,
+                    severity: Reflect.get(runtime, 'state') === 'blocked' ? 'error' : 'warning',
+                    message: 'This plugin UI contribution is unavailable.',
+                }, {
+                    ordinal: diagnostics.length, plugin,
+                    contribution: createPluginContributionIdentity({ pluginId, localId }),
+                    stage: 'ui', occurrenceId: params.registry.occurrenceIdsByPluginId?.[pluginId],
+                    host: 'daemon', platform: process.platform, occurredAtMs: Date.now(),
+                }));
+            }
+        }
+    }
 
     return {
         v: 2,

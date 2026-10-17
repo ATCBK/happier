@@ -5,7 +5,6 @@ import type { ModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model
 import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
 
 import type { TextInput } from '@/components/ui/text/Text';
-import { Modal } from '@/modal';
 import { useProviderConnectionModels } from '@/providers/hooks/useProviderConnectionModels';
 import { useProviderCatalogCounts } from '@/providers/hooks/useProviderCatalogCounts';
 import { useProviderModelLoadAction } from '@/providers/hooks/useProviderModelLoadAction';
@@ -14,7 +13,6 @@ import {
     buildProviderModelVisibilityChanges,
     type ProviderModelManagerGroup,
 } from '@/providers/models/ProviderModelManager';
-import { applyProviderModelBulkAction } from '@/providers/models/applyProviderModelBulkAction';
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import {
@@ -242,31 +240,18 @@ export function useProviderConnectionModelsSection(input: Readonly<{
         selected?: ModelVisibilityRefV1,
     ) => {
         if (!accountStillCurrent()) return;
-        await applyProviderModelBulkAction({
+        const changes = buildProviderModelVisibilityChanges({
+            scope: { kind: 'connection', connectionId },
+            nativeModels: [],
+            groups,
             action,
-            changes: buildProviderModelVisibilityChanges({
-                scope: { kind: 'connection', connectionId },
-                nativeModels: [],
-                groups,
-                action,
-                ...(selected ? { selected } : {}),
-            }),
-            confirm: async () => accountStillCurrent() && await Modal.confirm(
-                action === 'hideAll'
-                    ? t('settingsProviders.models.hideAll')
-                    : t('settingsProviders.models.showOnly'),
-                action === 'hideAll'
-                    ? t('settingsProviders.models.hideAllConfirmation')
-                    : t('settingsProviders.models.showOnlyConfirmation'),
-                { confirmText: t('common.continue'), ...(action === 'hideAll' ? { destructive: true } : {}) },
-            ) && accountStillCurrent(),
-            apply: async (changes) => {
-                await runModelSettingsMutation(
-                    { action: 'bulkVisibility', ...(machineId ? { machineId } : {}), changes: [...changes] },
-                    () => runBulk(action, selected),
-                );
-            },
+            ...(selected ? { selected } : {}),
         });
+        if (changes.length === 0) return;
+        await runModelSettingsMutation(
+            { action: 'bulkVisibility', ...(machineId ? { machineId } : {}), changes: [...changes] },
+            () => runBulk(action, selected),
+        );
     }, [accountStillCurrent, connectionId, groups, machineId, runModelSettingsMutation]);
 
     const addManualModels = React.useCallback(async (): Promise<boolean> => {
@@ -312,12 +297,6 @@ export function useProviderConnectionModelsSection(input: Readonly<{
 
     const removeManualModel = React.useCallback(async (removeConnectionId: string, modelId: string) => {
         if (!accountStillCurrent() || catalog.connectionRevision === null || removeConnectionId !== connectionId) return;
-        const confirmed = await Modal.confirm(
-            t('settingsProviders.models.remove'),
-            t('settingsProviders.models.removeConfirmation'),
-            { confirmText: t('common.delete'), destructive: true },
-        );
-        if (!confirmed || !accountStillCurrent()) return;
         await runModelSettingsMutation({
             action: 'manualRemove', ...(machineId ? { machineId } : {}), connectionId: removeConnectionId,
             modelId, expectedConnectionRevision: catalog.connectionRevision,

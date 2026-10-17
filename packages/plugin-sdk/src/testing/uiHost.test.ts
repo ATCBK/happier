@@ -20,7 +20,6 @@ import { isPluginError, PluginError } from '../errors.js';
 import type { PluginDiagnosticData } from '../diagnostics.js';
 import { definePlugin } from '../definePlugin.js';
 import type { ComposerContentHandleV1, ComposerSnapshotV1 } from '../ui/hostApi.js';
-import { PluginUiHostApiClientError } from '../ui/clientTransport.js';
 import {
     createPluginUiTestkit,
     createSurfaceContextFixture,
@@ -113,7 +112,7 @@ function targetedSurfaceAdmissionFixture(input: Readonly<{
                             pluginId: contributorPluginId,
                             localId: 'review-detail',
                             qualifiedId: `${contributorPluginId}/review-detail`,
-                            generation: contributorGeneration,
+                            occurrenceId: contributorGeneration,
                         },
                         visible: true,
                         requiredHostMethods: [],
@@ -1539,10 +1538,11 @@ describe('createPluginUiTestkit', () => {
                 openSurface: async ({ view }) => {
                     expect(typeof view === 'string' ? view : view.localId).toBe('review-detail');
                     calls += 1;
-                    const refusal = new PluginUiHostApiClientError(
-                        'denied',
-                        'The host did not admit the Review details panel.',
-                    );
+                    const refusal = new PluginError({
+                        code: 'denied',
+                        message: 'The host did not admit the Review details panel.',
+                        diagnostics: [{ code: 'destination_not_admitted', severity: 'error' }],
+                    });
                     throw refusal;
                 },
             },
@@ -1558,6 +1558,7 @@ describe('createPluginUiTestkit', () => {
                 code: 'denied',
                 message: 'The host did not admit the Review details panel.',
                 retryable: false,
+                diagnostics: [{ code: 'destination_not_admitted', severity: 'error' }],
             });
             expect(calls).toBe(1);
         } finally {

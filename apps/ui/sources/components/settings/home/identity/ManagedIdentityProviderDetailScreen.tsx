@@ -222,11 +222,6 @@ const DetailContent = React.memo(function DetailContent(props: Readonly<{
                     options,
                 ),
                 onApprovalPending: reportApprovalPending,
-                confirm: async () => await Modal.confirm(
-                    t('identityAdministration.removeTitle', { name: provider.displayName }),
-                    t('identityAdministration.removeBody', { name: provider.displayName }),
-                    { cancelText: t('common.cancel'), confirmText: t('identityAdministration.remove'), destructive: true },
-                ),
                 remove: async (expectedRevision) => {
                     const result = await client.execute('identity.providers.remove', {
                         owner: { kind: 'home' },
@@ -352,10 +347,7 @@ const DetailContent = React.memo(function DetailContent(props: Readonly<{
                     <SettingAnchor setting={HOME_IDENTITY_PROVIDER_SETTINGS.settings.edit}><Item testID="identity-provider-edit" title={t('identityAdministration.edit')} disabled={busy} onPress={() => router.push(homeAdministrationIdentityProviderEditPath(props.context.scope.serverId, provider.id))} showChevron={false} /></SettingAnchor>
                 ) : null}
                 {provider.enabled ? (
-                    <SettingAnchor setting={HOME_IDENTITY_PROVIDER_SETTINGS.settings.disable}><Item testID="identity-provider-disable" title={t('identityAdministration.disable')} disabled={busy} onPress={() => void (async () => {
-                        if (!await Modal.confirm(t('identityAdministration.disableTitle', { name: provider.displayName }), t('identityAdministration.disableBody', { name: provider.displayName }), { cancelText: t('common.cancel'), confirmText: t('identityAdministration.disable') })) return;
-                        await runLifecycle('identity.providers.disable');
-                    })()} showChevron={false} /></SettingAnchor>
+                    <SettingAnchor setting={HOME_IDENTITY_PROVIDER_SETTINGS.settings.disable}><Item testID="identity-provider-disable" title={t('identityAdministration.disable')} disabled={busy} onPress={() => void runLifecycle('identity.providers.disable')} showChevron={false} /></SettingAnchor>
                 ) : (
                     <SettingAnchor setting={HOME_IDENTITY_PROVIDER_SETTINGS.settings.enable}><Item testID="identity-provider-enable" title={t('identityAdministration.enable')} disabled={busy} onPress={() => void runLifecycle('identity.providers.enable')} showChevron={false} /></SettingAnchor>
                 )}

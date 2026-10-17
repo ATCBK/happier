@@ -19,7 +19,6 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { teamReadFailureLabel } from '@/components/settings/teams/teamMutationPresentation';
 import { useTeamMemberGroups, type TeamMemberGroups } from '@/hooks/teams/useTeamMemberGroups';
-import { Modal } from '@/modal';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import {
     getTeamMember,
@@ -53,7 +52,6 @@ import type { TeamMemberSectionRenderer } from './teamMemberSectionContext';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
     resolveTeamMemberManagementChoices,
-    teamMemberRemovalLines,
     type TeamMemberManagementChoiceId,
 } from './teamMemberPresentation';
 
@@ -79,8 +77,7 @@ const SEGMENTED_CHOICE_LIMIT = 4;
  * Read-only and offered to every viewer the Home answers: a person's Group
  * membership explains where their access comes from, and hiding it from a
  * non-manager would leave the roster unable to answer its own question. Each row
- * opens the same Group destination the Group list opens. The read belongs to the
- * person page, which also names these Groups when it confirms a removal.
+ * opens the same Group destination the Group list opens.
  */
 const MemberGroupsSection = React.memo(function MemberGroupsSection(props: Readonly<{
     context: TeamSectionContext;
@@ -348,7 +345,7 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
     }, [reload, context]);
 
     /**
-     * The management transfer, confirmed once and then executed.
+     * The management transfer executes through its Action policy.
      *
      * A refusal is reported in the Home's own terms rather than as a generic
      * failure: `management_conflict` means the named source holds no identity
@@ -361,12 +358,6 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
             | Readonly<{ kind: 'native' }>
             | Readonly<{ kind: 'directory_source'; directorySourceId: string }>,
     ) => {
-        const confirmed = await Modal.confirm(
-            t('teams.members.managementTitle'),
-            t('teams.members.managementHelp'),
-            { confirmText: t('teams.members.managementTitle') },
-        );
-        if (!confirmed) return;
         if (transitionInFlightRef.current) return;
         transitionInFlightRef.current = true;
         setNotice(null);
@@ -472,17 +463,6 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
     };
 
     const remove = async () => {
-        // The consequence in the manager's terms (lab `tsMembers-X`): what ends, the Groups by
-        // name, and what stays.
-        const confirmed = await Modal.confirm(
-            t('teams.members.removal.title', { name: displayName, team: context.team.name }),
-            teamMemberRemovalLines({
-                groupNames: groups.rows.map((group) => group.name),
-                moreGroups: groups.hasMore || groups.status !== 'ready',
-            }).join('\n'),
-            { confirmText: t('teams.members.remove'), destructive: true },
-        );
-        if (!confirmed) return;
         if (transitionInFlightRef.current) return;
         transitionInFlightRef.current = true;
         setNotice(null);
@@ -693,12 +673,6 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
                             title={t('teams.members.suspend')}
                             disabled={!canAct}
                             onPress={async () => {
-                                const confirmed = await Modal.confirm(
-                                    t('teams.members.suspendTitle', { name: displayName }),
-                                    t('teams.members.suspendBody'),
-                                    { confirmText: t('teams.members.suspendShort') },
-                                );
-                                if (!confirmed) return;
                                 await run(() => suspendTeamMember({
                                     scope: context.scope,
                                     address: context.address,
@@ -715,12 +689,6 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
                             title={t('teams.members.reactivate')}
                             disabled={!canAct}
                             onPress={async () => {
-                                const confirmed = await Modal.confirm(
-                                    t('teams.members.reactivateTitle', { name: displayName }),
-                                    t('teams.members.reactivateBody'),
-                                    { confirmText: t('teams.members.reactivate') },
-                                );
-                                if (!confirmed) return;
                                 await run(() => reactivateTeamMember({
                                     scope: context.scope,
                                     address: context.address,

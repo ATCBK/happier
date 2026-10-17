@@ -20,6 +20,8 @@ export type SessionModelSelectionDisposition = Readonly<{
     proposedSelection: ProviderBoundModelRef | null;
     proposedSelectionV2: SessionModelSelectionV2 | null;
     activeSelection: ProviderBoundModelRef | null;
+    /** Coherent runtime-applied history for presentation; never current runner/context authority. */
+    lastAppliedSelection: ProviderBoundModelRef | null;
     selectionTransitionPending: boolean;
     reportedSelection: ProviderBoundModelRef | null;
     reportedSelectionStatus: 'running' | 'last_used' | 'last_reported' | null;
@@ -108,7 +110,7 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
     // fact, using its own witness only to validate that historical fact. It
     // never becomes active/context truth, and an observed replacement runner
     // must still establish its own selection before it can satisfy a proposal.
-    const appliedSelectionForTransition = exactSelection ?? (
+    const lastAppliedSelection = exactSelection ?? (
         params.currentRunnerProcessIdentity === null
             ? readActiveSessionModelSelectionFromMetadata(
                 params.metadata,
@@ -128,12 +130,16 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
             teamSelectionTransitionPending
             || (
                 proposedIntent !== null
+                // Session socket presence precedes native startup/model publication.
+                // The launch intent alone is not evidence of a changed runtime route.
+                // Leave active/context authority unknown until the producer publishes it.
+                && sessionModels !== null
                 && (
-                    appliedSelectionForTransition === null
+                    lastAppliedSelection === null
                     || proposedSelection === null
-                    || appliedSelectionForTransition.agentTargetKey !== proposedSelection.agentTargetKey
-                    || appliedSelectionForTransition.providerConnectionId !== proposedSelection.providerConnectionId
-                    || appliedSelectionForTransition.modelId !== proposedSelection.modelId
+                    || lastAppliedSelection.agentTargetKey !== proposedSelection.agentTargetKey
+                    || lastAppliedSelection.providerConnectionId !== proposedSelection.providerConnectionId
+                    || lastAppliedSelection.modelId !== proposedSelection.modelId
                 )
             )
         );
@@ -149,6 +155,7 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
         proposedSelection,
         proposedSelectionV2,
         activeSelection,
+        lastAppliedSelection,
         selectionTransitionPending,
         reportedSelection,
         reportedSelectionStatus,

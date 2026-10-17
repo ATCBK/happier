@@ -4,40 +4,8 @@ import { teamMembershipFixture } from '@/dev/testkit/fixtures/teamFixtures';
 
 import {
   resolveTeamMemberManagementChoices,
-  teamMemberRemovalLines,
 } from './teamMemberPresentation';
 
-describe('teamMemberRemovalLines', () => {
-  it('names the Groups the person leaves, and says nothing about Groups when there are none', () => {
-    const withGroups = teamMemberRemovalLines({
-      groupNames: ['Engineering', 'Platform on-call'],
-      moreGroups: false,
-    });
-    const withoutGroups = teamMemberRemovalLines({
-      groupNames: [],
-      moreGroups: false,
-    });
-    expect(withGroups).toHaveLength(withoutGroups.length + 1);
-    expect(withGroups.join('\n')).toContain('Engineering');
-    expect(withGroups.join('\n')).toContain('Platform on-call');
-    // What ends comes first and what is kept comes last, with or without Groups.
-    expect(withGroups[0]).toBe(withoutGroups[0]);
-    expect(withGroups.at(-1)).toBe(withoutGroups.at(-1));
-  });
-
-  it('does not present a partly read Group list as the whole of it', () => {
-    const partial = teamMemberRemovalLines({
-      groupNames: ['Engineering'],
-      moreGroups: true,
-    });
-    const whole = teamMemberRemovalLines({
-      groupNames: ['Engineering'],
-      moreGroups: false,
-    });
-    expect(partial.join('\n')).toContain('Engineering');
-    expect(partial).not.toEqual(whole);
-  });
-});
 
 describe('resolveTeamMemberManagementChoices', () => {
   const sources = [

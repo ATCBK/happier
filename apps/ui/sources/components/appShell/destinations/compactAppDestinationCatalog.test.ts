@@ -54,6 +54,18 @@ beforeEach(() => {
 afterEach(() => storage.setState(initialStorageState, true));
 
 describe('workspace route identity round trips', () => {
+    it('gives an unnamed retained destination a truthful fallback before its page publishes a title', () => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: true, workflows: false, friends: false,
+        } });
+        const machine = resolveDestinationRefFromHref(catalog, '/machines/machine-a')!;
+        const session = resolveDestinationRefFromHref(catalog, '/session/session-a')!;
+        const prompt = resolveDestinationRefFromHref(catalog, '/settings/prompts/docs/prompt-a')!;
+        expect(readDestinationInstanceTitle(catalog, machine)).toBe('settings.machines');
+        expect(readDestinationInstanceTitle(catalog, session)).toBe('session.untitled');
+        expect(readDestinationInstanceTitle(catalog, prompt)).toBe('promptLibrary.editPrompt');
+        expect(readDestinationInstanceTitle(catalog, machine, { fallbackTitle: 'Build Mac' })).toBe('Build Mac');
+    });
     it.each([
         ['/settings/actions/happier.scm.forge.github%2Factions%2Fgithub%2Fpull-request%2Fmerge',
             'actionId', 'happier.scm.forge.github/actions/github/pull-request/merge'],

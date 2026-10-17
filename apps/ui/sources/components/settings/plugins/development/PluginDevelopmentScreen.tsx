@@ -14,6 +14,7 @@ import { presentActionInputForm } from '@/components/plugins/actions/presentActi
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 
 import { DevelopmentPluginsSection } from '../PluginMarketplaceSections';
+import { resolveDevelopmentStartUnavailableReason } from './developmentStartAvailability';
 import { PluginReadOnlySnapshotNotice } from '../PluginReadOnlySnapshotNotice';
 import { usePluginSettingsScreenState } from '../model/usePluginSettingsScreenState';
 import {
@@ -242,6 +243,14 @@ export const PluginDevelopmentScreen = React.memo(function PluginDevelopmentScre
             ) : null}
             <DevelopmentPluginsSection
                 developmentPlugins={state.developmentPlugins}
+                noTarget={state.administrationTargetSelection.state.kind === 'unselected'}
+                startUnavailableReason={resolveDevelopmentStartUnavailableReason({
+                    noTarget: state.administrationTargetSelection.state.kind === 'unselected',
+                    notice: state.readOnlySnapshotNotice,
+                    daemonOperationsAvailable: state.daemonOperationsAvailable,
+                    createAvailable: state.developmentCreateAvailable,
+                    sourceInstallAvailable: state.developmentSourceInstallAvailable,
+                })}
                 createAvailable={state.developmentCreateAvailable}
                 sourceInstallAvailable={state.developmentSourceInstallAvailable}
                 canRunActions={state.daemonOperationsAvailable}

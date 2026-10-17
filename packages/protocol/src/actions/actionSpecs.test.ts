@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import * as protocol from '../index.js';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '../rpc/index.js';
@@ -28,6 +28,7 @@ import { MANAGED_GITHUB_APP_ACTION_IDS_V1 } from '../identity/githubApps.js';
 import { resolveRuntimeActionSurfaces } from './surfaces.js';
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { evaluateInputPredicate } from '../inputs/inputPredicates.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, resolveLocalServiceDomainActionRpcBinding } from './specs/localServices.js';
 import type { ActionSpec } from './actionSpecs.js';
@@ -730,7 +731,7 @@ describe('Action Spec Registry', () => {
     expect(PUBLIC_ACTION_IDS).toEqual(expect.arrayContaining(
       expectations
         .map(([actionId]) => actionId)
-        .filter((actionId) => getActionSpec(actionId).requiredAuthority === 'account_automation'),
+        .filter((actionId) => getActionSpec(actionId).surfaces.api),
     ));
     expect(PUBLIC_ACTION_IDS).not.toContain('plugins.dev');
   });
@@ -832,7 +833,7 @@ describe('Action Spec Registry', () => {
     }
   });
 
-  it('keeps package trust approval on trusted interactive surfaces but off PAT', () => {
+  it('defaults package trust to an ordinary approval Artifact with user-changeable policy', () => {
     for (const retiredActionId of ['plugins.call', 'plugins.trust']) {
       expect(ActionIdSchema.safeParse(retiredActionId).success).toBe(false);
       expect(() => getActionSpec(retiredActionId as ActionId)).toThrow();
@@ -841,12 +842,20 @@ describe('Action Spec Registry', () => {
     const install = getActionSpec('plugins.install');
     expect(install.approval.result).toBe('optional');
     expect(resolveExpectedApprovalFlow(install.approval)).toBe('deferred');
+    expect(install.approvalPolicy).toMatchObject({ uiConfirmation: 'policy' });
+    for (const surface of ['ui', 'cli', 'agent', 'mcp', 'plugin'] as const) {
+      const context = { surface, authority: surface === 'ui' || surface === 'cli' ? 'present_user' as const : 'account_automation' as const };
+      expect(resolveActionApprovalRouting({ actionId: install.id, spec: install, context }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId: install.id, spec: install, context,
+        settings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [install.id]: [surface] } }),
+      }).required).toBe(false);
+    }
     expect(install.surfaces.rpc).toBe(false);
-    expect(install.surfaces.api).toBe(false);
+    expect(install.surfaces.api).toBe(true);
     expect(SignedRootActionIdSchema.safeParse(install.id).success).toBe(true);
-    expect(PublicActionIdSchema.safeParse(install.id).success).toBe(false);
+    expect(PublicActionIdSchema.safeParse(install.id).success).toBe(true);
     expect(install.surfaces.plugin).toBe(true);
-    expect(install.requiredAuthority).toBe('present_user');
+    expect(install.requiredAuthority).toBe('account_automation');
 
     for (const actionId of [
       'plugins.permissions.grants.request',
@@ -855,8 +864,8 @@ describe('Action Spec Registry', () => {
       'plugins.permissions.grants.dismissRequest',
     ] as const) {
       const spec = getActionSpec(actionId);
-      expect(spec.surfaces.agent).toBe(spec.requiredAuthority === 'present_user');
-      expect(spec.surfaces.mcp).toBe(spec.requiredAuthority === 'present_user');
+      expect(spec.surfaces.agent).toBe(actionId !== 'plugins.permissions.grants.request');
+      expect(spec.surfaces.mcp).toBe(actionId !== 'plugins.permissions.grants.request');
     }
   });
 
@@ -934,7 +943,7 @@ describe('Action Spec Registry', () => {
       },
       bindings: { mcpToolName: 'review_start' },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
     } as const;
 
     expect(ActionSpecSchema.parse({
@@ -981,14 +990,14 @@ describe('Action Spec Registry', () => {
         api: false,
         plugin: true,
       },
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
     } as const;
 
     expect(ActionSpecSchema.safeParse(base).success).toBe(false);
     expect(ActionSpecSchema.safeParse({ ...base, outputSchema: z.unknown() }).success).toBe(false);
     expect(ActionSpecSchema.safeParse({
       ...base,
-      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      outputSchema: z.strictObject({ ok: z.boolean() }),
     }).success).toBe(true);
   });
 
@@ -1009,8 +1018,8 @@ describe('Action Spec Registry', () => {
         api: false,
         plugin: true,
       },
-      inputSchema: z.object({}).strict(),
-      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      inputSchema: z.strictObject({}),
+      outputSchema: z.strictObject({ ok: z.boolean() }),
     } as const;
 
     expect(ActionSpecSchema.safeParse(base).success).toBe(false);
@@ -1037,8 +1046,8 @@ describe('Action Spec Registry', () => {
         api: false,
         plugin: true,
       },
-      inputSchema: z.object({}).strict(),
-      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      inputSchema: z.strictObject({}),
+      outputSchema: z.strictObject({ ok: z.boolean() }),
     } as const;
 
     expect(ActionSpecSchema.safeParse({
@@ -1105,22 +1114,22 @@ describe('Action Spec Registry', () => {
         api: true,
         plugin: true,
       },
-      inputSchema: z.object({ semantic: z.string() }).strict(),
-      outputSchema: z.object({ result: z.string() }).strict(),
+      inputSchema: z.strictObject({ semantic: z.string() }),
+      outputSchema: z.strictObject({ result: z.string() }),
       surfaceBindings: {
         rpc: {
-          inputSchema: z.object({ carrier: z.string() }).strict(),
+          inputSchema: z.strictObject({ carrier: z.string() }),
           decodeInput: transform,
-          outputSchema: z.object({ carrierResult: z.string() }).strict(),
+          outputSchema: z.strictObject({ carrierResult: z.string() }),
           encodeOutput: transform,
         },
         plugin: {
-          inputSchema: z.object({ callerInput: z.string() }).strict(),
+          inputSchema: z.strictObject({ callerInput: z.string() }),
           bindInput: transform,
           projectOutput: transform,
         },
         api: {
-          inputSchema: z.object({ callerInput: z.string() }).strict(),
+          inputSchema: z.strictObject({ callerInput: z.string() }),
           bindInput: transform,
         },
       },
@@ -1137,6 +1146,19 @@ describe('Action Spec Registry', () => {
     for (const spec of all) {
       // Runtime safety: registry objects must validate against the schema.
       expect.soft(ActionSpecSchema.safeParse(spec).error?.issues, spec.id).toBeUndefined();
+    }
+  });
+
+  it('keeps the workflow trigger patch editable for updates and reviewed legacy conversions', () => {
+    const spec = getActionSpec('workflow.trigger.update');
+    expect(ActionSpecSchema.safeParse(spec).error?.issues).toBeUndefined();
+    const hints = serializeActionSpec(spec).inputHints;
+    expect(ActionInputHintsSchema.safeParse(hints).error?.issues).toBeUndefined();
+    for (const input of [{ patch: { enabled: false } }, { confirmLegacyConversion: true, patch: { enabled: false } }]) {
+      const editable = hints?.fields.filter((field) => !field.visibleWhen || evaluateInputPredicate(field.visibleWhen, input));
+      expect(editable).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'patch', widget: 'json', required: true }),
+      ]));
     }
   });
 
@@ -1351,7 +1373,7 @@ describe('Action Spec Registry', () => {
     expect(SIGNED_ROOT_ACTION_IDS).toContain('automation.conversation.targets.list');
     expect(PUBLIC_ACTION_IDS).not.toContain('automation.conversation.targets.list');
     expect(PUBLIC_ACTION_IDS).toContain('approval.request.decide');
-    expect(PUBLIC_ACTION_IDS).not.toContain('plugins.install');
+    expect(PUBLIC_ACTION_IDS).toContain('plugins.install');
     for (const actionId of PUBLIC_ACTION_IDS) {
       expect(getActionSpec(actionId).requiredAuthority, actionId).toBe(
         ['approval.request.decide', 'session.user_action.answer'].includes(actionId)
@@ -2276,7 +2298,7 @@ describe('Action Spec Registry', () => {
       },
       bindings: { mcpToolName: 'review_start' },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
     };
 
     expect(() => ActionSpecSchema.parse({
@@ -2316,7 +2338,7 @@ describe('Action Spec Registry', () => {
         plugin: false,
       },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
       toolExposure: {
         agent: 'discoverable_only',
       },
@@ -2366,7 +2388,7 @@ describe('Action Spec Registry', () => {
         api: false,
         plugin: false,
       },
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
     });
 
     expect(parsed.success).toBe(false);
@@ -2889,11 +2911,10 @@ describe('Action Spec Registry', () => {
       const publicProjection = !isInternalActionId(id);
       const controlRpcMethod = Object.hasOwn(LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, id)
         ? LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS[id as keyof typeof LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS] : undefined;
-      const answeringClient = id === 'localServices.actions.copyUrl' || id === 'localServices.actions.openPreview'
+      const answeringClient = id === 'localServices.actions.copyUrl'
         || id === 'localServices.launcher.openPreview' || id === 'localServices.publicPreview.copyUrl';
       const domainRpc = resolveLocalServiceDomainActionRpcBinding(id as RuntimeActionIdV1);
       const serviceFrontDoor = id === 'localServices.launcher.start' || controlRpcMethod !== undefined;
-      const domainRpc = resolveLocalServiceDomainActionRpcBinding(id as RuntimeActionIdV1);
       expect(spec.surfaces, id).toEqual({
         ...resolveRuntimeActionSurfaces(id as RuntimeActionIdV1),
         // The family now declares actual native-control ingress separately
@@ -3806,9 +3827,9 @@ describe('Action Spec Registry', () => {
     ] as const;
     for (const [actionId, canonicalSchema] of streamingCases) {
       const projectedSchema = getActionSpec(actionId).outputSchema;
-      expect(projectedSchema, actionId).toBeInstanceOf(z.ZodLazy);
-      if (!(projectedSchema instanceof z.ZodLazy)) throw new Error(`${actionId} must remain cycle-safe`);
-      expect(projectedSchema.unwrap(), actionId).toBe(canonicalSchema);
+      expect(projectedSchema, actionId).toBeInstanceOf(z.ZodMiniLazy);
+      if (!(projectedSchema instanceof z.ZodMiniLazy)) throw new Error(`${actionId} must remain cycle-safe`);
+      expect(projectedSchema._zod.innerType, actionId).toBe(canonicalSchema);
     }
   });
 
@@ -4523,7 +4544,7 @@ describe('Action Spec Registry', () => {
         },
         bindings: { mcpToolName: 'review_start' },
         outputSchema: z.unknown(),
-        inputSchema: z.object({}).strict(),
+        inputSchema: z.strictObject({}),
         inputHints: {
           fields: [
             {
@@ -4556,7 +4577,7 @@ describe('Action Spec Registry', () => {
       },
       bindings: { mcpToolName: 'review_start' },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
       inputHints: {
         fields: [
           {
@@ -4597,7 +4618,7 @@ describe('Action Spec Registry', () => {
       },
       bindings: { mcpToolName: 'session_spawn_new' },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).passthrough(),
+      inputSchema: z.looseObject({}),
       inputHints: {
         fields: [
           {
@@ -4654,7 +4675,7 @@ describe('Action Spec Registry', () => {
         },
         bindings: { mcpToolName: 'review_start' },
         outputSchema: z.unknown(),
-        inputSchema: z.object({}).strict(),
+        inputSchema: z.strictObject({}),
         inputHints: {
           fields: [
             {
@@ -4686,7 +4707,7 @@ describe('Action Spec Registry', () => {
         },
         bindings: { mcpToolName: 'review_start' },
         outputSchema: z.unknown(),
-        inputSchema: z.object({}).strict(),
+        inputSchema: z.strictObject({}),
         inputHints: {
           fields: [
             {
@@ -4720,7 +4741,7 @@ describe('Action Spec Registry', () => {
         },
         bindings: { mcpToolName: 'review_start' },
         outputSchema: z.unknown(),
-        inputSchema: z.object({}).strict(),
+        inputSchema: z.strictObject({}),
         inputHints: {
           fields: [
             {
@@ -4804,12 +4825,12 @@ describe('Action Spec Registry', () => {
       ['bypassPermissions', 'yolo'],
       ['yolo', 'yolo'],
     ] as const) {
-      const parsed = (spec.inputSchema as z.ZodTypeAny).safeParse({ ...baseInput, permissionMode });
+      const parsed = (spec.inputSchema as z.ZodMiniType).safeParse({ ...baseInput, permissionMode });
       expect(parsed.success, permissionMode).toBe(true);
       if (parsed.success) expect(parsed.data.permissionMode).toBe(expected);
     }
 
-    const invalid = (spec.inputSchema as z.ZodTypeAny).safeParse({
+    const invalid = (spec.inputSchema as z.ZodMiniType).safeParse({
       ...baseInput,
       permissionMode: 'workspace_read',
     });
@@ -4863,18 +4884,18 @@ describe('Action Spec Registry', () => {
     expect(spec.inputSchema.safeParse({ sessionId: 's1', permissionMode: 'default', applyTiming: 'eventually' }).success).toBe(false);
 
     expect(spec.description).toContain('read_only/default/auto/yolo');
-    expect((spec.inputSchema as z.ZodTypeAny).parse({
+    expect((spec.inputSchema as z.ZodMiniType).parse({
       sessionId: 'session-1',
       permissionMode: 'auto',
     })).toEqual({
       sessionId: 'session-1',
       permissionMode: 'safe-yolo',
     });
-    expect((spec.inputSchema as z.ZodTypeAny).parse({
+    expect((spec.inputSchema as z.ZodMiniType).parse({
       sessionId: 'session-1',
       permissionMode: 'workspace_write',
     }).permissionMode).toBe('safe-yolo');
-    expect((spec.inputSchema as z.ZodTypeAny).safeParse({
+    expect((spec.inputSchema as z.ZodMiniType).safeParse({
       sessionId: 'session-1',
       permissionMode: 'not-a-mode',
     }).success).toBe(false);

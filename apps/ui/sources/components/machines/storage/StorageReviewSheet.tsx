@@ -101,7 +101,7 @@ async function stopStorageHolders(
  * The review sheet (plan 40 STO-12, R24, lab `rs` R / Rp): the disk's result first, every item checked
  * again on the machine, what goes with what each frees (a Keep item says what is lost), what stays and
  * why, then the one choice of where it goes — Happier's Trash always chosen, Delete now beside it with a
- * button that says it can't be undone. No second dialog. Unticking an item narrows what the Action gets.
+ * button that says it can't be undone. Unticking narrows the Action's operands; its policy owns confirmation.
  */
 function StorageReviewSheet(props: ReviewProps) {
   // The body keeps the card's edge inset (the header's and footer's), and its sections add no second page inset.
@@ -180,11 +180,23 @@ function StorageReviewBody(props: ReviewProps) {
         setApplyFailed(stopped === 'approval' ? 'approval' : 'stopFailed');
         return;
       }
+      // Stopping changes the reviewed holder facts. Show the fresh review for
+      // confirmation: its opaque token may also cover changes beyond that stop.
+      const refreshed = await check([...refs]);
+      setApplying(false);
+      if (!refreshed.ok) {
+        setApplyFailed('failed');
+        return;
+      }
+      const nextReview = buildStorageReview(refreshed.value, props.summary.volumes);
+      setReview(nextReview);
+      setSelected((current) => new Set(nextReview.going.filter(row => current.has(row.itemId)).map(row => row.itemId)));
+      return;
     }
     const result = await props.apply(mode, plan.items);
     setApplying(false);
     if (result.ok) onClose();
-    else setApplyFailed(result.reason === 'approval_requested' ? 'approval' : 'failed');
+    else if (result.reason !== 'declined') setApplyFailed(result.reason === 'approval_requested' ? 'approval' : 'failed');
   };
   const amount = (bytes: number) => formatMachineBytes(bytes, 'storage');
   const days = props.trashEmptyAfterDays;

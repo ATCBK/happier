@@ -5,11 +5,12 @@ import {
     PluginWebhookAccountStatusResultV1Schema,
     PluginWebhookDeliveryDiscardResultV1Schema,
     PluginWebhookDeliveryReplayResultV1Schema,
-    PluginWebhookEndpointCredentialConfigureResultV1Schema,
-} from '@happier-dev/protocol';
+} from '@happier-dev/protocol/plugins/webhooks/statusV1';
+import { PluginWebhookEndpointCredentialConfigureResultV1Schema } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
 
 import { createDeferred, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { PluginWebhookAdministrationHttpClient } from '@/sync/api/plugins/webhooks/endpointActions';
+import { HappyError } from '@/utils/errors/errors';
 
 const resolveExecutionOrigin = vi.hoisted(() => vi.fn(() => null));
 const useFeatureEnabledMock = vi.hoisted(() => vi.fn<(featureId: string) => boolean>(() => true));
@@ -58,6 +59,10 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
+
+// Load the real screen after its platform boundaries during collection, so
+// transform/initialization is not charged to an individual interaction test.
+await import('./PluginWebhookAdministrationScreen');
 
 afterEach(() => {
     standardCleanup();
@@ -127,6 +132,19 @@ function createClient(): PluginWebhookAdministrationHttpClient {
 }
 
 describe('PluginWebhookAdministrationScreen', () => {
+    it.each(['approval_rejected', 'approval_canceled', 'action_disabled'])('preserves a refused delivery and only reports true failures: %s', async code => {
+        const client = createClient();
+        vi.mocked(client.replayDelivery).mockRejectedValue(new HappyError(code, false, { code }));
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.alertAsync).mockClear();
+        const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');
+        const screen = await renderScreen(<PluginWebhookAdministrationScreen client={client} />);
+        await vi.waitFor(() => expect(screen.findByTestId('settings.plugins.webhooks.delivery.delivery-dead.replay')).not.toBeNull());
+        await screen.pressByTestIdAsync('settings.plugins.webhooks.delivery.delivery-dead.replay');
+        expect(screen.findByTestId('settings.plugins.webhooks.delivery.delivery-dead.replay')).not.toBeNull();
+        expect(vi.mocked(Modal.alertAsync).mock.calls.length > 0).toBe(code === 'action_disabled');
+        expect(client.readStatus).toHaveBeenCalledTimes(1);
+    });
     it('publishes acknowledged revocation before rereading unrelated endpoint queues', async () => {
         const client = createClient();
         const initialStatus = await client.readStatus({ pageSize: 100, deadLetterPageSize: 100 });
@@ -138,7 +156,7 @@ describe('PluginWebhookAdministrationScreen', () => {
             kind: 'revoked', webhookEndpointId: endpoint.webhookEndpointId, revision: 2,
         });
         const { Modal } = await import('@/modal');
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
         const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');
         const screen = await renderScreen(<PluginWebhookAdministrationScreen client={client} />);
         try {
@@ -192,7 +210,7 @@ describe('PluginWebhookAdministrationScreen', () => {
             ...initialStatus, deadLetters: [],
         })));
         const { Modal } = await import('@/modal');
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
         const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');
         const screen = await renderScreen(<PluginWebhookAdministrationScreen client={client} />);
         try {

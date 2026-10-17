@@ -1,7 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import tweetnacl from 'tweetnacl';
+import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -13,8 +17,6 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
-import { HostPrivatePluginInstallDecisionV1Schema } from '@happier-dev/protocol/marketplace/internal';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 } from '@happier-dev/protocol/marketplace/marketplaceSourceRegistryV1';
 
 // The native modal host is a presentation boundary; its review body and
@@ -33,18 +35,37 @@ const { scopedPluginSettingsAdapter } = await import('@/sync/domains/plugins/set
 const { useScopedPluginSettingsProjection } = await import('@/sync/domains/plugins/settings/scopedPluginSettingsProjection');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { replacePluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
+const { AgentAddModal } = await import('@/components/settings/agents/add/agentAddModalConfig');
+const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
+const { useRegistryItem } = await import('@/registries/useRegistryItem');
+const { useAgentAdministrationCatalog } = await import('@/components/settings/agents/collection/useAgentAdministrationCatalog');
+function RegistryAgentReadProbe(props: { read: { current: ReturnType<typeof useRegistryItem> | null } }) {
+    props.read.current = useRegistryItem({ kind: 'agent', sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1,
+        itemId: '@acme/coding-agent', version: '1.0.0' });
+    return null;
+}
 let serverId: string;
+const installMachineKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(37));
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 beforeEach(async () => {
     resetScopedHomeActionExecutorsForTests();
     await homes.reset();
     await loadSyncSingletonForTests();
     serverId = await homes.addHome({ name: 'Plugin Home', serverUrl: 'https://plugin-actions.test', serverIdentityId: 'srv_plugin_home', accountId: 'owner', currentAccount: true });
-    homes.answer(serverId, '/v1/machines', { body: ['admitted', 'other'].map(id => ExternalActionMachineBootstrapV1Schema.parse({
+    homes.answer(serverId, '/v1/machines', { body: ['admitted', 'other'].map(id => ({ ...ExternalActionMachineBootstrapV1Schema.parse({
         id, kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
         installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
         access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-    })) });
+    }), installationPublicKey: encodeBase64(installMachineKey.publicKey) })) });
+    for (const actionId of ['plugins.install', 'plugins.disable'] as const) homes.answer(serverId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
+        const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+        return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-signed-install', binding: {
+            accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'srv_plugin_home',
+            machineId: request.machineId, installationId: `${request.machineId}-installation`, custodianAccountId: 'owner',
+            accountEncryptionMode: 'plain', actionId, requestId: request.envelope.requestId,
+            target: request.envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+        } }) };
+    } });
     homes.answer(serverId, '/v1/actions/plugins.list', { select: body => {
         const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
         return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'plugins.list', requestId: request.requestId,
@@ -59,180 +80,170 @@ afterEach(async () => {
 });
 
 describe('plugin-management Actions in the UI host', () => {
-    it('requires D22 approval for an Agent installing the same source-qualified Agent plugin', async () => {
+    it('retains an Agent lifecycle invocation and daemon-owned approval instead of creating a local Artifact', async () => {
+        const actionId = 'plugins.disable';
+        const input = { machineId: 'admitted', pluginId: 'acme.plugin' };
+        const approval = ActionApprovalRequestCreatedResultSchema.parse({ kind: 'approval_request_created',
+            actionId, artifactId: 'daemon-retained-disable-approval' });
+        homes.answer(serverId, `/v1/actions/${actionId}`, { select: body => {
+            const carried = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(carried.envelope);
+            expect(request.input).toEqual(input);
+            expect(openExternalActionRequesterAccountContextV1({ authorization: carried.executionAuthorization,
+                purpose: { kind: 'external_action' }, machineId: 'admitted', installationId: 'admitted-installation',
+                serverIdentityId: 'srv_plugin_home', installationPrivateKey: installMachineKey.secretKey,
+                includeInvocation: true })?.invocation).toMatchObject({ surface: 'agent', authority: 'account_automation', caller: { kind: 'host' } });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId,
+                requestId: carried.envelope.requestId, execution: { ok: true, result: approval } }) };
+        } });
+        expect(await createDefaultActionExecutor().execute(actionId, input, { serverId,
+            expectedAccountId: 'owner', surface: 'agent', authority: 'account_automation',
+            executionRunTargetMachineId: 'admitted', actionRequestId: 'agent-plugin-disable',
+        })).toEqual({ ok: true, result: approval });
+        expect(homes.artifacts(serverId).list()).toHaveLength(0);
+        expect(homes.requestsFor(`/v1/actions/${actionId}`)).toHaveLength(1);
+    });
+    it.each(['plugins.enable', 'plugins.disable', 'plugins.rollback', 'plugins.trust.forget',
+        'plugins.update_policy.set', 'plugins.uninstall'] as const)('delivers %s to its explicit Machine through the admitted root transport', async actionId => {
+        homes.answer(serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } },
+        } } } });
+        const input = getActionSpec(actionId).inputSchema.parse({ machineId: 'admitted', pluginId: 'acme.plugin',
+            ...(actionId === 'plugins.update_policy.set' ? { policy: 'pinned' } : {}) });
+        const output = { ok: true, kind: actionId.replaceAll('.', '_'), pluginId: 'acme.plugin', change: { kind: 'committed' } };
+        homes.answer(serverId, `/v1/actions/${actionId}`, { select: body => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            expect(request.target).toEqual({ kind: 'machine', machineId: 'admitted' });
+            expect(request.input).toEqual(input);
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: request.requestId,
+                execution: { ok: true, result: output } }) };
+        } });
+        expect(await createDefaultActionExecutor().execute(actionId, input, {
+            serverId, expectedAccountId: 'owner', surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+        })).toEqual({ ok: true, result: output });
+        expect(getActionSpec(actionId).outputSchema?.safeParse(output).success).toBe(true);
+        expect(homes.requestsFor(`/v1/actions/${actionId}`)).toHaveLength(1);
+    });
+    it.each(['ui', 'agent'] as const)('joins the daemon install approval without a second local Artifact (%s)', async surface => {
         const input = getActionSpec('plugins.install').inputSchema.parse({ machineId: 'admitted', source: {
             kind: 'marketplace', sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1,
             pluginId: 'acme.plugin', version: '1.0.0', packageName: '@acme/coding-agent',
         } });
-        const result = await createDefaultActionExecutor().execute('plugins.install', input, {
-            serverId, expectedAccountId: 'owner', surface: 'agent', authority: 'account_automation',
-        });
-        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
-        if (!result.ok) throw new Error(JSON.stringify(result));
-        const approval = ActionApprovalRequestCreatedResultSchema.parse(result.result);
-        expect(JSON.parse(homes.artifacts(serverId).readPlainBody(approval.artifactId)!)).toMatchObject({
-            actionId: 'plugins.install', status: 'open', input,
-        });
+        const approval = ActionApprovalRequestCreatedResultSchema.parse({ kind: 'approval_request_created',
+            actionId: 'plugins.install', artifactId: 'daemon-retained-install-approval' });
+        const authority = surface === 'ui' ? 'present_user' as const : 'account_automation' as const;
+        homes.answer(serverId, '/v1/actions/plugins.install', { select: body => {
+            const carried = ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(body);
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(carried.success ? carried.data.envelope : body);
+            expect(request.target).toEqual({ kind: 'machine', machineId: 'admitted' });
+            expect(request.input).toEqual(input);
+            if (surface === 'agent') {
+                if (!carried.success) throw new Error('Expected private invocation custody');
+                expect(openExternalActionRequesterAccountContextV1({ authorization: carried.data.executionAuthorization,
+                    purpose: { kind: 'external_action' }, machineId: 'admitted', installationId: 'admitted-installation',
+                    serverIdentityId: 'srv_plugin_home', installationPrivateKey: installMachineKey.secretKey,
+                    includeInvocation: true })?.invocation).toMatchObject({ surface, authority, caller: { kind: 'host' } });
+            }
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'plugins.install',
+                requestId: request.requestId, execution: { ok: true, result: approval } }) };
+        } });
+        const executor = createDefaultActionExecutor();
+        const context = {
+            serverId, expectedAccountId: 'owner', surface, authority,
+            executionRunTargetMachineId: 'admitted',
+            actionRequestId: 'agent-plugin-install',
+        };
+        expect(await executor.execute('plugins.install', input, context)).toEqual({ ok: true, result: approval });
+        const prepared = await executor.prepare('plugins.install', input, context);
+        expect(prepared.kind).toBe('ready');
+        if (prepared.kind !== 'ready') throw new Error('Expected a deferred public Action invocation');
+        expect(await prepared.invocation.run()).toEqual({ ok: true, result: approval });
+        expect(homes.artifacts(serverId).list()).toHaveLength(0);
+        expect(homes.requestsFor('/v1/actions/plugins.install')).toHaveLength(2);
+    });
+    it('delegates explicit install approval creation unchanged even when install approval is waived', async () => {
+        homes.answer(serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'plugins.install': ['ui'] } },
+        } } } });
+        const input = getActionSpec('approval.request.create').inputSchema.parse({ actionId: 'plugins.install',
+            actionArgs: { machineId: 'admitted', source: { kind: 'marketplace', sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1,
+                pluginId: 'acme.plugin', version: '1.0.0', packageName: '@acme/coding-agent' } },
+            summary: 'Review the exact installation', createdBy: { surface: 'system' } });
+        homes.answer(serverId, '/v1/actions/approval.request.create', { select: body => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            expect(request.target).toEqual({ kind: 'machine', machineId: 'admitted' });
+            expect(request.input).toEqual(input);
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.create',
+                requestId: request.requestId, execution: { ok: true, result: { artifactId: 'daemon-retained-install-approval' } } }) };
+        } });
+        expect(await createDefaultActionExecutor().execute('approval.request.create', input, {
+            serverId, expectedAccountId: 'owner', surface: 'ui', authority: 'present_user',
+        })).toEqual({ ok: true, result: { artifactId: 'daemon-retained-install-approval' } });
+        expect(homes.artifacts(serverId).list()).toHaveLength(0);
+        expect(homes.requestsFor('/v1/actions/approval.request.create')).toHaveLength(1);
         expect(homes.requestsFor('/v1/actions/plugins.install')).toHaveLength(0);
     });
-    it.each(['confirmed', 'account-retired', 'machine-retired', 'declined', 'registry-confirmed', 'registry-declined'] as const)('retains one exact human review until the present-user Action settles (%s)', async disposition => {
-        const registryEntry = disposition.startsWith('registry-');
-        const declined = disposition === 'declined' || disposition === 'registry-declined';
-        const committed = disposition === 'confirmed' || disposition === 'registry-confirmed';
+    it('does not install a registry Agent plugin without an admitted Machine', async () => {
         const home = homes.findByServerUrl('https://plugin-actions.test');
         if (!home?.token) throw new Error('Expected authenticated Home');
-        const decisions: unknown[] = [];
-        // Account restoration uses the harness's cold connection. Opening its
-        // real Socket starts unrelated full-Sync hydration; the private RPC
-        // handshake becomes available only when the user reaches that boundary.
-        let privateTransportReady = false;
+        // Keep restoration cold so unrelated full-Sync hydration cannot add a Machine.
         connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl,
             serverIdentityId: 'srv_plugin_home', accountId: 'owner', credentials: { token: home.token },
             request: homes.request, configureSocket: socket => {
-                vi.mocked(socket.connect).mockImplementation(() => {
-                    if (!privateTransportReady) return socket;
-                    socket.connected = true;
-                    for (const listener of socket.listeners('connect')) listener();
-                    return socket;
-                });
-                socket.timeout = vi.fn(() => socket);
-                socket.emitWithAck = vi.fn(async (event, payload) => {
-                    if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
-                    if (!payload || typeof payload !== 'object' || !('method' in payload)
-                        || payload.method !== 'admitted:daemon.plugins.install.review.decide' || !('params' in payload)) {
-                        throw new Error('Unexpected private daemon request');
-                    }
-                    const decision = HostPrivatePluginInstallDecisionV1Schema.parse(payload.params);
-                    decisions.push(decision);
-                    if (decision.decision === 'cancel') return { ok: true, result: { kind: 'cancelled' } };
-                    return { ok: true, result: { kind: 'committed', pluginId: 'acme.plugin',
-                        desiredGeneration: 'generation-1', appliedGeneration: null, pendingSurfaces: ['ui'] } };
-                });
+                vi.mocked(socket.connect).mockImplementation(() => socket);
             } });
         serverId = connection.home.id;
-        homes.answer(serverId, '/v1/machines/admitted', { body: { machine: createPlainMachineRowFixture({ id: 'admitted', accountId: 'owner' }) } });
         const packageName = '@acme/coding-agent';
-        if (registryEntry) {
-            const { createRegistryNpmPackageFixture } = await import('@/dev/testkit/fixtures/registryPluginCatalog');
-            const metadata = createRegistryNpmPackageFixture({ packageName, pluginId: 'acme.plugin', title: 'Acme Coding Agent', version: '1.0.0',
-                contributes: { agents: [{ id: 'coding', title: 'Coding', primary: 'sessions', runtime: { kind: 'custom' },
-                    capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }] } });
-            const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
-            const catalog = createPromptLibraryCatalogBoundary();
-            const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-            setRuntimeFetch(async (input, init) => {
-                const url = new URL(String(input));
-                if (url.origin === 'https://registry.npmjs.org') return Response.json(url.pathname === '/-/v1/search'
-                    ? { total: 1, objects: [{ package: { name: packageName, version: '1.0.0', publisher: { username: 'acme' } } }] }
-                    : { name: packageName, versions: { '1.0.0': metadata }, 'dist-tags': { latest: '2.0.0' } });
-                return await catalog.handle(url.pathname, init) ?? await homes.request(input, init);
-            });
-            const { storage } = await import('@/sync/domains/state/storageStore');
-            storage.getState().applyMachines([createMachineFixture({ id: 'admitted', activeAt: Date.now(),
-                metadata: { host: 'Development laptop', platform: 'linux', arch: 'x64', happyCliVersion: '0.0.0-test',
-                    happyHomeDir: '/home/dev/.happier', homeDir: '/home/dev' } })]);
-            storage.getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: {
-                agents: { serverIdentityId: 'srv_plugin_home', machineId: 'admitted' },
-            } });
-        }
-        const pending = { kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'pending-confirmed-marketplace',
-            reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
-            review: createPluginInstallationReviewFixture({ pluginId: 'acme.plugin', version: '1.0.0' }) };
-        homes.answer(serverId, '/v1/actions/plugins.install', { select: body => {
-            const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
-            expect(request.target).toEqual({ kind: 'machine', machineId: 'admitted' });
-            if (registryEntry) expect(request.input).toEqual({ machineId: 'admitted', source: { kind: 'marketplace',
-                sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1, pluginId: 'acme.plugin', version: '1.0.0', packageName } });
-            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'plugins.install', requestId: request.requestId,
-                execution: { ok: true, result: { ok: false, kind: 'plugins_install', outcome: 'reviewRequired', pendingReview: pending } } }) };
-        } });
-        const { ModalProvider, Modal } = await import('@/modal');
-        vi.mocked(Modal.show).mockClear();
-        const show = vi.mocked(Modal.show);
-        const present = show.getMockImplementation();
-        if (!present) throw new Error('Expected native modal presentation boundary');
-        const shown = createDeferred<void>();
-        let modal: Parameters<typeof Modal.show>[0] | undefined;
-        show.mockImplementation(config => {
-            modal = config;
-            const id = present(config);
-            shown.resolve();
-            return id;
+        const { createRegistryNpmPackageFixture } = await import('@/dev/testkit/fixtures/registryPluginCatalog');
+        const metadata = createRegistryNpmPackageFixture({ packageName, pluginId: 'acme.plugin', title: 'Acme Coding Agent', version: '1.0.0',
+            contributes: { agents: [{ id: 'coding', title: 'Coding', primary: 'sessions', runtime: { kind: 'custom' },
+                capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }] } });
+        const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+        const catalog = createPromptLibraryCatalogBoundary();
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        setRuntimeFetch(async (input, init) => {
+            const url = new URL(String(input));
+            if (url.origin === 'https://registry.npmjs.org') return Response.json(url.pathname === '/-/v1/search'
+                ? { total: 1, objects: [{ package: { name: packageName, version: '1.0.0', publisher: { username: 'acme' } } }] }
+                : { name: packageName, versions: { '1.0.0': metadata }, 'dist-tags': { latest: '2.0.0' } });
+            return await catalog.handle(url.pathname, init) ?? await homes.request(input, init);
         });
-        const { AgentAddModal } = await import('@/components/settings/agents/add/agentAddModalConfig');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applyMachines([]);
+        storage.getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: {
+            agents: { serverIdentityId: 'srv_plugin_home', machineId: 'admitted' },
+        } });
         const onOpenDefinition = vi.fn();
+        const registryRead: { current: ReturnType<typeof useRegistryItem> | null } = { current: null };
+        const administration = await renderHook(() => useAgentAdministrationCatalog({ loadProjection: false }));
         const screen = await renderScreen(React.createElement(React.Fragment, null,
-            registryEntry ? React.createElement(AgentAddModal, { onClose: () => {}, onAddedStay: onOpenDefinition,
-                params: { onCommand: () => {}, onOpenDefinition, onOpenAgent: () => {}, sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 } }) : null,
-            React.createElement(ModalProvider)));
+            React.createElement(AgentAddModal, { onClose: () => {}, onAddedStay: onOpenDefinition,
+                params: { onCommand: () => {}, onOpenDefinition, onOpenAgent: () => {}, sourceId: COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1 } }),
+            React.createElement(RegistryAgentReadProbe, { read: registryRead })));
         try {
-            let settled = false;
-            const selectedMachineLifetime = new AbortController();
-            let registryOperation: Promise<unknown> | undefined;
-            if (registryEntry) {
-                await waitForHomeGovernance(() => expect(screen.findByTestId(`agents.add.row.${packageName}`)).not.toBeNull());
-                await screen.pressByTestIdAsync(`agents.add.row.${packageName}`);
-                const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
-                // Inspect the live shell config, then invoke its actual footer callback. No internal owner is replaced.
-                const readFooter = () => {
-                    const node = screen.findAll(candidate => candidate.type === CapabilityAddModalBody)[0];
-                    const config = node.props.config as import('@/components/capabilities/add/CapabilityAddModal').CapabilityAddModalConfig<import('@/components/settings/agents/add/agentAddRows').AgentAddRow>;
-                    const row = config.catalog.items.find(candidate => candidate.summary.itemId === packageName)!;
-                    return config.detailFooter(row).primary;
-                };
-                await waitForHomeGovernance(() => expect(readFooter().disabledReason).toBeUndefined());
-                registryOperation = readFooter().onPress();
-            }
-            const operation = registryOperation ?? createDefaultActionExecutor().execute('plugins.install', {
-                machineId: 'admitted', source: { kind: 'marketplace', sourceId: 'marketplace:curated',
-                    pluginId: 'acme.plugin', version: '1.0.0' },
-            }, { serverId, expectedAccountId: 'owner', surface: 'ui', signal: selectedMachineLifetime.signal });
-            const completion = operation.then(result => { settled = true; return result; });
-            const first = await Promise.race([
-                shown.promise.then(() => ({ kind: 'shown' as const })),
-                completion.then(result => ({ kind: 'settled' as const, result })),
-            ]);
-            expect(first, JSON.stringify(first)).toEqual({ kind: 'shown' });
-            await waitForHomeGovernance(() => {
-                expect(settled, 'The Action must retain its exact reviewed operation until the human decides').toBe(false);
-                expect(screen.findByTestId('settings.plugins.installReview.confirm')).not.toBeNull();
-            });
-            expect(decisions).toEqual([]);
-            if (disposition === 'account-retired') await homes.switchAccount(serverId, 'replacement');
-            if (disposition === 'machine-retired') selectedMachineLifetime.abort();
-            privateTransportReady = true;
-            await act(async () => screen.pressByTestId(declined
-                ? 'settings.plugins.installReview.cancel' : 'settings.plugins.installReview.confirm'));
-            if (registryEntry) {
-                expect(await completion).toEqual(committed ? { itemId: 'acme.plugin', then: 'stay' } : null);
-                expect(onOpenDefinition).not.toHaveBeenCalled();
-                expect(homes.requestsFor('/v1/actions/agents.acp.backends.installFromRegistry')).toHaveLength(0);
-                expect(decisions).toEqual([{ v: 1, pendingChangeId: pending.pendingChangeId,
-                    decision: committed ? 'installAndTrust' : 'cancel', ...(committed ? { optionalSelections: [] } : {}) }]);
-            } else if (disposition === 'confirmed') {
-                const result = await completion as Awaited<ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>>;
-                expect(result).toMatchObject({ ok: true, result: { ok: true, kind: 'plugins_install', outcome: 'applied',
-                    change: { kind: 'committed', pluginId: 'acme.plugin', desiredGeneration: 'generation-1',
-                        appliedGeneration: null, pendingSurfaces: ['ui'] },
-                } });
-                if (result.ok) expect(getActionSpec('plugins.install').outputSchema?.safeParse(result.result).success).toBe(true);
-                expect(decisions).toEqual([{ v: 1, pendingChangeId: pending.pendingChangeId,
-                    decision: 'installAndTrust', optionalSelections: [] }]);
-            } else if (disposition === 'declined') {
-                expect(await completion).toMatchObject({ ok: true, result: {
-                    ok: false, kind: 'plugins_install', outcome: 'failed', change: { kind: 'cancelled' },
-                } });
-                expect(decisions).toEqual([{ v: 1, pendingChangeId: pending.pendingChangeId, decision: 'cancel' }]);
-            } else {
-                expect(await completion).toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
-                expect(decisions).toEqual([]);
-            }
-            expect(Modal.show).toHaveBeenCalledTimes(1);
+            const readRow = () => {
+                const node = screen.findAll(candidate => candidate.type === CapabilityAddModalBody)[0];
+                const config = node.props.config as import('@/components/capabilities/add/CapabilityAddModal').CapabilityAddModalConfig<import('@/components/settings/agents/add/agentAddRows').AgentAddRow>;
+                const row = config.catalog.items.find(candidate => candidate.summary.itemId === packageName)!;
+                return { config, row };
+            };
+            await waitForHomeGovernance(() => expect(readRow().row).toBeDefined());
+            // Renderer lists have no measured viewport; use the real Collection open intent.
+            const collection = screen.findAll(node => node.props?.testID === 'agents.add:collection'
+                && typeof node.props?.model?.actions?.open === 'function')[0];
+            await act(async () => collection.props.model.actions.open(readRow().row.key));
+            await waitForHomeGovernance(() => expect(registryRead.current?.item?.payload.kind).toBe('plugin'));
+            const { config, row } = readRow();
+            expect(administration.getCurrent().executionTarget).toBeNull();
+            expect(config.detailFooter(row).primary.disabledReason).toBeTruthy();
+            expect(await config.detailFooter(row).primary.onPress()).toBeNull();
+            expect(config.detailFooter(row).afterAdd).toBeUndefined();
+            expect(onOpenDefinition).not.toHaveBeenCalled();
+            expect(homes.requestsFor('/v1/actions/plugins.install')).toHaveLength(0);
+            expect(homes.requestsFor('/v1/actions/agents.acp.backends.installFromRegistry')).toHaveLength(0);
         } finally {
-            modal?.onHostUnmount?.();
-            Modal.hideAll();
-            show.mockImplementation(present);
             await screen.unmount();
+            await administration.unmount();
         }
     });
     it('delivers an exact marketplace candidate to its selected Machine and refuses a conflicting mounted target', async () => {
@@ -245,7 +256,8 @@ describe('plugin-management Actions in the UI host', () => {
             reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
             review: createPluginInstallationReviewFixture({ pluginId: 'acme.plugin', version: '1.0.0' }) };
         homes.answer(serverId, '/v1/actions/plugins.install', { select: body => {
-            const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            const carried = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(carried.envelope);
             expect(request.target).toEqual({ kind: 'machine', machineId: 'admitted' });
             expect(getActionSpec('plugins.install').inputSchema.safeParse(request.input).success).toBe(true);
             return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'plugins.install', requestId: request.requestId,
@@ -269,7 +281,7 @@ describe('plugin-management Actions in the UI host', () => {
             .toMatchObject({ ok: false, errorCode: 'target_mismatch' });
         expect(homes.requestsFor('/v1/actions/plugins.install')).toHaveLength(issued);
     });
-    it.each(['approval', 'encryption', 'unchanged', 'terminal-retirement'] as const)('keeps the actual UI Settings approval waiter on its captured field intent (change=%s)', async changeAt => {
+    it.each(['approval', 'encryption', 'unchanged', 'terminal-retirement'] as const)('keeps a configured Settings → Actions UI Ask on its captured field intent (change=%s)', async changeAt => {
         const changeIntent = changeAt !== 'unchanged';
         const home = homes.findByServerUrl('https://plugin-actions.test');
         if (!home?.token) throw new Error('Expected authenticated Home');
@@ -332,6 +344,9 @@ describe('plugin-management Actions in the UI host', () => {
                 perActiveServerIdentityId: null, sourceLifetimeIdentity }),
         { initialProps: { sourceLifetimeIdentity: 'declaration-a' } });
         await waitForHomeGovernance(() => expect(projection.getCurrent().state.revision).toEqual({ kind: 'account', value: 7 }));
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        expect(storage.getState().settings.actionsSettingsV1?.actions?.['plugins.settings.set']?.approvalRequiredSurfaces)
+            .toContain('ui');
         let returned = false;
         const pending = projection.getCurrent().commit({ fieldId: 'enabled', mutation: { kind: 'set', value: true } })
             .then(result => { returned = true; return result; });

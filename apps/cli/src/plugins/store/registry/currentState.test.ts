@@ -1039,7 +1039,7 @@ describe('PluginRegistryStateStore', () => {
     await expect(store.read()).resolves.toEqual(imported);
   });
 
-  it('persists the first source-in-place development authority without creating a generation', async () => {
+  it.each([false, true])('persists source-in-place development authority without retaining portable release facts (replaces archive=%s)', async (replacesArchive) => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-registry-development-authority-'));
     const pluginRoot = join(happyHomeDir, 'author-plugin');
     const manifestPath = join(pluginRoot, '.happier-plugin', 'plugin.json');
@@ -1096,17 +1096,55 @@ describe('PluginRegistryStateStore', () => {
       nowMs: () => 10,
       runtimeLifecycle: TEST_RUNTIME_LIFECYCLE,
     });
+    if (replacesArchive) {
+      const archiveDistribution = await createArchivePluginDistributionIdentity({
+        source: { kind: 'remoteUrl', url: 'https://example.test/development-authority.tgz' },
+        integrity: `sha256-${Buffer.alloc(32, 7).toString('base64')}`,
+      });
+      const archiveTrust = createPluginTrustRecord({ pluginId, distribution: archiveDistribution, approvedAtMs: 1 });
+      await installPreparedCandidate(store, {
+        pluginId,
+        sourceRootPath: pluginRoot,
+        manifestRelativePath: '.happier-plugin/plugin.json',
+        catalogRecord,
+        trust: archiveTrust,
+        updatePolicy: 'allowed',
+        optionalAccess: [],
+        availability: {
+          sourceClass: 'versionedArchive',
+          portableRelease: true,
+          release: normalizePluginReleaseFactsV1({
+            ref: { pluginId, version: manifest.version },
+            archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+            normalizedManifest: manifest,
+            collectionContracts: [],
+            uiSlots: [],
+            packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] },
+          }),
+        },
+      });
+    }
 
-    await expect(store.approveDevelopmentAuthorityWithResult(initialApproval))
+    await expect(store.approveDevelopmentAuthorityWithResult({
+      ...initialApproval,
+      expectedRevision: replacesArchive ? 1 : 0,
+    }))
       .resolves.toMatchObject({ transaction: { status: 'committed' } });
+
+    await expect(store.readAvailabilityInventory()).resolves.toMatchObject({
+      releasePublications: [],
+      materializations: [{ pluginId, sourceClass: 'localPath', portableRelease: false }],
+    });
+    if (!replacesArchive) {
+      expect((await store.readSnapshot()).pluginOccurrenceIds).toEqual({});
+    }
 
     const restarted = createPluginRegistryStateStore({
       happyHomeDir,
       runtimeLifecycle: TEST_RUNTIME_LIFECYCLE,
     });
     await expect(restarted.readSnapshot()).resolves.toMatchObject({
-      revision: 1,
-      pluginOccurrenceIds: {},
+      revision: replacesArchive ? 2 : 1,
       state: {
         plugins: {
           [pluginId]: expect.objectContaining({
@@ -1124,8 +1162,39 @@ describe('PluginRegistryStateStore', () => {
     });
     await expect(restarted.setEnabledWithResult(pluginId, false))
       .resolves.toMatchObject({ transaction: { status: 'committed' } });
+    await expect(restarted.approveDevelopmentAuthorityWithResult({
+      ...initialApproval,
+      expectedRevision: (await restarted.readSnapshot()).revision,
+    })).resolves.toMatchObject({ transaction: { status: 'committed' } });
+    await expect(restarted.readAvailabilityInventory()).resolves.toMatchObject({
+      releasePublications: [],
+      materializations: [{ pluginId, enabled: false, sourceClass: 'localPath', portableRelease: false }],
+    });
     await expect(restarted.setEnabledWithResult(pluginId, true))
       .resolves.toMatchObject({ transaction: { status: 'committed' } });
+    const archiveDistribution = await createArchivePluginDistributionIdentity({
+      source: { kind: 'remoteUrl', url: 'https://example.test/development-authority.tgz' },
+      integrity: `sha256-${Buffer.alloc(32, 7).toString('base64')}`,
+    });
+    const release = normalizePluginReleaseFactsV1({
+      ref: { pluginId, version: manifest.version },
+      archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+      normalizedManifest: manifest,
+      collectionContracts: [],
+      uiSlots: [],
+      packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] },
+    });
+    await installPreparedCandidate(restarted, {
+      pluginId, sourceRootPath: pluginRoot, manifestRelativePath: '.happier-plugin/plugin.json',
+      catalogRecord: { ...catalogRecord, source: { ...catalogRecord.source, devWatch: false } },
+      trust: createPluginTrustRecord({ pluginId, distribution: archiveDistribution, approvedAtMs: 20 }),
+      updatePolicy: 'allowed', optionalAccess: [],
+      availability: { sourceClass: 'versionedArchive', portableRelease: true, release },
+    });
+    await expect(restarted.readAvailabilityInventory()).resolves.toMatchObject({
+      releasePublications: [{ facts: release, sourceClass: 'versionedArchive' }],
+      materializations: [{ pluginId, sourceClass: 'versionedArchive', portableRelease: true }],
+    });
     await expect(restarted.uninstallWithResult(pluginId))
       .resolves.toMatchObject({ transaction: { status: 'committed' } });
     await expect(restarted.readSnapshot()).resolves.toMatchObject({

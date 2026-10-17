@@ -6,6 +6,7 @@ import type { TriageListWindowSnapshotV1 } from '../../projection/listWindowStor
 import {
   readTriageListFailureNotice,
   readTriageRefreshPacingNotice,
+  readTriageSourcesUnreachableNotice,
   resolveTriageListRefreshV1,
   resolveTriageListShellState,
 } from './windowState.js';
@@ -451,5 +452,25 @@ describe('resolveTriageListShellState', () => {
       .toEqual([OTHER_INSTANCE]);
     expect(failure?.kind === 'sources' ? failure.sources[0]?.displayName : undefined)
       .toBe('globex/service');
+  });
+});
+
+describe('readTriageSourcesUnreachableNotice', () => {
+  it('says the host\'s own reason, which names the machine and the next step, instead of a vaguer stand-in', () => {
+    // D1: when this device's Run-on Machine cannot answer, the page stays and only its Machine data
+    // is unavailable. The host's reason is the one sentence that names that Machine; the generic
+    // "a machine" copy hid which one and what to do.
+    const notice = readTriageSourcesUnreachableNotice({
+      kind: 'sourcesUnreachable',
+      message: 'This operation is unavailable on studio-mac. Reconnect it or choose another machine with Run on.',
+      retryable: true,
+    });
+    expect(notice.title).toBe('Your sources could not be reached');
+    expect(notice.description).toBe('This operation is unavailable on studio-mac. Reconnect it or choose another machine with Run on.');
+  });
+
+  it('keeps the general explanation when the failure carried no words', () => {
+    const notice = readTriageSourcesUnreachableNotice({ kind: 'sourcesUnreachable', message: ' ', retryable: true });
+    expect(notice.description).toContain('Refresh tries again');
   });
 });

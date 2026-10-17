@@ -4,6 +4,7 @@ import { createScmCapabilities } from '@happier-dev/protocol/scm';
 import { ApprovalRequestSchema, buildApprovalRequestArtifactHeaderV1, encodePlainArtifactStoredContent, projectLegacySessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { buildUpdateArtifactUpdate } from '../../../../../server/sources/app/events/artifactEventPayloadBuilders';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel:
 // the harness installs its network boundaries with `vi.doMock`, which only
@@ -78,6 +79,7 @@ installHomeGovernanceBoundaries(harness);
 // Load the real executor after installing its environment boundaries. Cold graph
 // transformation belongs to collection, rather than a single behavior test's timer.
 const executorModule = await import('./defaultActionExecutor');
+const { handleSocketUpdate } = await import('@/sync/engine/socket/socket');
 
 const ACCOUNT_ID = 'account-a';
 // A Home publishes its portable identity in the canonical `srv_` grammar; the
@@ -541,7 +543,7 @@ describe('withDefaultActionExecuteContext', () => {
         }));
     });
 
-    it('settles a blocking approval from the captured Home Artifact after an Account wake', async () => {
+    it('settles a blocking approval from its captured Home after an Artifact socket receipt', async () => {
         const serverId = await addHome();
         harness.answer(serverId, '/v2/account/settings', {
             body: { content: { t: 'plain', v: { actionsSettingsV1: { v: 1, actions: {
@@ -581,8 +583,22 @@ describe('withDefaultActionExecuteContext', () => {
             publishHomeAccountChange(serverId, ['unrelated-artifact']);
             await Promise.resolve();
             expect(harness.requestsFor(path)).toHaveLength(readsBeforeWake);
-            publishHomeAccountChange(serverId, [row.id]);
-            await vi.waitFor(() => expect(harness.requestsFor(path)).toHaveLength(readsBeforeWake + 1));
+            // Another device's durable receipt goes through the real socket
+            // consumer; no caller-side notification repairs its wake path.
+            await handleSocketUpdate({
+                update: buildUpdateArtifactUpdate(row.id, 2, 'approval-rejected', {
+                    value: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(rejected)), version: 2,
+                }, { value: encodePlainArtifactStoredContent({ body: JSON.stringify(rejected) }), version: 2 }),
+                sourceServerId: serverId, encryption: null, artifactDataKeys: new Map(),
+                applySessions: () => {}, fetchSessions: () => {}, applyMessages: () => {},
+                onSessionVisible: () => {}, isSessionMessagesLoaded: () => false,
+                getSessionMaterializedMaxSeq: () => 0, markSessionMaterializedMaxSeq: () => {},
+                onMessageGapDetected: () => {}, assumeUsers: async () => {}, applyTodoSocketUpdates: async () => {},
+                invalidateMachines: () => {}, invalidateSessions: () => {}, invalidateArtifacts: () => {},
+                invalidateFriends: () => {}, invalidateFriendRequests: () => {}, invalidateFeed: () => {},
+                invalidateAutomations: () => {}, invalidateTodos: () => {}, log: { log: () => {} },
+            });
+            await vi.waitFor(() => expect(outcome.result).toMatchObject({ ok: false, errorCode: 'approval_rejected' }));
             await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'approval_rejected' });
             publishHomeAccountChange(serverId);
             await Promise.resolve();

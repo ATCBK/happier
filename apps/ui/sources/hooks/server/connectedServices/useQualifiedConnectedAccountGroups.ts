@@ -25,6 +25,7 @@ import {
 } from '@/sync/domains/connectedServices/connectedServiceGroupsRefreshSignal';
 import { sameQualifiedConnectedAccountGroupRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/connect/configurationActionsV1';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ConnectedServiceAuthGroupPolicyV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
@@ -331,6 +332,7 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
             return appliedGroup;
         } catch (error) {
             if (currentBasisRef.current !== operationBasis) return null;
+            if (isActionApprovalDeclinedErrorCode(readConnectedServiceSettingsErrorCode(error))) return null;
             if (isGroupRevisionConflict(error)) {
                 await load([]);
             }
@@ -409,6 +411,7 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
                 return receipt;
             } catch (error) {
                 if (currentBasisRef.current !== operationBasis) return false;
+                if (isActionApprovalDeclinedErrorCode(readConnectedServiceSettingsErrorCode(error))) return false;
                 if (isGroupRevisionConflict(error)) {
                     await load([]);
                 }

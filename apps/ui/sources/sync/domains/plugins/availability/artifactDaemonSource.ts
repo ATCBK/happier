@@ -85,40 +85,55 @@ function decodeDaemonFileSet(
 }
 
 /**
- * The daemon byte source for every Artifact family and consumer: it asks one
- * machine for the selected digest's file set. It decides nothing about
- * currentness or admission; the lease verifies the returned bytes.
+ * The daemon byte source for every Artifact family and consumer: it asks the
+ * admitted byte suppliers for the selected digest's file set. It decides
+ * nothing about currentness or admission; the lease verifies the returned bytes.
  */
 export function createPluginArtifactDaemonSource(input: Readonly<{
-    transport: PluginArtifactDaemonTransport;
     family: PluginArtifactDaemonFamily;
     fetchArtifactBytes?: PluginArtifactDaemonByteFetcher;
-}>): PluginArtifactSourceCandidate {
+} & (
+    | { transport: PluginArtifactDaemonTransport; transports?: never }
+    | { transports: readonly PluginArtifactDaemonTransport[]; transport?: never }
+)>): PluginArtifactSourceCandidate {
     const fetchArtifactBytes = input.fetchArtifactBytes ?? fetchPluginArtifactBytesViaMachineRpc;
+    const seen = new Set<string>();
+    const transports = (input.transports ?? [input.transport]).filter((transport) => {
+        const key = JSON.stringify([transport.serverId, transport.machineId]);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
     return Object.freeze({
         kind: 'daemon' as const,
         fetch: async ({ artifact, signal }) => {
-            if (signal?.aborted) return null;
-            const response = await fetchArtifactBytes({
-                transport: input.transport,
-                family: input.family,
-                digest: artifact.digest,
-                ...(signal ? { signal } : {}),
-            });
-            if (signal?.aborted) return null;
-            if (!response.ok) {
-                for (const diagnostic of response.diagnostics) {
-                    switch (diagnostic) {
-                        case 'artifact_bytes_rpc_unavailable':
-                        case 'artifact_bytes_response_invalid':
-                        case 'artifact_bytes_fetch_failed':
-                        case 'plugin_host_access_disclosure_mismatch':
-                            throw new PluginArtifactSourceError(diagnostic);
+            let failure: PluginArtifactSourceError | undefined;
+            for (const transport of transports) {
+                if (signal?.aborted) return null;
+                const response = await fetchArtifactBytes({
+                    transport,
+                    family: input.family,
+                    digest: artifact.digest,
+                    ...(signal ? { signal } : {}),
+                });
+                if (signal?.aborted) return null;
+                if (!response.ok) {
+                    for (const diagnostic of response.diagnostics) {
+                        switch (diagnostic) {
+                            case 'artifact_bytes_rpc_unavailable':
+                            case 'artifact_bytes_response_invalid':
+                            case 'artifact_bytes_fetch_failed':
+                            case 'plugin_host_access_disclosure_mismatch':
+                                failure ??= new PluginArtifactSourceError(diagnostic);
+                        }
                     }
+                    continue;
                 }
-                return null;
+                const files = decodeDaemonFileSet(response, input.family, artifact.digest);
+                if (files) return files;
             }
-            return decodeDaemonFileSet(response, input.family, artifact.digest);
+            if (failure) throw failure;
+            return null;
         },
     });
 }

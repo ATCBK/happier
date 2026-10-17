@@ -126,6 +126,14 @@ describe('HappierWidgetFrame', () => {
     expect(byId(titled.container, 'frame.header')).not.toBeNull();
   });
 
+  it('says a source that only repeats the title once, and keeps a source that differs', () => {
+    const named = mount({ title: 'QA · Review progress', source: 'QA · Review progress' });
+    expect(byId(named.container, 'frame.source')).toBeNull();
+    expect(byId(named.container, 'frame.header')!.textContent).toContain('QA · Review progress');
+    const distinct = mount({ title: 'Release checklist', source: 'Note' });
+    expect(byId(distinct.container, 'frame.source')!.textContent).toBe('Note');
+  });
+
   it('puts the source under the title when asked (phones), and beside it otherwise', () => {
     const inline = mount();
     const below = mount({ sourcePlacement: 'below' });

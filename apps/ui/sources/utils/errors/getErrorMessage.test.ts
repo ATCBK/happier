@@ -35,6 +35,14 @@ describe('getErrorMessage', () => {
         expect(getErrorMessage('oops')).toBe('oops');
     });
 
+    it('explains unavailable Account encryption verification without displaying its machine code', () => {
+        expect(getErrorMessage('account_encryption_currentness_unavailable'))
+            .toBe('settingsAccount.encryptionFactUnread');
+        expect(getErrorMessage(new HappyError('account_encryption_currentness_unavailable', false, {
+            code: 'account_encryption_currentness_unavailable',
+        }))).toBe('settingsAccount.encryptionFactUnread');
+    });
+
     it('handles nullish values', () => {
         expect(getErrorMessage(null)).toBe('');
         expect(getErrorMessage(undefined)).toBe('');

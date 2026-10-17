@@ -541,6 +541,7 @@ export type PluginUiTestkitHostHandlers = Readonly<{
         input: Readonly<{ enrichment: PluginUiContextEnrichmentV1 | null; signal: AbortSignal }>,
     ) => void | Promise<void>;
     executeAction?: (input: PluginUiTestkitExecuteActionInput) => JsonValue | Promise<JsonValue>;
+    admitAction?: (input: Readonly<{ action: PluginReference; input?: JsonValue; signal: AbortSignal }>) => boolean | Promise<boolean>;
     selectActionInput?: (
         input: PluginUiTestkitSelectActionInputInput,
     ) => SelectActionInputResult | Promise<SelectActionInputResult>;
@@ -644,6 +645,7 @@ const hostMethodPolicies = {
     publishCurrentUiContext: 'publishCurrentUiContext',
     watchContext: 'fixture',
     executeAction: 'executeAction',
+    admitAction: 'admitAction',
     readResource: 'readResource',
     statOpenableContent: 'statOpenableContent',
     readOpenableContent: 'readOpenableContent',
@@ -1125,6 +1127,7 @@ async function createPluginUiTestkitInternal<TSurface>(
                 code: failure.code,
                 message: failure.message,
                 ...(failure.retryable ? { retryable: true } : {}),
+                ...(failure.diagnostics === undefined ? {} : { diagnostics: [...failure.diagnostics] }),
             },
         });
     }
@@ -1554,6 +1557,14 @@ async function createPluginUiTestkitInternal<TSurface>(
                     signal,
                 });
                 return undefined;
+            }
+            case 'admitAction': {
+                if (!handlers.admitAction) throw fixtureError('unsupported_method', 'admitAction is not installed.');
+                const payload = PluginUiExecuteActionRequestV1Schema.safeParse(message.payload);
+                if (!payload.success) throw fixtureError('invalid_payload', 'admitAction payload is invalid.');
+                const admitted = await handlers.admitAction({ ...payload.data, signal });
+                if (typeof admitted !== 'boolean') throw fixtureError('invalid_payload', 'admitAction must resolve a boolean.');
+                return { admitted };
             }
             case 'confirm': {
                 if (!handlers.confirm) throw fixtureError('unsupported_method', 'confirm is not installed.');

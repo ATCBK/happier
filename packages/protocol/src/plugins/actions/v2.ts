@@ -12,6 +12,7 @@ import {
 import type { ActionDefinitionSlashV1 } from '../../actions/actionDefinitionV1.js';
 import { ActionSafetySchema } from '../../actions/safetyVocabulary.js';
 import { ActionContextualDefaultsSchema } from '../../actions/contextualDefaults.js';
+import { InputPredicateSchema } from '../../inputs/inputPredicates.js';
 import { ActionOperationDeclarationV1Schema } from '../../actions/operations/v1.js';
 import {
   createActionInputHintsSchemasWithStaticOptionsOnly,
@@ -39,6 +40,7 @@ import {
 } from '../contributions/clientExecution.js';
 import { asProtocolZod } from "./internalProtocolZodAdapter.js";
 import { expandDeclaredInputAlternatives, resolveDeclaredInputLeaves } from './inputSchemaTraversal.js';
+export { resolveDeclaredInputLeaves } from './inputSchemaTraversal.js';
 export { PluginJsonSchemaV2Schema, type PluginJsonSchemaV2 as PluginJsonSchema } from '../contributions/publicTypes.js';
 export type { PluginJsonValueV2 as PluginJsonValue } from '../contributions/publicTypes.js';
 export {
@@ -213,6 +215,13 @@ export const PluginActionConfirmationV2Schema = lazyZodSchema(() => z.strictObje
   confirmLabel: z.optional(PluginActionConfirmationTitleV2Schema),
 }));
 export type PluginActionConfirmationV2 = z.infer<typeof PluginActionConfirmationV2Schema>;
+
+/** Flat predicates apply everywhere; the scoped form preserves automation defaults. */
+export const PluginActionConfirmationWhenV2Schema = lazyZodSchema(() => z.union([
+  InputPredicateSchema,
+  z.strictObject({ presentUserUi: z.union([z.boolean(), InputPredicateSchema]) }),
+]));
+export type PluginActionConfirmationWhenV2 = z.infer<typeof PluginActionConfirmationWhenV2Schema>;
 
 // Only the purpose-derived field capability may offer Connected Account choices.
 // Other typed choices still carry strict JSON through the neutral value owner.
@@ -508,6 +517,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.strictObje
   priority: z.optional(z.number().check(z.int())),
   dangerLevel: PluginActionDangerLevelV2Schema,
   confirmation: z.optional(PluginActionConfirmationV2Schema),
+  confirmationWhen: z.optional(PluginActionConfirmationWhenV2Schema),
   metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
 }).check(z.superRefine((value, ctx) => {
   if (value.operation && value.execution.target !== 'daemon') {

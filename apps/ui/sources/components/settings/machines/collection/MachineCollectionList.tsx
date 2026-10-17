@@ -20,14 +20,17 @@ import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { useMachinesSettingsViewModel, type MachinesSettingsViewModel } from '../machinesSettingsViewModel';
+import { useActiveActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
+import { readManagedInstallationPrompt } from '../managed/managedCreationPresentation';
 import { MachinePoolsSection } from '../sections/MachinePoolsSection';
-import { machinePoolDraftTitle } from '../pools/machinePoolDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import {
     MACHINES_ADD_ROUTE,
     MACHINES_THIS_COMPUTER_ROUTE,
     buildMachineCollection,
     isMachineCollectionRowSelected,
     machineCollectionHref,
+    managedMachineConsentKey,
     machineCollectionRowKey,
     machinesIndexHref,
     partitionMachineCollectionRailRows,
@@ -220,15 +223,23 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         for (const row of [...teams.rows, ...teams.archivedRows]) (names[row.address.serverId] ??= {})[row.team.id] = row.team.name;
         return names;
     }, [teams.rows, teams.archivedRows]);
+    // A creation waiting on the user's consent says so on its row; its page asks the question.
+    const activeOperations = useActiveActionOperations();
+    const awaitingConsentKey = activeOperations.flatMap(operation => {
+        const prompt = readManagedInstallationPrompt(operation);
+        const reference = operation.snapshot.domainRef;
+        return prompt && reference?.kind === 'managedMachine' ? [managedMachineConsentKey(operation.serverId, reference.id)] : [];
+    }).sort().join('\n');
+    const awaitingConsent = React.useMemo(() => new Set(awaitingConsentKey ? awaitingConsentKey.split('\n') : []), [awaitingConsentKey]);
     const collection = React.useMemo(() => buildMachineCollection({
-        nowMs,
+        nowMs, awaitingConsent,
         groups: viewModel.visibleMachineGroups,
         groupedByHome: viewModel.showMachinesGroupedByServer,
         query: searchable ? query : '',
         managedByServerId: viewModel.managedByServerId,
         presetsByServerId: viewModel.presetsByServerId,
         teamNamesByServerId,
-    }), [nowMs, query, searchable, viewModel.showMachinesGroupedByServer, viewModel.visibleMachineGroups, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision, teamNamesByServerId]);
+    }), [nowMs, awaitingConsent, query, searchable, viewModel.showMachinesGroupedByServer, viewModel.visibleMachineGroups, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision, teamNamesByServerId]);
 
     // The column is an open surface: its online machines' summaries stay live while it shows (one batched demand).
     const demandKeys = React.useMemo(() => rail ? collection.sections.flatMap(section => section.rows)
@@ -688,7 +699,7 @@ export function MachinePresetCollectionSectionView(props: Readonly<{
             <EmptyState testID={`settings.machines.presets.empty.${props.section.serverId}`} layout="line"
                 title={awaiting ? t('machinePresets.loading') : props.query.trim() ? t('common.noMatches') : t('machinePresets.empty')}
                 lineLoading={awaiting}
-                lineDensity={props.rail ? 'compact' : undefined} lineRowStyle={props.rail ? collectionListStyles.row : undefined} />) : null}
+                />) : null}
     </>;
     if (!props.rail) return <ItemGroup title={title} action={add}>{rows}</ItemGroup>;
     return <><CollectionListGroupLabel title={title} trailing={add} />
@@ -733,6 +744,7 @@ const MachineDraftRow = React.memo(function MachineDraftRow(props: Readonly<{ se
 
 /** The pool being added, at the top of the rail while its editor is open. */
 const MachinePoolDraftRow = React.memo(function MachinePoolDraftRow() {
+    const machinePoolDraftTitle = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow

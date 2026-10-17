@@ -354,7 +354,7 @@ describe('ExternalSessionsIntegrationSection Item boundary', () => {
             });
             await flushHookEffects({ cycles: 2, turns: 2 });
 
-            expect(modalConfirmMock).toHaveBeenCalledOnce();
+            expect(modalConfirmMock).not.toHaveBeenCalled();
             expect(screen.findByTestId('settings-external-sessions-action-enabled-uninstall')).toBeNull();
             expect(screen.findByTestId('settings-external-sessions-focus-fallback')?.props)
                 .toMatchObject({

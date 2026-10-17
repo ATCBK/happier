@@ -12,6 +12,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { CollectionList, CollectionListGroupLabel, CollectionNavigationRow, CollectionSkeletonRows, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
+import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { HomeReachabilityGate, useActiveHomeUnavailable } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useWorkflowsDestinationAccess } from '@/components/workflows/gating/workflowsDestinationAccess';
@@ -45,9 +46,12 @@ function readOpenDefinition(pathname: string): string | null {
 /** Definitions and the canonical Sessions list's Runs view share the destination's column. */
 export const WorkflowsColumn = React.memo(function WorkflowsColumn(props: Readonly<{ surface?: 'plane' | 'page'; definitionsContent?: React.ReactNode }>) {
     const access = useWorkflowsDestinationAccess();
-    // Where navigation shows the title (a phone), the home's header actions would fold into a second
-    // overflow of raw buttons; the column's own "+" menu (lab `nav-N1m` rows) carries creation instead.
-    const ownsCreation = useNavigationTitleChromeShowsTitle() && props.definitionsContent !== undefined;
+    // On a phone the home's header actions would either fold into a second overflow of raw buttons
+    // (navigation shows the title) or stack three buttons under the purpose line (a phone-sized web
+    // window); the column's own "+" menu (lab `nav-N1m` rows, P1's one way to add) carries creation instead.
+    const titleChrome = useNavigationTitleChromeShowsTitle();
+    const phone = useViewportClass() === 'compact';
+    const ownsCreation = (titleChrome || phone) && props.definitionsContent !== undefined;
     const pathname = usePathname();
     const params = useGlobalSearchParams<{ trigger?: string }>();
     const [view, setView] = React.useState<WorkflowsColumnView>(() => isRunPath(pathname) ? 'runs' : 'definitions');
@@ -117,7 +121,7 @@ const WorkflowsColumnDefinitions = React.memo(function WorkflowsColumnDefinition
             title={t('workflows.destination.columnLoadFailed')} action={{ label: t('workflows.retry'), onPress: library.retry, testID: 'workflows-column:library:failed:retry' }}
             accessibilitySemantics="alert" /></View> : null}
         {library.status === 'loaded' && split.library.length === 0 ? <EmptyState testID="workflows-column:library:empty"
-            layout="line" title={t('workflows.destination.libraryEmpty')} lineDensity="compact" lineRowStyle={collectionListStyles.row} /> : null}
+            layout="line" title={t('workflows.destination.libraryEmpty')} /> : null}
         {split.library.map((definition) => {
             const life = readDefinitionLife(summaries?.get(definition.definitionId));
             const title = formatWorkflowDefinitionLibraryTitle(definition);

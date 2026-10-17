@@ -16,10 +16,9 @@ import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layou
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { Modal } from '@/modal';
 import { useAgentModelsProjection } from './useAgentModelsProjection';
 import { useProviderModelLoadAction } from '@/providers/hooks/useProviderModelLoadAction';
 import { useProviderModelPickerVisibility } from '@/providers/hooks/useProviderModelPickerVisibility';
@@ -30,7 +29,6 @@ import {
     type ProviderModelManagerSourceGrouping,
 } from '@/providers/models/ProviderModelManager';
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
-import { applyProviderModelBulkAction } from '@/providers/models/applyProviderModelBulkAction';
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import { readProviderConnectionPickerKind } from '@/providers/catalog/accountProviderDeclarations';
@@ -337,22 +335,9 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         selected?: ModelVisibilityRefV1,
     ) => {
         if (!accountLifetime?.isCurrent() || !settingsAccess.writable) return;
-        await applyProviderModelBulkAction({
-            action,
-            changes: bulkChanges(action, selected),
-            confirm: async () => accountLifetime.isCurrent() && await Modal.confirm(
-                action === 'hideAll'
-                    ? t('settingsProviders.models.hideAll')
-                    : t('settingsProviders.models.showOnly'),
-                action === 'hideAll'
-                    ? t('settingsProviders.models.hideAllConfirmation')
-                    : t('settingsProviders.models.showOnlyConfirmation'),
-                { confirmText: t('common.continue'), ...(action === 'hideAll' ? { destructive: true } : {}) },
-            ) && accountLifetime.isCurrent(),
-            apply: async (changes) => {
-                await mutate({ action: 'bulkVisibility', ...(machineId ? { machineId } : {}), changes: [...changes] });
-            },
-        });
+        const changes = bulkChanges(action, selected);
+        if (changes.length === 0) return;
+        await mutate({ action: 'bulkVisibility', ...(machineId ? { machineId } : {}), changes: [...changes] });
     }, [accountLifetime, bulkChanges, machineId, mutate, settingsAccess.writable]);
 
     // These are Account settings: the page names no machine. Bulk operations are the one overflow;
@@ -405,7 +390,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         }
         return latest > 0 ? latest : null;
     }, [managementGroups]);
-    const machineName = executionTarget ? getMachineDisplayName(executionTarget.machine) : null;
+    const machineName = executionTarget ? getMachineSentenceName(executionTarget.machine) : null;
     // Where the lists were read: the one place a computer shows on this page.
     const footer = machineName && listsCheckedAt !== null ? (
         <ItemGroup surface="none">

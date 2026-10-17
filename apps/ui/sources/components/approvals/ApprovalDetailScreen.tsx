@@ -22,7 +22,6 @@ import { captureActionAccountContext } from '@/sync/ops/actions/actionAccountCon
 import {
   storage,
   useServerScopedMachine,
-  useSessionListRenderableWithServerScope,
 } from '@/sync/domains/state/storage';
 import {
   replayApprovalRequestAtExactDaemon,
@@ -36,14 +35,16 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { ApprovalSessionContextCard } from './ApprovalSessionContextCard';
 import { resolveApprovalHomeName } from './approvalRequesterLabels';
-import { ActionApprovalFieldsCard } from './ActionApprovalFieldsCard';
+import { BrowserOpenOperationStatusRow } from './BrowserOpenOperationStatus';
+import { ActionApprovalFieldsCard, ApprovalTechnicalDetails } from './ActionApprovalFieldsCard';
 import {
   ProjectCommandApprovalFacts,
   describeProjectCommandApprovalDecisions,
   readProjectCommandApproval,
   useProjectCommandApprovalTitle,
 } from './ProjectCommandApprovalFacts';
-import { resolveApprovalRequestTitle } from './approvalRequestTitle';
+import { useApprovalRequestTitle } from './approvalRequestTitle';
+import { formatApprovalStatusLabel, resolveApprovalDisplayStatus } from './approvalStatusLabel';
 import { WorkspaceSyncConflictDetailsView } from '@/components/workspaces/sync/WorkspaceSyncConflictDetailsView';
 import { describeApprovalRequestFields, resolveApprovalRequestApproveAdmission } from './approvalFieldValues';
 import { ApprovalPreviewCard, readApprovalPreviewSummary } from './ApprovalPreviewCard';
@@ -51,6 +52,8 @@ import { ApprovalVisualPreview } from './ApprovalVisualPreview';
 import { resolveApprovalVisualPreview } from './approvalFieldValues';
 import { HandoffTargetConsequencesCard, describeHandoffTargetApproval } from './HandoffTargetConsequencesCard';
 import { ComputerActionApprovalCard } from './ComputerActionApprovalCard';
+import { readCapabilityEnableApproval } from '@/components/sessions/capabilities/capabilityEnableApproval';
+import { CapabilityEnableDetailsDecisions } from '@/components/sessions/capabilities/CapabilityEnableApproval';
 import { ResourceProposalBody } from './resourceProposal/ResourceProposalBody';
 import { resolveResourceProposalLabels } from './resourceProposal/resourceProposalLabels';
 import { useResourceProposalCheck } from './resourceProposal/useResourceProposalCheck';
@@ -65,13 +68,14 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import {
   getApprovalDecisionErrorMessage,
+  presentApprovalFailure,
   isApprovalDecisionStale,
   isApprovalReplayRouteUnavailable,
-  resolveApprovalReplayRoute,
+  useApprovalHome,
   useApprovalDecisionHandler,
 } from '@/components/tools/shell/approvals/useApprovalDecisionHandler';
 import { useRetargetNavigationFocusReturnIntent } from '@/keyboard/focusReturn';
-import { useSessionListHomeObservations } from '@/sync/store/hooks';
+import { useApprovalSessionReading } from './useApprovalSessionReading';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
@@ -102,27 +106,6 @@ const styles = StyleSheet.create((theme) => ({
     marginTop: theme.space.s12,
   },
 }));
-
-function formatApprovalStatusLabel(status: string): string {
-  switch (status) {
-    case 'open':
-      return t('approvals.status.open');
-    case 'approved':
-      return t('approvals.status.approved');
-    case 'executing':
-      return t('approvals.status.executing');
-    case 'rejected':
-      return t('approvals.status.rejected');
-    case 'executed':
-      return t('approvals.status.executed');
-    case 'failed':
-      return t('approvals.status.failed');
-    case 'canceled':
-      return t('approvals.status.canceled');
-    default:
-      return status;
-  }
-}
 
 export const ApprovalDetailScreen = React.memo((props: Readonly<{
   artifactId: string;
@@ -204,6 +187,8 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
   );
   const projectCommandTitle = useProjectCommandApprovalTitle(projectCommand);
   const projectCommandDecisions = projectCommand ? describeProjectCommandApprovalDecisions(projectCommand) : null;
+  // An Agent's enable request is decided by its own controller here too: Allow · Always in <place> · Not now (P8 U8.5).
+  const capabilityEnable = parsed?.kind === 'built_in' ? readCapabilityEnableApproval(parsed.request) : null;
   const approvalWithheld = approveAdmission?.status === 'unavailable';
 
   const request = parsed?.request ?? null;
@@ -230,28 +215,29 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
       : parsed?.kind === 'host_action'
         ? parsed.request.sessionId
         : '';
-  // Requested by already names the asking Session; a target that is that same Session keeps its
-  // exact identity one disclosure away instead of repeating it as a second row.
+  // Requested by already names an ordinary same-Session target, so keep only its exact id in the
+  // disclosure. A destructive target must remain readable before the person acts.
   const shownActionFields = React.useMemo(() => actionFields && sessionId ? {
     ...actionFields,
     rows: actionFields.rows.map(row => row.kind === 'value' && row.reference?.kind === 'session'
-      && row.reference.id === sessionId ? { ...row, technical: true as const } : row),
+      && row.reference.id === sessionId && row.reference.presentation !== 'destructive_target'
+      ? { ...row, technical: true as const } : row),
   } : actionFields, [actionFields, sessionId]);
-  const builtInReplayRoute = React.useMemo(
-    () => resolveApprovalReplayRoute(parsed?.kind === 'built_in' ? parsed.request : null),
-    [parsed],
+  const { replayRoute } = useApprovalHome(
+    { id: artifact?.id ?? props.artifactId, header: artifact?.header ?? null },
+    parsed?.kind === 'built_in' || parsed?.kind === 'target' ? parsed.request : null,
+    sessionId,
+    requestedServerId,
   );
   const approvalServerId = React.useMemo(() => {
     if (!parsed) return null;
     if (parsed.kind === 'built_in' && parsed.request.v === 2) {
-      return (builtInReplayRoute?.serverId
+      return (replayRoute?.serverId
         ?? requestedServerId
         ?? parsed.request.executionOriginV1.serverId.trim()) || null;
     }
     if (parsed.kind === 'target') {
-      return parsed.request.executionOriginV1?.serverId
-        ?? parsed.request.replayPlacement?.serverId
-        ?? requestedServerId;
+      return replayRoute?.serverId ?? requestedServerId;
     }
     if (parsed.kind === 'host_action') return parsed.request.serverId;
     const requestServerId = parsed.kind === 'built_in'
@@ -262,7 +248,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     if (requestServerId.length > 0) return requestServerId;
     if (requestedServerId) return requestedServerId;
     return sessionId ? resolvePreferredServerIdForSessionId(sessionId) ?? null : null;
-  }, [builtInReplayRoute?.serverId, parsed, requestedServerId, sessionId]);
+  }, [replayRoute?.serverId, parsed, requestedServerId, sessionId]);
   const approvedWorkspaceSyncResolution = React.useMemo(() => {
     if (parsed?.kind !== 'built_in' || parsed.request.v !== 2
       || parsed.request.actionId !== 'workspace.sync.conflict.resolve') return null;
@@ -296,20 +282,15 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
   // An agent's cleanup or stop proposal reads as the same card body as in the transcript (AGW-6).
   const proposal = useResourceProposalCheck(parsed?.kind === 'built_in' ? parsed.request : null, approvalServerId, props.artifactId);
   const proposalLabels = proposal ? resolveResourceProposalLabels(proposal) : null;
-  const session = useSessionListRenderableWithServerScope(
-    approvalServerId,
-    approvalServerId ? sessionId : '',
-  );
+  const { resolution: approvalScopeResolution, binding: approvalAccountLifetime } = useServerCredentialAccountScopeBinding(approvalServerId);
+  const { session, status: requesterStatus, homeObservation } = useApprovalSessionReading(approvalServerId, sessionId, approvalScopeResolution, { exactRead: true });
   const ownerMetadata = session ? readSessionOwnerMetadataView(session) : null;
   const machineId = readDisplayMachineIdForSession({
     sessionId: null,
     metadata: ownerMetadata,
   });
   const machine = useServerScopedMachine(approvalServerId, approvalServerId ? machineId : '');
-  const { resolution: approvalScopeResolution, binding: approvalAccountLifetime } = useServerCredentialAccountScopeBinding(approvalServerId);
-  const homeObservations = useSessionListHomeObservations();
   // Context currentness is source-owned. Its relative age subscribes only at the context-line leaf.
-  const homeObservation = approvalServerId ? homeObservations[approvalServerId] : null;
   const contextServerProfile = approvalServerId ? getServerProfileById(approvalServerId) : null;
   const contextAudienceScope = approvalScopeResolution.kind === 'bound' ? approvalScopeResolution.scope : null;
   const sessionContextFacts = React.useMemo(() => approvalServerId && session
@@ -392,10 +373,11 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         setIsDeciding(true);
         if (parsed.kind === 'target') {
           if (parsed.request.replayPlacement !== undefined && decision !== 'cancel') {
+            if (!replayRoute) throw new HappyError('approval_origin_unavailable', false, { code: 'approval_origin_unavailable' });
             const replay = await replayApprovalRequestAtExactDaemon({
               artifactId: props.artifactId,
               decision,
-              executionTarget: parsed.request.replayPlacement,
+              executionTarget: { ...replayRoute, machineId: parsed.request.replayPlacement.machineId },
             });
             if (replay !== null
               && typeof replay === 'object'
@@ -475,8 +457,16 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         setIsDeciding(false);
       }
     },
-    [approvalWithheld, confidentialAction, computerChoice, decideBuiltInApproval, parsed, proposal, props.artifactId, refreshArtifact, requestedServerId, sessionId, setRecordedDecision],
+    [approvalWithheld, confidentialAction, computerChoice, decideBuiltInApproval, parsed, proposal, props.artifactId, refreshArtifact, replayRoute, requestedServerId, sessionId, setRecordedDecision],
   );
+
+  const requestTitle = useApprovalRequestTitle({
+    storedTitle: parsed?.request.summary,
+    actionId: parsed && parsed.kind !== 'target' ? String(parsed.request.actionId) : null,
+    qualifiedActionId: parsed?.kind === 'target' ? parsed.request.qualifiedActionId : null,
+    ...(parsed?.kind === 'built_in' ? { actionArgs: parsed.request.actionArgs, preview: parsed.request.preview } : {}),
+    sessionIds: [sessionId, parsed?.request.createdBy.sessionId],
+  }, approvalServerId ?? null);
 
   if (isLoading) {
     return (
@@ -539,51 +529,34 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
 
   // Only an open request shows a recorded answer; any later stored status is the newer fact.
   const answeredWhileOpen = parsed.request.status === 'open' ? recordedDecision : null;
-  const statusLabel = formatApprovalStatusLabel(builtInExecutionFailure ? 'failed'
-    : answeredWhileOpen === 'approve' ? 'approved'
-      : answeredWhileOpen === 'reject' ? 'rejected'
-        : answeredWhileOpen === 'cancel' ? 'canceled'
+  // The same status projection the retained tab reads; a recorded answer applies only while open.
+  const statusLabel = formatApprovalStatusLabel(answeredWhileOpen === 'approve' ? 'approved'
+    : answeredWhileOpen === 'reject' ? 'rejected'
+      : answeredWhileOpen === 'cancel' ? 'canceled'
+        : parsed.kind === 'built_in' ? resolveApprovalDisplayStatus(parsed.request, builtInExecutionFailure)
           : parsed.request.status);
-  const targetActionParts = parsed.kind === 'target'
-    ? parsed.request.qualifiedActionId.split('/actions/')
-    : null;
   const executionFailureResult = builtInExecutionFailure ?? (parsed.kind === 'host_action'
     || parsed.request.status !== 'failed'
     || parsed.request.execution?.ok !== false
     ? null
     : { errorCode: parsed.request.execution.errorCode, error: parsed.request.execution.error });
+  // The readable reason leads; its typed code waits in the technical disclosure.
   const executionFailure = executionFailureResult
-    ? getApprovalDecisionErrorMessage(executionFailureResult,
+    ? presentApprovalFailure(executionFailureResult,
         executionFailureResult.error || executionFailureResult.errorCode || t('approvals.decisionError'))
     : null;
-  // Who is asking for what: the plugin and action of a target request, or the plugin and proposal
-  // count of a host action. The action's name and exact identifiers are the Action row.
+  // One Technical details disclosure per page: the failure's code joins the arguments' own lines when
+  // the Details card is shown, and otherwise sits with the failure.
+  const failureCodeInDetails = Boolean(executionFailure?.code && shownActionFields && shownActionFields.rows.length > 0
+    && !confidentialAction && !proposal && !projectCommand);
+  // Only human-facing facts belong in page chrome. Target requests retain their
+  // Action name in summary; qualified ids and source custody are routing evidence.
   const headerFacts: PageHeaderMetaFact[] = [];
-  if (targetActionParts) {
-    headerFacts.push({ key: 'target-source', text: targetActionParts[0] ?? '' });
-    if (targetActionParts[1]) headerFacts.push({ key: 'target-action', text: targetActionParts[1] });
-  }
   if (parsed.kind === 'host_action') {
-    headerFacts.push({ key: 'plugin', text: parsed.request.pluginId });
     headerFacts.push({ key: 'proposals', text: t('approvals.proposedComments', { count: parsed.request.proposalCount }) });
   }
   // The one title rule shared with the Inbox row: no raw ids, a disclosure after the first line.
-  const requestTitle = resolveApprovalRequestTitle({
-    storedTitle: parsed.request.summary,
-    actionId: parsed.kind === 'target' ? null : String(parsed.request.actionId),
-    qualifiedActionId: parsed.kind === 'target' ? parsed.request.qualifiedActionId : null,
-    ...(parsed.kind === 'built_in' ? { actionArgs: parsed.request.actionArgs, preview: parsed.request.preview } : {}),
-    sessionIds: [sessionId, parsed.request.createdBy.sessionId],
-  });
-  const actionValue = requestTitle.actionTitle
-    ?? (parsed.kind === 'target' ? parsed.request.qualifiedActionId : String(parsed.request.actionId));
-  // A built-in Action is named by its title alone; its raw id is not copy. A plugin's host action
-  // keeps the identifiers that say which plugin code will run.
-  const actionIdentifiers = [
-    parsed.kind === 'host_action' ? parsed.request.actionId : null,
-    parsed.kind === 'target' ? parsed.request.sourceCustody.kind : null,
-    parsed.kind === 'host_action' ? parsed.request.profileId : null,
-  ].filter((value): value is string => Boolean(value));
+  const actionValue = requestTitle.actionTitle ?? requestTitle.title;
   const previewSummary = parsed.kind === 'built_in' ? readApprovalPreviewSummary(parsed.request.preview, parsed.request) : null;
   // A Session visual is approved by looking at it, not by reading its arguments.
   const visualPreview = parsed.kind === 'built_in' ? resolveApprovalVisualPreview({
@@ -591,7 +564,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     ...(parsed.request.preview === undefined ? {} : { preview: parsed.request.preview }),
   }) : null;
   // The Action row names the Action only when the title has not already said it.
-  const showActionRow = actionIdentifiers.length > 0 || actionValue !== requestTitle.title;
+  const showActionRow = actionValue !== requestTitle.title;
 
   return (
     <ItemList>
@@ -623,7 +596,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
           <Item
             testID="approvals.action"
             title={t('approvals.fieldAction')}
-            subtitle={joinHappierFacts(actionValue, ...actionIdentifiers)}
+            subtitle={actionValue}
             subtitleLines={0}
             mode="info"
             showChevron={false}
@@ -636,14 +609,23 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
           mode="info"
           showChevron={false}
         />
+        {/* Executed means the open was accepted; the bound operation says whether the page opened. */}
+        {parsed.kind === 'built_in' ? (
+          <BrowserOpenOperationStatusRow request={parsed.request} serverId={approvalServerId} testID="approvals.browser-open" />
+        ) : null}
         {executionFailure ? (
           <Item
             testID="approvals.execution-failure"
             title={t('detailPages.approval.failureTitle')}
-            subtitle={executionFailure}
+            subtitle={executionFailure.reason}
             subtitleLines={0}
             mode="info"
             showChevron={false}
+          />
+        ) : null}
+        {executionFailure?.code && !failureCodeInDetails ? (
+          <ApprovalTechnicalDetails
+            lines={[{ key: 'failure-code', label: t('common.error'), value: executionFailure.code }]}
           />
         ) : null}
         {approvalRouteUnavailable ? (
@@ -701,7 +683,8 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
           </SectionContentRow>
         </ItemGroup>
       ) : shownActionFields && !confidentialAction ? (
-        <ActionApprovalFieldsCard presentation={shownActionFields} anatomy="page" serverId={approvalServerId} />
+        <ActionApprovalFieldsCard presentation={shownActionFields} anatomy="page" serverId={approvalServerId}
+          failureCode={failureCodeInDetails ? executionFailure?.code ?? undefined : undefined} />
       ) : null}
 
       {approvedWorkspaceSyncResolution ? (
@@ -734,6 +717,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         // Home it does not know (or can no longer route to) shows its exact identity.
         homeDisplayId={approvalHomeKnown ? t('settingsAccount.thisHomeTitle') : approvalOriginHomeId}
         requesterSessionId={sessionId}
+        requesterStatus={requesterStatus}
         requesterAgentId={parsed.request.createdBy.agentId ?? null}
         requesterSurface={requesterSurface}
       />
@@ -761,7 +745,13 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         approval={confidentialApproval} serverId={approvalServerId} isOpen={parsed.request.status === 'open' && !answeredWhileOpen}
         unavailable={approvalRouteUnavailable} isDeciding={isDeciding} onDecision={decide} /> : null}
 
-      {parsed.request.status === 'open' && !answeredWhileOpen && !confidentialApproval ? (
+      {capabilityEnable && parsed.kind === 'built_in' && artifact && sessionId ? (
+        <ItemGroup surface="none">
+          <CapabilityEnableDetailsDecisions artifact={artifact} approval={parsed.request} sessionId={sessionId}
+            serverId={approvalServerId ?? null} disabled={isDeciding || approvalRouteUnavailable}
+            onDismiss={() => { void decide('cancel'); }} />
+        </ItemGroup>
+      ) : parsed.request.status === 'open' && !answeredWhileOpen && !confidentialApproval ? (
         <ItemGroup surface="none">
           {/* Dismiss closes without an answer; Reject answers no. Consent remains with decide. */}
           <ApprovalDecisionBar testID="approvals.actions" busy={isDeciding && !homeUnavailable}

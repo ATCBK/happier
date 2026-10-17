@@ -52,6 +52,7 @@ function statusForReadError(code: PluginCollectionReadOperationError["code"]): 4
         case "collection_unavailable":
             return 404;
         case "collection_index_not_ready":
+        case "collection_update_required":
         case "collection_content_mode_mismatch":
         case "collection_contract_inconsistent":
             return 409;

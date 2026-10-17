@@ -259,7 +259,9 @@ async function runExternalOperation(run: () => Promise<void>): Promise<void> {
     }
 }
 
-async function createPersonalHomeBackupAfterConfirmation<T>(create: () => Promise<T>): Promise<T | null> {
+async function createPersonalHomeBackupAfterConfirmation<T>(requiresAction: boolean, create: () => Promise<T>): Promise<T | null> {
+    // Signed-in controls delegate consent to the Account Action. Bootstrap drafts have no Account policy.
+    if (requiresAction) return await create();
     const accepted = await Modal.confirm(
         t('personalHome.settings.backupAction'),
         t('personalHome.settings.backupDisclosureBody'),
@@ -316,11 +318,11 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
     }, [control.status, props.onStatusChange]);
 
     const backup = React.useCallback(async () => {
-        return await createPersonalHomeBackupAfterConfirmation(() => control.backupPersonalHome()) !== null;
+        return await createPersonalHomeBackupAfterConfirmation(control.requiresAction, () => control.backupPersonalHome()) !== null;
     }, [control]);
 
     const exportBackup = React.useCallback(async () => {
-        await createPersonalHomeBackupAfterConfirmation(async () => {
+        await createPersonalHomeBackupAfterConfirmation(control.requiresAction, async () => {
             const outputPath = (await props.operations?.selectBackupExportDestination?.())?.trim();
             if (!outputPath) return null;
             return await control.backupPersonalHome({ outputPath });

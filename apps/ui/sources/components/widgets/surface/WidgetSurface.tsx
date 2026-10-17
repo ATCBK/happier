@@ -9,6 +9,7 @@ import { ConfiguredInstalledWidgetSurface, ConfiguredWidgetRefusal, UnavailableI
 import { BuiltinWidgetBody } from '@/components/sessions/companion/glances/BuiltinWidgetBody';
 import { describeAuthoredWidgetDefinitionV1, readWidgetDescriptor, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { DeclarativeWidgetDocument } from '@/components/widgets/DeclarativeWidgetDocument';
+import { WidgetMachineNoticeBoundary } from './WidgetMachineNotice';
 import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import type { WidgetPresentation } from '@/sync/domains/plugins/ui/widgetContract';
 import { useConfiguredWidgetTarget } from '@/sync/domains/widgets/useConfiguredWidgetTarget';
@@ -181,7 +182,9 @@ export function WidgetSurface(props: WidgetSurfaceProps): React.ReactElement {
         [inherited, size, footprint, geometry]);
     // It fills the frame's body room, so a state that replaces the body can sit balanced in it.
     const body = <View testID={`${props.testID}.geometry`} onLayout={inherited ? undefined : onLayout} style={{ minWidth: 0, flexGrow: 1 }}>
-        <WidgetSurfaceBody {...props} />
+        <WidgetMachineNoticeBoundary testID={props.testID}>
+            <WidgetSurfaceBody {...props} />
+        </WidgetMachineNoticeBoundary>
     </View>;
     return inherited ? body : <WidgetPresentationProvider value={value}>{body}</WidgetPresentationProvider>;
 }

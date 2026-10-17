@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { isActionApprovalDeclinedErrorCode, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import {
   SKILL_ACTION_OUTPUT_SCHEMAS_V1,
   type SkillLibraryActionInputByIdV1,
@@ -13,8 +13,6 @@ import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourc
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
-import { Modal } from '@/modal';
-import { t } from '@/text';
 import { saveFileBytes } from '@/sync/runtime/files/saveFileBytes';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
@@ -201,21 +199,15 @@ export function useSkillDetail(skillId: string | null) {
     setState({ skillId: read.skillId, read, status: 'ready', errorCode: null });
   }, []);
 
-  /** Remove asks first (D22: `skills.delete` is a confirm class); `'cancelled'` when the person says no. */
+  /** The Action owns confirmation; `'cancelled'` when the person declines its policy prompt. */
   const remove = React.useCallback(async (): Promise<boolean | 'cancelled'> => {
     const read = readRef.current;
     if (!skillId || !read) return false;
-    const confirmed = await Modal.confirm(
-      t('capabilities.skillDetail.leave.confirmTitle', { name: read.name }),
-      t('capabilities.skillDetail.leave.confirmBody'),
-      { confirmText: t('capabilities.skillDetail.leave.confirm'), destructive: true },
-    );
-    if (!confirmed) return 'cancelled';
     const result = await execute(
       'skills.delete',
       { skillId, expectedRevision: read.revision },
-      { presentUserConfirmation: { actionId: 'skills.delete' } },
     );
+    if (!result.ok && isActionApprovalDeclinedErrorCode(result.errorCode)) return 'cancelled';
     if (readSkillActionRefusal(result)) return false;
     SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.delete'].parse(
       result.ok ? result.result : null,

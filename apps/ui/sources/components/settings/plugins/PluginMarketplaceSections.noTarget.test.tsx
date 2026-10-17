@@ -47,6 +47,33 @@ describe('Plugins page without a chosen machine', () => {
         expect(screen.findByTestId('settings.plugins.marketplace.installed.loading')).toBeNull();
     });
 
+    it('asks for a machine instead of saying the machine reported no development sources', async () => {
+        const { DevelopmentPluginsSection } = await import('./PluginMarketplaceSections');
+        const noop = () => {};
+        const screen = await renderScreen(<DevelopmentPluginsSection developmentPlugins={[]} noTarget
+            createAvailable={false} sourceInstallAvailable={false} canRunActions={false} createdPlugin={null}
+            operationSettlement={null} isPluginActionInFlight={() => false} onCreate={noop} onCreateWithAgent={noop}
+            onStartCreatedDevelopment={noop} onCreateWithAgentFromCreated={noop} onDevelopSourceRoot={noop}
+            onEditWithAgent={noop} onRunAction={noop} />);
+        const text = screen.getTextContent();
+        expect(text).toContain('settingsPlugins.surfaces.chooseMachineInstalled');
+        expect(text).not.toContain('settingsPlugins.developmentEmpty');
+    });
+
+    it('keeps visible loading rows until the machine answers about development sources', async () => {
+        const { DevelopmentPluginsSection } = await import('./PluginMarketplaceSections');
+        const { HappierSkeletonBlock } = await import('@happier-dev/plugin-ui/presentation');
+        const noop = () => {};
+        const screen = await renderScreen(<DevelopmentPluginsSection developmentPlugins={[]}
+            startUnavailableReason="waitingForMachine"
+            createAvailable={false} sourceInstallAvailable={false} canRunActions={false} createdPlugin={null}
+            operationSettlement={null} isPluginActionInFlight={() => false} onCreate={noop} onCreateWithAgent={noop}
+            onStartCreatedDevelopment={noop} onCreateWithAgentFromCreated={noop} onDevelopSourceRoot={noop}
+            onEditWithAgent={noop} onRunAction={noop} />);
+        expect(screen.findAll((node) => node.type === HappierSkeletonBlock).length).toBeGreaterThan(0);
+        expect(screen.getTextContent()).not.toContain('settingsPlugins.developmentEmpty');
+    });
+
     it('never says a search matched nothing when nothing was searched', async () => {
         const { DiscoverStatusSummary } = await import('./PluginMarketplaceSections');
         const screen = await renderScreen(<DiscoverStatusSummary loading={false} error={null} stale={false} entryCount={0}

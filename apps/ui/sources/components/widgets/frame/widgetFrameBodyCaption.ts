@@ -32,3 +32,14 @@ export function useWidgetFrameBodyMeta(meta: React.ReactNode): void {
     return () => lend?.(null);
   }, [meta, lend]);
 }
+
+/**
+ * The host's one sentence about a body that cannot reach the Machine it runs on ("This operation is
+ * unavailable on Studio Mac. Reconnect it or choose another machine with Run on."). The mount that
+ * was refused lends how to word it now (`undefined` once the Machine answers again), and the shared
+ * widget surface says it once, whichever plugin the widget is.
+ */
+export type WidgetFrameBodyNoticeSource = () => string | undefined;
+export const WidgetFrameBodyNoticeContext = React.createContext<
+  ((notice: WidgetFrameBodyNoticeSource | null) => void) | null
+>(null);

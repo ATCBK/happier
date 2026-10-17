@@ -17,7 +17,6 @@ import {
 import { ApiTokenExpiryChoiceItem } from '@/components/settings/apiTokens/ApiTokenExpiryChoiceItem';
 import { resolveApiTokenOperationErrorMessageKey } from '@/components/settings/apiTokens/apiTokenSettingsPresentation';
 import { useApiTokenSettingsScopeController } from '@/components/settings/apiTokens/collection/ApiTokenSettingsScope';
-import { confirmForCapturedAccount } from '@/components/settings/apiTokens/confirmForCapturedAccount';
 import { useApiTokenSettingsControllerState } from '@/components/settings/apiTokens/useApiTokenSettingsControllerState';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -326,13 +325,7 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
     const remove = React.useCallback(async () => {
         if (!props.token) return;
         const token = props.token;
-        // The token owner revokes; the confirmation states the embed's consequence and is bound to the Account it opened for.
-        const target = await confirmForCapturedAccount(controller, () => Modal.confirm(
-            t('settingsEmbeds.delete.title', { label: token.label }),
-            t('settingsEmbeds.delete.body'),
-            { cancelText: t('common.cancel'), confirmText: t('settingsEmbeds.delete.confirm'), destructive: true },
-        ));
-        if (target && await controller.revokeToken(token.tokenId, target)) navigate(router, EMBEDS_COLLECTION_ROOT, 'EmbedDetail.deleted');
+        if (await controller.revokeToken(token.tokenId)) navigate(router, EMBEDS_COLLECTION_ROOT, 'EmbedDetail.deleted');
     }, [controller, props.token, router]);
 
     const serverUrl = getServerUrl();

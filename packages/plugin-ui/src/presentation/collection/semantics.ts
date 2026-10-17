@@ -199,10 +199,22 @@ export function resolveHappierRovingSelection(input: Readonly<{
    * caller leaves one owner that knows which key means which direction.
    */
   listNavigationKeys?: boolean;
+  /**
+   * A combobox list, whose active row may be none because the input owns focus: from no current
+   * entry, Down/Home enter at the first enabled entry and Up/End at the last. A collection whose
+   * focus always sits on a row leaves this off and claims nothing from an entry it does not know.
+   */
+  enterFromNone?: boolean;
 }>): number | null {
   const enabled = input.entries.flatMap((entry, index) => entry.disabled ? [] : [index]);
+  if (enabled.length === 0) return null;
   const position = enabled.indexOf(input.currentIndex);
-  if (position < 0 || enabled.length === 0) return null;
+  if (position < 0) {
+    if (input.enterFromNone !== true) return null;
+    if (input.key === 'ArrowDown' || input.key === 'Home') return enabled[0] ?? null;
+    if (input.key === 'ArrowUp' || input.key === 'End') return enabled.at(-1) ?? null;
+    return null;
+  }
   // A radio group's current choice is activated in place; the ItemGroup owner
   // still owns its onPress and focus target instead of each row inventing a
   // Space fallback.

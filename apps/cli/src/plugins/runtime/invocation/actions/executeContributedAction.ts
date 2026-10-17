@@ -5,11 +5,13 @@ import { MACHINE_PROVISIONER_EFFECT_ROLES_V1, readMachineProvisionerActionRolesV
 import type { ActionExecutorContext, ActionId, QualifiedPluginActionId } from '@happier-dev/protocol/actions';
 import { buildApprovalExecutionOriginV1 } from '@happier-dev/protocol/actions/actionExecutor';
 import { randomUUID } from 'node:crypto';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
 import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import type { ActionsSettingsV1, ApprovalExecutionOriginV1, JsonValue, MessageActionAvailableSnapshotV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
-import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import type { PluginMachineExecutionRoutingV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { PluginUiSelectedActionInputCarrierV1 } from '@happier-dev/protocol/plugins/ui';
 import type {
   PluginInvocationCaller,
@@ -432,6 +434,8 @@ export async function executeContributedAction(params: Readonly<{
   approvalContext?: ActionExecutorContext;
   /** Equality-only precondition from ActionsService.executeWithExecutionOrigin only. */
   expectedExecutionOrigin?: PluginMachineExecutionOriginV1;
+  /** Placement-only equality precondition; never a target selector. */
+  expectedExecutionRouting?: PluginMachineExecutionRoutingV1;
   /** Exact daemon placement re-read from a durable target-Action approval subject. */
   expectedApprovalReplayPlacement?: TargetActionApprovalReplayPlacementV1;
   /**
@@ -518,14 +522,16 @@ export async function executeContributedAction(params: Readonly<{
   );
   // Only authenticated host automated origins can use the reverse channel.
   // Plugin provenance and host-private execution bindings cannot be flattened
-  // into a host invocation on another process.
+  // into a host invocation on another process. An ordinary root invocation's
+  // approval origin is descriptive custody, not a replay binding: the answering
+  // client's canonical dispatcher still admits its own Action and approval.
   if (clientTarget && (
     (invocationSurface !== 'agent' && invocationSurface !== 'mcp' && invocationSurface !== 'cli')
     || params.context.caller !== undefined
     || params.context.externalActionContext !== undefined
     || params.captureExecutionOrigin !== undefined
-    || params.approvalExecutionOrigin !== undefined
     || params.expectedExecutionOrigin !== undefined
+    || params.expectedExecutionRouting !== undefined
     || params.expectedApprovalReplayPlacement !== undefined
     || params.admittedTargetedOperation !== undefined
     || params.admittedManagedProviderOperation !== undefined
@@ -732,7 +738,8 @@ export async function executeContributedAction(params: Readonly<{
       };
     }
     const requiresExecutionOrigin = params.captureExecutionOrigin === true
-      || params.expectedExecutionOrigin !== undefined;
+      || params.expectedExecutionOrigin !== undefined
+      || params.expectedExecutionRouting !== undefined;
     const beforeExecutionOrigin = requiresExecutionOrigin
       ? await resolveCurrentTargetExecutionOrigin(
           runtimeRegistry,
@@ -754,11 +761,13 @@ export async function executeContributedAction(params: Readonly<{
       };
     }
     if (beforeExecutionOrigin?.status === 'resolved'
-      && params.expectedExecutionOrigin !== undefined
-      && !arePluginMachineExecutionOriginsEqual(
-        params.expectedExecutionOrigin,
-        beforeExecutionOrigin.origin,
-      )) {
+      && ((params.expectedExecutionOrigin !== undefined
+        && !arePluginMachineExecutionOriginsEqual(params.expectedExecutionOrigin, beforeExecutionOrigin.origin))
+        || (params.expectedExecutionRouting !== undefined
+          && !arePluginMachineExecutionRoutingsEqual(
+            params.expectedExecutionRouting,
+            getPluginMachineExecutionRouting(beforeExecutionOrigin.origin),
+          )))) {
       return {
         matched: true,
         result: actionHandlerNotStartedFailure(
@@ -834,7 +843,7 @@ export async function executeContributedAction(params: Readonly<{
           const createsConfidentialApproval = requestedSurface !== 'ui' && requestedSurface !== 'voice'
             && (projectTargetActionApprovalInput(request.action.input, request.action.secretInputPaths ?? [])?.confidentialPaths.length ?? 0) > 0;
           const needsApprovalPlacement = (deferredSurface !== null || createsConfidentialApproval)
-            && pluginActionRequiresPresentUserIntent(request.action, requestedSurface);
+            && pluginActionRequiresPresentUserIntent(request.action, requestedSurface, request.action.input);
           if (!needsApprovalPlacement) return await params.requestCurrentIntent!(request);
           const currentPlacement = await resolveCurrentTargetApprovalReplayPlacement(
             runtimeRegistry,
@@ -884,6 +893,7 @@ export async function executeContributedAction(params: Readonly<{
       input: validatedInput === null ? params.input : validatedInput.value,
       surface: actionSurface,
       invocationSurface,
+      invocationAuthority: params.approvalContext?.authority ?? 'account_automation',
       ...(caller ? { caller } : {}),
       ...(params.context.initiatingActionCaller ? { initiatingActionCaller: params.context.initiatingActionCaller } : {}),
       ...(params.context.startedBy ? { startedBy: params.context.startedBy } : {}),
@@ -990,7 +1000,7 @@ export async function executeContributedAction(params: Readonly<{
         // after, and expected origins all agree. The refusal is deliberately
         // post-start and never carries `notStarted`.
         if (beforeExecutionOrigin?.status === 'resolved'
-          && (params.captureExecutionOrigin === true || params.expectedExecutionOrigin !== undefined)) {
+          && requiresExecutionOrigin) {
           const afterExecutionOrigin = await resolveCurrentTargetExecutionOrigin(
             runtimeRegistry,
             pluginId,
@@ -1046,18 +1056,21 @@ export async function executeContributedAction(params: Readonly<{
       };
     };
     if (params.context.capturePreparedInvocation) {
-      const prepared = await targetActionInvocations.prepare(targetInvocation);
+      const prepared = await runTracedExternalActionStage('action.invoke', params.approvalContext?.actionRequestId,
+        'contributed.target_prepare', () => targetActionInvocations.prepare(targetInvocation));
       if (prepared.kind === 'settled') {
         return { matched: true, result: await projectTargetResult(prepared.result) };
       }
       params.context.capturePreparedInvocation(Object.freeze({
-        run: async (operationProgress) => await projectTargetResult(await prepared.run({
+        run: async (operationProgress) => await projectTargetResult(await runTracedExternalActionStage(
+          'action.invoke', params.approvalContext?.actionRequestId, 'contributed.target_run', () => prepared.run({
           ...(operationProgress ? { operationProgress } : {}),
-        })),
+        }))),
       }));
       return { matched: true, result: { ok: true, result: null } };
     }
-    const targetResult = await targetActionInvocations.invoke(targetInvocation);
+    const targetResult = await runTracedExternalActionStage('action.invoke', params.approvalContext?.actionRequestId,
+      'contributed.target_invoke', () => targetActionInvocations.invoke(targetInvocation));
     return {
       matched: true,
       result: await projectTargetResult(targetResult),

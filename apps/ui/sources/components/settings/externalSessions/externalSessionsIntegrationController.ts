@@ -1,6 +1,9 @@
 import * as React from 'react';
 import {
     PLUGIN_SESSION_HOOK_STATUS_INVENTORY_MAX_ROWS,
+    PluginSessionHookInstallResponseV1Schema,
+    PluginSessionHookToggleResponseV1Schema,
+    PluginSessionHookUninstallResponseV1Schema,
     type PluginSessionHookInstallInputV1,
     type PluginSessionHookInstallResponseV1,
     type PluginSessionHookInstallationMutationInputV1,
@@ -18,6 +21,7 @@ import {
     machinePluginSessionHookStatusGet,
     machinePluginSessionHookUninstall,
 } from '@/sync/ops/machinePluginSessionHooks';
+import { createFrontDoorActionExecute, requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 import {
     isExternalSessionsIntegrationInventoryActionable,
@@ -39,15 +43,20 @@ export type ExternalSessionsHookManagementTransport = Readonly<{
     ) => Promise<PluginSessionHookStatusResponseV1>;
     install: (
         input: ServerScoped<PluginSessionHookInstallInputV1>,
+        presentConfirmation?: () => Promise<boolean>,
+        isCurrent?: () => boolean,
     ) => Promise<PluginSessionHookInstallResponseV1>;
     disable: (
         input: ServerScoped<PluginSessionHookInstallationMutationInputV1>,
+        isCurrent?: () => boolean,
     ) => Promise<PluginSessionHookToggleResponseV1>;
     enable: (
         input: ServerScoped<PluginSessionHookInstallationMutationInputV1>,
+        isCurrent?: () => boolean,
     ) => Promise<PluginSessionHookToggleResponseV1>;
     uninstall: (
         input: ServerScoped<PluginSessionHookInstallationMutationInputV1>,
+        isCurrent?: () => boolean,
     ) => Promise<PluginSessionHookUninstallResponseV1>;
 }>;
 
@@ -71,12 +80,42 @@ export type ExternalSessionsIntegrationControllerState = Readonly<{
     retryInventory: () => Promise<void>;
 }>;
 
+/** The screen selects its Machine; the shared executor owns every mutation decision. */
+async function executeHookMutation(
+    actionId: 'plugins.sessionHooks.install' | 'plugins.sessionHooks.disable' | 'plugins.sessionHooks.enable' | 'plugins.sessionHooks.uninstall',
+    input: ServerScoped<PluginSessionHookInstallInputV1 | PluginSessionHookInstallationMutationInputV1>,
+    presentConfirmation?: () => Promise<boolean>,
+    isCurrent?: () => boolean,
+): Promise<unknown> {
+    const { machineId, serverId, ...actionInput } = input;
+    const execute = createFrontDoorActionExecute(undefined, {
+        ...(presentConfirmation ? { presentUserActionConfirmation: presentConfirmation } : {}),
+        pluginSessionHookManagementAction: async (args) => {
+            args.signal?.throwIfAborted();
+            if (isCurrent?.() === false) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+            const target = { machineId, serverId: args.serverId ?? serverId };
+            switch (args.actionId) {
+                case 'plugins.sessionHooks.status.get': return machinePluginSessionHookStatusGet({ ...args.input, ...target });
+                case 'plugins.sessionHooks.install': return machinePluginSessionHookInstall({ ...args.input, ...target });
+                case 'plugins.sessionHooks.disable': return machinePluginSessionHookDisable({ ...args.input, ...target });
+                case 'plugins.sessionHooks.enable': return machinePluginSessionHookEnable({ ...args.input, ...target });
+                case 'plugins.sessionHooks.uninstall': return machinePluginSessionHookUninstall({ ...args.input, ...target });
+            }
+        },
+    });
+    const result = await execute(actionId, actionInput, { surface: 'ui', authority: 'present_user',
+        actionCaller: { kind: 'host' }, externalActionTarget: { kind: 'machine', machineId },
+        ...(serverId ? { serverId } : {}) });
+    requireActionSuccess(result);
+    return result.ok ? result.result : undefined;
+}
+
 export const machineExternalSessionsHookManagementTransport: ExternalSessionsHookManagementTransport = {
     status: machinePluginSessionHookStatusGet,
-    install: machinePluginSessionHookInstall,
-    disable: machinePluginSessionHookDisable,
-    enable: machinePluginSessionHookEnable,
-    uninstall: machinePluginSessionHookUninstall,
+    install: async (input, presentConfirmation, isCurrent) => PluginSessionHookInstallResponseV1Schema.parse(await executeHookMutation('plugins.sessionHooks.install', input, presentConfirmation, isCurrent)),
+    disable: async (input, isCurrent) => PluginSessionHookToggleResponseV1Schema.parse(await executeHookMutation('plugins.sessionHooks.disable', input, undefined, isCurrent)),
+    enable: async (input, isCurrent) => PluginSessionHookToggleResponseV1Schema.parse(await executeHookMutation('plugins.sessionHooks.enable', input, undefined, isCurrent)),
+    uninstall: async (input, isCurrent) => PluginSessionHookUninstallResponseV1Schema.parse(await executeHookMutation('plugins.sessionHooks.uninstall', input, undefined, isCurrent)),
 };
 
 function integrationKey(
@@ -299,6 +338,7 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
         integration: ExternalSessionsIntegrationDescriptor,
         operation: (
             input: ServerScoped<PluginSessionHookInstallationMutationInputV1>,
+            isCurrent?: () => boolean,
         ) => Promise<PluginSessionHookToggleResponseV1>,
     ): Promise<void> {
         if (!isCurrentScope()) return;
@@ -308,7 +348,7 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
             serverId: params.serverId,
             agent: integration.agent,
             installationId: requireInstallationId(integration),
-        });
+        }, () => requestIsCurrent() && isCurrentScope());
         if (!requestIsCurrent() || !isCurrentScope()) return;
         assertMutationSucceeded(result);
         if (result.ok) params.applyStatus(integration, result.status);
@@ -371,14 +411,14 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
                     'external_session_hook_install_preview_unavailable',
                 );
             }
-            if (!await confirm(candidate.installPreview)) return;
+            const installPreview = candidate.installPreview;
             if (!requestIsCurrent() || !isCurrentScope()) return;
             const result = await transport.install({
                 machineId: candidate.machineId,
                 serverId: params.serverId,
                 agent: candidate.agent,
-                expectedPreviewId: candidate.installPreview.previewId,
-            });
+                expectedPreviewId: installPreview.previewId,
+            }, () => confirm(installPreview), () => requestIsCurrent() && isCurrentScope());
             if (!isCurrentScope()) return;
             if (!result.ok) {
                 if (
@@ -406,7 +446,7 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
                 serverId: params.serverId,
                 agent: integration.agent,
                 installationId: requireInstallationId(integration),
-            });
+            }, () => requestIsCurrent() && isCurrentScope());
             if (!requestIsCurrent() || !isCurrentScope()) return;
             assertMutationSucceeded(result);
             if (result.ok) params.applyStatus(integration, result.status);

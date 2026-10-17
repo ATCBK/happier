@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { View } from 'react-native';
 import { usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useUnistyles } from 'react-native-unistyles';
@@ -32,7 +33,6 @@ import {
     MCP_COLLECTION_ROUTE,
     MCP_NEW_SERVER_ROUTE,
     MCP_FOUND_ROUTE,
-    mcpServerDraftTitle,
     mcpServerRoute,
     type McpServerCollectionRow,
 } from './mcpServerCollectionModel';
@@ -220,8 +220,6 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
                         testID="settings.mcpServers.empty"
                         layout="line"
                         title={t('settings.mcpServersEmptyTitle')}
-                        lineDensity="compact"
-                        lineRowStyle={collectionListStyles.row}
                     />
                 ) : null}
                 {inUse.length > 0 ? <CollectionListGroupLabel title={t('capabilities.mcp.inUse')} count={inUse.length} /> : null}
@@ -289,6 +287,7 @@ function GroupCount(props: Readonly<{ count: number }>) {
 
 /** The server being added in the detail pane, at the top of the rail, titled as it is typed. */
 const McpServerDraftRow = React.memo(function McpServerDraftRow() {
+    const mcpServerDraftTitle = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow

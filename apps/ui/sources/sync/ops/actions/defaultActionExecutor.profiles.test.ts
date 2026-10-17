@@ -75,6 +75,7 @@ installApprovalCommonModuleMocks({ storage: original => original(), reactNavigat
             navigation: createReactNavigationNativeMock().useNavigation() }).module;
     } });
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { useNewSessionProfileActions } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionProfileActions');
 const { router } = await import('expo-router');
 const { ProfileDetailScreen } = await import('@/components/settings/profiles/ProfileDetailScreen');
 const initialState = getStorage().getState();
@@ -668,6 +669,41 @@ describe('UI Profile Action front door', () => {
             expect(f.approvalArtifacts.list()).toHaveLength(1);
             expect(f.navigation.push).not.toHaveBeenCalled();
         } finally { await hook.unmount(); await deleting; confirm.mockRestore(); }
+    });
+
+    it.each([true, false])('New Session profile Delete delegates the reviewed revision and one policy decision (accepted=%s)', async accepted => {
+        const f = await fixture();
+        f.setProfile();
+        f.enableApprovalTransport();
+        await f.mountHome();
+        const confirm = vi.spyOn(Modal, 'confirm').mockResolvedValue(accepted);
+        // A person accepts the incumbent caller alert too, so the regression
+        // reaches the real Profile owner and exposes its missing revision.
+        const alert = vi.spyOn(Modal, 'alert').mockImplementation((_title, _message, buttons) => {
+            const destructive = buttons?.find(button => button.style === 'destructive');
+            if (destructive) void destructive.onPress?.();
+        });
+        const hook = await renderHook(() => {
+            const [selectedProfileId, setSelectedProfileId] = React.useState<string | null>('editable');
+            const remove = useDeleteAiLaunchProfile();
+            const collection = useProfilesCollection();
+            const actions = useNewSessionProfileActions({ selectedProfileId, setSelectedProfileId, deleteProfile: remove });
+            return { ...actions, selectedProfileId, profile: collection.profiles.find(profile => profile.id === 'editable') };
+        });
+        try {
+            const profile = hook.getCurrent().profile;
+            if (!profile) throw new Error('Expected the reviewed Profile');
+            await act(async () => { await hook.getCurrent().handleDeleteProfile(profile); });
+            await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+            if (accepted) {
+                await vi.waitFor(() => expect(f.profileMutations).toMatchObject([{ operation: 'remove', id: 'editable' }]));
+                await vi.waitFor(() => expect(hook.getCurrent().selectedProfileId).toBeNull());
+            } else {
+                expect(f.profileMutations).toEqual([]);
+                expect(hook.getCurrent().selectedProfileId).toBe('editable');
+            }
+            expect(alert).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); confirm.mockRestore(); alert.mockRestore(); }
     });
 
     it('cancels the present-user Profile confirmation without an error, approval or tombstone', async () => {

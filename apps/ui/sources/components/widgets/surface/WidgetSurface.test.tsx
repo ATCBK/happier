@@ -9,6 +9,8 @@ import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/wi
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary, createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { SessionSystemRecordStoredPageResponseSchema, SessionSystemRecordStoredReadResponseSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { buildWidgetDefinitionArtifactHeaderV1 } from '@happier-dev/protocol/widgets/widgetDefinitionArtifactV1';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
@@ -23,14 +25,14 @@ import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { readInputPath } from '@happier-dev/protocol/inputs';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import type { UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { SessionSystemRecordStoredSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { HappierDataMetric, StackedSeriesChart, type HappierSeries } from '@happier-dev/plugin-ui/presentation';
 import { invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
 import { readUsageWidgetPageContext, readUsageWidgetPageScope } from '@/components/settings/usage/usageWidgetPageContext';
 import { ConfiguredWidgetRefusal } from '@/components/widgets/InstalledWidgetSurface';
 import { SessionSurfaceItemV1Schema } from '@happier-dev/protocol/sessions/board';
 import { createSessionBoardSourceAvailabilityResolver } from '@/components/sessions/board/sessionBoardItemPresentation';
-import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storage';
 import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
 import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
@@ -97,9 +99,26 @@ it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard
     let total = 15;
     const start = Date.UTC(2026, 9, 10);
     const query = normalizeUsageQuery({ period: { startMs: start, endMs: start + 86_400_000 }, metric: 'tokens', breakdown: [] });
+    const reference = kind === 'artifact' ? { kind, artifactId: saved.id } : { kind, definition: saved };
+    const instance: WidgetInstanceV1 = { v: 1, id: 'daily-instance', definition: reference,
+        bindings: Object.fromEntries(saved.inputs.fields.map(field => [field.path, { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }])) };
+    const record = kind === 'inline' ? SessionSystemRecordStoredSchema.parse({ id: 'daily-record',
+        address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: instance.id },
+        content: { t: 'plain', v: SessionSurfaceItemV1Schema.parse({ v: 1, title: saved.name, frame: 'card',
+            height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'widget', instance } }) },
+        revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ', createdAt: '2026-10-10T00:00:00.000Z', updatedAt: '2026-10-10T00:00:00.000Z' }) : null;
+    // Session-scoped choices admit the containing Session through the real HTTP reader.
+    const containingSession = createPlainSessionCurrentProjectionRecordFixture({ id: 'destination', metadata: null });
+    const features = createRootLayoutFeaturesResponse();
+    if (!tryWriteServerEnabledBitInPlace(features, 'sessions.board', true)) throw new Error('Expected the Board feature');
     const connection = await restoreServerAccountForTest({ serverUrl: `https://saved-builtin-${owner}.test`, accountId: 'viewer', request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/machines') return Response.json({ machines: [] });
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+        if (path === '/v2/sessions/destination') return Response.json({ session: containingSession });
+        if (path === '/v2/sessions/destination/system-records/record') return Response.json(SessionSystemRecordStoredReadResponseSchema.parse({
+            record: new URL(String(url)).searchParams.get('localId') === instance.id ? record : null }));
+        if (path === '/v2/sessions/destination/system-records') return Response.json(SessionSystemRecordStoredPageResponseSchema.parse({ records: record ? [record] : [], nextCursor: null, hasNext: false }));
         if (path !== '/v2/usage/query') return http.request(url, init);
         const tokens = { input: total - 5, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total };
         const cost = { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' };
@@ -107,11 +126,9 @@ it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard
     } });
     const viewer = getActiveServerAccountScope();
     if (!viewer) throw new Error('Expected current viewer');
-    const reference = kind === 'artifact' ? { kind, artifactId: saved.id } : { kind, definition: saved };
-    const instance: WidgetInstanceV1 = { v: 1, id: 'daily-instance', definition: reference,
-        bindings: Object.fromEntries(saved.inputs.fields.map(field => [field.path, { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }])) };
     // Shared Session content is an inline copy, never a foreign private Account reference.
-    const scope: WidgetSurfaceRefV1 = { ...viewer, ...(kind === 'inline' ? { accountId: 'author' } : {}), owner: owner === 'home' ? { kind: owner }
+    // Session hosts scope their reads to the current viewer; shared content carries no author Account authority.
+    const scope: WidgetSurfaceRefV1 = { ...viewer, owner: owner === 'home' ? { kind: owner }
         : owner === 'project' ? { kind: owner, projectId: 'project-one' } : { kind: owner, sessionId: 'destination' } };
     if (kind === 'inline') {
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');

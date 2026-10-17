@@ -22,6 +22,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PLUGIN_UI_OUTWARD_EFFECT_HOST_METHODS_V1 } from '@/components/plugins/hostApi/outwardEffectSettlement';
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
+import { createPluginSurfaceContext } from '@/components/plugins/surfaces/pluginSurfaceContext';
+import { PluginUiHostApiSurfaceContextV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import {
     createPluginSurfaceHostApi,
     type PluginSurfaceHostApiHandlers,
@@ -1937,6 +1939,7 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
         // author the mount can never serve it and turns an outage into a
         // permanent capability verdict.
         let daemonReachable = false;
+        const unavailableMessage = 'NLDW6-3-11-20 · f759 is unavailable for this operation.';
         const host = createPluginSurfaceHostApi({
             surfaceContext: surface,
             handlers: {
@@ -1944,6 +1947,7 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
                 watchResource: async () => ({ ok: true }),
             },
             isMethodAvailable: (method) => method === 'context' || daemonReachable,
+            resolveUnavailableMessage: () => unavailableMessage,
         });
         const adapter = createCanonicalPluginReactNativeHostApiAdapter({
             surface: canonicalSurface,
@@ -1965,6 +1969,7 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
             name: 'PluginError',
             code: 'unavailable',
             retryable: true,
+            message: unavailableMessage,
             diagnostics: [{ code: 'host_api_method_unavailable:watchResource', severity: 'error' }],
         });
 
@@ -2272,6 +2277,28 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
             installedMethods: host.installedMethods,
         });
     }
+
+    it('carries the canonical mount approval projection through the live context publisher and strict SDK consumer', async () => {
+        const adapter = createAdapter();
+        const observed: SurfaceContext['pendingApproval'][] = [];
+        const project = (pendingApproval: SurfaceContext['pendingApproval']) => createPluginSurfaceContext({
+            mount: canonicalSurface.mount, target: canonicalSurface.target,
+            accountEncryptionMode: canonicalSurface.accountEncryptionMode, translations: canonicalSurface.translations,
+            environment: { ...canonicalSurface, columnVisible: false }, pendingApproval,
+        });
+        const approval = { artifactId: 'approval-a', href: '/inbox/approvals/approval-a?serverId=home-a' };
+        try {
+            await adapter.api.watchContext(context => observed.push(context.pendingApproval));
+            adapter.pushSurfaceContext(project(approval));
+            const snapshot = PluginUiHostApiSurfaceContextV1Schema.parse(await adapter.api.context());
+            expect(snapshot.pendingApproval).toEqual(approval);
+            expect(observed).toEqual([approval]);
+            expect(PluginUiHostApiSurfaceContextV1Schema.safeParse({ ...snapshot,
+                pendingApproval: { ...approval, approve: true } }).success).toBe(false);
+            adapter.pushSurfaceContext(project(null));
+            expect(observed).toEqual([approval, null]);
+        } finally { adapter.dispose(); }
+    });
 
     it('advertises watchContext exactly when the mount owns a surface fact', () => {
         expect(createAdapter().api.version().methods).toEqual(['context', 'watchContext']);

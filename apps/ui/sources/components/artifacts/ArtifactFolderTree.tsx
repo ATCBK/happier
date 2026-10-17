@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { happierPageTextMetrics, useHappierTreeRowLineHeight } from '@happier-dev/plugin-ui/presentation';
 
 import { Typography } from '@/constants/Typography';
 import { Tree, type TreeItem } from '@happier-dev/plugin-ui';
@@ -20,7 +20,6 @@ import type {
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { FieldItem } from '@/components/ui/forms/FieldItem';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import {
   DropdownMenu,
@@ -109,7 +108,7 @@ function refusalMessage(code: string): string {
 
 /**
  * The folder operations of the one personal Artifact tree: each is one `artifact.folders.*` Action at the reviewed
- * catalog revision (`useArtifactFolderActions`). Editors retain drafts and render refusals; delete confirms.
+ * catalog revision (`useArtifactFolderActions`). Editors retain drafts and render refusals; Actions own approval.
  */
 export function useArtifactFolderCommands(): Readonly<{
   canWrite: boolean;
@@ -172,15 +171,9 @@ export function useArtifactFolderCommands(): Readonly<{
   );
   const remove = React.useCallback(
     async (folder: PromptFolderEntryV1) => {
-      const confirmed = await Modal.confirm(
-        t('artifacts.browser.folders.deleteTitle', { name: folder.name }),
-        t('artifacts.browser.folders.deleteBody'),
-        { confirmText: t('common.delete'), destructive: true },
+      await settle(() =>
+        execute('artifact.folders.delete', { folderId: folder.id }),
       );
-      if (confirmed)
-        await settle(() =>
-          execute('artifact.folders.delete', { folderId: folder.id }),
-        );
     },
     [execute, settle],
   );
@@ -445,7 +438,8 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
     },
     describeFolder: (folder) =>
       folder?.name ?? t('artifacts.browser.folders.topLevel'),
-    describeMove: () => t('artifacts.browser.folders.moveVerb'),
+    // One line on the carried card: "Move to Reviews" (lab `c-art TD`).
+    describeMove: (name) => t('artifacts.browser.folders.moveVerb', { name }),
     describeRefusal: refusalMessage,
     execute: async (effect): Promise<EntityDropOutcomeV1> => {
       const input = effect.input;
@@ -550,7 +544,7 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
           node.kind === 'leaf' && node.row.artifact.isDecrypted === false
             ? t('settingsAccount.restoreRequiredTitle')
             : node.title || t('artifacts.untitled'),
-        mark: <NodeMark node={node} />,
+        mark: <NodeMark node={node} wide={wide} />,
       }));
       if (currentEdit?.kind === 'create') {
         const parentKey = currentEdit.parentId === null ? null : `folder:${currentEdit.parentId}`;
@@ -560,12 +554,30 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
           parentKey,
           depth: parentIndex < 0 ? 0 : rows[parentIndex]!.depth + 1,
           kind: 'leaf',
+          expanded: false,
           title: t('artifacts.browser.folders.newFolder'),
+          mark: <FolderGlyph wide={wide} />,
+        });
+      }
+      // An open folder with nothing in it says so, instead of an open chevron over nothing (lab c-art T).
+      for (let index = rows.length - 1; index >= 0; index -= 1) {
+        const row = rows[index]!;
+        if (row.kind !== 'branch' || !row.expanded || rows[index + 1]?.parentKey === row.key) continue;
+        rows.splice(index + 1, 0, {
+          key: `empty:${row.key}`,
+          parentKey: row.key,
+          depth: row.depth + 1,
+          kind: 'leaf',
+          expanded: false,
+          disabled: true,
+          title: t('artifacts.browser.folders.emptyFolder'),
+          // The quiet row keeps its siblings' mark column, so "Empty" sits in the child-title column.
+          mark: <View style={{ width: markSize(wide), height: markSize(wide) }} />,
         });
       }
       return rows;
     },
-    [currentEdit, tree],
+    [currentEdit, tree, wide],
   );
   const editKey = currentEdit?.kind === 'rename' ? `folder:${currentEdit.folder.id}`
     : currentEdit?.kind === 'create' ? `draft:folder:${currentEdit.id}` : null;
@@ -642,9 +654,10 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
         <View style={styles.freshness}>
           <SurfaceFreshnessLine
             testID={`${props.testID}:unavailable`}
-            tone="warning"
+            // Folders drawn from what was last read are working content, not a failure: one quiet line.
+            tone={catalog.value !== null ? 'neutral' : 'warning'}
             busy={catalog.status === 'loading'}
-            reason={t('artifacts.browser.folders.refusedUnavailable')}
+            reason={t(catalog.value !== null ? 'artifacts.browser.folders.lastKnown' : 'artifacts.browser.folders.refusedUnavailable')}
             action={{ label: t('common.retry'), onPress: retry }}
           />
         </View>
@@ -759,13 +772,15 @@ function FolderInlineEditor(props: Readonly<{
     fireAndForget(save(), { tag: 'ArtifactFolderTree.save' });
   };
   const label = t('artifacts.browser.folders.columnName');
+  // The row's own line: the field sits where the name was, level with the row's chevron and glyph.
+  const line = useHappierTreeRowLineHeight();
   return (
     <View style={stylesheet.editor}>
-      <FieldItem label={label} labelNativeID={`${props.testID}:edit:label`}>
+      <View style={[stylesheet.editorLine, line === null ? null : { minHeight: line }]}>
         <FieldTextInput
           testID={`${props.testID}:edit:name`}
           accessibilityLabel={label}
-          accessibilityLabelledBy={`${props.testID}:edit:label`}
+          accessibilityHint={props.edit.kind === 'create' ? t('artifacts.browser.folders.nameHelp') : undefined}
           value={name}
           onChangeText={props.edit.titles.publish}
           autoFocus
@@ -777,17 +792,8 @@ function FolderInlineEditor(props: Readonly<{
           onKeyPress={event => {
             if (event.nativeEvent.key === 'Escape' && !saving) props.onFinish(props.edit);
           }}
+          style={stylesheet.editorField}
         />
-      </FieldItem>
-      {error ? <SurfaceStateCard size="line" kind="error" testID={`${props.testID}:edit:refused`}
-        title={error} diagnosticCode={errorCode ?? undefined} accessibilitySemantics="alert" /> : null}
-      {approval ? <SurfaceStateCard size="line" kind="warning" testID={`${props.testID}:edit:approval`}
-        title={t('connect.waitingForApproval')} action={{ label: t('common.open'), onPress: () => {
-          if (!scope || !sameScope) return;
-          props.onFinish(props.edit);
-          router.push(`/inbox/approvals/${encodeURIComponent(approval.artifactId)}?serverId=${encodeURIComponent(scope.serverId)}` as never);
-        } }} /> : null}
-      <View style={stylesheet.editorActions}>
         <RoundButton
           testID={`${props.testID}:edit:cancel`}
           title={t('common.cancel')}
@@ -805,24 +811,40 @@ function FolderInlineEditor(props: Readonly<{
           onPress={submit}
         />
       </View>
+      {props.edit.kind === 'create' && !error && !approval ? (
+        <Text style={stylesheet.editorNote}>{t('artifacts.browser.folders.nameHelp')}</Text>
+      ) : null}
+      {error ? <SurfaceStateCard size="line" kind="error" testID={`${props.testID}:edit:refused`}
+        title={error} diagnosticCode={errorCode ?? undefined} accessibilitySemantics="alert" /> : null}
+      {approval ? <SurfaceStateCard size="line" kind="warning" testID={`${props.testID}:edit:approval`}
+        title={t('connect.waitingForApproval')} action={{ label: t('common.open'), onPress: () => {
+          if (!scope || !sameScope) return;
+          props.onFinish(props.edit);
+          router.push(`/inbox/approvals/${encodeURIComponent(approval.artifactId)}?serverId=${encodeURIComponent(scope.serverId)}` as never);
+        } }} /> : null}
     </View>
   );
 }
 
 function noop(): void {}
 
-function NodeMark(props: Readonly<{ node: Node }>) {
+/** A phone row carries its glyph a size up, with its reading-size name (lab c-art Tp). */
+function markSize(wide: boolean): number {
+  return wide ? 17 : 20;
+}
+
+function FolderGlyph(props: Readonly<{ wide: boolean }>) {
+  const { theme } = useUnistyles();
+  return <Icon name="folder" size={markSize(props.wide)} color={theme.colors.text.secondary} />;
+}
+
+/** One folder glyph, open or closed: the chevron already says which. */
+function NodeMark(props: Readonly<{ node: Node; wide: boolean; size?: number }>) {
   const { theme } = useUnistyles();
   const { node } = props;
-  const name =
-    node.kind === 'branch'
-      ? node.expanded
-        ? 'folder-open'
-        : 'folder'
-      : node.row.artifact.isDecrypted === false
-        ? 'lock'
-        : ARTIFACT_KIND_ICONS[node.row.kind];
-  return <Icon name={name} size={17} color={theme.colors.text.secondary} />;
+  const name = node.kind === 'branch' ? 'folder'
+    : node.row.artifact.isDecrypted === false ? 'lock' : ARTIFACT_KIND_ICONS[node.row.kind];
+  return <Icon name={name} size={props.size ?? markSize(props.wide)} color={theme.colors.text.secondary} />;
 }
 
 /** Which place of this tree the carried item would land in: a folder id, `null` for the top level, else nothing. */
@@ -865,7 +887,8 @@ function RowHost(
         : { kind: 'artifact', artifactId: node.row.key },
     isCurrent: () => tree.canWrite,
     getBounds: () => readWindowBounds(own.current),
-    describe: () => ({ title: props.title }),
+    // The carried card names the item with its own mark (lab `c-art TD`); the drop's outcome is the card's second line.
+    describe: () => ({ title: props.title, renderMark: (size) => <NodeMark node={node} wide size={size} /> }),
   });
   const dragDom = useEntityDragDomBinding({
     runtime,
@@ -1055,6 +1078,8 @@ function useMoveMenu(
               />
             ),
             submenu: {
+              // One title for the chooser, on a phone sheet as on a desktop menu (lab `c-art TAp`).
+              title: chooserTitle,
               showCategoryTitles: true,
               items: [...destinations.map(
                 (destination, index): DropdownMenuItem => {
@@ -1355,8 +1380,14 @@ function ArtifactRowMenu(
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-  editor: { minWidth: 0, paddingVertical: theme.space.s8, gap: theme.space.s8 },
-  editorActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: theme.space.s8 },
+  editor: { minWidth: 0, gap: theme.space.s4, paddingBottom: theme.space.s8 },
+  editorLine: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minWidth: 0 },
+  editorField: { flex: 1, minWidth: 0 },
+  editorNote: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+  },
   freshness: {
     marginBottom: theme.space.s12,
   },

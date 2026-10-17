@@ -24,7 +24,11 @@ import type { AppShellColumn as AppShellColumnModel } from './appRailModel';
  * machine list for the Machines page's rail door. Only
  * the open destination's column is mounted, so a closed one keeps no subscriptions.
  */
-export const AppShellColumn = React.memo(function AppShellColumn(props: Readonly<{ column: AppShellColumnModel }>) {
+export const AppShellColumn = React.memo(function AppShellColumn(props: Readonly<{
+    column: AppShellColumnModel;
+    /** Laid over another destination's page by a peek, rather than standing beside its own page. */
+    peeked?: boolean;
+}>) {
     const styles = stylesheet;
     const popoverBoundaryRef = React.useRef<View>(null);
     const { column } = props;
@@ -35,7 +39,7 @@ export const AppShellColumn = React.memo(function AppShellColumn(props: Readonly
         <View testID={`app-shell-column:${id}`} ref={popoverBoundaryRef} style={styles.column}>
             <PopoverScope boundaryRef={popoverBoundaryRef}>
                 {Column ? <Column /> : null}
-                {column.kind === 'plugin' ? <PluginAppPageColumn destinationId={column.destinationId} /> : null}
+                {column.kind === 'plugin' ? <PluginAppPageColumn destinationId={column.destinationId} peeked={props.peeked === true} /> : null}
             </PopoverScope>
         </View>
     );

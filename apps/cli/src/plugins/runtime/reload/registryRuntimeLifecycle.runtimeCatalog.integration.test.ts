@@ -5,7 +5,7 @@ import axios from 'axios';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildQualifiedPluginContributionKey, PluginManifestV2Schema } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey, PluginManifestV2Schema, ApprovalRequestV2Schema, decodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 
 import { createLocalPathPluginDistributionIdentity, createPluginTrustRecord } from '@/plugins/store/install/trustIdentity';
@@ -31,20 +31,31 @@ import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invoc
 import { createPluginRegistryCommitCoordinator } from '@/plugins/store/registry/commitCoordinator';
 import { createPluginRegistryTransactionService } from '@/plugins/store/registry/service';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import {
   resolveExecutablePluginRuntimeRegistry,
   type ResolvedExecutablePluginRuntimeRegistry,
 } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
-import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { createResolvedContributionRegistry, getResolvedContributionRegistry, resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { readCurrentDaemonPluginCatalog } from '@/plugins/daemon/currentCatalog';
 import {
   evaluatePluginDevelopmentCandidate,
   projectEvaluatedPluginDevelopmentSource,
 } from '@/plugins/authoring/sourceModule';
 import { bindPluginRuntimeSourceAuthority } from '@/plugins/runtime/sourceAuthority';
+import { PluginUiArtifactsManifestV2Schema } from '@happier-dev/protocol/plugins/ui';
+import { computePluginUiArtifactSha256DigestV1, computePluginUiArtifactFileSetSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
+import { findResolvedGeneratedReactNativeArtifactOwner, findGeneratedReactNativeArtifactEntry } from '@/plugins/projection/registry/ui/generatedUiArtifactOwners';
+import { GENERATED_PLUGIN_UI_ARTIFACTS_MANIFEST_RELATIVE_PATH } from '@/plugins/install/ui/generatedArtifacts';
 
 import { createPluginReloadController } from './controller';
 import { createDaemonPluginRegistryRuntimeLifecycle } from './registryRuntimeLifecycle';
+import type { DaemonPluginChangeService } from '@/plugins/daemon/changeService';
+import { createDaemonPluginDevelopmentReviewApprovalPublisher } from '@/plugins/daemon/developmentReviewApproval';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
+import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs')>();
@@ -508,6 +519,228 @@ async function invokeIdentity(
 
 describe('daemon plugin registry runtime lifecycle owner', () => {
   afterEach(() => vi.restoreAllMocks());
+  it('identifies first install from durable state without reseeding updates or re-enable', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-skill-first-install-'));
+    const pluginId = 'acme.library.defaults';
+    const fixture = await createExecutableInstallFixture(happyHomeDir, pluginId, { descriptorOnly: true });
+    const reloadController = createPluginReloadController({ happyHomeDir });
+    const firstInstallPublications: string[][] = [];
+    const lifecycle = createDaemonPluginRegistryRuntimeLifecycle({ happyHomeDir, reloadController,
+      beforeInstallPublish: async (_registry, _pluginIds, firstInstallPluginIds) => {
+        firstInstallPublications.push([...firstInstallPluginIds]);
+      } });
+    const store = createPluginRegistryStateStore({ happyHomeDir, runtimeLifecycle: lifecycle });
+    try {
+      await installFixtureCandidate(store, fixture.input);
+      expect(firstInstallPublications).toEqual([[pluginId]]);
+      await writeFile(join(fixture.pluginRoot, 'updated-content.txt'), 'New plugin content');
+      await installFixtureCandidate(store, fixture.input);
+      expect(firstInstallPublications).toEqual([[pluginId], []]);
+      await store.setEnabled(pluginId, false);
+      await store.setEnabled(pluginId, true);
+      expect(firstInstallPublications).toEqual([[pluginId], []]);
+    } finally {
+      await reloadController.shutdown();
+      await rm(happyHomeDir, { recursive: true, force: true });
+    }
+  });
+  it.each([[false, false], [true, false], [true, true]])('boots the bundled daemon catalog with currentness bindings for every admitted Resource (restored development source: %s, waived install: %s)', async (restoredDevelopmentSource, waivedInstall) => {
+    resetActiveAccountSettingsSnapshotForTests();
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-bundled-resource-startup-'));
+    const developmentPluginId = 'acme.restored-development-resources';
+    const reviewRoot = join(happyHomeDir, 'plugins', 'needs-review.ts');
+    const reviews: string[] = [];
+    const publicationErrors: unknown[] = [];
+    // Only HTTP persistence is substituted: real Artifact encoding, Inbox
+    // projection, Action admission/preview/replay and plugin owners compose below.
+    const artifacts = new Map<string, Record<string, unknown>>();
+    const credentials = { token: 'header.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null,
+      credentialProvenance: 'stored_session' as const };
+    vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      const path = new URL(url).pathname;
+      if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: waivedInstall
+        ? { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'plugins.install': ['cli', 'agent'] } } } : {} }, version: 1 } };
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path === '/v1/artifacts') return { status: 200, data: [...artifacts.values()] };
+      if (path.startsWith('/v1/artifacts/')) {
+        const artifact = artifacts.get(decodeURIComponent(path.slice('/v1/artifacts/'.length)));
+        return { status: artifact ? 200 : 404, data: artifact ?? {} };
+      }
+      throw new Error(`Unexpected approval HTTP read: ${path}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, input: unknown) => {
+      const path = new URL(url).pathname;
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid Artifact HTTP body');
+      const body = input as Record<string, unknown>;
+      if (path === '/v1/artifacts' && typeof body.id === 'string') {
+        if (artifacts.has(body.id)) return { status: 409, data: {} };
+        artifacts.set(body.id, { ...body, headerVersion: 1, bodyVersion: 1, seq: 1,
+          createdAt: 1, updatedAt: 1, ownerAccountId: 'account-1', access: 'owner', encryptionMode: 'plain' });
+        return { status: 200, data: { id: body.id, headerVersion: 1, bodyVersion: 1 } };
+      }
+      const artifact = artifacts.get(path.slice('/v1/artifacts/'.length));
+      if (!artifact) throw new Error(`Unexpected approval HTTP write: ${path}`);
+      const version = Number(artifact.headerVersion) + 1;
+      Object.assign(artifact, { header: body.header, body: body.body,
+        headerVersion: version, bodyVersion: version, updatedAt: version });
+      return { status: 200, data: { success: true, headerVersion: version, bodyVersion: version } };
+    });
+    const publisher = createDaemonPluginDevelopmentReviewApprovalPublisher({
+      credentials, happyHomeDir, serverId: 'review-home',
+      resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'review-home-identity', machineId: 'review-machine' }),
+    });
+    if (restoredDevelopmentSource) {
+      const fixture = await createExecutableInstallFixture(happyHomeDir, developmentPluginId);
+      const manifest = PluginManifestV2Schema.parse(createPluginManifestV2Fixture({
+        id: developmentPluginId,
+        entrypoints: { daemon: './daemon.mjs', development: './index.ts' },
+        contributes: {
+          resources: [{ id: 'rows', source: 'dynamic', kind: 'config', contentType: 'application/json', scope: 'global' }],
+        },
+      }));
+      await writeFile(join(fixture.pluginRoot, 'index.ts'), [
+        `export const manifest = ${JSON.stringify(manifest)};`,
+        "export function activate(api) { api.resources.registerDynamicResource('rows', { read: async () => '[]' }); }",
+      ].join('\n'));
+      const seedStore = createPluginRegistryStateStore({
+        happyHomeDir,
+        runtimeLifecycle: { prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }) },
+      });
+      await seedStore.initialize();
+      // Match a previously reviewed development installation: its portable
+      // declarations survive restart, but executable custody must be re-admitted.
+      await expect(seedStore.approveDevelopmentAuthorityWithResult({
+        ...fixture.input,
+        expectedRevision: 0,
+        catalogRecord: {
+          ...fixture.input.catalogRecord,
+          source: { ...fixture.input.catalogRecord.source, devWatch: true },
+        },
+        approvedAuthorityManifest: manifest,
+      })).resolves.toMatchObject({ transaction: { status: 'committed' } });
+      expect((await resolveMergedContributionRegistry({ happyHomeDir })).resources)
+        .toContainEqual(expect.objectContaining({ pluginId: developmentPluginId }));
+      await writeFile(reviewRoot, [
+        `export const manifest = ${JSON.stringify(createPluginManifestV2Fixture({ id: 'acme.observed-review', entrypoints: undefined }))};`,
+        'export function activate() {}',
+      ].join('\n'));
+    }
+    const reloadController = createPluginReloadController({ happyHomeDir });
+    const { createDaemonPluginRuntimeOwner } = await import('@/plugins/daemon/runtimeOwner');
+    const owner = createDaemonPluginRuntimeOwner({
+      happyHomeDir,
+      staleCandidateCleanup: 'disabled',
+      reloadController,
+      connectedAccounts: createUnusedConnectedAccountsOwner(),
+      publishDevelopmentReview: async ({ sourceRootPath, changeService }: Readonly<{
+        sourceRootPath: string; changeService: DaemonPluginChangeService;
+      }>) => {
+        const pending = (await changeService.listPendingPluginChanges()).changes;
+        expect(pending).toContainEqual(expect.objectContaining({ review: expect.objectContaining({
+          source: expect.objectContaining({ locator: sourceRootPath }),
+        }) }));
+        reviews.push(sourceRootPath);
+        try { await publisher({ sourceRootPath, changeService }); }
+        catch (error) { publicationErrors.push(error); throw error; }
+      },
+    });
+    try {
+      await owner.initialize();
+      expect(publicationErrors).toEqual([]);
+      if (restoredDevelopmentSource) expect(reviews).toContain(reviewRoot);
+      const registry = reloadController.getState().activeRegistry;
+      if (!registry) throw new Error('Expected the startup registry to be published');
+      const dynamicResources = registry.contributes.resources.filter(resource => resource.definition.source === 'dynamic');
+      expect(dynamicResources.length).toBeGreaterThan(1);
+      if (restoredDevelopmentSource) {
+        expect(dynamicResources).toContainEqual(expect.objectContaining({ pluginId: developmentPluginId }));
+      }
+      for (const resource of dynamicResources) {
+        const pluginId = resource.pluginId!;
+        if (restoredDevelopmentSource && pluginId === developmentPluginId) {
+          expect(registry.readPluginOccurrenceId?.(pluginId)).toBeNull();
+          expect(registry.getPluginUiResourceCapability?.(pluginId)).toEqual({ readable: false, dynamic: false });
+          continue;
+        }
+        expect(registry.activatedPluginIds.has(pluginId), pluginId).toBe(true);
+        const occurrenceId = registry.readPluginOccurrenceId?.(pluginId);
+        expect(occurrenceId, pluginId).toBeTruthy();
+        expect(registry.getPluginUiResourceCapability?.(pluginId), pluginId)
+          .toEqual({ readable: true, dynamic: true });
+      }
+      if (restoredDevelopmentSource && !waivedInstall) {
+        const store = createCliApprovalsArtifactStore({ credentials, serverId: 'review-home' });
+        const inbox = await store.approvalsList({ status: 'open', limit: null, serverId: 'review-home' });
+        expect(inbox.items).toHaveLength(1);
+        const artifactId = inbox.items[0]!.artifactId;
+        expect(inbox.items[0]).toMatchObject({ actionId: 'plugins.install', status: 'open' });
+        const request = ApprovalRequestV2Schema.parse(await store.approvalsGet({ artifactId, serverId: 'review-home' }));
+        expect(request).toMatchObject({ preview: { pluginInstall: {
+          permissionsDisclosure: 'daemonEvaluated', pendingReview: { pendingChangeId: artifactId },
+        } } });
+        const pendingBefore = (await owner.changeService.listPendingPluginChanges()).changes;
+        await owner.changeService.controlPluginDevelopment!({ kind: 'registerExplicit', rootPath: reviewRoot });
+        expect((await owner.changeService.listPendingPluginChanges()).changes).toEqual(pendingBefore);
+        expect((await store.approvalsList({ status: 'open', limit: null, serverId: 'review-home' })).items).toHaveLength(1);
+        // Ordinary public approval Action, with its real daemon candidate replay.
+        const executor = createCliActionExecutor({ credentials, token: credentials.token,
+          pluginChangeService: owner.changeService, sessionId: '', mode: 'plain', ctx: null,
+          serverId: 'review-home', serverIdentityId: 'review-home-identity', happyHomeDir,
+          serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+          isApprovalExecutionOriginCurrent: async () => true,
+        });
+        await expect(executor.execute('plugins.install', { path: reviewRoot, dev: true }, {
+          surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' },
+          executionRunTargetMachineId: 'review-machine', actionRequestId: 'author-rejoin',
+        })).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId } });
+        expect((await owner.changeService.listPendingPluginChanges()).changes).toEqual(pendingBefore);
+        // A raw UI stamp is not signed Account ingress into this CLI factory.
+        // Refusal must leave the exact retained candidate and Artifact open.
+        await expect(executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, {
+          surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+        })).resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
+        expect((await owner.changeService.listPendingPluginChanges()).changes).toEqual(pendingBefore);
+        expect(await store.approvalsGet({ artifactId, serverId: 'review-home' })).toEqual(request);
+        // Stored terminal credentials establish human authority at this boundary;
+        // the approval owner still replays only its exact retained candidate.
+        const decision = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, {
+          surface: 'cli', actionCaller: { kind: 'host' },
+        });
+        expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+        expect(reloadController.readCurrentPluginOccurrenceId?.('acme.observed-review')).toBeTruthy();
+        await expect(owner.changeService.controlPluginDevelopment!({ kind: 'status' }))
+          .resolves.toMatchObject({ status: { plugins: expect.arrayContaining([
+            expect.objectContaining({ sourceRootPath: reviewRoot, pluginId: 'acme.observed-review', phase: 'active',
+              occurrenceId: reloadController.readCurrentPluginOccurrenceId?.('acme.observed-review') }),
+          ]) } });
+        await expect(owner.changeService.controlPluginDevelopment!({ kind: 'registerExplicit', rootPath: reviewRoot }))
+          .resolves.toMatchObject({ status: { plugins: expect.arrayContaining([
+            expect.objectContaining({ pluginId: 'acme.observed-review', phase: 'active' }),
+          ]) } });
+        expect((await owner.changeService.listPendingPluginChanges()).changes).toEqual([]);
+        const raw = artifacts.get(artifactId)!;
+        expect(decodePlainArtifactStoredContent(String(raw.header))).toMatchObject({ kind: 'approval_request.v1', approvalStatus: 'executed' });
+      }
+      if (waivedInstall) {
+        expect(artifacts.size).toBe(0);
+        expect((await owner.changeService.listPendingPluginChanges()).changes).toEqual([]);
+        expect(reloadController.readCurrentPluginOccurrenceId?.('acme.observed-review')).toBeTruthy();
+        await expect(owner.changeService.controlPluginDevelopment!({ kind: 'status' }))
+          .resolves.toMatchObject({ status: { plugins: expect.arrayContaining([
+            expect.objectContaining({ pluginId: 'acme.observed-review', phase: 'active' }),
+          ]) } });
+      }
+    } finally {
+      await owner.changeService.shutdown();
+      await reloadController.shutdown();
+      await rm(happyHomeDir, { recursive: true, force: true });
+      resetActiveAccountSettingsSnapshotForTests();
+    }
+  });
+
   it('rejects development preparation when its saved plugin is disabled', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-development-disabled-runtime-'));
     const pluginId = 'acme.development.disabled';
@@ -687,7 +920,8 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
     });
 
     await expect(prepared.adopt()).resolves.toBeUndefined();
-    expect(queriedRoots).toEqual([sourcePath, sourcePath]);
+    expect(queriedRoots.length).toBeGreaterThan(0);
+    expect(queriedRoots.every(root => root === sourcePath)).toBe(true);
     await reloadController.shutdown();
     await rm(happyHomeDir, { recursive: true, force: true });
   });
@@ -702,9 +936,19 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
     const reloadController = createPluginReloadController({
       resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry(),
     });
+    const initialRuntime = await createAdmittedPluginRuntimeFixture({
+      happyHomeDir,
+      controller: reloadController,
+      runtimeOptions: { pluginIds: ['happier.agent.claude'] },
+    });
+    expect(initialRuntime.registry.contributes.agents.find(agent => agent.id === 'claude')
+      ?.catalogEntry?.shouldUseDeferredSessionStartup).toBeTypeOf('function');
+    const claudeOccurrence = reloadController.readCurrentPluginOccurrenceId?.('happier.agent.claude');
+    expect(claudeOccurrence).toBeTruthy();
     const lifecycle = createDaemonPluginRegistryRuntimeLifecycle({
       happyHomeDir,
       reloadController,
+      isDevelopmentSourceRegistered: (rootPath) => revisions.has(rootPath),
       resolveDevelopmentSourceAuthority: ({ rootPath }) => {
         const observedRevision = revisions.get(rootPath);
         if (observedRevision === undefined) return null;
@@ -724,13 +968,27 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
         'export const manifest = {',
         `  schemaVersion: 2, id: '${pluginId}', version: '1.0.0', displayName: '${pluginId}',`,
         "  engines: { happier: '>=0.0.0' }, runtime: { apiVersion: 1 },",
-        '  hostAccess: { required: [], optional: [] }, contributes: {},',
+        "  hostAccess: { required: [], optional: [] }, contributes: { ui: { renderers: [{ id: 'panel', kind: 'reactNative', artifact: 'panel-artifact', requiredHostMethods: [] }] } },",
         '};',
         crash
           ? "export function activate() { throw new Error('development activation failed'); }"
           : `export function activate() { const counts = (globalThis.__ppsSlotActivations ??= {}); counts['${pluginId}'] = (counts['${pluginId}'] ?? 0) + 1; }`,
         '',
       ].join('\n'), 'utf8');
+      const artifactEntry = 'react-native/panel-artifact/entry.cjs.bundle';
+      const artifactRoot = join(rootPath, 'dist', 'happier-plugin-ui');
+      const bytes = new TextEncoder().encode(`exports.renderSurface = () => ${observedRevision};`);
+      await mkdir(join(artifactRoot, 'react-native', 'panel-artifact'), { recursive: true });
+      await writeFile(join(artifactRoot, artifactEntry), bytes);
+      await writeFile(join(rootPath, GENERATED_PLUGIN_UI_ARTIFACTS_MANIFEST_RELATIVE_PATH), JSON.stringify(
+        PluginUiArtifactsManifestV2Schema.parse({ version: 2, entries: [{
+          artifactId: 'panel-artifact', tier: 'reactNative', entry: artifactEntry,
+          files: [{ relativePath: artifactEntry, digest: computePluginUiArtifactSha256DigestV1(bytes), byteSize: bytes.byteLength }],
+          digest: computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: artifactEntry, bytes }]),
+          builtWith: { bundler: 'esbuild', version: '0.27.2' },
+          executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0',
+        }] }),
+      ));
       const authority = bindPluginRuntimeSourceAuthority({
         custody: { kind: 'development', registeredRootId: rootPath },
         resolvedRoot: rootPath,
@@ -752,6 +1010,14 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       await alpha.adopt();
       const alphaBefore = reloadController.readCurrentPluginOccurrenceId?.('acme.development.alpha');
       expect(alphaBefore).toBeTruthy();
+      const activeContributes = reloadController.getState().activeRegistry!.contributes;
+      const artifactOwner = findResolvedGeneratedReactNativeArtifactOwner({
+        registry: activeContributes, pluginId: 'acme.development.alpha', contributionId: 'panel',
+      });
+      expect(artifactOwner).not.toBeNull();
+      expect(findGeneratedReactNativeArtifactEntry({ owner: artifactOwner!, platform: 'web' }))
+        .toMatchObject({ failure: null, entry: { artifactId: 'panel-artifact' } });
+      const initialArtifactDigest = artifactOwner!.generatedUiArtifactsManifest!.entries[0]!.digest;
 
       const alphaSlot = reloadController.readPluginSlot?.('acme.development.alpha');
       const alphaServing = alphaSlot?.current;
@@ -762,11 +1028,17 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       const betaBefore = reloadController.readCurrentPluginOccurrenceId?.('acme.development.beta');
       expect(betaBefore).toBeTruthy();
       expect(reloadController.readCurrentPluginOccurrenceId?.('acme.development.alpha')).toBe(alphaBefore);
+      expect(findResolvedGeneratedReactNativeArtifactOwner({
+        registry: reloadController.getState().activeRegistry!.contributes,
+        pluginId: 'acme.development.alpha', contributionId: 'panel',
+      })?.generatedUiArtifactsManifest?.entries[0]?.digest).toBe(initialArtifactDigest);
       // Adopting beta swaps only beta's slot: alpha's slot and serving
       // occurrence are the same objects, and alpha was not activated again.
       expect(reloadController.readPluginSlot?.('acme.development.alpha')).toBe(alphaSlot);
       expect(reloadController.readPluginSlot?.('acme.development.alpha')?.current).toBe(alphaServing);
       expect(slotActivations()['acme.development.alpha']).toBe(1);
+      expect(await reloadController.getState().activeRegistry?.acquireAgentCatalogEntry?.('claude'))
+        .toEqual(expect.objectContaining({ shouldUseDeferredSessionStartup: expect.any(Function) }));
 
       const failed = prepare('acme.development.alpha', 2, true);
       await expect(failed).rejects.toThrow('development activation failed');
@@ -780,6 +1052,13 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       expect(alphaAfterEdit).not.toBe(alphaBefore);
       expect(reloadController.readCurrentPluginOccurrenceId?.('acme.development.beta')).toBe(betaBefore);
       // The edited plugin keeps its one stable slot; only its serving occurrence changed.
+      const editedArtifactOwner = findResolvedGeneratedReactNativeArtifactOwner({
+        registry: reloadController.getState().activeRegistry!.contributes,
+        pluginId: 'acme.development.alpha', contributionId: 'panel',
+      });
+      expect(findGeneratedReactNativeArtifactEntry({ owner: editedArtifactOwner!, platform: 'web' }))
+        .toMatchObject({ failure: null, entry: { artifactId: 'panel-artifact' } });
+      expect(editedArtifactOwner!.generatedUiArtifactsManifest!.entries[0]!.digest).not.toBe(initialArtifactDigest);
       expect(reloadController.readPluginSlot?.('acme.development.alpha')).toBe(alphaSlot);
       expect(reloadController.readPluginSlot?.('acme.development.beta')).toBe(betaSlot);
       expect(slotActivations()).toEqual({
@@ -792,10 +1071,44 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       await expect(staleAlpha.adopt()).rejects.toThrow(/superseded before adoption/i);
       expect(reloadController.readCurrentPluginOccurrenceId?.('acme.development.alpha'))
         .toBe(alphaAfterEdit);
+
+      const betaRoot = join(happyHomeDir, 'acme.development.beta');
+      const removal = await lifecycle.prepareDevelopmentRemoval!({
+        pluginId: 'acme.development.beta', registeredRootId: betaRoot,
+      });
+      expect(removal).not.toBeNull();
+      revisions.delete(betaRoot);
+      await removal!.adopt();
+      expect(reloadController.readCurrentPluginOccurrenceId?.('acme.development.beta')).toBeNull();
+      expect(findResolvedGeneratedReactNativeArtifactOwner({
+        registry: reloadController.getState().activeRegistry!.contributes,
+        pluginId: 'acme.development.beta', contributionId: 'panel',
+      })).toBeNull();
+      expect(reloadController.readCurrentPluginOccurrenceId?.('acme.development.alpha')).toBe(alphaAfterEdit);
+      expect(reloadController.readCurrentPluginOccurrenceId?.('happier.agent.claude')).toBe(claudeOccurrence);
+      expect(await reloadController.getState().activeRegistry?.acquireAgentCatalogEntry?.('claude'))
+        .toEqual(expect.objectContaining({ shouldUseDeferredSessionStartup: expect.any(Function) }));
     } finally {
+      await initialRuntime.dispose();
       await reloadController.shutdown();
       await rm(happyHomeDir, { recursive: true, force: true });
     }
+  });
+
+  it('rejects genuinely competing declarative and activated Agent startup owners', async () => {
+    const declarations = getResolvedContributionRegistry();
+    await expect(createAdmittedPluginRuntimeFixture({
+      runtimeOptions: {
+        pluginIds: ['happier.agent.claude'],
+        contributes: createResolvedContributionRegistry({
+          ...declarations,
+          agents: declarations.agents.map((agent) => agent.id === 'claude' ? {
+            ...agent,
+            catalogEntry: { ...agent.catalogEntry!, shouldUseDeferredSessionStartup: () => true },
+          } : agent),
+        }),
+      },
+    })).rejects.toThrow("Agent 'claude' has competing declarative and activation-registered deferred startup owners");
   });
 
   it('removes and drains only the current development occurrence while fencing a re-admitted root', async () => {

@@ -104,6 +104,23 @@ describe('PluginMachineMatrixSection', () => {
         ));
     });
 
+    it('does not claim "current on 0 of N" for a plugin that only lives on its own machine', async () => {
+        // A development or machine-bound source is never Account-current by construction;
+        // "0 of 2" would read as a failure across the Account. The row naming its machine says it.
+        fixture.materializationAdmission = {
+            ...(fixture.materializationAdmission as object),
+            materializations: [materialization('machine-a', { portableRelease: false })],
+        };
+        const { PluginMachineMatrixSection } = await import('./PluginMachineMatrixSection');
+        const screen = await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const capturedItemProps = screen.findAllByType(Item).map((node) => node.props);
+        expect(capturedItemProps.find((props) => props.testID === 'settings.plugins.machineMatrix.summary')).toBeUndefined();
+        expect(capturedItemProps.filter((props) => props.testID === 'settings.plugins.machineMatrix.exception')
+            .map((props) => [props.title, props.detail])).toEqual([
+            ['machine-a', 'settingsPlugins.machineMatrix.state.localOnly'],
+        ]);
+    });
+
     it('does not repeat the Account release, which its own section owns', async () => {
         const { PluginMachineMatrixSection } = await import('./PluginMachineMatrixSection');
         const screen = await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);

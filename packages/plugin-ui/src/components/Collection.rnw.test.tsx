@@ -106,6 +106,7 @@ import {
   type CollectionAnatomy,
   type CollectionProps,
 } from './Collection.js';
+import { CollectionToolbar } from './CollectionToolbar.js';
 import { DetailsPaneFooter } from './DetailsPane.js';
 import { Button } from './Button.js';
 import { Heading } from './Foundation.js';
@@ -373,6 +374,7 @@ type HarnessOptions = Readonly<{
   search?: CollectionProps<Entry>['search'];
   sort?: CollectionProps<Entry>['sort'];
   renderDetail?: CollectionProps<Entry>['renderDetail'];
+  title?: CollectionProps<Entry>['title'];
 }>;
 
 type HarnessProps = HarnessOptions &
@@ -430,6 +432,7 @@ function Harness(props: HarnessProps): ReactElement {
       {...(props.empty === undefined ? {} : { empty: props.empty })}
       {...(props.header === undefined ? {} : { header: props.header })}
       {...(props.footer === undefined ? {} : { footer: props.footer })}
+      {...(props.title === undefined ? {} : { title: props.title })}
       testID="collection"
       listTestID="collection-list"
       detailTestID="collection-detail"
@@ -446,6 +449,7 @@ function mount(
     openKey?: string | null;
     pane?: ReturnType<typeof createPaneHost>;
     scrollTracker?: PluginUiScrollActivityTracker;
+    pageChrome?: Readonly<{ showsTitle: boolean; columnMaxWidthPx?: number }>;
   }> &
     HarnessOptions = {},
 ) {
@@ -466,6 +470,9 @@ function mount(
     ...(options.renderPopover === undefined
       ? {}
       : { renderPopover: options.renderPopover }),
+    ...(options.pageChrome === undefined
+      ? {}
+      : { pageChrome: options.pageChrome }),
   };
   const Slot = options.pane?.Slot ?? (() => null);
   let harness: HarnessOptions = options;
@@ -1367,6 +1374,90 @@ describe('Collection table', () => {
     },
   );
 
+  it("gives a resting list's rows the full width on a precise pointer: the actions overlay the row's end, revealed by hover", () => {
+    const matchMedia = (globalThis as { matchMedia?: unknown }).matchMedia;
+    (globalThis as { matchMedia?: unknown }).matchMedia = (query: string) => ({
+      matches: query.includes('hover: hover'),
+    });
+    const actions: string[] = [];
+    let view: ReturnType<typeof mount> | undefined;
+    try {
+      view = mount({
+        detail: 'none',
+        // A peek the phone list never draws must not hold a cell open at the row's end.
+        anatomy,
+        useRowActions: () => ({
+          secondaryActions: [{ id: 'pin', label: 'Pin' }],
+          onSecondaryAction: (id) => actions.push(id),
+        }),
+        renderPopover: (input) =>
+          input.content({
+            maxHeight: 600,
+            requestClose: () => input.onRequestClose(),
+          }),
+      });
+      view.measure(390);
+      const row = view.query('row:a')!;
+      const trigger = view.container.querySelector<HTMLElement>(
+        '[aria-label="More actions"]',
+      )!;
+      // The row's own wrapper: the closest node holding both the row's press target and its actions.
+      let item: HTMLElement = row;
+      while (!item.contains(trigger)) item = item.parentElement!;
+      // Out of the row's flow: the actions' outermost node beside the row's content is positioned, so no
+      // column (nor a padded cell) is reserved at the row's end and the age keeps the edge.
+      const ancestors: HTMLElement[] = [];
+      for (
+        let node = trigger.parentElement;
+        node !== null && node !== item;
+        node = node.parentElement
+      )
+        ancestors.push(node);
+      expect(getComputedStyle(ancestors.at(-1)!).position).toBe('absolute');
+      const opacityOf = () => {
+        for (const node of [trigger, ...ancestors]) {
+          const opacity = getComputedStyle(node).opacity;
+          if (opacity !== '' && opacity !== '1') return opacity;
+        }
+        return '1';
+      };
+      expect(opacityOf()).toBe('0');
+      act(() => {
+        row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      });
+      expect(opacityOf()).toBe('1');
+      act(() => {
+        row.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+      });
+      expect(opacityOf()).toBe('0');
+      // Keyboard focus on the trigger itself reveals it.
+      act(() => {
+        trigger.focus();
+      });
+      expect(opacityOf()).toBe('1');
+      act(() => {
+        trigger.blur();
+      });
+      // The row's context menu still reaches every action.
+      act(() => {
+        row.dispatchEvent(
+          new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+        );
+      });
+      const pin = [
+        ...view.container.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ].find((entry) => entry.textContent?.trim() === 'Pin');
+      expect(pin).toBeDefined();
+      act(() => {
+        pin!.click();
+      });
+      expect(actions).toEqual(['pin']);
+    } finally {
+      view?.unmount();
+      (globalThis as { matchMedia?: unknown }).matchMedia = matchMedia;
+    }
+  });
+
   it("draws a board card's actions inside the card at its title line, not beside it", () => {
     const view = mount({
       presentation: 'board',
@@ -1727,6 +1818,38 @@ describe('detail auto', () => {
     view.unmount();
   });
 
+  it('makes a pushed detail the page: the toolbar gives way, the hosted title leads, and back returns to the list', async () => {
+    const hostedSeen: boolean[] = [];
+    const view = mount({
+      header: <Text testID="toolbar">Clear sample reviews</Text>,
+      detailHeader: (key) => ({ title: `Entry ${key}` }),
+      renderDetail: (key, { headerHosted }) => {
+        hostedSeen.push(headerHosted);
+        return <Text testID={`detail:${key}`}>{`Detail ${key}`}</Text>;
+      },
+    });
+    view.measure(390);
+    await view.setOpen('a');
+    const detail = view.query('collection-detail')!;
+    expect(visible(detail)).toBe(true);
+    expect(detail.contains(view.query('detail:a'))).toBe(true);
+    // The page's own header (its toolbar) gives way: the detail is the page, not a block under the toolbar.
+    expect(visible(view.query('toolbar'))).toBe(false);
+    expect(visible(view.query('collection-list'))).toBe(false);
+    // The title lives in the hosted band, so the body is told not to draw it again.
+    expect(detail.querySelector('[role="heading"]')?.textContent).toBe(
+      'Entry a',
+    );
+    expect(hostedSeen.at(-1)).toBe(true);
+    act(() => {
+      view.query('collection-detail:back')!.click();
+    });
+    expect(view.openChanges.at(-1)).toBeNull();
+    await view.setOpen(null);
+    expect(visible(view.query('toolbar'))).toBe(true);
+    view.unmount();
+  });
+
   it('tells the detail it is pushed, and pins its primary through the one footer owner there only', async () => {
     const pushedSeen: boolean[] = [];
     const renderDetail: CollectionProps<Entry>['renderDetail'] = (
@@ -1818,6 +1941,13 @@ describe('detail auto beside the host details pane', () => {
     expect(within(view.query('host-pane'), 'detail:b')).toBe(true);
     expect(visible(view.query('collection-detail'))).toBe(false);
     expect(headerTitles(view.container)).not.toContain('Where');
+    // One message per state: the window's coverage is said once, in the footer, not again in the list's bar.
+    const statements =
+      view.container.textContent?.split('3 loaded · complete').length ?? 0;
+    expect(statements - 1).toBe(1);
+    expect(view.query('collection:footer')?.textContent).toContain(
+      '3 loaded · complete',
+    );
     expect(view.query('row:a:peek')).toBeNull();
     expect(view.query('row:a')?.textContent).toContain('payments-api');
     // The same row elements (no remount) and the open one marked.
@@ -2052,6 +2182,31 @@ describe('the title suffix', () => {
   });
 });
 
+describe('the title controls', () => {
+  it("draw a row's own controls beside its press target, never inside it, in the table and the phone list", () => {
+    const pressed: string[] = [];
+    const view = mount({
+      anatomy: {
+        ...anatomy,
+        titleControls: (entry) => (entry.id === 'a' ? (
+          <Button testID="row:a:chip" title=":5173" onPress={() => { pressed.push('chip'); }} />
+        ) : null),
+      },
+    });
+    for (const width of [1440, 360]) {
+      view.measure(width);
+      const chip = view.query('row:a:chip');
+      expect(chip).not.toBeNull();
+      expect(view.query('row:a')?.contains(chip)).toBe(false);
+      expect(view.container.querySelectorAll('button button, [role="button"] [role="button"]')).toHaveLength(0);
+      act(() => { chip!.click(); });
+    }
+    expect(pressed).toEqual(['chip', 'chip']);
+    expect(view.openChanges).toEqual([]);
+    view.unmount();
+  });
+});
+
 describe('the search field', () => {
   it('carries the active filters as removable tokens inside the field, and shows the key that focuses it', async () => {
     const removed: string[] = [];
@@ -2193,6 +2348,41 @@ describe('a page-sized collection (scroll page)', () => {
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     }
+    view.unmount();
+  });
+
+  it('lays its rows and search in the page content column, on the edge of the page sections around it', () => {
+    const view = mount({
+      presentation: 'list',
+      scroll: 'page',
+      detail: 'none',
+      pageChrome: { showsTitle: false, columnMaxWidthPx: 850 },
+      header: <Text testID="page-header">Plugins</Text>,
+    });
+    view.measure(1440);
+    // The rows' stage sits in the same centred column as the page header and the page sections, never full-bleed.
+    const column = view.query('collection:stage')!.parentElement!;
+    expect(getComputedStyle(column).maxWidth).toBe('850px');
+    expect(getComputedStyle(column).alignSelf).toBe('center');
+    view.unmount();
+  });
+
+  it('draws its search as one field: the input inside the well paints no focus ring of its own', () => {
+    const view = mount({
+      search: {
+        label: 'Search entries',
+        value: '',
+        onValueChange: () => undefined,
+        testID: 'search',
+      },
+    });
+    view.measure(1440);
+    const input = view.query('search')!;
+    expect(input.tagName).toBe('INPUT');
+    // The well is the field's one box; a browser ring on the inner input drew a second box inside it.
+    expect(input.style.outlineWidth).toBe('0px');
+    // Forced-colors mode restores one system ring on product inputs through this marker.
+    expect(input.getAttribute('data-happier-text-input')).toBe('true');
     view.unmount();
   });
 
@@ -2567,6 +2757,55 @@ describe('board', () => {
     view.unmount();
   });
 
+  it('lands on the first populated phone column when rows arrive after loading', async () => {
+    const view = mount({
+      presentation: 'board',
+      items: [],
+      loading: true,
+      grouping: { ...groups, retainEmpty: true },
+    });
+    view.measure(390);
+    await view.update({
+      items: entries.filter((entry) => entry.group === 'rest'),
+      loading: false,
+    });
+    expect(view.query('row:c')).not.toBeNull();
+    expect(
+      view.query('collection:pager')!.querySelector('[aria-checked="true"]')
+        ?.textContent,
+    ).toContain('Everything else');
+    view.unmount();
+  });
+
+  it('keeps an explicitly chosen empty phone column through data and presentation changes', async () => {
+    const view = mount({
+      presentation: 'board',
+      items: entries.filter((entry) => entry.group === 'rest'),
+      grouping: { ...groups, retainEmpty: true },
+    });
+    view.measure(390);
+    expect(view.query('row:c')).not.toBeNull();
+    act(() => {
+      (
+        view
+          .query('collection:pager')!
+          .querySelector('[role="radio"]') as HTMLElement
+      ).click();
+    });
+    expect(view.query('row:c')).toBeNull();
+    await view.update({ presentation: 'table' });
+    await view.update({
+      presentation: 'board',
+      items: [...entries.filter((entry) => entry.group === 'rest')],
+    });
+    expect(view.query('row:c')).toBeNull();
+    expect(
+      view.query('collection:pager')!.querySelector('[aria-checked="true"]')
+        ?.textContent,
+    ).toContain('Needs you');
+    view.unmount();
+  });
+
   it('keeps the open item and its mounted detail when the view switches from the table to the board', async () => {
     const view = mount({ openKey: 'b' });
     view.measure(1440);
@@ -2658,6 +2897,48 @@ describe('grid', () => {
     expect(height).toBeGreaterThan(40);
     expect(height).toBeLessThanOrEqual(60);
     view.unmount();
+  });
+
+  it('starts a new row where described cards give way to compact tiles, and moves vertically by those rows', async () => {
+    const view = mount({
+      presentation: 'grid',
+      grouped: false,
+      detail: 'none',
+      anatomy: {
+        ...anatomy,
+        reason: undefined,
+        age: undefined,
+        description: (entry) =>
+          entry.id === 'c' ? null : 'Retries payment intents.',
+      },
+    });
+    try {
+      view.measure(1440);
+      const rows = view.queryAll('collection:grid-row');
+      // The compact tile does not stretch to its described neighbours' height: it starts its own row.
+      expect(
+        rows.map(
+          (row) => row.querySelectorAll('[data-testid$=":card"]').length,
+        ),
+      ).toEqual([2, 1]);
+      const height = (id: string) =>
+        parseFloat(view.query(`row:${id}:card`)!.style.height);
+      expect(height('c')).toBeLessThan(height('a'));
+      // Keyboard rows are the drawn rows: ArrowDown from the second described card lands on the tile below.
+      await act(async () => {
+        view.query('row:b')!.focus();
+        view.query('row:b')!.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'ArrowDown',
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      expect(document.activeElement).toBe(view.query('row:c'));
+    } finally {
+      view.unmount();
+    }
   });
 
   it('drops the description and footer bands for a shelf where no card has them, keeping heights equal within each shelf', () => {
@@ -3797,6 +4078,57 @@ describe("the search in the caller's header row", () => {
     view.unmount();
   });
 
+  it("names the page at the head of the caller's row as its heading, unless the host's navigation already shows the title", () => {
+    const header: CollectionProps<Entry>['header'] = (slots) => (
+      <View testID="toolbar">
+        {slots.title}
+        {slots.search}
+      </View>
+    );
+    const desk = mount({
+      search,
+      title: 'PRs & Issues',
+      header,
+      pageChrome: { showsTitle: false },
+    });
+    desk.measure(1440);
+    const heading = desk.query('toolbar')!.querySelector('[role="heading"]');
+    expect(heading?.textContent).toBe('PRs & Issues');
+    // It is drawn in the theme's ink like the row titles, never the platform's default colour (black on a dark
+    // theme). Compared with a row title so the assertion follows whatever theme the surface carries.
+    const rowTitle = [
+      ...desk.container.querySelectorAll<HTMLElement>('div, span'),
+    ].find(
+      (node) =>
+        node.childElementCount === 0 &&
+        node.textContent === 'Retry idempotent payment intents',
+    );
+    expect(getComputedStyle(heading!).color).not.toBe('');
+    expect(getComputedStyle(heading!).color).toBe(
+      getComputedStyle(rowTitle!).color,
+    );
+    // It leads the row: the search comes after it.
+    expect(
+      heading!.compareDocumentPosition(desk.query('search')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    desk.unmount();
+
+    // A phone's navigation header already says it; the row does not say it twice.
+    const phone = mount({
+      search,
+      title: 'PRs & Issues',
+      header,
+      pageChrome: { showsTitle: true },
+    });
+    phone.measure(390);
+    expect(
+      phone.query('toolbar')!.querySelector('[role="heading"]'),
+    ).toBeNull();
+    expect(phone.query('toolbar')!.textContent).not.toContain('PRs & Issues');
+    phone.unmount();
+  });
+
   it('hands the selection control to a header render, so the list pane draws no row of its own for it', () => {
     const store = createListMultiSelectionStore({
       scopeKey: 'entries',
@@ -3835,15 +4167,13 @@ describe("the search in the caller's header row", () => {
       view.measure(1440);
       expect(view.query('happier-list-selection-mode')).toBeNull();
       await act(async () => {
-        view!
-          .query('row:a')!
-          .dispatchEvent(
-            new MouseEvent('click', {
-              shiftKey: true,
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
+        view!.query('row:a')!.dispatchEvent(
+          new MouseEvent('click', {
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
       });
       expect(store.getSnapshot().isSelectionMode).toBe(true);
       expect([...store.getSnapshot().selectedKeys]).toEqual(['a']);
@@ -3859,15 +4189,13 @@ describe("the search in the caller's header row", () => {
       expect(view.query('happier-list-selection-mode')).toBeNull();
       await act(async () => {
         view!.query('row:b')!.focus();
-        view!
-          .query('row:b')!
-          .dispatchEvent(
-            new KeyboardEvent('keydown', {
-              key: ' ',
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
+        view!.query('row:b')!.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: ' ',
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
       });
       expect(store.getSnapshot().isSelectionMode).toBe(true);
       expect([...store.getSnapshot().selectedKeys]).toEqual(['b']);
@@ -3931,6 +4259,235 @@ describe("the search in the caller's header row", () => {
       true,
     );
     expect(view.query('toolbar')!.contains(view.query('search'))).toBe(false);
+    view.unmount();
+  });
+});
+
+describe('the Collection toolbar', () => {
+  const search = {
+    label: 'Search entries',
+    value: '',
+    onValueChange: () => undefined,
+    testID: 'search',
+  };
+  // A phone host: a requested sheet is drawn as the sheet (titled, the rows, the pinned footer).
+  const openPopover: PluginUiPresentationHost['renderPopover'] = (input) =>
+    input.sheet === undefined ? (
+      input.content({
+        maxHeight: 600,
+        requestClose: () => input.onRequestClose(),
+      })
+    ) : (
+      <View testID="sheet" aria-label={input.sheet.title}>
+        {input.content({
+          maxHeight: 600,
+          requestClose: () => input.onRequestClose(),
+          presentation: 'sheet',
+        })}
+        <View testID="sheet:footer">{input.sheet.footer}</View>
+      </View>
+    );
+
+  function toolbarHeader(
+    calls: string[],
+    freshness: Readonly<{
+      tone: 'muted' | 'warning' | 'neutral';
+      label: string;
+      indicator?: boolean;
+      pulsing?: boolean;
+    }> = {
+      tone: 'muted',
+      label: 'Up to date',
+      indicator: false,
+    },
+  ): CollectionProps<Entry>['header'] {
+    return (slots) => (
+      <CollectionToolbar
+        slots={slots}
+        lens={<Text testID="lens">My work</Text>}
+        refine={{
+          label: 'Filters',
+          activeCount: 2,
+          render: () => <Text testID="refine:toolbar">Refine</Text>,
+          sheet: {
+            groups: [
+              {
+                id: 'state',
+                accessibilityLabel: 'State',
+                items: [
+                  { id: 'open', label: 'Open', kind: 'checkbox', checked: true },
+                  { id: 'merged', label: 'Merged', kind: 'checkbox', checked: false },
+                ],
+              },
+              {
+                id: 'order',
+                accessibilityLabel: 'Order',
+                items: [
+                  { id: 'order:newest', label: 'Newest', kind: 'radio', radioGroupId: 'order' },
+                  { id: 'order:oldest', label: 'Oldest', kind: 'radio', radioGroupId: 'order' },
+                ],
+              },
+            ],
+            radioGroups: [{ id: 'order', accessibilityLabel: 'Order', selectedId: 'order:newest' }],
+            onSelect: (id) => calls.push(`select:${id}`),
+            clear: { label: 'Clear filters', onPress: () => calls.push('clear') },
+            showResultsLabel: 'Show 3 results',
+          },
+        }}
+        freshness={freshness}
+        refresh={{ label: 'Refresh', onPress: () => calls.push('refresh') }}
+        more={{
+          label: 'More',
+          items: [{ id: 'manage-sources', label: 'Manage sources' }],
+          onSelect: (id) => calls.push(id),
+        }}
+        views={{
+          label: 'View',
+          value: 'list',
+          options: [
+            { value: 'list', label: 'List', icon: 'list' },
+            { value: 'board', label: 'Board', icon: 'board' },
+          ],
+          onChange: (value) => calls.push(`view:${value}`),
+        }}
+        testID="toolbar"
+      />
+    );
+  }
+
+  const button = (container: HTMLElement, label: string) =>
+    [
+      ...container.querySelectorAll<HTMLElement>('[role="button"], button'),
+    ].find((node) => node.getAttribute('aria-label') === label) ?? null;
+
+  it('keeps every control in one row on a wide page', () => {
+    const calls: string[] = [];
+    const view = mount({
+      search,
+      header: toolbarHeader(calls),
+      renderPopover: openPopover,
+    });
+    view.measure(1440);
+    const toolbar = view.query('toolbar')!;
+    expect(toolbar.contains(view.query('search'))).toBe(true);
+    expect(toolbar.contains(view.query('lens'))).toBe(true);
+    // Filters and order sit in the row itself, not behind a button.
+    expect(view.query('refine:toolbar')).not.toBeNull();
+    expect(view.query('sheet')).toBeNull();
+    expect(toolbar.textContent).toContain('Up to date');
+    expect(button(toolbar, 'Refresh')).not.toBeNull();
+    expect(button(toolbar, 'More')).not.toBeNull();
+    expect(
+      toolbar.querySelector('[role="radiogroup"], [role="tablist"]'),
+    ).not.toBeNull();
+    view.unmount();
+  });
+
+  it('on a phone folds filters, order, freshness and refresh behind two round buttons, keeping the lens and the view switch', () => {
+    const calls: string[] = [];
+    const view = mount({
+      search,
+      header: toolbarHeader(calls),
+      renderPopover: openPopover,
+    });
+    view.measure(390);
+    const toolbar = view.query('toolbar')!;
+    expect(toolbar.contains(view.query('search'))).toBe(true);
+    expect(toolbar.contains(view.query('lens'))).toBe(true);
+    expect(
+      toolbar.querySelector('[role="radiogroup"], [role="tablist"]'),
+    ).not.toBeNull();
+    expect(view.query('refine:toolbar')).toBeNull();
+    // Healthy freshness is quiet on a phone; the refresh icon leaves the row.
+    expect(toolbar.textContent).not.toContain('Up to date');
+    expect(button(toolbar, 'Refresh')).toBeNull();
+
+    // The folded Filters: a named, counted button that opens the shared bottom sheet of the wide menu's rows.
+    const filters = button(toolbar, 'Filters: 2')!;
+    expect(filters).not.toBeNull();
+    expect(filters.textContent).toBe('2');
+    act(() => {
+      filters.click();
+    });
+    const sheet = view.query('sheet')!;
+    expect(sheet.getAttribute('aria-label')).toBe('Filters');
+    const row = (label: string) =>
+      [...sheet.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"], [role="menuitemradio"]')].find(
+        (node) => node.getAttribute('aria-label') === label,
+      )!;
+    // Grouped checkbox rows under their names, and Order as one radio group.
+    expect(sheet.textContent).toContain('State');
+    expect(row('Open').getAttribute('aria-checked')).toBe('true');
+    expect(row('Merged').getAttribute('aria-checked')).toBe('false');
+    expect(row('Newest').getAttribute('aria-checked')).toBe('true');
+    expect(row('Newest').closest('[role="group"]')?.getAttribute('aria-label')).toBe('Order');
+    // Every choice applies where it is touched, and the sheet stays for the next.
+    act(() => {
+      row('Merged').click();
+    });
+    act(() => {
+      row('Oldest').click();
+    });
+    expect(calls).toEqual(['select:merged', 'select:order:oldest']);
+    expect(view.query('sheet')).not.toBeNull();
+    // The pinned footer: a quiet Clear, and one primary that only closes the sheet.
+    const footer = view.query('sheet:footer')!;
+    act(() => {
+      button(footer, 'Clear filters')!.click();
+    });
+    expect(calls).toEqual(['select:merged', 'select:order:oldest', 'clear']);
+    expect(view.query('sheet')).not.toBeNull();
+    act(() => {
+      button(footer, 'Show 3 results')!.click();
+    });
+    expect(view.query('sheet')).toBeNull();
+    calls.length = 0;
+
+    // The folded More: Refresh, carrying the freshness, then the page's own items, as menu items.
+    const more = button(toolbar, 'More')!;
+    expect(more.getAttribute('aria-haspopup')).toBe('menu');
+    act(() => {
+      more.click();
+    });
+    const items = [
+      ...view.container.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ];
+    expect(items.map((item) => item.textContent)).toEqual([
+      'RefreshUp to date',
+      'Manage sources',
+    ]);
+    act(() => {
+      items[0]!.click();
+    });
+    expect(calls).toEqual(['refresh']);
+    view.unmount();
+  });
+
+  it('on a phone keeps a stale list visible in the toolbar, not only inside a menu', () => {
+    const view = mount({
+      search,
+      header: toolbarHeader([], {
+        tone: 'warning',
+        label: 'Showing the last known list',
+        indicator: true,
+      }),
+      renderPopover: openPopover,
+    });
+    view.measure(390);
+    expect(view.query('toolbar')!.textContent).toContain(
+      'Showing the last known list',
+    );
+    view.unmount();
+  });
+
+  it('composes for a phone from the first frame when the host navigation shows the title', () => {
+    const view = mount({
+      search,
+      header: toolbarHeader([]),
+      pageChrome: { showsTitle: true },
+    });
+    expect(button(view.query('toolbar')!, 'Filters: 2')).not.toBeNull();
+    expect(view.query('refine:toolbar')).toBeNull();
     view.unmount();
   });
 });

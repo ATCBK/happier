@@ -1,3 +1,4 @@
+import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -688,15 +689,6 @@ const mcpServersUxTranslationExtension = {
     `Enabled in ${provider}`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) =>
     `Disabled in ${provider}`,
-  mcpServersEditorAppliesTo: 'Applies to',
-  mcpServersEditorAppliesToSubtitle:
-    'Choose where Happier should add this server by default.',
-  mcpServersAddApplyRule: 'Add applies-to rule',
-  mcpServersAddApplyRuleSubtitle:
-    'Choose where this server should apply by default.',
-  mcpServersAddApplyRuleHelp:
-    'Save this applies-to rule to make it part of this server configuration.',
-  mcpServersAddApplyRuleSave: 'Save applies-to rule',
   mcpServersDeliveryNativeTitle: 'Native MCP',
   mcpServersDeliveryNativeSubtitle:
     'This backend receives Happier tools as native MCP servers.',
@@ -1274,6 +1266,18 @@ const enSessionRemotePermissionGrants =
   sessionRemotePermissionGrantTranslations.en;
 
 const enPluginSurfaces = {
+  originReason: {
+      home_unreachable: "This machine can’t be reached from this Home.",
+      release_unavailable: "No verified release is available for this installation.",
+      non_portable: "This installation needs its local source to be ready.",
+      source_not_ready: "This plugin’s source is not ready yet.",
+      daemon_unsupported: "This machine’s Happier version can’t describe its plugins.",
+      daemon_invalid_response: "This machine returned an invalid plugin description.",
+      daemon_unavailable: "Happier could not read the plugin description from this machine.",
+      activation_refused: "This plugin could not start on this machine.",
+      no_materialization: "No installation is available to run this plugin.",
+      recovery: "Choose another machine with Run on.",
+  },
   selectCount: '{count} selected',
   state: {
     loading: {
@@ -1294,7 +1298,26 @@ const enPluginSurfaces = {
       title: 'Plugin content is offline',
       reason:
         'Showing the last available content in read-only mode until reconnection.',
+      titleNothingLoaded: 'This machine is offline',
+      reasonNothingLoaded:
+        'Nothing has loaded from it yet. Choose another machine to run it on.',
     },
+    unreachable: { title: 'Can’t reach this machine' },
+    sourceUnavailable: {
+      title: 'Its source isn’t available',
+      reason:
+        'Where it was set to run is gone or has changed, so nothing has loaded. Choose another source to run it on.',
+    },
+    connecting: {
+      title: 'Connecting to this machine',
+      reason: 'This view opens as soon as the machine answers.',
+    },
+    sourceRequired: {
+      title: 'Choose where this runs',
+      reason: 'More than one source can run it. Pick one to load it.',
+    },
+    namedUnavailable: ({ name }: { name: string }) => `${name} can’t open`,
+    namedFailed: ({ name }: { name: string }) => `${name} couldn’t load`,
   },
   offlineSnapshot: {
     accessibilityLabel: ({ title }: { title: string }) =>
@@ -1630,6 +1653,7 @@ const enMemoryContext = {
     factsTitle: 'Facts',
     alwaysRemembered: 'Always remembered:',
     searchable: 'Searchable:',
+    countsUnavailable: 'Couldn’t load the counts',
     factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fact' : 'facts'}`,
     topicsLabel: 'Topics:',
     showAll: ({ count }: { count: number }) => `Show all ${count}`,
@@ -4127,40 +4151,15 @@ const enSettings = {
   mcpServersEditorRemote: 'Remote',
   mcpServersEditorBindings: 'Bindings',
   mcpServersFieldName: 'Name',
-  mcpServersFieldTitle: 'Title',
-  mcpServersFieldTitlePlaceholder: 'Optional display title',
   mcpServersFieldTransport: 'Transport',
   mcpServersFieldCommand: 'Command',
   mcpServersFieldArgs: 'Args',
   mcpServersFieldUrl: 'URL',
-  mcpServersBindingTitle: 'Binding',
-  mcpServersBindingEnabled: 'Enabled',
-  mcpServersBindingEnabledSubtitle: 'Toggle this binding on or off',
-  mcpServersBindingTarget: 'Target',
-  mcpServersBindingTargetSubtitle: 'Where this server is available',
-  mcpServersBindingMachine: 'Machine',
-  mcpServersBindingMachineSubtitle: 'Select a machine',
-  mcpServersBindingDeleteSubtitle: 'Remove this binding',
-  mcpServersBindingTargetAllMachines: 'All machines',
   mcpServersBindingTargetMachine: ({ machine }: { machine: string }) =>
     `Machine: ${machine}`,
-  mcpServersBindingTargetWorkspace: ({
-    machine,
-    path,
-  }: {
-    machine: string;
-    path: string;
-  }) => `Workspace: ${machine} • ${path}`,
-  mcpServersBindingTargetAllMachinesSubtitle: 'Enable on every machine',
   mcpServersBindingTargetMachineTitle: 'Machine',
-  mcpServersBindingTargetMachineSubtitle: 'Enable on a single machine',
-  mcpServersBindingTargetWorkspaceTitle: 'Workspace',
-  mcpServersBindingTargetWorkspaceSubtitle:
-    'Enable only for a specific workspace path',
   mcpServersValidationFailed: 'MCP server settings are invalid.',
   mcpServersServerNotFound: 'Server not found.',
-  mcpServersBindingsEmptyTitle: 'No bindings yet',
-  mcpServersBindingsEmptySubtitle: 'Add a binding to use this server.',
   mcpServersAddBinding: 'Add binding',
   mcpServersAddBindingSubtitle: 'Enable this server for machines or workspaces',
   mcpServersSaveDisabledSubtitle: 'No changes to save.',
@@ -4186,18 +4185,7 @@ const enSettings = {
     name: string;
   }) => `Import "${name}" from ${provider}?`,
   mcpServersImportAction: 'Import',
-  mcpServersBindingSummaryAllMachines: 'All machines',
-  mcpServersBindingSummaryMachines: ({ count }: { count: number }) =>
-    `${count} machine${count === 1 ? '' : 's'}`,
-  mcpServersBindingSummaryWorkspaces: ({ count }: { count: number }) =>
-    `${count} workspace${count === 1 ? '' : 's'}`,
-  mcpServersBindingSummaryNone: 'Not bound',
   mcpServersPickWorkspaceTitle: 'Pick a workspace root',
-  mcpServersBindingWorkspaceRootTitle: 'Workspace root',
-  mcpServersBindingOverridesTitle: 'Overrides',
-  mcpServersBindingOverridesNone: 'No overrides',
-  mcpServersBindingOverridesCount: ({ count }: { count: number }) =>
-    `${count} override${count === 1 ? '' : 's'}`,
   mcpServersEditorEnv: 'Environment',
   mcpServersEnvAdd: 'Add env var',
   mcpServersEnvAddSubtitle: 'Set environment variables for this server',
@@ -4230,66 +4218,6 @@ const enSettings = {
   mcpServersValueSecretSelectSubtitle: 'Choose a Saved Secret',
   mcpServersKeyInvalid: 'Key is invalid.',
   mcpServersKeyAlreadyExists: 'Key already exists.',
-  mcpServersOverridesStdioTitle: 'Stdio overrides',
-  mcpServersOverridesCommandTitle: 'Override command',
-  mcpServersOverridesCommandSubtitle:
-    'Use a different command for this binding',
-  mcpServersOverridesArgsTitle: 'Override args',
-  mcpServersOverridesArgsSubtitle:
-    'Use different args for this binding (blank = empty args)',
-  mcpServersOverridesRemoteTitle: 'Remote overrides',
-  mcpServersOverridesUrlTitle: 'Override URL',
-  mcpServersOverridesUrlSubtitle: 'Use a different URL for this binding',
-  mcpServersOverridesEnvPatchTitle: 'Env patch',
-  mcpServersOverridesEnvPatchEmptyTitle: 'No env overrides',
-  mcpServersOverridesEnvPatchEmptySubtitle:
-    'Add overrides or deletions for env vars.',
-  mcpServersOverridesHeadersPatchTitle: 'Headers patch',
-  mcpServersOverridesHeadersPatchEmptyTitle: 'No header overrides',
-  mcpServersOverridesHeadersPatchEmptySubtitle:
-    'Add overrides or deletions for headers.',
-  mcpServersOverridesDeleteValue: 'Delete this key for this binding',
-  mcpServersOverridesEnvPatchAddTitle: 'Add env override',
-  mcpServersOverridesEnvPatchAddSubtitle:
-    'Set or override an env var for this binding',
-  mcpServersOverridesEnvPatchDeleteTitle: 'Delete env key',
-  mcpServersOverridesEnvPatchDeleteSubtitle:
-    'Remove an env var for this binding',
-  mcpServersOverridesHeadersPatchAddTitle: 'Add header override',
-  mcpServersOverridesHeadersPatchAddSubtitle:
-    'Set or override a header for this binding',
-  mcpServersOverridesHeadersPatchDeleteTitle: 'Delete header key',
-  mcpServersOverridesHeadersPatchDeleteSubtitle:
-    'Remove a header for this binding',
-  mcpServersOverridesDeleteEnvTitle: 'Delete env key',
-  mcpServersOverridesDeleteEnvPrompt:
-    'Enter the env var name to delete for this binding.',
-  mcpServersOverridesDeleteHeaderTitle: 'Delete header key',
-  mcpServersOverridesDeleteHeaderPrompt:
-    'Enter the header name to delete for this binding.',
-  mcpServersOverridesCommandRequired: 'Command override is enabled but empty.',
-  mcpServersOverridesUrlRequired: 'URL override is enabled but empty.',
-  mcpServersTestTitle: 'Test',
-  mcpServersTestFooter:
-    'Runs on the selected machine. No secrets are shown in results.',
-  mcpServersTestMachineTitle: 'Test on machine',
-  mcpServersTestBindingTitle: 'Use binding',
-  mcpServersTestNoBinding: 'No binding',
-  mcpServersTestNoBindingSubtitle: 'Test without binding overrides',
-  mcpServersTestDirectoryTitle: 'Working directory',
-  mcpServersTestDirectorySubtitle: 'Tap to set a directory',
-  mcpServersTestDirectoryPrompt: 'Enter the working directory for the test.',
-  mcpServersTestRunTitle: 'Test server',
-  mcpServersTestRunSubtitle: 'Connect and list tools',
-  mcpServersTestResultOkTitle: 'Test succeeded',
-  mcpServersTestResultOkSubtitle: ({
-    toolCount,
-    durationMs,
-  }: {
-    toolCount: number;
-    durationMs: number;
-  }) => `${toolCount} tools · ${durationMs}ms`,
-  mcpServersTestResultErrorTitle: 'Test failed',
   ...mcpServersUxTranslationExtension,
   ...acpCatalogTranslationExtension.settings,
 
@@ -7126,8 +7054,33 @@ const enSettingsAgents = {
     sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Used when a new session starts with ${agent}. Saved to your account.`,
     defaultModelAgentDefault: 'Agent default',
     defaultModelAgentDefaultDescription: 'New sessions start on the model the agent picks.',
-    setupTitle: 'Setup and status',
-    setupNoComputer: 'No machine selected. Choose one to check the CLI or sign in.',
+    machinesDescription: ({ agent }: { agent: string }) => `${agent} is available on a machine once it’s installed there. Happier installs it for Happier only; your own terminal setup isn’t changed.`,
+    installedOutsideHappier: 'Installed outside Happier',
+    kindRegistryAgent: ({ registry }: { registry: string }) => `Coding agent · from the ${registry}`,
+    sourceTitle: 'Source and updates',
+    sourceDescription: 'Happier tells you when the registry lists a newer version. It never updates on its own.',
+    versionTitle: 'Version',
+    versionChosen: 'The version you chose',
+    versionChecking: 'Checking the registry…',
+    versionCheckFailed: 'Couldn’t check the registry',
+    versionNotListed: 'No longer listed by the registry. It keeps working.',
+    versionAvailable: ({ version }: { version: string }) => `${version} is available`,
+    versionLatestChecked: ({ time }: { time: string }) => `The latest in the registry · checked ${time}`,
+    updateTo: ({ version }: { version: string }) => `Update to ${version}`,
+    checkNow: 'Check now',
+    checksumTitle: 'Checksum',
+    checksumVerified: 'Verified',
+    checksumVerifiedDescription: 'Every install is checked against the registry’s SHA-256.',
+    checksumNotPublished: 'Not published by the registry',
+    detailsTitle: 'Details',
+    launchTitle: 'Launch',
+    environmentTitle: 'Environment variables',
+    noVariables: 'no variables',
+    variables: ({ count }: { count: number }) => (count === 1 ? `${count} variable` : `${count} variables`),
+    removeAgent: 'Remove agent',
+    removeAgentConfirm: ({ name }: { name: string }) => `${name} leaves your Account and is uninstalled from the machines where Happier installed it.`,
+    removeAgentFootnote: 'Takes it out of your Account. Machines that are offline remove it when they’re back.',
+    removeAgentFootnoteMachines: ({ machines }: { machines: string }) => `Takes it out of your Account and uninstalls it from ${machines}. Machines that are offline remove it when they’re back.`,
     modelsDefaultTag: 'Default',
     modelsLegendFavorite: 'Pinned to the top',
     modelsLegendShown: 'Shown in the picker',
@@ -7148,10 +7101,6 @@ const enSettingsAgents = {
     readinessDescription: 'Sign-in and CLI on the machine above.',
     sessionDefaultsAccountDescription: ({ agent }: { agent: string }) =>
       `Saved to your account and used on every machine when a new session starts with ${agent}.`,
-    checkingMachine: ({ machine }: { machine: string }) =>
-      `Checking ${machine}…`,
-    machineUnavailableDescription:
-      'Happier couldn’t read this machine. Your agent settings still apply.',
     noMachineTitle: 'Choose a machine',
     noMachineDescription: ({ agent }: { agent: string }) =>
       `${agent}'s setup depends on the machine it runs on. Choose one above.`,
@@ -7161,9 +7110,6 @@ const enSettingsAgents = {
     checkedAt: ({ time }: { time: string }) => `checked ${time}`,
     signInTitle: 'Sign-in',
     signInGuide: 'Sign-in guide',
-    nothingToSetUpTitle: 'Nothing to set up on this machine',
-    nothingToSetUpDescription: ({ agent }: { agent: string }) =>
-      `${agent} has no CLI or sign-in to manage here.`,
     integrationsTitle: 'Integrations',
     onMachine: ({ machine }: { machine: string }) => `on ${machine}`,
     notInstalledOnMachine: ({ machine }: { machine: string }) =>
@@ -8083,10 +8029,10 @@ const enSettingsFeatures = {
   voiceSubtitle: 'Enable voice input/output and voice assistant settings',
   expVoiceAgent: 'Voice agent',
   expVoiceAgentSubtitle:
-    'Enable daemon-backed voice agent surfaces (requires Subagents)',
-  expVoiceDaemonInference: 'Voice daemon inference',
+    "Talk to an agent that works on your sessions (requires Subagents)",
+  expVoiceDaemonInference: "Machine speech",
   expVoiceDaemonInferenceSubtitle:
-    'Enable daemon-backed local voice inference controls',
+    "Run speech models on your machines",
   expLiveActivities: 'Live Activities',
   expLiveActivitiesSubtitle:
     'Enable Live Activities surfaces for session progress',
@@ -8257,6 +8203,7 @@ const enErrors = {
   failedToRejectRequest: 'Failed to reject friend request',
   failedToRemoveFriend: 'Failed to remove friend',
   searchFailed: 'Search failed. Please try again.',
+  workspaceFolderMissing: 'This folder no longer exists on the machine. Choose another folder.',
   failedToSendRequest: 'Failed to send friend request',
   failedToResumeSession: 'Failed to resume session',
   failedToSendMessage: 'Failed to send message',
@@ -8501,6 +8448,9 @@ const enNewSession = {
   launchStillPendingTitle: 'Launch still in progress',
   launchStillPendingBody:
     'Happier hasn’t confirmed the new session yet. Your launch request is still saved. Retry to continue the same launch without creating a duplicate session.',
+  launchApprovalTitle: 'Create session',
+  launchApprovalBody:
+    'Waiting for your approval. The session starts once it’s approved, and your message stays here.',
   initialInputNotConfirmedTitle: 'Check your first message',
   initialInputRejectedTitle: 'Your first message wasn’t sent',
   initialInputNotConfirmed:
@@ -8670,7 +8620,7 @@ const enNewSession = {
     // folder; it does NOT open the tree-browser modal. Distinct copy
     // matters for screen-reader correctness.
     openFolderLabel: 'Show folder contents',
-    emptyInThisFolder: 'No matches in this folder',
+    emptyNewFolder: 'No matching folder. Press ↵ to use the path as typed.',
     favoriteAdd: 'Add to favorites',
     favoriteRemove: 'Remove from favorites',
     hints: {
@@ -9546,6 +9496,7 @@ const enSession = {
     loadSessionFalse: 'Agent does not support loading sessions.',
   },
   inactiveResumable: 'Inactive (resumable)',
+  inactiveArchived: 'Archived',
   inactiveMachineOffline: 'Inactive (machine offline)',
   inactiveNotResumable: 'Inactive',
   inactiveNotResumableNoticeTitle: 'This session can’t be resumed',
@@ -9993,9 +9944,13 @@ const enUniversalSearch = {
   scopeFilterLabel: 'Home',
   commitsUpdateRequired: 'Update Happier on this machine to search commits.',
   moreResultsAvailable: 'More results are available. Refine your search.',
+  noMatchesInSearchedResults: 'No matches in what was searched',
   sessionInventoryLoading: 'Still loading sessions…',
   searchingGroup: 'Searching…',
-  groupFailed: ({ group }: { group: string }) => `Couldn’t search ${group}. Type again to retry.`,
+  groupFailed: ({ group }: { group: string }) => `Couldn’t search ${group}.`,
+  textUnavailableOnMachine: ({ machine }: { machine: string }) => `Text search isn’t available on ${machine}. Update Happier there, then retry.`,
+  commitsUnavailableOnMachine: ({ machine }: { machine: string }) => `Commit search isn’t available on ${machine}. Check that Git is installed there, then retry.`,
+  thisMachine: 'this machine',
   sessionInventoryIncomplete:
     'Some Sessions could not be loaded. Clear the search and try again.',
   sections: {
@@ -11562,10 +11517,6 @@ const enFiles = {
       removeTitle: 'Remove worktree',
       removeSubtitle: ({ target }: { target: string }) =>
         `Remove ${target} from this repository.`,
-      removeConfirmTitle: 'Remove worktree?',
-      removeConfirmBody: ({ path }: { path: string }) =>
-        `Remove the worktree at ${path}? This cannot be undone.`,
-      removeConfirmButton: 'Remove worktree',
       pruneTitle: 'Prune stale worktrees',
       pruneSubtitle: 'Clean up stale worktree metadata for this repository.',
       createFailed: 'Failed to create worktree.',
@@ -11616,16 +11567,6 @@ const enFiles = {
     discard: 'Discard',
     restoreFailed: 'Failed to restore stash.',
     discardFailed: 'Failed to discard stash.',
-    restoreConfirm: {
-      title: 'Restore stashed changes?',
-      body: 'Apply the stashed changes to your working tree. Conflicts may require manual resolution.',
-      confirm: 'Restore',
-    },
-    discardConfirm: {
-      title: 'Discard stashed changes?',
-      body: 'This will permanently delete this stash.',
-      confirm: 'Discard',
-    },
   },
   summary: ({ staged, unstaged }: { staged: number; unstaged: number }) =>
     `${staged} staged • ${unstaged} unstaged`,
@@ -11690,9 +11631,6 @@ const enFiles = {
   repositoryInit: {
     initialize: 'Initialize repository',
     initializing: 'Initializing…',
-    confirmTitle: 'Initialize repository?',
-    confirmBody:
-      'Create a Git repository in this folder. Existing files will not be staged or committed.',
     errors: {
       failed: 'Failed to initialize repository.',
     },
@@ -11850,9 +11788,7 @@ const enFiles = {
     commitLabel: 'Commit',
     running: ({ operation }: { operation: string }) => `Running: ${operation}`,
     revert: {
-      title: 'Revert commit',
       button: 'Revert commit',
-      confirm: 'Revert',
       success: 'Commit reverted successfully',
       failed: 'Failed to revert commit',
     },
@@ -11872,14 +11808,6 @@ const enFiles = {
   },
   commitAdjacentPush: {
     accessibilityLabel: ({ target }: { target: string }) => `Push to ${target}`,
-    confirm: {
-      title: 'Push local commits?',
-      body: ({ target }: { target: string }) =>
-        `Push your local commits to ${target}.`,
-      push: 'Yes',
-      notNow: 'No',
-      pushAndDontAskAgain: "Push and don't ask again",
-    },
   },
   loadingFile: ({ fileName }: { fileName: string }) => `Loading ${fileName}...`,
   binaryFile: 'Binary File',
@@ -12059,9 +11987,6 @@ const enFiles = {
         fetchUrlPlaceholder: 'Fetch URL',
         pushUrlPlaceholder: 'Push URL (optional)',
         noFetchUrl: 'No fetch URL',
-        removeConfirmTitle: 'Remove remote?',
-        removeConfirmBody: ({ name }: { name: string }) =>
-          `Remove ${name} from this repository?`,
         errors: {
           nameRequired: 'Enter a remote name.',
           fetchUrlRequired: 'Enter a fetch URL.',
@@ -12253,10 +12178,6 @@ const enFiles = {
 
     repositoryInit: {
       action: 'Initialize repository',
-      confirmTitle: 'Initialize repository?',
-      confirmBody:
-        'Create source control metadata for this folder so changes can be tracked.',
-      confirm: 'Initialize',
       failed: 'Failed to initialize repository.',
     },
   },
@@ -12768,11 +12689,16 @@ const enBrowserShell = {
     externalUrlUnavailable: "This site can't be opened in the in-app browser.",
     simulatorPreviewUnavailable:
       'The simulator preview is unavailable right now.',
+    managedPackageMissing: 'Chromium isn’t installed on this machine yet. It downloads once, the first time a page is opened, and the page then appears here.',
+    provisioningFailed: 'Check this machine’s internet connection and free disk space, then try opening the page again.',
+    sandboxUnavailable: 'This machine’s security settings keep Chromium’s sandbox from starting. Allow it once and the browser can open.',
     sidecarRuntimeUnavailable: 'The browser runtime is unavailable right now.',
     streamedBrowserUnavailable:
       'The streamed browser is unavailable right now.',
     hostUnavailable: 'Lost connection to the browser host.',
     targetKindUnavailable: "This target can't be opened in the in-app browser.",
+    annotationIframeCaptureUnavailable: 'Mark up needs a screenshot, which this embedded preview cannot capture.',
+    annotationCaptureUnavailable: 'Mark up needs a screenshot. No capture source is available for this page.',
     browserProfileMissing: 'No browser profile is available for this page.',
     hostedPluginBlocked: 'This plugin page is blocked by its security policy.',
     invalidUrl: "This address can't be opened.",
@@ -13154,6 +13080,8 @@ const enSettingsActions = {
   configureActionAccessibilityLabel: 'Configure action',
   approvalHelpBody:
     '"Ask first" shows a confirmation before this action runs from that surface. "Allowed" lets the action run from that surface without an approval prompt.',
+  sourceControlAsks: ({ setting }: { setting: string }) =>
+    `Asks first because “${setting}” is on in Source Control settings.`,
   contributed: {
     removedDescription:
       'This contributed action is no longer available from the selected machine. Its saved settings are retained.',
@@ -13300,6 +13228,7 @@ const enSettingsActions = {
     off: 'Off',
     askFirst: 'Ask first',
     allowed: 'Allowed',
+    useDefault: 'Use default',
   },
   sections: {
     app: 'In the app',
@@ -14634,6 +14563,21 @@ const enSettingsSession = {
     expandedStyleDefaultTitle: 'Default (recommended)',
     expandedStyleDefaultSubtitle: 'Cards: Full. Tool feed: Summary.',
   },
+  sessionPlacement: {
+    title: 'Folder',
+    description: 'Where these sessions appear in your list.',
+  },
+  toolPolicy: {
+    sectionTitle: 'Tools',
+    sectionDescription: 'What sessions started here may use, and what happens with anything else.',
+    allowedTitle: 'Allowed tools',
+    allowedPlaceholder: 'Read, mcp__server__tool',
+    unlistedTitle: 'Other tools',
+    unlistedAsk: 'Ask first',
+    unlistedAskSubtitle: 'Asks before using a tool that isn’t listed.',
+    unlistedDeny: 'Deny',
+    unlistedDenySubtitle: 'Refuses tools that aren’t listed without asking, for sessions nobody watches.',
+  },
   windows: {
     title: 'Windows',
     defaultModeTitle: 'Default Windows remote session mode',
@@ -15045,6 +14989,7 @@ const enSettingsVoice = {
     },
     catalog: {
       credentialRequired: 'Add an API key to load voices',
+      loadFailed: 'Couldn\'t load voices',
       retry: 'Could not load voices — retry',
       empty: 'No voices are available for this account',
       preview: ({ voice }: { voice: string }) => `Preview ${voice}`,
@@ -16007,7 +15952,7 @@ const enSettingsVoice = {
     testTtsSample: 'Hello from Happier. This is a test of your local TTS.',
     testTtsMissingBaseUrl: 'Set a TTS Base URL first.',
     testTtsFailed:
-      'TTS test failed. Check your base URL, API key, model, voice, and TTS Format (some endpoints only support mp3 or wav).',
+      "The sample couldn’t be played. Check the voice engine above, then try again.",
     autoSpeak: 'Auto-speak replies',
     autoSpeakSubtitle:
       'Speak the next assistant reply after sending your voice message',
@@ -16018,7 +15963,7 @@ const enSettingsVoice = {
       provider: {
         title: 'Local neural (beta)',
         subtitle:
-          'Daemon-backed neural TTS on web, with on-device model packs where supported.',
+          "Neural speech on your machines for web, with on-device model packs where supported.",
         detail: 'Local neural',
       },
     },
@@ -16042,41 +15987,41 @@ const enSettingsVoice = {
       execution: {
         title: 'Local neural execution',
         subtitle:
-          'Choose whether local neural voice runs on-device or on your daemon.',
+          "Choose whether local neural voice runs on this device or on your machine.",
         options: {
           auto: 'Auto',
           device: 'Device',
-          daemon: 'Daemon',
+          daemon: "Machine",
         },
         optionSubtitles: {
           auto: 'Prefer the recommended execution path for this platform.',
           device:
             'Run local neural voice directly on this device when supported.',
-          daemon: 'Run local neural voice through your voice-home daemon.',
+          daemon: "Run local neural voice on your Voice machine.",
         },
       },
       service: {
-        title: 'Daemon inference service',
-        subtitle: 'Status of the voice-home daemon inference service.',
+        title: "Machine speech service",
+        subtitle: "Status of speech on your Voice machine.",
       },
       model: {
-        title: 'Daemon model pack',
-        subtitleTts: 'Install and refresh the daemon TTS model pack.',
-        subtitleStt: 'Install and refresh the daemon STT model pack.',
+        title: "Machine model pack",
+        subtitleTts: "Install and refresh the text-to-speech model pack on your machine.",
+        subtitleStt: "Install and refresh the speech recognition model pack on your machine.",
       },
       remove: {
-        title: 'Remove daemon model files',
-        subtitle: 'Delete the daemon-side model files for this pack.',
-        detailInstalled: 'Remove installed daemon files',
+        title: "Remove machine model files",
+        subtitle: "Delete this pack’s model files from your machine.",
+        detailInstalled: "Remove installed model files",
       },
       states: {
         loading: 'Loading…',
-        machineUnreachable: 'Voice-home daemon unavailable.',
-        unavailable: 'Daemon inference unavailable.',
-        runtimeUnavailable: 'Daemon runtime unavailable.',
-        relayDisabled: 'Daemon relay is disabled.',
-        relayCapped: 'Daemon relay capacity reached.',
-        requestTimeout: 'Daemon request timed out.',
+        machineUnreachable: "Your Voice machine isn’t reachable.",
+        unavailable: "Machine speech isn’t available.",
+        runtimeUnavailable: "Speech isn’t available on your Voice machine.",
+        relayDisabled: "The relay is turned off.",
+        relayCapped: "The relay is at capacity.",
+        requestTimeout: "Your Voice machine took too long to answer.",
         warming: 'Warming model…',
         ready: 'Ready',
         degraded: 'Degraded',
@@ -16112,7 +16057,7 @@ const enSettingsVoice = {
       modelFiles: ({ size }: { size: string }) => `${size} model files`,
       removeConfirmTitle: 'Remove model pack',
       removeConfirmBody: ({ name }: { name: string }) =>
-        `Delete the daemon-side files for ${name}?`,
+        `Delete the model files on your machine for ${name}?`,
       state: {
         notInstalled: 'Not installed',
         downloading: 'Downloading…',
@@ -17815,6 +17760,7 @@ const enSetupOnboarding = {
     privateKeyLabel: 'Private key',
   },
   remoteSshChecklist: {
+    remoteCliUpdateRequired: 'Update Happier CLI on the remote machine to connect it to this Home, then retry setup.',
     planTitle: 'Review the setup plan',
     planSubtitleMachine:
       'This plan installs the remote CLI, connects it to the selected Home, and installs the background service.',
@@ -17932,13 +17878,9 @@ const enMachine = {
     replaceWithMachine: 'Mark as replaced…',
     replaceWithMachineSubtitle: ({ machine }: { machine: string }) =>
       `Use ${machine} as the replacement for this machine.`,
-    chooseReplacementSubtitle: 'Choose which machine replaces this one.',
+    chooseReplacementSubtitle: 'Future launches and old sessions use the machine you choose. Dependent Automations pause, waiting Runs that can no longer execute are cancelled, and possibly-started Runs are marked Outcome uncertain.',
     pickerTitle: 'Choose replacement machine',
     pickerCandidatesTitle: 'Eligible machines',
-    confirmTitle: 'Mark machine as replaced?',
-    confirmBody: ({ machine }: { machine: string }) =>
-      `Future launches and old sessions for this machine will use ${machine}. Dependent Automations pause, waiting Runs that can no longer execute are cancelled, and possibly-started Runs are marked Outcome uncertain.`,
-    confirmAction: 'Replace',
     undo: 'Undo replacement',
     undoSubtitle: ({ machine }: { machine: string }) =>
       `This machine is currently replaced by ${machine}.`,
@@ -17976,6 +17918,7 @@ const enMachine = {
   unknownMachine: 'unknown machine',
   unnamedMachine: 'Unnamed machine',
   lockedMachine: 'Locked machine',
+  thisMachineInSentence: 'this machine',
   removedMachine: 'Removed machine',
   replacedMachine: 'Replaced machine',
   unlistedMachine: 'Unlisted machine',
@@ -18382,26 +18325,26 @@ const enFriends = {
   // Friends feature
   title: 'Friends',
   manageFriends: 'Manage your friends and connections',
-  searchTitle: 'Find Friends',
-  pendingRequests: 'Friend Requests',
-  myFriends: 'My Friends',
+  searchTitle: 'Find friends',
+  pendingRequests: 'Friend requests',
+  myFriends: 'My friends',
   noFriendsYet: "You don't have any friends yet",
-  findFriends: 'Find Friends',
+  findFriends: 'Find friends',
   remove: 'Remove',
   pendingRequest: 'Pending',
   sentOn: ({ date }: { date: string }) => `Sent on ${date}`,
   accept: 'Accept',
   reject: 'Reject',
-  addFriend: 'Add Friend',
-  alreadyFriends: 'Already Friends',
-  requestPending: 'Request Pending',
+  addFriend: 'Add friend',
+  alreadyFriends: 'Already friends',
+  requestPending: 'Request pending',
   searchInstructions: 'Enter a username to search for friends',
   searchPlaceholder: 'Enter username...',
   searching: 'Searching...',
   userNotFound: 'User not found',
   noUserFound: 'No user found with that username',
   checkUsername: 'Please check the username and try again',
-  howToFind: 'How to Find Friends',
+  howToFind: 'How to find friends',
   findInstructions:
     'Search for friends by their username. Depending on your server, you may need to connect a provider or choose a username to use Friends.',
   emptyTitle: 'No friend activity yet',
@@ -18411,7 +18354,7 @@ const enFriends = {
   requestAccepted: 'Friend request accepted!',
   requestRejected: 'Friend request rejected',
   friendRemoved: 'Friend removed',
-  confirmRemove: 'Remove Friend',
+  confirmRemove: 'Remove friend',
   confirmRemoveMessage: 'Are you sure you want to remove this friend?',
   cannotAddYourself: 'You cannot send a friend request to yourself',
   bothMustHaveGithub:
@@ -18423,8 +18366,8 @@ const enFriends = {
     friend: 'Friends',
     rejected: 'Rejected',
   },
-  acceptRequest: 'Accept Request',
-  removeFriend: 'Remove Friend',
+  acceptRequest: 'Accept request',
+  removeFriend: 'Remove friend',
   removeFriendConfirm: ({ name }: { name: string }) =>
     `Are you sure you want to remove ${name} as a friend?`,
   requestSentDescription: ({ name }: { name: string }) =>
@@ -18512,7 +18455,7 @@ const enUsage = {
       executionOutside: "Outside Happier",
       executionUnknown: "Unknown execution",
       sourceQuota: "allowances",
-      sourceWork: "work links",
+      sourceWork: "pull requests and branches",
       sourceHowYouWork: "activity",
       sourceComparison: "previous period",
       sourceKindMeasured: "Measured",
@@ -18575,6 +18518,8 @@ const enUsage = {
       flowEmptyReason: "It appears once usage spans two or more buckets.",
       efficiencyNoBasisTitle: "No basis for ratios yet",
       efficiencyNoBasisReason: "Ratios need token categories and a known cost.",
+      costUnpricedCaption: "Some usage has no reported cost or price",
+      efficiencyUnpricedReason: "Some usage in this period has neither a reported cost nor a model price, so its ratios can't be priced.",
       cacheHit: "Cache hit",
       cacheListPriceDifference: ({ amount }: { amount: string | number }) => `${amount} list-price difference`,
       cacheReadTokens: ({ tokens }: { tokens: string | number }) => `${tokens} cache-read tokens`,
@@ -18697,6 +18642,7 @@ const enUsage = {
       capacityResets: ({ time }: { time: string | number }) => `resets ${time}`,
       capacityAccounts: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'account' : 'accounts'} read`,
       capacityReading: ({ count }: { count: string | number }) => `Reading ${count} ${Number(count) === 1 ? 'account' : 'accounts'}…`,
+      capacityNotRead: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'account' : 'accounts'} not read yet`,
       capacityNoReads: "No plan allowances read yet",
       capacityNoReadsReason: "Connect a subscription account to see what each plan has left.",
       openConnectedServices: "Connected services",
@@ -18786,6 +18732,8 @@ const enUsage = {
       planPaid: ({ amount }: { amount: string | number }) => `You paid ${amount}`,
       planList: ({ amount, date }: { amount: string | number; date: string | number }) => `list price ${amount}, as of ${date}`,
       planNoPrice: "No paid or list price reported",
+      planNoPriceShort: "No price reported",
+      planNoPriceAll: "No plan prices reported yet · add yours under Details",
       planEndsUnused: ({ time, percent }: { time: string | number; percent: string | number }) => `Ends ${time} · ~${percent} unused at this pace`,
       planEnds: ({ time }: { time: string | number }) => `Ends ${time}`,
       planRenews: ({ time }: { time: string | number }) => `Renews ${time}`,
@@ -18910,6 +18858,8 @@ const enUsage = {
       fitTitle: "Fit",
       fitNoneEnded: "no ended window recorded yet",
       fitUsedUp: ({ count, total }: { count: string | number; total: string | number }) => `${count} of ${total} ended windows fully used`,
+      fitNeverRanOut: ({ total }: { total: string | number }) => `never ran out in ${total} resets`,
+      fitRanOut: ({ count, total }: { count: string | number; total: string | number }) => `ran out in ${count} of ${total} resets`,
       fitLeftUnused: ({ count, total }: { count: string | number; total: string | number }) => `${count} of ${total} ended with allowance unused`,
       fitAboveTarget: ({ count, total, percent }: { count: string | number; total: string | number; percent: string | number }) => `${count} of ${total} ended above your ${percent}% target`,
       fitPace: ({ window, left, even }: { window: string | number; left: string | number; even: string | number }) => `${window}: ${left} left, an even pace would leave ${even}`,
@@ -19072,7 +19022,7 @@ const enUsage = {
       summary_subagent_fanout_observed: "Parent and subagent token usage",
       metric_cache_read_tokens: "cache reads",
       metric_input_tokens: "uncached input",
-      metric_cache_hit_ratio: "input cache-hit ratio",
+      metric_cache_hit_ratio: "of input from cache",
       metric_cache_replacement_premium: "API-equivalent replacement premium",
       metric_cache_cost_share: "observed cost fraction",
       metric_cached_history_cost: "API-equivalent cached-history cost",
@@ -19181,6 +19131,8 @@ const enUsage = {
       byHour: "By hour",
       unnamedRun: "Untitled session",
       unknownMachine: "Unknown machine",
+      machineLabel: "Machine",
+      parallelRunsLabel: "Runs today",
       peakAtOnce: ({ count }: { count: string | number }) => `Peak ${count} at once`,
       parallelUnknownTitle: "Today's runs aren't readable here",
       parallelUnknownReason: "Run timings come from sessions this device can open. Open Usage for a session, or a period that includes today.",
@@ -19246,7 +19198,7 @@ const enUsage = {
     recap: {
       // usage-board:recap
       tokensUnit: "tokens",
-      tokensValue: ({ value }: { value: string | number }) => `${value} tokens unpriced`,
+      tokensValue: ({ value }: { value: string | number }) => `${value} tokens`,
       daysValue: ({ count }: { count: string | number }) => `${count}d`,
       statActiveDays: "active days",
       statStreak: "longest streak",
@@ -19263,6 +19215,7 @@ const enUsage = {
       money_unpriced: "without a price",
       shareTitle: "Share your usage",
       shareCard: "Share card",
+      mixMore: ({ count }: { count: string | number }) => `+${count} more`,
       styleLabel: "Style",
       style_daybreak: "Daybreak",
       style_sigil: "Sigil",
@@ -19314,7 +19267,7 @@ const enUsage = {
     },
     sources: {
       // usage-board:sources
-      foundCaption: "usage outside Happier, not counted yet",
+      foundCaption: "what this page counts, per machine",
       continueInHappier: "Continue in Happier",
       rootOnMachine: ({ path, machine }: { path: string | number; machine: string | number }) => `${path} on ${machine}`,
       defaultFolder: "Default folder",
@@ -19344,6 +19297,11 @@ const enUsage = {
       machineLooking: "Looking for agent usage files",
       machineNone: "No agent usage files found",
       machineCounted: ({ count }: { count: string | number }) => `${count} sources counted`,
+      happierTitle: "Happier sessions",
+      happierSubtitle: "Every machine",
+      happierLive: "Live · counted as they run",
+      countedAsOf: ({ time }: { time: string | number }) => `Counted · read ${time}`,
+      machinesUnreadable: "Couldn't read their agent usage files",
       noMachinesTitle: "No machines yet",
       noMachinesReason: "Connect a machine and Happier finds the agent usage already on it.",
       emptyScopedTitle: "No native sources in this scope",
@@ -20175,6 +20133,7 @@ const enProjects = {
       thisTime: "This time",
       untilChanged: "Until it changes",
       consequenceThisTime: "Runs setup now. Next time, Happier asks again.",
+      consequenceSkip: "Skips setup for this invocation. It will not be marked ready.",
       consequenceUntilChanged: "Covers this project on any machine, including a teammate’s shared machine, until a command, the tools or the project file change. Teammates approve for themselves.",
       readySince: ({ time }: { time: string }) => `Ready for these inputs since ${time}`,
       notRunYet: "Setup hasn’t run for this version yet",
@@ -20655,12 +20614,10 @@ const enSettingsPlugins = {
   developmentEmptySubtitle:
     'This machine has not reported approved local sources or watch and reload diagnostics.',
   developmentCreate: 'Create plugin',
-  developmentCreateSubtitle:
-    'Create a first-party local plugin scaffold on this machine.',
+  developmentCreateSubtitle: 'A new plugin scaffold on this machine.',
   developmentCreateSucceeded: 'Plugin scaffold created.',
   developmentCreateWithAgent: 'Create with Agent',
-  developmentCreateWithAgentSubtitle:
-    'Scaffolds the plugin, then opens an ordinary Session in its folder so an Agent can build it with you.',
+  developmentCreateWithAgentSubtitle: 'Scaffold it, then build it with an Agent.',
   developmentEditWithAgent: 'Edit with Agent',
   developmentEditWithAgentSubtitle:
     "Opens an ordinary Session in this plugin's source folder.",
@@ -20670,8 +20627,9 @@ const enSettingsPlugins = {
     `This is the current development source of the Happier plugin '${pluginId}'. Use the happier-plugin-authoring skill and only public 'happier plugins' commands and public SDK imports for the change I ask for; new authority or credential grants remain my decision.`,
   developmentSourcePathLabel: ({ path }: { path: string }) => `Path: ${path}`,
   developmentSourceInstall: 'Develop a local plugin',
-  developmentSourceInstallSubtitle:
-    "Let this machine's daemon build and run a plugin from a file or folder you own. You approve the exact source first.",
+  developmentSourceInstallSubtitle: 'Run a plugin from a file or folder you own.',
+  developmentStartWaiting: 'Waiting for this machine to answer before you can start here.',
+  developmentStartNotOffered: 'This machine doesn’t offer plugin development.',
   developmentSourceInstallTitle: 'Plugin file or folder',
   developmentSourceInstallBody:
     'Enter the full path to a .ts, .mts, .js, or .mjs plugin file, or a plugin project folder on this machine.',
@@ -21300,11 +21258,14 @@ const enExternalSessions = {
   browseSearchTarget: 'Search in',
   browseContentPlaceholder: 'Search conversation text…',
   browseContentSearchPrompt: 'Enter a phrase, then search conversations.',
+  browseContentScanOff: ({ machine }: { machine: string }) => `Search on demand is off on ${machine}.`,
+  browseContentScanOffSettings: 'Search settings',
   browseContentSearchReady: ({ query }: { query: string }) => `Press Return to search conversations for “${query}”.`,
   browseContentSubmit: 'Search',
   browseContentUpdateRequired: ({ machine }: { machine: string }) =>
     `Update Happier on ${machine} to search conversations.`,
   browseContentPartial: 'Some conversations could not be searched.',
+  browseContentNothingYet: 'No matches yet in what’s been searched.',
   browseContentNotSearchable: 'Not searchable',
   browseContentStopped: 'Search stopped. Results are incomplete.',
   browseContentPaletteSearch: ({ query }: { query: string }) =>
@@ -21359,6 +21320,7 @@ const enPluginRuntime = {
   responseInvalid: "This plugin view received an invalid response. Try loading it again.",
   transportUnavailable: "Happier could not reach the source for this plugin view. Check the connection and try again.",
   sourceUnavailable: "The selected plugin view’s files are unavailable. Try loading it again.",
+  viewNotCurrent: "This plugin’s selected view is no longer current. Reopen the page, update the plugin on its machine, or choose another machine.",
   unavailableGeneric: 'It may still be starting. Try again in a moment.',
   crashLoop: 'The plugin was stopped after repeated crashes.',
   disabledByPolicy:
@@ -21387,7 +21349,7 @@ const enPluginRuntime = {
   installationConflict:
     'Your machines have different versions of this plugin. Choose the machine it should run on.',
   authorFailure:
-    'This plugin view could not start because its executable UI is invalid. Ask the plugin author to rebuild it.',
+    'This plugin view could not start because its built UI is missing or invalid. Rebuild the plugin, or ask its author for a fixed version.',
   retired:
     'This plugin view is no longer active. Open plugin settings to enable or reinstall it.',
 };
@@ -21468,6 +21430,8 @@ const enConversationSearch = {
         noneFoundAllMachines: ({ query }: { query: string }) => `No conversation mentions “${query}”.`,
         queryDescription: ({ query }: { query: string }) => `Conversations mentioning “${query}”`,
         mixedResults: 'Indexed and scanned conversations',
+        moreNothingNew: 'No new matches in what was just searched.',
+        moreExhausted: 'No more matches in this source.',
     settingsTitle: 'Search',
     settingsSubtitle: 'How past conversations are found on each machine',
     settingsKeywords: 'search find conversations history index indexing scan memory agents transcripts clear',
@@ -21490,6 +21454,7 @@ const enConversationSearch = {
     agentsTitle: 'Agents',
     agentsDescription: 'Only the Agents you turn on are indexed.',
     agentsNone: 'No Agent on this machine keeps conversations that can be indexed.',
+    agentsNoneOn: 'Nothing is indexed yet. Turn on an Agent to start.',
     historyTitle: 'How far back',
     historyDays: ({ count }: { count: number }) => `${count} days`,
     historyYear: '1 year',
@@ -21513,6 +21478,8 @@ const enConversationSearch = {
     coveragePartial: ({ machines }: { machines: string }) => `Partial results: ${machines}`,
     coverageDisabled: ({ machines }: { machines: string }) => `Search is off: ${machines}`,
     coverageHomeUnavailable: 'This Home’s search is unavailable.',
+    coverageMachineCount: ({ count }: { count: number }) => `${count} machines`,
+    coverageSourcesFailed: 'Some sources couldn’t be searched',
     resultIndexed: 'Indexed',
     resultScanned: 'Scanned',
     searching: 'Searching conversations…',
@@ -21520,6 +21487,7 @@ const enConversationSearch = {
 
 export const en: TranslationStructure = {
     resourceProposal: resourceProposalTranslations.en,
+    actionPresentation: actionPresentationTranslations.en,
     conversationSearch: enConversationSearch,
   sessions: { workspace: { noFolder: 'No folder' } },
   ...machineSharing,
@@ -21719,8 +21687,9 @@ export const en: TranslationStructure = {
     currentVoice: (params: { provider: string; voice: string }) => `${params.provider} · ${params.voice}`,
     inUse: 'In use',
     voicesHeading: (params: { provider: string }) => `${params.provider} voices`,
-    chooseVoice: 'Choose a voice',
+    searchVoices: (params: { provider: string }) => `Search ${params.provider} voices`,
     pickerA11y: (params: { name: string }) => `Voice for ${params.name}`,
+    sheetSubtitle: (params: { session: string; voice: string }) => `For ${params.session}. Speaking as ${params.voice}.`,
   },
   bots: {
     talk: (params: { name: string }) => `Talk to ${params.name}`,
@@ -21909,6 +21878,7 @@ type TranslationOverlay<Base, Overlay> = Omit<Base, keyof Overlay> & Overlay;
 
 type EnglishNamespaces0 = {
   readonly resourceProposal: typeof resourceProposalTranslations.en;
+  readonly actionPresentation: typeof actionPresentationTranslations.en;
   readonly conversationSearch: typeof enConversationSearch;
   // memoryContext:type:begin
   readonly memoryContext: typeof enMemoryContext;
@@ -21985,8 +21955,9 @@ type EnglishNamespaces0 = {
     readonly currentVoice: (params: { provider: string; voice: string }) => string;
     readonly inUse: string;
     readonly voicesHeading: (params: { provider: string }) => string;
-    readonly chooseVoice: string;
+    readonly searchVoices: (params: { provider: string }) => string;
     readonly pickerA11y: (params: { name: string }) => string;
+    readonly sheetSubtitle: (params: { session: string; voice: string }) => string;
   };
   readonly bots: {
     readonly talk: (params: { name: string }) => string;

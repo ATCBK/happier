@@ -43,6 +43,35 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (runtime-unification actions)', () => {
+  it('opens Browser views directly for their user, while honoring Ask and Agent defaults', async () => {
+    const target = { kind: 'localServicePreview', targetId: 'preview_1', machineId: 'machine_1' } as const;
+    const output = { v: 1, commandId: 'open_1', status: 'dispatched', adapterKind: 'localPreview', events: [] } as const;
+    for (const row of [
+      { id: 'browser.workspace.open', input: { scopeId: 'workspace_1', commandId: 'open_1', target },
+        output: { ...output, outcome: 'workspaceTab' } },
+      { id: 'browser.view.open', input: { commandId: 'open_1', browserSessionId: 'browser_1', viewId: 'view_1',
+        kind: 'openView', target, platform: 'web' }, output },
+    ] as const) {
+      const effects: unknown[] = [];
+      // Only the client/runtime effect is a boundary; declaration and policy stay real.
+      const executor = createActionExecutor(createDeps({
+        isActionApprovalRequired: undefined,
+        runtimeActionExecute: async args => { effects.push(args); return row.output; },
+      }));
+      const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+      expect(await executor.execute(row.id, row.input, context), row.id).toEqual({ ok: true, result: row.output });
+      expect(effects.splice(0)).toHaveLength(1);
+      const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+        [row.id]: { approvalRequiredSurfaces: ['ui'] },
+      } });
+      expect(await executor.execute(row.id, row.input, { ...context, actionsSettings }))
+        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      expect(await executor.execute(row.id, row.input, { surface: 'agent', authority: 'account_automation' }))
+        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      expect(effects).toEqual([]);
+    }
+  });
+
   it('preserves the approval bypass but returns the picker requirement without selecting a target', async () => {
     const runtimeActionExecute = vi.fn(async () => ({ consentGranted: false,
       approvalDisplay: { machineDisplayName: 'Workstation', requiresTargetSelection: true } }));

@@ -115,6 +115,12 @@ export const PluginMachineMatrixSection = React.memo(function PluginMachineMatri
                 />
             ) : (
                 <>
+                    {/*
+                      * "Current on 0 of N" only reads as a fault when nothing is current but the
+                      * plugin does live somewhere (a machine-bound or development source is never
+                      * Account-current by construction): its machine rows already say where.
+                      */}
+                    {summary.currentCount === 0 && summary.exceptions.length > 0 ? null : (
                     <Item
                         testID={`${prefix}.summary`}
                         title={t('settingsPlugins.surfaces.machinesCurrent', {
@@ -128,6 +134,7 @@ export const PluginMachineMatrixSection = React.memo(function PluginMachineMatri
                         mode="info"
                         showChevron={false}
                     />
+                    )}
                     {summary.exceptions.map((exception) => {
                         const name = exception.name ?? t('settingsPlugins.surfaces.machinesRetained');
                         const subtitle = exceptionSubtitle(exception);

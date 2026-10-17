@@ -57,6 +57,10 @@ export function HappierActionPanelSection({ title, children, testID, style }: Ha
         {
           flexDirection: 'row',
           alignItems: 'center',
+          // A section wraps inside its panel rather than running past a narrow pane.
+          flexWrap: 'wrap',
+          flexShrink: 1,
+          maxWidth: '100%',
           gap: 4,
         },
         style,

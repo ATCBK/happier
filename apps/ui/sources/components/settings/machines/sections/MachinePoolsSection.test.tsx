@@ -193,7 +193,7 @@ describe('MachinePoolsSection', () => {
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
         expect(screen.tree.findAllByType(ItemGroup)).toHaveLength(0);
-        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.featureLoading.${boundary.serverId}` })).toBeUndefined();
+        expect(screen.findByTestId(`settings.machinePools.featureLoading.${boundary.serverId}`)).toBeFalsy();
     });
 
     it('does not advertise Pool administration after a cold feature-discovery failure', async () => {
@@ -224,7 +224,7 @@ describe('MachinePoolsSection', () => {
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
         await vi.waitFor(() => {
-            expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.featureLoading.${boundary.serverId}` })).toBeDefined();
+            expect(screen.findByTestId(`settings.machinePools.featureLoading.${boundary.serverId}`)).toBeTruthy();
             expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}` })).toBeDefined();
         });
         const retainedRow = findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}` });

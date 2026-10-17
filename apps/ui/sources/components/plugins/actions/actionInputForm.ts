@@ -1,4 +1,4 @@
-import { normalizeInputByFieldHints as normalizeActionInputByFieldHints, resolveEffectiveInputFields as resolveEffectiveActionInputFields, type EffectiveInputField as EffectiveActionInputField } from '@happier-dev/protocol/inputs/inputFieldRuntime';
+import { normalizeInputByFieldHints as normalizeActionInputByFieldHints, resolveEffectiveInputFields as resolveEffectiveActionInputFields, seedInputByFieldHints, type EffectiveInputField as EffectiveActionInputField } from '@happier-dev/protocol/inputs/inputFieldRuntime';
 import type { InputHints as ActionInputHints } from '@happier-dev/protocol/inputs/inputFields';
 
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
@@ -143,6 +143,7 @@ export function createActionInputForm<
     TStaleReason extends string = 'presentation_retired',
 >(params: Readonly<{
     presentation: ActionInputFormPresentation;
+    initialInput?: Readonly<Record<string, unknown>>;
     submit: (
         candidate: Readonly<Record<string, unknown>>,
         context: ActionInputFormSubmitContext,
@@ -162,7 +163,10 @@ export function createActionInputForm<
     /** Called once for every retirement path, including cancel and outer abort. */
     onRetire?: () => void;
 }>): ActionInputForm<TResult, TUnavailableReason, TStaleReason> {
-    let input: Readonly<Record<string, unknown>> = {};
+    let input: Readonly<Record<string, unknown>> = seedInputByFieldHints(
+        { inputHints: params.presentation.inputHints },
+        params.initialInput ?? {},
+    );
     let retired = false;
     let submitting = false;
     let abortCleanup: (() => void) | null = null;

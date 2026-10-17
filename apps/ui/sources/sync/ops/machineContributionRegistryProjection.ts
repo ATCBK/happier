@@ -14,6 +14,7 @@ import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverSc
 import {
     isRpcMethodNotAvailableError,
     isRpcMethodNotFoundError,
+    readRpcErrorCode,
 } from '@/sync/runtime/rpcErrors';
 import {
     parseDaemonContributionRegistryProjectionDescribeResponse,
@@ -183,9 +184,9 @@ export function mapMachinePluginUiResourceTransportFailure(
 }
 
 function classifyMachinePluginTransportError(error: unknown): MachinePluginTransportReason {
-    const code = error && typeof error === 'object'
+    const code = readRpcErrorCode(error) ?? (error && typeof error === 'object'
         ? (error as Readonly<{ code?: unknown }>).code
-        : undefined;
+        : undefined);
     if (code === 'MACHINE_RPC_ABORTED' || code === 'SOCKET_RPC_ABORTED') return 'aborted';
     if (code === 'MACHINE_RPC_TIMEOUT') return 'timeout';
     return 'error';
@@ -372,6 +373,7 @@ export async function machinePluginUiTargetedContributionsRead(
             const response = await machineRpcWithServerScope<unknown, typeof payload>({
                 machineId: payload.machineId,
                 serverId: opts.serverId,
+                accountId: opts.accountLifetime?.scope.accountId,
                 method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
                 payload,
                 operationTimeoutMs: null,

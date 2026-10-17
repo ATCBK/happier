@@ -30,12 +30,14 @@ import {
 } from '@/sync/domains/plugins/availability/reactNativeArtifactAvailability';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { PluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type {
     PluginArtifactDaemonProjectionSelectionInput,
     PluginArtifactDaemonTransport,
 } from '@/sync/domains/plugins/availability/artifactLease';
 import { readPluginUiContributionOrigin, readPluginUiContributionSupplies } from './projectionUnion';
 import type { PluginReactNativeBundleCacheIdentity } from './reactNativeRuntime';
+import type { PluginAccountHostedArtifactPublicationResult } from '@/sync/domains/plugins/availability/accountHostedArtifactPublication';
 
 type PluginUiArtifactDisposableHandle = Readonly<{
     isCurrent: () => boolean;
@@ -94,6 +96,19 @@ export type PluginUiArtifactAdoptionResult<
 
 export type PluginUiArtifactDaemonSource = PluginArtifactDaemonTransport;
 
+/** Byte routes from the selected renderer; none of these suppliers selects execution. */
+export function readPluginUiArtifactDaemonSources(
+    contribution: Readonly<Record<string, unknown>> | null,
+): readonly PluginUiArtifactDaemonSource[] {
+    const sources: PluginUiArtifactDaemonSource[] = [];
+    const origin = readPluginUiContributionOrigin(contribution);
+    for (const supply of [...(origin ? [origin] : []), ...readPluginUiContributionSupplies(contribution)]) {
+        if (!supply.serverId || sources.some(source => source.machineId === supply.machineId && source.serverId === supply.serverId)) continue;
+        sources.push(Object.freeze({ machineId: supply.machineId, serverId: supply.serverId }));
+    }
+    return Object.freeze(sources);
+}
+
 export type PluginUiHostedWebArtifactTechnicalAdmission = Readonly<{
     artifactGraph: PluginUiArtifactsManifestEntryV2;
     cacheIdentity: PluginHostedWebArtifactIdentity;
@@ -106,6 +121,7 @@ export type PluginUiHostedWebNativeArtifactAdoptionInput = Omit<
     'daemon' | 'isCurrent' | 'signal'
 > & Readonly<{
     daemon?: PluginUiArtifactDaemonSource;
+    daemons?: readonly PluginUiArtifactDaemonSource[];
     daemonProjectionSelection?: PluginArtifactDaemonProjectionSelectionInput;
 }>;
 
@@ -458,12 +474,14 @@ export function readPluginUiDaemonProjectionSelection(
 export function createPluginUiHostedWebArtifactRequestFactsKey(input: Readonly<{
     platform: string | undefined;
     source: PluginUiArtifactDaemonSource | null;
+    sources?: readonly PluginUiArtifactDaemonSource[];
     admission: PluginUiHostedWebArtifactTechnicalAdmission | null;
 }>): string {
     const sourceMaps = input.admission?.hostedWebPolicy.sourceMaps;
     return JSON.stringify({
         platform: input.platform ?? null,
         source: input.source ?? null,
+        sources: input.sources ?? [],
         graph: input.admission
             ? {
                 artifactId: input.admission.artifactGraph.artifactId,
@@ -601,7 +619,10 @@ export type PluginUiReactNativeInstalledArtifactLoadInput = Readonly<{
     reader: PluginAccountAvailabilityReader;
     accountLifetime: ActiveServerAccountScopeLifetime;
     daemon?: PluginUiArtifactDaemonSource;
+    daemons?: readonly PluginUiArtifactDaemonSource[];
+    onAccountHosting?: (completion: Promise<PluginAccountHostedArtifactPublicationResult>) => void;
     daemonProjectionSelection?: PluginArtifactDaemonProjectionSelectionInput;
+    executionOrigin?: PluginMachineExecutionOriginV1 | null;
     moduleReference: PluginReactNativeExecutableModuleReference | undefined;
     hostPlatform: string;
     backend?: PluginReactNativeLoaderBackend;
@@ -632,10 +653,15 @@ export function createPluginUiReactNativeInstalledArtifactLoad(
         try {
             const acquired = await owner.adoptReactNative({
                 reader: input.reader,
+                executionOrigin: input.executionOrigin,
                 artifactGraph: input.artifactGraph,
                 cacheIdentity: input.identity,
                 accountLifetime: input.accountLifetime,
                 ...(input.daemon ? { daemon: input.daemon } : {}),
+                ...(input.daemons ? { daemons: input.daemons } : {}),
+                // The short acquisition owner retires after evaluation; hosting
+                // belongs to the renderer's actual load/mount cancellation.
+                ...(signal ? { accountHostingSignal: signal } : {}),
                 ...(input.daemonProjectionSelection
                     ? { daemonProjectionSelection: input.daemonProjectionSelection }
                     : {}),
@@ -643,6 +669,7 @@ export function createPluginUiReactNativeInstalledArtifactLoad(
             if (acquired.kind !== 'available') {
                 return throwReactNativeArtifactLoadFailure(acquired.code);
             }
+            if (acquired.adoption.handle.accountHosting) input.onAccountHosting?.(acquired.adoption.handle.accountHosting);
             // The module loader cannot be cancelled. Artifact and the bound
             // surface must therefore still be current on both sides of it.
             if (!acquired.adoption.isCurrent()) {

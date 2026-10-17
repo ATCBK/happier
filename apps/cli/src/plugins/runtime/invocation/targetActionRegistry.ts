@@ -4,6 +4,7 @@ import { readTargetActionDiagnosticConfidentiality } from './diagnostics';
 
 import { ActionOperationProgressV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 import { createPluginActionInvocation, pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
 import { PluginHostAccessRequestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
 import type { PluginActionPresentUserGatePolicy, PluginActionInputParser } from '@happier-dev/protocol';
@@ -84,6 +85,7 @@ export type TargetActionDefinition = Readonly<{
     hostAccessRequests?: readonly TargetActionHostAccessRequest[];
     availability?: PluginActionAvailabilityV2 | null;
     confirmation?: PluginActionConfirmationV2;
+    confirmationWhen?: PluginActionPresentUserGatePolicy['confirmationWhen'];
     operation?: ActionOperationDeclarationV1;
 }>;
 
@@ -131,6 +133,8 @@ export type InvokeTargetActionParams = Readonly<{
     surface: PluginInvocationSurface;
     /** Actual host invocation origin, distinct from the target capability surface. */
     invocationSurface?: PluginInvocationSurface;
+    /** Captured at the host ingress independently of its presentation surface. */
+    invocationAuthority?: ActionRequiredAuthority;
     /** Host-stamped provenance for a plugin-to-plugin edge. */
     caller?: PluginInvocationCaller;
     initiatingActionCaller?: import('@happier-dev/protocol/actions').ActionCaller;
@@ -381,6 +385,9 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                 ...(registration.definition.confirmation === undefined
                     ? {}
                     : { confirmation: registration.definition.confirmation }),
+                ...(registration.definition.confirmationWhen === undefined
+                    ? {}
+                    : { confirmationWhen: registration.definition.confirmationWhen }),
                 ...(registration.definition.hostAccessRequests === undefined
                     ? {}
                     : {
@@ -777,6 +784,8 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                         .isApprovalRequiredByActionSettings?.(pluginActionRequiresPresentUserIntent(
                             registration.definition,
                             invocation.invocationSurface ?? invocation.surface,
+                            preparedInput.input,
+                            invocation.invocationAuthority,
                         ));
                 } catch {
                     // A failed host settings re-read cannot authorize a plugin Action.
@@ -786,6 +795,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                     qualifiedId: `${registration.pluginId}/actions/${registration.localId}`,
                     pluginId: registration.pluginId, localId: registration.localId,
                     occurrenceId: registration.occurrenceId, dangerLevel: registration.definition.dangerLevel,
+                    ...(registration.definition.confirmationWhen === undefined ? {} : { confirmationWhen: registration.definition.confirmationWhen }),
                     sourceCustody: registration.sourceCustody,
                     scopes: registration.definition.scopes, surfaces: registration.definition.surfaces,
                     ...(registration.definition.confirmation === undefined
@@ -893,6 +903,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                     pluginId: invocation.pluginId, localId: invocation.localId, input: preparedInput.input,
                     surface: invocation.surface,
                     ...(invocation.invocationSurface ? { invocationSurface: invocation.invocationSurface } : {}),
+                    ...(invocation.invocationAuthority === undefined ? {} : { invocationAuthority: invocation.invocationAuthority }),
                     ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}),
                     signal: lifetime.signal,
                     ...(invocation.replayPlacement ? { replayPlacement: invocation.replayPlacement } : {}),

@@ -31,6 +31,8 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { buildPendingChangedSessionPatch, readPendingChangedRecipient } from './pendingChangedSessionPatch';
 import {
     getSessionSurfaceVisibilitySnapshot,
+    getRouteAnchorSessionAddress,
+    isSessionListRowVisible,
     isSessionSurfaceVisible,
 } from '@/sync/domains/session/sessionSurfaceVisibility';
 import type { DeferredTranscriptMarker } from '@/sync/domains/session/realtime/deferredTranscriptState';
@@ -59,6 +61,7 @@ import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 import { notifyExecutionRunActivityFromUpdate } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { notifyTeamCredentialUsageChanged } from '@/sync/engine/teams/teamCredentialUsageChanges';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { resolveSessionLiveConsumption } from '@/sync/runtime/sessionLiveConsumption';
 import { scmStatusSync } from '@/scm/scmStatusSync';
@@ -653,6 +656,7 @@ function hasSelfSufficientSharePermission(body: unknown): boolean {
 
 function requestTargetedSessionHydration(params: Readonly<{
     sessionId: string | null | undefined;
+    sourceServerId?: string | null;
     reason: SocketSessionHydrationReason;
     hydrateSessionById?: (sessionId: string, reason: SocketSessionHydrationReason) => void;
     invalidateSessions: () => void;
@@ -664,6 +668,11 @@ function requestTargetedSessionHydration(params: Readonly<{
         params.invalidateSessions();
         return;
     }
+    if (!isCacheOnlySessionHydrationAnchorActive(sessionId, params.sourceServerId)) {
+        // A socket hint may invalidate list truth without admitting a full content read.
+        params.invalidateSessions();
+        return;
+    }
     if (params.hydrateSessionById) {
         params.hydrateSessionById(sessionId, params.reason);
         return;
@@ -672,7 +681,13 @@ function requestTargetedSessionHydration(params: Readonly<{
 }
 
 function isCacheOnlySessionHydrationAnchorActive(sessionId: string, sourceServerId?: string | null): boolean {
-    if (isSessionSurfaceVisible(sessionId, sourceServerId)) return true;
+    if (isSessionFullContentConsumerActiveForRealtime(sessionId, sourceServerId)) return true;
+    if (isSessionListRowVisible(sessionId, sourceServerId)) return true;
+    const routeAnchor = getRouteAnchorSessionAddress();
+    if (routeAnchor?.sessionId === sessionId && areServerProfileIdentifiersEquivalent(
+        routeAnchor.serverId,
+        resolveSocketProjectionServerId(sourceServerId),
+    )) return true;
     if (typeof sourceServerId === 'string' && sourceServerId.trim().length > 0) return false;
     const visibilitySnapshot = getSessionSurfaceVisibilitySnapshot();
     return visibilitySnapshot.routeAnchorSessionId === sessionId
@@ -688,6 +703,7 @@ function requestVisibleCacheOnlySessionHydration(params: Readonly<{
     if (!isCacheOnlySessionHydrationAnchorActive(params.sessionId, params.sourceServerId)) return;
     requestTargetedSessionHydration({
         sessionId: params.sessionId,
+        sourceServerId: params.sourceServerId,
         reason: 'socket-update-missing-session',
         hydrateSessionById: params.hydrateSessionById,
         invalidateSessions: params.invalidateSessions,
@@ -1094,7 +1110,7 @@ function shouldReportReadyProjectionAdvance(
     return normalizedReadySeq;
 }
 
-function shouldHydrateEncryptedAgentStateForHiddenSession(params: Readonly<{
+function shouldHydrateAgentStateForHiddenSession(params: Readonly<{
     session: Session;
     updateBody: any;
 }>): boolean {
@@ -1402,11 +1418,8 @@ export async function handleUpdateContainer(params: {
             },
             requestSessionShellRefresh: (sessionId) => {
                 if (!shouldContinue()) return;
-                if (hydrateSessionById) {
-                    hydrateSessionById(sessionId, 'socket-update-attention-unknown');
-                    return;
-                }
-                fetchSessions();
+                requestTargetedSessionHydration({ sessionId, sourceServerId,
+                    reason: 'socket-update-attention-unknown', hydrateSessionById, invalidateSessions: fetchSessions });
             },
             applyCacheOnlySessionProjectionPatch: ({ sessionId, updateData, rawMessage, messageSeq }) => {
                 if (!shouldContinue()) return false;
@@ -1498,11 +1511,8 @@ export async function handleUpdateContainer(params: {
             },
             requestSessionShellRefresh: (sessionId) => {
                 if (!shouldContinue()) return;
-                if (hydrateSessionById) {
-                    hydrateSessionById(sessionId, 'socket-update-attention-unknown');
-                    return;
-                }
-                fetchSessions();
+                requestTargetedSessionHydration({ sessionId, sourceServerId,
+                    reason: 'socket-update-attention-unknown', hydrateSessionById, invalidateSessions: fetchSessions });
             },
             applyCacheOnlySessionProjectionPatch: ({ sessionId, updateData, rawMessage, messageSeq }) => {
                 if (!shouldContinue()) return false;
@@ -1560,6 +1570,10 @@ export async function handleUpdateContainer(params: {
         log.log('🆕 New session update received');
         if (!shouldContinue()) return;
         const socketSessionId = readSocketSessionId(updateData.body);
+        if (!socketSessionId || !isCacheOnlySessionHydrationAnchorActive(socketSessionId, sourceServerId)) {
+            invalidateSessions();
+            return;
+        }
         const wasSessionKnown = Boolean(socketSessionId && getSocketSessionApplyBase(socketSessionId));
         const nextSession = await buildNewSessionFromSocketUpdate({
             updateBody: updateData.body,
@@ -1579,6 +1593,7 @@ export async function handleUpdateContainer(params: {
         }
         requestTargetedSessionHydration({
             sessionId: socketSessionId,
+            sourceServerId,
             reason: 'socket-update-missing-session',
             hydrateSessionById,
             invalidateSessions,
@@ -1626,6 +1641,7 @@ export async function handleUpdateContainer(params: {
             } else if (shouldContinue()) {
                 requestTargetedSessionHydration({
                     sessionId,
+                    sourceServerId,
                     reason: 'socket-update-missing-session',
                     hydrateSessionById,
                     invalidateSessions,
@@ -1667,6 +1683,7 @@ export async function handleUpdateContainer(params: {
             if (!shouldContinue()) return;
             requestTargetedSessionHydration({
                 sessionId: runtimeActivitySessionId,
+                sourceServerId,
                 reason: 'socket-update-runtime-activity-conflict',
                 hydrateSessionById,
                 invalidateSessions,
@@ -1676,6 +1693,7 @@ export async function handleUpdateContainer(params: {
             if (!shouldContinue()) return;
             requestTargetedSessionHydration({
                 sessionId: runtimeActivitySessionId,
+                sourceServerId,
                 reason: 'socket-update-responsibility-invalid',
                 hydrateSessionById,
                 invalidateSessions,
@@ -1688,6 +1706,7 @@ export async function handleUpdateContainer(params: {
                 if (!shouldContinue()) return;
                 requestTargetedSessionHydration({
                     sessionId: updateData.body.id,
+                    sourceServerId,
                     reason: 'socket-update-missing-session',
                     hydrateSessionById,
                     invalidateSessions,
@@ -1718,11 +1737,13 @@ export async function handleUpdateContainer(params: {
             }
 
             const hasStatePayload = Boolean(updateData.body.metadata || updateData.body.agentState);
+            const contentDemanded = isCacheOnlySessionHydrationAnchorActive(updateData.body.id, sourceServerId);
             const sessionEncryption = encryption?.getSessionEncryption(updateData.body.id) ?? null;
-            if (hasStatePayload && sessionEncryption && updateData.body.metadata == null) {
+            if (contentDemanded && hasStatePayload && sessionEncryption && updateData.body.metadata == null) {
                 if (!shouldContinue()) return;
                 requestTargetedSessionHydration({
                     sessionId: updateData.body.id,
+                    sourceServerId,
                     reason: 'socket-update-unpatchable',
                     hydrateSessionById,
                     invalidateSessions,
@@ -1745,12 +1766,10 @@ export async function handleUpdateContainer(params: {
                     sessionEncryption,
                     onRuntimeActivityResyncRequired,
                     onResponsibilityResyncRequired,
-                    hydrateState: sessionEncryption
-                        ? {
-                            metadata: updateData.body.metadata != null,
-                            agentState: false,
-                        }
-                        : undefined,
+                    hydrateState: {
+                        metadata: contentDemanded && updateData.body.metadata != null,
+                        agentState: false,
+                    },
                 });
             const readySeq = shouldReportReadyProjectionAdvance(cachedRenderable, updateData.body.latestReadyEventSeq);
             if (!shouldContinue()) return;
@@ -1761,9 +1780,10 @@ export async function handleUpdateContainer(params: {
                 updateSeq: updateData.seq,
                 shouldContinue,
             });
-            if (sessionEncryption && updateData.body.agentState != null) {
+            if ((!contentDemanded && hasStatePayload) || updateData.body.agentState != null) {
                 markSessionStateHydrationDeferred?.(updateData.body.id);
             }
+            if (!contentDemanded && updateData.body.metadata != null) invalidateSessions();
             requestVisibleCacheOnlySessionHydration({
                 sessionId: updateData.body.id,
                 sourceServerId,
@@ -1790,6 +1810,7 @@ export async function handleUpdateContainer(params: {
             : encryption?.getSessionEncryption(updateData.body.id) ?? null;
         const shouldHydrateMetadata =
             clientAllowsSessionContent
+            && isCacheOnlySessionHydrationAnchorActive(updateData.body.id, sourceServerId)
             && updateData.body.metadata != null
             && (
                 sessionEncryptionMode === 'plain'
@@ -1800,16 +1821,14 @@ export async function handleUpdateContainer(params: {
             && updateData.body.agentState != null
             && (
                 sessionEncryptionMode === 'plain'
-                || (
-                    sessionEncryption != null
-                    && (
-                        fullContentConsumerActive
-                        || shouldHydrateEncryptedAgentStateForHiddenSession({
-                            session,
-                            updateBody: updateData.body,
-                        })
-                    )
-                )
+                || sessionEncryption != null
+            )
+            && (
+                fullContentConsumerActive
+                || shouldHydrateAgentStateForHiddenSession({
+                    session,
+                    updateBody: updateData.body,
+                })
             );
         const shouldHydrateSessionState = shouldHydrateMetadata || shouldHydrateAgentState;
         if (
@@ -1858,6 +1877,7 @@ export async function handleUpdateContainer(params: {
         enqueueSocketSessionApplyGuarded(applySessions, [nextSession], shouldContinue);
         const shouldRefreshLayout1OwnerMetadata =
             updateData.body.metadata != null
+            && isCacheOnlySessionHydrationAnchorActive(updateData.body.id, sourceServerId)
             && isSessionAccessOwner(session.access, session.accessLevel)
             && (
                 session.metadataLayoutVersion === 1
@@ -1874,6 +1894,7 @@ export async function handleUpdateContainer(params: {
         if (shouldRefreshCurrentLayout1OwnerMetadata || shouldRefreshTurnsProjection) {
             requestTargetedSessionHydration({
                 sessionId: updateData.body.id,
+                sourceServerId,
                 reason: shouldRefreshCurrentLayout1OwnerMetadata
                     ? 'socket-update-owner-metadata'
                     : 'socket-update-turn-projection',
@@ -2171,6 +2192,7 @@ export async function handleUpdateContainer(params: {
             encryption,
             artifactDataKeys,
             addArtifact: (artifact) => storage.getState().addArtifact(artifact),
+            invalidateArtifactsSync: invalidateArtifacts,
             log,
         });
     } else if (updateData.body.t === 'update-artifact') {
@@ -2261,6 +2283,7 @@ export async function handleUpdateContainer(params: {
             if (!hasPermissionProjection) {
                 requestTargetedSessionHydration({
                     sessionId,
+                    sourceServerId,
                     reason: 'share-visibility-change',
                     hydrateSessionById,
                     invalidateSessions,
@@ -2280,6 +2303,7 @@ export async function handleUpdateContainer(params: {
             if (!hasPermissionProjection) {
                 requestTargetedSessionHydration({
                     sessionId,
+                    sourceServerId,
                     reason: 'share-visibility-change',
                     hydrateSessionById,
                     invalidateSessions,
@@ -2290,6 +2314,7 @@ export async function handleUpdateContainer(params: {
 
         requestTargetedSessionHydration({
             sessionId,
+            sourceServerId,
             reason: 'share-visibility-change',
             hydrateSessionById,
             invalidateSessions,
@@ -2323,6 +2348,16 @@ export async function handleUpdateContainer(params: {
             notifySessionPublicLinkInvalidated({ serverId: publicLinkServerId, sessionId });
         }
         invalidateSessions();
+    }
+    if (sourceServerId && shouldContinue() && (
+        updateData.body.t === 'new-artifact'
+        || updateData.body.t === 'update-artifact'
+        || updateData.body.t === 'delete-artifact'
+    )) {
+        // A committed receipt must wake captured Artifact readers even when
+        // AccountChange catch-up has not reached this mutation yet.
+        publishHomeAccountChange(sourceServerId, [updateData.body.artifactId], { changeKinds: ['artifact'],
+            ...(updateData.body.t === 'delete-artifact' ? { deletedArtifactIds: [updateData.body.artifactId] } : {}) });
     }
 }
 
@@ -2531,7 +2566,7 @@ export function handleEphemeralSocketUpdate(params: {
         if (!shouldContinue() || !sourceServerId) return Promise.resolve();
         // Committed accounting and settled capture both wake canonical readers;
         // neither payload is admitted as a second accounting/source projection.
-        publishHomeAccountChange(sourceServerId);
+        publishHomeAccountChange(sourceServerId, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
     } else if (updateData.type === 'team-credential-usage-changed') {
         if (!shouldContinue() || !sourceServerId) return Promise.resolve();
         notifyTeamCredentialUsageChanged({ serverId: sourceServerId, resourceId: updateData.resourceId });

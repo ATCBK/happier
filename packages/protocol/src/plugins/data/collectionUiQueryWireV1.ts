@@ -163,6 +163,7 @@ export const PluginCollectionUiQueryErrorCodeV1Schema = lazyZodSchema(() => z.en
   'collection_query_invalid',
   'collection_cursor_invalid',
   'collection_unavailable',
+  'collection_update_required',
   'collection_index_not_ready',
   'collection_content_mode_mismatch',
   'collection_contract_inconsistent',

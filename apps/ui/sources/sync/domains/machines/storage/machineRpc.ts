@@ -17,7 +17,7 @@ import { MachineResourcesPolicyMutationResultV1Schema } from '@happier-dev/proto
 import type { MachineStorageActionId } from '@happier-dev/protocol/actions/specs/storage';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { createRpcCallError, readRpcErrorCode, isRpcMethodNotAvailableError, isRpcMethodNotFoundError, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -25,12 +25,6 @@ import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntime
 export type MachineStorageKey = Readonly<{ machineId: string; serverId?: string | null; expectedAccountId?: string | null; daemonStateVersion?: number | null }>;
 export type MachineStorageReadInput = MachineStorageKey & Readonly<{
     signal?: AbortSignal;
-    /**
-     * The person confirmed this exact Action in a UI confirmation host (the review sheet, Empty now's
-     * dialog). The Action approval policy then skips only its duplicate UI default; explicit approval
-     * settings still decide (R41). Never set for agents or for an unconfirmed press.
-     */
-    confirmedByPerson?: boolean;
 }>;
 export type MachineStorageCategoryInput = MachineStorageReadInput & Readonly<{ categoryId: HappierStorageCategoryIdV1; cursor?: string }>;
 export type MachineStorageRefreshInput = MachineStorageReadInput & Readonly<{ categoryId?: HappierStorageCategoryIdV1 }>;
@@ -56,7 +50,7 @@ export type MachineStorageTrashMoveInput = ScopedInput<MachineStorageTrashMoveIn
 export type MachineStorageDeleteNowInput = ScopedInput<MachineStorageDeleteNowInputV1>;
 export type MachineStorageTrashEmptyInput = ScopedInput<MachineStorageTrashEmptyInputV1>;
 export type MachineStorageTrashRestoreInput = ScopedInput<MachineStorageTrashRestoreInputV1>;
-export type MachineStorageResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response' | 'approval_requested' }>;
+export type MachineStorageResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response' | 'approval_requested' | 'declined' }>;
 export type MachineStorageClients = Readonly<{
     summaryClient: (input: MachineStorageReadInput) => Promise<MachineStorageResult<HappierStorageSummaryV1>>;
     categoryClient: (input: MachineStorageCategoryInput) => Promise<MachineStorageResult<MachineStorageCategoryListResultV1>>;
@@ -89,6 +83,7 @@ async function result<T>(input: MachineStorageReadInput, request: () => Promise<
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false, reason: 'invalid_response' };
     } catch (error) {
         return { ok: false, reason: isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error) ? 'older_happier'
+            : isActionApprovalDeclinedErrorCode(readRpcErrorCode(error)) ? 'declined'
             : readRpcErrorCode(error) === 'invalid_action_output' ? 'invalid_response' : 'request_failed' };
     }
 }
@@ -99,7 +94,6 @@ async function execute(input: MachineStorageReadInput, actionId: MachineStorageA
     const outcome = await actionExecute(actionId, {
         machineId: input.machineId, ...(input.serverId ? { serverId: input.serverId } : {}), ...extra,
     }, { surface: 'ui', ...(input.serverId ? { serverId: input.serverId } : {}),
-        ...(input.confirmedByPerson ? { authority: 'present_user' as const, presentUserConfirmation: { actionId } } : {}),
         ...(input.expectedAccountId ? { expectedAccountId: input.expectedAccountId } : {}), ...(input.signal ? { signal: input.signal } : {}) });
     if (!outcome.ok) throw createRpcCallError({ error: outcome.error, errorCode: outcome.errorCode });
     return outcome.result;
@@ -119,7 +113,7 @@ export function fetchMachineStoragePileViaAction(input: MachineStorageReadInput)
 }
 /** Runtime scope and cancellation fields never enter the strict Action input. */
 function fields<T extends MachineStorageReadInput>(input: T) {
-    const { machineId: _machine, serverId: _server, expectedAccountId: _account, daemonStateVersion: _version, signal: _signal, confirmedByPerson: _confirmed, ...payload } = input;
+    const { machineId: _machine, serverId: _server, expectedAccountId: _account, daemonStateVersion: _version, signal: _signal, ...payload } = input;
     return payload;
 }
 export function setMachineStoragePileViaAction(input: MachineStoragePileSetInput) {

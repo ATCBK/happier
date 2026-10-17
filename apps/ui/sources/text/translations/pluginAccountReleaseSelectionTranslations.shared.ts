@@ -30,6 +30,8 @@ export const english = {
         hostedStatusDisabled: "Disabled. Enable hosting to download this release’s artifacts while its source machine is offline.",
         hostedStatusPending: 'Enabled. This release is waiting for the host to publish its exact plugin artifacts.',
         hostedStatusReady: 'Hosted plugin artifacts are available for this exact release.',
+        hostedStatusFailed: "Other devices can't open this page yet. It still works here.",
+        hostedStatusFailedChip: 'Only on this device',
         hostedRemoveTitle: 'Disable and remove hosted artifacts',
         hostedRemoveBody: 'Stops Account hosting and removes the exact hosted plugin artifacts for this release. Local cache cleanup is separate.',
         hostedClearCacheTitle: 'Clear local artifact cache',

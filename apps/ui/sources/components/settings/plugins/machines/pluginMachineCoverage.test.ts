@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { t } from '@/text';
 
 import { resolvePluginMachineCoverageLabels } from './pluginMachineCoverage';
 import type { PluginMachineMatrixCellV1, PluginMachineMatrixV1 } from './pluginMachineMatrix';
@@ -44,6 +45,16 @@ describe('resolvePluginMachineCoverageLabels', () => {
         expect(labels.one).toContain('mac-mini');
         expect(labels.one).not.toContain('laptop');
         expect(labels).not.toHaveProperty('nowhere');
+    });
+
+    it('says where a plugin is installed when its only machine is offline, rather than nothing', () => {
+        const labels = resolvePluginMachineCoverageLabels(matrix({
+            offline: [cell('mac-mini', 'absent'), cell('laptop', 'staleOffline'), cell('vps', 'unknown')],
+            disabled: [cell('mac-mini', 'disabled'), cell('laptop', 'absent'), cell('vps', 'absent')],
+        }));
+
+        expect(labels.offline).toBe(t('settingsPlugins.surfaces.onMachineOffline', { machine: 'laptop' }));
+        expect(labels).not.toHaveProperty('disabled');
     });
 
     it('has no line while the matrix is not loaded', () => {

@@ -15,6 +15,7 @@ import { InstalledPluginMarkById } from '@/components/plugins/shared/InstalledPl
 import {
     mergeAdmittedPluginSettingsPages,
     readPluginSettingsPageRouteParams,
+    resolveAdmittedPluginSettingsPage,
 } from './pluginSettingsPageCatalog';
 
 function settingsBinding(pluginId: string, pageId: string, rendererId = 'settings-renderer') {
@@ -204,6 +205,24 @@ describe('mergeAdmittedPluginSettingsPages', () => {
         expect(ids).not.toContain('foreign-group');
         expect(ids).not.toContain('wrong-binding');
         expect(ids).not.toContain('pluginSettingsGroup:acme.review:review');
+    });
+});
+
+describe('resolveAdmittedPluginSettingsPage', () => {
+    it('names an opened page the way the Settings tree names its row, so a tab never says another page\'s title', () => {
+        // Sentry's only page is titled "PRs & Issues": as a tab or page header that names the PRs & Issues
+        // page itself, which is a different destination. The tree already names a one-page group by its
+        // plugin; the opened page follows the same rule. A several-page group keeps each page's own title.
+        const model = projection({
+            groups: [group('acme.sentry', 'sentry', 'Sentry'), group('acme.channels', 'channels', 'Conversation channels')],
+            pages: [
+                page({ pluginId: 'acme.sentry', localId: 'sources', group: { kind: 'plugin', id: { pluginId: 'acme.sentry', localId: 'sentry' } }, title: 'PRs & Issues' }),
+                page({ pluginId: 'acme.channels', localId: 'connections', group: { kind: 'plugin', id: { pluginId: 'acme.channels', localId: 'channels' } }, title: 'Connections' }),
+                page({ pluginId: 'acme.channels', localId: 'routing', group: { kind: 'plugin', id: { pluginId: 'acme.channels', localId: 'channels' } }, title: 'Routing' }),
+            ],
+        });
+        expect(resolveAdmittedPluginSettingsPage({ projection: model, pluginId: 'acme.sentry', pageId: 'sources', locale: 'en' })?.title).toBe('Sentry');
+        expect(resolveAdmittedPluginSettingsPage({ projection: model, pluginId: 'acme.channels', pageId: 'routing', locale: 'en' })?.title).toBe('Routing');
     });
 });
 

@@ -663,6 +663,10 @@ function hasPressableTestIdAncestor(
     return false;
 }
 
+// Initialize the real screen after the declared platform boundaries during
+// collection, outside individual interaction-test deadlines.
+await import('./PluginDetailGenericSettingsSection');
+
 describe('PluginDetailGenericSettingsSection', () => {
     beforeEach(() => {
         platformEnvironment.platform = 'web';
@@ -1427,13 +1431,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
         await flushAsync();
 
-        // The prompt names the Account record that loses the secret, in the
-        // person's language rather than a hardcoded English scope word.
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'secrets.prompts.deleteTitle',
-            `secrets.prompts.deleteConfirm:${PLUGIN_ID} · Account token · settings.account`,
-            { destructive: true, confirmText: 'common.delete', cancelText: 'common.cancel' },
-        );
+        expect(modalConfirmMock).not.toHaveBeenCalled();
         expect(accountPluginSecretWriteMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
             fieldId: 'accountToken',
             mutation: { kind: 'delete' },
@@ -1941,7 +1939,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(screen.getTextContent()).toContain('Connect this machine before changing the endpoint.');
     });
 
-    it('names the exact machine that loses a daemon-custodied secret', async () => {
+    it('leaves daemon-secret confirmation to the admitted Action owner', async () => {
         modalConfirmMock.mockResolvedValue(false);
         machinePluginSecretStatusMock.mockResolvedValue(secretStatusResult('configured'));
         const { screen } = await renderSection();
@@ -1952,11 +1950,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
         await flushAsync();
 
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'secrets.prompts.deleteTitle',
-            `secrets.prompts.deleteConfirm:${PLUGIN_ID} · API token · settings.mcpServersBindingTargetMachine`,
-            { destructive: true, confirmText: 'common.delete', cancelText: 'common.cancel' },
-        );
+        expect(modalConfirmMock).not.toHaveBeenCalled();
     });
 
     it('keeps generic text controls at the native touch floor on phones (44 pt iOS, 48 dp Android)', async () => {

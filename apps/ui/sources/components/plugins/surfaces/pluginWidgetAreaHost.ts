@@ -10,12 +10,17 @@ import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 export function createPluginWidgetAreaHostHandler(input: Readonly<{
     facts: BoundPluginSurfaceFacts; isCurrent(): boolean; lifetimeSignal: AbortSignal;
     hostAction: PluginSurfaceHostActionBinding; callerBinding: PluginSurfaceActionMountedBinding | null;
+    /** The mount's own words for a Machine-owned refusal (names the Run-on Machine); the code stays the code. */
+    describeUnavailable?: (reason: string) => string | undefined;
 }>): PluginSurfaceHostApiMethodHandler | null {
     const { facts } = input;
     const scope = facts.accountLifetime?.scope;
     if (!scope || facts.serverId && scope.serverId !== facts.serverId) return null;
+    // The admitted page declaration owns its areas. Its supplying occurrence
+    // need not be the selected execution Machine's occurrence (or have one).
+    // Actual operations retain the mounted-caller gate in Action dispatch below.
     const matches = Object.values(facts.pluginUiProjection?.surfacePlacementsById ?? {}).filter(row => row.pluginId === facts.pluginId
-        && row.descriptorId === facts.contributionId && row.occurrenceId === facts.occurrenceId
+        && row.descriptorId === facts.contributionId
         && row.binding.kind === 'destination' && row.binding.container === 'appPage');
     if (matches.length !== 1) return null;
     const declarations = PluginUiWidgetAreaDeclarationsV1Schema.safeParse(matches[0]!.widgetAreas);
@@ -28,7 +33,11 @@ export function createPluginWidgetAreaHostHandler(input: Readonly<{
                     ...(input.callerBinding ? { callerBinding: input.callerBinding } : {}),
                     hostAction: { ...input.hostAction, context: { ...input.hostAction.context, ...context } },
                     isCurrent: input.isCurrent, ...(context.signal ? { signal: context.signal } : {}) });
-                return outcome.ok ? { ok: true, result: outcome.result } : { ok: false, errorCode: outcome.reason, error: outcome.reason };
+                if (outcome.ok) return { ok: true, result: outcome.result };
+                const error = outcome.message
+                    ?? (outcome.code === 'unavailable' ? input.describeUnavailable?.(outcome.reason) : undefined)
+                    ?? outcome.reason;
+                return { ok: false, errorCode: outcome.reason, error };
             },
     });
     return async (request, options) => {

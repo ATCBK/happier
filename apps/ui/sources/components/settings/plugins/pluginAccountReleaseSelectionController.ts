@@ -1,4 +1,7 @@
 import type { PluginProjectionV2 } from '@happier-dev/protocol';
+import { PluginAccountAdministrationActionOutputSchemas as outputs,
+    type PluginAccountAdministrationActionId } from '@happier-dev/protocol/actions/pluginAccountAdministrationActionFamily';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import {
     readActivePluginAccountRelease,
@@ -29,6 +32,7 @@ import {
     type CandidateCollectionReleaseSelectionTarget,
 } from '@/sync/domains/plugins/availability/candidateCollectionReleaseSelection';
 import type { PluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
     classifyPluginAccountHostedArtifactStatus,
     type PluginAccountHostedArtifactStatus,
@@ -133,13 +137,18 @@ function currentIntent(input: Readonly<{
         return Object.freeze({ expectedRevision: null, offlineUiHosting: 'disabled' as const });
     }
     try {
-        const selected = input.reader.readCurrentReleaseSelection({ pluginId: input.pluginId });
-        if (selected.kind !== 'available') {
+        // Selecting a release also replaces retained unselected intents. Their
+        // CAS revision is Account administration state, not release admission.
+        const census = input.reader.readMaterializations();
+        const reads = census.kind === 'available'
+            ? census.intentReads.filter(read => read.pluginId === input.pluginId) : [];
+        const intent = reads.length === 1 ? reads[0]!.response.intent : null;
+        if (intent?.pluginId !== input.pluginId) {
             return Object.freeze({ expectedRevision: null, offlineUiHosting: 'disabled' as const });
         }
         return Object.freeze({
-            expectedRevision: selected.intent.revision,
-            offlineUiHosting: selected.intent.offlineUiHosting,
+            expectedRevision: intent.revision,
+            offlineUiHosting: intent.offlineUiHosting,
         });
     } catch {
         return Object.freeze({ expectedRevision: null, offlineUiHosting: 'disabled' as const });
@@ -151,9 +160,10 @@ function currentIntent(input: Readonly<{
  * release and CAS owner; Artifact/Data preparation remains downstream and is
  * passed only as a lazy, exact source for its typed preparation-required path.
  */
-export function createPluginAccountReleaseSelectionController(
-    dependencies: PluginAccountReleaseSelectionControllerDependencies = defaultDependencies,
+export function createPluginAccountReleaseAdministration(
+    overrides: Partial<PluginAccountReleaseSelectionControllerDependencies> = {},
 ): PluginAccountReleaseSelectionController {
+    const dependencies = { ...defaultDependencies, ...overrides };
     let retired = false;
     let activeAction: object | null = null;
 
@@ -364,5 +374,73 @@ export function createPluginAccountReleaseSelectionController(
             retired = true;
         },
         isPending: () => activeAction !== null,
+    });
+}
+
+/** Present-user admission only. The executor invokes the unchanged domain
+ * controller above after policy and approval settle; it never re-enters here. */
+export function createPluginAccountReleaseSelectionController(options: Readonly<{
+    onBlockingApprovalPending?: (input: Readonly<{
+        artifactId: string;
+        scope: ServerAccountScope;
+        signal: AbortSignal;
+    }>) => void;
+}> = {}): PluginAccountReleaseSelectionController {
+    const administration = createPluginAccountReleaseAdministration();
+    let retired = false;
+    let active: AbortController | null = null;
+    const execute = async (actionId: PluginAccountAdministrationActionId, input: unknown,
+        intentIsCurrent: () => boolean = () => true,
+        readProjection?: () => PluginProjectionV2 | null): Promise<unknown> => {
+        const cancelled = () => actionId === 'plugins.account.release.select'
+            ? { kind: 'cancelled' as const } : { kind: 'unavailable' as const };
+        if (retired || active || !intentIsCurrent()) return cancelled();
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime?.isCurrent()) return actionId === 'plugins.account.release.select'
+            ? { kind: 'unavailable', code: 'target_release_unavailable' } : { kind: 'unavailable' };
+        const cancellation = new AbortController();
+        active = cancellation;
+        const current = () => !retired && active === cancellation && !cancellation.signal.aborted
+            && lifetime.isCurrent() && intentIsCurrent();
+        const retirement = lifetime.onRetire(() => cancellation.abort());
+        try {
+            const frontDoor = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+            const requireActionSuccess: typeof frontDoor.requireActionSuccess = frontDoor.requireActionSuccess;
+            if (!current()) return cancelled();
+            const result: ActionExecuteResult = await frontDoor.createFrontDoorActionExecute(undefined, {
+                hostActionApprovalLifetime: { actionId, signal: cancellation.signal, surface: 'ui' },
+                pluginAccountAdministrationIsCurrent: current,
+                pluginAccountAdministrationProjection: readProjection,
+                onBlockingApprovalPending: ({ artifactId }) => {
+                    if (current()) options.onBlockingApprovalPending?.({
+                        artifactId, scope: lifetime.scope, signal: cancellation.signal,
+                    });
+                },
+            })(actionId, input, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                serverId: lifetime.scope.serverId, expectedAccountId: lifetime.scope.accountId, signal: cancellation.signal });
+            if (!current()) return cancelled();
+            requireActionSuccess(result);
+            return outputs[actionId].parse(result.result);
+        } finally {
+            retirement.dispose();
+            if (active === cancellation) active = null;
+        }
+    };
+    return Object.freeze({
+        select: async input => outputs['plugins.account.release.select'].parse(await execute('plugins.account.release.select', {
+            pluginId: input.pluginId, version: input.version, daemon: input.daemon,
+        }, input.isCurrent, () => input.projection)),
+        readHostedArtifactStatus: administration.readHostedArtifactStatus,
+        setHostedArtifactsEnabled: async input => outputs['plugins.account.hosting.set'].parse(await execute('plugins.account.hosting.set', {
+            pluginId: input.pluginId, enabled: input.enabled,
+        })),
+        disableAndRemoveHostedArtifacts: async input => outputs['plugins.account.hosting.remove'].parse(await execute('plugins.account.hosting.remove', {
+            pluginId: input.pluginId,
+        })),
+        clearHostedArtifactCache: async input => outputs['plugins.account.cache.clear'].parse(await execute('plugins.account.cache.clear', {
+            pluginId: input.pluginId,
+        })),
+        retire: () => { retired = true; active?.abort(); administration.retire(); },
+        isPending: () => active !== null,
     });
 }

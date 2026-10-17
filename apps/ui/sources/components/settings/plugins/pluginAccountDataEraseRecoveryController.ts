@@ -1,5 +1,5 @@
 import { PluginAccountDataEraseActionInputV1Schema, PluginAccountDataEraseActionOutputV1Schema } from '@happier-dev/protocol/plugins/data/accountEraseV1';
-import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { isActionApprovalDeclinedErrorCode, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { Modal, type IModal } from '@/modal';
 import { reviewManagedResourceRemoval } from '@/components/settings/machines/managed/reviewManagedResourceRemoval';
@@ -66,8 +66,8 @@ function parseCompletedOutput(result: ActionExecuteResult) {
 
 /**
  * Present-user controller for the one canonical Account plugin erase Action.
- * It owns confirmation, truthful feedback, and explicit retry presentation;
- * the Action owner below it owns both erase arms for each confirmed operation.
+ * It owns truthful feedback and explicit retry presentation; the Action owner
+ * below it owns approval and both erase arms for each admitted operation.
  */
 export function createPluginAccountDataEraseRecoveryController(
     dependencies: PluginAccountDataEraseRecoveryDependencies = defaultDependencies,
@@ -114,17 +114,6 @@ export function createPluginAccountDataEraseRecoveryController(
                 return;
             }
 
-            const confirmed = await dependencies.modal.confirm(
-                t('settingsPlugins.accountDataErase.confirmTitle'),
-                t('settingsPlugins.accountDataErase.confirmBody', { pluginId: input.data.pluginId }),
-                {
-                    confirmText: t('settingsPlugins.accountDataErase.confirm'),
-                    cancelText: t('common.cancel'),
-                    destructive: true,
-                },
-            );
-            if (!confirmed || !isCurrent(controller)) return;
-
             let actionInput = input.data;
             while (isCurrent(controller)) {
                 let actionResult: ActionExecuteResult;
@@ -148,6 +137,7 @@ export function createPluginAccountDataEraseRecoveryController(
                     return;
                 }
                 if (!isCurrent(controller)) return;
+                if (!actionResult.ok && isActionApprovalDeclinedErrorCode(actionResult.errorCode)) return;
 
                 const output = parseCompletedOutput(actionResult);
                 if (!output) {

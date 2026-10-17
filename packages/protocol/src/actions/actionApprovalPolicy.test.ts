@@ -35,84 +35,84 @@ async function loadRoutingResolver() {
 
 describe('isApprovalRequiredByActionsSettings', () => {
   it.each([
-    'artifact.access.grants.set',
-    'artifact.access.grants.remove',
-    'artifact.public_link.list',
-    'account.name.set',
-    'account.username.set',
-    'session.discussion.post',
-    'session.access.grant.set',
-    'session.access.grant.remove',
+    'projects.service.placement.set', 'projects.worker.preferences.set', 'projects.worker.preferences.reset', 'machines.worker.policy.set',
+    'session.checkpoint', 'session.connected_services_auth.set', 'prompt_doc.create',
+    'roles.create', 'roles.update', 'roles.override.set',
+    'daemon.filesystem.createDirectory',
+    'settings.set', 'settings.reset',
+    'connectedServices.subscription.price.set',
+    'connectedServices.accounts.default.set', 'connectedServices.accounts.purposeDefault.set',
+    'connectedServices.accounts.rename', 'connectedServices.purposes.default.set',
+    'connectedServices.pools.create', 'connectedServices.pools.patch',
+    'connectedServices.pools.members.add', 'connectedServices.pools.members.patch',
+    'connectedServices.pools.members.remove', 'connectedServices.pools.switchNow',
+    'connectedServices.pools.reorder', 'connectedServices.pools.default.set',
+    'usage.coach.apply', 'usage.coach.undo', 'usage.coach.dismiss', 'usage.coach.snooze',
+    'usage.sources.stop', 'usage.sources.root.set',
+    'widgets.item.add', 'widgets.item.move', 'widgets.item.rename', 'widgets.item.size.set',
+    'widgets.item.frame.set', 'widgets.item.inputs.set', 'widgets.item.inputs.reset',
+    'widgets.group.add', 'widgets.group.create', 'widgets.group.set', 'widgets.group.inputs.set', 'widgets.group.ungroup',
+    'widgets.area.layout.create', 'widgets.area.layout.rename', 'widgets.area.layout.reorder',
+    'widgets.area.layout.reset', 'widgets.area.layout.undo',
+    'widgets.definition.saveFromSession', 'widgets.fragment.update',
+    'session.board.layout.update',
+    'artifact.create', 'artifact.publish_from_file',
+    'artifact.access.grants.set', 'artifact.access.grants.remove', 'artifact.public_link.list',
+    'mcp.servers.create', 'mcp.servers.update', 'mcp.servers.tools.set', 'mcp.servers.duplicate',
+    'mcp.servers.import', 'mcp.servers.test', 'mcp.servers.signIn.start', 'mcp.found.adopt',
+    'mcp.rules.set', 'skills.rules.set', 'registries.sources.token.set',
+    'registries.sources.update', 'session.capabilities.set',
+    'skills.create', 'skills.update', 'skills.duplicate', 'skills.install', 'skills.found.adopt',
+    'prompt_registry.install',
+    'skills.updates.apply', 'skills.machine.install', 'agents.acp.backends.upsert',
+    'registries.sources.create', 'secrets.create', 'secrets.update',
+    'machines.agents.signIn.start', 'machines.agents.signIn.restart', 'machines.agents.signIn.cancel',
+    'machines.agents.install.cancel',
+    'connectedServices.authentication.beginConnect', 'connectedServices.authentication.beginReconnect',
+    'connectedServices.authentication.continueConnect', 'connectedServices.authentication.submitManual',
+    'connectedServices.authentication.completeOAuth', 'connectedServices.authentication.pollDevice',
+    'connectedServices.authentication.resumeDevice', 'connectedServices.authentication.reconcile',
+    'connectedServices.authentication.cancel',
+    'machines.daemon.stop', 'machines.replacement.set', 'machines.replacement.clear',
+    'machines.managed.acquire', 'machines.managed.power.set', 'machines.managed.retention.update',
+    'machines.managed.controller.update', 'machines.managed.setup.skip',
+    'machines.presets.create', 'machines.presets.update', 'machines.presets.archive', 'machines.presets.restore',
+    'machines.access.grant.remove', 'machines.access.leave',
+    'scm.change.include', 'scm.change.exclude', 'scm.commit.create', 'scm.commit.backout',
+    'scm.branch.create', 'scm.branch.checkout', 'scm.remote.fetch', 'scm.remote.pull', 'scm.remote.push',
+    'scm.repository.removeIndexLock', 'scm.stash.create', 'scm.stash.apply', 'scm.stash.pop', 'scm.commit.undoLast',
+    'scm.branch.operation.continue', 'scm.remote.add', 'scm.remote.setUrl', 'scm.remote.remove',
+    'scm.remote.publish', 'scm.worktree.create', 'scm.pullRequest.openOrReuse', 'scm.repository.init',
+    'scm.hostingRepository.publish',
+    'account.name.set', 'account.username.set',
+    'session.discussion.post', 'session.access.grant.set', 'session.access.grant.remove',
     'session.access.context.set',
-    'session.reports_to.set',
-    'session.responsibility.set',
-    'home.runtime.restart',
-    'relay.runtime.restart',
-    'remote_hosts.relay.restart',
-    'session.public_link.remove',
-    'session.public_link.create',
-    'artifact.public_link.create',
-    'teams.archive',
-    'teams.restore',
-    'teams.members.suspend',
-    'teams.members.reactivate',
-    'teams.members.remove',
-    'teams.members.leave',
+    'session.public_link.create', 'artifact.public_link.create',
+    'session.reports_to.set', 'session.responsibility.set',
+    'home.runtime.restart', 'relay.runtime.restart', 'remote_hosts.relay.restart',
+    'plugins.settings.set', 'plugins.settings.secret.bind', 'plugins.settings.secret.unbind',
+    'teams.restore', 'teams.members.suspend', 'teams.members.reactivate',
     'teams.members.management.set',
-    'teams.groups.archive',
-    'teams.groups.members.remove',
-    'teams.invitations.create',
-    'teams.invitations.revoke',
-    'teams.invitations.reissue',
+    'teams.groups.archive', 'teams.groups.members.remove',
+    'teams.invitations.create', 'teams.invitations.reissue',
     'teams.invitations.accept',
-    'teams.credentials.delete',
-    'teams.credentials.externalKeys.revoke',
-    'teams.credentials.externalKeys.revokeAll',
-    'teams.identity.connections.remove',
-    'home.identity.connections.remove',
-    'teams.externalGroupBindings.set',
-    'teams.externalGroupBindings.remove',
-    'teams.directory.sources.create',
-    'teams.directory.sources.pause',
-    'teams.directory.sources.remove',
-    'home.accounts.role.set',
-    'home.accounts.disable',
-    'home.accounts.enable',
-    'home.accounts.delete',
-    'home.accounts.signOutEverywhere',
-    'identity.providers.remove',
+    'teams.externalGroupBindings.set', 'teams.externalGroupBindings.remove',
+    'teams.directory.sources.create', 'teams.directory.sources.pause',
+    'home.accounts.role.set', 'home.accounts.disable', 'home.accounts.enable',
     'identity.githubApps.remove',
-    'teams.policy.set',
-    'teams.members.add',
-    'teams.members.role.set',
-    'teams.groups.members.add',
-    'teams.groups.restore',
-    'teams.directory.sources.sync',
-    'teams.directory.sources.resume',
-    'teams.credentials.limits.upsert',
-    'teams.credentials.limits.delete',
-    'teams.credentials.test',
+    'teams.policy.set', 'teams.members.add', 'teams.members.role.set', 'teams.groups.members.add',
+    'teams.groups.restore', 'teams.directory.sources.sync', 'teams.directory.sources.resume',
+    'teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.test',
     'teams.credentials.externalKeys.authorize',
-    'teams.identity.connections.enable',
-    'teams.identity.connections.disable',
-    'teams.identity.connections.test.start',
-    'teams.identity.connections.test.consume',
-    'home.identity.connections.enable',
-    'home.identity.connections.disable',
-    'home.identity.connections.test.start',
-    'home.identity.connections.test.consume',
-    'home.mailDelivery.test',
-    'home.search.rebuild',
-    'identity.providers.create',
-    'identity.providers.update',
-    'identity.providers.validate',
-    'identity.providers.test.start',
-    'identity.providers.test.consume',
-    'identity.providers.enable',
-    'identity.providers.disable',
-    'identity.githubApps.create',
-    'identity.githubApps.manifestSetup.start',
-    'identity.githubApps.verifyInstallation',
+    'teams.identity.connections.enable', 'teams.identity.connections.disable',
+    'teams.identity.connections.test.start', 'teams.identity.connections.test.consume',
+    'home.identity.connections.enable', 'home.identity.connections.disable',
+    'home.identity.connections.test.start', 'home.identity.connections.test.consume',
+    'home.mailDelivery.test', 'home.search.rebuild',
+    'identity.providers.create', 'identity.providers.update', 'identity.providers.validate',
+    'identity.providers.test.start', 'identity.providers.test.consume',
+    'identity.providers.enable', 'identity.providers.disable',
+    'identity.githubApps.create', 'identity.githubApps.manifestSetup.start', 'identity.githubApps.verifyInstallation',
   ] as const)('applies declared direct %s only for the present user on UI', actionId => {
     const spec = getActionSpec(actionId);
     const context = { surface: 'ui', authority: 'present_user' } as const;
@@ -139,17 +139,77 @@ describe('isApprovalRequiredByActionsSettings', () => {
     expect(resolveActionApprovalRouting({ actionId, spec, context, settings: ask }).required).toBe(true);
   });
 
-  it.each([
-    'teams.credentials.externalKeys.create',
-    'teams.members.history.prepare',
+  it.each(['mcp.servers.delete', 'registries.sources.delete', 'skills.delete', 'skills.machine.uninstall',
+    'usage.sources.history.delete', 'widgets.item.remove', 'widgets.definition.delete',
+    'widgets.fragment.delete', 'widgets.area.layout.delete', 'widgets.item.network.set',
+    'session.board.item.remove', 'artifact.delete', 'artifact.public_link.revoke',
+    'plugins.settings.reset', 'plugins.settings.secret.delete', 'machines.agents.install', 'machines.agents.uninstall',
+    'agents.acp.backends.installFromRegistry', 'agents.acp.backends.delete',
+    'teams.credentials.externalKeys.create', 'teams.members.history.prepare',
     'identity.providers.secret.replace',
     'home.governance.claim',
+    'machines.remove', 'machines.managed.delete', 'machines.managed.rebuild',
+    'machines.managed.cancel', 'machines.managed.retire', 'machines.managed.bootstrap.retry',
+    'machines.environment.apply', 'machines.access.grant.set', 'machines.access.prepareKeys', 'machines.pools.delete',
+    'scm.change.discard',
+    'connectedServices.accounts.revoke', 'connectedServices.pools.delete',
+    'connectedServices.configuration.replace', 'connectedServices.quota.reset',
   ] as const)('retains the default UI confirmation for %s', actionId => {
     const spec = getActionSpec(actionId);
     for (const settings of [undefined, EMPTY_SETTINGS]) {
       expect(resolveActionApprovalRouting({ actionId, spec, settings,
         context: { surface: 'ui', authority: 'present_user' } }).required).toBe(true);
     }
+  });
+
+  it.each([
+    'teams.archive', 'teams.members.remove', 'teams.members.leave', 'teams.invitations.revoke',
+    'teams.credentials.delete', 'teams.credentials.externalKeys.revoke', 'teams.credentials.externalKeys.revokeAll',
+    'teams.identity.connections.remove', 'home.identity.connections.remove',
+    'teams.directory.sources.remove', 'identity.providers.remove', 'session.public_link.remove',
+    'home.accounts.delete', 'home.accounts.signOutEverywhere',
+  ] as const)('keeps irreversible %s confirmation user-changeable on every exposed surface', actionId => {
+    const spec = getActionSpec(actionId);
+    for (const surface of ['ui', 'agent', 'mcp', 'cli'] as const) {
+      if (!spec.surfaces[surface]) continue;
+      const context = { surface, authority: surface === 'ui' ? 'present_user' : 'account_automation' } as const;
+      for (const settings of [undefined, EMPTY_SETTINGS]) {
+        expect(resolveActionApprovalRouting({ actionId, spec, context, settings }).required, surface).toBe(true);
+      }
+      const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+      expect(resolveActionApprovalRouting({ actionId, spec, context, settings: waived }).required, surface).toBe(false);
+      const ask = normalizeActionsSettingsV1({ ...waived, actions: { [actionId]: { approvalRequiredSurfaces: [surface] } } });
+      expect(resolveActionApprovalRouting({ actionId, spec, context, settings: ask }).required, surface).toBe(true);
+    }
+  });
+
+  it.each([
+    [{ intent: { kind: 'create', board: { id: 'board-1', name: 'Work' } } }, false],
+    [{ intent: { kind: 'update', boardId: 'board-1', patch: { name: 'Renamed' } } }, false],
+    [{ intent: { kind: 'add_items', boardId: 'board-1', refs: [] } }, false],
+    [{ intent: { kind: 'remove_item', boardId: 'board-1', ref: { kind: 'session', qualifiedId: { serverId: 'home-1', id: 'session-1' } } } }, false],
+    [{ intent: { kind: 'set_positions', boardId: 'board-1', positionsByItemRef: {} } }, false],
+    [{ intent: { kind: 'delete', boardId: 'board-1' } }, true],
+    [{ intent: { kind: 'widget_remove', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' } } }, true],
+    [{ intent: { kind: 'widget_network', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, network: { network: 'open' } } }, true],
+    [{ intent: { kind: 'delete' } }, true],
+    [undefined, true],
+  ] as const)('confirms the Board intent consequence through shared policy: %j', (input, expected) => {
+    const actionId = 'boards.apply';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    if (input?.intent.kind.startsWith('widget_')) expect(spec.inputSchema.safeParse(input).success).toBe(true);
+    for (const settings of [undefined, EMPTY_SETTINGS]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings }).required).toBe(expected);
+      for (const surface of ['agent', 'mcp', 'cli'] as const) {
+        expect(resolveActionApprovalRouting({ actionId, spec, input, settings,
+          context: { surface, authority: 'account_automation' } }).required, surface).toBe(true);
+      }
+    }
+    const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
+    expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: waived }).required).toBe(false);
+    const ask = normalizeActionsSettingsV1({ ...waived, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+    expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: ask }).required).toBe(true);
   });
 
   it.each([
@@ -240,7 +300,7 @@ describe('isApprovalRequiredByActionsSettings', () => {
     }).required).toBe(true);
   });
 
-  it('FA-4 admits reversible reachability enable and already-reviewed disable', () => {
+  it('admits reachability enable directly and confirms permanent identity retirement', () => {
     const actionId = 'home.reachability.iroh.set';
     const spec = getActionSpec(actionId);
     const context = { surface: 'ui', authority: 'present_user' } as const;
@@ -249,13 +309,41 @@ describe('isApprovalRequiredByActionsSettings', () => {
     }
     for (const mode of ['enabled', 'disabled'] as const) {
       const input = { mode };
-      expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(false);
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(mode === 'disabled');
       expect(resolveActionApprovalRouting({ actionId, spec, input,
         context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+      const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input, settings: waived }).required).toBe(false);
       expect(resolveActionApprovalRouting({ actionId, spec, context, input,
-        settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+        settings: normalizeActionsSettingsV1({ ...waived, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
       }).required).toBe(true);
     }
+  });
+
+  it.each([undefined, false, true])('admits recoverable Trash movement directly unless emptyAfter=%s deletes it', emptyAfter => {
+    const actionId = 'machines.storage.trash.move';
+    const spec = getActionSpec(actionId);
+    const input = {
+      machineId: 'machine-1',
+      items: [{ ref: { itemId: 'cache-1', path: '/tmp/cache',
+        identity: { dev: '1', ino: '2', kind: 'directory' }, collectedAt: 0,
+        collectedBy: { accountId: 'account-1', kind: 'person' } }, expect: 'review-1', claimedVerdict: 'safe' }],
+      ...(emptyAfter === undefined ? {} : { emptyAfter }),
+    };
+    expect(spec.inputSchema.safeParse(input).success).toBe(true);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const settings of [undefined, EMPTY_SETTINGS]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings }).required).toBe(emptyAfter === true);
+      for (const surface of ['agent', 'mcp', 'cli'] as const) {
+        expect(resolveActionApprovalRouting({ actionId, spec, input, settings,
+          context: { surface, authority: 'account_automation' } }).required, surface).toBe(true);
+      }
+    }
+    const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
+    expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: waived }).required).toBe(false);
+    const ask = normalizeActionsSettingsV1({ ...waived, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+    expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: ask }).required).toBe(true);
+    expect(resolveActionApprovalRouting({ actionId, spec, input: { machineId: 'machine-1', items: [] }, context }).required).toBe(true);
   });
 
   it('FA-4 honors Settings â†’ Actions require approval for a now-direct Team policy edit', () => {
@@ -334,9 +422,47 @@ describe('isApprovalRequiredByActionsSettings', () => {
     }
   });
 
+  it('uses declared non-waivability for Settings and execution, retaining approved replay', () => {
+    const actionId = 'workflow.trigger.add';
+    const spec = getActionSpec(actionId);
+    const descriptor = Object.getOwnPropertyDescriptor(spec, 'approvalPolicy')!;
+    // No production trigger is mandatory: exercise host-only declaration metadata
+    // through the real catalog rather than reviving the retired trigger id rule.
+    Object.defineProperty(spec, 'approvalPolicy', { ...descriptor, value: { ...spec.approvalPolicy, nonWaivable: true } });
+    try {
+      for (const surface of ['ui', 'agent', 'mcp', 'cli', 'plugin'] as const) {
+        const settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+        const context = { surface, authority: 'present_user' as const };
+        expect.soft(isApprovalRequiredByActionsSettings(actionId, settings, context), surface).toBe(true);
+        expect.soft(resolveActionApprovalRouting({ actionId, spec, settings, context, requiredByPolicy: false }).required, surface).toBe(true);
+        expect(resolveActionApprovalRouting({ actionId, spec, settings,
+          context: { ...context, bypassApprovals: true }, requiredByPolicy: false }).required, surface).toBe(false);
+      }
+    } finally { Object.defineProperty(spec, 'approvalPolicy', descriptor); }
+  });
+
+  it('requires the first plugin Install & Trust disclosure and retains automation approval', () => {
+    const actionId = 'plugins.install';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS, context }).required).toBe(true);
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
+      context: { ...context, presentUserConfirmation: { actionId } } }).required).toBe(false);
+    expect(resolveActionApprovalRouting({ actionId, spec, context, settings: normalizeActionsSettingsV1({ v: 1,
+      actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
+    }) }).required).toBe(true);
+    for (const surface of ['agent', 'cli', 'mcp', 'plugin'] as const) {
+      const automation = { surface, authority: 'account_automation' } as const;
+      expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS, context: automation }).required, surface).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, context: automation, settings: normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: { [actionId]: [surface] },
+      }) }).required, surface).toBe(false);
+    }
+    expect(isAgentInitiatedApprovalRequiredByDefault(actionId)).toBe(true);
+  });
   it('defaults declared dangerous registry writes to approval and honors surface waivers',()=>{
     for(const [id,surface,required]of [
-      ['registries.sources.create','ui',true],['registries.sources.delete','ui',true],
+      ['registries.sources.create','ui',false],['registries.sources.delete','ui',true],
       ['registries.sources.create','agent',true],['registries.sources.delete','cli',true],
     ] as const){
       const spec=getActionSpec(id);const context={surface,authority:'present_user',actionCaller:{kind:'host'}} as const;
@@ -345,25 +471,25 @@ describe('isApprovalRequiredByActionsSettings', () => {
     }
   });
   it('uses declared dangerous skill defaults and caller approval waivers', () => {
-    for (const [id, surface, expected] of [['skills.update', 'ui', true], ['skills.delete', 'ui', true], ['skills.install', 'agent', true], ['skills.create', 'cli', true]] as const) {
+    for (const [id, surface, expected] of [['skills.update', 'ui', false], ['skills.delete', 'ui', true], ['skills.install', 'agent', true], ['skills.create', 'cli', true]] as const) {
       const spec = getActionSpec(id), context = { surface, authority: 'present_user', actionCaller: { kind: 'host' } } as const;
       expect(resolveActionApprovalRouting({ actionId: id, spec, settings: EMPTY_SETTINGS, context }).required).toBe(expected);
       expect(resolveActionApprovalRouting({ actionId: id, spec, settings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [id]: [surface] } }), context }).required).toBe(false);
     }
   });
-  it('defaults dangerous MCP writes to approval on user and automation surfaces', () => {
+  it('defaults dangerous MCP writes to approval outside declared present-user direct UI intents', () => {
     const toolSet = getActionSpec('mcp.servers.tools.set');
     for (const surface of ['ui', 'cli', 'agent', 'mcp'] as const) {
       const context = { surface, authority: 'present_user', actionCaller: { kind: 'host' } } as const;
       expect(resolveActionApprovalRouting({ actionId: toolSet.id, spec: toolSet, settings: EMPTY_SETTINGS, context }).required)
-        .toBe(true);
+        .toBe(surface !== 'ui');
     }
     const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
     for (const declaration of MCP_SERVER_ACTION_SPECS_V1) {
       if (declaration.sideEffectClass === 'read') continue;
       const spec = getActionSpec(declaration.id);
       expect(resolveActionApprovalRouting({ actionId: spec.id, spec, settings: EMPTY_SETTINGS, context }).required,
-        spec.id).toBe(true);
+        spec.id).toBe(spec.approvalPolicy?.uiConfirmation !== 'direct');
     }
     for (const id of ['mcp.servers.create', 'mcp.servers.update', 'mcp.servers.import', 'mcp.found.adopt'] as const) {
       const spec = getActionSpec(id);
@@ -474,17 +600,17 @@ describe('isApprovalRequiredByActionsSettings', () => {
       const danger = spec.safety === 'danger';
       expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
         context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } }).required, actionId)
-        .toBe(danger);
+        .toBe(danger && spec.approvalPolicy?.uiConfirmation !== 'direct');
       for (const surface of ['agent', 'cli', 'mcp'] as const) {
         expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
           context: { surface, authority: 'account_automation' } }).required, `${actionId}:${surface}`).toBe(danger);
       }
     }
   });
-  it.each(['mcp.rules.set', 'skills.rules.set'] as const)('defaults declared dangerous %s to approval unless waived', actionId => {
+  it.each(['mcp.rules.set', 'skills.rules.set'] as const)('applies %s directly on UI and asks automation unless waived', actionId => {
     const spec = getActionSpec(actionId);
     expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
-      context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } }).required).toBe(true);
+      context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } }).required).toBe(false);
     for (const surface of ['agent', 'cli', 'mcp'] as const) {
       const context = { surface, authority: 'account_automation' } as const;
       expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS, context }).required).toBe(true);
@@ -492,14 +618,36 @@ describe('isApprovalRequiredByActionsSettings', () => {
       expect(resolveActionApprovalRouting({ actionId, spec, settings: waived, context }).required).toBe(false);
     }
   });
-  it('keeps every declared dangerous widget edit Ask-first on present-user UI with only a persisted waiver', () => {
+  it('keeps dangerous widget edits configurable while reversible UI defaults are direct', () => {
     const context = { surface: 'ui', authority: 'present_user' } as const;
+    const confirmedByDefault: ReadonlySet<ActionId> = new Set([
+      'widgets.definition.update', // Missing/malformed patch cannot prove a reversible edit.
+      'widgets.definition.delete', 'widgets.fragment.delete', 'widgets.snapshot.post',
+      'widgets.item.remove', 'widgets.item.network.set', 'widgets.area.layout.delete',
+    ]);
     for (const actionId of ACTION_IDS.filter(id => id.startsWith('widgets.') && getActionSpec(id).safety === 'danger')) {
-      expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, context), actionId).toBe(true);
+      expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, context), actionId)
+        .toBe(confirmedByDefault.has(actionId));
       const settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
       expect(isApprovalRequiredByActionsSettings(actionId, settings, context), actionId).toBe(false);
       expect(isApprovalRequiredByActionsSettings(actionId, settings, { surface: 'agent' }), actionId).toBe(true);
     }
+  });
+  it('confirms a force push with lease by default on the UI while an ordinary push stays direct, and the summary names the replacement', () => {
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    const lease = { cwd: '/repo', remote: 'origin', branch: 'main', pushMode: 'force_with_lease', expectedRemoteOid: 'abcdef0123456789abcdef0123456789abcdef01' };
+    const ordinary = { cwd: '/repo', remote: 'origin', branch: 'main' };
+    expect(isApprovalRequiredByActionsSettings('scm.remote.push', EMPTY_SETTINGS, context, undefined, undefined, lease)).toBe(true);
+    expect(isApprovalRequiredByActionsSettings('scm.remote.push', EMPTY_SETTINGS, context, undefined, undefined, ordinary)).toBe(false);
+    // The caller already recorded the person's answer to this exact press, and an explicit Allowed still wins.
+    expect(isApprovalRequiredByActionsSettings('scm.remote.push', EMPTY_SETTINGS,
+      { ...context, presentUserConfirmation: { actionId: 'scm.remote.push' } }, undefined, undefined, lease)).toBe(false);
+    expect(isApprovalRequiredByActionsSettings('scm.remote.push',
+      normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'scm.remote.push': ['ui'] } }), context, undefined, undefined, lease)).toBe(false);
+    const summary = (input: unknown) => getActionSpec('scm.remote.push').approvalPresentation?.summary(input) ?? '';
+    expect(summary(lease)).toContain('origin/main');
+    expect(summary(lease)).toContain('abcdef0');
+    expect(summary(ordinary)).toBe('Push your commits to origin/main.');
   });
   it('resolves legacy-conversion approval defaults and waivers without granting execution consent', () => {
     const actionId = 'workflow.trigger.update' as const;
@@ -730,7 +878,9 @@ describe('isApprovalRequiredByActionsSettings', () => {
     ] as const;
     for (const edit of edits) {
       const args = { ...edit, spec: getActionSpec(edit.actionId), context, settings: normalizeActionsSettingsV1({ v: 1 }) };
-      expect.soft(resolveActionApprovalRouting(args).required, edit.actionId).toBe(true);
+      expect.soft(resolveActionApprovalRouting(args).required, edit.actionId)
+        .toBe(args.spec.approvalPolicy?.uiConfirmationForInput?.(edit.input)
+          ?? args.spec.approvalPolicy?.uiConfirmation !== 'direct');
       const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [edit.actionId]: ['ui'] } });
       expect(resolveActionApprovalRouting({ ...args, settings: waived }).required, edit.actionId).toBe(false);
     }
@@ -739,8 +889,8 @@ describe('isApprovalRequiredByActionsSettings', () => {
         input: { ref: { surface: { ...shared, owner }, instanceId: 'copy' } }, context,
         settings: normalizeActionsSettingsV1({ v: 1 }),
       } as const;
-      expect(resolveActionApprovalRouting(args).required).toBe(true);
-      // The executor admits private UI safety; the policy cannot infer Artifact sharing from an input address.
+      expect(resolveActionApprovalRouting(args).required).toBe(false);
+      // Reversible presentation edits are direct; explicit Ask still wins.
       expect(resolveActionApprovalRouting({ ...args, defaultSafety: 'safe' }).required).toBe(false);
       expect(resolveActionApprovalRouting({ ...args, defaultSafety: 'safe',
         settings: normalizeActionsSettingsV1({ v: 1, actions: {
@@ -753,6 +903,22 @@ describe('isApprovalRequiredByActionsSettings', () => {
         v: 1, id: 'copy', definition: { kind: 'builtin', id: 'changes' }, bindings: {},
       } } }, context, settings: normalizeActionsSettingsV1({ v: 1 }),
     }).required).toBe(false);
+  });
+
+  it('confirms new source disclosure but admits Stop directly, honoring explicit Ask on either', () => {
+    const actionId = 'usage.sources.consent.set' as const;
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const enabled of [true, false]) {
+      const input = { serverId: 'home', machineId: 'machine', sourceId: 'source', enabled };
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: EMPTY_SETTINGS }).required).toBe(enabled);
+      for (const surface of ['agent', 'cli', 'mcp'] as const) {
+        expect(resolveActionApprovalRouting({ actionId, spec, input, context: { ...context, surface }, settings: EMPTY_SETTINGS }).required).toBe(true);
+      }
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: normalizeActionsSettingsV1({
+        v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
+      }) }).required).toBe(true);
+    }
   });
 
   it('admits reversible widget definition names and content directly while network changes confirm', () => {
@@ -771,6 +937,41 @@ describe('isApprovalRequiredByActionsSettings', () => {
       }
       const ask = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
       expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: ask }).required).toBe(true);
+    }
+  });
+
+  it('resolves admitted audience widening through the same configurable confirmation owner', () => {
+    const actionId = 'widgets.item.move' as const;
+    const args = { actionId, spec: getActionSpec(actionId), context: { surface: 'ui', authority: 'present_user' },
+      defaultUiConfirmation: true } as const;
+    expect(resolveActionApprovalRouting(args).required).toBe(true);
+    expect(resolveActionApprovalRouting({ ...args, settings: EMPTY_SETTINGS }).required).toBe(true);
+    expect(resolveActionApprovalRouting({ ...args, context: { ...args.context,
+      presentUserConfirmation: { actionId } } }).required).toBe(false);
+    const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
+    expect(resolveActionApprovalRouting({ ...args, settings: waived }).required).toBe(false);
+    const ask = normalizeActionsSettingsV1({ ...waived, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+    expect(resolveActionApprovalRouting({ ...args, settings: ask }).required).toBe(true);
+  });
+
+  it('confirms moving a widget into a different Session Board audience while same-board moves stay direct', () => {
+    const actionId = 'widgets.item.move' as const;
+    const spec = getActionSpec(actionId);
+    const scope = { serverId: 'home', accountId: 'account' };
+    const shared = { ...scope, owner: { kind: 'sessionBoard', sessionId: 'shared' } } as const;
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const [source, destination, required] of [
+      [{ ...scope, owner: { kind: 'home' } }, shared, true],
+      [shared, { ...scope, owner: { kind: 'sessionBoard', sessionId: 'another-session' } }, true],
+      [shared, shared, false],
+      [shared, { ...scope, owner: { kind: 'home' } }, false],
+    ] as const) {
+      const input = { ref: { surface: source, instanceId: 'copy' }, to: { surface: destination, index: 0 } };
+      expect(spec.inputSchema.safeParse(input).success).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: EMPTY_SETTINGS }).required).toBe(required);
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context: { surface: 'mcp', authority: 'account_automation' }, settings: EMPTY_SETTINGS }).required).toBe(true);
+      const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
+      expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: waived }).required).toBe(false);
     }
   });
 
@@ -1362,7 +1563,10 @@ describe('agent-initiated dangerous-action approval default (FINALIZATION-PLAN Â
       if (spec.safety !== 'danger') continue;
       for (const surface of ['ui', 'mcp', 'cli', 'agent', 'api', 'plugin', 'voice'] as const) {
         if (spec.surfaces[surface] !== true) continue;
-        expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, { surface })).toBe(true);
+        const operationOwnsConfirmation = spec.approvalPolicy?.scopeAdmissionOwnsConfirmation === true
+          && !spec.approvalPolicy.requiredSurfaces?.includes(surface);
+        expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, { surface }), `${actionId}:${surface}`)
+          .toBe(!operationOwnsConfirmation);
       }
     }
   });

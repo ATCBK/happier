@@ -634,6 +634,7 @@ function createChannelsPlugin() {
         resultSchema: SessionPullRequestBindingResultV1Schema,
         surfaces: ['cli', 'ui', 'plugin', 'agent', 'mcp'],
         dangerLevel: 'writesLocal',
+        confirmationWhen: { op: 'not', predicate: { op: 'eq', path: 'kind', value: 'list' } },
         confirmation: {
           title: 'Manage session pull request binding?',
           body: 'This can attach a pull request to the selected session or change its scoped conversation trigger bindings.',

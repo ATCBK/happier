@@ -12,7 +12,6 @@ import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SettingAnchor, SettingSection } from '@/components/settings/shell/SettingRow';
 import { DIRECTORY_SETTINGS } from './directorySettings';
-import { Modal } from '@/modal';
 import { identityAdministrationFailureMessage } from '@/components/settings/identity/identityAdministrationFailure';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { t } from '@/text';
@@ -179,11 +178,6 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
 
     const createSource = React.useCallback(async (option: TeamDirectorySourceSetupOptionV1) => {
         if (!props.mutationsAvailable || !projectionCurrent) return;
-        if (!await Modal.confirm(
-            t('teams.authentication.directory.setup.confirmTitle', { source: option.displayName }),
-            t('teams.authentication.directory.setup.confirmBody'),
-            { cancelText: t('common.cancel'), confirmText: t('common.continue') },
-        )) return;
         const optionId = option.kind === 'workos_directory'
             ? option.workosDirectoryId
             : option.githubAppInstallationId;

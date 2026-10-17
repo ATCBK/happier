@@ -7,7 +7,7 @@ import { createAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol";
 import {
     EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES,
-    EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2,
+    ExternalActionRequestEnvelopeSchema,
     EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
     measureExternalActionResponseEnvelopeUtf8BytesV1,
     prepareExternalActionResponseEnvelopeV1,
@@ -16,6 +16,7 @@ import {
     createExternalActionDaemonDispatchResponse,
     ExternalActionExecutionAuthorizationV1Schema,
 } from "@happier-dev/protocol/actions";
+import { EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2 } from "@happier-dev/protocol/actions/externalActionApi";
 import { createExternalActionDaemonDispatcher } from "@/app/api/socket/externalActionDispatcher";
 import { Server } from "socket.io";
 import {
@@ -108,6 +109,28 @@ function externalActionV2JsonPayloadWithByteLength(byteLength: number): string {
 }
 
 describe("registerExternalActionRoutes", () => {
+    it('reports a paired terminal decision authority refusal without calling its credential invalid', async () => {
+        const dispatch = vi.fn();
+        const app = createApp({ dispatch, beforeRegister: instance => {
+            instance.addHook('onRequest', async (request: FastifyRequest) => {
+                request.authTokenLegacy = false;
+                request.authTokenEpoch = 1;
+            });
+        } });
+        try {
+            const envelope = { v: 1, requestId: 'terminal-decision', target: { kind: 'machine', machineId: 'peer' },
+                input: { artifactId: 'approval', decision: 'approve' } };
+            for (const suffix of ['', '/execution-authorization']) {
+                const response = await app.inject({ method: 'POST', url: `/v1/actions/approval.request.decide${suffix}`,
+                    headers: { authorization: 'Bearer terminal-token', 'x-test-user-id': 'account-1', 'x-test-auth-token-kind': 'terminal' },
+                    payload: suffix ? { v: 1, machineId: 'peer', envelope } : envelope });
+                expect(response.statusCode).toBe(403);
+                expect(response.json()).toEqual({ error: 'credential_scope_denied' });
+            }
+            expect(dispatch).not.toHaveBeenCalled();
+        } finally { await app.close(); }
+    });
+
     it('refuses host-only Account and PAT plugin claims before Action dispatch or authorization issuance', async () => {
         const dispatch = vi.fn(async (request: Parameters<NonNullable<RegisterExternalActionRoutesDependencies['dispatch']>>[0]) => dispatchedResponse({ v: 1, actionId: request.actionId,
             requestId: request.envelope.requestId, execution: { ok: true, result: { accepted: true } } }));
@@ -729,9 +752,25 @@ describe("registerExternalActionRoutes", () => {
         const app = createApp({ dispatch });
         await app.ready();
         try {
-            const formerlyInflatedBodyBytes = EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES
-                + Math.floor(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES / 2);
-            expect(formerlyInflatedBodyBytes).toBeGreaterThan(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2);
+            const exactLimitPayload = externalActionV2JsonPayloadWithByteLength(
+                EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2,
+            );
+            const exactLimitResponse = await app.inject({
+                method: "POST",
+                url: "/v1/actions/session.spawn_new",
+                headers: { ...patHeaders, "content-type": "application/json" },
+                payload: exactLimitPayload,
+            });
+            expect(exactLimitResponse.statusCode).toBe(200);
+            expect(dispatch).toHaveBeenCalledOnce();
+            dispatch.mockClear();
+
+            const oneByteOverLimitPayload = externalActionV2JsonPayloadWithByteLength(
+                EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2 + 1,
+            );
+            // Keep the envelope structurally valid so this exercises the byte
+            // owner, rather than the ciphertext field's schema-length rejection.
+            expect(ExternalActionRequestEnvelopeSchema.safeParse(JSON.parse(oneByteOverLimitPayload)).success).toBe(true);
             const response = await app.inject({
                 method: "POST",
                 url: "/v1/actions/session.spawn_new",
@@ -739,7 +778,7 @@ describe("registerExternalActionRoutes", () => {
                     ...patHeaders,
                     "content-type": "application/json",
                 },
-                payload: externalActionV2JsonPayloadWithByteLength(formerlyInflatedBodyBytes),
+                payload: oneByteOverLimitPayload,
             });
             expect(response.statusCode).toBe(413);
             expect(response.json()).toEqual({

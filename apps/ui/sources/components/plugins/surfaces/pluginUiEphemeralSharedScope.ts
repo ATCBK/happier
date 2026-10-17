@@ -1,5 +1,6 @@
 import type { PluginUiEphemeralSharedScope } from '@happier-dev/plugin-ui/hostApi';
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
+import type { PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui';
 import { useLayoutEffect, useState } from 'react';
 
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -26,7 +27,7 @@ type OccurrenceScope = {
 type PluginScopeRecord = {
     /** Per-transport currentness fences; these never participate in value identity. */
     readonly origins: Map<string, { current: OccurrenceScope | null }>;
-    /** Opaque value identity is exactly Account + plugin + process occurrence. */
+    /** Opaque values belong to the Account, plugin and execution occurrence or admitted UI artifact. */
     readonly occurrences: Map<string, OccurrenceScope>;
 };
 
@@ -278,6 +279,8 @@ type MountedScopeInput = Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime | null;
     pluginId: string;
     occurrenceId?: string;
+    /** Verified presentation identity when this page has no executable occurrence. */
+    artifactDigest?: PluginUiArtifactDigestV1;
     executionOrigin?: PluginMachineExecutionOriginV1 | null;
     mountLifetime: Readonly<{ isCurrent(): boolean }>;
 }>;
@@ -286,10 +289,16 @@ type MountedScopeState = MountedScopeInput & Readonly<{
     scope: PluginUiEphemeralSharedScope | null;
 }>;
 
+function mountedScopeIdentity(input: MountedScopeInput): string | undefined {
+    // This is only a private sharing key, never executable currentness or
+    // mounted caller custody. Exact execution occurrences retain their identity.
+    return input.occurrenceId ?? (input.artifactDigest ? `artifact:${input.artifactDigest}` : undefined);
+}
+
 function isSameMountedScopeInput(state: MountedScopeState, input: MountedScopeInput): boolean {
     return state.accountLifetime === input.accountLifetime
         && state.pluginId === input.pluginId
-        && state.occurrenceId === input.occurrenceId
+        && mountedScopeIdentity(state) === mountedScopeIdentity(input)
         && readExecutionOriginSlot(state.executionOrigin) === readExecutionOriginSlot(input.executionOrigin)
         && state.mountLifetime === input.mountLifetime;
 }
@@ -303,6 +312,7 @@ export function usePluginUiEphemeralSharedScopeBinding(
     input: MountedScopeInput,
 ): PluginUiEphemeralSharedScope | null {
     const executionOriginSlot = readExecutionOriginSlot(input.executionOrigin);
+    const scopeIdentity = mountedScopeIdentity(input);
     const [state, setState] = useState<MountedScopeState>(() => ({ ...input, scope: null }));
     if (!isSameMountedScopeInput(state, input)) {
         setState({ ...input, scope: null });
@@ -312,17 +322,17 @@ export function usePluginUiEphemeralSharedScopeBinding(
         : { ...input, scope: null };
 
     useLayoutEffect(() => {
-        const scope = input.occurrenceId ? getPluginUiEphemeralSharedScope({
+        const scope = scopeIdentity ? getPluginUiEphemeralSharedScope({
             accountLifetime: input.accountLifetime,
             pluginId: input.pluginId,
-            occurrenceId: input.occurrenceId,
+            occurrenceId: scopeIdentity,
             executionOrigin: input.executionOrigin,
             isCurrent: input.mountLifetime.isCurrent,
         }) : null;
         setState((current) => isSameMountedScopeInput(current, input)
             ? { ...input, scope }
             : current);
-    }, [executionOriginSlot, input.accountLifetime, input.occurrenceId, input.mountLifetime, input.pluginId]);
+    }, [executionOriginSlot, input.accountLifetime, scopeIdentity, input.mountLifetime, input.pluginId]);
 
     return effectiveState.scope;
 }

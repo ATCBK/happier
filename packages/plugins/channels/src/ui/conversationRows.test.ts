@@ -88,3 +88,17 @@ it('lists a router once in the conversation index and leaves its threads to the 
   const groups = buildChannelsConversationIndex({ bindings: [router, thread, orphan], connections: [], providerName: (id) => id, t });
   expect(groups.flatMap((group) => group.rows.map((row) => row.binding.bindingId)).sort()).toEqual(['router-1', 'thread-2']);
 });
+
+it('says a bot needs you once per group, in the same words whatever its cause', () => {
+  const row = parseBinding({ bindingId: 'binding-1', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'shared', label: 'Ops' },
+    target: { kind: 'session', summary: 'session-1' }, inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly', approval: { kind: 'off' }, enabled: true, deletionState: 'none' });
+  if (row === undefined) throw new Error('fixture row must parse');
+  const labelFor = (attention: Partial<ChannelsConnection['attention']>) => buildChannelsConversationIndex({
+    bindings: [row], connections: [connection(attention)], providerName: (id) => id, t,
+  })[0]?.botAttention?.label;
+  const polling = labelFor({ pollFailure: { phase: 'blocked', attemptCount: 1, retryNotBeforeMs: null, evidence: { kind: 'provider', reason: 'providerConflict' } } });
+  const credential = labelFor({ providerReadiness: { code: 'providerCredentialInvalid' } });
+  expect(polling).toBe('Bot needs you');
+  expect(credential).toBe(polling);
+  expect(labelFor({})).toBeUndefined();
+});

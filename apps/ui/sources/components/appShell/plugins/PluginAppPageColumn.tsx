@@ -6,6 +6,7 @@ import type { BoundPluginSurfaceBinding } from '@/components/plugins/surfaces/bo
 import { usePluginSurfaceDestinationNavigationBinding } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import { useAppShellPeek } from '@/components/navigation/shell/appRail/AppShellPeek';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { PluginSurfaceCompanionContext } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
 
 import {
     useAppShellPluginUiProjection,
@@ -26,6 +27,8 @@ import {
  */
 export const PluginAppPageColumn = React.memo(function PluginAppPageColumn(props: Readonly<{
     destinationId: string;
+    /** Peeked over another page: its own page is not there to state an offline machine, so the column does. */
+    peeked: boolean;
 }>) {
     const projection = useAppShellPluginUiProjection();
     const localize = useProjectedPluginLocalizedTextResolver();
@@ -49,6 +52,7 @@ export const PluginAppPageColumn = React.memo(function PluginAppPageColumn(props
     if (!page?.columnPlacement || page.disabledReason !== null) return null;
     return (
         <PluginSurfaceFocusEligibilityProvider active={focused} presentationActive={presented} currentUiContextActive={false}>
+            <PluginSurfaceCompanionContext.Provider value={!props.peeked}>
             <PluginSurfacePlacementHost
                 placement={page.columnPlacement}
                 pluginUiProjection={projection.pluginUiProjection}
@@ -58,6 +62,7 @@ export const PluginAppPageColumn = React.memo(function PluginAppPageColumn(props
                 binding={binding}
                 subPath={subPath ?? ''}
             />
+            </PluginSurfaceCompanionContext.Provider>
         </PluginSurfaceFocusEligibilityProvider>
     );
 });

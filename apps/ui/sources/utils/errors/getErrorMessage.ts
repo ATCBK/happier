@@ -6,6 +6,11 @@ import { ConnectedAccountCatalogOperationError } from '@/sync/api/account/connec
 export function getErrorMessage(err: unknown): string {
     if (err === null || err === undefined) return '';
 
+    const message = typeof err === 'string' ? err : err instanceof Error ? err.message : null;
+    if (message === 'account_encryption_currentness_unavailable') {
+        return t('settingsAccount.encryptionFactUnread');
+    }
+
     if (typeof err === 'string') return err;
 
     if (err instanceof HappyError) {

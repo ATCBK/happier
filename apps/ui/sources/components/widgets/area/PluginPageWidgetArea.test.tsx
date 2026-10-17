@@ -39,6 +39,7 @@ import { PluginPageWidgetArea } from './PluginPageWidgetArea';
 import { WidgetArea } from './WidgetArea';
 import { WidgetAreaLayoutBar } from './WidgetAreaLayoutBar';
 import { WidgetAreaPresetLine } from './WidgetAreaPresetLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { selectMountedWidgetAreaLayout } from './widgetAreaLayoutSelection';
 import { ProjectAsideWidgets, ProjectWidgetArea } from './ProjectWidgetArea';
 import { SessionSurfaceEntityDragHandle } from '@/components/sessions/board/SessionSurfaceEntityDrag';
@@ -192,6 +193,35 @@ function page(hostApi: PluginUiHostApi, repository: unknown, content?: React.Rea
         </AppShellPluginUiProjectionValueProvider>
     );
 }
+
+it('retries the same edited area after a failed layout read without resetting its saved widgets', async () => {
+    let fail = false;
+    const fixture = createArea({ beforeRead: async () => { if (fail) throw new Error('Artifact unavailable'); } });
+    await fixture.store.apply({ kind: 'add', instance: follow, size: 'small' });
+    await fixture.store.apply({ kind: 'rename', instanceId: follow.id, displayName: 'My checks' });
+    fail = true;
+    const screen = await renderScreen(page(fixture.hostApi, 'repo-a'));
+    await flushHookEffects({ cycles: 8 });
+    expect(screen.findByTestId('prs.pinned.unavailable')).not.toBeNull();
+    fail = false;
+    await screen.pressByTestIdAsync('prs.pinned.retry');
+    await vi.waitFor(() => expect(screen.findByTestId(`prs.pinned.widget.${follow.id}`)).not.toBeNull());
+    expect(flattenWidgetLayoutWidgetsV1((await fixture.store.read()).items).map(row => row.instance))
+        .toEqual([{ ...follow, displayName: 'My checks' }]);
+});
+
+it('offers page readmission rather than Retry on an area whose Account scope was refused', async () => {
+    const fixture = createArea();
+    // The public Host API is the authority boundary; a retired mount cannot read through it.
+    const hostApi: PluginUiHostApi = { ...fixture.hostApi, widgetArea: async () => ({
+        ok: false, errorCode: 'widget_scope_unavailable', error: 'widget_scope_unavailable',
+    }) };
+    const screen = await renderScreen(page(hostApi, 'repo-a'));
+    await flushHookEffects({ cycles: 8 });
+    expect(screen.findByTestId('prs.pinned.unavailable')).not.toBeNull();
+    expect(screen.findByTestId('prs.pinned.retry')).toBeNull();
+    expect(screen.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'prs.pinned.unavailable')?.props.reason).toBeTruthy();
+});
 
 function menuOf(screen: Awaited<ReturnType<typeof renderScreen>>, id: string) {
     return screen.findByTestId(`prs.pinned.widget.${id}.menu`)!.findByType(ItemRowActions);
@@ -366,7 +396,7 @@ describe('a plugin page widget area', () => {
         const { hostApi } = createArea();
         const port: WidgetAreaPort = { execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) };
         const screen = await renderScreen(page(hostApi, 'happier', <WidgetArea port={port} context={{}}
-            layout={{ state: { status: 'loading' }, write: async () => ({ kind: 'applied' }) }}
+            layout={{ state: { status: 'loading' }, reload: async () => {}, write: async () => ({ kind: 'applied' }) }}
             geometry="grid" title="Dashboard" surfaceName="Dashboard" testID="loading-area"
             dashboard={{ addLabel: 'Add widget', emptyTitle: 'Empty' }} />));
         expect(screen.findByTestId('loading-area.loading')).not.toBeNull();
@@ -558,13 +588,18 @@ describe('a plugin page widget area', () => {
                 renderWidgetArea={createDeclarativeWidgetAreaRender({ dispatch: async (request, options) => StrictJsonValueSchema.parse(await plugin.hostApi.widgetArea(request as never, options)), surfaceName: 'PRs & Issues' })} />
             : <ItemList testID="area-scroll"><ProjectWidgetArea projectName="Project" port={project.port}
                 context={{ slots: { repository: { label: 'Repository', value: { value: 'happier', label: 'happier' } } } }} testID={areaId} /></ItemList>;
+        // A host node keeps its identity across re-renders, as on every platform; the renderer asks for the
+        // mock again on each ref attach, so one node per cell keeps a re-render during measurement honest.
+        const cellNodes = new Map<string, { getBoundingClientRect: () => Readonly<Record<string, number>> }>();
         const screen = await renderScreen(page(plugin.hostApi, 'happier', scroller), { createNodeMock: element => {
             const props = element.props;
             const id = props && typeof props === 'object' && 'testID' in props ? props.testID : undefined;
             if (id === 'area-scroll' || element.type === 'ScrollView') return { getInnerViewNode: () => contentNode };
             if (id === `${areaId}.widget.follow` || id === `${areaId}.widget.pin`) {
                 const top = id.endsWith('.pin') ? 4000 : 200;
-                return { getBoundingClientRect: () => ({ left: 0, top: top - scrollY, width: 400, height: 260 }) };
+                const node = cellNodes.get(id) ?? { getBoundingClientRect: () => ({ left: 0, top: top - scrollY, width: 400, height: 260 }) };
+                cellNodes.set(id, node);
+                return node;
             }
             return null;
         } });

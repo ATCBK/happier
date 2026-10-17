@@ -1,4 +1,4 @@
-import type { TeamDirectoryGroupV1, TeamDirectorySourceRemovalImpactV1, TeamDirectorySourceSummaryV1 } from '@happier-dev/protocol/teams';
+import type { TeamDirectoryGroupV1, TeamDirectorySourceSummaryV1 } from '@happier-dev/protocol/teams';
 
 import { t } from '@/text';
 
@@ -8,7 +8,6 @@ export function directoryGroupMappingTargetLabel(mapping: TeamDirectoryGroupV1['
         ? mapping.teamGroupName
         : t('identityAdministration.mappedGroupNotVisible');
 }
-
 export type DirectorySourcePresentationState =
     | 'initializing'
     | 'syncing'
@@ -53,22 +52,4 @@ export function directorySourceStateLabel(state: DirectorySourcePresentationStat
         case 'paused': return t('teams.authentication.directory.state.paused');
         case 'needs_attention': return t('teams.authentication.directory.state.needsAttention');
     }
-}
-
-/**
- * What removing a directory source does, as sentences: who leaves the Team and which Group
- * memberships go (each only when it happens), then what is always kept. The preview's internal
- * contribution counts stay out of the copy; they describe mechanism, not consequence.
- */
-export function directorySourceRemovalBody(impact: TeamDirectorySourceRemovalImpactV1): string {
-    const lines: string[] = [];
-    if (impact.teamMembershipsRemoved > 0) {
-        lines.push(t('teams.authentication.directory.actions.removeMembers', { count: impact.teamMembershipsRemoved }));
-    }
-    if (impact.groupMembershipsRemoved > 0) {
-        lines.push(t('teams.authentication.directory.actions.removeGroupMemberships', { count: impact.groupMembershipsRemoved }));
-    }
-    if (lines.length === 0) lines.push(t('teams.authentication.directory.actions.removeNothing'));
-    lines.push(t('teams.authentication.directory.actions.removeKept'));
-    return lines.join('\n');
 }

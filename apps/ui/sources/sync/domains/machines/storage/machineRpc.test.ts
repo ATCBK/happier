@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
-import { MachineStoragePileResultV1Schema, MachineStoragePileSetInputV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStoragePileResultV1Schema, MachineStoragePileSetInputV1Schema, PileApplyResultV1Schema, TrashEmptyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -10,6 +10,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 // Only the authenticated network is replaced; registration, Account admission, Action policy and decoding stay real.
 const boundary = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -18,19 +19,65 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     return createServerScopedMachineRpcBoundaryMock(boundary.rpc);
 });
 const storageRpc = await import('./machineRpc');
+const { machineStorageStore } = await import('./machineStorageStore');
+const { Modal } = await import('@/modal');
+// Load the real executor graph during collection rather than spending the first test's deadline on imports.
+await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
 const { fetchMachineStorageSummaryViaAction, fetchMachineStorageCategoryViaAction, refreshMachineStorageSizeViaAction, watchMachineStorageViaMachineRpc } = storageRpc;
 
 const HOME = 'srv_storage_action';
 const key = { serverId: HOME, machineId: 'machine-a', expectedAccountId: 'account-a' };
 beforeEach(async () => {
     await homes.reset();
-    boundary.rpc.mockReset();
+    boundary.rpc.mockReset().mockRejectedValue(new Error('Unexpected Machine mutation'));
+    machineStorageStore.reset();
+    vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
     key.serverId = await homes.addHome({ name: 'Storage', serverUrl: 'https://storage-action.test',
         serverIdentityId: HOME, accountId: key.expectedAccountId, currentAccount: true });
 });
 afterEach(async () => { boundary.rpc.mockReset(); await homes.reset(); });
 
 describe('storage Action and Machine RPC boundary', () => {
+    it('lets the Action policy confirm reviewed deletion and keeps a decline quiet without a receipt or mutation', async () => {
+        const item = { ref: { itemId: 'log', path: '/logs/old', identity: { dev: '1', ino: '2', kind: 'file' as const },
+            collectedAt: 100, collectedBy: { accountId: key.expectedAccountId, kind: 'person' as const } }, expect: 'checked-log' };
+        expect(await machineStorageStore.applyPile({ ...key, mode: 'delete', items: [item] }))
+            .toEqual({ ok: false, reason: 'declined' });
+        expect(Modal.confirm).toHaveBeenCalledOnce();
+        expect(boundary.rpc).not.toHaveBeenCalled();
+        expect(machineStorageStore.getReceipt(key)).toBeNull();
+    });
+
+    it('lets shared policy decline Empty without changing the machine or producing a receipt', async () => {
+        expect(await machineStorageStore.emptyTrash({ ...key, entryIds: ['entry-a'] }))
+            .toEqual({ ok: false, reason: 'declined' });
+        expect(Modal.confirm).toHaveBeenCalledOnce();
+        expect(boundary.rpc).not.toHaveBeenCalled();
+        expect(machineStorageStore.getReceipt(key)).toBeNull();
+    });
+
+    it('honors Allowed reviewed deletion and sends only the exact selected items through the strict Action', async () => {
+        homes.answer(key.serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {},
+                approvalWaivedSurfaces: { 'machines.storage.deleteNow': ['ui'], 'machines.storage.trash.empty': ['ui'] } }),
+        } }, version: 1 } });
+        const ref = { itemId: 'log', path: '/logs/old', identity: { dev: '1', ino: '2', kind: 'file' as const },
+            collectedAt: 100, collectedBy: { accountId: key.expectedAccountId, kind: 'person' as const } };
+        const receipt = PileApplyResultV1Schema.parse({ batchId: 'delete-a', mode: 'delete', inTrashBytes: 0, freedBytes: 64, outcomes: [{ itemId: ref.itemId, status: 'deleted' }] });
+        boundary.rpc.mockResolvedValueOnce(receipt);
+        expect(await machineStorageStore.applyPile({ ...key, mode: 'delete', items: [{ ref, expect: 'checked-log', claimedVerdict: 'keep' }] }))
+            .toEqual({ ok: true, value: receipt });
+        expect(boundary.rpc).toHaveBeenLastCalledWith(expect.objectContaining({ method: RPC_METHODS.DAEMON_STORAGE_DELETE_NOW,
+            payload: { machineId: key.machineId, serverId: HOME, items: [{ ref, expect: 'checked-log' }] } }));
+        expect(machineStorageStore.getReceipt(key)).toMatchObject({ kind: 'applied', result: receipt });
+        const emptied = TrashEmptyResultV1Schema.parse({ outcomes: [{ entryId: 'entry-a', status: 'deleted' }], freedBytes: 32 });
+        boundary.rpc.mockResolvedValueOnce(emptied);
+        expect(await machineStorageStore.emptyTrash({ ...key, entryIds: ['entry-a'] })).toEqual({ ok: true, value: emptied });
+        expect(boundary.rpc).toHaveBeenLastCalledWith(expect.objectContaining({ method: RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY,
+            payload: { machineId: key.machineId, serverId: HOME, entryIds: ['entry-a'] } }));
+        expect(Modal.confirm).not.toHaveBeenCalled();
+    });
+
     it('collects a served reference through the real registered Action and decodes the daemon pile receipt', async () => {
         const served = { itemId: 'log', path: '/logs/old' };
         const receipt = MachineStoragePileResultV1Schema.parse({ revision: 2, items: [{ ...served,
@@ -45,7 +92,7 @@ describe('storage Action and Machine RPC boundary', () => {
             return receipt;
         });
         expect(await storageRpc.setMachineStoragePileViaAction({ ...key, add: [served], daemonStateVersion: 4,
-            signal: new AbortController().signal, confirmedByPerson: true }))
+            signal: new AbortController().signal }))
             .toEqual({ ok: true, value: receipt });
         expect(received).toEqual([{ serverId: HOME, machineId: key.machineId, add: [served] }]);
     });

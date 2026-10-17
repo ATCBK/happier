@@ -8,6 +8,8 @@ import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfil
 import { installApprovalCommonModuleMocks } from '../../approvals/approvalsTestHelpers';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
+import { preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text/i18n';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,7 +24,7 @@ function createApprovalArtifact(): Extract<DecryptedArtifact, { isDecrypted: tru
     isDecrypted: true, header: { ...APPROVAL_ARTIFACT_HEADER } };
 }
 
-installApprovalCommonModuleMocks();
+installApprovalCommonModuleMocks({ text: () => vi.importActual('@/text') });
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 const initialState = storage.getState();
@@ -40,17 +42,55 @@ beforeEach(async () => {
     ...createSessionFixture().metadata!, name: 'Secondary Home session', path: '/Users/secondary/repo',
     host: 'secondary.local', homeDir: '/Users/secondary', machineId: 'machine-secondary',
   } });
+  // Home B's Session list has been read, so a Session it does not hold is absent rather than still loading.
   storage.setState({ sessions: { [primary.id]: primary }, sessionListRowsByServerId: {
     [serverIdB]: { [secondary.id]: buildSessionListRenderableFromSession(secondary) },
-  } });
+  }, concurrentSessionListCacheByServerId: { [serverIdB]: { serverName: null, listObservation: { phase: 'ready', lastSuccessAt: 1 } } } });
 });
 afterEach(async () => {
+  setPreferredLanguageFromSettings('en');
   standardCleanup();
   storage.setState(initialState, true);
   if (serverIdB) await removeServerProfile(serverIdB);
 });
 
 describe('ApprovalInboxCard', () => {
+  it('localizes the first-party title in French and resolves its document through the shared reference reader', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    await preloadTranslations('fr');
+    setPreferredLanguageFromSettings('fr');
+    storage.setState({ settingsScope: { serverId: serverIdB, accountId: 'owner' } });
+    storage.getState().applyArtifacts([{ id: 'release-notes', title: 'Notes de version',
+      isDecrypted: true, header: { title: 'Notes de version' }, headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }]);
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, actionId: 'artifact.public_link.create', summary: 'Create document public link',
+      actionArgs: { artifactId: 'release-notes' },
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'public-link-review',
+        surface: 'cli', serverId: serverIdB, actionId: 'artifact.public_link.create' },
+    });
+    const screen = await renderScreen(<ApprovalInboxCard artifact={{ ...createApprovalArtifact(),
+      header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) }} onPress={() => {}} />);
+    expect(screen.getTextContent()).toContain('Créer un lien public pour « Notes de version » ?');
+    expect(screen.getTextContent()).not.toContain('Create document public link');
+  });
+  it('names an install from its evaluated review rather than its generic summary or plugin id', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, actionId: 'plugins.install', summary: 'Install plugin',
+      actionArgs: { path: '/tmp/review-helper', kind: 'path' },
+      preview: { pluginInstall: { permissionsDisclosure: 'daemonEvaluated', pendingReview: {
+        kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'install-review', reason: 'firstInstall',
+        currentVersion: null, authorityExpansion: [],
+        review: createPluginInstallationReviewFixture({ displayName: 'Review companion' }),
+      } } },
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'install-review',
+        surface: 'cli', serverId: serverIdB, actionId: 'plugins.install' },
+    });
+    const artifact: DecryptedArtifact = { ...createApprovalArtifact(), header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    const screen = await renderScreen(<ApprovalInboxCard artifact={artifact} onPress={() => {}} />);
+    expect(screen.getTextContent()).toContain('Review companion');
+    expect(screen.getTextContent()).not.toContain('acme.example');
+  });
   it('distinguishes an older saved-group approval by the name in its admitted body', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
@@ -64,6 +104,8 @@ describe('ApprovalInboxCard', () => {
     expect(screen.getTextContent()).not.toContain('opaque-library-id');
   });
   it('shows the qualified plugin action without interpreting it as a built-in action', async () => {
+    await preloadTranslations('fr');
+    setPreferredLanguageFromSettings('fr');
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     const artifact = {
       ...createApprovalArtifact(),
@@ -84,7 +126,7 @@ describe('ApprovalInboxCard', () => {
     expect(screen.getTextContent()).not.toContain(
       'acme.publisher/actions/releases/publish',
     );
-    expect(screen.getTextContent()).toContain('inbox.work.rows.approvalNeeded');
+    expect(screen.getTextContent()).toContain(t('inbox.work.rows.approvalNeeded'));
     expect(
       screen.findByTestId(`inbox.approval.${artifact.id}`)?.props,
     ).toMatchObject({
@@ -117,13 +159,13 @@ describe('ApprovalInboxCard', () => {
     expect(text.split('Respond to user-action request')).toHaveLength(2);
     // The session that asked tells this row from its siblings; "needs your approval" is not repeated.
     expect(text).toContain('Repo session');
-    expect(text).not.toContain('inbox.work.rows.approvalNeeded');
+    expect(text).not.toContain(t('inbox.work.rows.approvalNeeded'));
     expect(
       String(
         screen.findByTestId(`inbox.approval.${artifact.id}`)?.props
           .accessibilityLabel,
       ),
-    ).toContain('inbox.work.rows.approvalNeeded');
+    ).toContain(t('inbox.work.rows.approvalNeeded'));
   });
 
   it('drops the raw session id an older request stored after its title', async () => {
@@ -231,10 +273,57 @@ describe('ApprovalInboxCard', () => {
     );
 
     const text = screen.getTextContent();
-    expect(text).toContain('detailPages.approval.sessionOnHome');
+    expect(text).toContain(t('detailPages.approval.sessionOnHome', { home: 'Home B' }));
     expect(text).not.toContain('cmv06zc2b003itmv4tsr5fin7');
     expect(text).not.toContain('home-b.example.test');
-    expect(text).not.toContain('inbox.work.rows.approvalNeeded');
+    expect(text).not.toContain(t('inbox.work.rows.approvalNeeded'));
+  });
+
+  it('names the Home of a session this device cannot list when that Home has no name of its own', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    // A saved Home known only by its address: this device is signed in to it, so the session is on this Home.
+    await upsertServerProfile({ serverUrl: 'https://home-c.example.test', name: 'home-c.example.test' });
+    const profile = await setServerProfileIdentityForUrl('https://home-c.example.test', 'srv_approval_home_c');
+    if (!profile) throw new Error('Expected the unnamed Home profile');
+    storage.setState({ concurrentSessionListCacheByServerId: { [profile.id]: { serverName: null,
+      listObservation: { phase: 'ready', lastSuccessAt: 1 } } } });
+    try {
+      const screen = await renderScreen(<ApprovalInboxCard onPress={() => {}} artifact={{ ...createApprovalArtifact(),
+        header: { ...APPROVAL_ARTIFACT_HEADER, serverId: profile.id, sessionId: 'cmv06zc2b003itmv4tsr5fin7' },
+      } satisfies DecryptedArtifact} />);
+      const text = screen.getTextContent();
+      expect(text).toContain(t('detailPages.approval.sessionOnHome', { home: t('settingsAccount.thisHome') }));
+      expect(text).not.toContain(t('detailPages.approval.sessionElsewhere'));
+    } finally {
+      await removeServerProfile(profile.id);
+    }
+  });
+
+  it('claims nothing about where a session lives while its Home list is still being read', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    storage.setState({ concurrentSessionListCacheByServerId: {} });
+    const screen = await renderScreen(<ApprovalInboxCard onPress={() => {}} artifact={{ ...createApprovalArtifact(),
+      header: { ...APPROVAL_ARTIFACT_HEADER, serverId: serverIdB, sessionId: 'cmv06zc2b003itmv4tsr5fin7' },
+    } satisfies DecryptedArtifact} />);
+    const text = screen.getTextContent();
+    expect(text).not.toContain(t('detailPages.approval.sessionOnHome', { home: 'Home B' }));
+    expect(text).not.toContain(t('detailPages.approval.sessionElsewhere'));
+  });
+
+  it('says the asking Session once when the title already names it', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, actionId: 'session.reports_to.set', summary: 'Set Session lead',
+      actionArgs: { sessionId: 'session-1', leadSessionId: null, expectedLeadSessionId: null },
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'lead-once',
+        surface: 'cli', serverId: serverIdB, actionId: 'session.reports_to.set', sessionId: 'session-1' } });
+    const artifact: DecryptedArtifact = { ...createApprovalArtifact(),
+      header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    const screen = await renderScreen(<ApprovalInboxCard artifact={artifact} onPress={() => {}} />);
+    // The session is the request's own subject (its title) and also the one that asked: one mention.
+    expect(screen.getTextContent().split('Secondary Home session')).toHaveLength(2);
+    expect(String(screen.findByTestId(`inbox.approval.${artifact.id}`)?.props.accessibilityLabel))
+      .toContain(t('inbox.work.rows.approvalNeeded'));
   });
 
   it('uses the approval Home when another Home has the same Session id', async () => {
@@ -339,7 +428,7 @@ describe('ApprovalInboxCard', () => {
       );
       expect(screen.getTextContent()).not.toContain('inbox-secret');
       // A locked session reads by where it lives.
-      expect(screen.getTextContent()).toContain('detailPages.approval.sessionOnHome');
+      expect(screen.getTextContent()).toContain(t('detailPages.approval.sessionOnHome', { home: 'Home B' }));
     } finally {
       storage.setState({ sessionListRowsByServerId: previous });
     }

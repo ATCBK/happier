@@ -92,6 +92,18 @@ describe('shared item and group semantics', () => {
     })).toBe(1);
   });
 
+  it('enters a combobox list with no active row from its ends, and leaves a plain list key unclaimed', () => {
+    // A combobox's active descendant may be none (the input owns focus): Down enters at the first
+    // enabled row, Up at the last. A list whose focus is always on a row claims nothing from "none".
+    const entries = [{ disabled: true }, { disabled: false }, { disabled: false }, { disabled: true }] as const;
+    const combobox = { entries, currentIndex: -1, rtl: false, enterFromNone: true } as const;
+    expect(resolveHappierRovingSelection({ ...combobox, key: 'ArrowDown' })).toBe(1);
+    expect(resolveHappierRovingSelection({ ...combobox, key: 'ArrowUp' })).toBe(2);
+    expect(resolveHappierRovingSelection({ ...combobox, key: 'End' })).toBe(2);
+    expect(resolveHappierRovingSelection({ ...combobox, key: ' ' })).toBeNull();
+    expect(resolveHappierRovingSelection({ entries, currentIndex: -1, rtl: false, key: 'ArrowDown' })).toBeNull();
+  });
+
   it('keeps one reachable roving tab stop on the current choice or the first selectable entry', () => {
     const entries = [{ disabled: true }, { disabled: false }, { disabled: false }] as const;
 

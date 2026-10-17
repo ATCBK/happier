@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 
 function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutorDeps {
   return {
@@ -152,6 +153,25 @@ describe('createActionExecutor (session.checkpoint_code_rollback)', () => {
 });
 
 describe('createActionExecutor (session.checkpoint / session.restore)', () => {
+  it('exposes checkpoint creation to Agent, MCP and CLI without dropping their approval default', async () => {
+    const effects: unknown[] = [];
+    const output = { ok: true, status: 'succeeded', source: 'happier_scm', receipts: [] };
+    const executor = createActionExecutor(createDeps({ isActionApprovalRequired: undefined,
+      sessionCheckpoint: async args => { effects.push(args); return output; },
+    }));
+    const input = { v: 1, sessionId: 'sess_1', scopes: ['workspace'], candidate: { source: 'happier_scm' }, timing: 'idle' };
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      const context = { surface, authority: 'account_automation', defaultSessionId: 'sess_1', sessionListAccess: 'current_session' } as const;
+      expect(await executor.execute('session.checkpoint', input, context), surface)
+        .toEqual({ ok: false, errorCode: 'approvals_not_supported', error: 'approvals_not_supported' });
+      expect(effects).toEqual([]);
+      const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'session.checkpoint': [surface] } });
+      expect(await executor.execute('session.checkpoint', input, { ...context, actionsSettings }))
+        .toEqual({ ok: true, result: output });
+      expect(effects.splice(0)).toEqual([{ request: input }]);
+    }
+  });
+
   it('delegates session.checkpoint with request and resolved server id', async () => {
     const sessionCheckpoint = vi.fn(async () => ({
       ok: true,

@@ -14,10 +14,11 @@ import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { nativePickImages } from '@/utils/files/nativePickImages';
-import { pictureStore } from '../pictureStore';
 import { storeUserAtmospherePicture } from '../atmosphereSettings';
 import type { PictureInfo } from '../pictureStore.types';
 import type { PictureRef } from './atmosphereEdits';
@@ -190,13 +191,16 @@ function PictureCredit(props: Readonly<{ picture: AtmospherePicture }>) {
 }
 
 function UserPictureLine(props: Readonly<{ localId: string }>) {
+  const scope = useAccountSettingsScope();
+  const execution = useMountedActionExecution(scope);
   const remove = async () => {
-    const confirmed = await Modal.confirm(
-      t('settingsAppearance.glassControls.atmospherePictureRemove'),
-      t('settingsAppearance.glassControls.yourPictureRemoveBody'),
-      { confirmText: t('common.remove'), destructive: true },
-    );
-    if (confirmed) await pictureStore.remove(props.localId);
+    const result = await execution.execute('settings.invoke', {
+      anchor: 'appearance.atmospherePictureRemove',
+      input: { kind: 'atmosphere_picture_remove', localId: props.localId },
+    });
+    if (!result.ok && result.errorCode !== 'approval_rejected' && result.errorCode !== 'approval_canceled' && execution.isCurrent()) {
+      await Modal.alertAsync(t('common.error'), t('common.unavailable'));
+    }
   };
   return (
     <View style={styles.line}>

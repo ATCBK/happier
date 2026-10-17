@@ -89,13 +89,17 @@ export const ConnectedServiceCatalogBlock = React.memo(function ConnectedService
                     </View>
                     <View style={styles.foot}>
                         {agents}
-                        {supportDetails}
-                        <RoundButton testID={`connected-service-setup:connect:${entry.serviceKey}`}
-                            size="small" display="secondary" title={t('connectedServicesSettings.connect')}
-                            accessibilityLabel={t('connectedServicesSettings.setupServiceTitle', { service: entry.label })}
-                            accessibilityHint={entry.usedBy.length > 0 ? entry.usedBy.join(', ') : undefined}
-                            disabled={!entry.canAdd}
-                            onPress={(event) => { event?.stopPropagation?.(); if (entry.canAdd) props.onConnect(); }} />
+                        {/* The tile's operations stay together at its trailing edge; when the marks leave them no room in
+                            a narrow tile they move to their own line instead of running past the tile. */}
+                        <View style={styles.footActions}>
+                            {supportDetails}
+                            <RoundButton testID={`connected-service-setup:connect:${entry.serviceKey}`}
+                                size="small" display="secondary" title={t('connectedServicesSettings.connect')}
+                                accessibilityLabel={t('connectedServicesSettings.setupServiceTitle', { service: entry.label })}
+                                accessibilityHint={entry.usedBy.length > 0 ? entry.usedBy.join(', ') : undefined}
+                                disabled={!entry.canAdd}
+                                onPress={(event) => { event?.stopPropagation?.(); if (entry.canAdd) props.onConnect(); }} />
+                        </View>
                     </View>
                 </SetupBlockPaper>
             ) : (
@@ -164,9 +168,16 @@ const styles = StyleSheet.create((theme) => ({
     foot: {
         marginTop: 'auto',
         flexDirection: 'row',
+        flexWrap: 'wrap',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: theme.space.s8,
+    },
+    footActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s8,
+        marginLeft: 'auto',
     },
     agents: {
         flexDirection: 'row',

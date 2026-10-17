@@ -8,20 +8,8 @@ import {
 
 import { createMachineFixture, renderScreen as renderScreenWithProviders, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { storage } from '@/sync/domains/state/storageStore';
 import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import type { PluginSurfaceOpenHandler } from '@/components/plugins/surfaces/openPluginSurface';
-import {
-    PluginSurfaceDestinationNavigationBindingProvider,
-    usePluginSurfaceDestinationNavigationBindingForScope,
-    useRegisterPluginSurfaceDestinationNavigationOwner,
-} from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
-import {
-    usePluginSurfaceCurrentUiContextEligibility,
-    usePluginSurfaceFocusEligibility,
-} from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
     type PluginUiProjectionModel,
@@ -29,8 +17,6 @@ import {
     type PluginUiSurfacePlacementProjection,
 } from '@/sync/domains/plugins/ui/projection';
 import { selectPluginDestinationSurfacePlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
-
-import { usePluginSettingsPageDestinationHandler } from './pluginSettingsPageNavigation';
 
 const hostSpy = vi.hoisted(() => vi.fn());
 const fallbackSpy = vi.hoisted(() => vi.fn());
@@ -189,6 +175,19 @@ function settingsPage(input: Readonly<{
 }
 
 installDisconnectedServerSocketBoundary();
+const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiProjection } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const {
+    PluginSurfaceDestinationNavigationBindingProvider,
+    usePluginSurfaceDestinationNavigationBindingForScope,
+    useRegisterPluginSurfaceDestinationNavigationOwner,
+} = await import('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation');
+const {
+    usePluginSurfaceCurrentUiContextEligibility,
+    usePluginSurfaceFocusEligibility,
+} = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+const { usePluginSettingsPageDestinationHandler } = await import('./pluginSettingsPageNavigation');
 let settingsConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 function composeSettingsProjection(raw: PluginUiProjectionModel | null,

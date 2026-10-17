@@ -3,6 +3,7 @@ import { createPluginActionPresentUserGate, projectPluginActionFailureCode, type
 import type { ApprovalExecutionOriginV1, PluginSourceCustodyV1, TargetActionApprovalReplayPlacementV1, PluginActionPresentUserGatePolicy } from '@happier-dev/protocol';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import type { PluginActionHandlerInvocation } from '@happier-dev/plugin-sdk/actions';
+import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 
 import {
   projectTargetActionPresentUserAuthorizationFacts,
@@ -67,6 +68,7 @@ export function resolveCatalogTargetActionPolicy(params: Readonly<{
   hostAccessRequests: readonly TargetActionHostAccessRequest[];
   availability?: ResolvedTargetAction['availability'];
   confirmation?: ResolvedTargetAction['confirmation'];
+  confirmationWhen?: ResolvedTargetAction['confirmationWhen'];
   resolveHostPolicy: ResolveTargetActionHostPolicy;
 }>): ResolvedTargetAction {
   const action = Object.freeze({
@@ -87,6 +89,7 @@ export function resolveCatalogTargetActionPolicy(params: Readonly<{
     })),
     ...(params.availability === undefined ? {} : { availability: params.availability }),
     ...(params.confirmation === undefined ? {} : { confirmation: params.confirmation }),
+    ...(params.confirmationWhen === undefined ? {} : { confirmationWhen: params.confirmationWhen }),
     input: null,
     policyFingerprint: '',
   });
@@ -150,6 +153,7 @@ export function fingerprintTargetActionPolicy(action: NormalizedTargetActionPoli
     hostAccess: action.hostAccess,
     availability: action.availability,
     confirmation: action.confirmation,
+    ...(action.confirmationWhen === undefined ? {} : { confirmationWhen: action.confirmationWhen }),
     approvalRequiredByActionSettings: action.approvalRequiredByActionSettings,
     secretInputPaths: action.secretInputPaths ?? [],
     ...(action.secretInputLabels === undefined ? {} : { secretInputLabels: action.secretInputLabels }),
@@ -364,6 +368,7 @@ export function resolvePresentUserGatePolicy(
     scopes: action.scopes,
     surfaces: action.surfaces,
     ...(action.confirmation === undefined ? {} : { confirmation: action.confirmation }),
+    ...(action.confirmationWhen === undefined ? {} : { confirmationWhen: action.confirmationWhen }),
     ...(action.approvalRequiredByActionSettings === undefined
       ? {}
       : { approvalRequiredByActionSettings: action.approvalRequiredByActionSettings }),
@@ -414,6 +419,7 @@ export function createTargetActionExecutor(deps: Readonly<{
     input: unknown;
     surface: string;
     invocationSurface?: string;
+    invocationAuthority?: ActionRequiredAuthority;
     sessionId?: string;
     signal?: AbortSignal;
     /** Immutable replay subject injected only by the host dispatcher. */
@@ -526,6 +532,7 @@ export function createTargetActionExecutor(deps: Readonly<{
         input: args.input,
         surface: args.surface,
         invocationSurface,
+        ...(args.invocationAuthority === undefined ? {} : { invocationAuthority: args.invocationAuthority }),
         ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
         ...(args.signal === undefined ? {} : { signal: args.signal }),
         ...(args.requireCurrentIntent === true ? { requireCurrentIntent: true as const } : {}),

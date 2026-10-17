@@ -87,7 +87,7 @@ function listResult(listsTheEntry: boolean): TriageListEntriesResultV1 {
                     level: 'required',
                     fromSourceInstanceId: INSTANCE,
                     reasonId: 'involvement/review-requested',
-                    reasonLabel: 'Your review was requested',
+                    reasonLabel: 'Review requested',
                 },
                 selected: { kind: 'selected', sourceInstanceId: INSTANCE, reason: 'onlyPresent' },
                 observation,
@@ -228,7 +228,7 @@ describe('the selected entry once the window stops holding it', () => {
         // §2.2's own facts, from the last row the window published for this
         // selection: why it was asking for the reader, its state, its scope and
         // the connection it was read through.
-        await expect(shell.getByText('Your review was requested')).resolves.toBeDefined();
+        await expect(shell.getByText('Review requested')).resolves.toBeDefined();
         // Where it lives and when it was opened are one quiet context line
         // under the title, not a label/value form repeating the row.
         await expect(shell.getByText(
@@ -246,7 +246,8 @@ describe('the selected entry once the window stops holding it', () => {
         await evictTheRow(shell, ephemeralSharedScope);
 
         await act(async () => {
-            await shell.press(await shell.getByRole('button', { name: 'Close' }));
+            // Pushed: the platform's Back is the detail's one way back.
+            await shell.press(await shell.getByRole('button', { name: 'Back' }));
         });
 
         // Back on the list, which no longer holds the entry at all. A retained

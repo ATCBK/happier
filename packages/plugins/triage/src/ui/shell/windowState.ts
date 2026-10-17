@@ -54,6 +54,9 @@ export type TriageListSourceFailureV1 = Readonly<{
   displayName: string;
   /** Why, in the source's own words when it sent them. */
   reason: string;
+  /** Non-secret invocation diagnostic; separate from the translated reason. */
+  code?: string;
+  retryable?: boolean;
 }>;
 
 /**
@@ -155,6 +158,8 @@ function readShellFailure(snapshot: TriageListWindowSnapshotV1): TriageListShell
       sourceInstanceId: entry.sourceInstance.sourceInstanceId,
       displayName: entry.displayName,
       reason: SOURCE_FAILURE_COPY_V1.transient,
+      ...(entry.code === undefined ? {} : { code: entry.code }),
+      ...(entry.retryable === undefined ? {} : { retryable: entry.retryable }),
     }));
   }
   // A connection whose source is not admitted is never asked, so it has no lane
@@ -232,18 +237,41 @@ export function readTriageListFailureNotice(
   failure: TriageListShellFailureV1,
   text: TriageTextResolverV1 = ENGLISH_TEXT,
 ): TriageListFailureNoticeV1 {
+  const describe = (source: TriageListSourceFailureV1) => (
+    [resolveSourceFailureReason(text, source.reason), source.code].filter(Boolean).join(' · ')
+  );
   const only = failure.sources.length === 1 ? failure.sources[0] : undefined;
   if (only !== undefined) {
     return Object.freeze({
       title: `${only.displayName} ${text('plugins.triage.surface.failure.suffix', 'could not be read')}`,
-      description: resolveSourceFailureReason(text, only.reason),
+      description: describe(only),
     });
   }
   return Object.freeze({
     title: text('plugins.triage.surface.failure.some', 'Some sources could not be read'),
     description: failure.sources
-      .map((source) => `${source.displayName} — ${resolveSourceFailureReason(text, source.reason)}`)
+      .map((source) => `${source.displayName} — ${describe(source)}`)
       .join('\n'),
+  });
+}
+
+/**
+ * No machine could read the sources, but the reader's own state is still here.
+ *
+ * The failure's own words lead when it has them: the host says which Machine
+ * could not answer and what to do ("…unavailable on studio-mac. Reconnect it
+ * or choose another machine with Run on."), which the general sentence cannot.
+ */
+export function readTriageSourcesUnreachableNotice(
+  state: Readonly<{ kind: 'sourcesUnreachable' } & TriageListShellReadFailureV1>,
+  text: TriageTextResolverV1 = ENGLISH_TEXT,
+): TriageListFailureNoticeV1 {
+  const reason = state.message.trim();
+  return Object.freeze({
+    title: text('plugins.triage.surface.sourcesUnreachable.title', 'Your sources could not be reached'),
+    description: reason.length > 0
+      ? reason
+      : text('plugins.triage.surface.sourcesUnreachable.description', 'Happier could not reach a machine for these sources, so nothing has been read yet. Your pins are still here, and Refresh tries again.'),
   });
 }
 

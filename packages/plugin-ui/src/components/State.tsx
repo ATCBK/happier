@@ -28,6 +28,7 @@ import {
   type HappierSurfaceStateBindings,
 } from '../presentation/state/SurfaceState.js';
 import { useHappierPageChrome } from '../presentation/layout/pageChrome.js';
+import { useHappierColumnEdgeRemainder } from '../presentation/layout/columnEdge.js';
 import { useHappierUiAnimationActivityInternal, useOptionalHappierUiPalette } from '../environment/context.js';
 import {
   HAPPIER_SCENE_ART_METRICS,
@@ -221,6 +222,7 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
   const chrome = useHappierPageChrome();
   const stateSize = useStateSize(props.size);
   const scene = useStateScene(props.scene, props.layout ?? 'centered', stateSize, props.testID);
+  const pageSheetInsetPx = useHappierColumnEdgeRemainder(HAPPIER_EMPTY_STATE_FRAME.page.marginHorizontal);
   const unavailableReason = resolveAuthorText(
     translate,
     props.actionUnavailableReason,
@@ -284,6 +286,8 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
           style={[
             { width: '100%', maxWidth: chrome?.columnMaxWidthPx },
             HAPPIER_EMPTY_STATE_FRAME.page,
+            // On the sheet edge, also inside a column that already draws part of it (a detail's body).
+            { marginHorizontal: pageSheetInsetPx },
             add ? HAPPIER_EMPTY_STATE_FRAME.pageAdd : null,
             add && palette ? { borderColor: palette.sheetBorder } : null,
           ]}
@@ -512,12 +516,12 @@ function SurfaceStateAdapter(props: SurfaceStateProps & Readonly<{ actionSlot?: 
         />
       : undefined;
   const bindings: HappierSurfaceStateBindings = {
-    renderText: ({ role, metrics: textMetrics, testID, onPress, children }) => {
+    renderText: ({ role, metrics: textMetrics, align, testID, onPress, children }) => {
       if (role === 'quietLink') {
         return <HappierText testID={testID} accessibilityRole="link" onPress={onPress} tone="secondary" style={{ textDecorationLine: 'underline' }}>{children}</HappierText>;
       }
       if (role === 'lineAction') return <HappierText tone="neutral" style={{ ...textMetrics, fontWeight: '600' }}>{children}</HappierText>;
-      if (role === 'quiet') return <HappierText testID={testID} tone="muted" style={{ ...textMetrics, textAlign: 'center' }}>{children}</HappierText>;
+      if (role === 'quiet') return <HappierText testID={testID} tone="muted" style={{ ...textMetrics, textAlign: align === 'start' ? 'auto' : 'center' }}>{children}</HappierText>;
       return <HappierText testID={testID} tone="secondary" tabularNumbers={role === 'live'} style={textMetrics}>{children}</HappierText>;
     },
     renderButton: ({ action, emphasis, tone, testID }) => (

@@ -7,6 +7,8 @@ import { useDestinationFocus, useDestinationRouter, useDestinationVisibility } f
 import { DetailsPaneSlotHost } from '@/components/appShell/panes/details/DetailsPaneSlot';
 import { PluginSurfacePlacementHost } from '@/components/plugins/surfaces';
 import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurfaceFallback';
+import { PluginPageBackStepProvider } from '@/components/plugins/shared/PluginPageBackStep';
+import { PluginPageIdentityHeaderProvider } from '@/components/plugins/shared/PluginPageIdentityHeader';
 import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
 import { PageNavigationContextActionsProvider } from '@/components/ui/layout/NavigationHeaderActions';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
@@ -18,7 +20,6 @@ import type { BoundPluginSurfaceBinding } from '@/components/plugins/surfaces/bo
 import { usePluginSurfaceDestinationNavigationBinding } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import { resolveSelectedPluginSurfaceLaunchAuthority } from '@/components/plugins/surfaces/pluginSurfaceLaunchAuthority';
 import { isPluginSurfaceMachineBound, usePluginSurfaceExecutionOrigin } from '@/components/plugins/surfaces/pluginSurfaceExecutionOrigin';
-import { readSelectedPluginUiResourceCapability } from '@/sync/domains/plugins/ui/resourceCapability';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { t } from '@/text';
 import { buildPluginDetailRoute } from '@/components/settings/plugins/model/pluginsSurfaceRoutes';
@@ -98,10 +99,8 @@ export function PluginAppPageScreen(props: Readonly<{
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const needsMachineExecution = !!page && isPluginSurfaceMachineBound({
         pluginId: props.pluginId,
-        renderer: page.placement.renderer,
+        surface: page.placement,
         projection: projection.pluginUiProjection,
-        headerActions: page.placement.headerActions,
-        resourceCapability: readSelectedPluginUiResourceCapability(page.placement),
     });
     const pageExecution = usePluginSurfaceExecutionOrigin({
         pluginId: props.pluginId,
@@ -289,7 +288,7 @@ export function PluginAppPageScreen(props: Readonly<{
     if (props.subPath === null || !page || page.disabledReason) {
         const unavailableReasonCode = props.subPath === null
             ? 'plugin_surface_open_sub_path_invalid'
-            : page?.disabledReason ?? 'plugin_app_page_unavailable';
+            : page?.disabledReason ?? projection.unavailableReasonCode ?? 'plugin_app_page_unavailable';
 
         return renderPage(
             <>
@@ -329,6 +328,8 @@ export function PluginAppPageScreen(props: Readonly<{
                 */}
                 <DetailsPaneSlotHost testID="plugin-app-page-details">
                 <View testID="plugin-app-page-host" style={pageContentFrameStyle}>
+                    <PluginPageBackStepProvider owner={locationOwner}>
+                    <PluginPageIdentityHeaderProvider pluginId={props.pluginId} title={headerTitle}>
                     <PluginSurfacePlacementHost
                         placement={page.placement}
                         pluginUiProjection={projection.pluginUiProjection}
@@ -343,6 +344,8 @@ export function PluginAppPageScreen(props: Readonly<{
                         projectionInteractionEnabled={projection.phase === 'current'
                             && projection.interactionEnabled}
                     />
+                    </PluginPageIdentityHeaderProvider>
+                    </PluginPageBackStepProvider>
                 </View>
                 </DetailsPaneSlotHost>
             </PluginSurfaceFocusEligibilityProvider>

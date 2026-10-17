@@ -21,7 +21,6 @@ type RemovalPreflight = Readonly<{
 export type ManagedIdentityProviderRemovalOutcome =
     | Readonly<{ kind: 'removed' }>
     | Readonly<{ kind: 'approval_pending'; artifactId: string; approval: ActionApprovalContinuation }>
-    | Readonly<{ kind: 'cancelled' }>
     | Readonly<{ kind: 'blocked'; blockers: RemovalBlockers }>
     | Readonly<{ kind: 'failed'; code: string }>;
 
@@ -29,7 +28,6 @@ export async function runManagedIdentityProviderRemoval(params: Readonly<{
     providerId: string;
     readPreflight: (options?: ManagedIdentityProviderExecuteOptions<RemovalPreflight>) => Promise<ManagedIdentityProviderActionResult<RemovalPreflight>>;
     onApprovalPending?: (registration: ActionApprovalRegistration) => void;
-    confirm: (preflight: RemovalPreflight) => Promise<boolean>;
     remove: (expectedRevision: number) => Promise<ManagedIdentityProviderActionResult<Readonly<{ outcome: 'removed' }>>>;
 }>): Promise<ManagedIdentityProviderRemovalOutcome> {
     // A configured read may itself require approval. Keep the impact review
@@ -46,7 +44,6 @@ export async function runManagedIdentityProviderRemoval(params: Readonly<{
     if (!preflight.value.canRemove) {
         return { kind: 'blocked', blockers: preflight.value.blockers };
     }
-    if (!await params.confirm(preflight.value)) return { kind: 'cancelled' };
     const removed = await params.remove(preflight.value.provider.revision);
     if (removed.kind === 'approval_pending') return removed;
     return removed.kind === 'succeeded' ? { kind: 'removed' } : { kind: 'failed', code: removed.failure.code };

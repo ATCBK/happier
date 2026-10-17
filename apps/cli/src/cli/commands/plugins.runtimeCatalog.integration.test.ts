@@ -1624,6 +1624,19 @@ describe('handlePluginsCommand', () => {
     }
   });
 
+  it.each([['dev', '--help'], ['dev', '.', '-h']])('renders development help without registering a source: %j', async (...args) => {
+    const output = captureConsoleText();
+    try {
+      await handlePluginsCommand(args, {
+        // Help must not reach the daemon lifecycle/process boundary.
+        ensureDaemon: async () => { throw new Error('Help attempted to reach the daemon'); },
+      });
+      expect(output.text()).toContain('plugins dev');
+    } finally {
+      output.restore();
+    }
+  });
+
   it('dispatches packed plugin testing through the isolated daemon-backed author test owner', async () => {
     const previousExitCode = process.exitCode;
     process.exitCode = undefined;

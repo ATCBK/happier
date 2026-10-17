@@ -292,7 +292,7 @@ describe('TeamInvitationsScreen', () => {
         await vi.waitFor(() => expect(harness.requestsFor(INVITATION_REISSUE_PATH)).toHaveLength(1));
     });
 
-    it('confirms a revoke with revoke copy before it calls the Home', async () => {
+    it('runs exactly one shared Action confirmation before revoking an invitation', async () => {
         modalChoice.press = 'teams.invitations.revoke';
         const serverId = await addManagedHome();
         harness.answer(serverId, INVITATIONS_LIST_PATH, {
@@ -307,12 +307,7 @@ describe('TeamInvitationsScreen', () => {
         await screen.pressByTestIdAsync('team-invitations-row:invitation-1');
 
         await vi.waitFor(() => expect(harness.requestsFor(INVITATION_REVOKE_PATH)).toHaveLength(1));
-        // The chooser's body describes reissuing whenever reissue is offered, so
-        // the destructive branch must state its own consequence itself.
-        expect(modalBoundary.confirmations).toEqual([{
-            title: 'teams.invitations.revokeTitle',
-            body: 'teams.invitations.revokeBody',
-        }]);
+        expect(modalBoundary.confirmations).toHaveLength(1);
     });
 
     it('keeps the Waiting description once a revoke has moved its row to Finished', async () => {

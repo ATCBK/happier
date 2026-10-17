@@ -3,6 +3,7 @@ export { ApprovalPendingNotice, type ApprovalPendingNoticeProps } from './Approv
 export { ApprovalPrompt, type ApprovalPromptProps } from './ApprovalPrompt.js';
 export * from './Button.js';
 export * from './Collection.js';
+export { CollectionToolbar, type CollectionToolbarFreshness, type CollectionToolbarProps } from './CollectionToolbar.js';
 export type { CollectionVirtualizer, CollectionVirtualizerHandle, CollectionVirtualizerRequest } from '../presentation/collection/collectionVirtualizer.js';
 export * from './Content.js';
 export {
@@ -33,6 +34,7 @@ export * from './Form.js';
 export { Icon, type IconName, type IconProps } from './Icon.js';
 export * from './Image.js';
 export { MotionFeedback, type MotionFeedbackProps } from './MotionFeedback.js';
+export { ModalHeader, type ModalHeaderProps } from './ModalHeader.js';
 export * from './StoredImage.js';
 export * from './Layout.js';
 export { LinkDelivery, type LinkDeliveryProps } from './LinkDelivery.js';
@@ -172,6 +174,12 @@ export {
   type HappierCountedDisclosureProps,
 } from '../presentation/collection/CountedDisclosure.js';
 export {
+  HappierListOverflowFooter,
+  leadHappierListRows,
+  type HappierListOverflowFooterLabels,
+  type HappierListOverflowFooterProps,
+} from '../presentation/collection/ListOverflowFooter.js';
+export {
   HAPPIER_DISCLOSURE_DURATION_MS,
   resolveHappierDisclosureFrameStyle,
   type HappierControlledDisclosure,
@@ -243,6 +251,11 @@ export {
   type HappierCollectionVisitMemory,
   type HappierCollectionWindow,
 } from '../presentation/collection/collectionModel.js';
+export {
+  rankHappierQueryMatches,
+  type HappierQueryRankOptions,
+  type HappierQueryText,
+} from '../presentation/collection/queryRank.js';
 export {
   HAPPIER_COLLECTION_INSTANT_MOTION,
   resolveHappierCollectionTrackStyle,
@@ -408,6 +421,7 @@ export {
   type HappierAgentCursorMotionDriver,
   type HappierAgentCursorProps,
   type HappierAgentPageRect,
+  type HappierAgentPoint,
   type HappierAgentTarget,
 } from '../presentation/copresence/AgentCursor.js';
 export {
@@ -671,6 +685,8 @@ export {
 export {
   HAPPIER_SELECTION_TILE_TEXT,
   HappierSelectionTiles,
+  resolveHappierSelectionTileText,
+  type HappierSelectionTileTextStep,
   type HappierActionSelectionTilesProps,
   type HappierMultipleSelectionTilesProps,
   type HappierSelectionTileFooterRenderer,
@@ -1039,7 +1055,6 @@ export {
   useHappierPageChrome,
 } from '../presentation/layout/pageChrome.js';
 export {
-  HAPPIER_COLLECTION_RAIL_WIDTH_PX,
   HAPPIER_PAGE_ADAPTIVE_ACCESSORY_MAX_ROW_SHARE,
   HAPPIER_PAGE_METRICS,
   isHappierPageRowAccessoryStacked,

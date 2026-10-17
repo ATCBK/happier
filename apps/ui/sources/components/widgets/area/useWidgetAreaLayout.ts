@@ -32,7 +32,7 @@ export type WidgetAreaWriteOutcome =
 export type WidgetAreaLayoutState<C> =
     | Readonly<{ status: 'loading' }>
     /** The host refused the area itself (scope retired, context invalid, Project source unavailable). */
-    | Readonly<{ status: 'unavailable'; reasonCode: string }>
+    | Readonly<{ status: 'unavailable'; reasonCode: string; /** The host's own words when it gave any beyond the code. */ reason?: string }>
     | Readonly<{
         status: 'ready'; surface: WidgetSurfaceRefV1; items: WidgetAreaLayoutV1['items']; placements: WidgetPlacementV1[]; canEdit: boolean; isShared: boolean;
         admittedViewer: ServerAccountScope | null;
@@ -49,6 +49,8 @@ export type WidgetAreaLayoutState<C> =
 
 export type WidgetAreaLayout<C> = Readonly<{
     state: WidgetAreaLayoutState<C>;
+    /** Retry the same bound document; this never resets its saved edits. */
+    reload: () => Promise<void>;
     /** One semantic write through the port, then a fresh read of the acknowledged layout. */
     write: (operation: PluginUiWidgetAreaOperationV1) => Promise<WidgetAreaWriteOutcome>;
 }>;
@@ -57,10 +59,17 @@ function failureCode(result: PluginUiWidgetAreaResultV1): string | null {
     return result.ok ? null : (result.errorCode ?? 'widget_area_unavailable');
 }
 
+/** A refusal's sentence (e.g. which Machine cannot answer), when the host said more than its code. */
+function failureReason(result: PluginUiWidgetAreaResultV1, code: string): string | undefined {
+    const reason = result.ok ? '' : result.error.trim();
+    return reason.length > 0 && reason !== code ? reason : undefined;
+}
+
 /** Keeps unchanged placements (and an unchanged read) referentially stable, so their cards do not re-render. */
 function reconcile<C>(previous: WidgetAreaLayoutState<C>, next: WidgetAreaLayoutState<C>): WidgetAreaLayoutState<C> {
     if (previous.status !== 'ready' || next.status !== 'ready') {
-        return previous.status === 'unavailable' && next.status === 'unavailable' && previous.reasonCode === next.reasonCode ? previous : next;
+        return previous.status === 'unavailable' && next.status === 'unavailable' && previous.reasonCode === next.reasonCode
+            && previous.reason === next.reason ? previous : next;
     }
     const byId = new Map(previous.placements.map(placement => [placement.instance.id, placement]));
     const placements = next.placements.map(placement => {
@@ -125,7 +134,8 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
                 && storage.getState().artifacts[admittedArtifactId] === admittedPublication;
             const isReadPending = () => hasAuthority() && (current !== generation.current || binding.current !== capturedBinding
                 || storage.getState().artifacts[admittedArtifactId] !== admittedPublication);
-            next = refused !== null ? { status: 'unavailable', reasonCode: refused }
+            const refusedReason = refused !== null ? failureReason(result, refused) : undefined;
+            next = refused !== null ? { status: 'unavailable', reasonCode: refused, ...(refusedReason ? { reason: refusedReason } : {}) }
                 : parsed?.success && area?.success ? { status: 'ready', surface: area.data.surface, items: area.data.items,
                     placements: parsed.data.instances, canEdit: parsed.data.canEdit,
                     isShared: parsed.data.isShared === true, admittedViewer, context, isCurrent, isReadPending, documentState: parsed.data.state ?? 'present',
@@ -153,6 +163,12 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         return () => controller.abort();
     }, [artifactId, artifact, read]);
 
+    const reload = React.useCallback(async () => {
+        if (!mounted.current || binding.current.port !== port || binding.current.context !== context) return;
+        setState(previous => previous.status === 'unavailable' ? { status: 'loading' } : previous);
+        await read();
+    }, [context, port, read]);
+
     const write = React.useCallback(async (operation: PluginUiWidgetAreaOperationV1): Promise<WidgetAreaWriteOutcome> => {
         if (!mounted.current || binding.current.port !== port || binding.current.context !== context)
             return { kind: 'refused', errorCode: 'widget_area_unavailable' };
@@ -175,5 +191,5 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         return outcome;
     }, [context, port, read]);
 
-    return React.useMemo(() => ({ state, write }), [state, write]);
+    return React.useMemo(() => ({ state, reload, write }), [state, reload, write]);
 }

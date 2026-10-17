@@ -31,6 +31,8 @@ import { getAccountSessionSocketRoom } from "@/app/api/socketRooms";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { prepareManagedFiniteActionWake } from '@/app/machines/managed/managedWake';
+import { log } from '@/utils/logging/log';
+import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 
 import { forwardRpcCall, type RpcForwardResult } from "./rpc/forwardRpcCall";
 import { readVerifiedMachineSocketInstallationIdFromSocketData } from "./machineSocketInstallationProof";
@@ -112,6 +114,80 @@ type SessionPublisherPresenceForExternalAction = Pick<
 
 type SocketDataCarrier = Readonly<{ data?: unknown }>;
 
+type DispatchPhase =
+    | 'session_publishers'
+    | 'publisher_currentness'
+    | 'target_currentness'
+    | 'pending_reset_admission'
+    | 'session_machine_resolution'
+    | 'managed_finite_wake'
+    | 'machine_resolution'
+    | 'execution_authorization'
+    | 'daemon_cancel'
+    | 'daemon_forward';
+
+interface DispatchPhaseFailure {
+    readonly kind: 'failed';
+    readonly phase: DispatchPhase;
+    readonly errorClass: 'TypeError' | 'RangeError' | 'SyntaxError' | 'Error' | 'UnknownError';
+    readonly message: 'Unexpected phase failure (details redacted)';
+    readonly credentialScopeDenied: boolean;
+}
+
+type DispatchPhaseResult<T> = Readonly<{ kind: 'ready'; value: T }> | DispatchPhaseFailure;
+
+function emitDispatchPhaseWitness(
+    failure: Pick<DispatchPhaseFailure, 'phase' | 'errorClass' | 'message'> | Readonly<{
+        phase: 'daemon_envelope_admission';
+        errorClass: 'DaemonAdmissionError';
+        message: 'invalid_encrypted_envelope';
+    }>,
+    machineId?: string,
+): void {
+    try {
+        log({ module: 'external-action-dispatch', level: 'warn', phase: failure.phase,
+            errorClass: failure.errorClass, message: failure.message,
+            ...(machineId === undefined ? {} : { machineId }) }, '[external-action-phase]');
+    } catch {
+        // Diagnostics cannot replace the existing fail-closed public outcome.
+    }
+}
+
+function recordDispatchPhaseFailure(phase: DispatchPhase, error: unknown, machineId?: string): DispatchPhaseFailure {
+    // Error names, messages, causes and Zod issues can contain Action content,
+    // credentials or Account identifiers. Classify builtins without reading them.
+    let errorClass: DispatchPhaseFailure['errorClass'] = 'UnknownError';
+    let credentialScopeDenied = false;
+    try {
+        errorClass = error instanceof TypeError ? 'TypeError'
+            : error instanceof RangeError ? 'RangeError'
+                : error instanceof SyntaxError ? 'SyntaxError'
+                    : error instanceof Error ? 'Error' : 'UnknownError';
+        credentialScopeDenied = error instanceof ApiTokenOperationError && error.code === 'credential_scope_denied';
+    } catch {
+        // A thrown Proxy or accessor is untrusted too; retain only the phase.
+    }
+    const failure: DispatchPhaseFailure = {
+        kind: 'failed', phase, errorClass,
+        message: 'Unexpected phase failure (details redacted)',
+        credentialScopeDenied,
+    };
+    emitDispatchPhaseWitness(failure, machineId);
+    return failure;
+}
+
+async function runDispatchPhase<T>(
+    phase: DispatchPhase,
+    machineId: string | undefined,
+    operation: () => T | Promise<T>,
+): Promise<DispatchPhaseResult<T>> {
+    try {
+        return { kind: 'ready', value: await timeWebLatencyPhase(`dispatch.${phase}`, operation) };
+    } catch (error) {
+        return recordDispatchPhaseFailure(phase, error, machineId);
+    }
+}
+
 function parseDaemonResponse(
     raw: unknown,
     expected: Readonly<{ v: 1 | 2; actionId: ExternalActionActionIdV1; requestId?: string }>,
@@ -121,11 +197,11 @@ function parseDaemonResponse(
     if (result.kind === "invalid_request") {
         // A protected pre-open failure is untrusted transport evidence, but it
         // still must belong to this exact opaque request before the relay may
-        // return its bounded code. Retained V1 relay failures have no request
-        // correlation field and keep their released shape.
+        // return its bounded code. V1 also accepts the retained uncorrelated
+        // shape; current daemon refusals echo the original request id.
         return expected.v === 2
             ? result.requestId === expected.requestId ? result : null
-            : result.requestId === undefined ? result : null;
+            : result.requestId === undefined || result.requestId === expected.requestId ? result : null;
     }
     const response = result.prepared.response;
     if (response.v !== expected.v || response.actionId !== expected.actionId) return null;
@@ -232,8 +308,7 @@ export async function resolveCurrentSessionPublisherFromServer(params: Readonly<
     sessionId: string;
 }>): Promise<CurrentSessionPublisherAuthority | null> {
     if (!params.presence) return null;
-    let sockets: readonly SocketDataCarrier[];
-    try {
+    const sockets = await runDispatchPhase('session_publishers', undefined, async () => {
         // The per-account Session room is the exact set of this Account's
         // sockets scoped to this Session, and it is what every Session-scoped
         // client joins — including a restricted Runner, which is deliberately
@@ -241,29 +316,28 @@ export async function resolveCurrentSessionPublisherFromServer(params: Readonly<
         // target from that Account-wide room therefore missed exactly the
         // publisher a Session target names.
         // Socket.IO's RemoteSocket has more fields than this resolver needs.
-        sockets = await params.io
+        return await params.io
             .in(getAccountSessionSocketRoom(params.accountId, params.sessionId))
             .fetchSockets() as SocketDataCarrier[];
-    } catch {
-        return null;
-    }
+    });
+    if (sockets.kind === 'failed') return null;
 
     const authorities = new Map<string, CurrentSessionPublisherAuthority>();
-    for (const socket of sockets) {
+    for (const socket of sockets.value) {
         const projection = readSessionPublisherAuthorityProjection(socket.data);
         if (!projection) continue;
-        try {
-            const authority = await params.presence.resolveProjectedCurrentPublisher({
+        const presence = params.presence;
+        const authority = await runDispatchPhase('publisher_currentness', undefined, () => (
+            presence.resolveProjectedCurrentPublisher({
                 expectedAccountId: params.accountId,
                 expectedSessionId: params.sessionId,
                 projection,
-            });
-            if (authority) {
-                authorities.set(authority.machineId, authority);
-            }
-        } catch {
-            // A currentness read is fail-closed; another current publisher may
-            // still be discovered, but an uncertain candidate is never used.
+            })
+        ));
+        // A failed currentness read cannot admit this candidate; another
+        // current publisher may still be discovered.
+        if (authority.kind === 'ready' && authority.value) {
+            authorities.set(authority.value.machineId, authority.value);
         }
     }
     return authorities.size === 1 ? [...authorities.values()][0] : null;
@@ -304,7 +378,7 @@ function createExactMachineDaemonGuard(params: Readonly<{
     isOriginCurrent?: () => Promise<boolean>;
 }>): RpcForwardTargetGuard {
     const current = async (): Promise<boolean> => {
-        try {
+        const result = await runDispatchPhase('target_currentness', params.machineId, async () => {
             if (params.isOriginCurrent && !await params.isOriginCurrent()) return false;
             if (await params.resolveMachine({
                 accountId: params.accountId,
@@ -327,9 +401,8 @@ function createExactMachineDaemonGuard(params: Readonly<{
                 accountId: params.accountId,
                 sessionId: params.sessionId,
             }) === params.machineId;
-        } catch {
-            return false;
-        }
+        });
+        return result.kind === 'ready' && result.value;
     };
     const exact = (target: Pick<RpcAckResponseEmitter, "data">): boolean => (
         isExactMachineDaemonTarget(target, params.machineId, params.installationId)
@@ -391,14 +464,16 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
         if (options.signal?.aborted) {
             return { kind: "placement_error", code: "target_unavailable" };
         }
-        let pendingResetStartAdmission: ExternalActionExecutionAuthorizationBindingV1['pendingResetStartAdmission'];
-        try {
-            pendingResetStartAdmission = projectExternalActionPendingResetStartEnvelopeAdmissionV1({
-                actionId: request.actionId, envelope: request.envelope, target });
-        } catch {
+        const pendingReset = await runDispatchPhase('pending_reset_admission',
+            target.kind === 'machine' ? target.machineId : undefined, () => (
+                projectExternalActionPendingResetStartEnvelopeAdmissionV1({
+                    actionId: request.actionId, envelope: request.envelope, target })
+            ));
+        if (pendingReset.kind === 'failed') {
             return { kind: 'invalid_request', errorCode: 'invalid_envelope',
                 ...(request.envelope.requestId ? { requestId: request.envelope.requestId } : {}) };
         }
+        const pendingResetStartAdmission = pendingReset.value;
         if (pendingResetStartAdmission) {
             const account = await db.account.findUnique({ where: { id: request.principal.accountId }, select: { encryptionMode: true } });
             const mode = account ? resolveEffectiveAccountEncryptionModeFromAccountRow(account) : null;
@@ -415,19 +490,18 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
             machineId = target.machineId;
         } else {
             sessionId = target.sessionId;
-            try {
-                const resolved = await resolveSessionMachine({
+            const resolved = await runDispatchPhase('session_machine_resolution', undefined, () => (
+                resolveSessionMachine({
                     accountId: request.principal.accountId,
-                    sessionId,
-                });
-                if (!resolved) return { kind: "placement_error", code: "target_unavailable" };
-                machineId = resolved;
-            } catch {
+                    sessionId: target.sessionId,
+                })
+            ));
+            if (resolved.kind === 'failed' || !resolved.value) {
                 return { kind: "placement_error", code: "target_unavailable" };
             }
+            machineId = resolved.value;
         }
 
-        let availability: MachineResolution;
         let executionAuthorization = request.executionAuthorization;
         if (executionAuthorization) {
             const root = await auth.verifyExternalActionExecutionAuthorization(executionAuthorization.token);
@@ -450,6 +524,7 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                 serverIdentityId: await getServerIdentityId(), machineId,
                 actionId: request.actionId, requestId: request.envelope.requestId ?? randomUUID(),
                 requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target,
+                ...(request.envelope.idempotencyKey === undefined ? {} : { idempotencyKey: request.envelope.idempotencyKey }),
                 ...(pendingResetStartAdmission ? { pendingResetStartAdmission } : {}),
                 ...(handoffAdmission ? { handoffAdmission } : {}),
                 ...(request.managedContinuation ? { managedContinuation: request.managedContinuation } : {}),
@@ -527,18 +602,20 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
         let finiteWake: Awaited<ReturnType<typeof prepareManagedFiniteActionWake>> | undefined;
         const finiteSignal = options.signal ?? new AbortController().signal;
         if (target.kind === 'machine' && Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, request.actionId)) {
-            try {
+            const wake = await runDispatchPhase('managed_finite_wake', machineId, async () => {
                 executionAuthorization ??= await mint();
                 const originalAuthorization = executionAuthorization;
-                finiteWake = await prepareManagedFiniteActionWake({ io: params.io, actionOrigin: originalAuthorization,
+                return await prepareManagedFiniteActionWake({ io: params.io, actionOrigin: originalAuthorization,
                     signal: finiteSignal, forwardRpc,
                     isOriginalSourceCurrent: () => hasCurrentExternalActionSessionSource(originalAuthorization.binding, resolveSessionMachine) });
-                if (finiteWake.kind === 'submitted-unknown') return { kind: 'submitted_unknown' };
-                if (finiteWake.kind === 'unavailable') return { kind: 'placement_error', code: 'target_unavailable' };
-            } catch { return { kind: 'placement_error', code: 'target_unavailable' }; }
+            });
+            if (wake.kind === 'failed') return { kind: 'placement_error', code: 'target_unavailable' };
+            finiteWake = wake.value;
+            if (finiteWake.kind === 'submitted-unknown') return { kind: 'submitted_unknown' };
+            if (finiteWake.kind === 'unavailable') return { kind: 'placement_error', code: 'target_unavailable' };
         }
-        try {
-            availability = await resolveMachine({
+        const machine = await runDispatchPhase('machine_resolution', machineId, () => (
+            resolveMachine({
                 accountId: request.principal.accountId,
                 machineId,
                 actionId: request.actionId,
@@ -549,10 +626,12 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                 ...(requiredSessionInputAdmissionProtocolVersion === undefined
                     ? {}
                     : { requiredSessionInputAdmissionProtocolVersion }),
-            });
-        } catch {
+            })
+        ));
+        if (machine.kind === 'failed') {
             return { kind: "placement_error", code: "target_unavailable" };
         }
+        const availability = machine.value;
         if (availability !== "available") {
             if (managedAdmission && availability === 'unavailable') {
                 return request.envelope.v === 1
@@ -584,19 +663,21 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
             return { kind: "placement_error", code: "target_unavailable" };
         }
 
-        try {
-            executionAuthorization ??= await mint();
-        } catch (error) {
-            if (error instanceof ApiTokenOperationError && error.code === "credential_scope_denied") {
+        const authorization = await runDispatchPhase('execution_authorization', machineId, async () => (
+            executionAuthorization ?? await mint()
+        ));
+        if (authorization.kind === 'failed') {
+            if (authorization.credentialScopeDenied) {
                 return { kind: "placement_error", code: "credential_scope_denied" };
             }
             return { kind: "placement_error", code: "target_unavailable" };
         }
+        const currentAuthorization = authorization.value;
 
         // No provider/login HTTP await follows this original-source check.
-        if ((request.executionAuthorization || executionAuthorization.binding.sessionActionOrigin)
-            && (!await hasCurrentExternalActionSessionSource(executionAuthorization.binding, resolveSessionMachine)
-                || !await verifyCurrentExternalActionPrincipalInTx(db, executionAuthorization.binding))) {
+        if ((request.executionAuthorization || currentAuthorization.binding.sessionActionOrigin)
+            && (!await hasCurrentExternalActionSessionSource(currentAuthorization.binding, resolveSessionMachine)
+                || !await verifyCurrentExternalActionPrincipalInTx(db, currentAuthorization.binding))) {
             return { kind: 'placement_error', code: 'target_unavailable' };
         }
 
@@ -608,9 +689,9 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
             accountId: request.principal.accountId,
             machineId,
             actionId: request.actionId,
-            custodianAccountId: executionAuthorization.binding.custodianAccountId,
-            installationId: executionAuthorization.binding.installationId,
-            ...(executionAuthorization.binding.handoffAdmission ? { handoffAdmission: executionAuthorization.binding.handoffAdmission } : {}),
+            custodianAccountId: currentAuthorization.binding.custodianAccountId,
+            installationId: currentAuthorization.binding.installationId,
+            ...(currentAuthorization.binding.handoffAdmission ? { handoffAdmission: currentAuthorization.binding.handoffAdmission } : {}),
             requiredExternalActionExecutionAuthorization: true,
             ...(sessionId === undefined ? {} : { sessionId }),
             ...(requiredSessionInputAdmissionProtocolVersion === undefined
@@ -636,18 +717,19 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
             if (!targetSocketId || !requestId) return;
             try {
                 params.io.to(targetSocketId).emit(SOCKET_RPC_EVENTS.CANCEL, { requestId });
-            } catch {
+            } catch (error) {
+                recordDispatchPhaseFailure('daemon_cancel', error, machineId);
                 // Cancellation is best effort at the transport boundary.
             }
         };
         options.signal?.addEventListener("abort", cancelTarget, { once: true });
 
-        let forwarded: RpcForwardResult;
+        let forwarded: DispatchPhaseResult<RpcForwardResult>;
         let submittedUnknown = false;
         try {
-            forwarded = await forwardRpc({
+            forwarded = await runDispatchPhase('daemon_forward', machineId, () => forwardRpc({
                 io: params.io,
-                targetUserId: executionAuthorization.binding.custodianAccountId,
+                targetUserId: currentAuthorization.binding.custodianAccountId,
                 method: `${machineId}:${EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1}`,
                 timeoutMs: null,
                 callParams: {
@@ -655,7 +737,7 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                     envelope: request.envelope,
                     principal: request.principal,
                     placement,
-                    executionAuthorization,
+                    executionAuthorization: currentAuthorization,
                 } satisfies ExternalActionDaemonDispatchRequest,
                 authorization: ACTION_API_SERVER_ORIGIN,
                 targetGuard,
@@ -664,24 +746,25 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                 },
                 ...(finiteWake?.kind === 'ready' ? { callerLifetime: { signal: finiteSignal, isCurrent: finiteWake.isCurrent } } : {}),
                 ...(cancellation ? { cancellation } : {}),
-            });
-        } catch {
-            if (submittedUnknown) return { kind: "submitted_unknown" };
-            return { kind: "placement_error", code: "target_unavailable" };
+            }));
         } finally {
             options.signal?.removeEventListener("abort", cancelTarget);
         }
-        if (!forwarded.ok) {
+        if (forwarded.kind === 'failed' || !forwarded.value.ok) {
             return submittedUnknown
                 ? { kind: "submitted_unknown" }
                 : { kind: "placement_error", code: "target_unavailable" };
         }
 
-        const result = parseDaemonResponse(forwarded.result, {
+        const result = parseDaemonResponse(forwarded.value.result, {
             v: request.envelope.v,
             actionId: request.actionId,
             ...(request.envelope.requestId === undefined ? {} : { requestId: request.envelope.requestId }),
         });
+        if (result?.kind === 'invalid_request' && result.errorCode === 'invalid_encrypted_envelope') {
+            emitDispatchPhaseWitness({ phase: 'daemon_envelope_admission',
+                errorClass: 'DaemonAdmissionError', message: 'invalid_encrypted_envelope' }, machineId);
+        }
         return result
             ? result
             : request.envelope.v === 2

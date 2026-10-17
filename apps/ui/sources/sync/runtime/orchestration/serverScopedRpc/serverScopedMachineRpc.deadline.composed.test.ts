@@ -22,7 +22,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { machineWorkspaceFileList } from '@/sync/ops/machineWorkspaceFileList';
 import { DaemonWorkspaceFileListRequestSchema, DaemonWorkspaceFileListResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 
-const credentials = vi.hoisted(() => ({ token: '' }));
+const credentials = vi.hoisted(() => ({ token: '', secret: undefined as string | undefined }));
 
 // Credential persistence is the only device boundary. HTTP and Socket.IO run in process.
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
@@ -31,17 +31,75 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     return await createTokenStorageModuleMock({
         importOriginal,
         subscribeHomeCredentialMutations: actual.subscribeHomeCredentialMutations,
-        tokenStorage: { getCredentialsForServerUrl: async () => ({ token: credentials.token }) },
+        tokenStorage: { getCredentialsForServerUrl: async () => ({ token: credentials.token,
+            ...(credentials.secret ? { secret: credentials.secret } : {}) }) },
     });
 });
 
 afterEach(async () => {
+    credentials.secret = undefined;
     vi.unstubAllGlobals();
     await serverScopedRpcSocketPool.stopAll();
     serverScopedRpcSocketPool.resetForTests();
     resetScopedMachineTransportCacheForTests();
     clearMachineRequestReachabilityForTest();
     resetServerFeaturesClientForTests();
+});
+
+it('detects Agent readiness through real scoped E2EE HTTP, crypto and Socket.IO wiring', async () => {
+    const { Encryption } = await import('@/sync/encryption/encryption');
+    const { machineCapabilitiesDetect } = await import('@/sync/ops/capabilities');
+    const { MachineAgentInventoryItemSchema, projectMachineAgentsDetectResponse } = await import('@happier-dev/protocol/capabilities');
+    const secret = new Uint8Array(32).fill(17);
+    const crypto = await Encryption.create(secret);
+    const dataKey = new Uint8Array(32).fill(23);
+    const envelope = Buffer.from(await crypto.encryptEncryptionKey(dataKey)).toString('base64');
+    await crypto.initializeMachines(new Map([['machine-1', dataKey]]));
+    const cipher = crypto.getMachineEncryption('machine-1');
+    if (!cipher) throw new Error('Expected real Machine cipher');
+    const transport = { mode: 'e2ee' as const, cipher };
+    const { agentId, title, ...facts } = MachineAgentInventoryItemSchema.parse({
+        agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: null,
+        update: { supported: false, command: null },
+        signIn: { status: 'signedOut', loginSupport: 'login_terminal' }, platform: { supported: true },
+        install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [],
+    });
+    const detected = { protocolVersion: 1, results: { 'cli.claude': { ok: true, checkedAt: 1, data: facts } } };
+    const http = createServer((request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/machine-1') response.end(JSON.stringify({ machine: { id: 'machine-1', dataEncryptionKey: envelope } }));
+        else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }));
+        else { response.statusCode = 404; response.end('{}'); }
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    const received: unknown[] = [];
+    relay.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL, async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+        expect(packet.method).toBe(`machine-1:${RPC_METHODS.CAPABILITIES_DETECT}`);
+        const decoded = await socketRpcCodec.decodeRequestParams(transport, packet.params, packet.method);
+        received.push(decoded.params);
+        ack({ ok: true, result: await socketRpcCodec.encodeResponse(transport, detected, decoded.callId) });
+    }));
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'readiness-account' })).toString('base64url')}.signature`;
+        credentials.secret = Buffer.from(secret).toString('base64url');
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Agent readiness E2EE' });
+        const request = { requests: [{ id: 'cli.claude' as const }] };
+        const responses = await Promise.all([1, 2].map(() => machineCapabilitiesDetect('machine-1', request, {
+            serverId: home.id, accountId: 'readiness-account',
+        })));
+        for (const response of responses) {
+            expect(response.supported).toBe(true);
+            if (!response.supported) throw new Error('Expected decoded capability facts');
+            expect(projectMachineAgentsDetectResponse({ agents: [{ agentId, title }], response: response.response }).items)
+                .toMatchObject([{ agentId: 'claude', installed: true, signIn: { status: 'signedOut' } }]);
+        }
+        expect(received).toEqual([request, request]);
+    } finally {
+        await serverScopedRpcSocketPool.stopAll();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+    }
 });
 
 async function listen(http: HttpServer, port = 0) {

@@ -115,6 +115,31 @@ describe('BrowserUrlField — toolbar address density', () => {
         expect(screen.findByTestId(`${TEST_ID}-field-row`)?.props.style[2]).toBeNull();
     });
 
+    it('shows the authoritative URL on ordinary blur and restores it on refocus', async () => {
+        const onSubmitUrl = vi.fn();
+        const screen = await renderScreen(
+            <BrowserUrlField
+                testID={TEST_ID}
+                density="toolbar"
+                trailingAction="copy"
+                formatWhileBlurred
+                value="https://example.com/"
+                onSubmitUrl={onSubmitUrl}
+            />,
+        );
+
+        await act(async () => { screen.findByTestId(TEST_ID)?.props.onFocus?.({}); });
+        screen.changeTextByTestId(TEST_ID, 'example.org/next');
+        await act(async () => { screen.findByTestId(TEST_ID)?.props.onBlur?.({}); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(screen.findByTestId(TEST_ID)?.props.value).toBe('example.com');
+        expect(onSubmitUrl).not.toHaveBeenCalled();
+
+        await act(async () => { screen.findByTestId(TEST_ID)?.props.onFocus?.({}); });
+        expect(screen.findByTestId(TEST_ID)?.props.value).toBe('https://example.com/');
+    });
+
     it('reverts the draft and blurs on Escape without navigating', async () => {
         const onNavigate = vi.fn();
         const screen = await renderScreen(
@@ -437,6 +462,32 @@ describe('BrowserUrlField — panel launchpad density', () => {
 
         expect(onSubmitUrl).not.toHaveBeenCalled();
         expect(screen.findByTestId(`${PANEL_ID}-invalid`)).toBeTruthy();
+    });
+
+    it('submits the typed launchpad address after the Go button blurs the input', async () => {
+        const onSubmitUrl = vi.fn();
+        const screen = await renderScreen(
+            <BrowserUrlField
+                testID={PANEL_ID}
+                density="panel"
+                trailingAction="go"
+                clearOnSubmit
+                value=""
+                onSubmitUrl={onSubmitUrl}
+            />,
+        );
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        await act(async () => { screen.findByTestId(PANEL_ID)?.props.onFocus?.({}); });
+        screen.changeTextByTestId(PANEL_ID, 'example.com');
+        // A pointer press transfers focus before the button's release commits the submit.
+        await act(async () => { screen.findByTestId(PANEL_ID)?.props.onBlur?.({}); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(onSubmitUrl).not.toHaveBeenCalled();
+        await act(async () => { screen.findHostByTestId(`${PANEL_ID}-open`)?.props.onPressIn?.({}); });
+        await screen.pressByTestIdAsync(`${PANEL_ID}-open`);
+
+        expect(onSubmitUrl).toHaveBeenCalledExactlyOnceWith('https://example.com/');
+        expect(screen.findByTestId(PANEL_ID)?.props.value).toBe('');
     });
 
     it('ignores an empty submit without accusing the user of anything', async () => {

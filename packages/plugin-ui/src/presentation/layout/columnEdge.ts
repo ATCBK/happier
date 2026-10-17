@@ -1,0 +1,22 @@
+import { createContext, useContext } from 'react';
+
+/**
+ * @internal How much of the page's edge the enclosing column already draws, in px.
+ *
+ * A page's anatomy insets itself from the column's edge: a sheet by `sheetInsetPx`, a title or section title by
+ * `pageTextInsetPx`. A column that owns an edge of its own (a detail's body, so its prose lines up with the
+ * detail's title) pads its content by that measure and provides it here; the self-insetting anatomy inside
+ * subtracts it, so a sheet still sits on the sheet edge and a heading on the text edge instead of twice inset.
+ * Absent (every page), nothing is drawn yet: `0`.
+ */
+export const HappierColumnEdgeContext = createContext(0);
+
+/** @internal The rest of `insetPx` the anatomy draws itself inside a column that already draws part of the edge. */
+export function useHappierColumnEdgeRemainder(insetPx: number): number {
+  return Math.max(0, insetPx - useContext(HappierColumnEdgeContext));
+}
+
+/** @internal */
+export function useHappierColumnEdgePx(): number {
+  return useContext(HappierColumnEdgeContext);
+}

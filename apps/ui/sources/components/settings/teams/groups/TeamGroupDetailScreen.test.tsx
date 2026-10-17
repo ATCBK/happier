@@ -2,7 +2,11 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { accountDisplayProfileFixture, collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamGroupFixture, teamGroupMemberFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { accountDisplayProfileFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
+import { teamCapabilitiesFixture, teamGroupFixture, teamGroupMemberFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
@@ -63,6 +67,9 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+vi.doUnmock('@/sync/domains/state/storage');
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
 
 const TEAM_GET_PATH = '/v1/teams/get';
 const GROUP_GET_PATH = '/v1/teams/groups/get';
@@ -114,8 +121,6 @@ async function waitForTestId(
 }
 
 beforeEach(async () => {
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     await harness.reset();
@@ -536,7 +541,7 @@ describe('TeamGroupDetailScreen', () => {
         expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(0);
     });
 
-    it('asks about removing this person from this Group, not about archiving the Group', async () => {
+    it('removes a native Group contribution through the shared direct Action policy', async () => {
         const { Modal } = await import('@/modal');
         vi.mocked(Modal.confirm).mockClear();
         // The confirmed operation is `teams.groups.members.remove` for one
@@ -564,16 +569,7 @@ describe('TeamGroupDetailScreen', () => {
         await vi.waitFor(() => {
             expect(harness.requestsFor(GROUP_MEMBER_REMOVE_PATH)).toHaveLength(1);
         });
-        const confirmCall = modalConfirm.spy?.mock.calls.at(-1) ?? [];
-        expect(modalConfirm.spy).toHaveBeenCalledTimes(1);
-        const title = String(confirmCall[0] ?? '');
-        const body = String(confirmCall[1] ?? '');
-        expect(title).toContain('removeMemberTitle');
-        expect(body).toContain('removeMemberBody');
-        expect(body).not.toContain('archiveBody');
-        // The person and the Group are both named in what was confirmed.
-        expect(`${title} ${body}`).toContain('Ada');
-        expect(`${title} ${body}`).toContain('Developers');
+        expect(modalConfirm.spy).not.toHaveBeenCalled();
     });
 
     it('keeps an unfinished Group description while a remote rename lands, and reconciles deliberately', async () => {

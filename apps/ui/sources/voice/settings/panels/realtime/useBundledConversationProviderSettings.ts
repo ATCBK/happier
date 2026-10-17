@@ -8,7 +8,7 @@ import { resolveSelectedVoiceProviderTitleKey } from '@/voice/registry/providerS
 import { BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION, BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID, readSessionVoiceSettingFieldV1, type SessionVoiceDeclarationV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
 import { VoiceProviderSettingsJsonValueV1Schema, type VoiceProviderSettingsJsonValueV1 } from '@happier-dev/protocol/voice/realtime/providerSettings';
 import { readLocalNeuralVoiceCatalog } from '@/voice/kokoro/assets/readLocalNeuralVoiceCatalog';
-import { resolveVoiceExecutionMachineIdFromState } from '@/voice/settings/executionMachine';
+import { useVoiceExecutionMachineId } from '@/voice/credentials/useExecutionMachinePresentation';
 import { storage } from '@/sync/domains/state/storage';
 import type { VoiceCatalogClient } from './voiceCatalog';
 import type { VoiceCatalogPreviewSynthesizer } from './catalogPreview';
@@ -117,7 +117,7 @@ export function useBundledConversationProviderSettings(voice: VoiceSettings): Re
   const envelope = providerId ? voice.providers?.[providerId] ?? null : null;
   const resolved = React.useMemo(() => owner ? resolveRealtimeProviderConfig(owner, envelope) : null, [envelope, owner]);
   const config = resolved?.status === 'ready' ? resolved.config : null;
-  const machineId = storage(state => resolveVoiceExecutionMachineIdFromState(state));
+  const machineId = useVoiceExecutionMachineId();
   const scope = storage(state => state.settingsScope);
   const sessionChoice = React.useMemo<ConversationSessionVoiceChoice | null>(() => {
     if (!providerId) return null;

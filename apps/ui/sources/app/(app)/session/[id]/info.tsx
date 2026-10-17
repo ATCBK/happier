@@ -611,9 +611,12 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const canStopSession = sessionActionTarget.isActive && sessionActionTarget.canStop;
     const canArchiveSession = sessionActionTarget.canArchive;
     const visibleSessionActionIds = React.useMemo(
-        () => contentUnavailable
-            ? new Set<string>()
-            : new Set(listVisibleSessionActionIds({ target: sessionActionTarget, surface: 'sessionInfo' })),
+        () => {
+            const actionIds = listVisibleSessionActionIds({ target: sessionActionTarget, surface: 'sessionInfo' });
+            return new Set(contentUnavailable
+                ? actionIds.filter((actionId) => actionId === SESSION_ACTION_ARCHIVE_ID || actionId === SESSION_ACTION_DELETE_ID)
+                : actionIds);
+        },
         [contentUnavailable, sessionActionTarget],
     );
     const canRenameSession = visibleSessionActionIds.has(SESSION_ACTION_RENAME_ID);
@@ -798,21 +801,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         });
         handleExitAfterSessionMutation();
     }, [handleExitAfterSessionMutation, hideInactiveSessions, sessionActionTarget]);
-    const [stoppingSession, performStop] = useHappyAction(handleStopAndMaybeArchive);
-
-    const handleStopSession = useCallback(async () => {
-        const confirmed = await Modal.confirm(
-            t('sessionInfo.stopSession'),
-            t('sessionInfo.stopSessionConfirm'),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: t('sessionInfo.stopSession'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
-        await performStop();
-    }, [performStop]);
+    const [stoppingSession, handleStopSession] = useHappyAction(handleStopAndMaybeArchive);
 
     const handleArchive = useCallback(async () => {
         await executeSessionAction({
@@ -820,8 +809,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
             target: sessionActionTarget,
             context: { hideInactiveSessions },
         });
-        handleExitAfterSessionMutation();
-    }, [handleExitAfterSessionMutation, hideInactiveSessions, sessionActionTarget]);
+    }, [hideInactiveSessions, sessionActionTarget]);
     const [archivingSession, performArchive] = useHappyAction(handleArchive);
 
     // A launcher only, exactly like the Session header: strategy is chosen
@@ -893,6 +881,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         await executeSessionAction({
             actionId: SESSION_ACTION_DELETE_ID,
             target: sessionActionTarget,
+            context: { presentUserConfirmation: { actionId: 'session.delete' } },
         });
         handleExitAfterSessionMutation();
     });
@@ -1519,7 +1508,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                 )}
 
                 {/* Leaving: quiet buttons; the irreversible one stands apart at the end. */}
-                {!contentUnavailable && (showStop || showArchive || showDelete) ? (
+                {showStop || showArchive || showDelete ? (
                     <ItemGroup surface="none" accessibilityLabel={t('sessionPages.info.leaveLabel')}>
                         <View testID="session-info-leave-actions" style={infoStyles.leaveActions}>
                             {showStop && stopInfoItemProps ? (

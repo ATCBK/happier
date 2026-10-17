@@ -304,10 +304,25 @@ async function materializeSourceCliBundledPrepublicationPackages(
   packageNames: readonly string[],
   projectRoot: string,
 ): Promise<PluginAuthorBundledPrepublicationMaterialization> {
+  const repoRoot = findRepoRoot(runtimeRoot);
+  // Source execution does not prepare dist. The repository publisher owns
+  // compilation and its shared lock; author materialization must consume its
+  // current output rather than copying a previous SDK build into a new cache.
+  // This dynamically loaded repository build program is an untyped boundary.
+  const publisher: unknown = await import(pathToFileURL(join(runtimeRoot, 'scripts', 'buildSharedDeps.mjs')).href);
+  if (!isRecord(publisher) || typeof publisher.syncSharedDepsForSourceDev !== 'function') {
+    throw new Error('The source Happier CLI public author package publisher is unavailable');
+  }
+  await publisher.syncSharedDepsForSourceDev({
+    repoRoot,
+    workspaceNames: packageNames.map((name) => name.slice('@happier-dev/'.length)),
+    publishBundledPluginArtifacts: false,
+    prepareBundledPluginCompilerInputs: false,
+  });
   return await materializePrepublicationAuthorWorkspacePackages({
     projectRoot,
     bundles: resolveWorkspaceBundlesFromPackageJson({
-      repoRoot: findRepoRoot(runtimeRoot),
+      repoRoot,
       hostPackageDir: runtimeRoot,
     }),
     packageNames,
@@ -801,9 +816,12 @@ export async function runManagedPluginPnpm(
  * `plugins dev` leaves a directory that looks materialized and resolves nothing
  * the author declared. The probe therefore stats the one dependency every
  * scaffold declares, which exists only once its bytes are really in place.
+ * First-party source workspaces retain their installed-declaration validation
+ * through the same owner used by managed dependency preparation.
  */
 export async function isPluginAuthorRootMaterialized(projectRoot: string): Promise<boolean> {
   try {
+    if (prepareSourceWorkspacePluginDependencies(resolveProjectRoot(projectRoot))) return true;
     return (await stat(join(
       resolveProjectRoot(projectRoot),
       'node_modules',

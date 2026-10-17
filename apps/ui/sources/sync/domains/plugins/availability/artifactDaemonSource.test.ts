@@ -15,6 +15,7 @@ import { createPluginArtifactDaemonSource } from './artifactDaemonSource';
 
 const digest = `sha256:${'a'.repeat(64)}` as const;
 const transport = { machineId: 'machine-a', serverId: 'server-a' } as const;
+const alternateTransport = { machineId: 'machine-b', serverId: 'server-a' } as const;
 const artifact: PluginSelectedArtifactIdentity = Object.freeze({
     pluginId: 'acme.preview',
     contributionId: 'preview',
@@ -105,5 +106,68 @@ describe('daemon Artifact byte source', () => {
         await expect(source.fetch({ artifact })).rejects.toMatchObject({ code: 'artifact_bytes_rpc_unavailable' });
         guardedMachineRpc.mockRejectedValueOnce(new Error('offline'));
         await expect(source.fetch({ artifact })).rejects.toMatchObject({ code: 'artifact_bytes_fetch_failed' });
+    });
+
+    it.each([
+        { ok: false, code: 'artifact_unavailable', diagnostics: [] },
+        { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'unsupported' },
+        okResponse('hostedWeb', `sha256:${'c'.repeat(64)}`),
+    ])('reads the selected digest from another admitted source after a miss or refusal (%j)', async (firstResponse) => {
+        guardedMachineRpc.mockResolvedValueOnce(firstResponse).mockResolvedValueOnce(okResponse('hostedWeb'));
+        const source = createPluginArtifactDaemonSource({
+            transports: [transport, alternateTransport],
+            family: 'hostedWeb',
+        });
+
+        await expect(source.fetch({ artifact })).resolves.toEqual(new Map([['index.html', entryBytes]]));
+        expect(guardedMachineRpc.mock.calls.map(([request]) => ({
+            machineId: request.machineId,
+            cacheIdentity: request.payload.cacheIdentity,
+        }))).toEqual([
+            { machineId: transport.machineId, cacheIdentity: { artifactDigest: digest } },
+            { machineId: alternateTransport.machineId, cacheIdentity: { artifactDigest: digest } },
+        ]);
+    });
+
+    it('stops the admitted source walk when the acquisition is cancelled', async () => {
+        const lifetime = new AbortController();
+        const fetchArtifactBytes = vi.fn(async () => {
+            lifetime.abort();
+            return { ok: false as const, code: 'artifact_unavailable' as const, diagnostics: [] };
+        });
+        const source = createPluginArtifactDaemonSource({
+            transports: [transport, alternateTransport],
+            family: 'hostedWeb',
+            fetchArtifactBytes,
+        });
+
+        await expect(source.fetch({ artifact, signal: lifetime.signal })).resolves.toBeNull();
+        expect(fetchArtifactBytes).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks each exact Home and Machine route once when suppliers repeat', async () => {
+        guardedMachineRpc.mockResolvedValue({ ok: false, code: 'artifact_unavailable', diagnostics: [] });
+        const otherHomeTransport = { ...transport, serverId: 'server-b' };
+        const source = createPluginArtifactDaemonSource({
+            transports: [transport, { ...transport }, alternateTransport, otherHomeTransport],
+            family: 'hostedWeb',
+        });
+
+        await expect(source.fetch({ artifact })).resolves.toBeNull();
+        expect(guardedMachineRpc.mock.calls.map(([request]) => ({
+            serverId: request.serverId, machineId: request.machineId,
+        }))).toEqual([transport, alternateTransport, otherHomeTransport]);
+    });
+
+    it('retains a safe transport failure when every admitted source misses', async () => {
+        guardedMachineRpc.mockRejectedValueOnce(new Error('offline'))
+            .mockResolvedValueOnce({ ok: false, code: 'artifact_unavailable', diagnostics: [] });
+        const source = createPluginArtifactDaemonSource({
+            transports: [transport, alternateTransport],
+            family: 'hostedWeb',
+        });
+
+        await expect(source.fetch({ artifact })).rejects.toMatchObject({ code: 'artifact_bytes_fetch_failed' });
+        expect(guardedMachineRpc).toHaveBeenCalledTimes(2);
     });
 });

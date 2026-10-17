@@ -204,8 +204,7 @@ function teamCredentialActionRow<TActionId extends TeamCredentialHomeActionIdV1>
 }>) {
   const row = homeDomainActionRow({
     ...input,
-    ...(['teams.credentials.delete', 'teams.credentials.externalKeys.revoke', 'teams.credentials.externalKeys.revokeAll',
-      'teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.test',
+    ...(['teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.test',
       'teams.credentials.externalKeys.authorize'].includes(input.id)
       ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
     ...(['teams.credentials.create', 'teams.credentials.update', 'teams.credentials.audience.set'].includes(input.id) ? { approvalPolicy: {
@@ -465,16 +464,15 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.archive', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Archive Team',
-    description: 'Archive a Team, ending ordinary member access to its work until it is restored.',
+    description: 'Archive a Team, ending ordinary member access until it is restored. Waiting invitations are permanently revoked.',
     safety: 'danger',
     sideEffectClass: 'danger',
     cliPath: ['teams', 'archive'],
     path: '/v1/teams/archive',
     inputSchema: TeamRefInputV1Schema,
     outputSchema: TeamSummaryV1Schema,
-    inputHints: { fields: [TEAM_ID_FIELD] },
+    inputHints: { description: 'Waiting invitations are permanently revoked. Restoring the Team does not restore them.', fields: [TEAM_ID_FIELD] },
   }),
   homeDomainActionRow({
     id: 'teams.restore', approval: {result: 'required',flow: 'deferred'},
@@ -579,7 +577,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.members.remove', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Remove Team member',
     description: 'End one membership lifetime. Repeating the request answers unchanged rather than failing.',
     safety: 'danger',
@@ -592,7 +589,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.members.leave', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Leave Team',
     description: 'End your own membership lifetime. Directory-managed members and the final active owner of a live Team cannot leave.',
     safety: 'danger',
@@ -801,7 +797,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }), requiredAuthority: 'present_user' as const },
   homeDomainActionRow({
     id: 'teams.invitations.revoke', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Revoke Team invitation',
     description: 'Stop an outstanding invitation from admitting anyone. A repeated revocation reports the current row.',
     safety: 'danger',
@@ -952,7 +947,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   teamProvisioningActionRow({
     id: 'teams.identity.connections.remove', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.remove'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.remove'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.remove'],
@@ -1217,7 +1211,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   teamProvisioningActionRow({
     id: 'teams.directory.sources.remove', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     method: 'DELETE',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.remove'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.remove'],

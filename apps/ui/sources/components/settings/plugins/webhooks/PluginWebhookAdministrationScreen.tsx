@@ -1,5 +1,7 @@
 import * as React from 'react';
 import { getRandomBytes } from 'expo-crypto';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { HappyError } from '@/utils/errors/errors';
 import { arePluginMachineExecutionOriginsEqual, arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginWebhookDeliveryMovePendingResultV1Schema, PluginWebhookEndpointCredentialConfigureResultV1Schema, PluginWebhookEndpointCredentialFinishRotationResultV1Schema, PluginWebhookEndpointCredentialRotateResultV1Schema, PluginWebhookEndpointRetargetResultV1Schema, PluginWebhookEndpointRevokeResultV1Schema } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
@@ -22,7 +24,8 @@ import {
     type PluginMachineExecutionOriginCandidateV1,
 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { useActivePluginAccountAvailabilityReleaseClassifier } from '@/sync/domains/plugins/availability/projection';
-import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { canPublishCatalogReceipt } from '@/sync/store/settings/wholeCatalogReceiptOrdering';
 import { t } from '@/text';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
@@ -136,11 +139,6 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
     }, [endpoint.webhookEndpointId, props.client]);
 
     const revoke = React.useCallback(async () => {
-        if (!await Modal.confirm(
-            t('settingsPlugins.webhookAdministration.revokeTitle'),
-            t('settingsPlugins.webhookAdministration.revokeBody'),
-            { confirmText: t('common.remove'), cancelText: t('common.cancel'), destructive: true },
-        )) return;
         setBusyAction('revoke');
         const operation = `revoke:${endpoint.revision}`;
         try {
@@ -155,7 +153,8 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
             operationKeys.current.delete(operation);
             props.onAcknowledged(result.webhookEndpointId, { revision: result.revision, revocationAcknowledged: true });
             fireAndForget(props.refresh());
-        } catch {
+        } catch (error) {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
             setBusyAction(null);
@@ -207,7 +206,8 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 });
             }
             fireAndForget(props.refresh());
-        } catch {
+        } catch (error) {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await props.refresh().catch(() => undefined);
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
@@ -226,7 +226,8 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
             // A completed move acknowledges the operation, not a fresh queue census.
             props.onAcknowledged(endpoint.webhookEndpointId, { revision: endpoint.revision });
             fireAndForget(props.refresh());
-        } catch {
+        } catch (error) {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await props.refresh().catch(() => undefined);
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
@@ -253,7 +254,8 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 );
             }
             fireAndForget(props.refresh());
-        } catch {
+        } catch (error) {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
             setBusyAction(null);
@@ -280,7 +282,8 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 );
             }
             fireAndForget(props.refresh());
-        } catch {
+        } catch (error) {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
             setBusyAction(null);
@@ -304,7 +307,8 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 credentialRotation: undefined,
             });
             fireAndForget(props.refresh());
-        } catch {
+        } catch (error) {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
             setBusyAction(null);
@@ -446,18 +450,14 @@ const WebhookDeadLetterSection = React.memo(function WebhookDeadLetterSection(pr
             if (result.kind !== 'requeued') throw new Error(result.kind);
             props.onAcknowledged(props.delivery.deliveryId);
             fireAndForget(props.refresh());
-        } catch {
+        } catch (error) {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
             setBusy(null);
         }
     }, [props]);
     const discard = React.useCallback(async () => {
-        if (!await Modal.confirm(
-            t('settingsPlugins.webhookAdministration.discardTitle'),
-            t('settingsPlugins.webhookAdministration.discardBody'),
-            { confirmText: t('common.discard'), cancelText: t('common.cancel'), destructive: true },
-        )) return;
         setBusy('discard');
         try {
             const result = await props.client.discardDelivery({
@@ -467,7 +467,8 @@ const WebhookDeadLetterSection = React.memo(function WebhookDeadLetterSection(pr
             if (result.kind !== 'discarded') throw new Error(result.kind);
             props.onAcknowledged(props.delivery.deliveryId);
             fireAndForget(props.refresh());
-        } catch {
+        } catch (error) {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
             setBusy(null);
@@ -529,7 +530,8 @@ const WebhookDeadLetterSection = React.memo(function WebhookDeadLetterSection(pr
 export const PluginWebhookAdministrationScreen = React.memo(function PluginWebhookAdministrationScreen(props: Readonly<{
     client?: PluginWebhookAdministrationHttpClient;
 }>) {
-    const executeAction = React.useMemo(() => createFrontDoorUiActionExecutor(), []);
+    const scope = useActiveServerAccountScope();
+    const { executeValue: executeAction } = useMountedActionExecution(scope, { openOnRequest: true });
     const client = React.useMemo(
         () => props.client ?? createPluginWebhookAdministrationHttpClient({ executeAction }),
         [executeAction, props.client],

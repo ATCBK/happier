@@ -5,10 +5,12 @@ import type {
   PluginUiActionInputFor,
   PluginUiActionReference,
   PluginUiActionResultFor,
+  SurfaceContext,
 } from '@happier-dev/plugin-sdk/ui';
 
 import { useHappierUiLocalization } from '../environment/context.js';
 import { usePluginHostApi } from './context.js';
+import { useSurfaceContext } from '../components/PluginUiProvider.js';
 
 /**
  * Compatibility names for established plugin-ui consumers. The SDK owns the
@@ -24,11 +26,9 @@ export type {
 /**
  * The settled fact about one execution (§3.9).
  *
- * `outcomeUnknown` is a first-class member, not a flavour of `error`, because
- * the two license opposite behaviour: a definite failure never ran, so offering
- * "try again" is correct; an unknown outcome may already have mutated state, so
- * §2 forbids retrying it blindly. Collapsing them is precisely how a duplicate
- * mutation ships.
+ * `outcomeUnknown` preserves the client's explicit dispatched-timeout fact.
+ * A generic rejection does not prove whether the action ran; only an explicit
+ * domain result can establish no effect. Neither rejection is replayed here.
  */
 export type PluginActionExecution<Result = unknown> =
   | Readonly<{ status: 'idle' }>
@@ -89,7 +89,7 @@ const REFUSAL_SENTENCES: Readonly<Record<string, readonly [key: string, fallback
   timeout: ['happier.plugin-ui.action.error.noAnswer', 'No answer came back in time, so it may still finish.'],
   aborted: ['happier.plugin-ui.action.error.noAnswer', 'No answer came back in time, so it may still finish.'],
 };
-const FAILED_SENTENCE = ['happier.plugin-ui.action.error.failed', 'That didn\u2019t go through. Nothing changed.'] as const;
+const FAILED_SENTENCE = ['happier.plugin-ui.state.error', 'Something went wrong'] as const;
 
 type Translate = (key: string, fallback?: string) => string;
 
@@ -103,6 +103,13 @@ function readErrorMessage(error: unknown, code: string, translate: Translate): s
 
 function settledFromRejection<Result>(error: unknown, translate: Translate): PluginActionExecution<Result> {
   const code = readErrorCode(error);
+  const diagnostics = (error as { diagnostics?: unknown } | null)?.diagnostics;
+  // The host binds this diagnostic to a declined confirmation. A generic
+  // permission denial remains an error rather than being treated as consent.
+  if (code === 'denied' && Array.isArray(diagnostics)
+    && diagnostics.includes('plugin_action_current_intent_rejected')) {
+    return { status: 'idle' };
+  }
   const message = readErrorMessage(error, code, translate);
   if (OUTCOME_UNKNOWN_ERROR_CODES.has(code)) {
     return { status: 'outcomeUnknown', code, message };
@@ -122,6 +129,8 @@ function settledFromResult<Result>(result: Result): PluginActionExecution<Result
 export type PluginActionExecutionController<Result, Input = JsonValue> = Readonly<{
   /** The current execution state for the bound action. */
   execution: PluginActionExecution<Result>;
+  /** The mounted host's pending approval while this hook has work in flight. The host retains all decision/result custody. */
+  pendingApproval: NonNullable<SurfaceContext['pendingApproval']> | null;
   /**
    * Run the bound action. `input` overrides the bound input for this run, which
    * is what a form surface needs — the values only exist at press time.
@@ -166,6 +175,7 @@ export function useExecutePluginAction(
   input?: JsonValue,
 ): PluginActionExecutionController<JsonValue, JsonValue> {
   const hostApi = usePluginHostApi();
+  const surface = useSurfaceContext();
   const { translate } = useHappierUiLocalization();
   const translateRef = useRef(translate);
   translateRef.current = translate;
@@ -237,5 +247,5 @@ export function useExecutePluginAction(
     }
   }, [bindingToken]);
 
-  return { execution, execute, reset };
+  return { execution, execute, reset, pendingApproval: execution.status === 'pending' ? surface.pendingApproval ?? null : null };
 }

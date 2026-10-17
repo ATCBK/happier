@@ -1,5 +1,6 @@
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { parseToolUseError } from '@/utils/errors/toolErrorParser';
+import { getErrorMessage } from '@/utils/errors/getErrorMessage';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -7,14 +8,14 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function firstLine(text: string): string {
-    const trimmed = text.trim();
+    const trimmed = getErrorMessage(text.trim()).trim();
     if (!trimmed) return '';
     const newline = trimmed.indexOf('\n');
     return newline >= 0 ? trimmed.slice(0, newline).trim() : trimmed;
 }
 
 function stripErrorPrefix(text: string): string {
-    return text.replace(/^error:\s*/i, '').trim();
+    return getErrorMessage(text.replace(/^error:\s*/i, '').trim());
 }
 
 export function resolveToolErrorSummary(tool: ToolCall): string | null {

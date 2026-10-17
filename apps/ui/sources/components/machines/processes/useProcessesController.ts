@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import {
   MachineProcessesActionResultV1Schema,
   MachineProcessesCheckResultV1Schema,
@@ -29,6 +29,7 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { showLeftBehindReview } from './LeftBehindReview';
 import {
   showProcessConfirmDialog,
+  type ProcessConfirmContent,
   type ProcessConfirmFact,
   type ProcessRecheck,
 } from './ProcessConfirmDialog';
@@ -65,7 +66,7 @@ export type ProcessesController = Readonly<{
   pendingFreedBytes: number;
   meterNote: ProcessesMeterNote | null;
   previewStop(bytes: number | null): void;
-  stop(item: ProcessesOwnerItem): void;
+  stop(item: ProcessesOwnerItem, confirmation?: MachineProcessesActionScope['confirmation']): void;
   killProcess(
     item: Extract<
       ProcessesItem,
@@ -110,9 +111,9 @@ function readActionResult<T>(
   outcome: Awaited<ReturnType<typeof executeMachineProcessesActionV1>>,
   parse: (value: unknown) => { success: true; data: T } | { success: false },
 ): Readonly<
-  { kind: 'ok'; value: T } | { kind: 'approval' } | { kind: 'failed' }
+  { kind: 'ok'; value: T } | { kind: 'approval' } | { kind: 'declined' } | { kind: 'failed' }
 > {
-  if (!outcome.ok) return { kind: 'failed' };
+  if (!outcome.ok) return { kind: isActionApprovalDeclinedErrorCode(outcome.errorCode) || outcome.errorCode === 'cancelled' ? 'declined' : 'failed' };
   if (
     ActionApprovalRequestCreatedResultSchema.safeParse(outcome.result).success
   )
@@ -231,6 +232,7 @@ export function useProcessesController(
           const result = readActionResult(outcome.processAction, (value) =>
             MachineProcessesStartAgainResultV1Schema.safeParse(value),
           );
+          if (result.kind === 'declined') return;
           const started =
             result.kind === 'ok' &&
             (result.value.status === 'started' ||
@@ -257,7 +259,7 @@ export function useProcessesController(
   );
 
   const runStop = React.useCallback(
-    (item: ProcessesOwnerItem) => {
+    (item: ProcessesOwnerItem, confirmation?: MachineProcessesActionScope['confirmation']) => {
       const actionScope = scope();
       if (!item.rootRef || !actionScope || latest.current.unavailableReason)
         return;
@@ -269,9 +271,6 @@ export function useProcessesController(
         next.delete(item.key);
         return next;
       });
-      // The decision was previewed where its effect lands: the row goes and the meter eases in the same frame.
-      setPendingFreed((current) => current + optimistic);
-      leave(item.key);
       const target: MachineProcessTargetV1 = {
         ref: item.rootRef,
         expect: { level: item.rootLevel, owner: item.owner.owner },
@@ -281,7 +280,7 @@ export function useProcessesController(
           const outcome = await executeMachineProcessesActionV1(
             'machines.processes.stop',
             { machineId: latest.current.machineId, targets: [target] },
-            actionScope,
+            { ...actionScope, confirmation },
           );
           const result = readActionResult(outcome, (value) =>
             MachineProcessesActionResultV1Schema.safeParse(value),
@@ -290,9 +289,10 @@ export function useProcessesController(
             result.kind === 'ok' ? result.value.outcomes[0] : undefined;
           if (first?.outcome === 'ended' || first?.outcome === 'gone_before') {
             const freed = first.freedBytes ?? null;
+            leave(item.key);
             // The freed amount is the measured drop, never the row's last number.
             setPendingFreed(
-              (current) => current - optimistic + (freed ?? optimistic),
+              (current) => current + (freed ?? optimistic),
             );
             settledAt.current = Date.now();
             const restartable =
@@ -308,7 +308,7 @@ export function useProcessesController(
             });
             return;
           }
-          setPendingFreed((current) => current - optimistic);
+          if (result.kind === 'declined') return;
           const note =
             result.kind === 'approval'
               ? t('machineProcesses.results.approvalPending')
@@ -324,30 +324,24 @@ export function useProcessesController(
   );
 
   /**
-   * R42.4 (plan 30 §209): stopping a guest Account's work asks first and names whose work ends, through the same
-   * confirm dialog guest Kill uses. Your own work stops at once with Start again.
+   * Guest identity belongs to the shared policy's confirmation content; a waiver also applies to guest work.
    */
   const stop = React.useCallback(
-    (item: ProcessesOwnerItem) => {
+    (item: ProcessesOwnerItem, confirmation?: MachineProcessesActionScope['confirmation']) => {
       if (!item.rootRef || latest.current.unavailableReason) return;
       const requester = item.owner.requester;
       if (!requester) {
-        runStop(item);
+        runStop(item, confirmation);
         return;
       }
       const name = describeProcessesItemTitle(item, latest.current.titles);
-      fireAndForget(
-        showProcessConfirmDialog({
+      runStop(item, async () => (await showProcessConfirmDialog({
           testID: 'machine-processes-stop-guest',
           title: t('machineProcesses.stopGuest.title', { name }),
           paragraphs: [t('machineProcesses.kill.guest', { name: requester.displayName })],
           facts: [],
           confirmLabel: t('machineProcesses.stopGuest.confirm'),
-        }).then((decision) => {
-          if (decision === 'confirm') runStop(item);
-        }),
-        { tag: 'MachineProcesses.stopGuest' },
-      );
+        })) === 'confirm');
     },
     [runStop],
   );
@@ -414,21 +408,41 @@ export function useProcessesController(
       target: MachineProcessTargetV1,
       tree: boolean,
       count: number,
+      content: ProcessConfirmContent,
+      alternative?: () => void,
     ) => {
       const actionScope = scope();
       if (!actionScope) return;
+      const machineId = latest.current.machineId;
+      const isCurrent = () => latest.current.isCurrent() && latest.current.machineId === machineId
+        && latest.current.serverId === actionScope.serverId && latest.current.expectedAccountId === actionScope.expectedAccountId;
       fireAndForget(
         (async () => {
+          // Identity and evidence remain required input validation even when approval is waived.
+          const checked = await content.recheck?.();
+          if (!isCurrent()) return;
+          if (checked?.kind === 'blocked') {
+            publishPresentationNotice({ key: `machine-processes:kill:${key}`, severity: 'warning', message: checked.line });
+            return;
+          }
           const outcome = await executeMachineProcessesActionV1(
             'machines.processes.kill',
-            { machineId: latest.current.machineId, targets: [target], tree },
-            actionScope,
+            { machineId, targets: [target], tree },
+            { ...actionScope, confirmation: async () => {
+              if (!isCurrent()) return false;
+              const decision = await showProcessConfirmDialog({ ...content,
+                ...(checked ? { recheck: async () => checked } : {}) });
+              if (!isCurrent()) return false;
+              if (decision === 'alternative') alternative?.();
+              return decision === 'confirm';
+            } },
           );
           const result = readActionResult(outcome, (value) =>
             MachineProcessesActionResultV1Schema.safeParse(value),
           );
           const first =
             result.kind === 'ok' ? result.value.outcomes[0] : undefined;
+          if (result.kind === 'declined') return;
           if (first?.outcome === 'ended' || first?.outcome === 'gone_before') {
             leave(key);
             setPendingFreed((current) => current + (first.freedBytes ?? 0));
@@ -477,8 +491,7 @@ export function useProcessesController(
         }),
       };
       if (item.kind === 'appMember') {
-        fireAndForget(
-          showProcessConfirmDialog({
+        runKill(item.key, name, { ref: item.row.ref, expect: { level: 'not_happier' } }, false, 1, {
             testID: 'machine-processes-kill-not-happier',
             title: t('machineProcesses.kill.processTitle', { name }),
             paragraphs: [
@@ -496,18 +509,7 @@ export function useProcessesController(
             ],
             recheck: recheck(item.row.ref),
             confirmLabel: t('machineProcesses.kill.confirmProcess'),
-          }).then((decision) => {
-            if (decision === 'confirm')
-              runKill(
-                item.key,
-                name,
-                { ref: item.row.ref, expect: { level: 'not_happier' } },
-                false,
-                1,
-              );
-          }),
-          { tag: 'MachineProcesses.killNotHappier' },
-        );
+        });
         return;
       }
       const row = item.row;
@@ -568,8 +570,7 @@ export function useProcessesController(
             ]
           : []),
       ];
-      fireAndForget(
-        showProcessConfirmDialog({
+      runKill(item.key, name, { ref: row.ref, expect: { level: row.level, owner: ownerRef } }, false, 1, {
           testID: proven
             ? 'machine-processes-kill-process'
             : 'machine-processes-kill-ask-first',
@@ -584,18 +585,7 @@ export function useProcessesController(
             : null,
           ...(proven ? {} : { recheck: recheck(row.ref) }),
           confirmLabel: t('machineProcesses.kill.confirmProcess'),
-        }).then((decision) => {
-          if (decision === 'confirm')
-            runKill(
-              item.key,
-              name,
-              { ref: row.ref, expect: { level: row.level, owner: ownerRef } },
-              false,
-              1,
-            );
-        }),
-        { tag: 'MachineProcesses.killProcess' },
-      );
+      });
     },
     [recheck, runKill],
   );
@@ -605,8 +595,7 @@ export function useProcessesController(
       if (!item.rootRef || latest.current.unavailableReason) return;
       const name = describeProcessesItemTitle(item, latest.current.titles);
       const session = item.owner.owner.kind === 'session';
-      fireAndForget(
-        showProcessConfirmDialog({
+      runKill(item.key, name, { ref: item.rootRef, expect: { level: item.rootLevel, owner: item.owner.owner } }, true, item.processCount, {
           testID: 'machine-processes-kill-tree',
           title: t('machineProcesses.kill.treeTitle', {
             name,
@@ -642,27 +631,13 @@ export function useProcessesController(
           ...(session
             ? { alternative: t('machineProcesses.kill.stopInstead') }
             : {}),
+          ...(item.rootLevel === 'proven' ? {} : { recheck: recheck(item.rootRef) }),
           confirmLabel: t('machineProcesses.kill.confirmTree', {
             count: item.processCount,
           }),
-        }).then((decision) => {
-          if (decision === 'alternative') runStop(item);
-          if (decision === 'confirm')
-            runKill(
-              item.key,
-              name,
-              {
-                ref: item.rootRef!,
-                expect: { level: item.rootLevel, owner: item.owner.owner },
-              },
-              true,
-              item.processCount,
-            );
-        }),
-        { tag: 'MachineProcesses.killTree' },
-      );
+      }, () => stop(item));
     },
-    [runKill, runStop],
+    [recheck, runKill, stop],
   );
 
   const cleanUp = React.useCallback(
@@ -695,6 +670,7 @@ export function useProcessesController(
           const result = readActionResult(outcome, (value) =>
             MachineProcessesCleanUpResultV1Schema.safeParse(value),
           );
+          if (result.kind === 'declined') return;
           if (result.kind !== 'ok') {
             publishPresentationNotice({
               key: 'machine-processes:clean-up',

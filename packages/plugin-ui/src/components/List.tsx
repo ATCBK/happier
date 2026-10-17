@@ -27,6 +27,7 @@ import {
   resolveHappierUiPalette,
 } from '../environment/context.js';
 import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
+import { useHappierColumnEdgeRemainder } from '../presentation/layout/columnEdge.js';
 import {
   HappierPageSectionHeader,
   HappierPageSheet,
@@ -47,6 +48,7 @@ import {
   admitHappierCollectionKeys,
   narrowHappierCollectionGroups,
 } from '../presentation/collection/collectionModel.js';
+import { rankHappierQueryMatches, type HappierQueryText } from '../presentation/collection/queryRank.js';
 import {
   encodeHappierSectionCellKey,
   encodeHappierSectionRowCellKey,
@@ -132,11 +134,27 @@ type ListSearchBaseProps<Item> = Readonly<{
   label: string;
   placeholder?: string;
   testID?: string;
-  /** Decides whether one author item stays in the virtualized data window. */
-  filter: (item: Item, query: string) => boolean;
   /** IME draft text, or `null` once that draft has settled. */
   onComposingValueChange?: (value: string | null) => void;
-}>;
+}> &
+  (
+    | Readonly<{
+        /**
+         * The row's searchable text. List keeps the matches ranked the way Happier's pickers rank them:
+         * label prefix (or an exact identity), then label, then subtitle, then hidden search text.
+         */
+        text: (item: Item) => HappierQueryText;
+        /** `false` leaves the subtitle out of matching (it repeats the query's context on every row). */
+        matchSubtitle?: boolean;
+        filter?: never;
+      }>
+    | Readonly<{
+        /** Decides whether one author item stays in the virtualized data window, in the author's order. */
+        filter: (item: Item, query: string) => boolean;
+        text?: never;
+        matchSubtitle?: never;
+      }>
+  );
 
 /**
  * A bounded search state for a virtualized List. An empty query retains the
@@ -496,6 +514,11 @@ export type ItemProps = Readonly<{
   titleNumberOfLines?: number;
   subtitleNumberOfLines?: number;
   detailNumberOfLines?: number;
+  /**
+   * `middle` keeps the title on one line and gives up its middle, never its end: a file path keeps its
+   * file name, a name keeps its disambiguating suffix. The full title stays the row's accessible name.
+   */
+  titleEllipsizeMode?: 'middle';
   icon?: ReactNode;
   accessory?: ReactNode;
   /**
@@ -506,6 +529,11 @@ export type ItemProps = Readonly<{
    * so an omitted advisory prop cannot create nested interactive markup.
    */
   accessoryOutsidePressable?: boolean;
+  /**
+   * The row's content carries its own controls mid-row (a Collection's `titleControls`): the press target fills
+   * the row beneath the content instead of wrapping it, so no control nests inside it.
+   */
+  contentBesidePressable?: boolean;
   /**
    * Let the accessory take its own line rather than starve the row's text.
    *
@@ -521,6 +549,11 @@ export type ItemProps = Readonly<{
   accessoryBelow?: boolean;
   /** A page select keeps its content width in a narrow desktop column and stacks beneath its label on phones. */
   fieldAccessory?: boolean;
+  /**
+   * With `fieldAccessory`: the width of other controls sharing the accessory with the field (a glyph and
+   * its gap). The row keeps it out of the field's room, so the name is never squeezed.
+   */
+  fieldAccessorySiblingPx?: number;
   tone?: HappierTone;
   /**
    * Colour for the trailing `detail` when it is the row's one loud fact — an
@@ -801,6 +834,20 @@ function VirtualizedList<Item>(
     listRootRef,
   );
   const filter = props.search?.filter;
+  const searchText = props.search?.text;
+  const matchSubtitle = props.search?.matchSubtitle;
+  // The rows a non-empty query keeps: ranked by their searchable text, or the author's own predicate.
+  const narrowRows = useMemo(() => {
+    if (query === '') return undefined;
+    if (searchText !== undefined) {
+      return (rows: readonly Item[]) =>
+        rankHappierQueryMatches(rows, query, searchText, { matchSubtitle });
+    }
+    if (filter !== undefined) {
+      return (rows: readonly Item[]) => rows.filter((item) => filter(item, query));
+    }
+    return undefined;
+  }, [filter, matchSubtitle, query, searchText]);
   const keyForItem = props.keyForItem;
   const [authorItems, authorSections] = useMemo(() => {
     const items = props.items;
@@ -821,9 +868,8 @@ function VirtualizedList<Item>(
     // derives a smaller window. This is the one measured large-list derivation;
     // selection itself must not trigger it again.
     if (authorItems === undefined) return undefined;
-    if (query === '' || filter === undefined) return authorItems;
-    return authorItems.filter((item) => filter(item, query));
-  }, [authorItems, filter, query]);
+    return narrowRows === undefined ? authorItems : narrowRows(authorItems);
+  }, [authorItems, narrowRows]);
   // Same rule for the sectioned arm, with one addition: a section with no rows
   // leaves no group behind. A labelled header over nothing announces a group a
   // reader cannot enter, and the platform still counts its header cell, so the
@@ -836,16 +882,16 @@ function VirtualizedList<Item>(
       authorSections.map((section) => section.key),
       'List sections',
     );
-    // The Collection model's narrowing rule (see the comment above).
+    // The Collection model's narrowing rule (see the comment above), over each
+    // section's matching rows.
     return narrowHappierCollectionGroups(
-      authorSections,
+      narrowRows === undefined
+        ? authorSections
+        : authorSections.map((section) => ({ ...section, data: narrowRows(section.data) })),
       (section) => section.data,
       (section, data) => ({ ...section, data }),
-      query === '' || filter === undefined
-        ? undefined
-        : (item: Item) => filter(item, query),
     );
-  }, [authorSections, filter, query]);
+  }, [authorSections, narrowRows]);
   const virtualizedSections = useMemo<
     readonly VirtualizedListSectionData<Item>[]
   >(
@@ -2339,6 +2385,9 @@ export function ItemGroup(props: ItemGroupProps): ReactElement {
   const theme = usePluginTheme();
   const palette = useOptionalHappierUiPalette(theme) ?? resolveHappierUiPalette(theme);
   const pageChrome = useHappierPageChrome();
+  // In a column that already draws part of the edge (a detail's body) the sheet and its title keep their edges.
+  const sheetInsetPx = useHappierColumnEdgeRemainder(HAPPIER_PAGE_METRICS.sheetInsetPx);
+  const headingInsetPx = useHappierColumnEdgeRemainder(HAPPIER_PAGE_METRICS.sheetInsetPx + HAPPIER_PAGE_METRICS.headingOpticalInsetPx);
   const {
     accessibilityLabel,
     accessibilityLabelKey,
@@ -2395,10 +2444,7 @@ export function ItemGroup(props: ItemGroupProps): ReactElement {
             title={title}
             description={description}
             action={action}
-            insetPx={
-              HAPPIER_PAGE_METRICS.sheetInsetPx +
-              HAPPIER_PAGE_METRICS.headingOpticalInsetPx
-            }
+            insetPx={headingInsetPx}
           />
         ) : (
           // An untitled page section starts one section gap below what precedes it, like a titled one
@@ -2415,7 +2461,7 @@ export function ItemGroup(props: ItemGroupProps): ReactElement {
               accessibilityRole={rest.accessibilityRole}
               accessibilityLabel={resolvedAccessibilityLabel}
               aria-label={resolvedAccessibilityLabel}
-              style={{ marginHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx }}
+              style={{ marginHorizontal: sheetInsetPx }}
             >
               {/* The radio projection runs first, so the sheet divides the projected rows. */}
               <HappierPageSheet surface={resolvedSurface} colors={palette}>

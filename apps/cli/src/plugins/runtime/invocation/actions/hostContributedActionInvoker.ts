@@ -2,6 +2,8 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
+import { arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { resolvePluginInvocationCallerExecutionOrigin } from '../services/actionCaller';
 
 import type { InvokeContributedAction } from '../services/actions';
 import type {
@@ -18,6 +20,9 @@ export function createHostContributedActionInvoker(params: Readonly<{
     invokeContributedAction: InvokeContributedAction;
     revalidatePluginActionCallerMaterialization: RevalidatePluginActionCallerMaterialization;
     revalidatePluginActionCallerOccurrence: RevalidatePluginActionCallerOccurrence;
+    resolveCurrentPluginExecutionOrigin?(
+        pluginId: string, signal?: AbortSignal,
+    ): Promise<import('@happier-dev/protocol').PluginMachineExecutionOriginV1 | null>;
 }>): NonNullable<ActionExecutorDeps['invokeContributedAction']> {
     return async ({ action, input, context, requiredDangerLevel, signal }) => {
         const caller = context.actionCaller;
@@ -35,6 +40,10 @@ export function createHostContributedActionInvoker(params: Readonly<{
         }
         const callerMaterialization = caller.materialization;
         const callerOccurrenceId = caller.occurrenceId;
+        const invocationSignal = signal ?? context.signal ?? new AbortController().signal;
+        const resolveCurrentOrigin = params.resolveCurrentPluginExecutionOrigin
+            ? (currentSignal?: AbortSignal) => params.resolveCurrentPluginExecutionOrigin!(caller.pluginId, currentSignal)
+            : undefined;
         const parsedInput = input === undefined
             ? undefined
             : StrictJsonValueSchema.safeParse(input);
@@ -67,6 +76,8 @@ export function createHostContributedActionInvoker(params: Readonly<{
         if (!await isCallerCurrent()) {
             return callerNoLongerCurrent();
         }
+        const executionOrigin = await resolvePluginInvocationCallerExecutionOrigin(caller, resolveCurrentOrigin, invocationSignal);
+        if (executionOrigin === null) return callerNoLongerCurrent();
         const result = await params.invokeContributedAction({
             action,
             ...(requiredDangerLevel ? { requiredDangerLevel } : {}),
@@ -88,11 +99,16 @@ export function createHostContributedActionInvoker(params: Readonly<{
                 occurrenceId: callerOccurrenceId,
                 sourceCustody: caller.sourceCustody,
                 materialization: callerMaterialization,
+                ...(executionOrigin === undefined ? {} : { executionOrigin }),
             },
-            signal: signal ?? context.signal ?? new AbortController().signal,
+            signal: invocationSignal,
         });
         if (!await isCallerCurrent()) {
             return callerNoLongerCurrent();
+        }
+        if (executionOrigin !== undefined) {
+            const current = await resolvePluginInvocationCallerExecutionOrigin(caller, resolveCurrentOrigin, invocationSignal);
+            if (!current || !arePluginMachineExecutionOriginsEqual(executionOrigin, current)) return callerNoLongerCurrent();
         }
         if (result.status === 'executed') {
             return { ok: true, result: result.value };

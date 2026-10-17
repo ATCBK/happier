@@ -1,4 +1,5 @@
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
+import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
 import type { TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
 
 import type { CorpusCollectionsV1 } from '../../corpus/collections/bindCorpusCollections.js';
@@ -60,18 +61,22 @@ export type TriageUnlinkLinkedEntryV1 = Readonly<{
  * owner. The row holds one of these and never branches on transport.
  */
 export type TriageUnlinkTransportV1 = Readonly<{
+    /** Null is a declined policy decision; no Account mutation ran. */
     unlink(
         target: TriageUnlinkLinkedEntryV1,
         options?: PluginCancellationOptions,
-    ): Promise<TriageUnlinkEntryFromSessionActionResultV1>;
+    ): Promise<TriageUnlinkEntryFromSessionActionResultV1 | null>;
 }>;
 
 /** The direct transport: this mount's own `session-links` Collection handle. */
 export function createDirectTriageUnlinkTransport(
     collections: Pick<CorpusCollectionsV1, 'sessionLinks'>,
+    host: Pick<PluginUiHostApi, 'admitAction'>,
 ): TriageUnlinkTransportV1 {
     return Object.freeze({
         unlink: async (target, options) => {
+            if (!await host.admitAction(TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1,
+                { v: 1, sessionId: target.sessionId, entryRef: target.entryRef }, options)) return null;
             const result = await unlinkEntryFromSession({
                 collections,
                 sessionId: target.sessionId,

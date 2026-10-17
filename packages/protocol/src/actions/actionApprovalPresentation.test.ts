@@ -12,13 +12,21 @@ import { skillFileFromBytesV1 } from '../prompts/library/skills/skillZipV1.js';
 import type { ActionId } from './actionIds.js';
 import { decideApprovalRequestTransition, settleApprovalRequestActionArgs } from '../approvals/approvalRequestTransition.js';
 import { describeApprovalRequestFields } from './actionApprovalPresentation.js';
+import { createPluginInstallationReviewFixture } from '../testing/pluginInstallationReviewFixture.js';
 import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
 import { TriageStartEntrySessionInputV1Schema } from '../../../plugins/triage/src/actions/entrySessionProtocol.js';
 import { createTriageSelectedPrStartApprovalInput } from '../../../plugins/triage/src/sessions/testkit/entrySessionTestkit.test-support.js';
 import { SharedSavedSecretRefV1Schema } from '../machines/managed/providerFactsV1.js';
 
 describe('approval field presentation', () => {
-
+  it('projects document references for every Artifact operation with an artifactId', () => {
+    const spec = getActionSpec('artifact.public_link.create');
+    const actionArgs = spec.inputSchema.parse({ artifactId: 'release-notes' });
+    const presentation = describeApprovalActionFields({ actionId: spec.id, actionArgs });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'value', path: 'artifactId', reference: { kind: 'artifact', id: 'release-notes' } }),
+    ]));
+  });
   it('discloses nested confidential operands by declared label and preserves exact public JSON', () => {
     const input = { rows: [{ releaseTag: 'private-release', target: ' endpoint ', enabled: false, count: 42,
       credential: { _isSecretValue: true, value: 'private-carrier' } }], token: 'public-routing-token' };
@@ -44,7 +52,19 @@ describe('approval field presentation', () => {
     expect(JSON.stringify(admission)).not.toContain('private');
   });
 
-
+  it('marks a destructive Session target for expanded identity presentation', () => {
+    expect(describeApprovalActionFields({
+      actionId: 'session.delete',
+      actionArgs: { sessionId: 'cmv9jgd3q016xmcvegf6icb89' },
+    }).rows).toContainEqual(expect.objectContaining({
+      path: 'sessionId',
+      reference: {
+        kind: 'session',
+        id: 'cmv9jgd3q016xmcvegf6icb89',
+        presentation: 'destructive_target',
+      },
+    }));
+  });
 
   it('discloses and admits the real Triage selected-PR credential identity', () => {
     const input = createTriageSelectedPrStartApprovalInput();
@@ -140,10 +160,6 @@ describe('approval field presentation', () => {
       .not.toBeNull();
   });
 
-
-
-
-
   it.each([undefined, 'own-trigger'])('admits an ordinary Automation pause review with trigger %s', (triggerId) => {
     const actionId = 'workflow.trigger.update' as const;
     const actionArgs = getActionSpec(actionId).inputSchema.parse({
@@ -169,6 +185,82 @@ describe('approval field presentation', () => {
     }));
   });
 
+  it('admits plugin install approval only with the daemon-evaluated install disclosure', () => {
+    const actionArgs = { path: '/plugins/acme.example', kind: 'path' as const };
+    const base = ApprovalRequestV2Schema.parse({
+      v: 2,
+      status: 'open',
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      createdBy: { surface: 'agent' },
+      actionId: 'plugins.install',
+      actionArgs,
+      summary: 'Install plugin',
+      executionOriginV1: {
+        v: 1,
+        authority: 'account_automation',
+        caller: { kind: 'host' },
+        requestId: 'plugin-install-request',
+        surface: 'agent',
+        serverId: 'home',
+        actionId: 'plugins.install',
+      },
+    });
+
+    expect(resolveApprovalRequestApproveAdmission({
+      ...base,
+      preview: {
+        actionId: 'plugins.install',
+        actionArgs,
+        pluginInstall: { permissionsDisclosure: 'pendingDaemonEvaluation' },
+      },
+    })).toMatchObject({
+      status: 'unavailable',
+      reason: 'context_unavailable',
+      details: { path: 'preview.pluginInstall.pendingReview' },
+    });
+
+    const review = createPluginInstallationReviewFixture({
+      requiredHostAccess: [{
+        id: 'network',
+        capability: 'network',
+        reason: 'Call the service.',
+        authorizationClass: 'cooperativeDisclosure',
+        normalizedScope: { targets: [{ kind: 'fixedOrigin', origin: 'https://example.test' }] },
+      }],
+    });
+    const admission = resolveApprovalRequestApproveAdmission({
+      ...base,
+      preview: {
+        actionId: 'plugins.install',
+        actionArgs,
+        pluginInstall: {
+          permissionsDisclosure: 'daemonEvaluated',
+          pendingReview: {
+            kind: 'reviewRequired',
+            reviewKind: 'installation',
+            pendingChangeId: 'pending-plugin-install',
+            reason: 'firstInstall',
+            currentVersion: null,
+            authorityExpansion: [],
+            review,
+          },
+        },
+      },
+    });
+
+    expect(admission).toMatchObject({ status: 'available' });
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({
+      path: 'preview.pluginInstall.pendingReview.review',
+      title: 'Daemon-evaluated install and trust disclosure',
+      entries: expect.arrayContaining([
+        expect.objectContaining({ label: 'Plugin id', value: 'acme.example' }),
+        expect.objectContaining({ label: 'Required host access', value: null }),
+        expect.objectContaining({ label: 'Capability', value: 'network' }),
+      ]),
+    }));
+  });
+
   it('admits the neighboring capabilities families without disclosing live-only secret values', () => {
     const entry = { id: 'mcp-a', name: 'mcp-a', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 };
     const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: review\n---\nReview.'), 0o644);
@@ -184,7 +276,7 @@ describe('approval field presentation', () => {
       ['mcp.servers.tools.set', { serverId: 'mcp-a', tools: { search: 'ask' } }],
       ['mcp.servers.create', { entry, expectedRevision: 1 }], ['mcp.servers.create', { entries: [{ entry }], expectedRevision: 1 }],
       ['mcp.servers.update', { entry, expectedRevision: 1 }],
-      ['mcp.servers.duplicate', { serverId: 'mcp-a', entry: { ...entry, id: 'mcp-b' }, expectedRevision: 1 }],
+      ['mcp.servers.duplicate', { serverId: 'mcp-a' }],
       ['mcp.servers.delete', { serverId: 'mcp-a', expectedRevision: 1, removeBindings: true }],
       ['mcp.servers.import', { source: { kind: 'paste', text: '{}' }, dryRun: true }],
       ['mcp.found.adopt', { machineId: 'machine-a', items: [] }],
@@ -242,6 +334,17 @@ describe('approval field presentation', () => {
     expect(admission.presentation.rows).toContainEqual(expect.objectContaining({ title: 'Launch', entries: expect.arrayContaining([
       expect.objectContaining({ label: 'Method' }),
     ]) }));
+  });
+  it.each([['skill', 'skill'], ['mcp_server', 'mcpServer']] as const)('names the %s an Agent asks to turn on for its session, not its id', (kind, referenceKind) => {
+    const fields = describeApprovalActionFields({ actionId: 'session.capabilities.set',
+      actionArgs: { sessionId: 'session-a', kind, id: 'item-a', state: 'on', reason: 'Link the fix' } });
+    expect(fields.rows).toContainEqual(expect.objectContaining({ path: 'id', reference: { kind: referenceKind, id: 'item-a' } }));
+    expect(describeApprovalActionFields({ actionId: 'session.capabilities.set',
+      actionArgs: { sessionId: 'session-a', kind: 'native_skill', id: 'pdf', state: 'on' } }).rows)
+      .toContainEqual(expect.objectContaining({ path: 'id', value: 'pdf' }));
+    expect(describeApprovalActionFields({ actionId: 'session.capabilities.set',
+      actionArgs: { sessionId: 'session-a', kind: 'native_skill', id: 'pdf', state: 'on' } }).rows.find(row => row.path === 'id'))
+      .not.toHaveProperty('reference');
   });
   it.each(['skills.rules.set', 'mcp.rules.set'] as const)('admits %s with the exact reviewed items and Machine change', actionId => {
     const spec = getActionSpec(actionId);
@@ -329,6 +432,20 @@ describe('approval field presentation', () => {
     expect(getActionSpec('settings.reset').approvalPresentation?.summary({ anchor }))
       .toBe(`Reset “${declaration.title}” to its default.`);
     expect(getActionSpec('settings.set').approvalPresentation?.summary({ anchor: 'unknown.setting', value: 3 })).toBeNull();
+  });
+  it('reads a theme choice as the choice it makes, not as profile ids, timestamps and schema versions', () => {
+    const profile = { schemaVersion: 1, id: 'custom-2', name: 'Custom theme 2', createdAt: '2026-10-16T08:00:00.000Z',
+      updatedAt: '2026-10-16T08:00:00.000Z', base: { light: 'light', dark: 'dark' }, overrides: { light: {}, dark: {} } };
+    const activation = { anchor: 'appearance.themeMode', value: { activation: { profileId: 'custom-2', profileMode: 'light', profile } } };
+    expect(getActionSpec('settings.set').approvalPresentation?.summary(activation)).toBe('Use “Custom theme 2” for light mode.');
+    const presentation = describeApprovalActionFields({ actionId: 'settings.set', actionArgs: activation });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows.find(row => row.path === 'value')).toMatchObject({ value: 'Use “Custom theme 2” for light mode' });
+    expect(JSON.stringify(presentation.rows)).not.toMatch(/2026-10-16|schemaVersion/);
+    expect(getActionSpec('settings.set').approvalPresentation?.summary({ anchor: 'appearance.themeMode', value: 'dark' }))
+      .toBe('Switch to dark mode.');
+    expect(getActionSpec('settings.set').approvalPresentation?.summary({ anchor: 'appearance.themeMode',
+      value: { activation: { profileId: 'premiumDark', profileMode: 'dark' } } })).toBe('Use “Premium dark” for dark mode.');
   });
   it('reads a Board visual by its title and destination, with its identity only in technical details', () => {
     const presentation = describeApprovalActionFields({ actionId: 'session.board.item.upsert', actionArgs: {
@@ -568,6 +685,21 @@ describe('approval field presentation', () => {
       surface: { serverId: 'srv_home', accountId: 'acct-1' }, groupId: 'usage-group', title: 'Usage' } });
     const row = presentation.rows.find((candidate) => candidate.path === 'groupId');
     expect(row).toEqual({ kind: 'value', path: 'groupId', title: 'Group id', value: 'usage-group' });
+  });
+
+  it('reads a Browser view command by its target, with its correlation ids and plumbing in technical details', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'browser.view.open', actionArgs: {
+      commandId: 'cmd-1', browserSessionId: 'session-1', viewId: 'view-1', kind: 'openView',
+      target: { targetId: 'target-1', kind: 'externalUrl', url: 'http://127.0.0.1:4000' }, platform: 'web', focus: true } });
+    const technical = presentation.rows.filter((row) => row.kind === 'value' && row.technical).map((row) => row.path).sort();
+    expect(technical).toEqual(['browserSessionId', 'commandId', 'focus', 'kind', 'platform', 'viewId']);
+    const target = presentation.rows.find((row) => row.path === 'target');
+    expect(target).toMatchObject({ kind: 'value' });
+    expect(target?.kind === 'value' && target.technical).toBeFalsy();
+    const members = target?.kind === 'value' ? target.entries ?? [] : [];
+    expect(members.filter((entry) => entry.technical).map((entry) => entry.value)).toEqual(['target-1']);
+    expect(members.find((entry) => entry.label === 'Url')).toMatchObject({ value: 'http://127.0.0.1:4000' });
+    expect(members.find((entry) => entry.label === 'Url')?.technical).toBeFalsy();
   });
 
   it('shows custom Provider target, endpoint and proposed template without credential or header values', () => {
@@ -908,6 +1040,15 @@ describe('approval field presentation', () => {
     expect(resolveApprovalVisualPreview({ actionId: 'settings.set', actionArgs: args({ kind: 'declarative', document }) })).toBeNull();
   });
 
+  it('carries the declared HTML height into the approval preview', () => {
+    const source = { v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html', contentBase64: 'PGI+aGk8L2I+' } } };
+    for (const height of [{ mode: 'fixed', size: 'compact' }, { mode: 'auto', fallback: 'tall' }]) {
+      expect(resolveApprovalVisualPreview({ actionId: 'session.board.item.upsert', actionArgs: {
+        item: { title: 'Build health', height, source: { kind: 'hostedHtml', source } },
+      } })).toMatchObject({ kind: 'html', height });
+    }
+  });
+
   it('keeps a previewed visual’s arguments under technical details, and its network in view', () => {
     const html = { v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html', contentBase64: 'PGI+aGk8L2I+' } } };
     const rows = describeApprovalActionFields({ actionId: 'session.board.item.upsert', actionArgs: { sessionId: 'session-1',
@@ -956,5 +1097,26 @@ describe('workspace file approvals read as the effect, not the mechanism', () =>
     const sized = describeApprovalActionFields({ actionId: 'daemon.filesystem.writeFile',
       actionArgs: { ...args, content: 'aGVsbG8gd29ybGQK' } });
     expect(sized.rows.find((row) => row.path === 'content')).toMatchObject({ value: '12 bytes' });
+  });
+});
+
+describe('plugin development confirmation summary', () => {
+  // PLUGQA 2026-10-15: "Submit plugin development snapshot" asked "Submit plugin development snapshot."
+  // — the confirmation repeated its title and never named the folder the daemon would build and run.
+  it('names the exact source each plugin development Action acts on instead of repeating its title', async () => {
+    const { buildApprovalPreviewSummary } = await import('./actionExecutor.js');
+    const cases = [
+      ['plugins.dev.submit', { projectRoot: '/home/ada/plugins/notes' }, '/home/ada/plugins/notes'],
+      ['plugins.dev.unregister', { projectRoot: '/home/ada/plugins/notes' }, '/home/ada/plugins/notes'],
+      ['plugins.dev.test', { projectRoot: '/home/ada/plugins/notes' }, '/home/ada/plugins/notes'],
+      ['plugins.pack', { locator: '/home/ada/plugins/notes' }, '/home/ada/plugins/notes'],
+      ['plugins.reload', { pluginId: 'acme.notes' }, 'acme.notes'],
+    ] as const;
+    for (const [actionId, input, subject] of cases) {
+      const spec = getActionSpec(actionId);
+      const summary = buildApprovalPreviewSummary(spec, input);
+      expect(summary, actionId).toContain(subject);
+      expect(summary.replace(/\.$/u, ''), actionId).not.toBe(spec.title);
+    }
   });
 });

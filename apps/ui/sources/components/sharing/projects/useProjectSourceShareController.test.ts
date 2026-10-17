@@ -64,8 +64,6 @@ describe('Source audience ShareSheet controller', () => {
         expect(hook.getCurrent().model.grants[0].level).toEqual({ kind: 'editable', value: 'view', options: ['view'] });
         expect(hook.getCurrent().model.revision).toBe(2);
         await act(async () => { hook.getCurrent().actions.requestRemove(principal); });
-        expect(hook.getCurrent().model.grants[0].removal.kind).toBe('confirming');
-        await act(async () => { hook.getCurrent().actions.confirmRemove(principal); });
         expect(hook.getCurrent().model.grants).toEqual([]);
         expect(writes).toEqual([
             { serverId: scope.serverId, sourceId: source.id, expectedRevision: 1, patch: { audience: [{ principal, level: 'view' }] } },

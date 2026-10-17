@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { symbols, type DestinationStream } from 'pino';
 import { Server } from 'socket.io';
 import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 
@@ -13,6 +14,7 @@ import {
     type ExternalActionRequestEnvelopeV1,
 } from "@happier-dev/protocol/actions";
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
+import { logger } from '@/utils/logging/log';
 
 import {
     EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1,
@@ -75,6 +77,74 @@ function dispatchedResponse(value: unknown) {
 }
 
 describe("createExternalActionDaemonDispatcher", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    function capturePhaseRecords() {
+        const records: Record<string, unknown>[] = [];
+        // Capture the real logger's output boundary, retaining its serialization.
+        const stream = (logger as unknown as { [symbols.streamSym]: DestinationStream })[symbols.streamSym];
+        vi.spyOn(stream, 'write').mockImplementation((message) => {
+            records.push(JSON.parse(message));
+        });
+        return records;
+    }
+
+    it.each(['machine_resolution', 'daemon_forward'] as const)(
+        'witnesses %s without disclosing thrown content or changing placement failure', async (phase) => {
+            const records = capturePhaseRecords();
+            const error = new TypeError('private-input-marker private-account-marker private-envelope-marker');
+            error.name = 'private-error-name-marker';
+            const dispatch = createExternalActionDaemonDispatcher({
+                io: {} as never,
+                resolveMachine: async () => {
+                    if (phase === 'machine_resolution') throw error;
+                    return 'available';
+                },
+                forwardRpc: async () => { throw error; },
+            });
+
+            await expect(dispatch({ actionId: 'browser.diagnostics.snapshot', principal,
+                envelope: { v: 2, requestId: 'private-request-marker',
+                    target: { kind: 'machine', machineId: 'machine-1' },
+                    payload: { t: 'encrypted', c: 'private-envelope-marker' } },
+            })).resolves.toEqual({ kind: 'placement_error', code: 'target_unavailable' });
+            const witnesses = records.filter((record) => record.msg === '[external-action-phase]');
+            expect(witnesses).toMatchObject([{ phase, machineId: 'machine-1', errorClass: 'TypeError',
+                message: 'Unexpected phase failure (details redacted)' }]);
+            expect(JSON.stringify(witnesses)).not.toContain('private-');
+        },
+    );
+
+    it('witnesses only a correlated daemon encrypted-envelope rejection without exposing its envelope', async () => {
+        const records = capturePhaseRecords();
+        const dispatch = createExternalActionDaemonDispatcher({
+            io: {} as never,
+            resolveMachine: async () => 'available',
+            forwardRpc: async () => ({ ok: true, result: { kind: 'invalid_request',
+                errorCode: 'invalid_encrypted_envelope', requestId: 'private-request-marker' } }),
+        });
+        const request = { actionId: 'browser.diagnostics.snapshot', principal,
+            envelope: { v: 2 as const, requestId: 'private-request-marker',
+                target: { kind: 'machine' as const, machineId: 'machine-1' },
+                payload: { t: 'encrypted' as const, c: 'private-envelope-marker' } } };
+        await expect(dispatch(request)).resolves.toEqual({ kind: 'invalid_request',
+            errorCode: 'invalid_encrypted_envelope', requestId: 'private-request-marker' });
+        const witnesses = records.filter((record) => record.msg === '[external-action-phase]');
+        expect(witnesses).toMatchObject([{ phase: 'daemon_envelope_admission', machineId: 'machine-1',
+            errorClass: 'DaemonAdmissionError', message: 'invalid_encrypted_envelope' }]);
+        expect(JSON.stringify(witnesses)).not.toContain('private-');
+        records.length = 0;
+        await expect(dispatch({ ...request, envelope: { ...request.envelope, requestId: 'different-request' } }))
+            .resolves.toEqual({ kind: 'submitted_unknown' });
+        expect(records.filter((record) => record.msg === '[external-action-phase]')).toEqual([]);
+
+        // A diagnostic destination failure must not replace the daemon's public refusal.
+        const stream = (logger as unknown as { [symbols.streamSym]: DestinationStream })[symbols.streamSym];
+        vi.spyOn(stream, 'write').mockImplementation(() => { throw new Error('private-log-sink-marker'); });
+        await expect(dispatch(request)).resolves.toEqual({ kind: 'invalid_request',
+            errorCode: 'invalid_encrypted_envelope', requestId: 'private-request-marker' });
+    });
+
     it("returns operation-scoped update required before sending an authorized invocation to an old daemon", async () => {
         const forwardRpc = vi.fn();
         const resolveMachine = vi.fn(async (input: Readonly<{

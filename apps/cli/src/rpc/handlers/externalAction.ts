@@ -14,6 +14,7 @@ import type {
 } from '@/daemon/externalActions/executeExternalAction';
 import { executeExternalAction } from '@/daemon/externalActions/executeExternalAction';
 import { traceExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
+import { isOriginalSessionInputAccountActionCustody } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 
 export type ExternalActionRpcRegistrationOptions = Readonly<{
   machineId: string;
@@ -138,7 +139,8 @@ export function registerExternalActionRpcHandler(
       // Shared execution remains closed until its Account-scoped dependency
       // ports preserve the actor independently of the daemon custodian.
       || (accountId !== request.principal.accountId
-        && (!request.executionAuthorization.requesterAccountContext || !options.prepareRequesterAccountContext))
+        && (!options.prepareRequesterAccountContext || !request.executionAuthorization.requesterAccountContext
+          && !isOriginalSessionInputAccountActionCustody(request.executionAuthorization.binding)))
     ) {
       return targetNotLocal(request);
     }
@@ -153,6 +155,9 @@ export function registerExternalActionRpcHandler(
       currentServerHttpBaseUrl: options.currentServerHttpBaseUrl,
       prepareRequesterAccountContext: options.prepareRequesterAccountContext,
       currentInstallationId: installationId,
+      // HTTP-port reconstruction reuses this ingress's admitted root. Keep
+      // installation retirement local; fresh effect admission stays below.
+      isInstallationCurrent: () => options.resolveInstallationId() === installationId,
       verifyExecutionAuthorization: async (input) => {
         if (options.resolveInstallationId() !== installationId) return false;
         const current = await options.verifyExecutionAuthorization(input);

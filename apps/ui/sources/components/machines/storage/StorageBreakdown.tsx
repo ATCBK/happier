@@ -15,7 +15,6 @@ import { useMachineResourcesPolicy } from '@/sync/domains/machines/resources/use
 import { useMachineStorageCleanup } from '@/sync/domains/machines/storage/useMachineStorageCleanup';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 
-import { confirmStorageEmpty } from './StorageCollectToggle';
 import { StorageSizeBar } from './StorageItemRow';
 import { t } from '@/text';
 
@@ -139,7 +138,7 @@ export const StorageCategoryRow = React.memo(function StorageCategoryRow(props: 
             <Text style={[styles.trailing, styles.keptText]} numberOfLines={1}>{t('machineStorage.breakdown.alwaysKept')}</Text>
         </View>
     ) : trailing.kind === 'trash' ? (
-        <TrashEmptyNow serverId={props.serverId} machineId={props.machineId} category={category}
+        <TrashEmptyNow serverId={props.serverId} machineId={props.machineId}
             fallback={trailing.emptiesAt !== null ? <Text style={styles.trailing} numberOfLines={1}>{t('machineStorage.breakdown.empties', { date: formatStorageDay(trailing.emptiesAt) })}</Text> : null} />
     ) : null;
     const open = React.useCallback(() => onOpen(category.categoryId), [category.categoryId, onOpen]);
@@ -165,16 +164,13 @@ export const StorageCategoryRow = React.memo(function StorageCategoryRow(props: 
     );
 });
 
-/** The Trash row's "Empty now" (lab `rs` RD): one confirmation, then `trash.empty` of every entry this person may empty. */
-function TrashEmptyNow(props: Readonly<{ serverId: string; machineId: string; category: StorageCategory; fallback: React.ReactNode }>) {
+/** The Trash row's "Empty now" delegates every entry this person may empty to the Action policy. */
+function TrashEmptyNow(props: Readonly<{ serverId: string; machineId: string; fallback: React.ReactNode }>) {
     const cleanup = useMachineStorageCleanup({ machineId: props.machineId, serverId: props.serverId });
     if (!cleanup.enabled) return <>{props.fallback}</>;
     return (
         <TextLinkButton testID="machine-storage-category-trash-empty" tone="strong" label={t('machineStorage.pile.emptyNow')}
-            onPress={async () => {
-                const amount = formatMachineBytes(props.category.size.allocatedBytes, 'storage');
-                if (await confirmStorageEmpty({ count: props.category.count, amount })) await cleanup.empty({}, true);
-            }} />
+            onPress={() => cleanup.empty({})} />
     );
 }
 

@@ -609,9 +609,11 @@ describe('AcpBackendEditorScreen', () => {
         expect(input(screen, `${EDITOR}.name`).props.value).toBe('kiro');
     });
 
-    it('deletes an existing agent from its menu after confirmation and leaves the page', async () => {
+    it('deletes an existing agent under its Allowed Action setting without a local confirmation and leaves the page', async () => {
         shared.settingsState.value = { v: 2, backends: [existingKiro] };
         const screen = await renderEditor('kiro');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
 
         const menu = screen.findAll((node) => node.props?.testID === `${EDITOR}.menu`
             && typeof node.props?.onSelect === 'function')[0];
@@ -622,7 +624,24 @@ describe('AcpBackendEditorScreen', () => {
 
         expect(shared.writes.at(-1)?.backends).toEqual([]);
         expect(shared.routerReplaceSpy).toHaveBeenCalledWith('/(app)/settings/agents');
+        expect(Modal.confirm).not.toHaveBeenCalled();
     });
+    it('keeps the agent and stays silent when the shared delete confirmation is declined', async () => {
+        shared.settingsState.value = { v: 2, backends: [existingKiro] };
+        shared.accountSettings = {};
+        const screen = await renderEditor('kiro');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
+        shared.modalAlertSpy.mockClear();
+        const menu = screen.findAll((node) => node.props?.testID === `${EDITOR}.menu`
+            && typeof node.props?.onSelect === 'function')[0];
+        await act(async () => { await menu?.props.onSelect('delete'); });
+        expect(Modal.confirm).toHaveBeenCalledOnce();
+        expect(shared.writes).toEqual([]);
+        expect(shared.modalAlertSpy).not.toHaveBeenCalled();
+        expect(shared.routerReplaceSpy).not.toHaveBeenCalled();
+    });
+
     it('keeps the authored draft on row refusal and navigates only after the durable receipt', async () => {
         const screen = await renderEditor(null);
         await type(screen, `${EDITOR}.title`, 'Retained draft');

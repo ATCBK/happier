@@ -1,6 +1,6 @@
 import fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
@@ -11,11 +11,14 @@ import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportD
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import { listActionSpecsForCatalogSurface } from '@happier-dev/protocol/actions/actionCatalog';
+import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
 
 // Home HTTP/persistence is the system boundary. Capture opaque bytes from the
 // actual Account Artifact producer; never reconstruct approval header/body DTOs.
 const artifactCarrier = z.object({ id: z.string(), header: z.string(), body: z.string(),
-  dataEncryptionKey: z.string(), provenance: z.string().nullish(), provenanceDataEncryptionKey: z.string().nullish() });
+  dataEncryptionKey: z.string(), provenance: z.nullish(z.string()), provenanceDataEncryptionKey: z.nullish(z.string()) });
 
 describe('composed approval catalog RPC and Account Artifact transport', () => {
   it('registers real catalog bindings and reads the real producer through executor, HTTP and storage codecs', async () => {
@@ -58,6 +61,36 @@ describe('composed approval catalog RPC and Account Artifact transport', () => {
         assertActionOutputContract('approval.request.list', listed);
         expect(listed).toMatchObject({ items: [{ artifactId: created.artifactId, status: 'open', actionId: 'session.list', serverId: 'home' }],
           queryPlan: { backingStore: 'ArtifactStore', hydratedTranscripts: false } });
+
+        for (const surface of ['cli', 'agent', 'mcp'] as const) {
+          expect(listActionSpecsForCatalogSurface({ surface }).map(spec => spec.id)).toContain('approval.request.list');
+          const bridge = createActionToolExecutorBridge({ surface, executor: {
+            execute: (id, input, context) => executor.execute(id, input, { ...context, serverId: 'home' }),
+          } });
+          const result = await bridge.executeActionByToolName('action_execute', {
+            actionId: 'approval.request.list', input: { status: 'open', limit: 5 },
+          }, 'session');
+          expect(result).toMatchObject({ ok: true, result: {
+            items: [{ artifactId: created.artifactId, status: 'open', actionId: 'session.list' }],
+            queryPlan: { hydratedTranscripts: false },
+          } });
+          if (surface === 'mcp') {
+            let executeTool: ((input: unknown) => Promise<unknown>) | undefined;
+            registerHappierMcpBuiltInTools({ registerTool: (name, _meta, handler) => {
+              if (name === 'action_execute') executeTool = handler;
+            } }, { sessionId: 'session', surface, deps: { ...bridge,
+              changeTitle: async () => { throw new Error('Unrelated title tool'); },
+              resolveActionOptions: args => bridge.resolveActionOptions(args, 'session'),
+            } });
+            expect(executeTool).toBeDefined();
+            const response = z.object({ isError: z.boolean(), content: z.array(z.object({ type: z.literal('text'), text: z.string() })) })
+              .parse(await executeTool!({ actionId: 'approval.request.list', input: { status: 'open', limit: 5 } }));
+            expect(response.isError).toBe(false);
+            expect(JSON.parse(response.content[0]!.text)).toMatchObject({
+              items: [{ artifactId: created.artifactId, status: 'open' }], queryPlan: { hydratedTranscripts: false },
+            });
+          }
+        }
         const read = await rpc.invokeLocal('approval.request.get', { artifactId: created.artifactId, serverId: 'home' });
         assertActionOutputContract('approval.request.get', read);
         expect(read).toMatchObject({ artifactId: created.artifactId, request });

@@ -74,14 +74,25 @@ it('unregisters an uninstalled development root and only revokes its matching in
     await control({ kind: 'registerExplicit', rootPath: firstEntry });
     const changes = (await owner.changeService.listPendingPluginChanges()).changes;
     const pending = changes[changes.length - 1]!;
+    // An outstanding review still belongs to this exact candidate. Rejoining
+    // it must not submit another revision and invalidate its eventual decision.
+    await control({ kind: 'registerExplicit', rootPath: firstEntry });
+    expect((await owner.changeService.listPendingPluginChanges()).changes).toEqual(changes);
     await expect(owner.changeService.decidePluginChange({
       pendingChangeId: pending.pendingChangeId,
       decision: 'installAndTrust',
     })).resolves.toMatchObject({ kind: 'committed', pluginId });
+    expect((await store.read()).plugins[pluginId]!.install.trust).toBeDefined();
+    expect(reloadController.readCurrentPluginOccurrenceId?.(pluginId)).toBeTruthy();
+    // Re-presenting the remembered source after its exact review settled must
+    // observe admission, rather than returning the old review diagnostic.
+    await expect(control({ kind: 'registerExplicit', rootPath: firstEntry }))
+      .resolves.toMatchObject({
+        kind: 'status',
+        status: { plugins: [{ pluginId, phase: 'active' }] },
+      });
     const installed = (await store.read()).plugins[pluginId]!;
     const occurrence = reloadController.readCurrentPluginOccurrenceId?.(pluginId);
-    expect(installed.install.trust).toBeDefined();
-    expect(occurrence).toBeTruthy();
     await control({ kind: 'registerExplicit', rootPath: secondRoot });
     const incumbentSnapshot = await store.readSnapshot();
     await expect(control({ kind: 'unregisterExplicit', rootPath: secondRoot }))

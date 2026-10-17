@@ -1,15 +1,27 @@
 import { ACCOUNT_LIFECYCLE_ACTION_INPUT_SCHEMAS as inputs, ACCOUNT_LIFECYCLE_ACTION_OUTPUT_SCHEMAS as outputs } from '../accountLifecycleActionFamily.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { AccountLifecycleActionId } from '../accountLifecycleActionFamily.js';
 
+export type AccountLifecycleActionSpec = {
+  [Id in AccountLifecycleActionId]: PreNormalizedActionSpec & {
+    id: Id;
+    inputSchema: (typeof inputs)[Id];
+    outputSchema: (typeof outputs)[Id];
+    requiredAuthority: 'account_automation';
+  };
+}[AccountLifecycleActionId];
+
+const cli = { acceptsServerId: true, commands: [] } satisfies NonNullable<PreNormalizedActionSpec['cli']>;
 const common = {
   placements: [], executionPlacement: 'client', requiredAuthority: 'account_automation',
-  surfaces: { ui: true, agent: true, mcp: true, voice: false, cli: false, rpc: false },
+  surfaces: { ui: true, agent: true, mcp: true, voice: false, cli: true, rpc: false },
+  cli,
   inputHints: { fields: [
     { path: 'serverId', title: 'Invoking Home', widget: 'text', required: true },
     { path: 'accountId', title: 'Your Account', widget: 'text', required: true },
   ] },
 } as const;
-export const ACCOUNT_LIFECYCLE_ACTION_SPECS = [
+export const ACCOUNT_LIFECYCLE_ACTION_SPECS: readonly AccountLifecycleActionSpec[] = [
   { ...common, id: 'account.signOut', approval: {result: 'required'}, title: 'Sign out of this Home',
     accountAuthorityRetirementStatuses: ['signed_out'],
     description: 'Forget this Account’s sign-in on this device. Other Homes and the sign-in service remain signed in.',

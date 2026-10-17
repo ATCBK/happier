@@ -2130,8 +2130,23 @@ describe("plugin collection UI query route", () => {
                 headers,
                 payload: { ref: incompatibleRef },
             });
-            expect(incompatible.statusCode).toBe(404);
-            expect(incompatible.json()).toEqual({ error: "collection_unavailable" });
+            expect(incompatible.statusCode).toBe(409);
+            expect(incompatible.json()).toEqual({ error: "collection_update_required" });
+
+            // Independently upgraded daemon writer -> older app-compiled reader.
+            // The writer moves forward; an app cannot borrow its contract.
+            await db.accountPluginIntent.update({
+                where: { accountId_pluginId: { accountId, pluginId: PLUGIN_ID } },
+                data: { desiredVersion: null, writableCollections: toPrismaJson([incompatibleRef]) },
+            });
+            const oldApp = await app.inject({ method: 'POST', url: '/v1/plugins/data/contract', headers,
+                payload: { ref: retainedReaderRef } });
+            expect(oldApp.statusCode).toBe(409);
+            expect(oldApp.json()).toEqual({ error: 'collection_update_required' });
+            expect(await db.accountPluginIntent.findUniqueOrThrow({
+                where: { accountId_pluginId: { accountId, pluginId: PLUGIN_ID } },
+                select: { writableCollections: true },
+            })).toEqual({ writableCollections: [incompatibleRef] });
         });
     });
 
