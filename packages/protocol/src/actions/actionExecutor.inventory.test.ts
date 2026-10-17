@@ -1987,7 +1987,11 @@ describe('createActionExecutor (inventory/discovery)', () => {
     if (!detail.ok) throw new Error('Explicit Action detail failed');
     const definition = ActionDiscoveryDefinitionV1Schema.parse(detail.result.actionSpec);
     expect(definition.inputSchema).toMatchObject({ type: 'object' });
-    expect(definition.outputSchema).toBeDefined();
+    if (surface === 'api') expect(definition.outputSchema).toBeDefined();
+    else expect(Object.hasOwn(definition, 'outputSchema')).toBe(false);
+    const fullDetail = await executor.execute('action.spec.get', { id: 'action.spec.get', includeOutputSchema: true }, { surface });
+    if (!fullDetail.ok) throw new Error('Full Action detail failed');
+    expect(ActionDiscoveryDefinitionV1Schema.parse(fullDetail.result.actionSpec).outputSchema).toBeDefined();
   });
 
   it('discovers current contributed Action definitions through the shared catalog operations', async () => {
@@ -2099,6 +2103,13 @@ describe('createActionExecutor (inventory/discovery)', () => {
       result: { actionSpec: contributedAction },
     });
     expect(readContributedActionSchemas).toHaveBeenCalledWith(contributedAction.id, undefined);
+    const inputOnly = await executor.execute('action.spec.get', {
+      id: contributedAction.id, includeOutputSchema: false,
+    }, { surface: 'api' });
+    if (!inputOnly.ok) throw new Error('Input-only contributed discovery failed');
+    const inputOnlyDefinition = ActionDiscoveryDefinitionV1Schema.parse(inputOnly.result.actionSpec);
+    expect(inputOnlyDefinition.inputSchema).toEqual(contributedInputSchema);
+    expect(Object.hasOwn(inputOnlyDefinition, 'outputSchema')).toBe(false);
     await expect(executor.execute(
       'action.options.resolve',
       { actionId: contributedAction.id, fieldPath: 'depth', query: 'full' },
@@ -2696,34 +2707,13 @@ describe('createActionExecutor (inventory/discovery)', () => {
       id: 'subagents.plan.start',
     }, { surface: 'agent' });
 
-    expect(planResult).toEqual(expect.objectContaining({
-      ok: true,
-      result: expect.objectContaining({
-        actionSpec: expect.objectContaining({
-          kindVersion: 1,
-          inputSchema: expect.objectContaining({
-            type: 'object',
-            properties: expect.objectContaining({
-              backendTargetKeys: expect.objectContaining({
-                type: 'array',
-                minItems: 1,
-                items: expect.objectContaining({
-                  anyOf: expect.arrayContaining([
-                    expect.objectContaining({
-                      type: 'string',
-                      pattern: '^(agent|acpBackend):.+$',
-                    }),
-                  ]),
-                }),
-              }),
-              permissionMode: expect.objectContaining({
-                description: expect.any(String),
-              }),
-            }),
-          }),
-        }),
-      }),
-    }));
+    if (!planResult.ok) throw new Error('Plan schema discovery failed');
+    const planDefinition = ActionDiscoveryDefinitionV1Schema.parse(planResult.result.actionSpec);
+    const validatePlan = compileProtocolJsonSchema(planDefinition.inputSchema, 'draft-07');
+    const validPlan = { sessionId: 'session-1', instructions: 'Plan the work', backendTargetKeys: ['agent:claude'] };
+    expect(validatePlan(validPlan)).toBe(true);
+    expect(validatePlan({ ...validPlan, backendTargetKeys: [] })).toBe(false);
+    expect(validatePlan({ ...validPlan, backendTargetKeys: [42] })).toBe(false);
 
     const spawnResult = await executor.execute('action.spec.get', {
       id: 'session.spawn_new',

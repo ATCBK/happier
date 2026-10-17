@@ -13,6 +13,7 @@ export type DiscoveryActionInputById = {
     readonly "action.spec.get": {
         [x: string]: unknown;
         id: string;
+        includeOutputSchema?: boolean | undefined;
     };
     readonly "action.options.resolve": {
         [x: string]: unknown;

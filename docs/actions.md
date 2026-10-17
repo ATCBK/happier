@@ -442,6 +442,14 @@ parent state. Choice projections do not authorize credentials or model execution
 | CLI presentation, including demoting an ineffective success | `apps/cli/src/cli/actions/commandPresentation.ts`, `.../executeCommand.ts` |
 | Machine-RPC route class for an Action-bearing method | `packages/protocol/src/machines/peer/mediation/rpc/routePolicyV1.ts` |
 
+In 0.3 development, `action.spec.get` always returns the complete input schema,
+hints and examples. Agent, MCP and CLI discovery omit the output schema by
+default, matching search summaries; pass `includeOutputSchema: true` to retrieve
+the complete result contract. Other surfaces retain output schemas by default.
+Shared subschemas use document-local references rather than repeated expansion;
+the returned schema is self-contained and is never truncated to fit an output
+budget.
+
 There is no server-side Action executor. Three hosts execute: the UI executor
 (`apps/ui/sources/sync/ops/actions/defaultActionExecutor.ts`), the daemon executor
 (`apps/cli/src/session/actions/createCliActionDeps.ts`, which also serves the CLI, Agents and

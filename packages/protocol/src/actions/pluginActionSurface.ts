@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
-import { ACTION_IDS, type ActionId } from './actionIds.js';
+import { ACTION_IDS, ActionIdSchema, type ActionId } from './actionIds.js';
 
 /** Host lifecycle/plumbing operations that are not author-facing Actions. */
 export const INTERNAL_ACTION_REASONS = Object.freeze({
@@ -111,9 +111,16 @@ export const PLUGIN_INVOCABLE_ACTION_IDS = Object.freeze(
   )),
 );
 
-const PLUGIN_INVOCABLE_ACTION_ID_SET = new Set<string>(PLUGIN_INVOCABLE_ACTION_IDS);
-
-export const PluginInvocableActionIdSchema = lazyZodSchema(() => z.custom<PluginInvocableActionId>(
-  (actionId) => typeof actionId === 'string' && PLUGIN_INVOCABLE_ACTION_ID_SET.has(actionId),
-  { message: 'Action is not available on the Plugin surface' },
-));
+export const PluginInvocableActionIdSchema = lazyZodSchema(() => {
+  const schema = z.enum(PLUGIN_INVOCABLE_ACTION_IDS, { error: 'Action is not available on the Plugin surface' });
+  // Capability declarations already carry ActionIdSchema. Share that vocabulary
+  // and this same policy's exclusions instead of publishing a second full list.
+  const projection = z.intersection(ActionIdSchema, z.unknown().check(z.meta({
+    not: { enum: PLUGIN_SURFACE_EXCLUSION_ACTION_IDS },
+  })));
+  schema._zod.processJSONSchema = (context, _json, params) => {
+    z.core.process(projection, context, params);
+    context.seen.get(schema)!.ref = projection;
+  };
+  return schema;
+});

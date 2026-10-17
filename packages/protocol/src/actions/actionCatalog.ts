@@ -127,6 +127,7 @@ function actionSearchScore(
 
 type ActionCatalogSurfaceParams = Readonly<{
   surface?: keyof ActionSurfaces | null;
+  includeOutputSchema?: boolean;
 }>;
 
 function resolveActionCatalogSurfaceProjection(
@@ -172,8 +173,9 @@ function projectSerializedActionOutput(
   spec: ActionSpec,
   params?: ActionCatalogSurfaceParams,
 ): SerializedActionSpec {
+  if (params?.includeOutputSchema === false) return metadata;
   const projection = resolveActionCatalogSurfaceProjection(spec, params?.surface);
-  const outputSchema = projectActionOutputJsonSchema(projection.outputSchema, { target: 'draft-7' });
+  const outputSchema = projectActionOutputJsonSchema(projection.outputSchema, { target: 'draft-7', reused: 'ref' });
   return { ...metadata, ...(outputSchema ? { outputSchema } : {}) };
 }
 
@@ -213,7 +215,7 @@ export function actionSpecToActionDefinitionV1(
   return {
     kindVersion: 1,
     ...serializeActionSpec(spec, params),
-    inputSchema: zodSchemaToJsonSchemaObject(projection.inputSchema, { target: 'draft-7' }),
+    inputSchema: zodSchemaToJsonSchemaObject(projection.inputSchema, { target: 'draft-7', reused: 'ref' }),
   };
 }
 

@@ -6401,6 +6401,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
         if (actionId === 'action.spec.get') {
           const requestedId = String(data.id);
+          const includeOutputSchema = typeof data.includeOutputSchema === 'boolean'
+            ? data.includeOutputSchema
+            : ctx.surface !== 'agent' && ctx.surface !== 'mcp' && ctx.surface !== 'cli';
           try {
             const requestedSpec = getActionSpec(requestedId as ActionId);
             const credentialFailure = credentialScopeFailure(requestedId, ctx, undefined, true);
@@ -6415,6 +6418,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                 actionSpec: projectActionDefinitionForExternalDiscovery(
                   actionSpecToActionDefinitionV1(requestedSpec, {
                     surface: ctx.surface ?? null,
+                    includeOutputSchema,
                   }),
                 ),
               },
@@ -6434,14 +6438,15 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             if (!schemas) {
               return { ok: false, errorCode: 'unavailable', error: 'unavailable' };
             }
+            const { outputSchema: _summaryOutputSchema, ...contributedMetadata } = contributedDefinition;
             return {
               ok: true,
               result: {
                 actionSpec: projectActionDefinitionForExternalDiscovery({
-                  ...contributedDefinition,
+                  ...contributedMetadata,
                   kindVersion: 1,
                   inputSchema: { ...schemas.inputSchema },
-                  ...(schemas.outputSchema === undefined ? {} : { outputSchema: { ...schemas.outputSchema } }),
+                  ...(includeOutputSchema && schemas.outputSchema !== undefined ? { outputSchema: { ...schemas.outputSchema } } : {}),
                 }),
               },
             };

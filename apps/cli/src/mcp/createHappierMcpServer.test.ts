@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fastify from 'fastify';
+import Ajv from 'ajv';
 import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -22,6 +23,8 @@ import * as daemonControlClient from '@/daemon/controlClient';
 import { restartSessionRunnerOnCurrentRuntime } from '@/daemon/plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
 import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
 import type { TrackedSession } from '@/daemon/types';
+import { ActionDiscoveryDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 const env = process.env;
 
@@ -101,6 +104,69 @@ describe('createHappierMcpServer real host admission', () => {
   beforeEach(resetEnvironment);
   afterEach(unmockCaseModules);
   afterEach(() => vi.restoreAllMocks());
+
+  it('discovers complete widget and Board inputs over MCP and reads output schemas explicitly', async () => {
+    const sessionId = 'c666666666666666666666666';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    const runtime = createHappierMcpServer({
+      sessionId, getServerBinding: getTestServerBinding,
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+      updateMetadata() {}, getMetadataSnapshot: () => createTestMetadata(), ...catalogHostTurn,
+    });
+    const client = new Client({ name: 'widget-spec-discovery', version: '1' }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await runtime.mcp.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tools = await client.listTools();
+      expect(tools.tools.find(tool => tool.name === 'action_spec_get')?.inputSchema.properties)
+        .toHaveProperty('includeOutputSchema');
+      for (const id of ['widgets.catalog.list', 'boards.apply', 'home.hub.layout.update', 'session.board.item.upsert'] as const) {
+        const reply = await client.callTool({ name: 'action_spec_get', arguments: { id } });
+        expect(reply.isError, id).not.toBe(true);
+        const text = reply.content.find(content => content.type === 'text');
+        if (!text || text.type !== 'text') throw new Error('Missing discovery result');
+        const definition = ActionDiscoveryDefinitionV1Schema.parse(JSON.parse(text.text).actionSpec);
+        expect(definition.id).toBe(id);
+        expect(definition.outputSchema).toBeUndefined();
+        const validate = new Ajv({ strict: false }).compile(definition.inputSchema);
+        expect(validate({}), id).toBe(false);
+        if (id === 'boards.apply') {
+          const input = { boardId: 'board-1', intent: { kind: 'update', boardId: 'board-1', patch: { name: 'Renamed' } } };
+          expect(getActionSpec(id).inputSchema.safeParse(input).success).toBe(true);
+          expect(validate(input)).toBe(true);
+          expect(validate({ ...input, intent: { ...input.intent, kind: 'unknown' } })).toBe(false);
+        }
+        if (id === 'home.hub.layout.update') {
+          const input = { intent: { kind: 'visibility', sectionId: 'machines', hidden: false } };
+          expect(getActionSpec(id).inputSchema.safeParse(input).success).toBe(true);
+          expect(validate(input)).toBe(true);
+          expect(validate({ intent: { ...input.intent, hidden: 'false' } })).toBe(false);
+        }
+        if (id === 'session.board.item.upsert') {
+          const input = { sessionId, itemId: 'discovered-note', expectedItemRevision: null, item: { v: 1, title: 'Note', frame: 'card',
+            height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'declarative', document: {
+              version: 1, root: { kind: 'stack', children: [{ kind: 'text', text: 'Complete schema' }] },
+            } } } };
+          expect(getActionSpec(id).inputSchema.safeParse(input).success).toBe(true);
+          expect(validate(input)).toBe(true);
+          expect(validate({ ...input, item: { ...input.item, title: 42 } })).toBe(false);
+          expect(validate({ ...input, item: { ...input.item, source: { ...input.item.source,
+            document: { version: 1, root: { kind: 'unknown' } },
+          } } })).toBe(false);
+        }
+      }
+      const reply = await client.callTool({ name: 'action_spec_get', arguments: {
+        id: 'widgets.catalog.list', includeOutputSchema: true,
+      } });
+      expect(reply.isError).not.toBe(true);
+      const text = reply.content.find(content => content.type === 'text');
+      if (!text || text.type !== 'text') throw new Error('Missing complete discovery result');
+      const full = ActionDiscoveryDefinitionV1Schema.parse(JSON.parse(text.text).actionSpec);
+      expect(full.outputSchema).toBeDefined();
+      expect(new Ajv({ strict: false }).compile(full.outputSchema!)({})).toBe(false);
+    } finally { await client.close(); await runtime.mcp.close(); await daemon.close(); }
+  });
 
   it('publishes client-compilable tools before the successor runner has a turn witness', async () => {
     const sessionId = 'c444444444444444444444444';

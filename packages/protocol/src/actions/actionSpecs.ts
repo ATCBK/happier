@@ -2436,6 +2436,7 @@ const ActionSpecSearchCliInputSchema = lazyZodSchema(() => z.strictObject({
 
 const ActionSpecGetInputSchema = lazyZodSchema(() => z.looseObject({
   id: z.string().check(z.minLength(1)),
+  includeOutputSchema: z.optional(z.boolean()),
 }));
 
 const ActionSpecSearchResultSchema = lazyZodSchema(() => z.strictObject({
@@ -5809,7 +5810,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
     id: 'action.spec.get', approval: {result: 'required'},
     title: 'Get action spec',
     sideEffectClass: 'read',
-    description: 'Get one Happier action spec with input hints and examples.',
+    description: 'Get one Happier action spec with its complete input schema, hints and examples. Agent, MCP and CLI results omit the output schema by default; set includeOutputSchema: true to read it. Shared schemas use document-local references.',
     safety: 'safe',
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
@@ -5829,6 +5830,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
       title: 'Get action spec',
       fields: [
         { path: 'id', title: 'Action id', description: 'The exact Happier action id.', widget: 'text', required: true },
+        { path: 'includeOutputSchema', title: 'Include output schema', description: 'Include the complete output schema. Defaults to false for Agent, MCP and CLI discovery; true on other surfaces.', widget: 'boolean' },
       ],
     },
     cli: {

@@ -446,7 +446,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `action.spec.get`
 
-**Get action spec** — Get one Happier action spec with input hints and examples.
+**Get action spec** — Get one Happier action spec with its complete input schema, hints and examples. Agent, MCP and CLI results omit the output schema by default; set includeOutputSchema: true to read it. Shared schemas use document-local references.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -457,6 +457,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `id` (text, required): Action id — The exact Happier action id.
+- `includeOutputSchema` (boolean): Include output schema — Include the complete output schema. Defaults to false for Agent, MCP and CLI discovery; true on other surfaces.
 
 ## `action.spec.search`
 
