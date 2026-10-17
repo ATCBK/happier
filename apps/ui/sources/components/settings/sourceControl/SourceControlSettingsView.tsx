@@ -454,7 +454,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                         onPress={() => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles.anchor, investigateSurroundingFiles !== true); }} />
                     <WalkthroughSavedSettings machineId={executionTarget?.machine.id ?? null} serverId={executionTarget?.serverId ?? null}
                         machineAvailability={administrationTargetSelection.state.kind}
-                        machineName={administrationTargetSelection.candidates.find(candidate => candidate.target.machineId === executionTarget?.machine.id)?.displayName ?? ''}
+                        machineName={administrationTargetSelection.candidates.find(candidate => candidate.target.machineId === executionTarget?.machine.id)?.displayName ?? routingScopeMachineName ?? ''}
                         prepareAfterTurn={prepareAfterTurn === true}
                         onPrepareAfterTurn={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.prepareAfterTurn.anchor, value); }} modelAvailable={summaryModelAvailable} />
                 </ItemGroup>

@@ -195,7 +195,8 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
                 </Text>
                 <Text style={styles.subtitle}>
                     {phone
-                        ? t('commitProposal.proposedByPhone', { committed: proposal.committedFileCount, total: proposal.totalFileCount })
+                        // The move hint belongs only to a proposal that can still be edited.
+                        ? t(editing && remaining > 0 && actions.onMove ? 'commitProposal.proposedByPhone' : 'commitProposal.filesInCommits', { committed: proposal.committedFileCount, total: proposal.totalFileCount })
                         : `${t('commitProposal.proposedBy', { who, committed: proposal.committedFileCount, total: proposal.totalFileCount })} ${editing && actions.onMove ? t('commitProposal.moveHint', { max: Math.min(9, total) }) : ''}`}
                 </Text>
             </View>

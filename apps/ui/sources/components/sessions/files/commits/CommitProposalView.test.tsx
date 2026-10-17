@@ -228,6 +228,20 @@ describe('CommitProposalView (lab WT4-C1/C3/C4)', () => {
         expect(onAskSession).toHaveBeenCalledTimes(1);
     });
 
+    it('after every commit lands, the phone header stops offering moves and a message body reads as text, not a second title', async () => {
+        const plan = { ...PLAN, groups: [{ ...PLAN.groups[0]!, message: 'Key by route\n\nKeys the modal by route instead of width.' }, ...PLAN.groups.slice(1)] };
+        const landed = buildCommitProposal({ comparison: PENDING, plan, application: application({ status: 'complete', nextGroupIndex: 3,
+            steps: plan.groups.map((group, index) => ({ groupId: group.id, state: 'published' as const, commitSha: String(index + 1).repeat(40) })) }) });
+        const screen = await renderScreen(<CommitProposalView proposal={landed} phase="ready" branch="main" modelLabel={null}
+            layout="phone" actions={{ onMove: vi.fn(), onEditMessage: vi.fn() }} />);
+        const text = screen.getTextContent();
+        expect(text).not.toContain('commitProposal.proposedByPhone');
+        expect(text).toContain('commitProposal.filesInCommits');
+        expect(menus(screen)).toHaveLength(0);
+        expect(textOf(screen.findByTestId('commit-group-message:one') as unknown as Instance)).toBe('Key by route');
+        expect(textOf(screen.findByTestId('commit-group-message-body:one') as unknown as Instance)).toBe('Keys the modal by route instead of width.');
+    });
+
     it('offers Undo right after a proposal is discarded', async () => {
         const onUndoDiscard = vi.fn();
         const screen = await renderScreen(

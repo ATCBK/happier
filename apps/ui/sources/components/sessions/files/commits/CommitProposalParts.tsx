@@ -204,6 +204,9 @@ export const CommitGroupHeader = React.memo(function CommitGroupHeader(props: Re
         else if (id === 'merge') onMergeWithNext?.(group.id);
     }, [group.id, onMergeWithNext, onMoveGroup]);
     const titleStyle = styles.message;
+    // The subject is the commit's title; a body the message carries reads as its text below, never as a second title.
+    const [subject, ...bodyLines] = group.message.split('\n');
+    const messageBody = bodyLines.join('\n').trim();
     return (
         <View style={styles.header}>
             <View style={styles.markSlot}><CommitGroupMark number={group.number} state={group.state} /></View>
@@ -230,9 +233,10 @@ export const CommitGroupHeader = React.memo(function CommitGroupHeader(props: Re
                         accessibilityRole={editable ? 'button' : undefined}
                         accessibilityLabel={t('commitProposal.group.a11y', { number: group.number, message: group.message })}
                     >
-                        {group.message}
+                        {subject}
                     </Text>
                 )}
+                {!editing && messageBody ? <Text testID={`commit-group-message-body:${group.id}`} style={styles.messageBody}>{messageBody}</Text> : null}
                 {group.rationale ? <Text style={styles.rationale}>{group.rationale}</Text> : null}
                 <View style={styles.meta}>{props.meta}</View>
             </View>
@@ -314,6 +318,7 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.focus,
         ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as object : null),
     },
+    messageBody: { marginTop: 3, ...Typography.variant('body'), color: theme.colors.text.secondary },
     rationale: { marginTop: 3, ...Typography.variant('reading'),  color: theme.colors.text.secondary,  },
     meta: { marginTop: theme.space.s6, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s6 },
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s2, marginTop: -3 },
