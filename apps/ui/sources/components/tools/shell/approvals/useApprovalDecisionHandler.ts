@@ -52,6 +52,17 @@ export function getApprovalDecisionErrorMessage(error: unknown, fallbackMessage 
         ? fallbackMessage === code ? code : `${fallbackMessage} (${code})` : fallbackMessage;
 }
 
+/** A recorded decision is not a successful user outcome when its physical effect failed. */
+export function assertApprovalExecutionSucceeded(execution: ApprovalExecutionV1): void {
+    if (execution.ok !== false) return;
+    if (isApprovalDecisionStale(execution)) {
+        throw new HappyError(execution.error ?? 'approval_stale', false, { code: 'approval_stale' });
+    }
+    throw new HappyError(execution.error ?? 'approval_execution_failed', false, {
+        code: execution.errorCode ?? 'approval_execution_failed',
+    });
+}
+
 type ApprovalDecisionArtifact = Pick<DecryptedArtifact, 'id' | 'header'>;
 
 function requiresResolvedReplayRoute(approval: ApprovalRequest): boolean {
@@ -210,9 +221,7 @@ export function useApprovalDecisionHandler(
             // Never let a stale receipt become an optimistic "Approved" answer.
             const execution = typeof outcome === 'object' && outcome !== null && 'execution' in outcome
                 ? ApprovalExecutionV1Schema.safeParse(outcome.execution) : null;
-            if (execution?.success && execution.data.ok === false && isApprovalDecisionStale(execution.data)) {
-                throw new HappyError(execution.data.error ?? 'approval_stale', false, { code: 'approval_stale' });
-            }
+            if (execution?.success) assertApprovalExecutionSucceeded(execution.data);
             options?.onExecution?.(execution?.success ? execution.data : null);
             // A storage proposal remembers what the person turned down; best effort, the decision stands.
             void recordResourceProposalDeclines(approval, decision, narrowedInput, options?.declinedItems, serverId);
