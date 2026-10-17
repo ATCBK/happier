@@ -134,7 +134,7 @@ What you need first:
 
 - Keyless OIDC login enabled for the provider (above). The exchange only signs in to keyless/plain accounts.
 - The user has signed in to Happier through this provider at least once. The exchange never creates an account.
-- An OAuth client in your IdP that issues the machine's access tokens. It can be Happier's own client or a separate one.
+- An OAuth client in your IdP that issues the machine's access tokens. It can be Happier's own client or a separate one, provided its `/userinfo` returns the same `sub` as the user's Happier login. Providers using [pairwise subject identifiers](https://openid.net/specs/openid-connect-core-1_0.html#SubjectIDTypes) can return different subjects for separate client sectors; those tokens return `not-linked` even if the user has already signed in to Happier.
 
 Turn it on per provider by listing the clients whose tokens may be exchanged:
 
@@ -147,8 +147,10 @@ Turn it on per provider by listing the clients whose tokens may be exchanged:
 ```
 
 - `allowedClientIds` (required): OAuth client ids, compared exactly. An empty or missing list leaves the exchange off.
-- `clientIdClaim` (optional): the access-token claim naming the client. When unset, Happier reads `client_id` (RFC 9068), then `azp`. Okta access tokens use `cid`.
-- `subjectClaim` (default `sub`): the access-token claim that must equal the `sub` returned by `/userinfo`. Okta access tokens carry the login in `sub` and the user id in `uid`, so Okta needs `uid`.
+- `clientIdClaim` (optional): the access-token claim naming the client. When unset, Happier reads `client_id` (RFC 9068), then `azp`. For Okta JWT access tokens with a `cid` client claim, set `clientIdClaim` to `cid`.
+- `subjectClaim` (default `sub`): the access-token claim that must equal the `sub` returned by `/userinfo`. For Okta JWT access tokens whose `sub` is the login and whose `uid` matches the `/userinfo` subject, set `subjectClaim` to `uid`.
+
+Verify these claim names against tokens from your configured issuer. [Okta treats org authorization server access-token contents as opaque](https://developer.okta.com/docs/guides/validate-access-tokens/main/) and may change their format. This exchange requires a readable JWT with the configured client and subject claims; an org token format change can therefore disable exchange even while browser login still works. The token is validated by Okta's own `/userinfo` endpoint, rather than by local signature validation.
 
 The machine then calls:
 
