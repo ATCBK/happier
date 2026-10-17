@@ -3031,7 +3031,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               ...params.spawnOptions,
               directory: params.directory,
             },
-            { encryptionMaterial: credentials.encryption },
+            { encryptionMaterial: credentials.encryption ?? undefined },
           );
           if (!respawn) {
             throw new Error(`Could not persist accepted spawn custody for PID ${params.pid}`);
@@ -5521,7 +5521,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 void refreshSessionMarkerRespawn({
                   pid: switchTracked.pid,
                   spawnOptions: switchTracked.spawnOptions,
-                  encryptionMaterial: credentials.encryption,
+                  encryptionMaterial: credentials.encryption ?? undefined,
                 }).catch((error) => {
                   logger.debug('[DAEMON RUN] Failed to refresh session marker after hot-applied auth switch', error);
                 });
@@ -7103,7 +7103,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               void refreshSessionMarkerRespawn({
                 pid: tracked.pid,
                 spawnOptions: tracked.spawnOptions,
-                encryptionMaterial: credentials.encryption,
+                encryptionMaterial: credentials.encryption ?? undefined,
               }).catch((error) => {
                 logger.debug('[DAEMON RUN] Failed to refresh session marker after hot-applied auth switch', error);
               });
@@ -8473,7 +8473,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               automationWorker = startAutomationWorker({
                 token: credentials.token,
                 machineId,
-                encryption: credentials.encryption,
+                encryption: credentials.encryption ?? undefined,
                 spawnSession,
               });
             }
@@ -8886,6 +8886,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 },
                 onMachineReplaced: () => {
                   logger.warn('[DAEMON RUN] Machine identity was replaced on the server; shutting down');
+                  requestShutdown('happier-app');
+                },
+                onContentKeyChanged: () => {
+                  logger.warn('[DAEMON RUN] Machine content key changed; shutting down. Restart the daemon to load the current machine.');
                   requestShutdown('happier-app');
                 },
               });

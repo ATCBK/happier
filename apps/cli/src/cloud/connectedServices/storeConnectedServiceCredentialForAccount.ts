@@ -11,7 +11,7 @@ import {
 } from '@happier-dev/protocol';
 
 import { readHttpStatus } from '@/api/client/httpStatusError';
-import type { Credentials } from '@/persistence';
+import { requireEncryptionCredentials, type Credentials } from '@/persistence';
 
 type CredentialBinding = Readonly<{
   serviceId: ConnectedServiceCredentialRecordV1['serviceId'];
@@ -217,7 +217,9 @@ export async function storeConnectedServiceCredentialForAccount(params: Readonly
   const revisionSemantics = currentRevision?.revisionSemantics ?? 'revisioned';
   const prepared: PreparedCredentialWrite = mode === 'plain'
     ? { mode, binding, expectedCredentialRevision, revisionSemantics, record: params.record }
-    : {
+    : (() => {
+      requireEncryptionCredentials(params.credentials);
+      return {
         mode,
         binding,
         expectedCredentialRevision,
@@ -235,6 +237,7 @@ export async function storeConnectedServiceCredentialForAccount(params: Readonly
         },
         metadata: metadataForRecord(params.record),
       };
+    })();
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (attempt > 0 && params.signal?.aborted) throw new ConnectedServiceCredentialStorageResultUnknownError();

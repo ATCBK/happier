@@ -183,7 +183,7 @@ export type SessionControlEnvelopeBase = z.infer<typeof SessionControlEnvelopeBa
 export const AuthStatusResultSchema = z.object({
   authenticated: z.literal(true),
   encryption: z.object({
-    type: z.enum(['legacy', 'dataKey']),
+    type: z.enum(['legacy', 'dataKey', 'tokenOnly']),
   }).passthrough(),
   machineRegistered: z.boolean(),
   machineId: z.string().min(1).optional(),
@@ -216,7 +216,7 @@ export const SessionSummarySchema = z.object({
   systemPurpose: z.string().nullable().optional(),
   encryptionMode: AccountEncryptionModeSchema.optional(),
   encryption: z.object({
-    type: z.enum(['legacy', 'dataKey']),
+    type: z.enum(['legacy', 'dataKey', 'plain']),
   }).passthrough(),
   latestTurnId: z.string().min(1).nullable().optional(),
   latestTurnStatus: PrimaryTurnStatusV1Schema.nullable().optional(),

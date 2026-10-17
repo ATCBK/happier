@@ -1257,11 +1257,18 @@ export {
   TERMINAL_PROVISIONING_V2_CONTENT_PRIVATE_KEY_BYTES,
   TERMINAL_PROVISIONING_V2_PLAINTEXT_BYTES,
   TERMINAL_PROVISIONING_V2_VERSION_BYTE,
+  TERMINAL_PROVISIONING_V2_TOKEN_ONLY_TAG,
+  type TerminalProvisioningV2Response,
   isTerminalProvisioningV3Payload,
   openTerminalProvisioningV3Payload,
+  openTerminalProvisioningV3Response,
   openTerminalProvisioningV2Payload,
+  openTerminalProvisioningV2Response,
+  parseTerminalProvisioningV2Plaintext,
   sealTerminalProvisioningV3Payload,
+  sealTerminalProvisioningV3TokenOnlyPayload,
   sealTerminalProvisioningV2Payload,
+  sealTerminalProvisioningV2TokenOnlyPayload,
 } from './crypto/terminalProvisioningV2.js';
 
 export {
@@ -3428,6 +3435,7 @@ export {
   AccountEncryptionMigrateKeyProofSchema,
   AccountEncryptionMigrateConnectedServicesDirectiveSchema,
   AccountEncryptionMigrateAutomationsDirectiveSchema,
+  AccountEncryptionMigrateMachinesDirectiveSchema,
   AccountEncryptionMigrateSessionDraftItemSchema,
   AccountEncryptionMigrateSessionDraftsDirectiveSchema,
   AccountEncryptionMigrateRequestSchema,
@@ -3443,6 +3451,7 @@ export {
   type AccountEncryptionMigrateKeyProof,
   type AccountEncryptionMigrateConnectedServicesDirective,
   type AccountEncryptionMigrateAutomationsDirective,
+  type AccountEncryptionMigrateMachinesDirective,
   type AccountEncryptionMigrateSessionDraftItem,
   type AccountEncryptionMigrateSessionDraftsDirective,
   type AccountEncryptionMigrateRequest,
@@ -3649,3 +3658,23 @@ export {
   supportsConnectedServiceOperation,
   withConnectedServiceReaderSupport,
 } from './connect/connectedServiceReaderSupport.js';
+
+export {
+  MACHINE_PLAIN_DATA_KEY_MARKER,
+  encodePlainMachineStoredContent,
+  decodePlainMachineStoredContent,
+  isPlainMachineDataKeyMarker,
+  machineStoredContentMatchesAccountMode,
+  machineUpdateMatchesStoredMode,
+} from './machines/machineStoredContent.js';
+export {
+  MachineKeyBasisV1Schema,
+  MachineContentKeyTransitionInputV1Schema,
+  MachineContentKeyTransitionRefusalV1Schema,
+  createMachineContentKeyTransitionResultV1Schema,
+  type MachineKeyBasisV1,
+  type MachineContentKeyTransitionInputV1,
+  type MachineContentKeyTransitionResultV1,
+} from './machines/machineContentKeyTransitionV1.js';
+
+export { assertAccountKeyProvisioningAllowed, AccountKeyProvisioningUnavailableError, verifyAccountContentPublicKeyBinding, createAccountContentPublicKeyBindingMessage } from './auth/accountKeyProvisioning.js';

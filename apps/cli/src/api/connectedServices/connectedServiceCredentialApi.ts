@@ -169,6 +169,7 @@ export function createConnectedServiceCredentialApi(
 export async function getAccountEncryptionMode(params: Readonly<{
   token: string;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }>): Promise<'e2ee' | 'plain' | 'unknown'> {
   const serverUrl = resolveServerHttpBaseUrl();
   try {
@@ -176,7 +177,7 @@ export async function getAccountEncryptionMode(params: Readonly<{
       `${serverUrl}/v1/account/encryption`,
       {
         headers: authHeaders(params.token),
-        timeout: resolveConnectedServicesServerApiTimeoutMs(),
+        timeout: params.timeoutMs ?? resolveConnectedServicesServerApiTimeoutMs(),
         signal: params.signal,
       },
     );
