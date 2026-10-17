@@ -202,20 +202,6 @@ export function useSessionRowActionMenu(params: Readonly<{
         }
     });
 
-    const confirmStopSession = React.useCallback(async () => {
-        const confirmed = await Modal.confirm(
-            t('sessionInfo.stopSession'),
-            t('sessionInfo.stopSessionConfirm'),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: t('sessionInfo.stopSession'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
-        performStopMutation();
-    }, [performStopMutation]);
-
     const reportCount = target.session.reports?.total ?? 0;
     const confirmArchiveSession = React.useCallback(async () => {
         const confirmation = await confirmSessionArchive({ reportCount });
@@ -397,7 +383,7 @@ export function useSessionRowActionMenu(params: Readonly<{
                 await handleRenameSession();
                 return;
             case SESSION_ACTION_STOP_ID:
-                await confirmStopSession();
+                performStopMutation();
                 return;
             case SESSION_ACTION_ARCHIVE_ID:
                 await confirmArchiveSession();
@@ -408,7 +394,6 @@ export function useSessionRowActionMenu(params: Readonly<{
             case SESSION_ACTION_WORK_OPEN_ID:
             case SESSION_ACTION_TALK_ID:
             case SESSION_ACTION_PUT_UNDER_ID:
-            case SESSION_ACTION_RAIL_PIN_ID:
             case SESSION_ACTION_RAIL_UNPIN_ID:
             case SESSION_ACTION_MAKE_BOT_ID:
             case SESSION_ACTION_MAKE_REGULAR_ID:
@@ -421,7 +406,7 @@ export function useSessionRowActionMenu(params: Readonly<{
         }
     }, [
         confirmArchiveSession,
-        confirmStopSession,
+        performStopMutation,
         handleAttentionStandingAction,
         handleReadStateAction,
         handleRenameSession,

@@ -12,7 +12,6 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Icon } from '@/components/ui/icons/Icon';
-import { Modal } from '@/modal';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { t } from '@/text';
 import { useUnistyles } from 'react-native-unistyles';
@@ -174,16 +173,6 @@ export function SessionRemotePermissionGrantsView(props: Readonly<{
     }, [routeKey]);
 
     const revoke = React.useCallback(async (grant: OwnerGrant) => {
-        const confirmed = await Modal.confirm(
-            t('sessionRemotePermissionGrants.revokeConfirmTitle'),
-            t('sessionRemotePermissionGrants.revokeConfirmBody', { identifier: grant.projection.rule.identifier }),
-            {
-                confirmText: t('sessionRemotePermissionGrants.revoke'),
-                cancelText: t('common.cancel'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
         if (routeKeyRef.current !== routeKey) return;
 
         const requestRouteKey = routeKey;

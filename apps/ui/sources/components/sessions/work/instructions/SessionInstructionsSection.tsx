@@ -29,7 +29,6 @@ import { Item } from '@/components/ui/lists/Item';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { Modal } from '@/modal';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { isSessionAccessOwner } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -45,7 +44,6 @@ import {
 } from '@/sync/ops/promptLibrary/sessionInstructions';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
-import { useDeviceType } from '@/utils/platform/responsive';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import {
@@ -231,17 +229,7 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
   }, [execution.execute, execution.isCurrent, router, serverId, session, settle, target]);
   const detach = React.useCallback(() => {
     fireAndForget(
-      (async () => {
-        const confirmed = await Modal.confirm(
-          t('sessionInstructions.detach'),
-          t('sessionInstructions.detachHelp'),
-          {
-            confirmText: t('sessionInstructions.detach'),
-          },
-        );
-        if (confirmed)
-          await settle(() => sessionInstructionsActions.set(target, null, undefined, execution.execute));
-      })(),
+      settle(() => sessionInstructionsActions.set(target, null, undefined, execution.execute)),
       { tag: 'SessionInstructions.detach' },
     );
   }, [execution.execute, settle, target]);
@@ -493,7 +481,6 @@ function SessionInstructionsAgentEdits(props: Readonly<{
   settle: (run: () => Promise<ActionExecuteResult>) => Promise<boolean>;
 }>) {
   const accountScope = useActiveServerAccountScope();
-  const deviceType = useDeviceType();
   const rawSettings = useSetting('actionsSettingsV1');
   const writeSetting = useSettingActionWriter({ serverId: props.serverId });
   const settings = React.useMemo(
@@ -516,20 +503,20 @@ function SessionInstructionsAgentEdits(props: Readonly<{
     )
   )
     return null;
-  const stacked = deviceType === 'phone';
   return (
     <Item
       testID="session-work-instructions.agentEdits"
       title={t('sessionInstructions.agentEdits')}
       subtitle={t('sessionInstructions.policyScope')}
       showChevron={false}
-      accessoryLayout={stacked ? 'stacked' : 'adaptive'}
+      // The Work pane is a narrow column on every device: the choice sits beneath its words, where they start.
+      accessoryLayout="stacked"
       rightElement={
         <ActionSettingsTargetModeControl
           controlState={policy.controlState}
           accessibilityLabel={t('sessionInstructions.agentEdits')}
           testIDPrefix="session-work-instructions.agentEdits"
-          layout={stacked ? 'stacked' : 'inline'}
+          layout="stacked"
           disabled={props.disabled}
           onChange={(value) => {
             if (value !== 'on') {
@@ -556,6 +543,8 @@ export function AttachExistingInstructions(
     testID?: string;
     /** Beside a primary way to start (Create instructions): the quiet second choice, not a second button. */
     quiet?: boolean;
+    /** Written as words on a line (a New bot's Instructions line), not a button. */
+    link?: boolean;
     onAttach: (ref: PromptDocArtifactRefV1) => void;
   }>,
 ) {
@@ -573,13 +562,23 @@ export function AttachExistingInstructions(
     return null;
   return (
     <View ref={anchorRef} collapsable={false}>
-      <RoundButton
-        testID={props.testID ?? 'session-work-instructions.attach'}
-        size="small"
-        display={props.quiet ? 'inverted' : 'secondary'}
-        title={props.title}
-        onPress={() => setOpen(true)}
-      />
+      {props.link ? (
+        <TextLinkButton
+          testID={props.testID ?? 'session-work-instructions.attach'}
+          tone={props.quiet ? 'quiet' : 'strong'}
+          label={props.title}
+          expanded={open}
+          onPress={() => setOpen(true)}
+        />
+      ) : (
+        <RoundButton
+          testID={props.testID ?? 'session-work-instructions.attach'}
+          size="small"
+          display={props.quiet ? 'inverted' : 'secondary'}
+          title={props.title}
+          onPress={() => setOpen(true)}
+        />
+      )}
       {open ? (
         <AttachExistingMenu
           anchorRef={anchorRef}

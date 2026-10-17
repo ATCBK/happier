@@ -1,8 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { APPROVAL_ARTIFACT_KINDS_V1, approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, buildExecutionRunHostActionApprovalArtifactHeaderV1, buildTargetActionApprovalArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
+import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ActionId, ApprovalQueueListItemV1, ApprovalRequest, ExecutionRunHostActionApprovalRequestV1, TargetActionApprovalRequestV1, PromptLibraryArtifactStore } from '@happier-dev/protocol';
 
 import type { StoredCredentials } from '@/persistence';
@@ -17,10 +20,12 @@ import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibrarySto
 import { configuration } from '@/configuration';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import type { SkillRulesActionPortV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
 import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { readAccountPluginSkills } from '@/prompts/skills/library/readAccountPluginSkills';
+import type { SkillActionPortV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 import { targetActionApprovalRequestsEqual, targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
@@ -85,9 +90,22 @@ function readExecutionRunHostActionApprovalArtifact(header: Record<string, unkno
   return parsed?.family === 'execution_run_host_action' ? parsed.request : null;
 }
 
+function derivePluginInstallApprovalSuccessorArtifactId(artifactId: string): string {
+  const bytes = createHash('sha256')
+    .update('happier-plugin-install-approval-successor-v1\0', 'utf8')
+    .update(artifactId, 'utf8')
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export function createCliApprovalsArtifactStore(params: Readonly<{
   credentials: StoredCredentials;
   serverId?: string;
+  serverHttpBaseUrl?: string;
   operationContext?: SavedSecretOperationContextV1;
   getAccountEncryptionMode?: () => Promise<ConnectedServiceAccountEncryptionMode>;
 }>): Readonly<{
@@ -103,35 +121,39 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
   executionRunHostActionApprovalsUpdate(args: Readonly<{ artifactId: string; request: ExecutionRunHostActionApprovalRequestV1 }>): Promise<Readonly<{ ok: true } | { ok: false; errorCode: string; error: string }>>;
   promptLibraryStore: PromptLibraryArtifactStore;
   skillRules: SkillRulesActionPortV1;
+  readPluginSkills: NonNullable<SkillActionPortV1['readPluginSkills']>;
 }> {
   const accountModeApi = params.getAccountEncryptionMode
     ? null
     : createConnectedServiceCredentialApi(params.credentials);
   const getAccountEncryptionMode = params.getAccountEncryptionMode
     ?? (() => accountModeApi!.getAccountEncryptionMode());
-  const accountArtifactStore = createAccountArtifactStore({
+  const rawAccountArtifactStore = createAccountArtifactStore({
     credentials: params.credentials,
-    getAccountEncryptionMode,
+    getAccountEncryptionMode: () => timeWebLatencyPhase('approval.account_mode', getAccountEncryptionMode),
   });
-  const folderBaseUrl = params.operationContext?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
-  const folderStore = createCliPromptLibraryStore({ credentials: params.credentials, operationContext: params.operationContext });
+  const accountArtifactStore = { ...rawAccountArtifactStore,
+    read: (...args: Parameters<typeof rawAccountArtifactStore.read>) => timeWebLatencyPhase('approval.artifact.read', () => rawAccountArtifactStore.read(...args)),
+    update: (...args: Parameters<typeof rawAccountArtifactStore.update>) => timeWebLatencyPhase('approval.artifact.update', () => rawAccountArtifactStore.update(...args)),
+  };
+  const folderBaseUrl = params.operationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
+  const folderStore = runWithServerHttpBaseUrl(folderBaseUrl,
+    () => createCliPromptLibraryStore({ credentials: params.credentials, operationContext: params.operationContext }));
   const folderScopeKey = runWithServerHttpBaseUrl(folderBaseUrl,()=>resolveAccountSettingsScopeKey(params.credentials));
   const folderLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+  const readPluginSkills: NonNullable<SkillActionPortV1['readPluginSkills']> = (signal, skillIds) => readAccountPluginSkills({
+    credentials: params.credentials, serverHttpBaseUrl: folderBaseUrl, signal, skillIds,
+    settings: (params.operationContext ? params.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot())?.settings,
+    isCurrent: async () => { folderStore.assertCurrent(); return params.operationContext ? params.operationContext.isCurrent() : true; },
+  });
   const organization: ArtifactFolderActionPortV1 = {
     serverId: params.serverId ?? configuration.activeServerId,
     assertCurrent: folderStore.assertCurrent,
     readCatalog: async (signal, key = 'folders') => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
       folderStore.assertCurrent(); signal?.throwIfAborted();
-      const transport = createCliPromptLibraryStore({ credentials: params.credentials, signal, operationContext: params.operationContext });
-      const catalog = await transport.readPromptLibraryCatalog();
+      const projection = await folderStore.readCatalog(signal, key);
       folderStore.assertCurrent(); signal?.throwIfAborted();
-      const occupied = (catalog.status === 'ready' || catalog.status === 'partial') &&
-        (catalog.rows.some(row => row.record.key === key) || catalog.tombstones.some(row => row.key === key) ||
-          catalog.diagnostics.some(row => row.key === key));
-      if (catalog.status !== 'ready' && catalog.status !== 'partial' || occupied) return { catalog };
-      const source = await transport.readSourceSnapshot();
-      folderStore.assertCurrent(); signal?.throwIfAborted();
-      return { catalog, rawSettings: source.raw, sourceSettingsVersion: source.version };
+      return projection;
     }),
     writeRecord: async (input, signal) => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
       folderStore.assertCurrent(); signal?.throwIfAborted();
@@ -196,10 +218,11 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         if (!deleted.ok) throw Object.assign(new Error(deleted.error), { code: deleted.errorCode });
       },
     },
+    readPluginSkills,
     skillRules: { ...organization,
       listSkills: (signal, skillIds) => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
         folderStore.assertCurrent(); signal?.throwIfAborted();
-        const skills = await readSkillLibraryCatalog(accountArtifactStore, signal, skillIds);
+        const skills = await readSkillLibraryCatalog({ ...accountArtifactStore, readPluginSkills }, signal, skillIds);
         folderStore.assertCurrent(); signal?.throwIfAborted();
         return skills;
       }),
@@ -289,13 +312,15 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       const maxItems = typeof limit === 'number' && Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 32;
       let cursor: string | undefined;
       do {
-        const page = await accountArtifactStore.list({ limit: maxItems, ...(cursor ? { cursor } : {}) });
+        const page = await accountArtifactStore.list({ limit: maxItems, includeBody: true, ...(cursor ? { cursor } : {}) });
         for (const artifact of page.items) {
           if (items.length >= maxItems) break;
           const header = artifact.header;
           if (!header || (header.kind !== APPROVAL_ARTIFACT_KINDS_V1.builtIn
             && header.kind !== APPROVAL_ARTIFACT_KINDS_V1.targetAction)) continue;
-          const hydrated = await accountArtifactStore.read(artifact.artifactId);
+          // The finite page already carries a matching header/body revision.
+          // Only an omitted or unreadable body needs the individual read path.
+          const hydrated = typeof artifact.body === 'string' ? artifact : await accountArtifactStore.read(artifact.artifactId);
           if (!hydrated?.body) continue;
           const parsed = approvalArtifactBodyMatchesHeaderV1(hydrated.header, hydrated.body);
           if (!parsed || parsed.family === 'execution_run_host_action') continue;
@@ -339,15 +364,56 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     },
 
     approvalsCreate: async ({ request, serverId }) => {
-      const artifactId = randomUUID();
+      const pendingReview = request.v === 2 && request.actionId === 'plugins.install'
+        ? readPluginInstallApprovalPendingReview(request.preview) : null;
+      let artifactId = pendingReview?.pendingChangeId ?? randomUUID();
 
       const header = buildApprovalRequestArtifactHeaderV1(request, { legacyServerId: serverId });
       if (request.v === 2 && typeof serverId === 'string' && serverId.trim() !== request.executionOriginV1.serverId) {
         throw new Error('approval_request_server_target_mismatch');
       }
 
-      const res = await accountArtifactStore.create({ artifactId, header, body: JSON.stringify(request) });
-      return { artifactId: res.artifactId };
+      const inspectPendingReviewArtifact = async (): Promise<'absent' | 'active' | 'terminal'> => {
+        const artifact = await accountArtifactStore.read(artifactId);
+        if (!artifact) return 'absent';
+        const existing = readBuiltInApprovalArtifact(artifact.header, artifact.body);
+        if (artifact.access !== 'owner' || existing?.v !== 2 || request.v !== 2
+          || existing.actionId !== 'plugins.install'
+          || !sameStrictJsonValue(readPluginInstallApprovalPendingReview(existing.preview), pendingReview)
+          || existing.executionOriginV1.accountId !== request.executionOriginV1.accountId
+          || !existing.executionOriginV1.machineId
+          || existing.executionOriginV1.machineId !== request.executionOriginV1.machineId
+          || existing.executionOriginV1.serverIdentityId !== request.executionOriginV1.serverIdentityId
+          || (!existing.executionOriginV1.serverIdentityId
+            && existing.executionOriginV1.serverId !== request.executionOriginV1.serverId)) {
+          throw Object.assign(new Error('approval_request_subject_mismatch'), { code: 'subject_mismatch' });
+        }
+        return existing.status === 'open' || existing.status === 'approved' || existing.status === 'executing'
+          ? 'active'
+          : 'terminal';
+      };
+      if (!pendingReview) {
+        const res = await accountArtifactStore.create({ artifactId, header, body: JSON.stringify(request) });
+        return { artifactId: res.artifactId };
+      }
+      // Each retained daemon subject owns a deterministic Artifact chain. A
+      // terminal row remains immutable history; every observer follows the
+      // same successor id and therefore rejoins the one active lifecycle.
+      while (true) {
+        const existingState = await inspectPendingReviewArtifact();
+        if (existingState === 'active') return { artifactId };
+        if (existingState === 'terminal') {
+          artifactId = derivePluginInstallApprovalSuccessorArtifactId(artifactId);
+          continue;
+        }
+        try {
+          const res = await accountArtifactStore.create({ artifactId, header, body: JSON.stringify(request) });
+          return { artifactId: res.artifactId };
+        } catch (error) {
+          if (error && typeof error === 'object' && Reflect.get(error, 'code') === 'conflict') continue;
+          throw error;
+        }
+      }
     },
 
     approvalsGet: async ({ artifactId, serverId }) => {

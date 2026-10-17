@@ -59,9 +59,8 @@ import { findTranscriptEncryptedMessageByLocalIdV2 } from '@/api/session/transcr
 import { openSessionMessageContent } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
-import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { clearInitialGoalFromEnv, readInitialGoalFromEnv } from '@/daemon/spawn/initialGoal';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import { ApiClient } from '@/api/api';
 import type { RpcHandlerManagerLike } from '@/api/rpc/types';
@@ -132,6 +131,7 @@ import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime
 import { resolveRunnerSkills, type RunnerSkillsResult } from '@/prompts/skills/runtime/resolveRunnerSkills';
 import { readAppliedSessionSkillDelivery } from '@/prompts/skills/runtime/reapplySessionSkills';
 import { resolveCapabilityApplyAgentFacts } from '@/session/runtime/capabilityApplyFacts';
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
 import { publishRunnerSkillNotice } from '@/prompts/skills/runtime/publishRunnerSkillNotice';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
@@ -143,7 +143,6 @@ import { createSessionPromptPlanResolver, type SessionPromptPlanResolver } from 
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { registerHappierSessionAgentToolRpc } from '@/mcp/startHappyServer';
-import { DaemonPluginToolCatalogUnavailableError } from '@/mcp/pluginToolCatalogError';
 import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
 import { classifyPrimarySessionRuntimeIssue, readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { resolveCliMemoryRecallGuidanceEnabled } from '@/agent/prompts/library/resolveCliMemoryRecallGuidanceEnabled';
@@ -620,6 +619,7 @@ export type HostSessionRuntimeLifecycleHooks = Readonly<{
     metadata: Metadata;
     attachedToExistingSession: boolean;
     machineId: string;
+    signal: AbortSignal;
   }>) => void | Promise<void>;
   onBeforeReset?: (params: Readonly<{
     reason: PromptLoopResetReason;
@@ -809,6 +809,8 @@ export type HostSessionRuntimeConfig = {
   flavor: CreateSessionMetadataOptions['flavor'];
   policyAgentId: string;
   providerRequirements?: unknown;
+  /** The native factory admits a managed binding after canonical Session acknowledgement. */
+  providerBindingAdmission?: 'runtime';
   publishHostRuntimeEvent?: (event: AgentSessionRuntimeEvent) => void;
   agentSessionRealtimeVoiceAuthority?: AgentSessionRealtimeVoiceAuthority;
   backendDisplayName: string;
@@ -862,6 +864,8 @@ export type HostSessionRuntimeConfig = {
   /** Exact caller-owned executable registry for daemonless scoped runtimes. */
   pluginRuntimeRegistryLease?: PluginRuntimeRegistryLease;
   pluginMcpRuntimeRegistry?: PluginRuntimeRegistryLease['registry'];
+  /** Reads the exact Agent catalog after retained native-source preparation. */
+  readSessionAgentCatalogEntry?: () => AgentCatalogEntry | null;
   /** Reviewed activation-local MCP material already resolved by the canonical owner. */
   resolvedMcpServers?: Record<string, McpServerConfig>;
   /** Explicit host Action/MCP authority; absent for ordinary Account runtimes. */
@@ -998,6 +1002,31 @@ export async function runHostSessionRuntime(
     startupPhase = phase;
   };
   recordStartupPhase('entered');
+  const traceStartupAuthority = async <T>(
+    phase: string,
+    claimedSession: ApiSessionClient,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const startedAt = performance.now();
+    const record = (status: 'started' | 'completed' | 'failed'): void => {
+      logger.infoFile(`${config.uiLogPrefix} Startup authority phase`, {
+        sessionId: claimedSession.sessionId,
+        phase,
+        status,
+        elapsedMs: Math.round(performance.now() - startupStartedAt),
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    };
+    record('started');
+    try {
+      const result = await operation();
+      record('completed');
+      return result;
+    } catch (error) {
+      record('failed');
+      throw error;
+    }
+  };
   const startupRegistrationLifetime = new AbortController();
   let currentSessionPresentationHost: CurrentSessionPresentationHost | null = null;
   let runtimeStopRequested = false;
@@ -1095,7 +1124,8 @@ export async function runHostSessionRuntime(
     ? { ...canonicalRuntimeOpts, accountSettingsContext: null }
     : canonicalRuntimeOpts;
   const hasLateEnvironmentAdmission =
-    typeof runtimeOpts.resolveLateEnvironment === 'function';
+    typeof runtimeOpts.resolveLateEnvironment === 'function'
+    || config.providerBindingAdmission === 'runtime';
   // Canonicalization owns this scoped clone, so deletion prevents later launch projection
   // without mutating the caller's run options.
   const providerBindingHandoff = consumeProviderBindingLaunchHandoffFromEnvironments([
@@ -1508,6 +1538,9 @@ export async function runHostSessionRuntime(
     deferredStartupStart = startupBootstrap.start ?? null;
     startupBootstrapCancel = startupBootstrap.cancel ?? null;
     startupBootstrapCleanup = startupBootstrap.cleanup ?? null;
+    pendingSessionInitializedHook = {
+      attachedToExistingSession: startupBootstrap.attachedToExistingSession,
+    };
   } else {
     const initializedApiContext = await initializeBackendApiContextFn({
       credentials: runtimeOpts.credentials,
@@ -1760,15 +1793,16 @@ export async function runHostSessionRuntime(
     claimedSession: ApiSessionClient,
   ): Promise<StartupSessionPublisherAuthorityClaimResult> => {
     const publisherAuthority =
-      await claimedSession.claimCurrentSessionPublisherAuthorityForStartup();
-    await claimedSession.refreshSessionSnapshotFromServerRequired({
-      reason: 'startup-drain',
-    });
+      await traceStartupAuthority('publisher_claim', claimedSession,
+        () => claimedSession.claimCurrentSessionPublisherAuthorityForStartup());
+    await traceStartupAuthority('required_snapshot', claimedSession,
+      () => claimedSession.refreshSessionSnapshotFromServerRequired({ reason: 'startup-drain' }));
 
     if (persistedTakeoverAdmission) {
       takeoverAdmissionPublisherPrecondition =
         publisherAuthority.status === 'claimed'
-          ? await claimedSession.readCurrentPublisherPreconditionForStartup()
+          ? await traceStartupAuthority('takeover_publisher_precondition', claimedSession,
+            () => claimedSession.readCurrentPublisherPreconditionForStartup())
           : null;
       if (!takeoverAdmissionPublisherPrecondition) {
         throw Object.assign(
@@ -1789,10 +1823,12 @@ export async function runHostSessionRuntime(
             metadata: runtimeContextMetadataFallback(metadata, claimedSession),
             correlation,
           }));
-      await admitPersistedTakeoverBeforeRuntime({
+      const takeoverCorrelation = {
         ...persistedTakeoverAdmission,
         publisherPrecondition: takeoverAdmissionPublisherPrecondition,
-      });
+      };
+      await traceStartupAuthority('takeover_admission', claimedSession,
+        () => admitPersistedTakeoverBeforeRuntime(takeoverCorrelation));
     }
 
     if (
@@ -1807,9 +1843,11 @@ export async function runHostSessionRuntime(
           binding,
         ) as typeof current;
       if (publisherAuthority.status === 'claimed') {
-        await claimedSession.updateMetadataAsCurrentPublisher(updateBinding);
+        await traceStartupAuthority('provider_binding_publication', claimedSession,
+          () => claimedSession.updateMetadataAsCurrentPublisher(updateBinding));
       } else {
-        await claimedSession.updateMetadata(updateBinding);
+        await traceStartupAuthority('provider_binding_publication', claimedSession,
+          () => claimedSession.updateMetadata(updateBinding));
       }
       pendingAttachedProviderBindingMetadataUpdate = false;
     }
@@ -1818,7 +1856,8 @@ export async function runHostSessionRuntime(
       modelTransitionOwnerCurrent = false;
     }
     if (!persistedTakeoverAdmission) {
-      await claimedSession.activateDurableMutationDelivery();
+      await traceStartupAuthority('durable_delivery_activation', claimedSession,
+        () => claimedSession.activateDurableMutationDelivery());
     }
     return publisherAuthority;
   };
@@ -1936,6 +1975,7 @@ export async function runHostSessionRuntime(
       metadata: runtimeContextMetadataFallback(metadata, session),
       attachedToExistingSession: pendingSessionInitializedHook.attachedToExistingSession,
       machineId,
+      signal: startupRegistrationLifetime.signal,
     });
     pendingSessionInitializedHook = null;
   }
@@ -2907,6 +2947,7 @@ export async function runHostSessionRuntime(
   const {
     runtime,
     nativeRuntime,
+    runtimeDescriptorV1: openedRuntimeDescriptor,
     terminalRemoteModeLoop: initialTerminalRemoteModeLoop,
     admittedProviderBindingHandoff,
     skillsDelivered,
@@ -3319,15 +3360,14 @@ export async function runHostSessionRuntime(
           freshIntent.updatedAt,
         );
         if (freshIntent.selection !== null) {
+          const selection = freshIntent.selection;
           adoptedModelSelection = SessionModelSelectionV1Schema.parse({
             v: 1,
             updatedAt: freshIntent.updatedAt,
-            ref: freshIntent.selection,
+            ref: selection,
           });
-          const result = await modelTransitionCoordinator!.submit(
-            freshIntent.selection,
-            { source: 'metadata' },
-          );
+          const result = await traceStartupAuthority('model_intent_reconciliation', claimedSession,
+            () => modelTransitionCoordinator!.submit(selection, { source: 'metadata' }));
           if (!result.ok) {
             throw new Error(
               `Startup model intent reconciliation failed: ${result.status}${
@@ -3341,7 +3381,8 @@ export async function runHostSessionRuntime(
       if (claimedSession.hasOwnerMetadataAuthority()) {
         const activeTarget =
           modelTransitionCoordinator!.readActiveTarget();
-        await claimedSession.updateMetadataAsCurrentPublisher((current) =>
+        await traceStartupAuthority('active_model_facts', claimedSession,
+          () => claimedSession.updateMetadataAsCurrentPublisher((current) =>
           applyActiveModelFacts(
             current,
             activeTarget,
@@ -3354,7 +3395,7 @@ export async function runHostSessionRuntime(
               === activeTarget.selection.modelId
               ? latestExactActiveSelectionFact
               : null,
-          ));
+          )));
         if (!runtimeModelsPublisher && hookRuntime.models) {
           runtimeModelsPublisher = createSessionRuntimeModelsPublisher({
             agentId: config.policyAgentId,
@@ -3365,7 +3406,10 @@ export async function runHostSessionRuntime(
             source: hookRuntime.models,
           });
         }
-        await runtimeModelsPublisher?.flush();
+        if (runtimeModelsPublisher) {
+          const publisher = runtimeModelsPublisher;
+          await traceStartupAuthority('models_publication', claimedSession, () => publisher.flush());
+        }
         if (!runtimeModesPublisher && hookRuntime.modes) {
           runtimeModesPublisher = createSessionRuntimeModesPublisher({
             agentId: config.policyAgentId,
@@ -3373,7 +3417,10 @@ export async function runHostSessionRuntime(
             source: hookRuntime.modes,
           });
         }
-        await runtimeModesPublisher?.flush();
+        if (runtimeModesPublisher) {
+          const publisher = runtimeModesPublisher;
+          await traceStartupAuthority('modes_publication', claimedSession, () => publisher.flush());
+        }
       }
       return publisherAuthority;
     } finally {
@@ -3516,7 +3563,8 @@ export async function runHostSessionRuntime(
   runtimeForSessionRollback = nativeRuntime;
   const capabilitySelectionAgentFacts = await resolveCapabilityApplyAgentFacts({ agentId: policyAgentId,
     registry: config.pluginRuntimeRegistryLease?.registry,
-    metadata: { runtimeDescriptorV1: nativeRuntime?.runtimeDescriptorV1 ?? runtimeOpts.runtimeDescriptorV1 }, sessionRunning: true });
+    ...(config.readSessionAgentCatalogEntry ? { catalogEntry: config.readSessionAgentCatalogEntry() } : {}),
+    metadata: { runtimeDescriptorV1: openedRuntimeDescriptor ?? nativeRuntime?.runtimeDescriptorV1 ?? runtimeOpts.runtimeDescriptorV1 }, sessionRunning: true });
   const unsubscribeRuntimePublication = subscribeSessionRuntimePublicationToMetadata({
     session: currentLifecycleSession,
     sessionState: sessionStateBridge.engine,
@@ -3526,6 +3574,7 @@ export async function runHostSessionRuntime(
     capabilitySelection: capabilitySelectionAgentFacts,
     resolveCapabilitySelectionForDescriptor: descriptor => resolveCapabilityApplyAgentFacts({ agentId: policyAgentId,
       registry: config.pluginRuntimeRegistryLease?.registry,
+      ...(config.readSessionAgentCatalogEntry ? { catalogEntry: config.readSessionAgentCatalogEntry() } : {}),
       metadata: { runtimeDescriptorV1: descriptor }, sessionRunning: true }),
   });
   runtimePublicationMetadata = unsubscribeRuntimePublication;
@@ -3951,12 +4000,11 @@ export async function runHostSessionRuntime(
         const startupIssue = !runtimeStopRequested ? classifyPrimarySessionRuntimeIssue({
           cause: 'session_error', error, provider: policyAgentId,
         }) : null;
-        if (startupIssue && (error instanceof DaemonPluginToolCatalogUnavailableError
-          || error instanceof PromptStackPreparationError
-          || startupIssue.code === 'preparation_pending' && startupIssue.source === 'dependency_failure')) {
-          // Required preparation resolves after Session custody, before the live loop owns a
-          // turn lifecycle. Publish through that same canonical owner before
-          // releasing durable delivery; an unavailable prerequisite is not idle.
+        if (startupIssue) {
+          // Construction failures happen after Session custody but before the live
+          // loop can own a turn. Publish through the same canonical lifecycle owner
+          // before releasing durable delivery so the Session cannot become an
+          // unexplained offline row with retained input.
           await createSessionTurnLifecycle({ session, agentId: policyAgentId }).failTurn({
             issue: startupIssue,
             allocateWhenIdle: true,

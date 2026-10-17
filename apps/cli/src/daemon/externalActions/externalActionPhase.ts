@@ -2,12 +2,25 @@ import { logger } from '@/ui/logger';
 import type { ActionStartDiagnosticV1 } from '@happier-dev/protocol/actions/executor/actionStartDiagnostics';
 
 function isTracedRequest(actionId: unknown, rootRequestId: unknown): boolean {
-  return (actionId === 'session.stop' || actionId === 'session.status.get')
+  return (actionId === 'session.stop' || actionId === 'session.status.get' || actionId === 'plugins.list' || actionId === 'action.invoke'
+      || process.env.HAPPIER_WEB_LATENCY_TRACE === '1'
+        && (actionId === 'approval.request.decide' || actionId === 'projects.script.run' || actionId === 'projects.compute.exec'
+          || actionId === 'machines.provisioners.list' || actionId === 'machines.provisioners.check' || actionId === 'machines.provisioners.options'))
     && typeof rootRequestId === 'string'
     && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(rootRequestId);
 }
 
-/** Correlates the diagnosed Session admission paths without caller content. */
+/** Same UUID-qualified, content-free trace for host and contributed Action work. */
+export async function runTracedExternalActionStage<T>(actionId: string, rootRequestId: unknown, stage: string,
+  operation: () => T | Promise<T>): Promise<T> {
+  // Socket RPC owns this prefix; retain its UUID so completion records join.
+  const requestId = typeof rootRequestId === 'string' ? rootRequestId.replace(/^rpc_/u, '') : rootRequestId;
+  traceExternalActionStage(actionId, requestId, `${stage}.begin`);
+  try { return await operation(); }
+  finally { traceExternalActionStage(actionId, requestId, `${stage}.end`); }
+}
+
+/** Correlates diagnosed admission paths without caller content. */
 export function traceExternalActionStage(actionId: unknown, rootRequestId: unknown, stage: string, transportRequestId?: string,
   diagnostic?: Pick<ActionStartDiagnosticV1, 'phase' | 'elapsedMs'>): void {
   if (!isTracedRequest(actionId, rootRequestId)) return;

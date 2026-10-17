@@ -1,4 +1,5 @@
-import type { ToolNormalizationProtocol, TurnChangeSet } from '@happier-dev/protocol';
+import { randomUUID } from 'node:crypto';
+import type { CheckpointCodeRollbackRequest, CheckpointCodeRollbackResult, ToolNormalizationProtocol, TurnChangeSet } from '@happier-dev/protocol';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
@@ -6,7 +7,8 @@ import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiff
 import type { PromptLoopCheckpointLifecycle } from '@/agent/runtime/runPermissionModePromptLoop';
 import type { ScmBackendContext } from '@/scm/types';
 import { buildRepositoryCheckpointRefs, projectRepositoryCheckpointTurnChangeSet } from '@/scm/checkpoints';
-import { gitCheckpointAdapter, resolveGitCheckpointBackendContext } from '@/scm/checkpoints/gitCheckpointAdapter';
+import { createGitCheckpointRollbackDependencies, gitCheckpointAdapter, resolveGitCheckpointBackendContext } from '@/scm/checkpoints/gitCheckpointAdapter';
+import { executeCheckpointCodeRollback } from '@/scm/checkpoints/rollback';
 import { retainRepositoryCheckpointInitialEvidence, retainRepositoryCheckpointTurnEvidence } from '@/scm/checkpoints/sessionEvidence';
 import type {
     RepositoryCheckpointAttributionScope,
@@ -92,6 +94,36 @@ function appendReceipts(
     next: readonly RepositoryCheckpointReceipt[],
 ): readonly RepositoryCheckpointReceipt[] {
     return [...existing, ...next];
+}
+
+export function createRepositoryCheckpointCodeRollback(params: Readonly<{
+    session: Pick<ApiSessionClient, 'sessionId'>;
+    runtimeDirectory: string;
+}>): (request: CheckpointCodeRollbackRequest) => Promise<CheckpointCodeRollbackResult> {
+    return async (request) => {
+        if (request.sessionId !== params.session.sessionId) {
+            return {
+                status: 'unavailable', changedPaths: [], skippedPaths: [],
+                receipts: ['checkpoint.rollback_aborted'], diagnostics: ['checkpoint_rollback_session_mismatch'],
+            };
+        }
+        const binding = await resolveGitCheckpointContext({
+            runtimeDirectory: params.runtimeDirectory,
+            sessionId: params.session.sessionId,
+        });
+        if (!binding.context) {
+            return {
+                status: 'unavailable', changedPaths: [], skippedPaths: [],
+                receipts: ['checkpoint.rollback_aborted'],
+                diagnostics: [binding.unavailableReason ?? 'not_repo', binding.unavailableError ?? 'Repository checkpoint rollback is unavailable.'],
+            };
+        }
+        return await executeCheckpointCodeRollback({
+            request,
+            conversationRollbackSupported: false,
+            deps: createGitCheckpointRollbackDependencies({ context: binding.context, rollbackId: randomUUID() }),
+        });
+    };
 }
 
 function buildUnavailableDiffResult(input: Readonly<{

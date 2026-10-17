@@ -51,6 +51,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     /** Bound by the live Session/Run host; private and deferred operations retain Artifact custody. */
     sessionActionConfirmation?: ActionExecutorDeps['sessionActionConfirmation'];
     hostActionApprovalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime'];
+    runActionOperation?: ActionExecutorDeps['runActionOperation'];
     /** Current committed contributed Action declarations for catalog discovery. */
     listContributedActionDefinitions?: ActionExecutorDeps['listContributedActionDefinitions'];
     inputTypeDeps?: Pick<ActionExecutorDeps, 'resolveInputType' | 'readInputTypeResource'>;
@@ -63,6 +64,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     /** Current authority/credential/target proof for durable core Action replay. */
     isApprovalExecutionOriginCurrent?: ActionExecutorDeps['isApprovalExecutionOriginCurrent'];
     prepareApprovalExecutionAuthorization?: ActionExecutorDeps['prepareApprovalExecutionAuthorization'];
+    prepareApprovedApiTokenExecution?: ActionExecutorDeps['prepareApprovedApiTokenExecution'];
     /** The exact daemon external-session RPC owner for host-stamped API requests. */
     hostExternalSessionAction?: ActionExecutorDeps['hostExternalSessionAction'];
     /** Thin adapters to the canonical Account-server-owned auth routes. */
@@ -172,6 +174,7 @@ export function createCliActionExecutor(
       ...(params.prepareApprovalExecutionAuthorization
         ? { prepareApprovalExecutionAuthorization: params.prepareApprovalExecutionAuthorization }
         : {}),
+      ...(params.prepareApprovedApiTokenExecution ? { prepareApprovedApiTokenExecution: params.prepareApprovedApiTokenExecution } : {}),
       ...(params.listContributedActionDefinitions
         ? { listContributedActionDefinitions: params.listContributedActionDefinitions,
             readContributedActionSchemas: createCommittedContributedActionSchemaReader(params.listContributedActionDefinitions) }
@@ -182,16 +185,12 @@ export function createCliActionExecutor(
         : {}),
       ...accountServerActionPorts,
       ...(personalSavedSecretActionExecute ? { personalSavedSecretActionExecute } : {}),
-      ...(params.projectWorkerAction ? { projectWorkerAction: async (request) =>
-        request.actionId === 'projects.worker.status' || request.actionId === 'projects.worker.copy.retire'
-          ? await params.projectWorkerAction!(request)
-          : projectWorkerAccountAction
-            ? await projectWorkerAccountAction(request)
-            : { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' } } : {}),
+      ...(params.projectWorkerAction ? { projectWorkerAction: params.projectWorkerAction } : {}),
       ...(params.workflowAction ? { workflowAction: params.workflowAction } : {}),
       ...(params.managedMachineAction ? { managedMachineAction: params.managedMachineAction } : {}),
       ...(params.machineEnvironmentApply ? { machineEnvironmentApply: params.machineEnvironmentApply } : {}),
       ...(params.hostActionApprovalLifetime ? { hostActionApprovalLifetime: params.hostActionApprovalLifetime } : {}),
+      ...(params.runActionOperation ? { runActionOperation: params.runActionOperation } : {}),
       ...(params.filesystemActionExecute ? { filesystemActionExecute: async (request) => {
         const denied = filesystemRequesterAuthorityFailure(request.actionId, request.context);
         return denied ?? await params.filesystemActionExecute!(request);

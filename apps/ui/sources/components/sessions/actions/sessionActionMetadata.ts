@@ -95,14 +95,12 @@ const METADATA_BY_ACTION_ID: Readonly<Record<string, SessionActionMetadata>> = {
         subtitleKey: 'sessionInfo.stopSessionSubtitle',
         icon: 'stop-circle', group: 'finish',
         destructive: true,
-        requiresConfirmation: true,
     },
     [SESSION_ACTION_ARCHIVE_ID]: {
         titleKey: 'sessionInfo.archiveSession',
         subtitleKey: 'sessionInfo.archiveSessionSubtitle',
         icon: 'archive', group: 'finish',
         destructive: true,
-        requiresConfirmation: true,
     },
     [SESSION_ACTION_UNARCHIVE_ID]: {
         titleKey: 'sessionInfo.unarchiveSession',

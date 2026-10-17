@@ -4,7 +4,7 @@ import * as React from 'react';
 import { t } from '@/text';
 import { getErrorMessage } from '@/utils/errors/getErrorMessage';
 import { Modal } from '@/modal';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
 import { machineCollectionHref } from '@/components/settings/machines/collection/machineCollectionModel';
 import { sync } from '@/sync/sync';
@@ -55,7 +55,8 @@ import {
 } from '@happier-dev/protocol';
 import type { AcpConfigOptionOverridesV1, ComposerSnapshotV1, RawIngressStructuredInputV1 } from '@happier-dev/protocol';
 import type { SessionSpawnNewInitialInputV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import type { SessionSpawnNewInitialInputDispositionV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import type { SessionSpawnNewInitialInputDispositionV1, SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { awaitManualSessionSpawnOperation, readManualSessionSpawnOperation } from '@/sync/domains/session/spawn/manualSessionSpawnOperation';
 import { getSessionInputFailureLabelKey } from '@/components/sessions/pending/pendingMessageVisualState';
 import type { SessionManagedCreationV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
@@ -126,10 +127,13 @@ import {
     buildManualSessionCreationKey,
     completeManualSessionSpawnNewActionCustody,
     executeManualSessionSpawnNewAction,
+    executeSessionSpawnNewAction,
+    projectManualSessionSpawnOperationResult,
     resolveSessionSpawnNewActionFailureMessage,
     resolveSessionSpawnNewResultFailureMessage,
     resolveSessionSpawnNewInitialInputFailureMessage,
     type ManualSessionSpawnNewActionCustody,
+    type SessionSpawnNewActionResult,
 } from '@/sync/ops/actions/sessionSpawnNewAction';
 import {
     captureNewSessionDraftLaunchCurrentness,
@@ -149,6 +153,8 @@ import { managedMachineCreationIntent } from '@/sync/domains/state/newSessionMan
 import { runManagedMachineCreation, type ManagedMachineCreationProgress } from '@/components/settings/machines/managed/managedMachineCreation';
 import { bindNewManagedMachineCreationScope } from '@/sync/ops/actions/managedCreationScopeBinding';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { readActionApprovalRequestCreatedError } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { captureLazyActionAccountContext, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { sessionInstructionsActions } from '@/sync/ops/promptLibrary/sessionInstructions';
@@ -428,6 +434,8 @@ export function useCreateNewSession(params: Readonly<{
     launchIntentSignature: string;
     launchUserAttemptId?: string | null;
     onLaunchUserAttemptIdChange?: (userAttemptId: string | null) => void;
+    /** Retains the original creation completion while the exact approval is pending. */
+    onLaunchApprovalPending?: (approval: ActionApprovalContinuation) => void;
     /**
      * Continuation recipe when this draft was seeded from another Session. It is
      * required semantics: the target daemon resolves the source transcript
@@ -499,7 +507,7 @@ export function useCreateNewSession(params: Readonly<{
     const launchUserAttemptIdForCurrentIntentRef = React.useRef(launchUserAttemptIdForCurrentIntent);
     launchUserAttemptIdForCurrentIntentRef.current = launchUserAttemptIdForCurrentIntent;
     const createInFlightRef = React.useRef(false);
-    const managedAbortRef = React.useRef<AbortController | null>(null);
+    const launchAbortRef = React.useRef<AbortController | null>(null);
     const managedAcquisitionRef = React.useRef(params.managedMachineAcquisition ?? null);
     const managedAcquisitionPropRef = React.useRef(params.managedMachineAcquisition);
     if (managedAcquisitionPropRef.current !== params.managedMachineAcquisition) {
@@ -520,7 +528,7 @@ export function useCreateNewSession(params: Readonly<{
         const operation = actionOperationSelectors.selectById(actionOperationStore.getSnapshot(), {
             serverId: managedOperationServerId, operationId: managedOperationId,
         });
-        return operation?.snapshot.scope.accountId === managedOperationAccountId
+        return operation && operation.snapshot.scope.accountId === managedOperationAccountId
             && operation.snapshot.scope.machineId === managedOperationControllerId ? operation : null;
     }, [managedOperationId, managedOperationServerId, managedOperationAccountId, managedOperationControllerId, managedAcquisitionMatchesSelection]);
     const managedOperation = React.useSyncExternalStore(actionOperationStore.subscribe, readManagedOperation, readManagedOperation);
@@ -530,7 +538,9 @@ export function useCreateNewSession(params: Readonly<{
         serverId: params.targetAccountScope?.serverId ?? params.targetServerId ?? params.draftScope?.serverId ?? '',
         onExecuted: onManagedApprovalExecuted,
     });
-    React.useEffect(() => () => { managedAbortRef.current?.abort(); }, [launchIntentSignature]);
+    React.useEffect(() => () => { launchAbortRef.current?.abort(); }, [
+        launchIntentSignature, params.draftId, params.draftScope?.serverId, params.draftScope?.accountId,
+    ]);
     // Keep the latest params available synchronously so event handlers can't observe
     // a stale snapshot in the window between rerender and effect flush.
     latestParamsRef.current = params;
@@ -613,12 +623,13 @@ export function useCreateNewSession(params: Readonly<{
         }
         if (current.managedMachineSelection) {
             const submitted = current;
+            const onManagedMachineEnrolled = submitted.onManagedMachineEnrolled;
             const managedDraft = current.managedMachineSelection;
             const signature = current.launchIntentSignature;
             const scope = current.targetAccountScope ?? current.draftScope;
             const cancellation = new AbortController();
-            managedAbortRef.current?.abort();
-            managedAbortRef.current = cancellation;
+            launchAbortRef.current?.abort();
+            launchAbortRef.current = cancellation;
             let account: LazyActionAccountContext | null = null;
             let accountRetirement: Readonly<{ dispose(): void }> | null = null;
             let accountRetainedForBinding = false;
@@ -629,7 +640,7 @@ export function useCreateNewSession(params: Readonly<{
                 accountRetirement?.dispose();
                 account?.dispose();
                 cancellation.signal.removeEventListener('abort', releaseAccount);
-                if (managedAbortRef.current === cancellation) managedAbortRef.current = null;
+                if (launchAbortRef.current === cancellation) launchAbortRef.current = null;
             };
             cancellation.signal.addEventListener('abort', releaseAccount, { once: true });
             releaseManagedAccountOnRejection = releaseAccount;
@@ -646,7 +657,7 @@ export function useCreateNewSession(params: Readonly<{
                 reportAfterCreatedSettlement({ status: 'rejected' });
                 return;
             }
-            if (!scope || !current.onManagedMachineAcquisitionChange || !current.onManagedMachineEnrolled) {
+            if (!scope || !current.onManagedMachineAcquisitionChange || !onManagedMachineEnrolled) {
                 progress({ kind: 'failed', code: 'managed_continuation_unavailable' });
                 reportAfterCreatedSettlement({ status: 'rejected' });
                 return;
@@ -734,7 +745,7 @@ export function useCreateNewSession(params: Readonly<{
                 }
                 managedCreation = { homeId: result.machine.homeId, managedId: result.machine.id,
                     controller: result.machine.controller };
-                await submitted.onManagedMachineEnrolled(result.machine.enrolledMachineId, cancellation.signal);
+                await onManagedMachineEnrolled(result.machine.enrolledMachineId, cancellation.signal);
                 const enrolled = latestParamsRef.current;
                 if (!isCurrent() || enrolled.selectedMachineId !== result.machine.enrolledMachineId
                     || enrolled.selectedMachine?.id !== result.machine.enrolledMachineId || !enrolled.daemonMergedProjectionInputs) {
@@ -1031,6 +1042,7 @@ export function useCreateNewSession(params: Readonly<{
                 return;
             }
             const sourceDraftCancellation = new AbortController();
+            launchAbortRef.current = sourceDraftCancellation;
             if (current.draftScope && !hostSpawnExecutorRef.current) {
                 capturedOrdinarySourceAccount = await captureLazyActionAccountContext(current.draftScope.serverId, sourceDraftCancellation.signal);
                 if (capturedOrdinarySourceAccount.accountId !== current.draftScope.accountId) {
@@ -1469,11 +1481,9 @@ export function useCreateNewSession(params: Readonly<{
             const adoptCanonicalActionOperationSettlement = (): boolean => {
                 const executionAccountId = executionAccountScope.accountId.trim();
                 const canonicalOperation = executionAccountId
-                    ? actionOperationSelectors.selectSnapshotByRequestId(
-                        actionOperationStore.getSnapshot(),
+                    ? readManualSessionSpawnOperation(
+                        executionAccountScope,
                         launchAttempt.attemptId,
-                        executionAccountScope.serverId,
-                        executionAccountId,
                     )
                     : null;
                 if (
@@ -1533,16 +1543,18 @@ export function useCreateNewSession(params: Readonly<{
                     });
                 const spawnInput = { ...authoredSpawnInput, ...(managedCreation ? { managedCreation } : {}) };
                 const releaseUserRequestLease = sync.acquireUserRequestLease();
-                actionOperationPresentationCoordinator.register({
-                    serverId: resolvedTargetServerId,
-                    accountId: executionAccountScope.accountId,
-                    requestId: launchAttempt.attemptId,
-                    onStart: 'current',
-                    ...(current.draftScope && current.draftId
-                        ? { origin: createNewSessionActionOperationOrigin(current.draftScope, current.draftId) }
-                        : {}),
-                });
-                const actionResult = await (async () => {
+                for (const requestId of [launchAttempt.attemptId, spawnInput.creationKey]) {
+                    actionOperationPresentationCoordinator.register({
+                        serverId: resolvedTargetServerId,
+                        accountId: executionAccountScope.accountId,
+                        requestId,
+                        onStart: 'current',
+                        ...(current.draftScope && current.draftId
+                            ? { origin: createNewSessionActionOperationOrigin(current.draftScope, current.draftId) }
+                            : {}),
+                    });
+                }
+                let actionResult = await (async () => {
                     try {
                         if (!current.draftScope) {
                             throw new Error('Manual Session launch custody requires an active Account scope');
@@ -1558,7 +1570,39 @@ export function useCreateNewSession(params: Readonly<{
                                 : '',
                             userAttemptId: launchAttempt.attemptId,
                             seedNonce: launchAttempt.spawnNonce,
-                            ...(hostSpawnExecutorRef.current ? { executeAction: hostSpawnExecutorRef.current } : {}),
+                            executeAction: async (input, context) => {
+                                try {
+                                    return await (hostSpawnExecutorRef.current ?? executeSessionSpawnNewAction)(input, context);
+                                } catch (error) {
+                                    const deferred = readActionApprovalRequestCreatedError(error);
+                                    const onApprovalPending = latestParamsRef.current.onLaunchApprovalPending;
+                                    if (!deferred || !onApprovalPending) throw error;
+                                    // The approved receipt resumes this same custody and completion
+                                    // closure, including attachments and first-turn admission.
+                                    releaseUserRequestLease();
+                                    const result = await awaitActionApprovalResult<SessionSpawnNewResultV1, SessionSpawnNewActionResult>({
+                                        signal: sourceDraftCancellation.signal,
+                                        execute: async callbacks => {
+                                            onApprovalPending(createActionApprovalContinuation({
+                                                artifactId: deferred.artifactId,
+                                                actionId: 'session.spawn_new',
+                                                scope: executionAccountScope,
+                                                expectedRequestId: launchAttempt.attemptId,
+                                                expectedInput: input,
+                                                refreshAfterExecution: false,
+                                                signal: sourceDraftCancellation.signal,
+                                                onSucceeded: callbacks.onApprovalSucceeded,
+                                                onFailed: callbacks.onApprovalFailed,
+                                            }));
+                                            return { approvalPending: true };
+                                        },
+                                        succeeded: value => ({ ok: true, result: value }),
+                                        failed: (code, failure) => failure ?? { ok: false, errorCode: code, error: code },
+                                        aborted: () => ({ ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' }),
+                                    });
+                                    return result;
+                                }
+                            },
                         });
                         if (execution.status === 'custody_unavailable') {
                             throw new Error(
@@ -1590,8 +1634,26 @@ export function useCreateNewSession(params: Readonly<{
                     }
                 })();
                 if (actionResult === null) return;
+                if (!isLaunchScopeStillActive() || sourceDraftCancellation.signal.aborted) return;
+                let observedCanonicalSettlement = false;
+                if (actionResult.ok && actionResult.result.type === 'pending' && actionResult.result.outcome === 'accepted') {
+                    const operation = await awaitManualSessionSpawnOperation(
+                        executionAccountScope, launchAttempt.attemptId, sourceDraftCancellation.signal,
+                    );
+                    if (!operation || !isLaunchScopeStillActive() || sourceDraftCancellation.signal.aborted) return;
+                    observedCanonicalSettlement = true;
+                    actionResult = projectManualSessionSpawnOperationResult(operation);
+                }
                 if (!actionResult.ok) {
-                    if (adoptCanonicalActionOperationSettlement()) {
+                    if (actionResult.errorCode === 'approval_rejected' || actionResult.errorCode === 'approval_canceled'
+                        || (observedCanonicalSettlement && actionResult.errorCode === 'action_cancelled')) {
+                        endLaunchAttemptWithoutSession();
+                        if (manualActionCustody) await completeManualSessionSpawnNewActionCustody(manualActionCustody);
+                        manualActionCustody = null;
+                        current.setIsCreating(false);
+                        return;
+                    }
+                    if (!observedCanonicalSettlement && adoptCanonicalActionOperationSettlement()) {
                         if (mountedRef.current) {
                             current.setIsCreating(false);
                         }
@@ -1684,7 +1746,7 @@ export function useCreateNewSession(params: Readonly<{
                         && selectedMachineId
                     ) {
                         const agentTitle = resolveAgentCatalogProjection(actionResult.result.agentId, { enabledAgentIds: [] }).title;
-                        const machineName = getMachineDisplayName(current.selectedMachine) ?? selectedMachineId;
+                        const machineName = current.selectedMachine ? getMachineSentenceName(current.selectedMachine) : selectedMachineId;
                         const setupHref = machineCollectionHref({ machineId: selectedMachineId, serverId: resolvedTargetServerId });
                         Modal.alert(
                             actionResult.result.code === 'agent_cli_missing'
@@ -1814,7 +1876,8 @@ export function useCreateNewSession(params: Readonly<{
                         sessionId: createdSessionId,
                         serverId: resolvedTargetServerId,
                         accountId: executionAccountScope.accountId,
-                        requestId: launchAttempt.attemptId,
+                        requestId: readManualSessionSpawnOperation(executionAccountScope, launchAttempt.attemptId)?.requestId
+                            ?? launchAttempt.attemptId,
                         router: current.router,
                         href: postSpawnReplacementHref ?? buildCreatedSessionRoute(),
                         isStillActive: isLaunchScopeStillActive,
@@ -2007,7 +2070,8 @@ export function useCreateNewSession(params: Readonly<{
                         actionOperationStore.markFollowUpNeedsAttention({
                             serverId: executionAccountScope.serverId,
                             accountId: executionAccountScope.accountId,
-                            requestId: launchAttempt.attemptId,
+                            requestId: readManualSessionSpawnOperation(executionAccountScope, launchAttempt.attemptId)?.requestId
+                                ?? launchAttempt.attemptId,
                             message: t('inbox.actionOperations.followUpNeedsAttention'),
                         });
                     }
@@ -2142,7 +2206,7 @@ export function useCreateNewSession(params: Readonly<{
     const cancelManagedMachineCreation = React.useCallback(() => {
         // Local cancellation must retire custody before a late install can settle,
         // not wait for React to commit removal of the selected draft.
-        managedAbortRef.current?.abort();
+        launchAbortRef.current?.abort();
         latestParamsRef.current.setIsCreating(false);
     }, []);
     const visibleManagedProgress: ManagedMachineCreationProgress = managedProgress.signature === launchIntentSignature

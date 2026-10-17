@@ -305,6 +305,7 @@ describe('Work › Instructions', () => {
       expect(screen.findByTestId('session-work-instructions.conflict')).toBeTruthy();
       expect(screen.findByTestId('session-work-instructions.body')).toBeTruthy();
       expect(sessionHttp.writes).toEqual([]);
+      expect(Modal.confirm).not.toHaveBeenCalled();
     } finally { standardCleanup(); await account.dispose(); }
   });
 

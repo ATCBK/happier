@@ -6,6 +6,7 @@ import {
   AgentRuntimeDaemonServiceResponseV1Schema,
   type AgentRuntimeDaemonServiceRequestV1,
   type AgentRuntimeDaemonServiceResponseV1,
+  type RunnerDaemonPluginServicesPreparationCauseV1,
 } from './agentRuntimeDaemonServiceProtocol';
 import type {
   AgentRuntimeDaemonModelTransitionAuthorizationResultV1,
@@ -32,8 +33,6 @@ import {
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { TeamCredentialDirectMaterialOperationError } from '@/daemon/connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { isProvenPreDispatchConnectionFailure } from '@/api/client/classifyServerEndpointError';
-
-const DEFAULT_AGENT_RUNTIME_DAEMON_SERVICE_TIMEOUT_MS = 300_000;
 
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
@@ -70,13 +69,14 @@ function unavailableResponse(): AgentRuntimeDaemonServiceResponseV1 {
   };
 }
 
-function unknownOutcomeResponse(): AgentRuntimeDaemonServiceResponseV1 {
+function unknownOutcomeResponse(cause?: RunnerDaemonPluginServicesPreparationCauseV1): AgentRuntimeDaemonServiceResponseV1 {
   return {
     ok: false,
     error: {
       code: NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE,
       message:
         'Native Agent privileged effect outcome is unknown after dispatch',
+      ...(cause ? { cause } : {}),
     },
   };
 }
@@ -438,6 +438,14 @@ export async function authorizeCurrentAgentRuntimeDaemonModelTransition(
   ) {
     return response.result.authorization;
   }
+  if (!response.ok) {
+    const providerCode = ProviderErrorCodeV1Schema.safeParse(response.error.code);
+    if (providerCode.success) {
+      throw Object.assign(new Error(providerCode.data), createProviderErrorV1(providerCode.data, {
+        connectionId: input.selection.providerConnectionId,
+      }));
+    }
+  }
   throw createNativeAgentSessionEffectBoundaryError(
     'authority_unavailable_before_effect',
   );
@@ -527,6 +535,18 @@ export async function dispatchCurrentRunnerDaemonPluginService(
     return decodeRunnerDaemonPluginServiceWireValueV1(
       response.result.value,
     );
+  }
+  if (
+    !response.ok
+    && response.error.code === NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE
+    && response.error.cause
+  ) {
+    throw new PluginError({
+      code: response.error.code,
+      message: response.error.message,
+      retryable: false,
+      details: { cause: response.error.cause },
+    });
   }
   if (
     !response.ok
@@ -738,9 +758,10 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
     return unavailableResponse();
   }
 
-  const timeoutMs = input.timeoutMs === undefined
-    ? DEFAULT_AGENT_RUNTIME_DAEMON_SERVICE_TIMEOUT_MS
-    : input.timeoutMs;
+  // Native launch preparation can await Project setup, approval and requester
+  // admission. Its containing operation owns cancellation and any deadline;
+  // elapsed transport time does not establish a failed privileged effect.
+  const timeoutMs = input.timeoutMs ?? null;
   const timeoutSignal =
     timeoutMs === null ? null : AbortSignal.timeout(timeoutMs);
   const signal = input.signal && timeoutSignal
@@ -836,6 +857,8 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
     if (isProvenPreDispatchConnectionFailure(error)) {
       return unavailableResponse();
     }
-    return unknownOutcomeResponse();
+    return unknownOutcomeResponse(timeoutSignal?.aborted
+      ? { code: 'TimeoutError', stage: 'dispatch' }
+      : undefined);
   }
 }

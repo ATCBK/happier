@@ -142,6 +142,8 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
   machineAdmission?: SavedSecretOperationContextV1['machineAdmission'];
   credentials: StoredCredentials;
   snapshot: ActiveAccountSettingsSnapshot;
+  /** A long-lived Session refreshes source observations without replacing an in-flight reader. */
+  readSourceSnapshot?: () => ActiveAccountSettingsSnapshot | null;
   serverHttpBaseUrl: string;
   isCurrent(): Promise<boolean>;
 }>): SavedSecretOperationContextV1 {
@@ -150,6 +152,7 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
     throw new Error('saved_secret_account_snapshot_unavailable');
   }
   let snapshot: ActiveAccountSettingsSnapshot | null = input.snapshot;
+  let sourceSnapshot = input.snapshot;
   let acpRevision = snapshot.acpCatalog?.status === 'ready' && typeof snapshot.acpCatalog.revision === 'number'
     ? snapshot.acpCatalog.revision : undefined;
   let mcpRevision = snapshot.mcpServerCatalog?.status === 'ready' && typeof snapshot.mcpServerCatalog.revision === 'number'
@@ -160,17 +163,40 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
       try { listener(); } catch { logger.debug('[MCP] Captured catalog subscriber failed'); }
     }
   };
-  const isCurrent = async () => {
-    if (!snapshot) return false;
-    let current = false;
-    try { current = await input.isCurrent(); } catch { /* Unavailable admission retires material. */ }
-    if (!current && snapshot) {
-      withdrawSavedSecretCatalogInSnapshot(snapshot);
-      snapshot = null;
-      notifyMcpCatalog();
-      mcpListeners.clear();
+  const retire = () => {
+    if (snapshot) withdrawSavedSecretCatalogInSnapshot(snapshot);
+    snapshot = null;
+    notifyMcpCatalog();
+    mcpListeners.clear();
+  };
+  const readSnapshot = () => {
+    if (!snapshot || !input.readSourceSnapshot) return snapshot;
+    const next = input.readSourceSnapshot();
+    if (!next || next.scopeKey !== scopeKey) {
+      retire();
+      return null;
     }
-    return current && snapshot !== null;
+    if (next !== sourceSnapshot) {
+      const previousMcpCatalog = snapshot.mcpServerCatalog;
+      snapshot = preserveAccountCatalogsInSnapshot(snapshot, next, sourceSnapshot);
+      sourceSnapshot = next;
+      if (snapshot.acpCatalog?.status === 'ready' && typeof snapshot.acpCatalog.revision === 'number') {
+        acpRevision = Math.max(acpRevision ?? 0, snapshot.acpCatalog.revision);
+      }
+      if (snapshot.mcpServerCatalog?.status === 'ready' && typeof snapshot.mcpServerCatalog.revision === 'number') {
+        mcpRevision = Math.max(mcpRevision ?? 0, snapshot.mcpServerCatalog.revision);
+      }
+      if (snapshot.mcpServerCatalog !== previousMcpCatalog) notifyMcpCatalog();
+    }
+    return snapshot;
+  };
+  const isCurrent = async () => {
+    if (!readSnapshot()) return false;
+    // A failed observation grants no access, but also proves no revocation.
+    // Preserve its typed cause and allow the same captured custody to recover.
+    const current = await input.isCurrent();
+    if (!current && snapshot) retire();
+    return current && readSnapshot() !== null;
   };
   const withdrawCatalog = () => {
     if (snapshot) snapshot = withdrawSavedSecretCatalogInSnapshot(snapshot);
@@ -182,7 +208,7 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
     }) } : {}),
     credentials: input.credentials,
     serverHttpBaseUrl: input.serverHttpBaseUrl,
-    readSnapshot: () => snapshot,
+    readSnapshot,
     isCurrent,
     replaceAccountSettings: async (next: ActiveAccountSettingsSnapshot) => {
       if (next.scopeKey !== scopeKey || !await isCurrent() || !snapshot) return false;

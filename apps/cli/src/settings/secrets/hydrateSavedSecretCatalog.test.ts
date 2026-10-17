@@ -32,6 +32,7 @@ import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol
 import { decodeBase64 } from '@/api/encryption';
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { emptyMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 
 vi.mock('axios', () => ({
   default: { get: vi.fn(), post: vi.fn() },
@@ -46,6 +47,53 @@ vi.mock('@/persistence', async (importOriginal) => ({
 }));
 
 describe('Saved Secret catalog hydration', () => {
+  it('retains one captured holder across source observations and in-flight catalog commits', async () => {
+    const token = 'captured-source-token';
+    const initial = { source: 'network' as const, settings: AccountSettingsSchema.parse({ preferredLanguage: 'en' }), rawSettings: { preferredLanguage: 'en' },
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKeyForToken(token),
+      promptLibraryCatalog: { status: 'loading' as const } };
+    let source: import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null = initial;
+    const context = createInvocationSavedSecretOperationContextV1({ credentials: { token, encryption: null }, snapshot: initial,
+      serverHttpBaseUrl: 'https://captured-source.example', isCurrent: async () => true, readSourceSnapshot: () => source });
+    const privateCatalog = { status: 'ready' as const, rows: [], tombstones: [], diagnostics: [] };
+    source = { ...initial, loadedAtMs: 2 };
+    expect(context.readSnapshot()?.loadedAtMs).toBe(2);
+    expect(await context.commitPromptLibraryCatalog({ expectedSettingsVersion: 1, catalog: privateCatalog })).toBe(true);
+    source = { ...source, loadedAtMs: 3 };
+    expect(context.readSnapshot()?.promptLibraryCatalog).toBe(privateCatalog);
+    const refreshed = { ...initial, promptLibraryCatalog: privateCatalog, settingsVersion: 2, loadedAtMs: 4,
+      rawSettings: { preferredLanguage: 'fr' }, settings: AccountSettingsSchema.parse({ preferredLanguage: 'fr' }) };
+    expect(await context.replaceAccountSettings(refreshed)).toBe(true);
+    const profiles = { status: 'ready' as const, authority: 'active' as const, source: 'destination' as const,
+      records: [], diagnostics: [], referenceGuardRevision: 1, control: null, controlRevision: 'absent' as const };
+    source = { ...source, loadedAtMs: 5, profileCatalog: profiles };
+    expect(context.readSnapshot()).toMatchObject({ settingsVersion: 2, rawSettings: refreshed.rawSettings,
+      settings: { preferredLanguage: 'fr' }, profileCatalog: profiles, promptLibraryCatalog: privateCatalog });
+    expect(await context.replaceAccountSettings(initial)).toBe(false);
+    const unavailable = { status: 'unavailable' as const, reason: 'forbidden' as const };
+    source = { ...source, promptLibraryCatalog: unavailable };
+    expect(context.readSnapshot()?.promptLibraryCatalog).toBe(unavailable);
+    source = { ...source, settingsVersion: 3, rawSettings: { preferredLanguage: 'de' },
+      settings: AccountSettingsSchema.parse({ preferredLanguage: 'de' }) };
+    expect(context.readSnapshot()).toMatchObject({ settingsVersion: 3, rawSettings: source.rawSettings,
+      settings: { preferredLanguage: 'de' }, promptLibraryCatalog: unavailable });
+    const mcpCatalog = { status: 'ready' as const, authority: 'active' as const, revision: 8,
+      catalog: emptyMcpServerCatalogV1(), diagnostics: [] };
+    const acpCatalog = { status: 'ready' as const, revision: 8, record: { v: 1 as const, definitions: [] } };
+    const mcpObservations: unknown[] = [];
+    const unsubscribe = context.subscribeMcpCatalog(() => mcpObservations.push(context.readSnapshot()?.mcpServerCatalog));
+    source = { ...source, mcpServerCatalog: mcpCatalog, acpCatalog };
+    expect(context.readSnapshot()?.mcpServerCatalog).toBe(mcpCatalog);
+    expect(mcpObservations).toEqual([mcpCatalog]);
+    expect(await context.commitMcpCatalog({ ...mcpCatalog, revision: 7 })).toBe(false);
+    expect(await context.commitAcpCatalog({ catalog: { ...acpCatalog, revision: 7 } })).toBe(false);
+    unsubscribe();
+    source = { ...source, scopeKey: 'foreign-account' };
+    expect(context.readSnapshot()).toBeNull();
+    source = initial;
+    expect(await context.commitPromptLibraryCatalog({ expectedSettingsVersion: 1, catalog: privateCatalog })).toBe(false);
+    expect(context.readSnapshot()).toBeNull();
+  });
   const serverFeatures = (teamsEnabled: boolean, credentialResourcesEnabled = false) => FeaturesResponseSchema.parse({
     features: {
       teams: {

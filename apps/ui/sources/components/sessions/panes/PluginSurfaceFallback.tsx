@@ -4,6 +4,8 @@ import { useUnistyles } from 'react-native-unistyles';
 import { HappierSkeletonRows } from '@happier-dev/plugin-ui/presentation';
 
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { PluginSurfacePageHeaderContext } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
+import { PageFrame } from '@/components/ui/layout/PageFrame';
 import {
     SurfaceStateCard,
     type SurfaceStateAction,
@@ -86,25 +88,35 @@ export function PluginSurfaceFallback(props: Readonly<{
     accessibilitySemantics?: SurfaceStateAccessibilitySemantics;
     /** Glyph-only decoration; semantic title and reason remain the shared owner's strings. */
     renderText?: (field: 'title' | 'reason', text: string) => React.ReactNode;
+    /** The plugin's display name, so a whole-page card says which plugin failed. */
+    subjectName?: string;
 }>): React.ReactElement {
     const presentation = resolvePluginSurfaceStatePresentation({
         state: props.state ?? 'unavailable',
         reasonCode: props.reasonCode,
+        subjectName: props.subjectName,
     });
+    // On a plugin page route that has loaded nothing, the page keeps its identity (title, mark, the
+    // route's Back) above the state, in the page column the loaded page will use, like the offline
+    // state (`PluginSurfaceInteractionBoundary`). Mounted content resets this to null.
+    const pageHeader = React.useContext(PluginSurfacePageHeaderContext);
     const card = presentation.card;
     if (!card) {
         throw new Error('plugin_surface_unavailable_presentation_missing_card');
     }
     if (card.kind === 'loading') {
-        return (
+        const skeleton = (
             <PluginSurfaceLoadingSkeleton
                 testID={props.testID}
                 accessibilityLabel={card.title}
                 diagnosticCode={presentation.diagnosticCode}
             />
         );
+        return pageHeader ? <PageFrame content="column" style={{ flex: 1 }}>{pageHeader}{skeleton}</PageFrame> : skeleton;
     }
     return (
+        <>
+        {pageHeader}
         <SurfaceStateCard
             testID={props.testID}
             kind={card.kind}
@@ -120,6 +132,7 @@ export function PluginSurfaceFallback(props: Readonly<{
             })}
             accessibilitySemantics={props.accessibilitySemantics ?? card.accessibilitySemantics}
         />
+        </>
     );
 }
 

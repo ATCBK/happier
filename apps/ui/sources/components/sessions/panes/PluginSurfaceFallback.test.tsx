@@ -1,11 +1,14 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { View } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
 import { resolvePluginSurfaceStatePresentation } from '@/sync/domains/surfaces/copy';
 import { t } from '@/text';
+
+import { PluginSurfacePageHeaderContext } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
 
 import { PluginSurfaceFallback, projectPluginSurfaceFallbackFindText } from './PluginSurfaceFallback';
 
@@ -71,6 +74,28 @@ describe('PluginSurfaceFallback', () => {
         expect(screen.findByTestId(
             'plugin-surface-unavailable-diagnostic-targeted_contributions_loading',
         )).toBeTruthy();
+    });
+
+    it('keeps a page route\'s identity header above its loading and unavailable states, and only there', async () => {
+        const header = <View testID="page-identity-header" />;
+        const loading = await renderScreen(
+            <PluginSurfacePageHeaderContext.Provider value={header}>
+                <PluginSurfaceFallback testID="plugin-surface-unavailable" state="loading" />
+            </PluginSurfacePageHeaderContext.Provider>,
+        );
+        expect(loading.findByTestId('page-identity-header')).toBeTruthy();
+        expect(loading.findByTestId('plugin-surface-unavailable-loading-skeleton')).toBeTruthy();
+
+        const unavailable = await renderScreen(
+            <PluginSurfacePageHeaderContext.Provider value={header}>
+                <PluginSurfaceFallback testID="plugin-surface-unavailable" reasonCode="hosted_web_bridge_timeout" />
+            </PluginSurfacePageHeaderContext.Provider>,
+        );
+        expect(unavailable.findByTestId('page-identity-header')).toBeTruthy();
+        expect(unavailable.findByTestId('plugin-surface-unavailable-title')).toBeTruthy();
+
+        const embedded = await renderScreen(<PluginSurfaceFallback testID="plugin-surface-unavailable" state="loading" />);
+        expect(embedded.findByTestId('page-identity-header')).toBeNull();
     });
 
     it('makes Retry the single action for a transient failure and wires it to the host retry', async () => {

@@ -20,11 +20,11 @@ import { executeSessionAction } from './sessionActionExecution';
 import type { SessionActionExecutionContext } from './sessionActionTypes';
 
 /**
- * The one archive confirmation for a Session (ORC R-04, §3.1 "Archiving a lead").
+ * The archive scope choice for a Session (ORC R-04, §3.1 "Archiving a lead").
  *
  * A Session that leads others offers "Also archive N sub-sessions", off by default; archiving a lead
- * never archives its reports unless the person ticks it. A Session with no reports keeps the plain
- * confirmation. Both the header menu and the row menu ask through here.
+ * never archives its reports unless the person ticks it. A Session with no reports proceeds directly;
+ * approval is owned by the Action policy. Both the header menu and the row menu use this choice.
  */
 export type SessionArchiveConfirmation = Readonly<{ confirmed: boolean; alsoArchiveReports: boolean }>;
 
@@ -120,16 +120,7 @@ export function SessionArchiveConfirmModal(props: SessionArchiveConfirmModalProp
 
 export async function confirmSessionArchive(params: Readonly<{ reportCount: number }>): Promise<SessionArchiveConfirmation> {
     if (params.reportCount <= 0) {
-        const confirmed = await Modal.confirm(
-            t('sessionInfo.archiveSession'),
-            t('sessionInfo.archiveSessionConfirm'),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: t('sessionInfo.archiveSession'),
-                destructive: true,
-            },
-        );
-        return { confirmed, alsoArchiveReports: false };
+        return { confirmed: true, alsoArchiveReports: false };
     }
     return await new Promise<SessionArchiveConfirmation>((resolve) => {
         Modal.show({

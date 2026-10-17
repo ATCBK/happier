@@ -2,7 +2,9 @@ import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createDeferred, renderHook, standardCleanup, type Deferred } from '@/dev/testkit';
+import { createDeferred, type Deferred } from '@/dev/testkit/hooks/createDeferred';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 import {
     useTranscriptOlderPagination,
@@ -110,12 +112,34 @@ describe('useTranscriptOlderPagination', () => {
         standardCleanup();
     });
 
+    it('retains source exhaustion across viewport remounts and entry resets without another read', async () => {
+        let availability: boolean | null = false;
+        const { input, loadOlder } = createHarness({
+            readHasMore: () => availability,
+        });
+        const first = await renderHook(() => useTranscriptOlderPagination(input));
+        expect(first.getCurrent().hasMore).toBe(false);
+        await first.unmount();
+
+        const remounted = await renderHook(() => useTranscriptOlderPagination(input));
+        await act(async () => remounted.getCurrent().reset());
+        expect(remounted.getCurrent().hasMore).toBe(false);
+        await act(async () => remounted.getCurrent().continueOlderLoad());
+        expect(loadOlder).not.toHaveBeenCalled();
+
+        availability = true;
+        await remounted.rerender();
+        expect(remounted.getCurrent().hasMore).toBe(true);
+        expect(loadOlder).not.toHaveBeenCalled();
+        await remounted.unmount();
+    });
+
     it('consumes initial-fill exhaustion before any threshold load and reopens a later gap', async () => {
         let gapAvailability: boolean | null = null;
         const { input, loadOlder } = createHarness();
         const hook = await renderHook(() => useTranscriptOlderPagination({
             ...input,
-            readHasMoreAfterExhaustion: () => gapAvailability,
+            readHasMore: () => gapAvailability,
         }));
         await act(async () => {
             hook.getCurrent().observeLoadResult({ status: 'no_more', loaded: 0, hasMore: false });
@@ -156,7 +180,7 @@ describe('useTranscriptOlderPagination', () => {
         const { input, loadOlder, pendingLoads } = createHarness();
         const hook = await renderHook(() => useTranscriptOlderPagination({
             ...input,
-            readHasMoreAfterExhaustion: () => gapAvailability,
+            readHasMore: () => gapAvailability,
         }));
         await observe(hook, { offsetY: 120 });
         await resolveLoad(pendingLoads, { loaded: 0, hasMore: false, status: 'no_more' });
@@ -187,7 +211,7 @@ describe('useTranscriptOlderPagination', () => {
         const { input, loadOlder, pendingLoads } = createHarness();
         const hook = await renderHook(() => useTranscriptOlderPagination({
             ...input,
-            readHasMoreAfterExhaustion: () => gapAvailability,
+            readHasMore: () => gapAvailability,
         }));
         await observe(hook, { offsetY: 120 });
         gapAvailability = true;

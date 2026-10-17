@@ -230,7 +230,7 @@ describe('SessionListSelectionActionBarHost', () => {
         expect(screen.findByTestId('session-list-selection-select-all-visible')).toBeNull();
     });
 
-    it('executes confirmed actions against the originally confirmed selection snapshot', async () => {
+    it('executes Stop directly against the selection captured when pressed', async () => {
         const stoppedSessionIds: string[] = [];
         const targetsByKey = new Map<string, SessionBulkActionTarget>([
             ['session-a', {
@@ -265,13 +265,13 @@ describe('SessionListSelectionActionBarHost', () => {
 
         await pressByTestId(screen, 'select-session-a');
         await pressByTestId(screen, 'session-list-selection-action-session-stop');
+        expect(screen.findByTestId('session-list-selection-confirm-session-stop')).toBeNull();
         await pressByTestId(screen, 'select-all-sessions');
-        await pressByTestId(screen, 'session-list-selection-confirm-session-stop');
 
         expect(stoppedSessionIds).toEqual(['session-a']);
     });
 
-    it('shows inline confirmation and progress for long-running stop actions', async () => {
+    it('shows progress directly for long-running Stop actions', async () => {
         let resolveStop: (() => void) | null = null;
         const stopPromise = new Promise<void>((resolve) => {
             resolveStop = resolve;
@@ -303,13 +303,7 @@ describe('SessionListSelectionActionBarHost', () => {
         await pressByTestId(screen, 'select-session-a');
         await pressByTestId(screen, 'session-list-selection-action-session-stop');
 
-        const confirm = screen.findByProps({ testID: 'session-list-selection-confirm-session-stop' });
-        expect(confirm).toBeTruthy();
-
-        await act(async () => {
-            confirm.props.onPress();
-            await Promise.resolve();
-        });
+        expect(screen.findByTestId('session-list-selection-confirm-session-stop')).toBeNull();
 
         const progress = screen.findByProps({ testID: 'session-list-selection-progress' });
         expect(progress.props['data-action-id']).toBe(SESSION_BULK_ACTION_IDS.stop);

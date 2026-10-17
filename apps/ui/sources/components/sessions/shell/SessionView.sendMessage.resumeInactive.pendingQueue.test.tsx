@@ -14,11 +14,13 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen, findTestInstanceByTypeWithProps } from '@/dev/testkit/render/renderScreen';
 import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import type { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import type { Session, PendingMessage } from '@/sync/domains/state/storageTypes';
 import type { ResumeSessionResult } from '@/sync/ops/sessions';
@@ -35,6 +37,8 @@ import sodium from 'libsodium-wrappers';
 import { ManagedMachineV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
 import type { SessionViewPresentation } from './embedded/embeddedSessionPresentation';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 // The shell statically imports Sync before the pane harness can bind its Socket.
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -291,6 +295,7 @@ const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixture
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { clearSessionDraftValuesForSession, readSessionDraftValue, writeSessionDraftValue } = await import('@/dev/testkit/sessionDraftRepositoryTestkit');
 const runtime = installSessionPaneRuntimeTestHarness({
+    sessionSeq: 0,
     configureSocket,
     credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
     features: () => {
@@ -302,6 +307,17 @@ const runtime = installSessionPaneRuntimeTestHarness({
     request: async (input, init) => {
         const url = new URL(String(input));
         const method = init?.method ?? 'GET';
+        if (method === 'GET' && url.pathname === '/v1/machines') {
+            const state = storage.getState();
+            const machines = state.profileScope ? state.machineListByServerId[state.profileScope.serverId] ?? [] : [];
+            return Response.json(machines.map(machine => ({
+                ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+                active: machine.active, activeAt: machine.activeAt,
+                metadata: encodePlainMachineStoredContent(machine.metadata), metadataVersion: machine.metadataVersion,
+                daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null,
+                daemonStateVersion: machine.daemonStateVersion,
+            })));
+        }
         if (resetQuotaSnapshot && url.pathname.startsWith('/v4/connect/qualified/provider-account-usage/')) {
             if (url.pathname.endsWith('/sources/resolve') && heldResetQuotaRead) {
                 heldResetQuotaRead.entered();
@@ -342,6 +358,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
             httpWrites.push(write);
             if (url.pathname === '/v1/actions/machines.managed.inspect' && managedWakeMachine) {
                 const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+                if (!envelope.target) throw new Error('Managed inspection requires its captured Machine target');
                 if (managedInspectAskFirst) {
                     // The native daemon, not a client-local policy mock, owns this
                     // Ask receipt. Persist its real signed origin through the Home Artifact codec.
@@ -387,6 +404,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
     },
 });
 const { SessionView } = await import('./SessionView');
+const { SessionDraftHydrationBoundary } = await import('@/components/sessions/drafts/SessionDraftHydrationBoundary');
 const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
 const { emitSessionResumeRequest } = await import('@/components/sessions/model/sessionResumeRequests');
 const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjection');
@@ -472,18 +490,20 @@ async function publishDurablePendingState(row: PendingMessage, authorization: Se
 }
 
 describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
-    async function renderSessionView(props: { routeServerId?: string; presentation?: SessionViewPresentation } = {}) {
-        if (!storage.getState().machines['m-target']) setMachineOnline(true);
-        const screen = await renderScreen(
+    function sessionViewFrame(props: { routeServerId?: string; presentation?: SessionViewPresentation; presentationKey?: string } = {}) {
+        return (
             <DestinationInstanceHost tabId="queue-session" ref={{ kind: 'session', params: {
                 id: 's1', ...(props.routeServerId ? { serverId: props.routeServerId } : {}),
             } }} pathname="/session/s1" focused visible navigation={{
                 push: routerPushSpy, pushRetainingCurrent: routerPushSpy, replace: vi.fn(), back: vi.fn(),
             }}>
-                <SessionView id="s1" routeServerId={props.routeServerId} presentation={props.presentation} />
-            </DestinationInstanceHost>,
-            { wrapper: runtime.Wrapper },
+                <SessionView key={props.presentationKey} id="s1" routeServerId={props.routeServerId} presentation={props.presentation} />
+            </DestinationInstanceHost>
         );
+    }
+    async function renderSessionView(props: Parameters<typeof sessionViewFrame>[0] = {}) {
+        if (!storage.getState().machines['m-target']) setMachineOnline(true);
+        const screen = await renderScreen(sessionViewFrame(props), { wrapper: runtime.Wrapper });
         await flushHookEffects();
         return screen;
     }
@@ -578,11 +598,11 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             ...(kind === 'starting' ? { submittedNativeEffect: { intent: 'start', intentRevision: 1, requestId: 'start-a', controller } } : {}) });
         setMachineOnline(kind === 'resuming' || kind === 'agentStartFailed');
         storage.getState().applyMachines([createMachineFixture({ id: 'controller', active: false, activeAt: 0,
-            metadata: { host: 'Controller Mac', displayName: 'Controller Mac' } })], false, { sourceServerId: runtime.serverId });
+            metadata: { ...createMachineFixture().metadata!, host: 'Controller Mac', displayName: 'Controller Mac' } })], false, { sourceServerId: runtime.serverId });
         const row = { ...durablePendingRow('wake-message'), displayText: 'Original typed wake request' };
         await publishDurablePendingState(kind === 'deliveryUnknown' ? { ...row, pendingDeliveryStatus: 'server_delivering' } : row, {
-            requestId: row.localId!, requestedAt: 200, status: kind === 'agentStartFailed' ? 'failed' : 'waiting',
-            ...(kind === 'agentStartFailed' ? { failureCode: 'runtime_start_failed' as const } : {}),
+            requestId: row.localId!, requestedAt: 200,
+            ...(kind === 'agentStartFailed' ? { status: 'failed' as const, failureCode: 'runtime_start_failed' as const } : { status: 'waiting' as const }),
             managedWakeTargetV1: { homeId: runtime.serverIdentityId, managedId: 'managed-guest', enrolledMachineId: 'm-target', expectedIntentRevision: 1, controller,
                 reason: 'admitted-work', origin: { kind: 'session-input', session: { homeId: runtime.serverIdentityId, sessionId: 's1' },
                     pendingRequestId: row.localId!, requestedAt: 200 } },
@@ -686,7 +706,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         resetStartAskFirst = true;
         await enableResetStartProtocol();
         storage.setState({ settings: { ...storage.getState().settings,
-            actionsSettingsV1: { v: 1, actions: { 'session.pending.resetStart.set': { approvalRequiredSurfaces: ['ui'] } } },
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.pending.resetStart.set': { approvalRequiredSurfaces: ['ui'] } } }),
         } });
         const screen = await renderSessionView();
         await changeText(screen, 'Wait for capacity');
@@ -794,16 +814,20 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await setComposerAttachmentProjection({ [issueAttachmentCatalogEntry.id]: issueAttachmentCatalogEntry });
         writeSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments', composerAttachments);
         const screen = await renderSessionView();
-        expect(findAgentInput(screen).props.hasSendableAttachments).toBe(true);
-        await send(screen);
-        await vi.waitFor(() => expect(pendingWrites()).toHaveLength(1));
-        await waitForSubmittedDraft(screen);
-        expect(pendingWrites()[0]?.body).toMatchObject({
-            content: { t: 'plain', v: { meta: { happierStructuredInputV1: { v: 1, composerAttachments } } } },
-        });
-        expect(readSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments') ?? []).toEqual([]);
-        expect(findAgentInput(screen).props.hasSendableAttachments).toBe(false);
-        await screen.unmount();
+        try {
+            expect(findAgentInput(screen).props.hasSendableAttachments).toBe(true);
+            await send(screen);
+            await vi.waitFor(() => {
+                expect(modalMockState.current?.spies.alert.mock.calls).toEqual([]);
+                expect(pendingWrites()).toHaveLength(1);
+            });
+            await waitForSubmittedDraft(screen);
+            expect(pendingWrites()[0]?.body).toMatchObject({
+                content: { t: 'plain', v: { meta: { happierStructuredInputV1: { v: 1, composerAttachments } } } },
+            });
+            expect(readSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments') ?? []).toEqual([]);
+            expect(findAgentInput(screen).props.hasSendableAttachments).toBe(false);
+        } finally { await screen.unmount(); }
     });
 
     it('keeps an uninstalled or incompatible persisted attachment visible, refuses its text send, and retains the draft until the exact current generation returns', async () => {
@@ -1031,6 +1055,51 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
+    it('does not alert from a Pending send that completes after its Session view unmounts', async () => {
+        updateSession({ active: true, presence: 'online', agentStateVersion: 1 });
+        const handoff = deferred<Response>();
+        enqueueResponse = async () => handoff.promise;
+        const screen = await renderSessionView({ routeServerId: runtime.serverId });
+        await changeText(screen, 'Send before leaving this Session');
+        await send(screen);
+        await vi.waitFor(() => expect(pendingWrites()).toHaveLength(1));
+        await screen.unmount();
+
+        await act(async () => { handoff.resolve(acceptedEnqueue(pendingWrites()[0]!)); });
+        await flushHookEffects();
+
+        expect(modalMockState.current?.spies.alert.mock.calls).toEqual([]);
+        expect(pendingWrites()).toHaveLength(1);
+        expect(resumeCalls()).toHaveLength(0);
+    });
+
+    it('keeps admitting a Pending send when the same destination replaces its responsive Session shell', async () => {
+        const handoff = deferred<Response>();
+        enqueueResponse = async () => handoff.promise;
+        resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
+        const screen = await renderSessionView({ routeServerId: runtime.serverId, presentationKey: 'classic' });
+        const lifetime = screen.root.findByType(SessionDraftHydrationBoundary).props.lifetime as ServerAccountScopeLifetime;
+        try {
+            await changeText(screen, 'Continue through the phone layout');
+            await send(screen);
+            await vi.waitFor(() => expect(pendingWrites()).toHaveLength(1));
+            // The classic/cockpit experience owner replaces the presentation,
+            // while DestinationInstanceHost keeps the same Session destination.
+            await screen.update(sessionViewFrame({ routeServerId: runtime.serverId, presentationKey: 'cockpit' }));
+            expect(lifetime.isCurrent()).toBe(true);
+            expect(screen.root.findByType(SessionDraftHydrationBoundary).props.lifetime).toBe(lifetime);
+
+            await act(async () => { handoff.resolve(acceptedEnqueue(pendingWrites()[0]!)); });
+            await vi.waitFor(() => expect(resumeCalls()).toHaveLength(1));
+            expect(pendingWrites()).toHaveLength(1);
+            expect(modalMockState.current?.spies.alert.mock.calls).toEqual([]);
+        } finally {
+            handoff.resolve(acceptedEnqueue(pendingWrites()[0]!));
+            await screen.unmount();
+        }
+        expect(lifetime.isCurrent()).toBe(false);
+    });
+
     it('keeps the submitted draft clear while an ambiguous enqueue retains Pending custody', async () => {
         updateSession({ active: true, presence: 'online', agentStateVersion: 1 });
         enqueueResponse = async () => { throw new TypeError('Failed to fetch after issuing the Pending handoff'); };
@@ -1171,7 +1240,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
     it('refuses a mounted manual resume when session.open is disabled on the owning Home', async () => {
         sessionOpenDisabled = true;
         storage.setState({ settings: { ...storage.getState().settings,
-            actionsSettingsV1: { v: 1, actions: { 'session.open': { disabledSurfaces: ['ui'] } } },
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.open': { disabledSurfaces: ['ui'] } } }),
         } });
         resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
         const screen = await renderSessionView();
@@ -1188,7 +1257,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
     it('parks a mounted manual resume behind the owning Home Ask-first approval before launching a process', async () => {
         sessionOpenAskFirst = true;
         storage.setState({ settings: { ...storage.getState().settings,
-            actionsSettingsV1: { v: 1, actions: { 'session.open': { approvalRequiredSurfaces: ['ui'] } } },
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.open': { approvalRequiredSurfaces: ['ui'] } } }),
         } });
         resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
         const screen = await renderSessionView();
@@ -1270,6 +1339,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             await changeText(screen, 'Message to the shared live Session');
             await send(screen);
             await waitForSubmittedDraft(screen);
+            expect(modalMockState.current?.spies.alert.mock.calls).toEqual([]);
             expect(pendingWrites()).toHaveLength(1);
             expect(findAgentInput(screen).props.value).toBe('');
             expect(resumeCalls()).toHaveLength(0);
@@ -1283,7 +1353,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             await act(async () => { storage.setState({ machineListByServerId: { [runtime.serverId]: [] }, machineListStatusByServerId: { [runtime.serverId]: 'idle' } }); });
             expect(storage.getState().machineListByServerId[runtime.serverId]).toEqual([]);
             expect(screen.findByTestId('session-requester-access-removed')).toBeTruthy();
-            expect(currentSession().metadata?.codexSessionId).toBe('codex-session-1');
+            expect(readSessionOwnerMetadataView(currentSession())?.codexSessionId).toBe('codex-session-1');
             await act(async () => { await emitSessionResumeRequest('s1'); });
             expect(resumeCalls()).toHaveLength(0);
             await screen.pressByTestIdAsync('session-requester-continue-elsewhere');
@@ -1292,7 +1362,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
             expect(readNewSessionDraftFromRepository({ scope: scope(), draftId: route.params.draftId }))
                 .toMatchObject({ selectedMachineId: null, executionTarget: null });
-            expect(currentSession().metadata?.codexSessionId).toBe('codex-session-1');
+            expect(readSessionOwnerMetadataView(currentSession())?.codexSessionId).toBe('codex-session-1');
             expect(resumeCalls()).toHaveLength(0);
         } finally {
             await screen.unmount();

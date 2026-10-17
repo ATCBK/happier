@@ -39,13 +39,55 @@ vi.mock('@/text', async () => {
 });
 
 describe('stopSessionAndMaybeArchive', () => {
+    it('asks the Home to archive when a preceding Stop already retired the captured active target', async () => {
+        const archiveSession = vi.fn(async () => ({ success: true }));
+        const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
+        const params = {
+            address: address('session_already_stopped'), hideInactiveSessions: false, isPinned: false,
+            stopSession: async () => ({ success: false, code: 'session_stop_not_found', message: 'runtime already retired' }),
+            archiveSession, stopErrorMessage: 'stop failed', archiveErrorMessage: 'archive failed',
+        };
+        await expect(stopSessionAndMaybeArchive({ ...params, archiveAfterStop: 'always' })).resolves.toBeUndefined();
+        expect(archiveSession).toHaveBeenCalledTimes(1);
+        await expect(stopSessionAndMaybeArchive({ ...params, archiveAfterStop: 'always',
+            archiveSession: async () => ({ success: false, code: 'session_active', message: 'raw conflict' }),
+        })).rejects.toMatchObject({ message: 'archive failed', code: 'session_active' });
+        await expect(stopSessionAndMaybeArchive({ ...params, archiveAfterStop: 'never' }))
+            .rejects.toMatchObject({ message: 'runtime already retired' });
+        await expect(stopSessionAndMaybeArchive({ ...params, archiveAfterStop: 'always',
+            stopSession: async () => ({ success: false, code: 'session_stop_failed', message: 'Session not found' }),
+        })).rejects.toMatchObject({ message: 'Session not found' });
+        expect(archiveSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports an active archive conflict without a silent polling window', async () => {
+        vi.useFakeTimers();
+        const archiveSession = vi.fn()
+            .mockResolvedValueOnce({ success: false, code: 'session_active' })
+            .mockResolvedValueOnce({ success: true });
+        const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
+        let outcome: unknown;
+        const pending = stopSessionAndMaybeArchive({
+            address: address('session_stopping'), hideInactiveSessions: false, isPinned: false,
+            archiveAfterStop: 'always',
+            stopSession: async () => ({ success: false, code: 'session_stop_requested', recovery: 'wait_for_inactive' }),
+            archiveSession, stopErrorMessage: 'stop failed', archiveErrorMessage: 'archive failed',
+        }).then(() => { outcome = 'archived'; }, error => { outcome = error; });
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            expect(outcome).toMatchObject({ message: 'archive failed' });
+            expect(archiveSession).toHaveBeenCalledTimes(1);
+        } finally {
+            await vi.runOnlyPendingTimersAsync();
+            await pending;
+            vi.useRealTimers();
+        }
+    });
+
     afterEach(() => {
         standardCleanup();
         applyServerScopedSessionListRowPatchesSpy.mockClear();
         modalConfirmSpy.mockClear();
-        delete process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_RETRY_MS;
-        delete process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_MAX_RETRIES;
-        delete process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_TIMEOUT_MS;
     });
 
     it('uses the exact Home for temporary retention and archive-success cleanup when two Homes share a Session id', async () => {
@@ -162,16 +204,13 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(archiveSpy).not.toHaveBeenCalled();
     });
 
-    it('observes accepted pending Stop until Archive becomes valid', async () => {
-        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_RETRY_MS = '0';
+    it('archives an accepted pending Stop when the Home already permits Archive', async () => {
         const stopSpy = vi.fn(async () => ({
             success: false,
             code: 'session_stop_requested',
             recovery: 'wait_for_inactive' as const,
         }));
-        const archiveSpy = vi.fn()
-            .mockResolvedValueOnce({ success: false, code: 'session_active' })
-            .mockResolvedValueOnce({ success: true });
+        const archiveSpy = vi.fn(async () => ({ success: true }));
 
         const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
         await expect(stopSessionAndMaybeArchive({
@@ -184,7 +223,7 @@ describe('stopSessionAndMaybeArchive', () => {
             stopErrorMessage: 'stop failed',
             archiveErrorMessage: 'archive failed',
         })).resolves.toBeUndefined();
-        expect(archiveSpy).toHaveBeenCalledTimes(2);
+        expect(archiveSpy).toHaveBeenCalledTimes(1);
     });
 
     it('surfaces truthful recovery when session control is unavailable', async () => {
@@ -268,139 +307,7 @@ describe('stopSessionAndMaybeArchive', () => {
         ]);
     });
 
-    it('retries archive after stop when the first archive attempt still sees the session as active', async () => {
-        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_RETRY_MS = '0';
-        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_MAX_RETRIES = '2';
-
-        const stopSpy = vi.fn(async () => ({ success: true }));
-        const archiveSpy = vi.fn()
-            .mockResolvedValueOnce({
-                success: false,
-                message: 'Cannot archive an active session',
-                code: 'session_active' as const,
-            })
-            .mockResolvedValueOnce({ success: true });
-
-        const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
-
-        await stopSessionAndMaybeArchive({
-            address: address('session_retry'),
-            hideInactiveSessions: false,
-            isPinned: false,
-            archiveAfterStop: 'always',
-            stopSession: stopSpy,
-            archiveSession: archiveSpy,
-            stopErrorMessage: 'stop failed',
-            archiveErrorMessage: 'archive failed',
-        });
-
-        expect(stopSpy).toHaveBeenCalledTimes(1);
-        expect(archiveSpy).toHaveBeenCalledTimes(2);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(1, 'server-a', [
-            {
-                sessionId: 'session_retry',
-                patch: { keepVisibleWhenInactive: true },
-            },
-        ]);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(2, 'server-a', [
-            {
-                sessionId: 'session_retry',
-                patch: { keepVisibleWhenInactive: false },
-            },
-        ]);
-    });
-
-    it('keeps retrying archive while the stopped session is still active server-side', async () => {
-        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_RETRY_MS = '0';
-        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_TIMEOUT_MS = '1000';
-
-        const stopSpy = vi.fn(async () => ({ success: true }));
-        const activeArchiveResult = {
-            success: false,
-            message: 'Cannot archive an active session',
-            code: 'session_active' as const,
-        };
-        const archiveSpy = vi.fn()
-            .mockResolvedValueOnce(activeArchiveResult)
-            .mockResolvedValueOnce(activeArchiveResult)
-            .mockResolvedValueOnce(activeArchiveResult)
-            .mockResolvedValueOnce(activeArchiveResult)
-            .mockResolvedValueOnce({ success: true });
-
-        const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
-
-        await stopSessionAndMaybeArchive({
-            address: address('session_long_retry'),
-            hideInactiveSessions: false,
-            isPinned: false,
-            archiveAfterStop: 'always',
-            stopSession: stopSpy,
-            archiveSession: archiveSpy,
-            stopErrorMessage: 'stop failed',
-            archiveErrorMessage: 'archive failed',
-        });
-
-        expect(stopSpy).toHaveBeenCalledTimes(1);
-        expect(archiveSpy).toHaveBeenCalledTimes(5);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(1, 'server-a', [
-            {
-                sessionId: 'session_long_retry',
-                patch: { keepVisibleWhenInactive: true },
-            },
-        ]);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(2, 'server-a', [
-            {
-                sessionId: 'session_long_retry',
-                patch: { keepVisibleWhenInactive: false },
-            },
-        ]);
-    });
-
-    it('uses a default archive wait long enough for delayed daemon exit observation', async () => {
-        vi.useFakeTimers();
-        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_RETRY_MS = '1000';
-
-        try {
-            const stopSpy = vi.fn(async () => ({ success: true }));
-            const activeArchiveResult = {
-                success: false,
-                message: 'Cannot archive an active session',
-                code: 'session_active' as const,
-            };
-            const archiveSpy = vi.fn();
-            for (let index = 0; index < 12; index += 1) {
-                archiveSpy.mockResolvedValueOnce(activeArchiveResult);
-            }
-            archiveSpy.mockResolvedValueOnce({ success: true });
-
-            const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
-
-            const promise = stopSessionAndMaybeArchive({
-                address: address('session_delayed_exit'),
-                hideInactiveSessions: false,
-                isPinned: false,
-                archiveAfterStop: 'always',
-                stopSession: stopSpy,
-                archiveSession: archiveSpy,
-                stopErrorMessage: 'stop failed',
-                archiveErrorMessage: 'archive failed',
-            });
-            const assertion = expect(promise).resolves.toBeUndefined();
-
-            for (let index = 0; index < 12; index += 1) {
-                await vi.advanceTimersByTimeAsync(1000);
-            }
-
-            await assertion;
-            expect(archiveSpy).toHaveBeenCalledTimes(13);
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('uses the archive fallback message when the stopped session stays active until timeout', async () => {
-        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_MAX_RETRIES = '0';
-        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_TIMEOUT_MS = '0';
+    it('uses the archive fallback message when a confirmed Stop has not settled at the Home', async () => {
 
         const stopSpy = vi.fn(async () => ({ success: true }));
         const archiveSpy = vi.fn(async () => ({

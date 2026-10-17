@@ -14,6 +14,7 @@ import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { QualifiedConnectedAccountCredentialSnapshotV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV1ResponseSchema, ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { PROFILE_ROWS_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
@@ -33,6 +34,9 @@ import type {
     ManagedServices,
 } from '@happier-dev/plugin-sdk/managed-services';
 import { PLUGIN_MANIFEST as OPENCODE_PLUGIN_MANIFEST } from '@happier-dev/plugins-opencode/manifest';
+import { PLUGIN_MANIFEST as PI_PLUGIN_MANIFEST } from '@happier-dev/plugins-pi/manifest';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
 import {
     resolveConnectedAccountRequestAuthCapabilityPath,
 } from '@happier-dev/agents/request-auth';
@@ -120,6 +124,7 @@ import {
 } from '@happier-dev/protocol/actions';
 import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { prepareAccountSettingsV2Content } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { encodeStoredCredentials } from '@/persistence';
 import { COMPOSER_SOURCE_REF_PRIVATE_META_FIELD_V1 } from '@happier-dev/protocol/plugins/ui/composerRef';
@@ -135,6 +140,9 @@ import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { procfsFileHandle } from '@/testkit/process/procfsFileHandle';
+import { retainExecutionRunState } from '../executionRunRegistry';
+import { readProcessIdentityByPid } from '../processIdentity';
+import { hashProcessCommand } from '../sessionRegistry';
 
 // Genuine descriptor/directory OS boundaries remain real until a fixture selects
 // procfs; wrapped exports permit that fixture under native ESM namespaces.
@@ -345,10 +353,11 @@ const runtimeAuthRefreshRequest = {
 } as const;
 
 it('commits the accepted hot-apply target before stale bootstrap state can supersede its exact report', async () => {
+    const serviceKey = buildQualifiedPluginContributionKey({ pluginId: 'happier.agent.codex', localId: 'openai-codex' });
     const binding = {
         v: 2,
         bindingsByServiceId: {
-            'openai-codex': {
+            [serviceKey]: {
                 source: 'connected',
                 selection: 'group',
                 groupId: 'work',
@@ -358,7 +367,7 @@ it('commits the accepted hot-apply target before stale bootstrap state can super
     } satisfies ConnectedServiceBindingsV2;
     const selectionA = {
         kind: 'group',
-        serviceId: 'openai-codex',
+        serviceId: serviceKey,
         groupId: 'work',
         activeProfileId: 'primary',
         fallbackProfileId: 'primary',
@@ -367,7 +376,7 @@ it('commits the accepted hot-apply target before stale bootstrap state can super
     } as const;
     const selectionB = {
         kind: 'group',
-        serviceId: 'openai-codex',
+        serviceId: serviceKey,
         groupId: 'work',
         activeProfileId: 'backup',
         fallbackProfileId: 'primary',
@@ -421,7 +430,7 @@ it('commits the accepted hot-apply target before stale bootstrap state can super
     const registeredTarget = registry.getByPid(501);
     expect(registeredTarget).toMatchObject({
         activeBindings: [{
-            serviceId: 'openai-codex',
+            serviceId: serviceKey,
             groupId: 'work',
             profileId: 'backup',
             groupGeneration: 7,
@@ -434,7 +443,7 @@ it('commits the accepted hot-apply target before stale bootstrap state can super
         sessionId,
         classification: {
             kind: 'usage_limit',
-            serviceId: 'openai-codex',
+            serviceId: serviceKey,
             profileId: 'backup',
             groupId: 'work',
             groupGeneration: 7,
@@ -448,7 +457,7 @@ it('commits the accepted hot-apply target before stale bootstrap state can super
         resolveRegisteredRuntimeAuthFailureSource: async () => {
             const current = registry.getBySessionId(sessionId);
             const currentBinding = current?.activeBindings.find(
-                (candidate) => candidate.serviceId === 'openai-codex',
+                (candidate) => candidate.serviceId === serviceKey,
             );
             return currentBinding ? {
                 serviceId: currentBinding.serviceId,
@@ -962,6 +971,7 @@ vi.mock('@/ui/logger', () => ({
         info: vi.fn(),
         infoFile: vi.fn(),
         warn: vi.fn(),
+        warnLocalFile: vi.fn(),
     },
 }));
 
@@ -1439,10 +1449,78 @@ async function writeHostedWebStaticAssetsFixture(input: Readonly<{
     }), 'utf8');
 }
 
+async function installTrackedRunnerProcfsBoundary(
+    tracked: TrackedSession,
+    isLive: () => boolean,
+): Promise<void> {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const open = vi.spyOn(filesystem, 'open').mockImplementation(async (path, flags, mode) => {
+        const file = String(path);
+        if (!file.startsWith(`/proc/${tracked.pid}/`)) return actual.open(path, flags, mode);
+        if (!isLive()) throw Object.assign(new Error('Fixture process exited'), { code: 'ENOENT' });
+        if (file.endsWith('/status')) return procfsFileHandle(`Uid:\t${process.getuid?.() ?? 1000}\t0\t0\t0\n`);
+        if (file.endsWith('/stat')) {
+            const fields = Array<string>(22).fill('0');
+            fields[0] = 'S';
+            fields[1] = '1';
+            fields[2] = String(tracked.pid);
+            fields[3] = String(tracked.pid);
+            fields[19] = String((tracked.processStartTimeMs ?? 1000) / 10);
+            return procfsFileHandle(`${tracked.pid} (fixture-runner) ${fields.join(' ')}`);
+        }
+        return actual.open(path, flags, mode);
+    });
+    const readdir = vi.spyOn(filesystem, 'readdir').mockImplementation(
+        (async (path, options) => String(path) === '/proc'
+            ? [String(process.pid), ...(isLive() ? [String(tracked.pid)] : [])]
+            : actual.readdir(path, options)) as typeof filesystem.readdir,
+    );
+    onTestFinished(() => { open.mockRestore(); readdir.mockRestore(); });
+}
+
 describe('startDaemonSessionControlRuntime', () => {
+    it('admits its own retained detached Run to connected-account resolution without a fabricated Session', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-daemon-detached-auth-'));
+        const originalConfiguration = { happyHomeDir: configuration.happyHomeDir,
+            deviceLocalSecretKeyFile: configuration.deviceLocalSecretKeyFile };
+        Object.assign(configuration, { happyHomeDir: directory, deviceLocalSecretKeyFile: join(directory, 'local.key') });
+        const runtime = await startDaemonSessionControlRuntime({ machineId: 'machine',
+            credentials: { token: 'daemon-fixture', encryption: null }, api: {} as never,
+            connectedServicesMaterializationBaseDir: join(directory, 'connected-services'),
+            getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
+            connectedServiceRuntimeRegistry: new ConnectedServiceRuntimeRegistry(), pidToTrackedSession: new Map(),
+            pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+            getApiMachineForSessions: () => null, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+            connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {},
+            onHappySessionWebhook: async () => {}, requestShutdown: () => {}, processEnv: {},
+        });
+        try {
+            await retainExecutionRunState({ runId: 'daemon-detached-run', callId: 'call', sidechainId: 'side', sessionId: null,
+                depth: 0, intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, backendId: 'claude',
+                instructions: 'Background reply', permissionMode: 'default', retentionPolicy: 'resumable', runClass: 'long_lived',
+                ioMode: 'request_response', status: 'running', startedAtMs: 1 });
+            const materialize = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0].materializeConnectedServicesForExecutionRun;
+            if (!materialize) throw new Error('Production Run materializer was not registered');
+            const input = { runId: 'daemon-detached-run', runnerPid: process.pid, agentId: 'claude', cwd: directory,
+                connectedServices: { v: 2 as const, bindingsByServiceId: {} } };
+            // Empty native selection has no credentials to issue: reaching the canonical
+            // resolver proves own-daemon custody, while unknown keys and PIDs stay refused.
+            expect(await materialize(input)).toMatchObject({ ok: false,
+                errorMessage: 'Connected services selection resolved no materialized auth' });
+            for (const changed of [{ runId: 'missing-run' }, { runnerPid: process.ppid }]) {
+                expect(await materialize({ ...input, ...changed })).toMatchObject({ ok: false,
+                    errorMessage: 'Execution-run connected services runner identity is not current' });
+            }
+        } finally { await runtime.stopControlServer(); Object.assign(configuration, originalConfiguration);
+            await rm(directory, { recursive: true, force: true }); }
+    });
     it('projects a wrapper parent through the installed daemon reader and strict runner contract', async () => {
         const registry = new ConnectedServiceRuntimeRegistry();
+        const runnerIdentity = await readProcessIdentityByPid(process.pid);
+        if (!runnerIdentity?.processStartTimeMs || !runnerIdentity.command) throw new Error('Expected the live fixture runner identity');
         const tracked: TrackedSession = { pid: process.ppid, sessionRunnerPid: process.pid,
+            runnerProcessIdentity: { pid: process.pid, processStartTimeMs: runnerIdentity.processStartTimeMs,
+                processCommandHash: hashProcessCommand(runnerIdentity.command) },
             startedBy: 'daemon', happySessionId: 'wrapped-parent', spawnOptions: { directory: '/repo',
                 backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' } } };
         registry.registerTarget({ pid: tracked.pid, sessionId: tracked.happySessionId, agentId: 'claude',
@@ -1579,7 +1657,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 return { result: 'success', version: 1 };
             },
         });
-        if (finiteRpc) {
+        if (finiteWake) {
             // Socket.IO is the external transport; the installed approval supervisor stays real.
             class ApprovalSocketBoundary extends EventEmitter {
                 connected = false;
@@ -1626,7 +1704,7 @@ describe('startDaemonSessionControlRuntime', () => {
             }
             if (path === '/v1/account/encryption') return { status: 200, data: { mode: requesterMode, updatedAt: 1 } };
             if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: requesterMode, version: 1,
-                signingKeyFingerprint: material ? 'bob-signing' : null, contentKeyFingerprint: material ? computeContentPublicKeyFingerprint(
+                signingKeyFingerprint: material ? 'bob-signing' : null, contentKeyFingerprint: material ? computeAccountEncryptionMigrateKeyFingerprintV1(
                     tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey) : null, updatedAt: 1 } };
             if (path.startsWith('/v1/artifacts/')) {
                 expect(config?.headers?.Authorization).toBe(`Bearer ${bob.token}`);
@@ -1760,7 +1838,6 @@ describe('startDaemonSessionControlRuntime', () => {
                 if (finiteRpc === 'revoked') requesterCurrent = false;
                 const actionOrigin = finiteRpc === 'changed-root' ? { ...controllerCarrier,
                     binding: { ...controllerCarrier.binding, requestEnvelopeDigest: 'b'.repeat(43) } } : controllerCarrier;
-                const rpc = apiMachine!.getPeerMediationMachineRpcHandlerManager();
                 runWithServerHttpBaseUrl(serverUrl, () => apiMachine!.connect());
                 await vi.waitFor(() => expect(machineSocket.getHandler(SOCKET_RPC_EVENTS.REQUEST)).toBeDefined());
                 let rpcResult: unknown;
@@ -1810,7 +1887,7 @@ describe('startDaemonSessionControlRuntime', () => {
                     expect(nativeEffects.filter(role => role === 'power')).toHaveLength(1);
                 }
                 expect((await readStoredCredentials())?.token).toBe(alice.token);
-                expect(ActionOperationListV1ResponseSchema.parse(await rpc.invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {})).items).toEqual([]);
+                expect(ActionOperationListV1ResponseSchema.parse(await apiMachine!.invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {})).items).toEqual([]);
                 return;
             }
             const prepare = runtime.externalActionIngressOwner?.prepareRequesterAccountContext;
@@ -1856,8 +1933,8 @@ describe('startDaemonSessionControlRuntime', () => {
             expect.soft(execution, JSON.stringify({ transportPaths, nativeEffects })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
             expect(getActiveAccountSettingsSnapshotActual.current?.() ?? null).toBe(controllerSettingsBeforeEffect);
             expect((await readStoredCredentials())?.token).toBe(alice.token);
-            const ownOperations = ActionOperationListV1ResponseSchema.parse(await apiMachine!.getPeerMediationMachineRpcHandlerManager()
-                .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
+            const ownOperations = ActionOperationListV1ResponseSchema.parse(await apiMachine!
+                .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
             expect.soft(ownOperations.items, 'Bob native work must not be visible in Alice operation scope').toEqual([]);
             expect(childReached).toBe(false);
             expect(nativeEffects).not.toContain('power');
@@ -2213,6 +2290,9 @@ describe('startDaemonSessionControlRuntime', () => {
             const path = new URL(String(url)).pathname;
             observedTransport.push({ method: 'GET', path });
             if (path === '/v1/account/profile') return { status: 200, data: { id: machine.custodianAccountId } };
+            if (policy === 'creation-cleanup' && path === managedMachineActionEndpointPathV1('machines.managed.get')) {
+                return { status: 200, data: machine };
+            }
             if (policy === 'environment-approved' && path === `/v1/machines/${machine.controller.machineId}`) {
                 return { status: 200, data: { machine: { ...ExternalActionMachineBootstrapV1Schema.parse({
                     id: machine.controller.machineId, active: true, kind: 'persistent', revokedAt: null, replacedByMachineId: null,
@@ -2300,8 +2380,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 expect(ask, JSON.stringify({ ask, observedTransport })).toMatchObject({ kind: 'response', response: { execution: { ok: true,
                     result: { kind: 'approval_request_created', actionId } } } });
                 expect(setupLaunches).toEqual([]);
-                const rpc = apiMachine.getPeerMediationMachineRpcHandlerManager();
-                expect(ActionOperationListV1ResponseSchema.parse(await rpc.invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {})).items).toEqual([]);
+                expect(ActionOperationListV1ResponseSchema.parse(await apiMachine.invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {})).items).toEqual([]);
                 const artifactId = [...artifacts.keys()][0]!;
                 expect(ApprovalRequestV2Schema.parse(approvals[0]).executionOriginV1.requestId).toBe(envelope.requestId);
                 const decision = await ingress.executor.execute('approval.request.decide', { artifactId, decision: 'approve' },
@@ -2316,14 +2395,14 @@ describe('startDaemonSessionControlRuntime', () => {
                 const output = MachineEnvironmentApplyResultV1Schema.parse(approval.execution.result);
                 expect(setupLaunches).toHaveLength(1);
                 expect(setupLaunches[0]).toMatchObject({ args: ['-c', 'printf environment-setup'] });
-                const listed = ActionOperationListV1ResponseSchema.parse(await rpc.invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
+                const listed = ActionOperationListV1ResponseSchema.parse(await apiMachine.invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
                 expect(listed.items).toHaveLength(1);
                 expect(listed.items[0]).toMatchObject({ actionId, requestId: envelope.requestId, operationId: output.operationId, state: 'succeeded',
                     domainRef: { kind: 'machineEnvironment', machineId: machine.controller.machineId, preset: { id: input.presetId, revision: 0 }, terminalId: output.terminalId } });
                 expect(await ingress.executor.execute('approval.request.decide', { artifactId, decision: 'approve' },
                     { surface: 'cli', serverId: configuration.activeServerId, actionRequestId: 'environment-repeated-answer' })).toMatchObject({ ok: true });
                 expect(setupLaunches).toHaveLength(1);
-                expect(ActionOperationListV1ResponseSchema.parse(await rpc.invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {}))
+                expect(ActionOperationListV1ResponseSchema.parse(await apiMachine.invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {}))
                     .items.map(operation => operation.operationId)).toEqual([output.operationId]);
                 expect(environmentReports).toEqual([]); // Existing machine has no managed creation stage.
                 return;
@@ -2342,8 +2421,8 @@ describe('startDaemonSessionControlRuntime', () => {
                 expect(nativeEffects).toEqual([]);
                 // The real Artifact and operation owners are independent: a
                 // deferred Ask is not an executed native acquisition receipt.
-                expect(ActionOperationListV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
-                    .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {})).items).toEqual([]);
+                expect(ActionOperationListV1ResponseSchema.parse(await apiMachine
+                    .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {})).items).toEqual([]);
                 return;
             }
             if (policy === 'guard-cleanup-ask') {
@@ -2378,8 +2457,8 @@ describe('startDaemonSessionControlRuntime', () => {
                 try {
                     const oldArtifactId = await approvalCreated;
                     await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(oldArtifactId)).toBe(1));
-                    const held = ActionOperationListV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
-                        .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
+                    const held = ActionOperationListV1ResponseSchema.parse(await apiMachine
+                        .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
                     expect(held.items).toHaveLength(1);
                     const oldOperationId = held.items[0]!.operationId;
                     expect(nativeEffects).toEqual([]);
@@ -2396,8 +2475,8 @@ describe('startDaemonSessionControlRuntime', () => {
                     // no second edge or timer is supplied to restart it after staleness.
                     await vi.waitFor(() => expect(approvals).toHaveLength(2));
                     expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(oldArtifactId)).toBe(0);
-                    expect(ActionOperationGetV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
-                        .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.get, { operationId: oldOperationId, waitForTerminal: true })))
+                    expect(ActionOperationGetV1ResponseSchema.parse(await apiMachine
+                        .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.get, { operationId: oldOperationId, waitForTerminal: true })))
                         .toMatchObject({ kind: 'found', operation: { operationId: oldOperationId, state: 'cancelled' } });
                     const newArtifactId = [...artifacts.keys()][1]!;
                     await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(newArtifactId)).toBe(1));
@@ -2438,8 +2517,8 @@ describe('startDaemonSessionControlRuntime', () => {
                         actionArgs: { homeId, managedId: machine.id, intent: 'delete', when: 'now', expectedRevision: 1, reviewedDependencies: true },
                         approval: { flow: 'blocking' }, executionOriginV1: { authority: 'account_automation', caller: { kind: 'host' } } });
                     expect(nativeEffects).toEqual([]);
-                    const held = ActionOperationListV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
-                        .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
+                    const held = ActionOperationListV1ResponseSchema.parse(await apiMachine
+                        .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
                     expect(held.items).toHaveLength(1);
                     const operationId = held.items[0]!.operationId;
                     const ingress = runtime.externalActionIngressOwner;
@@ -2452,8 +2531,8 @@ describe('startDaemonSessionControlRuntime', () => {
                     expect(approvals).toHaveLength(1);
                     expect(cleanupAdmissions).toHaveLength(1);
                     expect(unavailable).toEqual([]);
-                    expect(ActionOperationGetV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
-                        .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.get, { operationId, waitForTerminal: true })))
+                    expect(ActionOperationGetV1ResponseSchema.parse(await apiMachine
+                        .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.get, { operationId, waitForTerminal: true })))
                         .toMatchObject({ kind: 'found', operation: { operationId, state: 'succeeded' } });
                     expect(cleanupPeers.every(peer => peer.submittedNativeEffect === undefined)).toBe(true);
                 } finally {
@@ -2581,12 +2660,12 @@ describe('startDaemonSessionControlRuntime', () => {
             const approval = ApprovalRequestV2Schema.parse(approvals[0]);
             expect(approval.actionArgs).toEqual({ homeId, managedId: machine.id, intent: acceptedWake ? 'start' : 'delete', when: 'now', expectedRevision: 1,
                 ...(acceptedWake ? {} : { reviewedDependencies: true }) });
-            const heldOperations = ActionOperationListV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
-                .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
+            const heldOperations = ActionOperationListV1ResponseSchema.parse(await apiMachine
+                .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.list, {}));
             expect(heldOperations.items).toHaveLength(1);
             const operationId = heldOperations.items[0]!.operationId;
-            const heldOperation = ActionOperationGetV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
-                .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.get, { operationId }));
+            const heldOperation = ActionOperationGetV1ResponseSchema.parse(await apiMachine
+                .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.get, { operationId }));
             expect(heldOperation.kind).toBe('found');
             if (heldOperation.kind !== 'found') throw new Error('Expected the same retained automatic operation');
             expect(approval.executionOriginV1.requestId).toBe(heldOperation.operation.requestId);
@@ -2615,8 +2694,8 @@ describe('startDaemonSessionControlRuntime', () => {
             if (nativeExecEnvironment) expect(nativeExecObservations).toEqual([{ selected: 'selected-configuration', unrelated: null }]);
             expect(approvals).toHaveLength(1);
             expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId)).toBe(0);
-            expect(ActionOperationGetV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
-                .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.get, { operationId, waitForTerminal: true }))).toMatchObject({ kind: 'found',
+            expect(ActionOperationGetV1ResponseSchema.parse(await apiMachine
+                .invokeLocalMachineAction(ACTION_OPERATION_RPC_METHODS_V2.get, { operationId, waitForTerminal: true }))).toMatchObject({ kind: 'found',
                 operation: { operationId, state: policy === 'approve' ? 'succeeded' : policy === 'cancel' ? 'cancelled' : 'failed' } });
         } finally {
             policyCancellation.abort();
@@ -3184,16 +3263,15 @@ describe('startDaemonSessionControlRuntime', () => {
     });
 
     it('routes E2EE external Action spawn input through the current authenticated machine admission transport', async () => {
-        type ApiMachineForTest = Readonly<{
+        const daemonToken = `header.${Buffer.from(JSON.stringify({ sub: 'account-external-action-admission' })).toString('base64url')}.signature`;
+        type ApiMachineForTest = Pick<ApiMachineClient, 'createFilesystemActionExecutor' | 'createMachineSkillActionExecutor' | 'invokeLocalMachineAction'> & Readonly<{
             enqueueSessionPendingByMachine: (
                 request: unknown,
                 options?: Readonly<{ signal?: AbortSignal }>,
             ) => Promise<unknown>;
             registerLocalServicesRoutes: (routes: unknown) => void;
             registerSimulatorPreviewRoutes: (routes: unknown) => void;
-            getPeerMediationMachineRpcHandlerManager: () => Readonly<{
-                invokeLocal: (method: string, request: unknown, options?: Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
-            }>;
+            registerMachineAccessLossReceiver: () => void;
         }>;
         const staleEnqueueSessionPendingByMachine = vi.fn<
             (request: unknown, options?: Readonly<{ signal?: AbortSignal }>) => Promise<{
@@ -3232,18 +3310,24 @@ describe('startDaemonSessionControlRuntime', () => {
             ? conflictStatus
             : { ok: true, result: { handoffId: 'handoff-current' } });
         const apiMachineAtStartup: ApiMachineForTest = {
+            createFilesystemActionExecutor: () => async () => { throw new Error('Unexpected QA filesystem Action'); },
+            createMachineSkillActionExecutor: () => async () => { throw new Error('Unexpected QA Skill Action'); },
             enqueueSessionPendingByMachine: async (request, options) =>
                 await staleEnqueueSessionPendingByMachine(request, options),
             registerLocalServicesRoutes: () => {},
             registerSimulatorPreviewRoutes: () => {},
-            getPeerMediationMachineRpcHandlerManager: () => ({ invokeLocal: staleInvokeLocal }),
+            registerMachineAccessLossReceiver: () => {},
+            invokeLocalMachineAction: staleInvokeLocal,
         };
         const apiMachineAtRequest: ApiMachineForTest = {
+            createFilesystemActionExecutor: () => async () => { throw new Error('Unexpected QA filesystem Action'); },
+            createMachineSkillActionExecutor: () => async () => { throw new Error('Unexpected QA Skill Action'); },
             enqueueSessionPendingByMachine: async (request, options) =>
                 await enqueueSessionPendingByMachine(request, options),
             registerLocalServicesRoutes: () => {},
             registerSimulatorPreviewRoutes: () => {},
-            getPeerMediationMachineRpcHandlerManager: () => ({ invokeLocal }),
+            registerMachineAccessLossReceiver: () => {},
+            invokeLocalMachineAction: invokeLocal,
         };
         let currentApiMachineForSessions: ApiMachineForTest | null =
             apiMachineAtStartup;
@@ -3261,7 +3345,7 @@ describe('startDaemonSessionControlRuntime', () => {
         const runtime = await startDaemonSessionControlRuntime({
             machineId: 'machine-external-action-admission',
             credentials: {
-                token: 'token-daemon',
+                token: daemonToken,
                 encryption: {
                     type: 'legacy' as const,
                     secret: new Uint8Array(32).fill(1),
@@ -3321,13 +3405,6 @@ describe('startDaemonSessionControlRuntime', () => {
             );
 
             type ExecutorOptions = Readonly<{
-                workspaceSyncConflictResolve?: (
-                    request: Readonly<{
-                        actionReceiptId: string;
-                        input: unknown;
-                        signal?: AbortSignal;
-                    }>,
-                ) => Promise<unknown>;
                 machineAdmissionTransport?: (
                     request: unknown,
                     options?: Readonly<{ signal?: AbortSignal }>,
@@ -3350,10 +3427,6 @@ describe('startDaemonSessionControlRuntime', () => {
             const machineActionDirectTargetTransport = executorOptions?.machineActionDirectTargetTransport;
             if (!machineActionDirectTargetTransport) {
                 throw new Error('Expected external Action execution to receive local machine Action transport');
-            }
-            const workspaceSyncConflictResolve = executorOptions?.workspaceSyncConflictResolve;
-            if (!workspaceSyncConflictResolve) {
-                throw new Error('Expected external Action execution to receive workspace conflict resolution');
             }
 
             const controller = new AbortController();
@@ -3386,11 +3459,11 @@ describe('startDaemonSessionControlRuntime', () => {
                     expectedDigest: 'a'.repeat(40),
                 },
             } as const;
-            await expect(workspaceSyncConflictResolve({
-                actionReceiptId: 'approval-receipt-1',
-                input: conflictInput,
-                signal: conflictSignal,
-            })).resolves.toEqual(conflictStatus);
+            await expect(machineActionDirectTargetTransport.invoke(
+                RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_RESOLVE,
+                { actionReceiptId: 'approval-receipt-1', actionInput: conflictInput },
+                { signal: conflictSignal },
+            )).resolves.toEqual(conflictStatus);
             expect(machineActionDirectTargetTransport.machineId).toBe('machine-external-action-admission');
             expect(getApiMachineForSessions).toHaveBeenCalledTimes(2);
             expect(enqueueSessionPendingByMachine).toHaveBeenCalledWith(request, {
@@ -3416,7 +3489,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 { initialMessage: 'Durable E2EE initial input' },
                 expect.objectContaining({
                     surface: 'api',
-                    serverId: 'srv_external_action_account',
+                    serverIdentityId: 'srv_external_action_account',
                 }),
             );
         } finally {
@@ -4670,9 +4743,19 @@ describe('startDaemonSessionControlRuntime', () => {
                 providerEmail: null,
             },
         });
+        const readQualifiedCredential = vi.fn(() => QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+            ref: binding.target.account,
+            revisionSemantics: 'revisioned', credentialRevision,
+            authenticationModeId: 'oauth', configurationRevision: null,
+            content: { t: 'plain', v: credential }, metadata: { scopes: [] },
+        }));
         const fetchAccountProfile = vi
             .spyOn(axios, 'get')
-            .mockResolvedValue({
+            .mockImplementation(async url => {
+                const path = new URL(String(url)).pathname;
+                if (path === '/v4/connect/qualified/credential') return { status: 200, data: readQualifiedCredential() };
+                if (path !== '/v1/account/profile') throw new Error(`Unexpected reattached request-auth read ${path}`);
+                return {
                 status: 200,
                 data: {
                     id: 'account-request-auth-reattach',
@@ -4691,170 +4774,75 @@ describe('startDaemonSessionControlRuntime', () => {
                         credentialRevision,
                     }],
                 },
+                };
             });
-        acquireAuthoritativePluginRuntimeRegistryLeaseMock
-            .mockImplementation(async () => ({
-                registry: {
-                    contributes: {
-                        agentDefinitionsById: new Map([
-                            ['opencode', {
-                                identity: purpose.consumer,
-                                richDefinition: {
-                                    definition: {
-                                        connectedAccounts: [{
-                                            purpose: purpose.purpose,
-                                            service:
-                                                binding.target.account.service,
-                                            materializationKinds:
-                                                ['httpHeaders'],
-                                        }],
-                                    },
-                                },
-                                catalogEntry: {
-                                    connectedAccountRequestAuthUses: [{
-                                        purpose:
-                                            currentHUse.purpose.purpose,
-                                        materialization:
-                                            currentHUse.materialization,
-                                    }],
-                                },
-                            }],
-                            ['pi', {
-                                identity: piPurpose.consumer,
-                                richDefinition: {
-                                    definition: {
-                                        connectedAccounts: [{
-                                            purpose:
-                                                piPurpose.purpose,
-                                            service:
-                                                piBinding.target.account.service,
-                                            materializationKinds:
-                                                ['httpHeaders'],
-                                        }],
-                                    },
-                                },
-                                catalogEntry: {
-                                    connectedAccountRequestAuthUses: [{
-                                        purpose:
-                                            piUse.purpose.purpose,
-                                        materialization:
-                                            piUse.materialization,
-                                    }],
-                                },
-                            }],
-                        ]),
-                        // Both shipped Agents declare legacy service-keyed Connected Services,
-                        // which is what grants the recovered subject legacy compatibility.
-                        catalogEntriesById: {
-                            opencode: {
-                                connectedServiceIds: [
-                                    'openai-codex',
-                                    'openai',
-                                    'claude-subscription',
-                                    'anthropic',
-                                ],
-                            },
-                            pi: {
-                                connectedServiceIds: [
-                                    'openai-codex',
-                                    'openai',
-                                    'claude-subscription',
-                                    'anthropic',
-                                ],
-                            },
-                        },
-                    },
-                    acquireRetainedRunnerAgentPurposeContributions:
-                        vi.fn(async ({
-                            binding: retainedBinding,
-                            pluginHardRevocationRevision,
-                        }) => {
-                            const expectedBinding =
-                                retainedBinding.agentId === 'pi'
-                                    ? retainedPiBindingG
-                                    : retainedOpencodeBindingG;
-                            if (
-                                pluginHardRevocationRevision !== 0
-                                || JSON.stringify(retainedBinding)
-                                    !== JSON.stringify(expectedBinding)
-                            ) return null;
-                            return {
-                                contributes: {
-                                    agentDefinitionsById: new Map([
-                                        ['opencode', {
-                                            identity: purpose.consumer,
-                                            richDefinition: {
-                                                definition: {
-                                                    connectedAccounts: [{
-                                                        purpose:
-                                                            purpose.purpose,
-                                                        service:
-                                                            binding.target.account.service,
-                                                        materializationKinds:
-                                                            ['httpHeaders'],
-                                                    }],
-                                                },
-                                            },
-                                            catalogEntry: {
-                                                connectedAccountRequestAuthUses: [{
-                                                    purpose:
-                                                        use.purpose.purpose,
-                                                    materialization:
-                                                        use.materialization,
-                                                }],
-                                            },
-                                        }],
-                                        ['pi', {
-                                            identity: piPurpose.consumer,
-                                            richDefinition: {
-                                                definition: {
-                                                    connectedAccounts: [{
-                                                        purpose:
-                                                            piPurpose.purpose,
-                                                        service:
-                                                            piBinding.target.account.service,
-                                                        materializationKinds:
-                                                            ['httpHeaders'],
-                                                    }],
-                                                },
-                                            },
-                                            catalogEntry: {
-                                                connectedAccountRequestAuthUses: [{
-                                                    purpose:
-                                                        piUse.purpose.purpose,
-                                                    materialization:
-                                                        piUse.materialization,
-                                                }],
-                                            },
-                                        }],
-                                    ]),
-                                    catalogEntriesById: {
-                                        opencode: {
-                                            connectedServiceIds: [
-                                                'openai-codex',
-                                                'openai',
-                                                'claude-subscription',
-                                                'anthropic',
-                                            ],
-                                        },
-                                        pi: {
-                                            connectedServiceIds: [
-                                                'openai-codex',
-                                                'openai',
-                                                'claude-subscription',
-                                                'anthropic',
-                                            ],
-                                        },
-                                    },
-                                },
-                                isCurrent: () => true,
-                                release: vi.fn(async () => {}),
-                            };
-                        }),
+        const projectRequestAuthAgent = (
+            definition: Parameters<typeof projectManifestAgentContribution>[0]['definition'],
+            requestAuthUse: typeof use | typeof piUse | typeof currentHUse,
+        ) => {
+            const projected = projectManifestAgentContribution({
+                definition: {
+                    ...definition,
+                    connectedAccounts: definition.connectedAccounts?.filter(
+                        declaration => declaration.purpose === requestAuthUse.purpose.purpose,
+                    ),
                 },
-                source: 'active',
-                release: vi.fn(async () => {}),
-            }));
+                provenance: 'first_party',
+                source: { kind: 'bundled' },
+                pluginId: requestAuthUse.purpose.consumer.pluginId,
+            });
+            if (!projected.catalogEntry) throw new Error('Expected the declared Agent catalog');
+            return {
+                ...projected,
+                catalogEntry: {
+                    ...projected.catalogEntry,
+                    connectedAccountRequestAuthUses: [{
+                        purpose: requestAuthUse.purpose.purpose,
+                        materialization: requestAuthUse.materialization,
+                    }],
+                },
+            };
+        };
+        const retainedContributes = createResolvedContributionRegistry({
+            agents: [
+                projectRequestAuthAgent(OPENCODE_PLUGIN_MANIFEST.contributes.agents[0]!, use),
+                projectRequestAuthAgent(PI_PLUGIN_MANIFEST.contributes.agents[0]!, piUse),
+            ],
+        });
+        const admittedRuntime = await createAdmittedPluginRuntimeFixture({
+            runtimeOptions: {
+                pluginIds: [],
+                contributes: createResolvedContributionRegistry({
+                    agents: [
+                        projectRequestAuthAgent(OPENCODE_PLUGIN_MANIFEST.contributes.agents[0]!, currentHUse),
+                        projectRequestAuthAgent(PI_PLUGIN_MANIFEST.contributes.agents[0]!, piUse),
+                    ],
+                }),
+            },
+        });
+        onTestFinished(() => admittedRuntime.dispose());
+        // The virtual retained process/generation is the installed-source boundary;
+        // current catalog acquisition uses the real admitted registry and lifecycle.
+        vi.spyOn(
+            admittedRuntime.registry,
+            'acquireRetainedRunnerAgentPurposeContributions',
+        ).mockImplementation(async ({ binding: retainedBinding, pluginHardRevocationRevision }) => {
+            const expectedBinding = retainedBinding.agentId === 'pi'
+                ? retainedPiBindingG : retainedOpencodeBindingG;
+            if (pluginHardRevocationRevision !== 0
+                || JSON.stringify(retainedBinding) !== JSON.stringify(expectedBinding)) return null;
+            let released = false;
+            return {
+                contributes: retainedContributes,
+                isCurrent: () => !released,
+                release: async () => { released = true; },
+            };
+        });
+        acquireAuthoritativePluginRuntimeRegistryLeaseMock.mockImplementation(async () => ({
+            registry: admittedRuntime.registry,
+            source: 'active',
+            release: async () => {},
+        }));
 
         const purposeLeaseCurrentBySessionId =
             new Map<string, boolean>();
@@ -5447,15 +5435,6 @@ describe('startDaemonSessionControlRuntime', () => {
                     coldResumeCutoverTracked,
                 ],
             ]);
-        const getConnectedServiceCredentialPlain =
-            vi.fn(async () => ({
-                revisionSemantics: 'revisioned' as const,
-                credentialRevision,
-                content: {
-                    t: 'plain' as const,
-                    v: credential,
-                },
-            }));
         type RespawnOwnerParams =
             Parameters<
                 typeof sessionRunnerRespawnModule
@@ -5485,8 +5464,6 @@ describe('startDaemonSessionControlRuntime', () => {
                 api: {
                     getAccountEncryptionMode:
                         vi.fn(async () => 'plain'),
-                    getConnectedServiceCredentialPlain:
-                        getConnectedServiceCredentialPlain,
                 } as never,
                 connectedServicesMaterializationBaseDir:
                     materializationBaseDir,
@@ -5517,7 +5494,13 @@ describe('startDaemonSessionControlRuntime', () => {
                 },
                 processEnv: {},
             });
-            await reusedPidSafetyEntered;
+            const awaitRecoveryPhase = (entered: Promise<void>, phase: string) => Promise.race([
+                entered,
+                runtimePromise.then(() => {
+                    throw new Error(`Reattached recovery completed before ${phase}`);
+                }),
+            ]);
+            await awaitRecoveryPhase(reusedPidSafetyEntered, 'reused PID validation');
             const stagedReusedDocument =
                 await readConnectedAccountRequestAuthCapabilityFile(
                     reusedDescriptor.path,
@@ -5542,7 +5525,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 processStartTimeMs: 3_000,
                 command: reattachedProcessCommand,
             });
-            await changedIdentityEntered;
+            await awaitRecoveryPhase(changedIdentityEntered, 'changed process identity validation');
             const stagedChangedIdentityDocument =
                 await readConnectedAccountRequestAuthCapabilityFile(
                     changedIdentityDescriptor.path,
@@ -5581,11 +5564,13 @@ describe('startDaemonSessionControlRuntime', () => {
                 .toHaveBeenCalledWith({
                     binding: retainedOpencodeBindingG,
                     pluginHardRevocationRevision: 0,
+                    runnerSnapshotIdentity: 'snapshot:session-request-auth-reattach',
                 });
             expect(acquireRetainedPurposeContributions)
                 .toHaveBeenCalledWith({
                     binding: retainedPiBindingG,
                     pluginHardRevocationRevision: 0,
+                    runnerSnapshotIdentity: 'snapshot:session-pi-request-auth-reattach',
                 });
             // Persisted marker absence is ambiguous: daemon A may have crashed
             // after Provider work began but before recording task_started. Only
@@ -6181,7 +6166,7 @@ describe('startDaemonSessionControlRuntime', () => {
                     'agent-session:session-pi-request-auth-reattach',
                 legacyServiceKeyedCompatibility: true,
             });
-            expect(getConnectedServiceCredentialPlain)
+            expect(readQualifiedCredential)
                 .not.toHaveBeenCalled();
             const profileFetchesBeforeLookup =
                 fetchAccountProfile.mock.calls.length;
@@ -6214,12 +6199,12 @@ describe('startDaemonSessionControlRuntime', () => {
                 .toBeGreaterThanOrEqual(
                     Math.max(1, profileFetchesBeforeLookup),
                 );
-            expect(getConnectedServiceCredentialPlain)
+            expect(readQualifiedCredential)
                 .toHaveBeenCalledOnce();
             expect(
                 fetchAccountProfile.mock.invocationCallOrder[0],
             ).toBeLessThan(
-                getConnectedServiceCredentialPlain
+                readQualifiedCredential
                     .mock.invocationCallOrder[0]!,
             );
             expect(
@@ -6442,6 +6427,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 legacyServiceKeyedCompatibility: true,
             });
             await expect(dependencies.refreshAfterAuthFailure({
+                subject,
                 resolved: resolved!,
                 failure: {
                     class: 'authentication',
@@ -7157,6 +7143,14 @@ describe('startDaemonSessionControlRuntime', () => {
         try {
             await connectedAccountRequestAuthServiceDependenciesCapture
                 .current?.reportQuotaFailure({
+                    subject: {
+                        subjectId: 'agent-session:request-auth-group-recovery',
+                        legacyServiceKeyedCompatibility: true,
+                        isCurrent: () => true,
+                        registerRedaction: () => {},
+                        resolvePurposeUse: () => null,
+                        listPurposeUses: () => [],
+                    },
                     resolved: {
                         account: {
                             service: {
@@ -7299,7 +7293,7 @@ describe('startDaemonSessionControlRuntime', () => {
             );
             await runtimeHandlerInput?.switchCoordinator
                 ?.switchAfterClassifiedFailure({
-                    serviceId: 'openai-codex',
+                    serviceId: buildQualifiedPluginContributionKey({ pluginId: 'happier.agent.codex', localId: 'openai-codex' }),
                     groupId: 'fallbacks',
                     observedProfileId: 'primary',
                     reason: 'usage_limit',
@@ -7559,6 +7553,14 @@ describe('startDaemonSessionControlRuntime', () => {
             const dependencies = connectedAccountRequestAuthServiceDependenciesCapture.current;
             expect(dependencies).not.toBeNull();
             const quotaFailure = {
+                subject: {
+                    subjectId: 'agent-session:request-auth-backoff',
+                    legacyServiceKeyedCompatibility: true,
+                    isCurrent: () => true,
+                    registerRedaction: () => {},
+                    resolvePurposeUse: () => null,
+                    listPurposeUses: () => [],
+                },
                 resolved: {
                     account: {
                         service: {
@@ -10658,43 +10660,7 @@ describe('startDaemonSessionControlRuntime', () => {
             pidSafetyModule,
             'isPidSafeHappySessionProcess',
         ).mockResolvedValue(true);
-        // The real census/terminator reads procfs before signaling. Model only
-        // this fixture PID's OS files; all unrelated filesystem I/O stays real.
-        const actualOpen = filesystem.open;
-        const procfsOpen = vi.spyOn(filesystem, 'open').mockImplementation(
-            async (path, flags, mode) => {
-                const file = String(path);
-                if (!file.startsWith(`/proc/${revokedPid}/`)) {
-                    return actualOpen(path, flags, mode);
-                }
-                if (!pidToTrackedSession.has(revokedPid)) {
-                    throw Object.assign(new Error('Fixture process exited'), { code: 'ENOENT' });
-                }
-                if (file.endsWith('/status')) {
-                    return procfsFileHandle(`Uid:\t${process.getuid?.() ?? 1000}\t0\t0\t0\n`);
-                }
-                if (file.endsWith('/stat')) {
-                    const fields = Array<string>(22).fill('0');
-                    fields[0] = 'S';
-                    fields[1] = '1';
-                    fields[2] = String(revokedPid);
-                    fields[3] = String(revokedPid);
-                    fields[19] = String(revokedTracked.processStartTimeMs! / 10);
-                    return procfsFileHandle(`${revokedPid} (fixture-runner) ${fields.join(' ')}`);
-                }
-                return actualOpen(path, flags, mode);
-            },
-        );
-        onTestFinished(() => procfsOpen.mockRestore());
-        const actualReaddir = filesystem.readdir;
-        // Procfs directory enumeration must include the same observed fixture
-        // process as its descriptors. Other directory reads keep their options.
-        const procfsReaddir = vi.spyOn(filesystem, 'readdir').mockImplementation(
-            (async (path, options) => String(path) === '/proc'
-                ? [String(process.pid), ...(pidToTrackedSession.has(revokedPid) ? [String(revokedPid)] : [])]
-                : actualReaddir(path, options)) as typeof filesystem.readdir,
-        );
-        onTestFinished(() => procfsReaddir.mockRestore());
+        await installTrackedRunnerProcfsBoundary(revokedTracked, () => pidToTrackedSession.has(revokedPid));
         const processKill = vi.spyOn(process, 'kill')
             .mockImplementation(((targetPid: number, signal?: number | NodeJS.Signals) => {
                 if (
@@ -11229,7 +11195,7 @@ describe('startDaemonSessionControlRuntime', () => {
             sessionRunnerPid: 197,
             startedBy: 'daemon',
             happySessionId: sessionId,
-            processStartTimeMs: 789,
+            processStartTimeMs: 780,
             processCommandHash: '7'.repeat(64),
             runnerProcessIdentity: {
                 pid: 197,
@@ -11470,7 +11436,7 @@ describe('startDaemonSessionControlRuntime', () => {
             ? vi.spyOn(process, 'kill').mockImplementation((
                 (targetPid: number, signal?: number | NodeJS.Signals) => {
                     if (
-                        targetPid === -tracked.pid
+                        targetPid === tracked.pid
                         && signal === 'SIGTERM'
                     ) {
                         pidToTrackedSession.delete(tracked.pid);
@@ -11499,6 +11465,9 @@ describe('startDaemonSessionControlRuntime', () => {
                 'isPidSafeHappySessionProcess',
             ).mockResolvedValue(true)
             : null;
+        if (runnerMustStop) {
+            await installTrackedRunnerProcfsBoundary(tracked, () => pidToTrackedSession.has(tracked.pid));
+        }
 
         listener?.({
             durableRevision: 10,
@@ -11590,7 +11559,7 @@ describe('startDaemonSessionControlRuntime', () => {
             if (runnerMustStop) {
                 await vi.waitFor(() => {
                     expect(processKill).toHaveBeenCalledWith(
-                        -tracked.pid,
+                        tracked.pid,
                         'SIGTERM',
                     );
                     expect(tracked.stopRequestedAtMs)
@@ -11606,7 +11575,7 @@ describe('startDaemonSessionControlRuntime', () => {
                     );
                 });
                 expect(processKill).not.toHaveBeenCalledWith(
-                    -tracked.pid,
+                    tracked.pid,
                     'SIGTERM',
                 );
                 expect(pidToTrackedSession.get(tracked.pid))
@@ -11615,7 +11584,7 @@ describe('startDaemonSessionControlRuntime', () => {
         } else if (runnerMustStop) {
             await vi.waitFor(() => {
                 expect(processKill).toHaveBeenCalledWith(
-                    -tracked.pid,
+                    tracked.pid,
                     'SIGTERM',
                 );
                 expect(tracked.stopRequestedAtMs)
@@ -11721,6 +11690,11 @@ describe('startDaemonSessionControlRuntime', () => {
         Object.assign(tracked, {
             processStartTimeMs: runner.processStartTimeMs,
             processCommandHash: runner.processCommandHash,
+            runnerProcessIdentity: {
+                pid: runner.pid,
+                processStartTimeMs: runner.processStartTimeMs,
+                processCommandHash: runner.processCommandHash,
+            },
             runnerAgentSourceCustodyV1:
                 binding.sourceCustody,
             runnerAgentInvocationContext: {
@@ -11972,7 +11946,8 @@ describe('startDaemonSessionControlRuntime', () => {
             agentContribution: {
                 pluginId: 'happier.agent.codex',
                 localId: 'codex',
-                immutableGenerationId: 'generation-codex-run-startup-port',
+                sourceCustody: { kind: 'managed' as const,
+                    immutableGenerationId: 'generation-codex-run-startup-port', installSource: 'npm' as const },
             },
             materializationKey: runId,
             connectedServicesBindings: {
@@ -12011,7 +11986,7 @@ describe('startDaemonSessionControlRuntime', () => {
                                 definition: {
                                     connectedAccounts: [{
                                         purpose: purpose.purpose,
-                                        service: 'openai-codex',
+                                        service: binding.target.account.service,
                                         materializationKinds:
                                             ['httpHeaders'],
                                     }],
@@ -12029,6 +12004,7 @@ describe('startDaemonSessionControlRuntime', () => {
                     readPluginOccurrenceId: vi.fn(() =>
                         'occurrence-codex-run-startup-port',
                     ),
+                    readPluginSourceCustody: () => registration.agentContribution.sourceCustody,
                 },
                 source: 'active',
                 release: vi.fn(async () => {}),
@@ -12321,7 +12297,7 @@ describe('startDaemonSessionControlRuntime', () => {
         await runtime.stopControlServer();
     });
 
-    it('completes fresh resume admission only for the external control-server spawn boundary', async () => {
+    it('completes fresh resume admission for Machine RPC and local control-server spawn boundaries', async () => {
         const originalCreateSessionRunnerRespawnManager =
             sessionRunnerRespawnModule.createSessionRunnerRespawnManager;
         const completedAdmissions: Array<ReturnType<typeof vi.fn>> = [];
@@ -12332,10 +12308,10 @@ describe('startDaemonSessionControlRuntime', () => {
         ).mockImplementation((params) => {
             const manager = originalCreateSessionRunnerRespawnManager(params);
             prepareFreshExplicitResumeAdmission.mockImplementation((sessionId: string) => {
-                const complete = manager.prepareFreshExplicitResumeAdmission(sessionId);
-                const observedComplete = vi.fn(complete);
+                const admission = manager.prepareFreshExplicitResumeAdmission(sessionId);
+                const observedComplete = vi.fn(admission.complete);
                 completedAdmissions.push(observedComplete);
-                return observedComplete;
+                return { ...admission, complete: observedComplete };
             });
             return {
                 ...manager,
@@ -12376,16 +12352,17 @@ describe('startDaemonSessionControlRuntime', () => {
             await expect(runtime.spawnSession(resumeOptions)).resolves.toEqual(
                 expect.objectContaining({ type: 'success' }),
             );
-            expect(prepareFreshExplicitResumeAdmission).not.toHaveBeenCalled();
+            expect(prepareFreshExplicitResumeAdmission).toHaveBeenCalledTimes(1);
+            expect(completedAdmissions[0]).toHaveBeenCalledTimes(1);
 
             const controlServerInput = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0];
             if (!controlServerInput) throw new Error('Expected control server input');
             await expect(controlServerInput.spawnSession(resumeOptions)).resolves.toEqual(
                 expect.objectContaining({ type: 'success' }),
             );
-            expect(prepareFreshExplicitResumeAdmission).toHaveBeenCalledTimes(1);
-            expect(completedAdmissions).toHaveLength(1);
-            expect(completedAdmissions[0]).toHaveBeenCalledTimes(1);
+            expect(prepareFreshExplicitResumeAdmission).toHaveBeenCalledTimes(2);
+            expect(completedAdmissions).toHaveLength(2);
+            expect(completedAdmissions[1]).toHaveBeenCalledTimes(1);
 
             vi.mocked(executeSpawnSessionRequest).mockResolvedValueOnce({
                 type: 'error',
@@ -12396,15 +12373,15 @@ describe('startDaemonSessionControlRuntime', () => {
                 ...resumeOptions,
                 existingSessionId: 'session-failed',
             })).resolves.toEqual(expect.objectContaining({ type: 'error' }));
-            expect(completedAdmissions).toHaveLength(2);
-            expect(completedAdmissions[1]).not.toHaveBeenCalled();
+            expect(completedAdmissions).toHaveLength(3);
+            expect(completedAdmissions[2]).not.toHaveBeenCalled();
         } finally {
             await runtime.stopControlServer();
             createManagerSpy.mockRestore();
         }
     });
 
-    it('makes explicit Stop supersede automatic recovery while keeping later internal resumes stop-fenced', async () => {
+    it('makes explicit Stop supersede automatic recovery until a fresh explicit Resume succeeds', async () => {
         const stoppedSessionId = 'session-internal-resume-stop-fence';
         const crashedSessionId = 'session-unstopped-crash';
         const pidToTrackedSession = new Map<number, TrackedSession>();
@@ -12508,11 +12485,6 @@ describe('startDaemonSessionControlRuntime', () => {
                 new Error('durable recovery store unavailable'),
             );
             await expect(runtime.stopSession(stoppedSessionId)).resolves.toEqual({ status: 'not_found' });
-            await expect(runtime.spawnSession(stoppedResumeOptions)).resolves.toEqual(
-                expect.objectContaining({ type: 'success' }),
-            );
-            expect(executeSpawnSessionRequest).toHaveBeenCalledTimes(1);
-
             pidToTrackedSession.set(8801, {
                 pid: 8801,
                 startedBy: 'daemon',
@@ -12525,8 +12497,13 @@ describe('startDaemonSessionControlRuntime', () => {
                 signal: null,
             });
             await new Promise((resolve) => setTimeout(resolve, 100));
-            expect(executeSpawnSessionRequest).toHaveBeenCalledTimes(1);
+            expect(executeSpawnSessionRequest).not.toHaveBeenCalled();
             expect(pidToTrackedSession.has(8801)).toBe(false);
+
+            await expect(runtime.spawnSession(stoppedResumeOptions)).resolves.toEqual(
+                expect.objectContaining({ type: 'success' }),
+            );
+            expect(executeSpawnSessionRequest).toHaveBeenCalledTimes(1);
 
             pidToTrackedSession.set(8802, {
                 pid: 8802,
@@ -13063,22 +13040,6 @@ describe('startDaemonSessionControlRuntime', () => {
     });
 
     it('repairs dead unresolved terminal topology through the canonical Stop owner before Resume', async () => {
-        const originalCreateSessionRunnerRespawnManager =
-            sessionRunnerRespawnModule.createSessionRunnerRespawnManager;
-        const markStopRequested = vi.fn();
-        const managerSpy = vi.spyOn(
-            sessionRunnerRespawnModule,
-            'createSessionRunnerRespawnManager',
-        ).mockImplementation((params) => {
-            const manager = originalCreateSessionRunnerRespawnManager(params);
-            return {
-                ...manager,
-                markStopRequested: (...args) => {
-                    markStopRequested(...args);
-                    return manager.markStopRequested(...args);
-                },
-            };
-        });
         const runtime = await startDaemonSessionControlRuntime({
             machineId: 'machine-terminal-recovery',
             credentials: {
@@ -13108,19 +13069,23 @@ describe('startDaemonSessionControlRuntime', () => {
         });
 
         try {
+            // Keep the deciding launch admission real even in this catalog fixture.
+            // Physical launch is covered by the custom-ACP composed suite.
+            vi.mocked(executeSpawnSessionRequest).mockImplementationOnce(async ({ options }) => {
+                if (options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()) {
+                    return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+                        errorMessage: 'Session handoff launch custody unavailable' };
+                }
+                return { type: 'success', sessionId: 'spawned-session' };
+            });
             await expect(runtime.spawnSession({
                 directory: '/tmp/project',
                 backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
                 existingSessionId: 'session-unresolved-terminal',
             })).resolves.toEqual({ type: 'success', sessionId: 'spawned-session' });
-            expect(markStopRequested).toHaveBeenCalledWith(
-                'session-unresolved-terminal',
-                expect.objectContaining({ reason: 'daemon_stop_session' }),
-            );
             expect(executeSpawnSessionRequest).toHaveBeenCalledTimes(1);
         } finally {
             await runtime.stopControlServer();
-            managerSpy.mockRestore();
         }
     });
 

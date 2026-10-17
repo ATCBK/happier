@@ -118,6 +118,7 @@ describe('SessionRemotePermissionGrantsView', () => {
         });
         expect(screen.getTextContent()).toContain('Revoked grant from external:alice');
         expect(screen.findByTestId('session-remote-permission-grant-grant-1-revoke')).toBeNull();
+        expect(confirm).not.toHaveBeenCalled();
     });
 
     it('fails closed when a response lacks the owner-only grant projection', async () => {

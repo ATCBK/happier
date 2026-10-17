@@ -112,7 +112,6 @@ import { inspectDaemonPublicationPresence, type DaemonPublicationPresenceInspect
 import {
   type PluginChangeDecision,
   type PluginChangeDecisionResult,
-  type PluginChangeListResult,
   type PluginChangeRequest,
   type PluginChangeRequestResult,
   type PluginChangeStatusRequest,
@@ -120,6 +119,7 @@ import {
   type PluginChangeTerminalResult,
   type PluginPendingChangeEntry,
 } from '@/plugins/daemon/changeContract';
+import type { UserPluginChangeListResult } from '@/plugins/daemon/changeClient';
 import { PluginChangePendingReviewResultSchema } from '@happier-dev/protocol/marketplace/internal';
 import type { PluginChangePendingReviewResult } from '@happier-dev/protocol/marketplace/internal';
 import {
@@ -184,11 +184,6 @@ const DAEMON_PING_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_PING_TIMEOUT_MS';
 const DAEMON_STOP_WAIT_FOR_DEATH_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_STOP_WAIT_FOR_DEATH_TIMEOUT_MS';
 const DAEMON_SHUTDOWN_SPAWN_DRAIN_GRACE_ENV_KEY = 'HAPPIER_DAEMON_SHUTDOWN_SPAWN_DRAIN_GRACE_MS';
 const EXECUTION_RUN_CS_MATERIALIZE_TIMEOUT_ENV_KEY = 'HAPPIER_EXECUTION_RUN_CS_MATERIALIZE_TIMEOUT_MS';
-// The daemon's serialized materialization owner may legitimately wait up to six minutes behind an
-// older root operation before it begins its own bounded refresh/copy/promotion work. Keep the
-// caller's deadline at the existing ten-minute cap so load does not turn valid work into an
-// ambiguous abandoned start plus compensating release.
-const DEFAULT_EXECUTION_RUN_CS_MATERIALIZE_TIMEOUT_MS = 600_000;
 
 function serializeSpawnDaemonSessionRequestForLocalControl(
   request: SpawnDaemonSessionRequest,
@@ -254,12 +249,12 @@ function resolvePositiveIntValue(
 
 export function resolveExecutionRunConnectedServiceMaterializeTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,
-): number {
-  return resolvePositiveIntValue(
-    env[EXECUTION_RUN_CS_MATERIALIZE_TIMEOUT_ENV_KEY],
-    DEFAULT_EXECUTION_RUN_CS_MATERIALIZE_TIMEOUT_MS,
-    { min: 1_000, max: 600_000 },
-  );
+): number | null {
+  // Root writers wait for their live predecessor; elapsed time does not revoke
+  // their authority. Only an explicitly configured caller deadline bounds this phase.
+  const raw = env[EXECUTION_RUN_CS_MATERIALIZE_TIMEOUT_ENV_KEY]?.trim();
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function resolveDaemonPingTimeoutMs(): number {
@@ -539,20 +534,26 @@ export async function readDaemonPluginChangeStatus(
 /**
  * Enumerates the daemon's outstanding plugin-change decisions.
  *
- * A daemon that is not reachable holds no in-memory pending changes by
- * definition, so an unreachable or malformed response is an empty listing
- * rather than an error: there is nothing for a present user to decide.
+ * Absence of pending changes is authoritative only when the daemon answers
+ * successfully. Transport failures and malformed responses remain distinct so
+ * callers cannot present unknown daemon state as a truthful empty list.
  */
 export async function listDaemonPluginChanges(
   options: DaemonControlRequestOptions = {},
-): Promise<PluginChangeListResult> {
+): Promise<UserPluginChangeListResult> {
   const result = await daemonPost(PLUGIN_CHANGE_LIST_PATH, {}, pluginControlOptions(options));
   if (!result || typeof result !== 'object' || typeof result.error === 'string') {
-    return { changes: [] };
+    return {
+      kind: 'unavailable',
+      code: result && typeof result === 'object' && typeof result.errorCode === 'string'
+        ? result.errorCode
+        : 'daemon_unavailable',
+    };
   }
   const changes = (result as Readonly<Record<string, unknown>>).changes;
-  if (!Array.isArray(changes)) return { changes: [] };
+  if (!Array.isArray(changes)) return { kind: 'unavailable', code: 'invalid_daemon_response' };
   return {
+    kind: 'available',
     changes: changes.flatMap((entry): readonly PluginPendingChangeEntry[] => {
       const review = parseDaemonPluginChangeReviewResult(entry);
       if (review) return [review];
@@ -644,12 +645,21 @@ export async function requestDaemonSignedRootActionExecution(
   const spec = getActionSpec(request.actionId);
   const { sideEffectClass } = spec;
   const executionPlacement = resolveActionExecutionPlacementForInput(spec, request.input);
+  // These roots compose the same daemon-owned change and development controls.
+  const usesPluginControl = request.actionId === 'plugins.install'
+    || request.actionId === 'plugins.uninstall'
+    || request.actionId === 'plugins.dev.submit'
+    || request.actionId === 'plugins.dev.unregister'
+    || request.actionId === 'plugins.reload'
+    || request.actionId === 'plugins.change.status'
+    || request.actionId === 'plugins.list';
   const result = await daemonPost(SIGNED_ROOT_ACTION_EXECUTE_PATH, request, {
     ...options,
-    // Idle observation owns its deadline; client Actions may wait for approval
-    // and completion under the caller lifetime. Neither gets a shorter ACK cutoff.
+    // Idle observation owns its deadline; client and contributed Actions may
+    // wait for approval and completion under the caller lifetime.
     timeoutMs: options.timeoutMs !== undefined ? options.timeoutMs
-      : request.actionId === 'session.wait.idle' || executionPlacement === 'client'
+      : usesPluginControl ? pluginControlOptions(options).timeoutMs
+      : request.actionId === 'session.wait.idle' || request.actionId === 'action.invoke' || executionPlacement === 'client'
         || request.actionId === 'daemon.filesystem.upload' || request.actionId === 'daemon.filesystem.download'
         || (request.actionId === 'daemon.filesystem.copy' && request.input && typeof request.input === 'object'
           && 'kind' in request.input && request.input.kind === 'prepared_transfer') ? null : 300_000,

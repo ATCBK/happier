@@ -22,6 +22,7 @@ import {
     resolveValidatedShareableServerUrl,
 } from '@/sync/domains/server/url/shareableServerUrl';
 import { buildStoredContentPublicShareUrlV1 } from '@happier-dev/protocol/sharing/storedContentPublicShareV1';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { SessionPublicVisualNetworkConsequence } from '@/sync/api/session/sessionPublicVisualNetworkConsequence';
 import { describePublicLinkNetworkConsequence, hasSamePublicLinkNetworkConsequence } from '@/components/sharing/PublicLinkNetworkConfirmation';
 
@@ -251,6 +252,7 @@ export function useSessionPublicLinkController(input: SessionPublicLinkControlle
         try {
             await client().removePublicLink();
         } catch (error) {
+            if (error instanceof SessionAccessApiError && isActionApprovalDeclinedErrorCode(error.code)) return;
             if (error instanceof SessionAccessApprovalPendingError && isCurrent()) {
                 holdForApproval(error, 'session.public_link.remove', { sessionId }, async () => {
                     applyAuthoritativePublication(null);

@@ -2,12 +2,13 @@ import { expect, it, vi } from 'vitest';
 
 import { logger } from '@/ui/logger';
 
-import { refuseExternalActionPhase } from './externalActionPhase';
+import { refuseExternalActionPhase, runTracedExternalActionStage, traceExternalActionStage } from './externalActionPhase';
 import { executeExternalAction } from './executeExternalAction';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
 
-it.each(['session.stop', 'session.status.get'])('traces %s admission and real executor phases without caller content', async actionId => {
+it.each(['session.stop', 'session.status.get', 'projects.script.run', 'projects.compute.exec', 'approval.request.decide', 'plugins.list'])('traces %s admission and real executor phases without caller content', async actionId => {
+  vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', actionId === 'plugins.list' ? '0' : '1');
   const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
   const rootRequestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
   try {
@@ -25,7 +26,7 @@ it.each(['session.stop', 'session.status.get'])('traces %s admission and real ex
         stage: 'action_execution.phase', phase: 'cli_context', elapsedMs: expect.any(Number) })],
     ]));
     expect(JSON.stringify(stages)).not.toContain('private-');
-  } finally { log.mockRestore(); }
+  } finally { log.mockRestore(); vi.unstubAllEnvs(); }
 });
 
 it('does not disclose a changing Error name through private diagnostics', () => {
@@ -41,3 +42,38 @@ it('does not disclose a changing Error name through private diagnostics', () => 
     expect(JSON.stringify(log.mock.calls)).not.toContain('private-details');
   } finally { log.mockRestore(); }
 });
+
+it('joins contributed stages by the RPC UUID and preserves thrown values without logging them', async () => {
+  const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+  const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+  const failure = new Error('private-failure-marker');
+  try {
+    await expect(runTracedExternalActionStage('action.invoke', `rpc_${requestId}`, 'contributed.execute',
+      async () => { throw failure; })).rejects.toBe(failure);
+    expect(log.mock.calls).toEqual(['begin', 'end'].map(edge => [
+      '[external-action-stage]', { actionId: 'action.invoke', rootRequestId: requestId, stage: `contributed.execute.${edge}` },
+    ]));
+    await runTracedExternalActionStage('action.invoke', 'private-invalid-request-marker', 'contributed.execute', () => null);
+    expect(log.mock.calls).toHaveLength(2);
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private-');
+  } finally { log.mockRestore(); }
+});
+
+it.each(['machines.provisioners.list', 'machines.provisioners.check', 'machines.provisioners.options'])(
+  'correlates %s read completion and cleanup only while latency diagnostics are enabled', actionId => {
+    const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    const rootRequestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+    const transportRequestId = 'fd0b0146-17a5-431c-bc69-3a3fa865b1d7';
+    try {
+      vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '0');
+      traceExternalActionStage(actionId, rootRequestId, 'action_execution.end', transportRequestId);
+      expect(log).not.toHaveBeenCalled();
+      vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+      traceExternalActionStage(actionId, rootRequestId, 'action_execution.end', transportRequestId);
+      traceExternalActionStage(actionId, rootRequestId, 'daemon.cleanup.end', transportRequestId);
+      expect(log.mock.calls).toEqual(['action_execution.end', 'daemon.cleanup.end'].map(stage => [
+        '[external-action-stage]', { actionId, rootRequestId, stage, transportRequestId },
+      ]));
+    } finally { log.mockRestore(); vi.unstubAllEnvs(); }
+  },
+);

@@ -53,11 +53,11 @@ describe('listSessionBulkActionDescriptors', () => {
             SESSION_BULK_ACTION_IDS.moveToFolder,
         ]);
         expect(descriptors.find((descriptor) => descriptor.id === SESSION_BULK_ACTION_IDS.stop)).toMatchObject({
-            requiresConfirmation: true,
+            requiresConfirmation: undefined,
             destructive: true,
         });
         expect(descriptors.find((descriptor) => descriptor.id === SESSION_BULK_ACTION_IDS.archive)).toMatchObject({
-            requiresConfirmation: true,
+            requiresConfirmation: undefined,
             destructive: true,
         });
     });

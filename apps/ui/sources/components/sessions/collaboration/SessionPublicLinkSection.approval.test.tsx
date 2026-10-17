@@ -42,7 +42,7 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
-const modal = vi.hoisted(() => ({ update: vi.fn(), hide: vi.fn(), alert: vi.fn(), show: vi.fn((_config: unknown) => 'network-confirmation') }));
+const modal = vi.hoisted(() => ({ update: vi.fn(), hide: vi.fn(), alert: vi.fn(), confirm: vi.fn(async () => true), show: vi.fn((_config: unknown) => 'network-confirmation') }));
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -186,10 +186,68 @@ describe('SessionPublicLinkSection deferred approval', () => {
         modal.update.mockReset();
         modal.hide.mockReset();
         modal.alert.mockReset();
+        modal.confirm.mockReset().mockResolvedValue(true);
         modal.show.mockClear();
     });
 
     afterEach(() => standardCleanup());
+
+    it.each(['default', 'ask'] as const)('uses the canonical %s policy when turning off a public link', async policy => {
+        const serverId = await addPublishingHome();
+        if (policy === 'ask') await harness.requireUiApproval(serverId, 'session.public_link.remove');
+        const active = { id: 'active-link', expiresAt: null, useCount: 0, maxUses: null, isConsentRequired: true, updatedAt: 1 };
+        let removed = false;
+        harness.answer(serverId, `GET ${PUBLIC_SHARE_PATH}`, { select: () => ({ body: { publicShare: removed ? null : active } }) });
+        harness.answer(serverId, `DELETE ${PUBLIC_SHARE_PATH}`, { select: () => { removed = true; return { body: { success: true } }; } });
+        const { SessionPublicLinkSection, useSessionCollaborationPublicLink } = await import('./SessionPublicLinkSection');
+        function PublicLink() {
+            const link = useSessionCollaborationPublicLink({ scope: { serverId, accountId: ACCOUNT_ID },
+                sessionId: SESSION_ID, session: session(), availability: hostedAvailability() });
+            return <SessionPublicLinkSection link={link} hasSession shareable />;
+        }
+        const screen = await renderScreen(<PublicLink />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('session-public-link-status')?.props.children).toBe('On'));
+        await screen.pressByTestIdAsync('session-public-link-turn-off');
+        if (policy === 'ask') {
+            await waitForHomeGovernance(() => expect(screen.findByTestId('session-public-link-approval')).not.toBeNull());
+            const rows = harness.artifacts(serverId).list();
+            expect(rows).toHaveLength(1);
+            expect(JSON.parse(harness.artifacts(serverId).readPlainBody(rows[0]!.id)!)).toMatchObject({
+                status: 'open', actionId: 'session.public_link.remove', actionArgs: { sessionId: SESSION_ID },
+            });
+            expect(removed).toBe(false);
+            expect(modal.confirm).not.toHaveBeenCalled();
+        } else {
+            await waitForHomeGovernance(() => expect(screen.findByTestId('session-public-link-status')?.props.children).toBe('Off'));
+            expect(removed).toBe(true);
+            expect(modal.confirm).toHaveBeenCalledTimes(1);
+            expect(harness.artifacts(serverId).list()).toHaveLength(0);
+        }
+    });
+
+    it('keeps a declined public-link removal at the policy owner silent and unchanged', async () => {
+        const serverId = await addPublishingHome();
+        harness.answer(serverId, `GET ${PUBLIC_SHARE_PATH}`, { body: { publicShare: {
+            id: 'active-link', expiresAt: null, useCount: 0, maxUses: null, isConsentRequired: true, updatedAt: 1,
+        } } });
+        modal.confirm.mockResolvedValue(false);
+        const { SessionPublicLinkSection, useSessionCollaborationPublicLink } = await import('./SessionPublicLinkSection');
+        let remove: (() => Promise<void>) | undefined;
+        function PublicLink() {
+            const link = useSessionCollaborationPublicLink({ scope: { serverId, accountId: ACCOUNT_ID },
+                sessionId: SESSION_ID, session: session(), availability: hostedAvailability() });
+            remove = link.remove;
+            return <SessionPublicLinkSection link={link} hasSession shareable />;
+        }
+        const screen = await renderScreen(<PublicLink />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('session-public-link-status')?.props.children).toBe('On'));
+        await act(async () => { await expect(remove!()).resolves.toBeUndefined(); });
+        expect(modal.confirm).toHaveBeenCalledTimes(1);
+        expect(harness.requestsFor(PUBLIC_SHARE_PATH)).toHaveLength(1);
+        expect(screen.findByTestId('session-public-link-status')?.props.children).toBe('On');
+        expect(screen.findByTestId('session-public-link-mutation-error')).toBeNull();
+        expect(modal.alert).not.toHaveBeenCalled();
+    });
 
     it('rereads a public Session visual changed while the Share confirmation is open and requires a fresh confirmation', async () => {
         const serverId = await addPublishingHome();

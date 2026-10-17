@@ -13,7 +13,7 @@ import { t } from '@/text';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { readLocalServiceActionOutcome } from './localServiceActionOutcome';
-import { executeLocalServiceActionWithAdmission, isLocalServiceActionAdmissionCurrent, readLocalServiceSetupConsentReview, useLocalServiceActionExecutor, type LocalServiceActionAdmission } from './localServiceActionAdmission';
+import { executeLocalServiceActionWithAdmission, isLocalServiceActionAdmissionCurrent, readLocalServiceSetupConsentReview, useLocalServiceActionExecutor, type LocalServiceActionAdmission, type LocalServiceActionInvocationOptions } from './localServiceActionAdmission';
 
 /** History is a scoped presentation mutation, never a process lifecycle control. */
 export function useLocalServiceLauncherHistoryClearAction(context: LocalServiceActionAdmission & Readonly<{
@@ -178,7 +178,7 @@ function readInventoryEntryIdFromTarget(target: LocalServiceLaunchTarget): strin
 
 export type ManagedLocalServiceControlAction = (target: LocalServiceLaunchTarget,
     actionId: 'localServices.actions.stopManaged' | 'localServices.actions.restartManaged',
-    options?: Pick<LocalServiceActionRequestV1, 'expectedEffectDigest' | 'choice'>) => Promise<unknown>;
+    options?: Pick<LocalServiceActionRequestV1, 'expectedEffectDigest' | 'choice'> & LocalServiceActionInvocationOptions) => Promise<unknown>;
 
 /** Exact managed controls use the same published Actions and never optimistically settle custody. */
 export function useManagedLocalServiceControlAction(context: Readonly<{
@@ -199,7 +199,7 @@ export function useManagedLocalServiceControlAction(context: Readonly<{
         const dispatch = () => runtimeActionExecute({ actionId,
             input: request,
             context: { ...(sessionId ? { defaultSessionId: sessionId } : {}), ...(actionServerId ? { serverId: actionServerId } : {}), surface: 'ui' },
-        });
+        }, options);
         let result = await dispatch();
         while (actionId === 'localServices.actions.restartManaged' && isLocalServiceActionAdmissionCurrent(context)) {
             const review = LocalServiceActionResultV1Schema.safeParse(result);
@@ -234,7 +234,7 @@ export function useDetectedLocalServiceTerminateAction(
         workspaceId?: string | null;
         serverId?: string | null;
     }> & LocalServiceActionAdmission,
-): ((target: LocalServiceLaunchTarget) => Promise<unknown>) | undefined {
+): ((target: LocalServiceLaunchTarget, options?: LocalServiceActionInvocationOptions) => Promise<unknown>) | undefined {
     const machineId = normalizeNonEmptyString(context.machineId);
     const sessionId = normalizeNonEmptyString(context.sessionId);
     const workspaceId = normalizeNonEmptyString(context.workspaceId);
@@ -245,7 +245,7 @@ export function useDetectedLocalServiceTerminateAction(
         if (!runtimeActionExecute || !machineId) {
             return undefined;
         }
-        return async (target: LocalServiceLaunchTarget) => {
+        return async (target: LocalServiceLaunchTarget, options?: LocalServiceActionInvocationOptions) => {
             if (target.source !== 'inventory_entry' || !target.actions.includes('terminate_detected')) {
                 return undefined;
             }
@@ -266,7 +266,7 @@ export function useDetectedLocalServiceTerminateAction(
                     ...(serverId ? { serverId } : {}),
                     surface: 'ui',
                 },
-            });
+            }, options);
         };
     }, [machineId, runtimeActionExecute, serverId, sessionId, workspaceId]);
 }
@@ -346,6 +346,7 @@ export function useDetectedLocalServiceForgetAction(
                                 const receipt = LocalServiceActionResultV1Schema.safeParse(result);
                                 if (receipt.success && receipt.data.status === 'succeeded') return result;
                                 const outcome = readLocalServiceActionOutcome(result);
+                                if (outcome.kind === 'cancelled') return result;
                                 reasonCode = outcome.kind === 'failed' ? outcome.reasonCode : null;
                             } catch {
                                 // Transport failure is visible through the same notice owner.

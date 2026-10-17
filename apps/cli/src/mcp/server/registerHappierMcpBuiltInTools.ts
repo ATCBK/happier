@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createHappierToolInventory, type HappierToolInventory, type BuiltInHappierToolsSurface } from '@/agent/tools/happierTools/listBuiltInHappierTools';
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
 import { createPluginJsonSchemaZodObjectAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
@@ -8,11 +9,12 @@ import type { ActionId, ActionsSettingsV1, ApprovalRequestOriginV1, BrowserScree
 import { BrowserScreenshotMediaReferenceV1Schema } from '@happier-dev/protocol/browser/context/v1';
 import { SessionImageMediaReferenceV1Schema } from '@happier-dev/protocol/sessions/media/imageReferenceV1';
 import type { HappierBuiltInToolDefinition } from '@/agent/tools/happierTools/types';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 import { projectSessionBoundActionToolInputSchema } from '@/agent/tools/happierTools/actionToolContext';
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
+import { projectMcpToolInputJsonSchema, rewriteMcpJsonSchemaReferences } from './projectMcpToolInputJsonSchema';
 import {
     BrowserMediaUnavailableError,
     browserMediaToStructuredImageInput,
@@ -109,7 +111,7 @@ function toMcpToolInputSchema(params: Readonly<{
     sessionId: string;
     sessionMachineId?: string | null;
     pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
-}>): z.ZodType {
+}>): z.ZodMiniType {
     const contextualInputSchema = params.actionId
         ? projectSessionBoundActionToolInputSchema({
             actionId: params.actionId,
@@ -124,14 +126,14 @@ function toMcpToolInputSchema(params: Readonly<{
     return toMcpToolObjectSchema(contextualInputSchema, 'inputSchema');
 }
 
-function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema'): z.ZodType;
-function toMcpToolObjectSchema(schema: unknown, field: 'outputSchema'): z.ZodType | undefined;
-function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSchema'): z.ZodType | undefined {
+function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema'): z.ZodMiniType;
+function toMcpToolObjectSchema(schema: unknown, field: 'outputSchema'): z.ZodMiniType | undefined;
+function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSchema'): z.ZodMiniType | undefined {
     if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
         throw new Error(`Plugin tool ${field} must be a JSON Schema object`);
     }
     if (field === 'outputSchema') {
-        const completed = schema instanceof z.ZodType
+        const completed = schema instanceof z.core.$ZodType
             ? schema
             : createPluginJsonSchemaZodObjectAdapter(schema);
         const completedJsonSchema = projectActionOutputJsonSchema(completed, { target: 'draft-7' });
@@ -140,11 +142,11 @@ function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSc
         // Approval creation is an execution outcome, not a completed Action
         // output. Every approval-capable tool shares the protocol envelope.
         const output = z.union([completed, ActionApprovalRequestCreatedResultSchema]);
-        const adapter = z.object({}).passthrough().superRefine((value, ctx) => {
+        const adapter = z.looseObject({}).check(z.superRefine((value, ctx) => {
             if (!output.safeParse(value).success) {
                 ctx.addIssue({ code: 'custom', message: 'Value does not match the Action outputSchema' });
             }
-        });
+        }));
         adapter._zod.processJSONSchema = (_ctx, json) => {
             Object.assign(json, {
                 type: 'object',
@@ -153,23 +155,23 @@ function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSc
         };
         return adapter;
     }
-    if (schema instanceof z.ZodType) {
+    if (schema instanceof z.core.$ZodType) {
         // Action schemas are executable parser contracts and can contain
         // normalization transforms that the MCP SDK cannot render. Present
         // the same canonical structural JSON Schema used by Action discovery
         // through a non-transforming Zod object adapter. Validation delegates
         // to the original schema, while dispatch retains the authoritative
         // parse/normalization rather than receiving MCP-transformed input.
-        const jsonSchema = zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' });
+        const jsonSchema = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' }));
         if (jsonSchema === undefined) return undefined;
-        const adapter = z.object({}).passthrough().superRefine((value, ctx) => {
-            if (!schema.safeParse(value).success) {
+        const adapter = z.looseObject({}).check(z.superRefine((value, ctx) => {
+            if (!z.safeParse(schema, value).success) {
                 ctx.addIssue({
                     code: 'custom',
                     message: `Value does not match the Action ${field}`,
                 });
             }
-        });
+        }));
         adapter._zod.processJSONSchema = (_ctx, json) => {
             Object.assign(json, jsonSchema);
             json.type = 'object';
@@ -180,34 +182,15 @@ function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSc
     // vocabulary. The MCP SDK accepts Zod at registration, so use the protocol
     // owner's presentation adapter; daemon action execution remains the
     // authoritative validation and dispatch owner.
-    return createPluginJsonSchemaZodObjectAdapter(schema);
+    const adapter = createPluginJsonSchemaZodObjectAdapter(schema);
+    const jsonSchema = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(adapter, { target: 'draft-7' }));
+    adapter._zod.processJSONSchema = (_ctx, json) => { Object.assign(json, jsonSchema); };
+    return adapter;
 }
 
 /** Document-local references still belong to the completed output after nesting it in anyOf. */
 function nestMcpOutputJsonSchema(schema: JsonSchemaObject): JsonSchemaObject {
-    const nested: Record<string, unknown> = { ...schema };
-    if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#')) {
-        nested.$ref = `#/anyOf/0${schema.$ref.slice(1)}`;
-    }
-    // Visit schema positions only: const/default/enum objects may contain literal $ref data.
-    for (const key of ['properties', 'definitions', '$defs']) {
-        const entries = schema[key];
-        if (entries && typeof entries === 'object' && !Array.isArray(entries)) {
-            nested[key] = Object.fromEntries(Object.entries(entries as Readonly<Record<string, JsonSchemaObject>>).map(([name, child]) =>
-                [name, nestMcpOutputJsonSchema(child)]));
-        }
-    }
-    for (const key of ['items', 'additionalProperties', 'propertyNames', 'not']) {
-        const child = schema[key];
-        if (child && typeof child === 'object' && !Array.isArray(child)) {
-            nested[key] = nestMcpOutputJsonSchema(child as JsonSchemaObject);
-        }
-    }
-    for (const key of ['anyOf', 'oneOf', 'allOf']) {
-        const children = schema[key];
-        if (Array.isArray(children)) nested[key] = (children as readonly JsonSchemaObject[]).map(nestMcpOutputJsonSchema);
-    }
-    return nested;
+    return rewriteMcpJsonSchemaReferences(schema, ref => ref.startsWith('#') ? `#/anyOf/0${ref.slice(1)}` : ref);
 }
 
 function buildPluginToolMcpMeta(tool: HappierBuiltInToolDefinition): Record<string, unknown> | undefined {
@@ -363,10 +346,10 @@ export function registerHappierMcpBuiltInTools(
                         toolName: tool.name,
                         extra,
                     });
-                    const rawRequestId = (extra as { requestId?: unknown } | null | undefined)?.requestId;
-                    const actionRequestId = typeof rawRequestId === 'string' || typeof rawRequestId === 'number'
-                        ? String(rawRequestId).trim()
-                        : '';
+                    // JSON-RPC ids correlate a connection and can restart at zero,
+                    // including when a new client reaches this same live server.
+                    // Keep them in approval provenance, never operation identity.
+                    const actionRequestId = randomUUID();
                     const currentActionsSettings = readActionsSettings();
                     const result = await dispatchBuiltInHappierTool({
                         toolName: tool.name,
@@ -379,7 +362,7 @@ export function registerHappierMcpBuiltInTools(
                         pluginToolCatalog: params.pluginToolCatalog,
                         requiredDirectActionIds: params.requiredDirectActionIds,
                         ...(approvalOrigin ? { approvalOrigin } : {}),
-                        ...(actionRequestId ? { actionRequestId } : {}),
+                        actionRequestId,
                         ...((extra as McpRequestHandlerExtra | undefined)?.signal
                             ? { signal: (extra as McpRequestHandlerExtra).signal } : {}),
                         deps: params.deps,

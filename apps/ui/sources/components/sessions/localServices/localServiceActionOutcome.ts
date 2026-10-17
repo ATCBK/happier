@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { LocalServiceNativePrerequisiteV1Schema, type LocalServiceNativePrerequisiteV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { LocalServiceEstablishmentFailureV1Schema, type LocalServiceEstablishmentFailureV1 } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -28,6 +28,7 @@ type UnknownRecord = Record<string, unknown>;
 
 export type LocalServiceActionOutcome =
     | Readonly<{ kind: 'succeeded' }>
+    | Readonly<{ kind: 'cancelled' }>
     | Readonly<{ kind: 'approval_pending'; artifactId: string; actionId: string }>
     /**
      * `reasonCode` is `null` only when the action never dispatched — a guard in the action hook
@@ -74,8 +75,9 @@ export function readLocalServiceActionFailureReason(result: unknown): string | n
  *
  * Anything else is a success payload the caller already knows how to parse.
  */
-function readFailureOutcome(result: unknown): Extract<LocalServiceActionOutcome, { kind: 'failed' }> {
+function readFailureOutcome(result: unknown): Extract<LocalServiceActionOutcome, { kind: 'failed' | 'cancelled' }> {
     const reasonCode = readLocalServiceActionFailureReason(result);
+    if (isActionApprovalDeclinedErrorCode(reasonCode) || reasonCode === 'cancelled') return { kind: 'cancelled' };
     const record = asRecord(result);
     const prerequisite = LocalServiceNativePrerequisiteV1Schema.safeParse(reasonCode === 'native_tool_unavailable'
         ? record?.prerequisite ?? asRecord(record?.details)?.prerequisite : undefined);

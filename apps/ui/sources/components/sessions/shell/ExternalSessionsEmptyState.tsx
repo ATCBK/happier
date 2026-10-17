@@ -44,7 +44,6 @@ export function ExternalSessionsEmptyState(props: ExternalSessionsEmptyStateProp
                 <EmptyState
                     testID="direct-sessions-empty-state-line"
                     layout="line"
-                    lineDensity="compact"
                     titleTestID="direct-sessions-empty-state-title"
                     title={t('externalSessions.emptyStateTitle')}
                     primaryAction={{

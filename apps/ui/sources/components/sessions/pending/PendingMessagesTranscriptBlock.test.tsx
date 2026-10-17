@@ -1658,7 +1658,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(screen.findByTestId('pendingMessages.clearTerminalComposer')).toBeTruthy();
         await screen.pressByTestIdAsync('pendingMessages.clearTerminalComposer');
 
-        expect(modalConfirm).toHaveBeenCalledTimes(1);
+        expect(modalConfirm).not.toHaveBeenCalled();
         expect(executeDefaultAction).toHaveBeenCalledWith(
             'session.terminalComposer.clear',
             { sessionId: 's1', expectedStateAtMs: 42 },
@@ -1721,9 +1721,9 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(screen.findByTestId('pendingMessages.clearTerminalComposer')).toBeNull();
     });
 
-    it('does not call the clear action when terminal composer clear is canceled', async () => {
+    it('keeps the pending row when the clear Action confirmation is canceled', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
-        modalConfirm.mockResolvedValueOnce(false);
+        executeDefaultAction.mockResolvedValueOnce({ ok: false, errorCode: 'approval_canceled', error: 'approval_canceled' });
         sessionValue = {
             active: true,
             thinking: false,
@@ -1746,8 +1746,9 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         await screen.pressByTestIdAsync('pendingMessages.clearTerminalComposer');
 
-        expect(modalConfirm).toHaveBeenCalledTimes(1);
-        expect(executeDefaultAction).not.toHaveBeenCalled();
+        expect(modalConfirm).not.toHaveBeenCalled();
+        expect(executeDefaultAction).toHaveBeenCalledTimes(1);
+        expect(modalAlert).not.toHaveBeenCalled();
         expect(screen.findByTestId('pendingMessages.row:p1')).toBeTruthy();
     });
 

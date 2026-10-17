@@ -28,6 +28,7 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 import { LocalServiceActionFailureNotice } from './LocalServiceActionFailureNotice';
 import { useLocalServiceActionRunner } from './localServiceActionOutcome';
+import type { LocalServiceActionInvocationOptions } from './localServiceActionAdmission';
 import {
     copyLocalServiceAddress,
     formatLocalServiceRowAddress,
@@ -47,10 +48,10 @@ import type { LocalServiceCapabilityDisabledReasons } from './useLocalServicePub
 
 export type ServiceRowOpenHandler = (target: LocalServiceLaunchTarget) => ServicesOpenInBrowserResult | void | Promise<unknown>;
 export type ServiceRowStartHandler = (target: LocalServiceLaunchTarget) => void | Promise<unknown>;
-export type ServiceRowTerminateHandler = (target: LocalServiceLaunchTarget) => void | Promise<unknown>;
+export type ServiceRowTerminateHandler = (target: LocalServiceLaunchTarget, options?: LocalServiceActionInvocationOptions) => void | Promise<unknown>;
 export type ServiceRowForgetHandler = (target: LocalServiceLaunchTarget) => void | Promise<unknown>;
 /** Stop or Restart a managed lifetime through its exact occurrence; the result, not the press, settles the row. */
-export type ServiceRowManagedControlHandler = (target: LocalServiceLaunchTarget) => void | Promise<unknown>;
+export type ServiceRowManagedControlHandler = (target: LocalServiceLaunchTarget, options?: LocalServiceActionInvocationOptions) => void | Promise<unknown>;
 export type ServiceRowCopyUrlHandler = (
     target: LocalServiceLaunchTarget,
     value: string,

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBandBoundary';
+import type { NewSessionLaunchApprovalNoticeState } from '@/components/sessions/new/components/NewSessionLaunchApprovalNotice';
 import type { ViewStyle } from 'react-native';
 import { Keyboard, Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
@@ -110,6 +110,7 @@ export type NewSessionSimplePanelProps = Readonly<{
     launchPendingPreviewVisible?: boolean;
     providerLaunchError?: ProviderErrorV1 | null;
     retryProviderLaunch?: () => void;
+    launchApproval?: NewSessionLaunchApprovalNoticeState | null;
     emptyAutocompleteKinds: React.ComponentProps<typeof AgentInput>['autocompleteKinds'];
     emptyAutocompleteSuggestions: React.ComponentProps<typeof AgentInput>['autocompleteSuggestions'];
     sessionPromptInputMaxHeight?: number;
@@ -228,7 +229,6 @@ const NewSessionFloatingComposerCapsuleRow = React.memo(
 );
 
 export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.ReactElement {
-    const atmosphereBoundary = useAtmosphereBandBoundary();
     const { width: windowWidth } = useWindowDimensions();
     const shouldBottomAnchor =
         props.shouldBottomAnchor ?? (Platform.OS !== 'web' || isMobileLayoutWidth(windowWidth));
@@ -439,7 +439,7 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                           * slot measured its ramp from the top of the close capsule, which put the
                           * band a capsule-plus-gap higher than the edge it is supposed to seat.
                           */}
-                        <View ref={atmosphereBoundary?.ref} onLayout={atmosphereBoundary?.onLayout}>
+                        <View>
                         {isFloatingComposer ? (
                             <OverlayScrim
                                 progress={enterProgress}

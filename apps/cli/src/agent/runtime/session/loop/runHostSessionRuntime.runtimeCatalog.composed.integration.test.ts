@@ -13,6 +13,7 @@ import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { clearDaemonStateForTestTeardown, writeDaemonState } from '@/persistence';
 import axios from 'axios';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import { UpdateSchema, UserMessageSchema } from '@/api/types';
 import * as machineRpcTransport from '@/session/transport/rpc/machineRpc';
 import * as storedAuthTransport from '@/auth/validateStoredAuthTokenAgainstActiveServer';
@@ -35,7 +36,7 @@ import { readPendingCapabilityApplyV1 } from '@happier-dev/protocol/reach/sessio
 import { CheckpointCodeRollbackResultSchema } from '@happier-dev/protocol/sessions/control/rollback/checkpointCodeRollback';
 import { buildRepositoryCheckpointRefs } from '@/scm/checkpoints';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   buildBackendTargetKey,
   accountSettingsParse,
@@ -4074,7 +4075,7 @@ describe('runHostSessionRuntime', () => {
     }
   });
 
-  it('uses a late-admitted Provider binding as the active target without an early handoff', async () => {
+  it.each(['foreground', 'managedRuntime'] as const)('uses a %s-admitted Provider binding as the active target without an early handoff', async (admission) => {
     const harness = createHarness();
     const connectionId = ProviderConnectionIdSchema.parse('pc_late');
     const agentTargetKey = 'agent:happier.agent.codex/codex';
@@ -4132,11 +4133,12 @@ describe('runHostSessionRuntime', () => {
       sourceKind: 'built_in',
     };
     harness.opts.modelSelection = modelSelection;
-    harness.opts.resolveLateEnvironment = async () => ({
+    if (admission === 'foreground') harness.opts.resolveLateEnvironment = async () => ({
       environmentVariables: {},
       unsetEnvironmentVariables: [],
       sensitiveEnvironmentVariableNames: [],
     });
+    else harness.config.providerBindingAdmission = 'runtime';
     harness.session.getMetadataSnapshot = () => metadata;
     harness.session.updateMetadata.mockImplementation(async (update: unknown) => {
       metadata = typeof update === 'function'
@@ -6128,11 +6130,14 @@ describe('runHostSessionRuntime', () => {
     expect(capturedStartupSideEffectsOrder).toBe('persist-first');
   });
 
-  it('runs the session-initialized lifecycle hook before runtime creation', async () => {
+  it.each(['ordinary', 'deferred'] as const)('runs the session-initialized lifecycle hook before runtime creation (%s)', async startup => {
     const harness = createHarness();
     const callOrder: string[] = [];
+    let startupSignal: AbortSignal | undefined;
     harness.config.lifecycleHooks = {
-      onSessionInitialized: async ({ attachedToExistingSession, session }: any) => {
+      onSessionInitialized: async ({ attachedToExistingSession, session, signal }) => {
+        startupSignal = signal;
+        expect(signal.aborted).toBe(false);
         callOrder.push(`initialized:${attachedToExistingSession}:${session.sessionId}`);
       },
     };
@@ -6145,6 +6150,17 @@ describe('runHostSessionRuntime', () => {
         attachedToExistingSession: true,
       };
     };
+    if (startup === 'deferred') {
+      harness.config.startupBootstrap = { create: async () => ({
+        api: { push: () => null }, session: harness.session, machineId: 'machine-1',
+        metadata: createTestMetadata({ path: '/tmp/workspace' }), attachedToExistingSession: true,
+        reconnectionHandle: null,
+        start: async options => {
+          callOrder.push('session-created');
+          await options?.prepareSession?.(harness.session);
+        },
+      }) };
+    }
     setSessionRuntimeFactory(harness.config, () => {
       callOrder.push('runtime-created');
       return {
@@ -6160,6 +6176,27 @@ describe('runHostSessionRuntime', () => {
       'initialized:true:session-1',
       'runtime-created',
     ]);
+    expect(startupSignal?.aborted).toBe(true);
+  });
+
+  it.each(['initialization-hook', 'runtime-construction'] as const)('retires initialized startup admission after %s failure', async failure => {
+    const harness = createHarness();
+    const failureCause = new Error('startup-admission-failure');
+    let startupSignal: AbortSignal | undefined;
+    let admissionRetired = false;
+    harness.config.lifecycleHooks = {
+      onSessionInitialized: async ({ signal }) => {
+        startupSignal = signal;
+        signal.addEventListener('abort', () => { admissionRetired = true; }, { once: true });
+        if (failure === 'initialization-hook') throw failureCause;
+      },
+    };
+    setSessionRuntimeFactory(harness.config, () => { throw failureCause; });
+
+    await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toBe(failureCause);
+
+    expect(startupSignal?.aborted).toBe(true);
+    expect(admissionRetired).toBe(true);
   });
 
   it('does not create the provider runtime while backend session initialization is pending', async () => {
@@ -6958,6 +6995,36 @@ describe('runHostSessionRuntime', () => {
     };
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+  });
+
+  it('attributes a held startup publisher claim before custody and model publication complete', async () => {
+    const harness = createHarness();
+    const releaseClaim = createDeferred<void>();
+    const claimEntered = createDeferred<void>();
+    const diagnostics = vi.spyOn(logger, 'infoFile');
+    harness.session.claimCurrentSessionPublisherAuthorityForStartup = async () => {
+      claimEntered.resolve();
+      await releaseClaim.promise;
+      return { status: 'claimed' as const };
+    };
+    const startup = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    try {
+      await claimEntered.promise;
+      expect(diagnostics).toHaveBeenCalledWith('[Qwen] Startup authority phase', expect.objectContaining({
+        phase: 'publisher_claim', status: 'started', sessionId: harness.session.sessionId,
+      }));
+    } finally {
+      releaseClaim.resolve();
+      await startup;
+    }
+    const completed = diagnostics.mock.calls.filter(([label, fields]) => label === '[Qwen] Startup authority phase'
+      && (fields as { status?: string })?.status === 'completed').map(([, fields]) => fields);
+    expect(completed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: 'publisher_claim', durationMs: expect.any(Number) }),
+      expect.objectContaining({ phase: 'required_snapshot', durationMs: expect.any(Number) }),
+      expect.objectContaining({ phase: 'durable_delivery_activation', durationMs: expect.any(Number) }),
+      expect.objectContaining({ phase: 'active_model_facts', durationMs: expect.any(Number) }),
+    ]));
   });
 
   it('establishes durable Session custody before runtime creation, then reconciles fresh model intent', async () => {
@@ -9035,6 +9102,31 @@ describe('runHostSessionRuntime', () => {
       .toBeLessThan(harness.session.enqueueSessionTurnMutation.mock.invocationCallOrder[failureCallIndex]!);
     expect(harness.session.close).toHaveBeenCalledOnce();
     diagnostic.mockRestore();
+  });
+
+  it('publishes a typed compatibility failure before a created Session runner exits', async () => {
+    const harness = createHarness();
+    const failure = Object.assign(new Error('private incompatible server response'), {
+      code: 'metadata_privacy_upgrade_required',
+    });
+    setSessionRuntimeFactory(harness.config, async () => { throw failure; });
+
+    await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toBe(failure);
+
+    const { SessionTurnMutationV1Schema } = await import('@happier-dev/protocol/sessions/turns/sessionTurnMutationV1');
+    const mutations = harness.session.enqueueSessionTurnMutation.mock.calls
+      .map(([mutation]: readonly [unknown]) => SessionTurnMutationV1Schema.parse(mutation));
+    expect(mutations).toContainEqual(expect.objectContaining({
+      action: 'fail',
+      issue: expect.objectContaining({
+        code: 'metadata_privacy_upgrade_required',
+        source: 'dependency_failure',
+        sanitizedPreview: 'Session startup needs a compatible Home. Update or reconnect, then retry the Session.',
+      }),
+    }));
+    expect(harness.session.enqueueSessionTurnMutation.mock.invocationCallOrder.at(-1))
+      .toBeLessThan(harness.session.deactivateDurableMutationDelivery.mock.invocationCallOrder[0]!);
+    expect(harness.session.close).toHaveBeenCalledOnce();
   });
 
   it('resolves and passes native MCP servers for the Grok catalog policy', async () => {
@@ -11784,6 +11876,7 @@ describe('runHostSessionRuntime', () => {
   });
 
   it('lets user input arriving during the workflow deliverability recheck run before the step host event', async () => {
+    onTestFinished(installEmptyProjectAccountRowsHttpBoundary());
     const harness = createHarness();
     harness.session.hasPendingProviderInput = vi.fn(() => false);
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>((mode) => mode.permissionMode, { batcher: combinePermissionModeQueuedPrompts });

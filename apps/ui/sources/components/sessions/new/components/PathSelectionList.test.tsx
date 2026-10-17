@@ -414,6 +414,39 @@ describe('PathSelectionList', () => {
         act(() => screen.tree.unmount());
     });
 
+    it('tells the person that Enter uses a typed folder that does not exist yet, instead of a bare "No matches"', async () => {
+        // Live 2026-10-16 (PLUGVIS r2k/r2l): typing a new folder name showed only "No matches".
+        listMachineFileBrowserDirectoryEntriesMock.mockResolvedValue({
+            ok: true,
+            entries: [{ type: 'directory', name: 'Archive', path: '/Users/leeroy/current/Archive' }],
+        });
+        const { PathSelectionList } = await import('./PathSelectionList');
+        const screen = await renderScreen(
+            <PathSelectionList
+                initialValue="/Users/leeroy/current"
+                initialSuggestionMode="history"
+                favorites={[]}
+                recents={[]}
+                machineHomeDir="/Users/leeroy"
+                machineId="m-1"
+                serverId="srv-1"
+                machinePlatform="unix"
+                onCommit={() => {}}
+                onRequestClose={() => {}}
+            />,
+        );
+
+        await act(async () => {
+            screen.changeTextByTestId('path-selection-list:header:input', 'recipe-box');
+        });
+        await flushPathSelectionDynamicResolver();
+
+        const { t } = await import('@/text');
+        expect(screen.getTextContent()).toContain(t('newSession.pathPicker.emptyNewFolder'));
+        expect(screen.getTextContent()).not.toContain(t('selectionList.emptyMatch'));
+        act(() => screen.tree.unmount());
+    });
+
     it('renders the open-tree-browser button in the input suffix slot when a machine is bound', async () => {
         const { PathSelectionList } = await import('./PathSelectionList');
         const screen = await renderScreen(

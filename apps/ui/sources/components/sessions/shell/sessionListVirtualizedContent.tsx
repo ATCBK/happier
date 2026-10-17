@@ -93,7 +93,6 @@ export function SessionListFilteredNoResultsMessage(props: Readonly<{
         <View accessibilityLiveRegion="polite" testID="session-list-filtered-no-results">
             <EmptyState
                 layout="line"
-                lineDensity="compact"
                 title={t(props.message ?? SESSION_LIST_FILTERED_NO_RESULTS_MESSAGE_KEY)}
             />
         </View>

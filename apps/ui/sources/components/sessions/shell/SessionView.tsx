@@ -542,7 +542,7 @@ import { resolvePendingActivationBanner } from '@/components/sessions/pending/re
 import { useManagedPendingWakeObservation } from '@/components/sessions/pending/useManagedPendingWakeObservation';
 import { deriveManagedWakeProjection } from '@/sync/domains/pending/managedWakeProjection';
 import { ManagedWakePopover, describeManagedWakeLabel } from '@/components/sessions/pending/ManagedWakePopover';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { machineCollectionHref } from '@/components/settings/machines/collection/machineCollectionModel';
@@ -608,7 +608,7 @@ import { ComposerAuxiliaryFrame } from './view/ComposerAuxiliaryFrame';
 import { SessionComputerPresenceLine } from '@/components/computer/SessionComputerPresenceLine';
 import { SessionViewerHost } from '@/components/sessions/viewer/SessionViewerHost';
 import { SessionViewerScope } from '@/components/sessions/viewer/SessionViewerScope';
-import { useSessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
+import { useSessionDestinationAccountBinding, useSessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
 import { SessionViewerStickySlot } from '@/components/sessions/viewer/SessionViewerStickySlot';
 import { COMPOSER_CONTENT_HORIZONTAL_INSET } from '@/components/sessions/agentInput/composerContentInset';
 import { WarningActionBanner } from './view/WarningActionBanner';
@@ -1939,12 +1939,14 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
         explicitRouteServerId
         || resolveServerIdForSessionIdFromLocalCache(sessionId)
         || getActiveServerSnapshot().serverId;
+    const destinationAccountBinding = useSessionDestinationAccountBinding(sessionId, currentSessionRouteServerId);
+    const destinationOwnsAccountBinding = destinationAccountBinding !== undefined;
     const routeAccountBindingServerIds = React.useMemo(
-        () => currentSessionRouteServerId ? [currentSessionRouteServerId] : [],
-        [currentSessionRouteServerId],
+        () => !destinationOwnsAccountBinding && currentSessionRouteServerId ? [currentSessionRouteServerId] : [],
+        [currentSessionRouteServerId, destinationOwnsAccountBinding],
     );
     const routeAccountBindings = useServerCredentialAccountScopeBindings(routeAccountBindingServerIds);
-    const routeAccountBinding = routeAccountBindings.values().next().value as
+    const routeAccountBinding = destinationOwnsAccountBinding ? destinationAccountBinding : routeAccountBindings.values().next().value as
         | ServerCredentialAccountScopeBinding
         | undefined;
     const sessionAccountBinding = routeAccountBinding && (isEmbedWindowContext() || routeAccountBinding.isCurrent())
@@ -2104,10 +2106,16 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
         () => resolveExternalSessionIdentityPresentation(ownerMetadata, currentSessionMachineId),
         [currentSessionMachineId, ownerMetadata],
     );
+    const attachmentsUploadsFeatureEnabled = useFeatureEnabled('attachments.uploads');
+    const attachmentsUploadsTransferAvailable = useSessionFileUploadAvailability(acceptedSessionId, currentSessionRouteServerId, 'attachment');
+    const attachmentsUploadsEnabled = attachmentsUploadsFeatureEnabled
+        && attachmentsUploadsTransferAvailable
+        && resolveEmbeddedComposerControls(embedded)?.attachments !== false;
     const sessionBrowserContextRuntime = useSessionBrowserContextRuntime({
         enabled: browserContextFeatureEnabled && isSurfaceFocused && session != null,
         scopeKey: acceptedSessionId,
         sessionId: acceptedSessionId,
+        attachmentsUploadsEnabled,
         nowMs: nowServerMs,
         onAttachUnavailable: React.useCallback(() => {
             Modal.alert(t('common.error'), t('browserContext.composer.contextUnavailable'));
@@ -2763,6 +2771,7 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
                            transcriptApprovalRequests={transcriptApprovalRequests}
                            paneUrlState={props.paneUrlState ?? null}
                            initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
+                           attachmentsUploadsEnabled={attachmentsUploadsEnabled}
                            browserContextStateForComposer={browserContextStateForComposer}
                            browserContextComposerContext={browserContextComposerContext}
                            paneScopeId={paneScopeId}
@@ -2837,6 +2846,7 @@ function SessionViewLoadedContent({
     transcriptApprovalRequests,
     paneUrlState,
     initialAttachmentDrafts,
+    attachmentsUploadsEnabled,
     browserContextStateForComposer,
     browserContextComposerContext,
     paneScopeId,
@@ -2888,6 +2898,7 @@ function SessionViewLoadedContent({
     transcriptApprovalRequests: ReadonlyArray<OpenApprovalArtifactForSession>;
     paneUrlState: SessionPaneUrlState | null;
     initialAttachmentDrafts: readonly AttachmentDraft[] | null;
+    attachmentsUploadsEnabled: boolean;
     browserContextStateForComposer: BrowserContextState | null;
     browserContextComposerContext: SessionBrowserContextRuntime['composerContext'] | null;
     paneScopeId: string;
@@ -2925,7 +2936,7 @@ function SessionViewLoadedContent({
         : null;
     const sessionAccountScope = sessionAccountLifetime?.scope ?? null;
     const presentSessionActionOutcome = React.useCallback((error: unknown, lifetime: typeof sessionAccountLifetime) => {
-        if (!lifetime?.isCurrent()) return;
+        if (!lifetime?.isCurrent() || !composerPresentationMountedRef.current) return;
         const pendingApproval = error instanceof HappyError
             && error.code === 'approval_request_created'
             && ActionApprovalRequestCreatedResultSchema.safeParse(error.details).success;
@@ -3679,13 +3690,8 @@ function SessionViewLoadedContent({
     }, [sessionActionDefaultBackend, sessionAgentCatalogEntries]);
     // The embedded arm never mounts a voice surface or affordance, whatever the account enables.
     const reviewCommentsEnabled = useFeatureEnabled('files.reviewComments');
-    const attachmentsUploadsFeatureEnabled = useFeatureEnabled('attachments.uploads');
     const usageLimitRecoveryFeatureEnabled = useFeatureEnabled('sessions.usageLimitRecovery', { scopeKind: 'spawn', serverId: sessionRouteServerId });
     const connectedServiceQuotasEnabled = useFeatureEnabled('connectedServices.quotas');
-    const attachmentsUploadsTransferAvailable = useSessionFileUploadAvailability(sessionId, sessionRouteServerId, 'attachment');
-    const attachmentsUploadsEnabled = attachmentsUploadsFeatureEnabled
-        && attachmentsUploadsTransferAvailable
-        && embeddedComposerControls?.attachments !== false;
     // Generalized goal umbrella gate (provider-agnostic). The provider-specific discriminator is the
     // capability gate `supportsEditableSessionGoals` (Codex: app-server mode; Claude: live runner
     // goal-control registration), so this stays a single umbrella flag for all providers.
@@ -3860,8 +3866,8 @@ function SessionViewLoadedContent({
         ? t(agentInputCore.displayNameKey)
         : formatAgentLikeIdForDisplay(agentInputAgentType);
     const managedWakeNames = React.useMemo(() => ({
-        controllerName: getMachineDisplayName(managedWakeController) ?? t('common.machine'),
-        machineName: managedPendingMachine?.launch.name ?? getMachineDisplayName(sessionMachineRecord) ?? t('common.machine'),
+        controllerName: managedWakeController ? getMachineSentenceName(managedWakeController) : t('common.machine'),
+        machineName: managedPendingMachine?.launch.name ?? (sessionMachineRecord ? getMachineSentenceName(sessionMachineRecord) : t('common.machine')),
         homeName: resolveHomeDisplayLabel(getServerProfileById(sessionAccountScope?.serverId ?? ''), sessionAccountScope?.serverId ?? ''),
         agentName: currentAgentLabel,
     }), [managedWakeController, managedPendingMachine?.launch.name, sessionMachineRecord, sessionAccountScope?.serverId, currentAgentLabel]);
@@ -7715,13 +7721,14 @@ function SessionViewLoadedContent({
         const resumeSessionForCapabilities = React.useCallback(() => handleResumeSession({ silent: true }), [handleResumeSession]);
         const sessionCapabilities = useExistingSessionCapabilitiesChip({
             target: sessionCapabilitiesTarget,
-            machineName: getMachineDisplayName(sessionMachineRecord) ?? t('common.machine'),
+            machineName: sessionMachineRecord ? getMachineSentenceName(sessionMachineRecord) : t('common.machine'),
             machineOnline: isMachineReachable,
             turnSettled: !isRuntimeFreshActiveTurn,
             stop: stopSessionForCapabilities,
             resume: resumeSessionForCapabilities,
         });
         const sessionCapabilitiesChip = agentId ? sessionCapabilities.chip : null;
+        const sessionComposerSkillSource = sessionCapabilities.skillSource;
         const intentionalRestartRecoveryEvidenceAtMs = React.useMemo(() => (
             resolveSessionIntentionalRestartRecoveryEvidenceAtMs({
                 activeAt: sessionRuntimeStatusSource.activeAt,
@@ -8438,9 +8445,10 @@ function SessionViewLoadedContent({
             signal,
             composerReferenceHost,
             contributedActions: composerPluginActionController.listSlashCommands(),
+            skillSource: sessionComposerSkillSource,
             onUpdate,
         }),
-        [composerPluginActionController, composerReferenceHost, sessionId],
+        [composerPluginActionController, composerReferenceHost, sessionComposerSkillSource, sessionId],
     );
 
     // Stable identities for the memoized AgentInput (R1 churn fix). SessionView
@@ -9802,6 +9810,7 @@ function SessionViewLoadedContent({
                                             }
                                         },
                                     });
+                                    if (!outboundAccountLifetime.isCurrent() || !composerPresentationMountedRef.current) return { status: 'rejected' };
                                     if (result.type === 'wake_failed' && resolveResumeFailurePresentation(result, t('session.resumeFailed')).kind === 'directory_missing') {
                                         setDirectoryRecovery({ scopeKey: sessionAccountScopeKey, busy: false });
                                     }
@@ -10052,6 +10061,8 @@ function SessionViewLoadedContent({
                                         }
                                     },
                                 });
+
+                                if (!outboundAccountLifetime.isCurrent() || !composerPresentationMountedRef.current) return { status: 'rejected' };
 
                                 if (result.type === 'wake_failed' && resolveResumeFailurePresentation(result, t('session.resumeFailed')).kind === 'directory_missing') {
                                     setDirectoryRecovery({ scopeKey: sessionAccountScopeKey, busy: false });

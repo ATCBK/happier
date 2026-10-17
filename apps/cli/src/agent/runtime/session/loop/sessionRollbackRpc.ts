@@ -8,7 +8,7 @@ import { CheckpointCodeRollbackActionRequestSchema } from '@happier-dev/protocol
 import { SessionCheckpointRequestV1Schema, SessionRestoreRequestV1Schema } from '@happier-dev/protocol/sessions/control/checkpoints/v1';
 import type { CheckpointCodeRollbackRequest, CheckpointCodeRollbackResult, SessionCheckpointRequestV1, SessionCheckpointResultV1, SessionRollbackRpcParams, SessionRollbackRpcResult, SessionRestoreRequestV1, SessionRestoreResultV1 } from '@happier-dev/protocol';
 import { SessionRollbackRpcParamsSchema } from '@happier-dev/protocol/sessions/rollback';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 export type SessionRollbackRuntimeFacet = Readonly<{
   rollbackConversation?: (request: SessionRollbackRpcParams) => Promise<SessionRollbackRpcResult>;
@@ -25,9 +25,6 @@ export function resolveSessionRollbackRuntimeFacet(runtime: unknown): SessionRol
   const resolved: SessionRollbackRuntimeFacet = {
     ...(typeof candidate.rollbackConversation === 'function'
       ? { rollbackConversation: candidate.rollbackConversation.bind(runtime) }
-      : {}),
-    ...(typeof candidate.checkpointCodeRollback === 'function'
-      ? { checkpointCodeRollback: candidate.checkpointCodeRollback.bind(runtime) }
       : {}),
     ...(typeof candidate.sessionCheckpoint === 'function'
       ? { sessionCheckpoint: candidate.sessionCheckpoint.bind(runtime) }

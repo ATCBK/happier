@@ -67,7 +67,6 @@ import {
   SESSION_ACTION_ARCHIVE_ID,
   SESSION_ACTION_RENAME_ID,
   SESSION_ACTION_RESUME_ID,
-  SESSION_ACTION_STOP_ID,
   resolveManualReadStateFromSessionActionId,
 } from '@/components/sessions/actions/sessionActionIds';
 import { buildSessionMetadataStabilitySignature } from '@/sync/domains/session/metadata/sessionMetadataStability';
@@ -123,6 +122,7 @@ import {
   type SessionHeaderMenuGroup,
 } from './sessionHeaderMenuGroups';
 import { getSessionActionMetadata } from './sessionActionMetadata';
+import { useSessionComputerMenuEntry } from './SessionHeaderComputerButton';
 
 const SESSION_FOLLOW_IN_ANOTHER_SESSION_ACTION_ID = 'session.follow.sources.add';
 
@@ -369,6 +369,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     serverId: sessionServerId,
     openFullSurface: openCompanionFullSurface,
   });
+  const openComputer = useSessionComputerMenuEntry({ sessionId: props.sessionId, serverId: sessionServerId ?? null });
   const showCompanionInOverflow = props.companionHeaderActionPlacement === 'overflow'
     && companionRevealPort !== null
     && companion.availability === 'ready'
@@ -626,6 +627,9 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     const out: Array<Readonly<{ group: SessionHeaderMenuGroup; item: DropdownMenuItem }>> = [];
     const push = (group: SessionHeaderMenuGroup, item: DropdownMenuItem) => { out.push({ group, item }); };
     push('open', { id: 'header.findChat', title: t('find.surface.chat'), icon: <Icon name="magnifying-glass" size={16} color={iconColor} /> });
+    if (openComputer) {
+      push('open', { id: 'header.openComputer', title: t('computerUse.presentation.sourceComputer'), icon: <Icon name="desktop" size={16} color={iconColor} /> });
+    }
 
     if (props.collaborationHeader && collaborationHeaderState.overflow) {
       push('open', createSessionCollaborationHeaderMenuItem({
@@ -712,6 +716,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     collaborationHeaderState.overflow,
     props.collaborationHeader,
     props.extraItems,
+    openComputer,
     showCompanionInOverflow,
     companion.preference.items.length,
     companion.preference.visible,
@@ -799,6 +804,10 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
         setOpen(false);
         if (actionId === 'header.findChat') {
           findSurfaceRuntime.open(`transcript:${sessionServerId ?? ''}:${props.sessionId}`);
+          return;
+        }
+        if (actionId === 'header.openComputer') {
+          openComputer?.();
           return;
         }
         if (actionId === 'header.openCompanion' && showCompanionInOverflow) {
@@ -889,18 +898,6 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
                 return;
               }
               let alsoArchiveReports = false;
-              if (actionId === SESSION_ACTION_STOP_ID) {
-                const confirmed = await Modal.confirm(
-                  t('sessionInfo.stopSession'),
-                  t('sessionInfo.stopSessionConfirm'),
-                  {
-                    cancelText: t('common.cancel'),
-                    confirmText: t('sessionInfo.stopSession'),
-                    destructive: true,
-                  },
-                );
-                if (!confirmed) return;
-              }
               if (actionId === SESSION_ACTION_ARCHIVE_ID) {
                 const confirmation = await confirmSessionArchive({ reportCount: session?.reports?.total ?? 0 });
                 if (!confirmation.confirmed) return;

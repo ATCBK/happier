@@ -51,6 +51,26 @@ describe('getInactiveSessionUiState', () => {
         });
     });
 
+    it('says Archived for an archived session, which sending resumes and unarchives', () => {
+        expect(getInactiveSessionUiState({
+            isSessionActive: false,
+            isResumable: true,
+            isMachineOnline: true,
+            isArchived: true,
+        })).toEqual({
+            shouldShowInput: true,
+            inactiveStatusTextKey: 'session.inactiveArchived',
+            noticeKind: 'none',
+        });
+        // An offline machine still blocks it, so that stays the one thing said.
+        expect(getInactiveSessionUiState({
+            isSessionActive: false,
+            isResumable: true,
+            isMachineOnline: false,
+            isArchived: true,
+        }).inactiveStatusTextKey).toBe('session.inactiveMachineOffline');
+    });
+
     it('shows input for inactive voice conversation sessions even when normal resume is unavailable', () => {
         expect(getInactiveSessionUiState({
             isSessionActive: false,

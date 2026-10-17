@@ -6,6 +6,7 @@ import { Typography } from '@/constants/Typography';
 import type { DiscardedPendingMessage, PendingMessage } from '@/sync/domains/state/storageTypes';
 import { useSession, useSetting } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
+import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { Modal } from '@/modal';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
@@ -23,7 +24,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { PendingMessagesDragReorderList } from './PendingMessagesDragReorderList';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import {
     getPendingMessageVisualState,
     isPendingMessageProviderDeliveryInFlight,
@@ -55,6 +56,9 @@ import { useSessionMessageAuthorshipScope } from '@/components/sessions/transcri
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
 import type { PendingMessageWithdrawRecoveryResult } from '@/components/sessions/composer/pendingMessageComposerDocumentOwner';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+
+const PENDING_AFFORDANCE_ICON_SIZE_PX = 8;
 
 function getPendingText(message: PendingMessage | DiscardedPendingMessage): string {
     const raw = (message.displayText ?? message.text) ?? '';
@@ -199,6 +203,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     // about who authored it or whether this Session has another named collaborator.
     const authorship = useSessionMessageAuthorshipScope(props.sessionId, props.serverId);
     const accountActorViewerScope = authorship.viewerScope;
+    const pendingRecoveryExecutor = React.useMemo(() => createDefaultActionExecutor(), []);
     const pendingMessages = React.useMemo(() => props.pendingMessages.filter((message) =>
         isPendingMessageForRecipient(message, props.recipient)
     ), [props.pendingMessages, props.recipient]);
@@ -435,33 +440,38 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         }
     }, [setPendingMaterializing]);
 
+    const executePendingRecovery = React.useCallback(async (
+        actionId: 'session.pending.markHandled' | 'session.pending.dismiss' | 'session.pending.sendAsNew',
+        message: PendingMessage,
+    ) => {
+        if (!accountActorViewerScope) throw new Error('action_account_scope_changed');
+        const { serverId, accountId } = accountActorViewerScope;
+        const result = await pendingRecoveryExecutor.execute(actionId, {
+            sessionId: props.sessionId, localId: message.localId ?? message.id, serverId,
+            ...(message.recipient ? { targetExecutionRunId: message.recipient.runId } : {}),
+        }, { surface: 'ui', authority: 'present_user', defaultSessionId: props.sessionId, serverId, expectedAccountId: accountId });
+        if (!result.ok && !isActionApprovalDeclinedErrorCode(result.errorCode)) throw new Error(result.error);
+    }, [accountActorViewerScope, pendingRecoveryExecutor, props.sessionId]);
+
     const handleDismissDelivery = React.useCallback(async (message: PendingMessage) => {
         await runPendingDeliveryAction(message, async () => {
             try {
-                await sync.dismissPendingDelivery(
-                    props.sessionId,
-                    message.id,
-                    ...(exactPendingQueueOwner ? [exactPendingQueueOwner] as const : [] as const),
-                );
+                await executePendingRecovery('session.pending.dismiss', message);
             } catch (e) {
                 Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.discardFailed'));
             }
         });
-    }, [exactPendingQueueOwner, props.sessionId, runPendingDeliveryAction]);
+    }, [executePendingRecovery, runPendingDeliveryAction]);
 
     const handleSendAsNew = React.useCallback(async (message: PendingMessage) => {
         await runPendingDeliveryAction(message, async () => {
             try {
-                await sync.sendPendingDeliveryAsNew(
-                    props.sessionId,
-                    message.id,
-                    ...(exactPendingQueueOwner ? [exactPendingQueueOwner] as const : [] as const),
-                );
+                await executePendingRecovery('session.pending.sendAsNew', message);
             } catch (e) {
                 Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.sendFailed'));
             }
         });
-    }, [exactPendingQueueOwner, props.sessionId, runPendingDeliveryAction]);
+    }, [executePendingRecovery, runPendingDeliveryAction]);
 
     const handleRetrySend = React.useCallback(async (message: PendingMessage) => {
         await runPendingDeliveryAction(message, async () => {
@@ -483,24 +493,13 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 
     const handleMarkDeliveryHandled = React.useCallback(async (message: PendingMessage) => {
         await runPendingDeliveryAction(message, async () => {
-            const confirmed = await Modal.confirm(
-                t('session.pendingMessages.markHandledConfirm.title'),
-                t('session.pendingMessages.markHandledConfirm.body'),
-                { confirmText: t('session.pendingMessages.actions.markHandled') },
-            );
-            if (!confirmed) return;
-
             try {
-                await sync.markPendingDeliveryHandled(
-                    props.sessionId,
-                    message.id,
-                    ...(exactPendingQueueOwner ? [exactPendingQueueOwner] as const : [] as const),
-                );
+                await executePendingRecovery('session.pending.markHandled', message);
             } catch (e) {
                 Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.markHandledFailed'));
             }
         });
-    }, [exactPendingQueueOwner, props.sessionId, runPendingDeliveryAction]);
+    }, [executePendingRecovery, runPendingDeliveryAction]);
 
     const handleInterruptAndRun = React.useCallback(async (
         message: PendingMessage,
@@ -968,11 +967,13 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             {visualState.showSpinner ? (
                                 <ActivitySpinner
                                     testID={`pendingMessages.${visualState.kind}Indicator:${message.id}`}
-                                    size="small"
+                                    // The spinner takes the status icon's place at the icon's size, so a
+                                    // working state keeps the label's height instead of growing over the bubble.
+                                    size={iconMatchedSpinnerSize(PENDING_AFFORDANCE_ICON_SIZE_PX)}
                                     color={theme.colors.text.secondary}
                                 />
                             ) : (
-                                <Icon name={visualState.iconName} size={8} color={theme.colors.text.secondary} />
+                                <Icon name={visualState.iconName} size={PENDING_AFFORDANCE_ICON_SIZE_PX} color={theme.colors.text.secondary} />
                             )}
                             <Text
                                 testID={`pendingMessages.pendingAffordanceLabel:${message.id}`}

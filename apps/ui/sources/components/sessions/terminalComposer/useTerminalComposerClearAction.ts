@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { ActionId } from '@happier-dev/protocol';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { Modal } from '@/modal';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
@@ -65,13 +66,6 @@ export function useTerminalComposerClearAction(sessionId: string, serverId?: str
 
     const clearTerminalComposer = React.useCallback(async (options?: Readonly<{ expectedStateAtMs?: number | null }>) => {
         if (busy) return;
-        const confirmed = await Modal.confirm(
-            t('session.pendingMessages.clearComposer.confirmTitle'),
-            t('session.pendingMessages.clearComposer.confirmBody'),
-            { confirmText: t('session.pendingMessages.clearComposer.action'), destructive: true },
-        );
-        if (!confirmed) return;
-
         setBusy(true);
         try {
             const expectedStateAtMs = options?.expectedStateAtMs;
@@ -90,6 +84,7 @@ export function useTerminalComposerClearAction(sessionId: string, serverId?: str
                     placement: 'pending_messages',
                 },
             );
+            if (!result.ok && isActionApprovalDeclinedErrorCode(result.errorCode)) return;
             const failureStatus = getTerminalComposerClearFailureStatus(result);
             if (failureStatus) {
                 Modal.alert(t('common.error'), getTerminalComposerClearFailureMessage(failureStatus));

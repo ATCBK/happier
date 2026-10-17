@@ -13,10 +13,12 @@ import {
 } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { sanitizeNativeAgentSessionBoundaryError } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionBoundaryError';
 import { prepareRunnerDaemonPluginServices } from './runnerDaemonPluginServices';
 import { encodeRunnerDaemonPluginServiceWireValueV1 } from './agentRuntimeDaemonPluginServicesProtocol';
 import {
   admitCurrentRunnerSessionInput,
+  authorizeCurrentAgentRuntimeDaemonModelTransition,
   closeCurrentRunnerTeamCredentialProviderBinding,
   dispatchCurrentAgentRuntimeDaemonServiceRequest,
   dispatchCurrentRunnerDaemonPluginService,
@@ -181,6 +183,94 @@ describe('current Agent runtime daemon service authority client', () => {
       }
     },
   );
+
+  it.each(['operation', 'deadline', 'cancellation'] as const)(
+    'keeps native launch authorization under its %s lifetime beyond five minutes',
+    async (lifetime) => {
+      const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-agent-launch-lifetime-'));
+      roots.push(happyHomeDir);
+      const authority = await createTestAuthority({ happyHomeDir, runner: {
+        pid: 1234, processStartTimeMs: 1_717_171_717_000,
+        processCommandHash: 'a'.repeat(64), snapshotIdentity: 'snapshot:runner-a',
+      } });
+      let releaseResponse = () => {};
+      let requestStarted!: () => void;
+      const started = new Promise<void>(resolve => { requestStarted = resolve; });
+      const launch = { authorizationId: 'authorization-1', launch: {
+        command: '/agent/native', args: [], env: {},
+      } };
+      const server = createServer((request, response) => {
+        request.resume();
+        releaseResponse = () => response.end(JSON.stringify({ ok: true, result: {
+          kind: 'plugin_services.result_v1', requestId: 'launch-1',
+          value: encodeRunnerDaemonPluginServiceWireValueV1(launch),
+        } }));
+        requestStarted();
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing server address');
+      await publishAgentRuntimeDaemonServiceAuthority({ ...authority,
+        httpPort: address.port, capability: 'A'.repeat(43) });
+      // Only time is simulated: authority files, HTTP, request/response schemas
+      // and the runner service adapter remain real.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), ms);
+        return controller.signal;
+      });
+      const cancellation = new AbortController();
+      try {
+        const pending = dispatchCurrentRunnerDaemonPluginService({ authority,
+          operation: { kind: 'plugin_exec.launch.authorize_v1', requestId: 'launch-1',
+            invocationId: 'invocation-1', agentNativeLaunch: true,
+            request: { executable: { kind: 'systemTool', id: 'fixture-agent' } } },
+          ...(lifetime === 'deadline' ? { timeoutMs: 300_000 } : {}),
+          signal: cancellation.signal,
+        });
+        const outcome = lifetime === 'operation' ? expect(pending).resolves.toEqual(launch)
+          : lifetime === 'deadline' ? expect(pending.catch(error => {
+            throw sanitizeNativeAgentSessionBoundaryError(error, true);
+          })).rejects.toMatchObject({
+            code: 'native_agent_privileged_effect_outcome_unknown',
+            retryable: false,
+            details: { cause: { code: 'TimeoutError', stage: 'dispatch' } },
+          }) : expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        await started;
+        if (lifetime === 'cancellation') cancellation.abort();
+        await vi.advanceTimersByTimeAsync(301_000);
+        releaseResponse();
+        await outcome;
+      } finally {
+        cancellation.abort();
+        releaseResponse();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    },
+  );
+
+  it('preserves a settled Provider transition failure instead of reporting missing daemon authority', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-provider-transition-error-'));
+    roots.push(happyHomeDir);
+    const authority = await createTestAuthority({ happyHomeDir, runner: {
+      pid: 1234, processStartTimeMs: 1_717_171_717_000,
+      processCommandHash: 'a'.repeat(64), snapshotIdentity: 'snapshot:runner-a',
+    } });
+    await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: 31_001, capability: 'A'.repeat(43) });
+    // The daemon HTTP transport is the boundary; authority reading and strict response decoding stay real.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ok: false, error: { code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    await expect(authorizeCurrentAgentRuntimeDaemonModelTransition({
+      authority, requestId: 'model-transition-failure', timeoutMs: null,
+      selection: { agentTargetKey: 'agent:acme.plugin/acme-agent', providerConnectionId: 'pc_test', modelId: 'model' },
+    })).rejects.toMatchObject({ code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' });
+  });
 
   it('admits a new prompt after daemon replacement changes only the runner command witness', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-reattached-input-'));

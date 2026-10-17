@@ -1,8 +1,7 @@
 import * as React from 'react';
 
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 
 import { CLOSED_SESSION_VIEWER, type SessionViewerPresentationState } from './sessionViewerPresentation';
 
@@ -25,15 +24,22 @@ function createPresentationState(isCurrent: () => boolean = () => true) {
 
 type DestinationViewerScope = Readonly<{
     sessionId: string;
-    accountLifetime: ServerAccountScopeLifetime;
+    accountLifetime: ServerCredentialAccountScopeBinding;
     presentation: ReturnType<typeof createPresentationState>;
 }>;
 
-const DestinationViewerContext = React.createContext<DestinationViewerScope | null>(null);
+type DestinationSessionOwner = Readonly<{
+    sessionId: string;
+    serverId: string | null;
+    scope: DestinationViewerScope | null;
+}>;
+
+const DestinationViewerContext = React.createContext<DestinationSessionOwner | null>(null);
 
 /**
- * Presentation and viewing authority outlive the classic/cockpit shell replacement. The destination
- * owns their lifetime; the shell still owns pane callbacks, and the retained source owns its stream.
+ * Session Account authority and viewer presentation outlive classic/cockpit shell replacement.
+ * The destination owns their lifetime; the shell still owns pane callbacks, and the retained
+ * source owns its stream.
  */
 export function SessionViewerDestinationScope(props: React.PropsWithChildren<Readonly<{
     sessionId: string;
@@ -45,13 +51,28 @@ export function SessionViewerDestinationScope(props: React.PropsWithChildren<Rea
         accountLifetime: binding,
         presentation: createPresentationState(binding.isCurrent),
     } : null, [binding, props.sessionId]);
-    return <DestinationViewerContext.Provider value={scope}>{props.children}</DestinationViewerContext.Provider>;
+    const owner = React.useMemo<DestinationSessionOwner>(() => ({ sessionId: props.sessionId, serverId: props.serverId, scope }),
+        [props.serverId, props.sessionId, scope]);
+    return <DestinationViewerContext.Provider value={owner}>{props.children}</DestinationViewerContext.Provider>;
+}
+
+function useMatchingSessionDestinationOwner(sessionId: string, serverId: string | null): DestinationSessionOwner | null {
+    const owner = React.useContext(DestinationViewerContext);
+    return owner?.sessionId === sessionId && owner.serverId !== null && serverId !== null
+        && areServerProfileIdentifiersEquivalent(owner.serverId, serverId) ? owner : null;
+}
+
+/** Undefined means standalone; null means the matching destination has no current authority yet. */
+export function useSessionDestinationAccountBinding(sessionId: string, serverId: string | null): ServerCredentialAccountScopeBinding | null | undefined {
+    const owner = useMatchingSessionDestinationOwner(sessionId, serverId);
+    if (!owner) return undefined;
+    const binding = owner.scope?.accountLifetime;
+    return binding?.isCurrent() ? binding : null;
 }
 
 export function useSessionViewerDestinationScope(sessionId: string, serverId: string | null): DestinationViewerScope | null {
-    const scope = React.useContext(DestinationViewerContext);
-    return scope?.sessionId === sessionId && scope.accountLifetime.isCurrent() && serverId !== null
-        && areServerProfileIdentifiersEquivalent(scope.accountLifetime.scope.serverId, serverId) ? scope : null;
+    const scope = useMatchingSessionDestinationOwner(sessionId, serverId)?.scope;
+    return scope?.accountLifetime.isCurrent() ? scope : null;
 }
 
 /** A standalone/embedded Session keeps its existing local owner; a destination supplies the same one across shells. */

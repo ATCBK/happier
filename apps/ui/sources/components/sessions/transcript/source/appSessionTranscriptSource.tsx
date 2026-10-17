@@ -280,7 +280,7 @@ function TranscriptOriginAppSourceRoot(props: Readonly<{ source: SessionTranscri
                     const { isLoaded } = useSessionTranscriptIds(sessionId);
                     useSessionMessagesVersion(sessionId);
                     const window = useSourceTargetWindow(sessionId);
-                    const available = sync.getSessionTailDiscontinuityOlderAvailability(sessionId);
+                    const available = sync.getSessionOlderMessagesAvailability(sessionId);
                     return React.useMemo(() => projectHistoryFrontiers({ isLoaded, hasOlder: available ?? true, isLoadingOlder: false }, window), [available, isLoaded, window]);
                 },
                 loadOlder: null, loadTargetWindow: null,
@@ -300,7 +300,7 @@ function AppSessionTranscriptSourceRoot(props: AppSourceProviderProps) {
         let loadOlderOverride = props.loadOlder;
         let olderLoadCount = 0;
         let newerLoadCount = 0;
-        let hasOlder = true;
+        let overrideHasOlder = true;
         const listeners = new Set<() => void>();
         const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
         const notify = () => { for (const listener of listeners) listener(); };
@@ -325,8 +325,8 @@ function AppSessionTranscriptSourceRoot(props: AppSourceProviderProps) {
                     const window = useSourceTargetWindow(sessionId, loadOlderOverride == null);
                     const loading = React.useSyncExternalStore(subscribe, () => olderLoadCount > 0, () => olderLoadCount > 0);
                     const loadingNewer = React.useSyncExternalStore(subscribe, () => newerLoadCount > 0, () => newerLoadCount > 0);
-                    const more = React.useSyncExternalStore(subscribe, () => hasOlder, () => hasOlder);
-                    const available = sync.getSessionTailDiscontinuityOlderAvailability(sessionId);
+                    const more = React.useSyncExternalStore(subscribe, () => overrideHasOlder, () => overrideHasOlder);
+                    const available = loadOlderOverride ? null : sync.getSessionOlderMessagesAvailability(sessionId);
                     return React.useMemo(() => projectHistoryFrontiers({ isLoaded, hasOlder: available ?? more, isLoadingOlder: loading, isLoadingNewer: loadingNewer }, window), [available, isLoaded, loading, loadingNewer, more, window]);
                 },
                 loadOlder: props.readOnly === true ? null : async (options) => {
@@ -349,7 +349,7 @@ function AppSessionTranscriptSourceRoot(props: AppSourceProviderProps) {
                             if (hydration.kind !== 'available') return { loaded: 0, hasMore: true, status: 'not_ready' };
                         }
                         const result = loadOlderOverride ? await loadOlderOverride(options) : forked ? await sync.loadOlderMessagesForkAware(sessionId, options) : await sync.loadOlderMessages(sessionId, options);
-                        if (result.status === 'loaded' || result.status === 'no_more') hasOlder = result.hasMore;
+                        if (loadOlderOverride && (result.status === 'loaded' || result.status === 'no_more')) overrideHasOlder = result.hasMore;
                         return result;
                     } finally { olderLoadCount -= 1; notify(); }
                 },

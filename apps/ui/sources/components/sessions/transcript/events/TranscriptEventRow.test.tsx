@@ -214,7 +214,7 @@ describe('TranscriptEventRow', () => {
 
         await screen.pressByTestIdAsync('transcriptEvent.clearTerminalComposer');
 
-        expect(modalConfirm).toHaveBeenCalledTimes(1);
+        expect(modalConfirm).not.toHaveBeenCalled();
         expect(executeDefaultAction).toHaveBeenCalledWith(
             'session.terminalComposer.clear',
             { sessionId: 's1', expectedStateAtMs: 1234 },

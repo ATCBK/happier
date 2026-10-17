@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ZodType } from 'zod';
+import type { ZodMiniType as ZodType } from 'zod/mini';
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type {
     JsonValue,
@@ -219,6 +219,8 @@ type RunnerAuthorizedLaunchWire = Readonly<{
     maxStdoutBytes?: number;
     maxStderrBytes?: number;
     windowsVerbatimArguments?: true;
+    processOwnerTag?: string;
+    waitForGracefulRootExitBeforeTreeStop?: true;
 }>;
 
 function isRunnerAuthorizedLaunchWire(
@@ -257,6 +259,14 @@ function isRunnerAuthorizedLaunchWire(
         && (
             value.windowsVerbatimArguments === undefined
             || value.windowsVerbatimArguments === true
+        )
+        && (
+            value.processOwnerTag === undefined
+            || typeof value.processOwnerTag === 'string'
+        )
+        && (
+            value.waitForGracefulRootExitBeforeTreeStop === undefined
+            || value.waitForGracefulRootExitBeforeTreeStop === true
         );
 }
 
@@ -405,6 +415,8 @@ function readDaemonWitness(
 export async function prepareRunnerDaemonPluginServices(
     input: Readonly<{
         invocationId: string;
+        /** Host-authored child cwd; only snapshot-backed Run invocations use it. */
+        executionRunCwd?: string;
         processOwner?: import('@/processes/ownerTag').ProcessOwnerRef;
         dispatch: RunnerDaemonPluginServicesDispatchV1;
         signal: AbortSignal;
@@ -521,6 +533,7 @@ export async function prepareRunnerDaemonPluginServices(
                 kind: 'plugin_services.prepare_v1',
                 requestId: randomUUID(),
                 invocationId: input.invocationId,
+                ...(input.executionRunCwd ? { executionRunCwd: input.executionRunCwd } : {}),
                 ...(managedProviderRetention
                     ? { managedProviderRetention }
                     : {}),
@@ -2445,6 +2458,25 @@ export async function prepareRunnerDaemonPluginServices(
         }
         return value;
     };
+    const readAuthorizedExecLaunch = (raw: Record<string, unknown>): HostAuthorizedPluginExecLaunch => {
+        if (typeof raw.authorizationId !== 'string' || !isRunnerAuthorizedLaunchWire(raw.launch)) {
+            throw new PluginError({ code: 'plugin_exec_launch_authorization_invalid',
+                message: 'Daemon returned an invalid process launch authorization' });
+        }
+        const authorizationId = raw.authorizationId;
+        const { stdin, ...launch } = raw.launch;
+        let released = false;
+        return Object.freeze({ ...launch,
+            args: Object.freeze([...launch.args]), env: Object.freeze({ ...launch.env }),
+            ...(stdin === undefined ? {} : { stdin: new Uint8Array(Buffer.from(stdin, 'base64')) }),
+            release() {
+                if (released) return;
+                released = true;
+                void dispatch<null>({ kind: 'plugin_exec.launch.release_v1', requestId: randomUUID(),
+                    invocationId: input.invocationId, authorizationId }, { timeoutMs: 1_000 }).catch(() => undefined);
+            },
+        });
+    };
     const exec = createStableRunnerPluginExecService({
         ...(input.processOwner ? { processOwner: input.processOwner } : {}),
         signal: input.signal,
@@ -2554,7 +2586,7 @@ export async function prepareRunnerDaemonPluginServices(
             >[0] & Readonly<{ timeoutMs?: number }>,
             options?: Parameters<
                 PluginServices['exec']['spawn']
-            >[1],
+            >[1] & Readonly<{ agentNativeLaunch?: true }>,
             systemToolResolutionId?: string,
         ) {
             assertAvailable('exec');
@@ -2563,6 +2595,7 @@ export async function prepareRunnerDaemonPluginServices(
                     kind:
                         'plugin_exec.launch.authorize_v1',
                     ...requestBase(),
+                    ...(options?.agentNativeLaunch ? { agentNativeLaunch: true as const } : {}),
                     ...(systemToolResolutionId
                         ? { systemToolResolutionId }
                         : {}),
@@ -2607,73 +2640,16 @@ export async function prepareRunnerDaemonPluginServices(
                 'plugin_exec_launch_authorization_invalid',
                 'Daemon returned an invalid process launch authorization',
             );
-            if (
-                typeof raw.authorizationId !== 'string'
-                || !isRunnerAuthorizedLaunchWire(raw.launch)
-            ) {
-                throw new PluginError({
-                    code:
-                        'plugin_exec_launch_authorization_invalid',
-                    message:
-                        'Daemon returned an invalid process launch authorization',
-                });
-            }
-            let released = false;
-            const authorizationId = raw.authorizationId;
-            const launch = raw.launch;
-            const command = launch.command;
-            const args = launch.args;
-            return Object.freeze({
-                command,
-                args: Object.freeze([...args]),
-                env: Object.freeze({
-                    ...launch.env,
-                }),
-                ...(typeof launch.cwd === 'string'
-                    ? { cwd: launch.cwd }
-                    : {}),
-                ...(typeof launch.stdin === 'string'
-                    ? {
-                        stdin: new Uint8Array(
-                            Buffer.from(
-                                launch.stdin,
-                                'base64',
-                            ),
-                        ),
-                    }
-                    : {}),
-                ...(typeof launch.timeoutMs === 'number'
-                    ? { timeoutMs: launch.timeoutMs }
-                    : {}),
-                ...(typeof launch.maxStdoutBytes === 'number'
-                    ? {
-                        maxStdoutBytes:
-                            launch.maxStdoutBytes,
-                    }
-                    : {}),
-                ...(typeof launch.maxStderrBytes === 'number'
-                    ? {
-                        maxStderrBytes:
-                            launch.maxStderrBytes,
-                    }
-                    : {}),
-                ...(launch.windowsVerbatimArguments === true
-                    ? { windowsVerbatimArguments: true }
-                    : {}),
-                release() {
-                    if (released) return;
-                    released = true;
-                    void dispatch<null>({
-                        kind:
-                            'plugin_exec.launch.release_v1',
-                        requestId: randomUUID(),
-                        invocationId: input.invocationId,
-                        authorizationId,
-                    }, {
-                        timeoutMs: 1_000,
-                    }).catch(() => undefined);
-                },
-            } satisfies HostAuthorizedPluginExecLaunch);
+            return readAuthorizedExecLaunch(raw);
+        },
+        async authorizeResolvedAgentNativeLaunch(launch, options) {
+            assertAvailable('exec');
+            const { stdin, release: _release, ...tuple } = launch;
+            const raw = parseObjectResult(await dispatch<unknown>({
+                kind: 'plugin_exec.resolved_agent_launch.authorize_v1', ...requestBase(),
+                launch: { ...tuple, ...(stdin === undefined ? {} : { stdin: Buffer.from(stdin).toString('base64') }) },
+            }, options), 'plugin_exec_launch_authorization_invalid', 'Daemon returned an invalid process launch authorization');
+            return readAuthorizedExecLaunch(raw);
         },
     });
     let closeStarted = false;

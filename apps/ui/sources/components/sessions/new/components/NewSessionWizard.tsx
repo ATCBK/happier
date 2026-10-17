@@ -86,6 +86,7 @@ import {
 } from '@/components/sessions/new/components/NewSessionLaunchPendingPreview';
 import type { NewSessionLaunchAttempt } from '@/components/sessions/new/modules/newSessionLaunchAttempt';
 import { NewSessionProviderLaunchError } from '@/components/sessions/new/components/NewSessionProviderLaunchError';
+import { NewSessionLaunchApprovalNotice, type NewSessionLaunchApprovalNoticeState } from '@/components/sessions/new/components/NewSessionLaunchApprovalNotice';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import {
     useNewSessionPromptValue,
@@ -232,6 +233,7 @@ export interface NewSessionWizardFooterProps {
     launchPendingPreviewVisible?: boolean;
     providerLaunchError?: ProviderErrorV1 | null;
     retryProviderLaunch?: () => void;
+    launchApproval?: NewSessionLaunchApprovalNoticeState | null;
     submitAccessibilityLabel?: React.ComponentProps<typeof AgentInput>['submitAccessibilityLabel'];
     emptyAutocompleteKinds: React.ComponentProps<typeof AgentInput>['autocompleteKinds'];
     emptyAutocompleteSuggestions: React.ComponentProps<typeof AgentInput>['autocompleteSuggestions'];
@@ -698,6 +700,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         error={props.footer.providerLaunchError}
                                         retry={props.footer.retryProviderLaunch}
                                     />
+                                    <NewSessionLaunchApprovalNotice approval={props.footer.launchApproval} />
                                     {/*
                                       * Resolved upstream by
                                       * `resolveNewSessionLaunchPresentation`. The Wizard

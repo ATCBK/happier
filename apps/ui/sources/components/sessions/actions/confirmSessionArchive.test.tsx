@@ -9,7 +9,7 @@ import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/action
 import type { SessionActionExecutionContext } from './sessionActionTypes';
 
 vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit');
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
 
@@ -73,12 +73,4 @@ describe('archive confirmation policy', () => {
         }
     });
 
-    it('keeps confirmation before an archive stops a running session', async () => {
-        vi.mocked(Modal.confirm).mockClear();
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(false);
-        const stoppingArchive = { reportCount: 0, requiresStop: true };
-        expect(await confirmSessionArchive(stoppingArchive)).toEqual({ confirmed: false, alsoArchiveReports: false });
-        expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ destructive: true }));
-        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[0]).toBe((await import('@/text')).t('sessionInfo.stopSession'));
-    });
 });

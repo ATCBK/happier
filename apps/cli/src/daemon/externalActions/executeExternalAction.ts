@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { prepareExternalActionResponseEnvelopeV1, ExternalActionActionIdV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema, externalActionTargetsEqualV1, isExternalActionRequestWithinLimit, isExternalActionRequestVersionAllowedForAccountModeV1, projectExternalActionExecutionResultV1, readExternalActionProtectedRequestId } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { projectExternalActionRunNowIdempotencyKeyV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { openExternalActionRequestV2, prepareExternalActionResponseV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { SIGNED_ROOT_ACTION_OUTPUT_SCHEMAS, PublicActionIdSchema, SignedRootActionIdSchema, isPluginProvenanceOnlyActionId } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult, ActionExecutorContext, ExternalActionResponseEnvelopeV1, ExternalActionTargetV1, PreparedExternalActionResponseEnvelope, ExternalActionEncryptionBindingV2, ExternalActionExecutionAuthorizationV1, ExternalActionServerPrincipalV1, SignedRootActionId } from '@happier-dev/protocol/actions';
@@ -10,14 +11,15 @@ import { ManagedAcquireInputV1Schema, ManagedAdmissionComputeInputV1Schema } fro
 import { projectApiTokenSessionSpawnAdmissionV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 
 import { reconcileExternalActionTarget } from './reconcileExternalActionTarget';
-import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
+import { projectExternalActionRequesterHttpAuthorization, resolveExternalActionAccountInvocationSurface } from '@/api/externalActionExecutionAuthorization';
 import type { ExternalActionRequesterAccountContextPurposeV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import type { ManagedMachinePolicyRequest } from '../startup/managedMachineActionAdapter';
 import { deriveMountedPluginInvocationCaller } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
 import { resolvePluginActionCaller } from '@/plugins/runtime/invocation/services/actionCaller';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
-import { isOriginalOwnAccountActionCustody } from '../sessionEncryption/requesterAccountActionProjection';
+import { isOriginalOwnAccountActionCustody, isOriginalSessionInputAccountActionCustody } from '../sessionEncryption/requesterAccountActionProjection';
 import { createExternalActionStartDiagnosticRecorder, refuseExternalActionPhase, runExternalActionPhase, traceExternalActionStage } from './externalActionPhase';
+import { timeWebLatencyPhase, withWebLatencyTrace } from './webLatencyTrace';
 
 type PublicOutputValidationResult =
   | Readonly<{ success: true; data: unknown }>
@@ -75,10 +77,17 @@ export type VerifyExternalActionExecutionAuthorization = (input: Readonly<{
   signal?: AbortSignal;
 }>) => Promise<boolean>;
 
-/** Installation-admitted private custody selects the existing invocation factory. */
+/**
+ * Installation-admitted private custody selects the existing invocation factory.
+ * Its canonical preparation owner proves fresh Home admission before using
+ * requester credentials; the resolved effect is verified separately below.
+ */
 export type PrepareExternalActionRequesterAccountContext = (input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
   purpose?: ExternalActionRequesterAccountContextPurposeV1;
+  /** Private SOURCE admission rechecks the installed controller without impersonating the finite worker. */
+  verifyWorkspaceSyncPrepareCurrent?: () => Promise<boolean>;
+  verifyServiceMoveChildCurrent?: () => Promise<boolean>;
   signal?: AbortSignal;
 }>) => Promise<Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
@@ -249,16 +258,11 @@ export async function executeExternalAction(input: Readonly<{
   let requesterContext: Awaited<ReturnType<PrepareExternalActionRequesterAccountContext>> = null;
   let pluginRuntimeLease: PluginRuntimeRegistryLease | null = null;
   const prepareOwnAccount = executionAuthorization?.success && input.prepareRequesterAccountContext !== undefined
-    && isOriginalOwnAccountActionCustody(executionAuthorization.data.binding);
+    && (isOriginalOwnAccountActionCustody(executionAuthorization.data.binding)
+      || isOriginalSessionInputAccountActionCustody(executionAuthorization.data.binding));
   if (executionAuthorization?.success && (executionAuthorization.data.requesterAccountContext || prepareOwnAccount)) {
     const authorization = executionAuthorization.data;
-    trace('requester_root_currentness.begin');
-    const current = await runExternalActionPhase('requester_root_currentness', input.currentMachineId, async () =>
-      !input.signal?.aborted && await input.verifyExecutionAuthorization!({ authorization,
-      effectActionId: actionId.data, target: authorization.binding.target,
-      ...(input.signal ? { signal: input.signal } : {}) }));
-    trace('requester_root_currentness.end');
-    if (!current.ok || !input.prepareRequesterAccountContext) return { kind: 'invalid_request',
+    if (input.signal?.aborted || !input.prepareRequesterAccountContext) return { kind: 'invalid_request',
       errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
       ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
     trace('requester_prepare.begin');
@@ -334,6 +338,10 @@ export async function executeExternalAction(input: Readonly<{
   // Signed outer admission facts and private opened input must describe the
   // same invocation before approval, native submission or Session birth.
   try {
+    if (projectExternalActionRunNowIdempotencyKeyV1(actionId.data, decodedInput) !== envelope.data.idempotencyKey
+      || executionAuthorization?.success && executionAuthorization.data.binding.idempotencyKey !== envelope.data.idempotencyKey) {
+      throw new TypeError('Manual retry identity mismatch');
+    }
     if (envelope.data.managedAdmission) {
       if (actionId.data !== 'machines.managed.acquire') throw new TypeError('Wrong managed admission Action');
       const { agentStart, ...compute } = ManagedAcquireInputV1Schema.parse(decodedInput);
@@ -535,7 +543,7 @@ export async function executeExternalAction(input: Readonly<{
     ...(recordActionStartDiagnostic ? { recordActionStartDiagnostic } : {}),
     surface: pluginCaller ? 'plugin' : sessionActionOrigin ? 'agent' : apiTokenPrincipal
       ? 'api'
-      : invocation?.surface ?? input.surface ?? (accountPrincipal?.authentication.kind === 'terminal' ? 'cli' : 'ui'),
+      : resolveExternalActionAccountInvocationSurface(accountPrincipal?.authentication.kind, invocation?.surface ?? input.surface),
     authority: invocation && invocation.authority !== 'present_user' ? 'account_automation' : input.principal.authority,
     actionCaller: pluginCaller ?? sessionActionOrigin?.caller ?? invocation?.caller ?? { kind: 'host' },
     ...(invocation ? { callerPermissionMode: invocation.callerPermissionMode,
@@ -566,7 +574,8 @@ export async function executeExternalAction(input: Readonly<{
     ...(executionAuthorization?.success
       ? {
           externalActionExecutionAuthorization: admittedAuthorization!,
-          ...(actionId.data === 'projects.open' ? { originalActionEnvelope: envelope.data } : {}),
+          ...(actionId.data === 'projects.open' || actionId.data === 'projects.script.run' || actionId.data === 'projects.compute.exec' || actionId.data === 'projects.service.relocate'
+            ? { originalActionEnvelope: envelope.data } : {}),
           signExternalActionApprovalInput: ({ actionId: approvalActionId, input: approvalInput, target: approvalTarget }) =>
             signExternalActionApprovalInputV1({
               authorizationToken: executionAuthorization.data.token,
@@ -598,7 +607,8 @@ export async function executeExternalAction(input: Readonly<{
   let internalExecution: ActionExecuteResult;
   try {
     trace('action_execution.begin');
-    internalExecution = await (requesterContext?.executor ?? input.executor).execute(actionId.data, decodedInput, context);
+    internalExecution = await withWebLatencyTrace(envelope.data.requestId, () => timeWebLatencyPhase('daemon.action.execute', () =>
+      (requesterContext?.executor ?? input.executor).execute(actionId.data, decodedInput, context)));
     trace('action_execution.end');
   } catch (error) {
     trace('action_execution.threw');
