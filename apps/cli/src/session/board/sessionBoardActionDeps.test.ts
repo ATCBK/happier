@@ -55,6 +55,9 @@ import { createCliWidgetDefinitionActionDepsV1 } from '@/session/actions/widgetD
 import { SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
 import type { WidgetDefinitionArtifactV1 } from '@happier-dev/protocol/widgets';
 import { createSessionBoardWidgetActionPortV1 } from '@happier-dev/protocol/widgets';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
 const item = { v: 1, destination: 'board', title: 'Note', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
@@ -99,6 +102,23 @@ describe('CLI Board Action family', () => {
     });
   });
   afterEach(async () => { restore(); vi.restoreAllMocks(); await app.close(); });
+  it('discovers widgets on a Session Board addressed by its portable Home', async () => {
+    const serverIdentityId = 'srv_board_identity';
+    const sessionId = 'c000000000000000000000052';
+    app.get(`/v2/sessions/${sessionId}`, async () => ({ session: { ...rawSession, id: sessionId } }));
+    app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+    app.get(`/v2/sessions/${sessionId}/system-records/record`, async () => ({ record: null }));
+    app.get(`/v2/sessions/${sessionId}/system-records`, async () => ({ records: [], hasNext: false, nextCursor: null }));
+    const deps = createCliActionDeps({ credentials: { token: 'token', encryption: null }, token: 'token',
+      sessionId, mode: 'plain', ctx: null,
+      serverId: 'local-profile', serverIdentityId, serverHttpBaseUrl: 'http://board.test',
+      machineActionDirectTargetTransport: { machineId: 'machine-one', invoke: async () => ({ protocolVersion: 1,
+        projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1 }) }) } });
+    const surface = { serverId: serverIdentityId, accountId: 'owner', owner: { kind: 'sessionBoard' as const, sessionId } };
+    const result = await runWithServerHttpBaseUrl('http://board.test', () => deps.widgetCatalog!.list(surface, { serverId: 'local-profile' }));
+    expect(result).toEqual(expect.arrayContaining([expect.objectContaining({ definition: { kind: 'builtin', id: 'session_summary' } })]));
+  });
   it('admits the portable Home through the widget Board port while retaining exact HTTP routing', async () => {
     const serverIdentityId = 'srv_board_identity';
     const writes: unknown[] = [];
