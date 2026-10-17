@@ -197,6 +197,12 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         sessionLastMobileSurfaceBySessionId,
         projectLastMobileSurfaceByWorkspaceRefId,
         explicitMobileSurfaceHint,
+        sessionDetailsKind: paneUrlState?.details?.kind ?? null,
+        registeredSessionCockpit: cockpitRegistration ? {
+            sessionId: cockpitRegistration.sessionId,
+            surface: cockpitRegistration.activeSurface,
+            terminalTabAvailable: cockpitRegistration.terminalTabAvailable,
+        } : null,
     });
     const routeOwnedMainTab = resolveRouteOwnedMainTab(pathname);
     const visibleMainTab = routeOwnedMainTab ?? activeTab;
@@ -363,16 +369,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             return buildMainChrome(visibleMainTab);
         }
 
-        const sessionCockpitModel = model.kind === 'sessionCockpit'
-            ? model
-            : model.kind === 'hidden' && cockpitRegistration
-                ? {
-                    kind: 'sessionCockpit' as const,
-                    sessionId: cockpitRegistration.sessionId,
-                    surface: cockpitRegistration.activeSurface,
-                    terminalTabAvailable: cockpitRegistration.terminalTabAvailable,
-                }
-                : null;
+        const sessionCockpitModel = model.kind === 'sessionCockpit' ? model : null;
 
         if (
             sessionCockpitModel
