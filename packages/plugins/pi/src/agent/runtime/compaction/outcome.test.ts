@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
+import { resolvePiCompactionTurnOutcome } from './index.js';
 
 describe('pi compaction turn outcome', () => {
-  it('is published through a narrow plugin agent runtime subpath and preserves post-final compaction ordering', async () => {
+  it('is published through a narrow plugin agent runtime subpath and preserves post-final compaction ordering', () => {
     const packageJson = JSON.parse(
       readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8'),
     ) as { exports?: Record<string, unknown> };
@@ -13,8 +14,6 @@ describe('pi compaction turn outcome', () => {
       types: './dist/agent/runtime/compaction/index.d.ts',
       default: './dist/agent/runtime/compaction/index.js',
     });
-
-    const { resolvePiCompactionTurnOutcome } = await import('./index.js');
 
     expect(
       resolvePiCompactionTurnOutcome({
