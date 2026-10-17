@@ -133,6 +133,35 @@ async function rewriteInPlace(path: string, position: number, replacement: strin
 }
 
 describe('Claude external transcript continuity evidence', () => {
+    it.each(['stdout', 'stderr'] as const)('publishes live shell %s before its ordered observation while ordinary prompts stay observation-only', async (stream) => {
+        const fixture = await createTranscript(1, 0);
+        const cursor = await mintTailCursor(fixture);
+        const outputText = `SYNTHETIC_COMMAND_RESULT\n  literal </bash-${stream}> tail &lt;value&gt;\n`;
+        const output = {
+            type: 'user', uuid: `shell-${stream}`, parentUuid: 'continuity-0000', sessionId: fixture.remoteSessionId,
+            timestamp: '2026-10-17T00:00:01.000Z',
+            message: { role: 'user', content: `<bash-${stream}>${outputText}</bash-${stream}>` },
+        };
+        const prompt = {
+            type: 'user', uuid: 'ordinary-next-prompt', parentUuid: output.uuid, sessionId: fixture.remoteSessionId,
+            timestamp: '2026-10-17T00:00:02.000Z', message: { role: 'user', content: 'next ordinary prompt' },
+        };
+        await appendFile(fixture.transcriptPath, `${JSON.stringify(output)}\n${JSON.stringify(prompt)}\n`);
+        const params = { source: fixture.source, env: fixture.env, providerSessionId: fixture.remoteSessionId,
+            projection: 'terminal' as const, maxBytes: 64 * 1024, maxItems: 10 };
+        const live = await readAfterClaudeExternalSessionTranscript({ ...params, cursor });
+        expect(live.items).toMatchObject([
+            { raw: { role: 'agent', content: { type: 'acp', agentId: 'claude', data: {
+                type: 'message', message: outputText,
+            } } } },
+            { raw: { role: 'source_observation', content: { uuid: output.uuid } } },
+            { raw: { role: 'source_observation', content: { uuid: prompt.uuid } } },
+        ]);
+        const historical = await pageClaudeExternalSessionTranscript({ ...params, direction: 'older' });
+        expect(historical.items.filter(item => item.raw.role === 'agent'
+            && JSON.stringify(item.raw).includes('SYNTHETIC_COMMAND_RESULT'))).toHaveLength(1);
+    });
+
     it('publishes a delivered peer attachment through the live terminal stream as visible recipient text', async () => {
         const fixture = await createTranscript(1, 0);
         const cursor = await mintTailCursor(fixture);

@@ -484,7 +484,22 @@ export function classifyClaudeNativeTranscriptRow(
   // Keep display content intact; only lifecycle identity unwraps the native envelope.
   const shellInput = /^<bash-input>([\s\S]*)<\/bash-input>$/u.exec(text.trim());
   if (shellInput) return { ...base, lifecycle: { kind: 'shell_input', text: `!${shellInput[1]}` } };
-  if (/^<bash-(?:stdout|stderr)>/u.test(text.trim())) return { ...base, lifecycle: { kind: 'shell_output' } };
+  if (/^<bash-(?:stdout|stderr)>/u.test(text.trim())) {
+    // Bash output carries literal stream bytes, unlike slash-command output's
+    // XML-escaped presentation text. Preserve whitespace and entities verbatim.
+    const combinedOutput = /^<bash-stdout>([\s\S]*)<\/bash-stdout><bash-stderr>([\s\S]*)<\/bash-stderr>$/u.exec(text.trim());
+    const singleOutput = /^<bash-(stdout|stderr)>([\s\S]*)<\/bash-\1>$/u.exec(text.trim());
+    const outputText = combinedOutput
+      ? `${combinedOutput[1] ?? ''}${combinedOutput[2] ?? ''}`
+      : singleOutput?.[2] ?? text;
+    return {
+      ...base,
+      messageRole: 'agent',
+      content: { kind: 'message', text: outputText },
+      semanticParts: outputText.length > 0 ? [{ kind: 'text', text: outputText }] : [],
+      lifecycle: { kind: 'shell_output' },
+    };
+  }
   return { ...base, lifecycle: { kind: 'text', text } };
 }
 

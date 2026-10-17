@@ -18,8 +18,12 @@ describe('Claude native transcript semantic projection', () => {
     const input = { type: 'user', uuid: 'shell-input', message: { role: 'user', content: '<bash-input> echo hi</bash-input>' } };
     expect(classifyClaudeNativeTranscriptRow(input)).toMatchObject({ visibility: 'visible', lifecycle: { kind: 'shell_input', text: '! echo hi' } });
     expect(projectClaudeTranscriptRowToProviderPayload({ providerSessionId: 'claude-session-1', row: input, suppressPriorEraTurnClosure: false })).toMatchObject({ kind: 'text', text: '! echo hi' });
-    const output = { ...input, uuid: 'shell-output', message: { role: 'user', content: '<bash-stdout>hi</bash-stdout><bash-stderr></bash-stderr>' } };
-    expect(classifyClaudeNativeTranscriptRow(output)).toMatchObject({ visibility: 'visible', lifecycle: { kind: 'shell_output' } });
+    const output = { ...input, uuid: 'shell-output', message: { role: 'user', content: '<bash-stdout>hi\n  literal </bash-stdout> tail &lt;literal&gt;\n</bash-stdout><bash-stderr>warning\n</bash-stderr>' } };
+    expect(classifyClaudeNativeTranscriptRow(output)).toMatchObject({ visibility: 'visible', messageRole: 'agent',
+      content: { kind: 'message', text: 'hi\n  literal </bash-stdout> tail &lt;literal&gt;\nwarning\n' }, lifecycle: { kind: 'shell_output' } });
+    expect(projectClaudeJsonlLineToDirectMessages({ fileRelPath: 'projects/session.jsonl', lineStartOffsetBytes: 4, lineValue: output }))
+      .toMatchObject([{ messageRole: 'agent', raw: { role: 'agent', content: { type: 'acp', agentId: 'claude',
+        data: { type: 'message', message: 'hi\n  literal </bash-stdout> tail &lt;literal&gt;\nwarning\n' } } } }]);
     expect(projectClaudeTranscriptRowToProviderPayload({ providerSessionId: 'claude-session-1', row: output, suppressPriorEraTurnClosure: false })).toBeNull();
     const caveat = { ...input, uuid: 'shell-caveat', isMeta: true, message: { role: 'user', content: '<local-command-caveat>Local only</local-command-caveat>' } };
     expect(classifyClaudeNativeTranscriptRow(caveat)).toMatchObject({ visibility: 'hidden', lifecycle: { kind: 'local_command_caveat' } });

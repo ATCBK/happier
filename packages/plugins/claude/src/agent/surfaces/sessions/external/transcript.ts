@@ -96,6 +96,7 @@ function projectForwardLine(params: Parameters<typeof projectClaudeJsonlLineReco
         // Native user envelopes also carry tool results. Those stay on the
         // ordinary semantic path; the runtime alone decides prompt acceptance.
         const userPrompt = classification.rawType === 'user'
+            && classification.lifecycle.kind !== 'shell_output'
             && !classification.semanticParts.some((part) => part.kind === 'tool_result' || part.kind === 'tool_use');
         const workflowEvidence = parseClaudeWorkflowFacts(params.lineValue).length > 0;
         if (readClaudeTaskLifecycleEnvelope(params.lineValue)?.subtype === 'task_notification' || userPrompt || classification.rawType === 'queue-operation' || (classification.rawType === 'attachment' && queuedCommand)) {
@@ -109,7 +110,8 @@ function projectForwardLine(params: Parameters<typeof projectClaudeJsonlLineReco
                 ],
             };
         }
-        if (workflowEvidence || classification.nativeBoundary !== null || classification.lifecycle.kind === 'stop_hook_feedback') {
+        if (workflowEvidence || classification.nativeBoundary !== null || classification.lifecycle.kind === 'stop_hook_feedback'
+            || classification.lifecycle.kind === 'shell_output') {
             const parsed = nativeObservationContent.safeParse(projectClaudeNativeTranscriptObservation(params.lineValue));
             if (!parsed.success) return { disposition: 'unsupported', items: [] };
             // A lifecycle row is indivisible: publish its visible parts first,
