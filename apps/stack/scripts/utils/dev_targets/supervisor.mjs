@@ -877,7 +877,7 @@ export async function startStackDevTargets(
           return TARGET_SYNC_READY;
         }
         const remoteServerPort =
-          preservedDaemonForward?.listenPort ?? target.remoteServerPort ?? resolveDefaultRemoteServerPort({
+          (!services.server ? preservedDaemonForward?.listenPort : null) ?? target.remoteServerPort ?? resolveDefaultRemoteServerPort({
             localServerPort,
             targetIndex: index,
             instanceId,

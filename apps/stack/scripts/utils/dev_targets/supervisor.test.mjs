@@ -26,6 +26,7 @@ import { writeManagedRuntimeSnapshotLayout } from '../../testkit/core/runtime_sn
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { inspectDevTargetSync, runDevTargetDependencyBootstrap } from './executor.mjs';
 import { readStackRuntimeStateFile, recordStackRuntimeStart, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
+import { decideDevStartupTopology, observeDevServerStartupTopology } from '../dev/devStartupTopology.mjs';
 
 const successfulDependencyBootstrap = async () => ({ code: 0 });
 const repoDir = fileURLToPath(new URL('../../../../../', import.meta.url));
@@ -366,6 +367,71 @@ test('preserved remote daemon reconnects its original endpoint to a moved local 
     assert.deepEqual(states.at(-1).sourceRuntimeIdentities.daemon, { selected: 'preserved', loaded: 'preserved' });
   } finally { await controller.close({ preserveDaemon: true }); }
   assert.equal(commands.some(command => command.includes('stack stop')), false, 'preserving a transport-only adoption releases only the local forward');
+});
+
+test('co-located server recovery keeps its private startup port distinct from the preserved daemon canonical forward', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-preserved-daemon-server-forward-' });
+  const localServerPort = 3027;
+  const instanceId = 42;
+  const target = { name: 'linux3', platform: 'posix', ssh: 'linux3-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/home' };
+  const runtimeState = { remoteTargets: { [target.name]: {
+    services: { server: true, daemon: true }, status: 'running', serviceStatus: { server: 'stopped', daemon: 'running' },
+  } } };
+  const targetPlans = resolvePreservedDaemonTargetPlans({
+    targetPlans: [{ target, services: { server: true, expo: false, daemon: false } }],
+    targets: [target], runtimeState, daemonRequested: false,
+  });
+  const children = [];
+  const controller = await startStackDevTargets({
+    stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir, sourceSnapshot: true,
+    localServerPort, canonicalServerUrl: `http://happier-agent-qa.localhost:${localServerPort}`,
+    publicServerUrl: `http://happier-agent-qa.localhost:${localServerPort}`,
+    credentialPath: join(root, 'credential'), targetPlans, instanceId,
+    remoteServerRuntimeConfig: remoteLightSqliteRuntimeConfig, env: {},
+  }, {
+    runProcess: async ({ command, args }) => {
+      const remote = String(args.at(-1));
+      if (command === 'ssh' && remote.includes('sourceRuntimeIdentities')) return { code: 0, out: JSON.stringify({
+        sourceRuntimeIdentities: { daemon: { selected: 'preserved', loaded: 'preserved' } },
+        daemonServerUrl: `http://127.0.0.1:${localServerPort}`,
+      }) };
+      return { code: 0 };
+    },
+    runCommand: async () => ({ code: 0, out: JSON.stringify({ retainedRemoteData: true }) }),
+    spawnProcess: input => { const child = { ...input, exitCode: null }; children.push(child); return child; },
+    stopProcess: async child => { child.exitCode = 0; },
+    waitForProcess: async () => new Promise(() => {}),
+    waitForServerReady: async () => new Promise(() => {}),
+    waitForDaemonReady: async () => new Promise(() => {}),
+  });
+  try {
+    const expectedPrivatePort = resolveDefaultRemoteServerPort({ localServerPort, targetIndex: 0, instanceId });
+    const tunnel = children.find(child => child.command === 'ssh' && child.args.includes('-N'));
+    const worker = children.find(child => child.command === 'ssh' && child.args.at(-1).includes('stack start'));
+    assert.ok(tunnel?.args.includes(`127.0.0.1:${localServerPort}:127.0.0.1:${expectedPrivatePort}`),
+      'the supervisor must forward the controller port to the co-located server private port');
+    assert.ok(tunnel?.args.includes(`127.0.0.1:${localServerPort}:127.0.0.1:${localServerPort}`),
+      'the preserved daemon must retain its descriptor-declared canonical endpoint');
+    assert.match(worker?.args.at(-1) ?? '', new RegExp(`HAPPIER_STACK_SERVER_PORT=${expectedPrivatePort}`));
+
+    const observe = serverPort => observeDevServerStartupTopology({
+      serverRequested: true, stackMode: true, serverPort,
+    }, {
+      observeTcpPortAvailabilityImpl: async port => ({ status: port === localServerPort ? 'occupied' : 'free' }),
+      observeRuntimePortOwnedByStackDevProxyImpl: async () => false,
+      resolveStackOwnedServerListenPidImpl: async () => null,
+    });
+    const correct = await observe(expectedPrivatePort);
+    assert.equal(correct.topology, 'absent', 'the remote start must observe the unoccupied private server port');
+    assert.equal(decideDevStartupTopology({ serverRequested: true, serverTopology: correct.topology }).startServer, true);
+    const miswired = await observe(localServerPort);
+    assert.equal(miswired.topology, 'foreign');
+    assert.throws(
+      () => decideDevStartupTopology({ serverRequested: true, serverTopology: miswired.topology }),
+      error => error?.code === 'ESERVERTOPOLOGYFOREIGN',
+      'a genuinely foreign listener remains a fail-closed startup refusal',
+    );
+  } finally { await controller.close({ preserveDaemon: true }); }
 });
 
 for (const mode of ['foreground', 'background-ready', 'background-starting']) {
