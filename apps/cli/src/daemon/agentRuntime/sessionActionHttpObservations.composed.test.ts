@@ -43,6 +43,11 @@ import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemon
   removeAgentRuntimeDaemonServiceAuthorityIfOwned } from './sessionBridgeAuthorization';
 import * as machineRpc from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import type { AgentSessionRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
+import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceTurnWitness';
+import { createNativeAgentRuntimeSessionPlanFixture, createNativeSessionClientTestPort,
+  createExternalContributionFixtures, createLease, createSessionHostServiceOwners } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
 
 const processIdentity = vi.hoisted(() => vi.fn());
 vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
@@ -341,6 +346,73 @@ it.each([
     }));
     expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private-error-body');
   } finally { await f.close(); }
+});
+
+it('admits child reads from the native factory witness through real caller resolution', async () => {
+  const f = await fixture();
+  const agentId = 'native-reader';
+  const contributions = createExternalContributionFixtures(agentId);
+  const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+  let permissionMode: 'default' | 'read-only' | undefined = 'default';
+  let sequence = 0;
+  // The vendor runtime is the external boundary. Native host witness ownership,
+  // daemon execution, caller reconstruction and signed Home reads remain real.
+  const native: AgentSessionRuntime = {
+    send: async request => {
+      for (const listener of listeners) {
+        listener({ kind: 'input-accepted', sessionId, sequence: ++sequence, emittedAtMs: 1,
+          inputIds: request.inputIds, delivery: request.delivery });
+        listener({ kind: 'turn-start', sessionId, sequence: ++sequence, emittedAtMs: 2,
+          turnId: request.delivery.turnId, startedBy: 'host' });
+      }
+      return { status: 'admitted' };
+    },
+    watch: listener => { listeners.add(listener); return { dispose: () => { listeners.delete(listener); } }; },
+    dispose() {},
+  };
+  const plan = await createNativeAgentRuntimeSessionPlanFixture({
+    runtime: { sessions: { open: async () => native } },
+    lease: createLease(agentId), backend: contributions.backend, agent: contributions.agent,
+    createSessionHostServiceOwners,
+    sessionInput: buildPluginSessionBindingInput({ credentials: f.credentials, directory: '/workspace' }),
+  });
+  // Canonical factory testkit supplies the process/transport shell for this host.
+  const created = await plan.config.createSessionRuntime({ directory: '/workspace', metadata: {},
+    machineId: storage.state.machineId, session: createNativeSessionClientTestPort(sessionId),
+    transcriptSession: {}, messageBuffer: {}, mcpServers: {}, permissionHandler: {},
+    getPermissionMode: () => permissionMode, setThinking() {}, memoryRecallGuidanceEnabled: false,
+  } as never);
+  const unsubscribe = created.operations.subscribeRuntimeEvents(() => undefined);
+  try {
+    await created.operations.sendTurnPrompt('Read own child', { turnId: 'native-read-turn', localId: 'native-read-input',
+      userMessageSeq: 1, userMessageSeqs: [1], agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 },
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' } });
+    const invoke = async (actionId: 'session.status.get' | 'session.messages.recent.get') => {
+      const witness = created.operations.readActiveTurnAdmissionWitness?.();
+      if (!witness) throw new Error('Missing active native host witness');
+      return await f.execute({ ...f.operation(actionId, { sessionId: childId }),
+        witness: projectAgentRuntimeDaemonServiceTurnWitnessV1(witness) }, { sessionId, isCurrent: async () => true });
+    };
+    const status = await invoke('session.status.get');
+    expect(status, JSON.stringify(status)).toMatchObject({ ok: true, result: { session: { id: childId } } });
+    permissionMode = 'read-only';
+    expect(await invoke('session.messages.recent.get')).toMatchObject({ ok: true,
+      result: { sessionId: childId, items: [{ text: 'Child ready' }] } });
+    const queries = f.observations.filter(row => row.path === '/v2/sessions/query');
+    expect(queries.length).toBeGreaterThan(0);
+    expect(queries.every(row => row.status === 200 && row.signed && !row.bearer)).toBe(true);
+    f.members.clear();
+    expect(await invoke('session.status.get')).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'target_outside_led_subtree' } });
+    f.members.add(childId);
+    permissionMode = undefined;
+    expect(await invoke('session.status.get')).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'caller_context_unavailable' } });
+  } finally {
+    unsubscribe?.();
+    await created.operations.resetOrDisposeRuntime();
+    await f.close();
+  }
 });
 
 it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 'session.archive', 'session.unarchive'] as const)(
