@@ -1,4 +1,4 @@
-import { createStoredReadSchema } from '@happier-dev/protocol';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionViewerProjectionV1Schema, type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 import { isSessionPersonallyTrackedForViewerV1 } from '@happier-dev/protocol/sessions/personal/tracking';
 import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
