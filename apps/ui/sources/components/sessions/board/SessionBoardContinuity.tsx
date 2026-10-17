@@ -44,6 +44,11 @@ export type SessionBoardContinuity = Readonly<{
         retainedMutation: StateCell<SessionBoardRetainedMutation | null>;
         announcement: StateCell<string | null>;
         busy: StateCell<boolean>;
+        /**
+         * Add asked for where the Board cannot add (the read-only sidebar, which then opens the Board in
+         * Details): the next placement that draws the Board's Add opens its gallery once and clears it.
+         */
+        addRequest: StateCell<boolean>;
     }>;
     viewSelection: Readonly<{
         read: () => string | null;
@@ -118,6 +123,7 @@ function QualifiedSessionBoardContinuityProvider(props: React.PropsWithChildren<
     const retainedMutation = React.useState<SessionBoardRetainedMutation | null>(null);
     const announcement = React.useState<string | null>(null);
     const busy = React.useState(false);
+    const addRequest = React.useState(false);
     const editorDraftsRef = React.useRef(new Map<string, unknown>());
     const mountedRef = React.useRef(true);
     React.useLayoutEffect(() => {
@@ -198,6 +204,7 @@ function QualifiedSessionBoardContinuityProvider(props: React.PropsWithChildren<
                 retainedMutation,
                 announcement,
                 busy,
+                addRequest,
             },
             viewSelection: {
                 read: () => requestedViewIdRef.current,
@@ -242,6 +249,7 @@ function QualifiedSessionBoardContinuityProvider(props: React.PropsWithChildren<
         // React state tuples are fresh on every render; their values and stable
         // setters define the published continuity, not the tuple wrappers.
         announcement[0],
+        addRequest[0],
         activeEditorOwnerId,
         activateEditor,
         busy[0],

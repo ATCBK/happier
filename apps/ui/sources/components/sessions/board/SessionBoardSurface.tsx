@@ -335,6 +335,15 @@ function AddControls(props: Readonly<{
     const anchorRef = React.useRef<View | null>(null);
     const [open, setOpen] = React.useState(false);
     const close = React.useCallback(() => setOpen(false), []);
+    // Add asked for from the read-only sidebar opens here, the placement that can add.
+    const addRequest = useMountedSessionBoardContinuity()?.controller.addRequest;
+    const requested = addRequest?.[0] === true;
+    const clearRequest = addRequest?.[1];
+    React.useEffect(() => {
+        if (!requested || props.controller.addIntents.length === 0) return;
+        clearRequest?.(false);
+        setOpen(true);
+    }, [clearRequest, props.controller.addIntents.length, requested]);
     if (props.controller.addIntents.length === 0) return null;
     const toggle = () => setOpen((value) => !value);
     const popover = (
@@ -505,21 +514,26 @@ function ViewActions(props: Readonly<{
 
 /**
  * The empty Board's first steps (lab ST): Ask the agent leads — it only drafts a sentence into this
- * Session's composer and sends nothing, so even the read-only sidebar may offer it — and Add a note
- * is the quiet second way wherever the placement may write.
+ * Session's composer and sends nothing, so even the read-only sidebar may offer it — and the quiet
+ * second way adds yourself: Add a note wherever the placement may write; in the read-only sidebar,
+ * Add a widget, which opens the Board in Details with the same gallery Home and every area use
+ * (`addInDetails`), so the person has the same capability the agent has.
  */
 function emptyBoardActions(
     controller: SessionBoardController,
     mutationControls: boolean,
+    addInDetails?: () => void,
 ): Readonly<{ action?: SurfaceStateAction; secondaryAction?: SurfaceStateAction }> {
     const askAgent: SurfaceStateAction | null = controller.addIntents.includes('askAgent')
         ? { label: t('sessionBoard.empty.editor.askAgent'), onPress: () => { void controller.run({ kind: 'add', intent: 'askAgent' }); } }
         : null;
-    const addNote: SurfaceStateAction | null = mutationControls && controller.addIntents.includes('note')
+    const addYourself: SurfaceStateAction | null = mutationControls && controller.addIntents.includes('note')
         ? { label: t('sessionBoard.empty.editor.addNote'), onPress: () => { void controller.run({ kind: 'add', intent: 'note' }); } }
-        : null;
-    if (askAgent) return addNote ? { action: askAgent, secondaryAction: addNote } : { action: askAgent };
-    return addNote ? { action: addNote } : {};
+        : !mutationControls && addInDetails && controller.addIntents.some((intent) => intent !== 'askAgent')
+            ? { label: t('widgetAdd.areaEmptyAction'), onPress: addInDetails }
+            : null;
+    if (askAgent) return addYourself ? { action: askAgent, secondaryAction: addYourself } : { action: askAgent };
+    return addYourself ? { action: addYourself } : {};
 }
 
 /**
@@ -760,6 +774,10 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
     // The views strip draws itself only for several views or a lone view being renamed; the line takes its place otherwise.
     const stripVisible = (snapshot?.views.length ?? 0) > 1 || renamingViewId !== null;
     const onOpenBoardDetails = props.onOpenBoardDetails;
+    const addRequest = continuity?.controller.addRequest[1];
+    // The read-only sidebar cannot add; it opens the Board in Details with its Add gallery open.
+    const addInDetails = props.navigationOnly && onOpenBoardDetails && addRequest && snapshot?.canEdit
+        ? () => { addRequest(true); onOpenBoardDetails(); } : undefined;
     // What the Add popover offers beyond the controller's intents: this Session's exact projection
     // (for the live previews) and the Board's one current-Session candidate list.
     const addSource = React.useMemo(() => ({
@@ -1335,7 +1353,7 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                                 reason={snapshot.canEdit
                                     ? t('sessionBoard.empty.editor.description')
                                     : t('sessionBoard.empty.viewer.description')}
-                                {...emptyBoardActions(controller, mutationControls)}
+                                {...emptyBoardActions(controller, mutationControls, addInDetails)}
                             />
                         </>
                     )) : (

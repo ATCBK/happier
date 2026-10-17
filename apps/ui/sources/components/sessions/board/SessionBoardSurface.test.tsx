@@ -25,6 +25,7 @@ import {
     usePublishedPaneHeaderContent,
 } from '@/components/appShell/panes/paneHeaderSlot';
 import { SessionBoardSurface } from './SessionBoardSurface';
+import { SessionBoardContinuityProvider } from './SessionBoardContinuity';
 import { useSessionBoardController } from './useSessionBoardController';
 import { realBoardActions } from './sessionBoardActionsTestkit';
 import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityTargetFeedback } from './SessionSurfaceEntityDrag';
@@ -924,6 +925,23 @@ describe('SessionBoardSurface', () => {
         await screen.pressByTestIdAsync('session-board-empty-action');
         expect(onAskAgent).toHaveBeenCalledOnce();
         expect(screen.findHostByTestId('session-board-empty-secondary-action')).not.toBeNull();
+    });
+
+    it('offers Add a widget on an empty sidebar Board and opens the Board gallery where the Board can add', async () => {
+        const openDetails = vi.fn();
+        const sidebar = <PaneHarness host="sidebar" snapshot={snapshot({})} onAskAgent={() => {}} onOpenBoardDetails={openDetails} />;
+        const screen = await renderScreen(<SessionBoardContinuityProvider sessionId="session-1" serverId="home-1">{sidebar}</SessionBoardContinuityProvider>);
+        // The read-only sidebar draws no Add chooser of its own; its empty card hands Add to Details.
+        expect(screen.findByTestId('session-board-add-trigger')).toBeNull();
+        expect(screen.findByTestId('session-board-add-popover')).toBeNull();
+        await screen.pressByTestIdAsync('session-board-empty-secondary-action');
+        expect(openDetails).toHaveBeenCalledOnce();
+        // The Board then opens in Details, the one placement that adds, with the same gallery already open.
+        await act(async () => screen.update(<SessionBoardContinuityProvider sessionId="session-1" serverId="home-1">
+            {sidebar}
+            <Harness snapshot={snapshot({})} />
+        </SessionBoardContinuityProvider>));
+        expect(screen.findByTestId('session-board-add-popover')).not.toBeNull();
     });
 
     it('counts only what is on the Board, not the replies that stay in the conversation', async () => {
