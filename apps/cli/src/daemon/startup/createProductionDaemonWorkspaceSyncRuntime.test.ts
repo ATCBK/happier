@@ -109,6 +109,44 @@ function settingsSnapshot(): ActiveProjectAccountRowsSnapshot {
 }
 
 describe('createProductionDaemonWorkspaceSyncRuntime', () => {
+  it('refreshes receiving target rows before bootstrapping a newly staged remote endpoint', async () => {
+    const rows: ProjectAccountRowV1[] = [];
+    const fixture = await composeBindChildSourcePhaseTestRuntime({ socketIo, separateTargetParent: true,
+      projectRowsFromHttp: true, readAdditionalHttpPostResponse: async url => {
+        if (!url.endsWith('/v1/account/project-rows/list')) return undefined;
+        return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      } });
+    const cipher = createProjectAccountRowCipherV1({ mode: 'plain', material: null, randomBytes: n => new Uint8Array(n) });
+    const sourceKey = { kind: 'workspace-ref' as const, serverId: fixture.serverId, id: fixture.sourceRef.id };
+    rows.push(ProjectAccountRowV1Schema.parse({ key: sourceKey, revision: 0,
+      content: cipher.seal({ key: sourceKey, value: fixture.sourceRef }) }));
+    await runWithServerHttpBaseUrl('https://bind-child-home.invalid', async () =>
+      await readProjectAccountRows({ credentials: fixture.credentials, serverId: fixture.serverId }));
+    await fixture.settleProjects();
+    // The SOURCE has just committed these rows at Home. The receiving process
+    // still has the previous real Account snapshot until its next HTTP read.
+    const targetKey = { kind: 'workspace-ref' as const, serverId: fixture.serverId, id: fixture.targetRef.id };
+    rows.push(ProjectAccountRowV1Schema.parse({ key: targetKey, revision: 0,
+      content: cipher.seal({ key: targetKey, value: fixture.targetRef }) }));
+    const relationship = { v: 1 as const, relationshipId: 'fresh-remote-endpoint',
+      controllerMachineId: fixture.sourceRef.machineId, alphaWorkspaceRefId: fixture.sourceRef.id,
+      betaWorkspaceRefId: fixture.targetRef.id, mode: 'keep_synced' as const, contentPolicy,
+      enabled: false, createdAtMs: 1, updatedAtMs: 1 };
+    const graphKey = { kind: 'relationship-graph' as const };
+    rows.push(ProjectAccountRowV1Schema.parse({ key: graphKey, revision: 0,
+      content: cipher.seal({ key: graphKey, value: { relationships: [relationship] } }) }));
+    expect(getActiveProjectAccountRowsSnapshot()?.workspaceRefs.map(ref => ref.id)).toEqual([fixture.sourceRef.id]);
+    await mkdir(fixture.targetPath);
+    const prepare = fixture.targetParentRpcHandlers.get(RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_PREPARE);
+    if (!prepare) throw new Error('The receiving target bootstrap RPC is not registered');
+    await expect(prepare({ v: 1, bootstrapOperationId: relationship.relationshipId,
+      owner: { kind: 'relationship', relationshipId: relationship.relationshipId }, transientRelationship: { ...relationship, enabled: true },
+      targetWorkspaceRefId: fixture.targetRef.id, endpointRole: 'beta', policyDigest: contentPolicy.policyDigest,
+      createIfMissing: false, targetBootstrap: 'use_existing' })).resolves.toMatchObject({ state: 'ready' });
+    expect(getActiveProjectAccountRowsSnapshot()?.workspaceRefs.map(ref => ref.id))
+      .toContain(fixture.targetRef.id);
+  });
+
   it.each(['distinct SOURCE row id', 'cross-Account same row id'] as const)(
     'copies into the accepted physical TARGET workspace without borrowing its rows into the SOURCE writer graph (%s)', async sourceRowNamespace => {
     const sourceRows: ProjectAccountRowV1[] = [];

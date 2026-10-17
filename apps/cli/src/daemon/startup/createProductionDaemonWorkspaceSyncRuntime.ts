@@ -1631,7 +1631,26 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     readFileAtTarget: targetAuthority.readFileHere,
     observeEntryAtTarget: targetAuthority.observeEntryHere,
     preflightHandoffTargetReplacement: targetAuthority.preflightHandoffTargetReplacementHere,
-    prepareBootstrapAtTarget: targetAuthority.prepareBootstrapHere,
+    prepareBootstrapAtTarget: async (request, signal, context) => {
+      assertLegacyStateAvailable();
+      signal?.throwIfAborted();
+      // SOURCE has acknowledged staging at Home before dispatching this RPC.
+      // A receiving process can still lack those endpoint rows. Refresh that
+      // projection before admission; existing immutable endpoints and private
+      // requester reads retain their current owners.
+      if (!context?.callerInputAuthorization) {
+        const relationship = request.transientRelationship;
+        const endpointIds = request.owner.kind === 'copy_once'
+          ? [request.owner.operation.alphaWorkspaceRefId, request.owner.operation.betaWorkspaceRefId]
+          : relationship ? [relationship.alphaWorkspaceRefId, relationship.betaWorkspaceRefId] : [request.targetWorkspaceRefId];
+        const refs = factories.getProjectSnapshot()?.workspaceRefs ?? [];
+        if (endpointIds.some(id => !resolveWorkspaceRefById(refs, id, semanticServerId))) {
+          await factories.refreshProjectRows({ credentials: input.credentials, serverId: semanticServerId,
+            ...(signal ? { signal } : {}) });
+        }
+      }
+      return await targetAuthority.prepareBootstrapHere(request, signal, context);
+    },
     releaseBootstrapAtTarget: targetAuthority.releaseBootstrapHere,
     prepareSourceSeedExport: targetAuthority.prepareSourceSeedExport,
     prepareConflictResolutionExport: targetAuthority.prepareConflictResolutionExport,
