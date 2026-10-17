@@ -321,7 +321,7 @@ export function parseQueuedSessionMutation(value: unknown, sessionId: string): Q
         const parsed = z.object({
             v: z.literal(1), source: z.literal('agent_state_request_settlement'),
             sessionId: z.literal(sessionId), mutationId: z.string().min(1),
-            content: z.object({ t: z.literal('encrypted'), c: z.string().min(1) }).strict(),
+            content: z.object({ t: z.enum(['encrypted', 'installation_encrypted_v1']), c: z.string().min(1) }).strict(),
         }).strict().safeParse(value.payload);
         if (parsed.success && parsed.data.mutationId === mutationId) {
             return { ok: true, mutation: {

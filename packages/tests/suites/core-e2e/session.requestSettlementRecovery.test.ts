@@ -21,7 +21,7 @@ describe('core e2e: durable request settlement recovery', () => {
   let server: StartedServer | null = null;
   afterEach(async () => { await server?.stop(); server = null; });
 
-  it('replays an admitted settlement after runtime restart without clearing background or newer requests', async () => {
+  it.each(['legacy', 'tokenOnly'] as const)('replays an admitted %s settlement after runtime restart without clearing background or newer requests', async (credentialMode) => {
     const testDir = run.testDir(`request-settlement-${randomUUID()}`);
     const extraEnv = { HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'plaintext_only' };
     server = await startServerLight({ testDir, dbProvider: 'sqlite', extraEnv });
@@ -46,7 +46,7 @@ describe('core e2e: durable request settlement recovery', () => {
     };
     const launchRuntime = async (phase: 'admit' | 'recover', session: typeof runtimeSession) => {
       const inputPath = join(testDir, `${phase}.json`);
-      await writeFile(inputPath, JSON.stringify({ phase, token: auth.token, secret, session, requestId }), { mode: 0o600 });
+      await writeFile(inputPath, JSON.stringify({ phase, credentialMode, token: auth.token, secret, session, requestId }), { mode: 0o600 });
       const hook = resolveTsxImportHookSpecifier();
       if (!hook) throw new Error('Missing canonical tsx import hook');
       await runLoggedCommand({
@@ -61,6 +61,7 @@ describe('core e2e: durable request settlement recovery', () => {
     expect(journalFiles).toHaveLength(1);
     const admitted = await readFile(join(homeDir, journalFiles[0]), 'utf8');
     expect(admitted).toContain('agent_state_request_settlement');
+    expect(admitted).toContain(credentialMode === 'tokenOnly' ? 'installation_encrypted_v1' : 'encrypted');
     expect(admitted).not.toContain('private-settlement-marker');
     server = await startServerLight({ testDir, dbProvider: 'sqlite', extraEnv, preserveExistingDataDir: true, __portAllocator: async () => Number(new URL(baseUrl).port) });
     const observer = createUserScopedSocketCollector(baseUrl, auth.token);
@@ -78,7 +79,7 @@ describe('core e2e: durable request settlement recovery', () => {
       expect(settled).toMatchObject({ pendingPermissionRequestCount: 2, pendingUserActionRequestCount: 0 });
       const state = JSON.parse(String(settled.agentState));
       expect(Object.keys(state.requests).sort()).toEqual(['background', 'newer']);
-      expect(state.completedRequests[requestId].status).toBe('approved');
+      expect(state.completedRequests[requestId].status).toBe(credentialMode === 'tokenOnly' ? 'canceled' : 'approved');
       await waitFor(() => observer.getEvents().some((event) => event.kind === 'update' && event.payload.body?.pendingPermissionRequestCount === 2), { timeoutMs: 20_000 });
     } finally { observer.close(); }
   });

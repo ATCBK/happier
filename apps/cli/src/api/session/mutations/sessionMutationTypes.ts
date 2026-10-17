@@ -114,13 +114,13 @@ export type RuntimeActivitySnapshotMutationV1 = Readonly<{
     snapshot: SessionRuntimeActivitySnapshot;
 }>;
 
-/** Local intent encrypted with the account's machine credential key, including plaintext sessions. */
+/** Local intent encrypted with genuine account keys or the keyless runtime's installation identity. */
 export type AgentStateRequestSettlementMutationV1 = Readonly<{
     v: 1;
     source: 'agent_state_request_settlement';
     sessionId: string;
     mutationId: string;
-    content: Readonly<{ t: 'encrypted'; c: string }>;
+    content: Readonly<{ t: 'encrypted' | 'installation_encrypted_v1'; c: string }>;
 }>;
 
 export function resolveRuntimeActivitySnapshotMutationId(sessionId: string): string {

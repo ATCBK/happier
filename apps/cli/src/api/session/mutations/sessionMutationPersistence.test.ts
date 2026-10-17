@@ -39,14 +39,14 @@ async function readDeadLetterEntries(sessionId: string): Promise<unknown[]> {
 }
 
 describe('session mutation persistence', () => {
-    it('readmits an encrypted settlement quarantined by the released CLI v0.2.15 reader', async () => {
+    it.each(['encrypted', 'installation_encrypted_v1'] as const)('readmits a %s settlement quarantined by the released CLI v0.2.15 reader', async (format) => {
         const { loadSessionMutationOutbox, recoverAuthoritativeSessionMutationDeadLetters } = await import('./sessionMutationPersistence');
         const context = await createRuntimePersistenceContext('rollback-settlement');
         const queued = {
             kind: 'agent_state_request_settlement', mutationId: 'settlement-1',
             payload: {
                 v: 1, source: 'agent_state_request_settlement', sessionId: 'rollback-settlement',
-                mutationId: 'settlement-1', content: { t: 'encrypted', c: 'ciphertext' },
+                mutationId: 'settlement-1', content: { t: format, c: 'ciphertext' },
             },
             createdAt: 10, attempts: 0, nextAttemptAt: 0,
         };

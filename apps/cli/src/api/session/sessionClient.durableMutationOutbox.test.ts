@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -379,9 +379,11 @@ describe('ApiSessionClient durable mutation outbox', () => {
     }
   });
 
-  it('does not retain a pre-effect UI decision for later journal replay after acknowledgement failure', async () => {
-    const { writeCredentialsLegacy } = await import('@/persistence');
-    await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });
+  it.each(['legacy', 'tokenOnly'] as const)('does not retain a %s pre-effect UI decision for later journal replay after acknowledgement failure', async (variant) => {
+    const { writeCredentialsLegacy, writeCredentialsTokenOnly } = await import('@/persistence');
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'settlement-account' })).toString('base64url')}.sig`;
+    if (variant === 'legacy') await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token });
+    else await writeCredentialsTokenOnly({ token });
     const request = { tool: 'Write', kind: 'permission', arguments: {}, createdAt: 1 };
     let serverState: AgentState = { requests: { ui: request } };
     let serverVersion = 0;
@@ -401,7 +403,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
     const { ApiSessionClient } = await import('./sessionClient');
     const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
     const { createPermissionRequestCoordinator } = await import('@/agent/permissions/permissionRequestCoordinator');
-    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-ui-failure', agentState: serverState }));
+    const client = new ApiSessionClient(token, createPlainSessionFixture({ id: 's-ui-failure', agentState: serverState }));
     const coordinator = createPermissionRequestCoordinator<boolean>({ store: new AgentStateRequestStore({ session: client, logPrefix: '[Test]' }) });
     const provider = coordinator.requestDecision({ requestId: 'ui', toolName: request.tool, toolInput: request.arguments, createdAt: 1 });
     let outcome = 'pending';
@@ -498,10 +500,12 @@ describe('ApiSessionClient durable mutation outbox', () => {
     expect(JSON.stringify(queued)).not.toContain('private');
   });
 
-  it.each(['legacy', 'dataKey'] as const)('recovers %s encrypted exact request settlement after restart and rebases on concurrent requests', async (variant) => {
-    const { writeCredentialsLegacy, writeCredentialsDataKey } = await import('@/persistence');
-    if (variant === 'legacy') await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });
-    else await writeCredentialsDataKey({ publicKey: new Uint8Array(32).fill(8), machineKey: new Uint8Array(32).fill(9), token: 'tok' });
+  it.each(['legacy', 'dataKey', 'tokenOnly'] as const)('recovers %s encrypted exact request settlement after restart and rebases on concurrent requests', async (variant) => {
+    const { writeCredentialsLegacy, writeCredentialsDataKey, writeCredentialsTokenOnly, readCredentials } = await import('@/persistence');
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'settlement-account' })).toString('base64url')}.sig`;
+    if (variant === 'legacy') await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token });
+    else if (variant === 'dataKey') await writeCredentialsDataKey({ publicKey: new Uint8Array(32).fill(8), machineKey: new Uint8Array(32).fill(9), token });
+    else await writeCredentialsTokenOnly({ token });
     const foreground = { tool: 'Write', arguments: { path: 'private-foreground-path' }, createdAt: 10 };
     const background = { tool: 'Write', arguments: { path: 'private-background-path' }, createdAt: 11 };
     let serverState: AgentState = { requests: { foreground, background }, completedRequests: {} };
@@ -528,10 +532,16 @@ describe('ApiSessionClient durable mutation outbox', () => {
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
     const { ApiSessionClient } = await import('./sessionClient');
     const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
-    const first = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-settlement', agentState: serverState }));
-    await new AgentStateRequestStore({ session: first, logPrefix: '[Test]' }).completeRequest({
-      requestId: 'foreground', status: 'approved', decision: 'approved', observedCompletion: true,
-    });
+    const first = new ApiSessionClient(token, createPlainSessionFixture({ id: 's-settlement', agentState: serverState }));
+    try {
+      await new AgentStateRequestStore({ session: first, logPrefix: '[Test]' }).completeRequest({
+        requestId: 'foreground', status: variant === 'tokenOnly' ? 'canceled' : 'approved',
+        ...(variant === 'tokenOnly' ? {} : { decision: 'approved', observedCompletion: true }),
+      });
+    } catch (error) {
+      await first.close();
+      throw error;
+    }
     const saved = JSON.stringify(await readPersistedOutboxMutations('s-settlement'));
     expect(saved).toContain('agent_state_request_settlement');
     expect(saved).not.toContain('private-foreground-path');
@@ -542,13 +552,38 @@ describe('ApiSessionClient durable mutation outbox', () => {
     serverState.requests = { ...serverState.requests, newer: { ...foreground, createdAt: 30 } };
     serverVersion += 1;
     online = true;
+    if (variant === 'tokenOnly') {
+      const { configuration } = await import('@/configuration');
+      const identity = await readFile(configuration.installationIdentityFile, 'utf8');
+      await rm(configuration.installationIdentityFile);
+      sessionSocketStub = makeSocket();
+      const missingIdentity = new ApiSessionClient(token, createPlainSessionFixture({
+        id: 's-settlement', agentState: { requests: { foreground, background } },
+      }));
+      try {
+        await missingIdentity.flush();
+        expect(await readPersistedOutboxMutations('s-settlement')).toEqual([
+          expect.objectContaining({ kind: 'agent_state_request_settlement', payload: expect.objectContaining({
+            content: expect.objectContaining({ t: 'installation_encrypted_v1' }),
+          }) }),
+        ]);
+        await expect(readFile(configuration.installationIdentityFile)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(serverState.requests?.foreground).toEqual(foreground);
+      } finally {
+        await missingIdentity.close();
+        await writeFile(configuration.installationIdentityFile, identity, { mode: 0o600 });
+      }
+      // Same-account authorization refresh must not rotate the local encryption key.
+      await writeCredentialsTokenOnly({ token: `header.${Buffer.from(JSON.stringify({ sub: 'settlement-account', refreshed: true })).toString('base64url')}.sig` });
+      expect((await readCredentials())?.encryption).toBeNull();
+    }
     sessionSocketStub = makeSocket();
-    const restarted = new ApiSessionClient('tok', createPlainSessionFixture({
+    const restarted = new ApiSessionClient(token, createPlainSessionFixture({
       id: 's-settlement', agentState: { requests: { foreground, background } }, agentStateVersion: 0,
     }));
     await expect.poll(async () => await readPersistedOutboxMutations('s-settlement')).toEqual([]);
     expect(serverState.requests).toEqual({ background, newer: { ...foreground, createdAt: 30 } });
-    expect(serverState.completedRequests).toMatchObject({ foreground: { status: 'approved' } });
+    expect(serverState.completedRequests).toMatchObject({ foreground: { status: variant === 'tokenOnly' ? 'canceled' : 'approved' } });
     expect(publishedCounts).toContainEqual({ pendingPermissionRequestCount: 2, pendingUserActionRequestCount: 0 });
     await restarted.close();
   });

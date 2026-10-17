@@ -27,7 +27,11 @@ import {
     type CommittedClaudeJsonlMessageBaseline,
 } from '@/backends/claude/utils/claudeJsonlMessageKey';
 import { randomUUID } from 'node:crypto';
-import { resolveMachineEncryptionContext } from '@/api/client/encryptionKey';
+import {
+    openAgentStateRequestSettlement,
+    sealAgentStateRequestSettlement,
+    type AgentStateRequestSettlementEncryptionScope,
+} from './agentStateRequestSettlementEncryption';
 import {
     AgentStateRequestSettlementSchema,
     applyAgentStateRequestSettlement,
@@ -584,6 +588,7 @@ export class ApiSessionClient extends EventEmitter {
     private static readonly STARTUP_MESSAGE_CATCH_UP_RETRY_DELAYS_MS = [250, 1_000, 2_500] as const;
 
     private readonly token: string;
+    private readonly requestSettlementEncryptionScope: AgentStateRequestSettlementEncryptionScope;
     readonly sessionId: string;
     private metadata: Metadata | null;
     private runtimeWorkingDirectory: string | null = null;
@@ -952,6 +957,10 @@ export class ApiSessionClient extends EventEmitter {
 	        super()
 	        this.token = token;
 	        this.sessionId = session.id;
+            this.requestSettlementEncryptionScope = {
+                token, sessionId: session.id, serverId: configuration.activeServerId,
+                installationIdentityPath: configuration.installationIdentityFile,
+            };
 	        this.metadata = normalizeSessionMetadataForRead(session.metadata);
 	        this.metadataVersion = session.metadataVersion;
             this.sessionSocketMachineId = resolveSessionSocketMachineIdForBootstrap(session.metadata);
@@ -1093,12 +1102,7 @@ export class ApiSessionClient extends EventEmitter {
             getSocket: () => this.socket as any,
             requestReconnect: (reason) => this.kickSessionSocketReconnectForDurableMutation(reason),
             deliverAgentStateRequestSettlement: async (mutation) => {
-                const credentials = await readCredentials();
-                if (!credentials) throw new Error('Request settlement recovery requires account credentials');
-                const context = resolveMachineEncryptionContext(credentials);
-                const decrypted = decrypt(
-                    context.encryptionKey, context.encryptionVariant, decodeBase64(mutation.content.c),
-                );
+                const decrypted = await openAgentStateRequestSettlement(this.requestSettlementEncryptionScope, mutation.content);
                 // The crypto boundary also returns null for a wrong key. Retain that
                 // ciphertext for recovery rather than permanently quarantining it.
                 if (decrypted === null) throw new Error('Request settlement recovery could not decrypt payload');
@@ -5840,13 +5844,11 @@ export class ApiSessionClient extends EventEmitter {
         settlement: ReturnType<typeof buildAgentStateRequestSettlement>,
     ): Promise<void> {
         if (settlement.entries.length === 0) return;
-        const credentials = await readCredentials();
-        if (!credentials) throw new Error('Request settlement admission requires account credentials');
-        const context = resolveMachineEncryptionContext(credentials);
+        const content = await sealAgentStateRequestSettlement(this.requestSettlementEncryptionScope, settlement);
         const result = await this.sessionMutationOutbox.enqueueAgentStateRequestSettlement({
             v: 1, source: 'agent_state_request_settlement', sessionId: this.sessionId,
             mutationId: randomUUID(),
-            content: { t: 'encrypted', c: encodeBase64(encrypt(context.encryptionKey, context.encryptionVariant, settlement)) },
+            content,
         });
         if (!result.persisted) throw new Error('Request settlement was not durably admitted');
     }

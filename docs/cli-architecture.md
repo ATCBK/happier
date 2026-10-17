@@ -1723,8 +1723,21 @@ occurrence for a retirement retry and reporting the failure. Local bridge dispos
 waits for cancellation admission rather than a server round trip. Automatic history
 first uses the normal
 acknowledged Agent-state write; if that fails, the same journal retains its exact
-completion delta. These entries are encrypted with the canonical account machine
-encryption context even for plaintext sessions. The journal retries through the
+completion delta. Existing `{ t: 'encrypted', c }` entries retain the canonical
+account machine encryption context, including plaintext sessions with genuine keys.
+For token-only credentials, new entries instead use
+`{ t: 'installation_encrypted_v1', c }`: the existing private installation identity
+supplies a local encryption key without creating Account key material or another
+secret file. The key is `deriveKey` over the validated identity's base64url-decoded
+64-byte private key, with usage `Happier Session Mutation` and path
+`['request-settlement-v1', serverId, accountId, sessionId]`. Server and identity-file
+scope are captured with the client; Account identity is the trimmed JWT subject.
+The ciphertext uses the existing AES-256-GCM data-key bundle and standard base64.
+Same-Account token refreshes retain access; credentials for another Account fail
+closed. Recovery reads the original installation identity and never creates a new
+one when it is missing. Missing or replacement identity material leaves ciphertext
+queued and reports failure; restore the original identity to recover those entries.
+The journal retries through the
 existing current-version Agent-state updater. It preserves unrelated requests,
 replacement occurrences, response claims, and already committed automatic outcomes.
 Once a request is absent, replay preserves its committed terminal outcome even
@@ -1734,6 +1747,12 @@ in the existing dead-letter file, preserving its encrypted bytes and allowing la
 mutations to proceed. Missing credentials or an undecryptable payload remain
 retryable so restoring the correct credentials can recover the entry. Both failures
 are reported in the normal file log without request contents.
+Envelope markers are parsed explicitly. An older reader that does not recognize
+the marker uses its existing journal quarantine path rather than another key.
+Released CLI v0.2.15 does not recognize this private mutation kind; its existing
+unknown-kind quarantine preserves the complete encrypted row. Returning to the
+current runtime re-admits either recognized envelope through the existing recovery
+owner. This adds no server wire field or background recovery process.
 Claude abort/reset/disposal also retires source-owned persisted requests that have
 no local provider waiter; local bridge and unified dialog requests retain their
 separate ownership scopes. Coordinator-owned requests settle through their existing
