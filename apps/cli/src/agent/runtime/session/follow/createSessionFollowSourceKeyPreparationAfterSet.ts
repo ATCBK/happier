@@ -9,6 +9,9 @@ import type { StoredCredentials } from '@/persistence';
 import { openSessionDataEncryptionKey } from '@/api/client/openSessionDataEncryptionKey';
 import { resolveSessionOwningMachineId } from '@/session/services/resolveSessionOwningMachine';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { isAuthenticationStatus, readHttpStatus } from '@/api/client/httpStatusError';
+import { logger } from '@/ui/logger';
+import { AccountEncryptionCurrentnessUnavailableError } from '@/api/client/connectedServiceCredentialApi';
 
 import { prepareSessionFollowSourceKey } from './prepareSessionFollowSourceKey';
 
@@ -70,6 +73,18 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
         });
         return resolved.ok ? resolved.headers : null;
       };
+      const transportFailed = (cause: 'source_transport_exception' | 'destination_transport_exception', error: unknown) => {
+        signal?.throwIfAborted();
+        // Keep the typed HTTP cause; never serialize messages, bodies, URLs,
+        // request config, headers or arbitrary native error codes.
+        const httpStatus = readHttpStatus(error instanceof AccountEncryptionCurrentnessUnavailableError ? error.cause : error);
+        try {
+          logger.warnLocalFile('[Session Follow source-key preparation] Transport refused', {
+            cause, httpStatus, errorCode: isAuthenticationStatus(httpStatus) ? 'not_authenticated' : 'transport_exception',
+          });
+        } catch { /* Diagnostics cannot change the committed relation's result. */ }
+        return null;
+      };
 
       let exceptionCause: SessionFollowSourceKeyPreparationWaitingCauseV1 = 'server_features_exception';
       try {
@@ -81,14 +96,14 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
             resolveAuthorizationHeaders,
             ...(signal ? { signal } : {}),
             ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}),
-          }).catch(() => { signal?.throwIfAborted(); return null; }),
+          }).catch(error => transportFailed('source_transport_exception', error)),
           resolveSessionTransportContext({
             credentials: input.credentials,
             idOrPrefix: destinationSessionId,
             resolveAuthorizationHeaders,
             ...(signal ? { signal } : {}),
             ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}),
-          }).catch(() => { signal?.throwIfAborted(); return null; }),
+          }).catch(error => transportFailed('destination_transport_exception', error)),
         ]);
         if (!source) return { kind: 'waiting', reason: 'runner_unreachable', cause: 'source_transport_exception' };
         if (!destination) return { kind: 'waiting', reason: 'runner_unreachable', cause: 'destination_transport_exception' };

@@ -204,7 +204,9 @@ export function createSessionListActionDependency(params: Readonly<{
     }>) => {
       const resolved = resolveExternalActionServerRequestHeaders({
         context,
-        effectActionId: 'session.list',
+        // Scope/start admission observes the caller's subtree under the
+        // original Action. It does not originate a second session.list root.
+        effectActionId: context?.externalActionExecutionAuthorization?.binding.actionId ?? 'session.list',
         method: request.method,
         path: request.path,
         ...(request.body === undefined ? {} : { body: request.body }),
