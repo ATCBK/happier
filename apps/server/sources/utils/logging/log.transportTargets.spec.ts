@@ -1,3 +1,4 @@
+import pino from 'pino';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -107,6 +108,30 @@ describe('JSON stdout', () => {
       }
     } finally {
       rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe('structured errors', () => {
+  it('preserves non-enumerable error details under the existing error field', async () => {
+    setBunRuntime(true);
+    const { logger } = await import('./log');
+    const output: string[] = [];
+    // Replace only Pino's output stream; its real formatter and serializers still run.
+    const stream = Reflect.get(logger, pino.symbols.streamSym);
+    Reflect.set(logger, pino.symbols.streamSym, { write: (chunk: string) => output.push(chunk) });
+    try {
+      const error = Object.assign(new Error('unsupported Unicode escape sequence'), {
+        name: 'PrismaClientUnknownRequestError', clientVersion: '6.19.2',
+      });
+      logger.error({ module: 'session-write', error }, 'Message write failed');
+      const record = JSON.parse(output.join(''));
+      expect(record.error).toMatchObject({
+        message: error.message, stack: error.stack, clientVersion: '6.19.2',
+      });
+    } finally {
+      Reflect.set(logger, pino.symbols.streamSym, stream);
     }
   });
 });
