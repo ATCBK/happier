@@ -69,6 +69,15 @@ describe('workspace worker preference authority', () => {
       .toEqual({ status: 'refused', reason: 'override_requires_review' });
     expect(resolve({ ...primary, invocation: accepted }))
       .toEqual({ status: 'refused', reason: 'override_requires_review' });
+    expect(resolve({ ...primary, invocation: { kind: 'workers', destination: preference.destination } }))
+      .toEqual({ status: 'refused', reason: 'override_requires_review' });
+  });
+
+  it('preserves an exact worker choice on the accepted SOURCE Machine', () => {
+    const choice = { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'source' } };
+    expect(resolve({ execution: 'portable', sourceMachineId: 'source', acceptedMachineId: 'source',
+      invocation: choice, preference: { status: 'ready', value: preference } }))
+      .toEqual({ status: 'resolved', choice, provenance: 'workflow' });
   });
 
   it('does not turn unavailable preferences into default primary permission', () => {

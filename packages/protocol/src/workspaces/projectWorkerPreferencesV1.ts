@@ -159,9 +159,13 @@ export function resolveProjectExecutionChoiceV1(input: Readonly<{
   if (input.adHoc && !preference.allowAdHoc) return { status: 'refused', reason: 'ad_hoc_disabled' };
   if (input.execution === 'primary') return { status: 'resolved', choice: { kind: 'primary' }, provenance: 'declaration' };
   if (input.acceptedMachineId !== undefined && !input.reviewedOverride) {
-    const baseline: ProjectExecutionChoiceV1 = input.acceptedMachineId === input.sourceMachineId
+    // An accepted Machine constrains placement. An explicit worker choice
+    // targeting SOURCE still satisfies that same Machine ceiling.
+    const exactAcceptedWorker = input.invocation?.kind === 'workers' && input.invocation.destination.kind === 'machine'
+      && input.invocation.destination.machineId === input.acceptedMachineId ? input.invocation : undefined;
+    const baseline: ProjectExecutionChoiceV1 = exactAcceptedWorker ?? (input.acceptedMachineId === input.sourceMachineId
       ? { kind: 'primary' }
-      : { kind: 'workers', destination: { kind: 'machine', machineId: input.acceptedMachineId } };
+      : { kind: 'workers', destination: { kind: 'machine', machineId: input.acceptedMachineId } });
     if (input.invocation && !projectExecutionChoicesEqualV1(input.invocation, baseline)) {
       return { status: 'refused', reason: 'override_requires_review' };
     }
