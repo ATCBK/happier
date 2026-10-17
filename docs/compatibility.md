@@ -632,6 +632,12 @@ fields. Pile refs, item checks, and staying refs optionally carry the canonical
 catalog title; absent titles remain readable. Review/check presentation objects
 drop unknown fields while nested identity and mutation envelopes remain strict.
 Titles do not participate in cleanup authority or review tokens. Category reads
+use the Protocol's typed evidence vocabulary for display. Evidence is a skippable
+presentation list: readers preserve known codes and the `recognizer:` / `manifest:`
+namespaces, normalize unfamiliar string codes to `unknown`, and reject non-string
+values. The UI supplies localized labels and a neutral unknown label; evidence
+never grants cleanup authority. Opaque directory digests receive titles from their
+owning Storage category rather than becoming display names. Category reads
 can include exact `trashEntries` restoration metadata;
 an entry id is not filesystem authority, and the daemon rechecks every effect.
 Scan views additionally serve an optional `root` with the selected folder's facts,
@@ -887,6 +893,20 @@ clean moving predecessor at `f18aba940c5c56e5b24454e176c836c171098a2d`
 has no `terminal/workspace.ts` member producer; its absent workspace continues
 through the existing default-member reader. No reverse 0.3-to-0.2 layout writer
 or migration is added.
+
+Borrowed `terminal_view` members in current 0.3 development can retain the
+actual accepted `workspace` address separately from the process `cwd`. Project
+admission checks that exact address and its Project association; a nested cwd
+does not replace the accepted root. Inline and docked Project output use the
+same attachment-to-checkout resolver. The member and nested address stay closed.
+Docking consumes the output Action's freshly authorized operation snapshot,
+so an earlier UI projection cannot select another terminal or checkout.
+No unknown field supplies routing authority. This is device-local presentation
+state, not a terminal RPC or a new plugin launch API. The predecessor at
+`f18aba940c5c56e5b24454e176c836c171098a2d`, rechecked on 2026-10-16, has no
+`terminal/workspace.ts` producer or current Session terminal workspace owner.
+Existing members without the optional address keep their prior admission path;
+no reverse 0.3-to-0.2 workspace writer is supported.
 
 ### Terminal-host account settings (development)
 
@@ -1194,18 +1214,45 @@ The development V4 history operation also admits
 `{ recordId, projection: { range, resolution: 'accepted_observations' } }`.
 Its closed read result is `{ projection, complete }`; a missing materialization
 is explicitly incomplete. HEAD on this demand returns no body and exposes
-`x-happier-usage-projection-complete` under `Cache-Control: no-store`. The client
-then reads the stable `/history/document?recordId=…` resource, whose coverage is
-relative to its stored range, and uses the HEAD result for the actual demand.
+`x-happier-usage-projection-complete` and its representation's `ETag` under
+`Cache-Control: no-store`. The client
+then reads the stable `/history/document?recordId=…` resource, which carries the
+protected prefix and conservatively reports `complete: false`. Only the demand
+operation asserts coverage. The client uses the HEAD result for the actual demand
+only when both ETags match. A mismatched document read falls
+back to the original atomic demand GET, then the existing backfill path when
+incomplete. A now-null document also backfills instead of inheriting completeness.
 The document supports standard HTTP revalidation with `ETag`,
 `Cache-Control: private, no-cache` and `Vary: Authorization`. Matching conditional
 reads return an empty 304 only after qualified source, Account-mode and
 accepted-prefix admission. Moving range endpoints do not change the document URL.
-HTTP transports retain their own representation; no Usage response cache or timer
-is added. Missing HEAD support or an unexposed metadata header uses the original
-GET contract. Transports without HTTP caching still receive a full document.
-The first document GET, cache eviction, or a newly published projection can
-transfer a body; a successful PUT does not itself prime the transport's GET cache.
+The existing Account Resource retains the admitted document and validator beside
+its B read state, shared across batches and retired with Account/credential authority.
+A successful PUT acknowledges the actual stored document's ETag when its exact
+range/count/frontier matches the submitted cohort, including when an equivalent
+write retained existing ciphertext. A competing wider document is re-read instead
+of binding its validator to the producer's smaller body. The Resource can therefore retain
+the document it just produced without downloading it again. Conditional HEAD
+returns an empty 304 with freshly admitted demand coverage when that document is
+unchanged; current-record/freshness changes and new accepted tails do not change
+the document identity. An incomplete demand extends the held prefix through exact
+tail reads. A reader can include its content-free `heldProjection` coverage in
+the demand HEAD. The same storage owner checks that held count/frontier against
+accepted history and returns `x-happier-usage-projection-prefix`, bound to that
+coverage rather than the other writer's ETag. A compatible extension uses exact
+tail pages without downloading the other body. If that writer already published
+the derived range, the reader re-admits its actual derived prefix and omits the
+duplicate PUT. Its locally sealed body never borrows the other ciphertext's ETag.
+A changed accepted prefix, range origin or Account mode retains the full
+read/backfill or typed refusal path. Backdated or removed witnesses arriving
+during tail acquisition therefore cannot inherit the earlier HEAD's completeness.
+No separate response cache or timer is added. Browser preflights admit
+`If-None-Match`; the original demand GET separately exposes the document validator
+as `x-happier-usage-projection-document-etag`, because its own body also carries
+changing demand coverage. Missing HEAD support or an unexposed coverage/ETag header uses the original
+GET contract. Stateless transports without HTTP caching still receive a full document.
+Stateless callers can use the platform HTTP cache; a cold or evicted representation
+can still transfer a body. A successful PUT does not prime that platform cache.
 A qualified PUT to that same route accepts a closed
 Account-mode protected projection with its record, range, accepted count and
 frontier. The server admits only a complete accepted range and preserves other
@@ -1455,6 +1502,12 @@ released flattened fallback. Released direct-share events may refresh a normaliz
 legacy projection only when it has no current `sources`; they never replace a
 sourced current projection or the fail-closed `null` marker.
 
+Current development by-ID hydration reads prior full rows and admitted publication
+only from the requested Home. A retained row with the same Session id on another
+Home is not prior state for that request; each Home retains its own list row.
+Account lifetime, encryption generation, and the by-ID Home/mode checks still
+reject stale responses.
+
 Server-side, the released owner/direct seam and the version-qualified current seam
 are two presentations of one access decision, not two admissions. Released
 unqualified V2 lists and unqualified by-ID detail leave Team and Group grants out
@@ -1534,6 +1587,15 @@ transitions opt into the V2 draft directive when captured Account-owned content 
 older strict servers reject that directive before mutation. The
 [Account transition contract](./encryption.md#account-mode-transition-status) owns resealing and
 replay; Session-bound drafts never participate solely because their address uses V2.
+
+New-Session V2 authoring retains the title, creation identity, explicit memory choice and qualified
+prompt stack in the canonical synchronized field catalog. Another client can therefore reopen a
+Bot or Ask Happier draft with those choices. Existing 0.3 device-local copies are read only when
+the corresponding canonical field is absent; a canonical clear wins. The next authoring edit
+writes the recovered values through the catalog and removes their local copies. Device-local
+unsaved Instructions editor content stays local. A draft whose original client never synchronized
+its identity or prompt references cannot recover them from its text alone. These are development
+V2 fields; the released V1 projection remains unchanged.
 
 Development Project Open drafts use `project-open/<draftId>` through the existing draft
 repository, reserved KV prefix, field mutation identities and revision CAS. Their V2 document
@@ -2453,6 +2515,15 @@ second Follow loop. The prospective `../0.2` source inspected at
 method; new clients therefore fail closed against it instead of negotiating a
 parallel format. Refresh that dirty sibling's relevant bytes before activation.
 
+In unreleased 0.3, the existing post-commit source-key preparation `waiting`
+result may also carry a bounded `cause` diagnostic. Its strict Protocol schema
+accepts omission from earlier writers and rejects arbitrary error text or extra
+fields. Follow partial results and committed Reports-to/spawn results retain the
+same cause. These codes identify the observed preparation branch; they grant no
+authority and do not promise that a retained creation settlement will refresh
+when a Runner later registers. The private preparation RPC request,
+authorization and installed response remain unchanged.
+
 ## Plugin Platform direct-cut frontier
 
 The Plugin Platform simplification is a direct cut within the unreleased 0.3
@@ -2525,6 +2596,27 @@ decision. The parent-level mac-host database and the Linux-local database at
 are inactive files, not the current Stack migration target. None of these
 development-only ledger shapes is a released compatibility direction or
 justification for a product alias, bridge, or reader.
+
+### Collection readers and answering-client routing (0.3 development)
+
+Independently upgraded apps retain their compiled Collection reader refs. A
+current writer admits an exact compatible reader through Data's existing access
+resolver or refuses that Collection with `collection_update_required`; the app
+must not substitute the writer contract. No released 0.2 Collection/Run-on
+contract was found in the inspected clean predecessor corridor at
+`f18aba940c5c56e5b24454e176c836c171098a2d`; no 0.3 intermediary shim is retained.
+
+Exact answering-client selection is authority-bearing and cannot be an optional
+field an older relay silently ignores. The canonical reverse RPC transport uses
+the `answering-client.v1/` method prefix plus a closed `answeringClient` envelope.
+The current relay normalizes this operation into the incumbent authenticated
+Machine continuation and applies the selector before dispatch. A relay without
+that operation refuses the unknown method without executing the mutation;
+the caller reports `client_routing_update_required` and never retries through
+unselected delivery. Current ambiguous mutations return `client_ambiguous`;
+reads retain deterministic selection. Exact socket addresses expire on reconnect,
+and a missing selected client refuses without replacement. No persisted format,
+Run-on writer or store is added.
 
 ## SDK protocol evolution
 

@@ -116,19 +116,52 @@ content, and mode/content disagreement fails closed. Retention metadata does
 not make the quota or capacity numbers SQL-queryable for E2EE Accounts.
 
 The authorized client can drain exact encrypted history. Current capacity is published before history, entered-price and Pending work settle;
-each accepted page then updates the same Resource. Client projection keeps the
-first and last actual observations of an unchanged material run, preserving reset,
-denominator and entitlement changes. Its sample counts describe the retained
-observations used for the projection. Ordinary paged reads and exact immutable
-reset-witness reads still return their requested accepted records.
+each accepted page then updates the same Resource. The ordinary progressive
+history adapter keeps the first and last actual observations of an unchanged
+material run. Plans' page projection instead retains every accepted observation,
+including interior timestamp-only witnesses, so curves, sample counts, ended
+windows and reset evidence use the same exact history. Ordinary paged reads and
+exact immutable reset-witness reads still return their requested accepted records.
 
-The development B page-projection format shares snapshot, meter and subscription
-material through dictionaries while retaining every accepted observation id and
-its observation/fetch clocks. It uses the Account-mode envelope: plain content
+The development B page-projection format interns snapshot bases, meter definitions,
+meter readings and subscription material separately. Consecutive equal material
+shares one run; every sample keeps its immutable id and exact clock deltas,
+including irregular intervals and subscription observation times. Run length and
+first/last clocks alone cannot recover those facts and are not substituted for
+the samples. It uses the Account-mode envelope: plain content
 for a plain Account, or the domain-separated
 `provider_account_usage_page_projection` ciphertext for E2EE. Only a client with
 the Account material produces or opens encrypted projection facts; the server
 does not decrypt quota history to build them.
+
+Page-history dictionaries omit per-fetch diagnostics, which Plans and Coach do
+not consume. Current readings and exact history retain those diagnostics; every
+accepted observation id, clock, meter and subscription fact is preserved in the
+page projection.
+
+The protected body's closed `meter_readings_runs_v1` encoding marker identifies
+the current development materialization. New writes also carry that marker in
+metadata, but a missing metadata hint does not retire a current protected body.
+The server can classify plain bodies; only the authorized client can classify
+encrypted bodies after authenticated opening. Recognized superseded bodies are
+rebuilt from exact accepted history through the existing backfill/replace path,
+including at unchanged coverage. Authentication, mode and current-body schema
+failures remain errors. No legacy projection decoder is retained, and exact
+history is not rewritten or compacted.
+
+Unchanged polls update current-record freshness without appending history.
+Material equality ignores HTTP observation clocks and headers, while retaining
+failure status, code and retry facts. Reset-boundary phases remain material even
+when counters do not change. Plain server acceptance and the sealed producer's
+fingerprint use that same history-material owner; the server does not inspect
+encrypted quota facts.
+
+The key-holding B reader derives page-consumed `pageFacts` before publishing to
+the Usage Resource. It retains every earlier-curve point/exclusion, ended-window
+result and witnessed reset, plus the latest reset witness. The Resource does not
+carry the packed observation dictionaries. This changes neither the protected
+persisted document nor the exact paged-history/witness readers, and adds no
+server-readable E2EE facts.
 
 The existing qualified history route admits projection reads and writes at the
 same record/source authority. A missing projection reports `complete: false`;
@@ -1305,6 +1338,30 @@ public key, a 24-byte nonce, a 16-byte tag, and the wrapped 32-byte data key —
 codec for it; `crypto/boxBundle.ts` stays a generic variable-length box and never
 acquires 32-byte semantics.
 
+In 0.3 development, the UI's web crypto adapter opens these envelopes in a Web
+Worker using that same Protocol codec. The existing source-asset build prepares
+`public/happier-crypto-worker.js`, so this also works with a single Expo bundle.
+The adapter module reuses one Worker across Encryption instances and queue
+dispatches, serializing concurrent scopes on that transport. Each dispatch transfers
+owned input buffers and receives transferred key buffers; the Worker wipes
+recipient keys after each request.
+Errors and active caller cancellation terminate the Worker; a later dispatch
+creates its replacement. Cancelling a queued caller leaves active work intact.
+Web envelope inventories drain the existing queue without the native bridge's
+aggregate deadline: queue wait, worker script loading and renderer scheduling can
+outlast that budget while every envelope remains valid. Native routing retains its
+existing deadline. Ordinary runtime routing uses the same canonical main-thread
+implementation for that call when a Worker is unavailable or fails, cancelling
+the failed call's remaining queue before fallback. Later calls retry the Worker;
+diagnostic `require` mode retains its errors. JSON-content operations
+retain their existing implementation and native adapters retain their own routing.
+
+Repeated Session-list parsing can reuse structural owner-metadata ciphertext
+validation from a canonically parsed retained envelope. The Protocol validator
+ties that proof to the envelope object and its exact ciphertext, with reuse scoped
+to one synchronous parse. New bytes still pass the canonical validator; this proof
+does not authorize access, open content, or replace Account-mode admission.
+
 Those sizes are owned by pure format leaves that import no crypto implementation:
 `crypto/boxBundleFormat.ts`, `crypto/encryptedDataKeyEnvelopeFormatV1.ts`, and
 `crypto/accountContentKeyBindingFormatV1.ts`. Wire schemas admit an envelope or a
@@ -2399,6 +2456,12 @@ attribution. Supplied but inconsistent private metadata fails closed.
 Authenticated header-only inventories carry the current body version and the
 same recipient-private envelope independently of whether document bodies are
 requested. The Artifacts browser opens this metadata on a cold list refresh;
+background Session and Inbox indexes defer attribution. Their body hydration
+is limited to open approvals and private usage notices consumed by the Inbox;
+settled approval bodies are demanded by their mounted transcript. Worker
+failures propagate to the existing sync retry owner rather than publishing
+locked replacements; completed cryptographic refusals still produce locked
+rows. Background decrypt failures stay in developer diagnostics. Ordinary
 document bodies remain lazy. Public-link inventory/content paths do not gain
 this metadata or its key.
 
@@ -2564,6 +2627,60 @@ user. Current source publisher, Session tuple, installation and grant checks
 remain at their existing owners. This is development integration, not a claim
 that every requester lifecycle or a loaded cross-account journey is verified.
 
+In 0.3 development, a host process shares one encryption-currentness
+observation across live requester custody and its authenticated Machine connection
+for each exact Account and Home. The API-owned
+`accountEncryptionCurrentnessObservation.ts` is the single fact owner. Each admission owner confirms the
+credential's Account with the authenticated profile read before registering
+that observation. The existing authenticated
+`update-account` publication carries the committed mode and key fingerprints;
+the HTTP currentness route uses the same server projector. A subscription or
+reconnection reads that fact once, and a known connected observation avoids
+recurring encryption reads. Disconnect, explicit withdrawal and a malformed
+matching publication make the fact unknown and refuse existing private
+decisions. A subsequent admission can re-read unknown state. Unrelated profile
+updates and other Accounts do not change the observation. The last custody
+holder releases the channel when its invocation, Session runtime or Machine client retires.
+When the channel cannot be constructed, the existing fresh HTTP path remains.
+Ordinary Account storage and the daemon's memory, connected-account, Project-row
+and Machine-key maintenance readers consume that same encryption identity while a holder exists;
+their content, credential, signed-request and native-effect admission remain
+independent. Exact Account-cursor witnesses and Settings-history normalization's
+Settings-version witnesses use fresh HTTP; an encryption identity observation
+cannot supply those newer revisions. A subscribed unknown/disconnected fact refuses identity reads instead
+of consulting the legacy mode TTL. Scopes without a holder retain fresh HTTP.
+The Machine client registers only after its authenticated Profile matches the
+credential subject; an initial missing currentness route releases its holder and
+leaves the existing readers usable with older Homes. Transient initial failures
+stay unknown and recover at the observation's next read or reconnect. This is a
+development source contract, not evidence of a loaded daemon's idle traffic.
+
+Requester Session custody distinguishes a rejected authorization from unavailable
+Home evidence. Transient HTTP or transport failures during fresh Profile, Session
+or Machine verification refuse the operation with
+`project_requester_home_unavailable`; they do not retire the captured Saved Secret
+snapshot. A subsequent operation must verify current authority again before using
+that snapshot. An explicit denial or changed Account, Session or installation
+still retires the captured material. The Machine verifier's existing boolean/null
+adapters remain fail closed; requester custody uses its error-preserving reader.
+This is a development-source contract, not loaded-runtime certification.
+Signed-root, Session, grant and installation checks remain at their existing
+admission and effect owners; observing encryption currentness does not replace
+those checks.
+
+Installed Action custody separates its local installation and observed
+encryption checks from fresh Home identity and signed-root verification. After admission, private
+HTTP preparation consumes that same custody; Home still verifies each signed
+request's exact effect, principal/grant and epoch at the destination. This does
+not cache a Home authorization. Preparation retains the admitted exact Home
+binding; fresh effect verification rechecks its live identity. The installed finite runtime carries the
+admitted context through local preparation and explicitly revalidates Machine
+and original-root authorization before worker-copy admission and native setup,
+Script or Exec effects. A pushed mode/key change, disconnect or retired custody
+refuses local preparation, including after an awaited native-tool probe; a
+revoked root refuses the final native admission. Session bootstrap and the
+distinct SOURCE/controller preparation proof retain their existing checks.
+
 The same installation-key encrypted requester box can carry a closed private
 invocation for UI Account-machine Actions: caller provenance and permission/input
 ceilings are retained independently of the credential. This is not a public
@@ -2573,6 +2690,31 @@ its root and purpose. Account and API-token root issuers capture the persisted
 Account mode; neither infers it from keys. A verified API-token root can admit
 finite Session effects with its own captured grant without creating Account
 credential custody; see [the canonical Action admission owner](actions.md#canonical-owners).
+
+Finite worker and reviewed Service Move Sync preparation reuse that same box with a closed
+`workspace_sync_prepare` purpose. It binds the exact controller installation and
+source/target ref request while preserving the original Action root.
+Only the verified installed sender reseals its admitted requester custody to the
+Home-proved controller. The receiving private owner requires the verified SOURCE
+request to remain current; it cannot fall back to the controller's credentials.
+Plain Accounts stay keyless, and protected original inputs are opened with the
+requester's existing Account material. These are unreleased 0.3 contracts.
+
+Move's exact incumbent snapshot/Stop and selected-destination status/Start reuse
+the signed SOURCE packet and original envelope on the existing RPC carrier.
+The root's target and installation stay unchanged. Its private `machine_rpc`
+purpose binds the receiving Machine/installation together with the method and
+input digest; only a Move root admits that recipient selection. The receiver
+rechecks the retained SOURCE proof and current requester access at Home, opens
+the original input with requester material, and compares the exact child and
+current linked refs before effects. A changed service, Machine, effect or revoked
+grant cannot reuse that proof. Private native-preparation HTTP ports expose only
+the original requester's required Project/metadata reads while that proof remains
+current; they neither lend the custodian's credentials nor mint a new grant.
+Account and paired-terminal requester custody retain their original provenance
+and authority across the child carrier.
+Plain Accounts remain keyless. This admission extension is development-only and
+does not establish a loaded or released Move capability.
 
 The installed terminal runtime consumes these same admitted original requester
 ports for an accepted Project standalone shell and an exact own local Session
@@ -2646,6 +2788,13 @@ Snapshot hydration distinguishes a temporarily unavailable existing-Session key/
 invalid envelope or payload. It may skip only the unavailable Session record while continuing to
 materialize other Account drafts; malformed or mode-incompatible content fails the snapshot so it
 cannot be silently classified as a local key-loading condition.
+
+In 0.3 development, recovering an existing-Session draft demands its scoped Session
+mode and cipher, not full Session content. The canonical exact reader can initialize
+that encryption context after its ordinary access, key and currentness checks,
+without opening owner metadata, decrypting metadata or Agent state, or publishing a
+Session entity. Draft collection recovery and its readiness/outbox ordering remain
+unchanged. Unavailable context fails closed without publishing a locked Session shell.
 
 ## On-wire formats (mode-aware fields)
 

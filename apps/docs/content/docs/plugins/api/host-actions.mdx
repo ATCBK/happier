@@ -8074,7 +8074,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.execution_origin.clear`
 
-**Clear plugin execution origin preference** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
+**Clear plugin execution origin preference** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. clientId selects an exact connected app; unselected mutations refuse when several apps can answer. List returns answeringClientId for subsequent calls. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -8085,11 +8085,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `pluginId` (text, required): Plugin
+- `clientId` (text): Exact answering client
 - `contextualTarget` (json): Mounted contextual target
 
 ## `plugins.execution_origin.list`
 
-**List plugin execution origins** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
+**List plugin execution origins** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. clientId selects an exact connected app; unselected mutations refuse when several apps can answer. List returns answeringClientId for subsequent calls. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -8100,12 +8101,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `pluginId` (text, required): Plugin
+- `clientId` (text): Exact answering client
 - `contextualTarget` (json): Mounted contextual target
 - `contextual` (boolean): Discover mounted contextual targets
 
 ## `plugins.execution_origin.set`
 
-**Choose where a plugin runs** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
+**Choose where a plugin runs** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. clientId selects an exact connected app; unselected mutations refuse when several apps can answer. List returns answeringClientId for subsequent calls. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -8116,6 +8118,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `pluginId` (text, required): Plugin
+- `clientId` (text): Exact answering client
 - `contextualTarget` (json): Mounted contextual target
 - `origin` (json, required): Exact execution origin
 

@@ -28,6 +28,38 @@ This is the standing reference for **0.3 development source / Developer Preview 
 
 ## Declaration, activation and projection
 
+In 0.3 development source, mounted plugins call `hostApi.admitAction(action, input, options)`
+before a caller-owned Account KV or Collection mutation. The existing surface Action
+dispatcher applies Account enablement before its normal approval presenter, without
+requiring a reachable daemon. Off rejects with `denied`, a user decline returns `false`,
+and cancellation or mount retirement rejects without authorizing the writer. After
+`true`, the plugin invokes its existing domain writer with the same signal; admission
+does not run that writer, retain a grant, or replace Account authorization and CAS.
+Unvalidated input cannot waive an input-conditional declaration default: this path uses
+its conservative no-input default. Both physical SDK transports advertise and consume
+the same optional host method, so an older host refuses it as `unsupported_method`.
+Action-bound `confirm` also consults enablement, but remains a presentation helper.
+
+In 0.3 development source, an Action may declare `confirmationWhen` using the
+shared input predicate grammar. The host evaluates it against the parsed input
+passed to the handler: non-matching inputs do not inherit that declaration's
+default confirmation, while explicit per-Action approval settings still apply.
+Catalog reads without input retain the declaration's conservative default.
+This does not change execution authority, Agent permission policy, or durable
+approval replay checks. Bundled and installed plugins use the same rule; Channels
+uses it to read Session pull request bindings without asking by default while
+retaining confirmation for attaching links and removing triggers.
+
+The same `confirmationWhen` declaration accepts
+`{ presentUserUi: false }` for a uniformly reversible own-UI operation such as
+completing or reopening a review. That scoped value also accepts an input
+predicate for input-dependent UI consequences. It applies only with
+host-stamped present-user authority on the UI surface; other requesters retain
+the danger/confirmation default. Omission retains that default everywhere.
+Local writes can overwrite data, so `writesLocal` alone is never an exemption;
+destructive and outward operations should retain review. Explicit user Ask
+still wins, and a waiver changes confirmation without granting human authority.
+
 In 0.3 development source, bundled client-only declarations receive the same
 process-local occurrence and source custody as other plugins. The executable
 registry census includes declarations with no daemon entrypoint; final policy
@@ -42,6 +74,15 @@ availability. It does not claim an applied handler or activate plugin code.
 Invocation demands activation and uses applied execution policy; declaration
 facts cannot become present-user execution authorization.
 
+For a client-placed Action, the client executable composition supplies the applied
+occurrence from its exact committed SDK registration. The daemon's projected
+desired occurrence and access facts remain authoritative; its daemon-entrypoint
+application state does not describe client application. The dispatcher feeds
+those combined facts to the same current-generation policy. Cold daemon
+activation therefore cannot block an already applied client handler, while a
+missing, replaced or retired client registration still refuses execution. This
+applies to bundled and installed plugins in 0.3 development source.
+
 [`definePlugin`](../packages/plugin-sdk/src/definePlugin.ts) is the code-defined author path. It projects a portable manifest and compiles registration callbacks into the named `activate(api)` ABI declared in [`activation.ts`](../packages/plugin-sdk/src/activation.ts). Raw host-generated `contributes` is not an additional `definePlugin` author input.
 
 The canonical manifest schema and normalizer remain Protocol/platform-owned. [`manifest/v2.ts`](../packages/protocol/src/plugins/manifest/v2.ts) admits runtime API version 1 and an **optional** non-wildcard `engines.happier` range. Host/runtime ABI admission and package SemVer are separate contracts; do not infer a host compatibility range from a package version or source build identity. See [protocol evolution](compatibility.md#sdk-protocol-evolution).
@@ -54,6 +95,32 @@ Account `registry-sources` row, retaining supplier identity and read-only
 plugin ownership. Declarations contain credential-free HTTPS locations and
 format/item-kind facts, never tokens or npm profiles. Source enablement does
 not grant execution or credential authority.
+
+In 0.3 development source, `skills` is a descriptor-only declaration family
+through that same lazy catalog. Authors use
+`definePlugin({ skills: { '<localId>': { directory: './resources/skills/<name>' } } })`;
+the portable `PluginSkillContributionV1` contains only `id` and `directory`.
+The directory is confined to the package and contains `SKILL.md`; the canonical
+`readSkillFrontmatterV1` owns name, description and invocation flags rather than
+duplicating them in manifest metadata. There is no skill activation callback,
+second registry or independent loader.
+
+The canonical skill list/read owners project these declarations into the
+library with provenance `{ kind: 'plugin', pluginId, occurrenceId }`, using
+[`readReadOnlySkillContentV1`](../packages/protocol/src/prompts/library/promptBundleSchemas.ts)
+for both built-in and plugin skills. Reach and Session delivery remain with the
+existing skill owners; durable installation seeds default reach once, without
+overwriting later rules. Disable or uninstall retires the projection while
+retaining inert rules. Content updates follow the plugin version, not a skill
+registry update. The existing `skills.duplicate` Action makes a person-owned,
+editable copy through the canonical
+[`skillActionOperations`](../packages/protocol/src/prompts/library/skills/skillActionOperations.ts)
+owner; rules and Session selection use their ordinary Actions. The Skills UI
+owner supplies the byline and read-only controls; this source contract does not
+establish their rendered or loaded-runtime verification.
+Agent-native plugin skill folders remain a separate Found input. Public
+authoring guidance lives in [Contributions](../apps/docs/content/docs/plugins/manifest/contributions.mdx#library-skills-in-development);
+generated SDK API and capability reports remain the availability authority.
 
 In 0.3 development source, each MCP discovery source declares
 `loadedInHappierSessions`. Detection carries that fact into its server rows, and
@@ -172,13 +239,20 @@ display locale. The response envelope and Agent metadata remain unchanged.
 
 In 0.3 development source, admitted targeted Actions use the existing contributor-materialization and target-occurrence checks in [`executeContributedAction.ts`](../apps/cli/src/plugins/runtime/invocation/actions/executeContributedAction.ts) before demanding activation, after activation settles (including failure), and after awaited bindings before starting the handler. A stale admitted occurrence returns its retirement result without demanding activation; retirement during activation takes precedence over activation-failed or handler-missing errors, and no handler starts.
 
+For retained targeted-operation input, the same admission projection retains
+the Action's declared `connectedAccountPurposeBindings` field path even when
+it has no UI form hints. Reconstruction accepts only that one selected Account
+identity; ambiguous paths and a different Account are refused before the
+handler. Configuration replacement keeps the qualified Account identity and
+the credential owner materializes its current configuration for each operation.
+
 Contribution-family membership and normalization are Protocol-owned. In development source, the CLI's [`projection/families.ts`](../apps/cli/src/plugins/projection/families.ts) asserts its descriptors against that catalog, adds current occurrence facts and validates each projected entry with the existing Protocol schema. The daemon omits an invalid entry and publishes a plugin-attributed diagnostic identifying its family and entry, while retaining healthy entries in the same projection. Agent catalog and UI registries consume that projection; a feature must not scan Actions, invent conventional ids or install a second registry to discover its contributors.
 
 The development-only `machineProvisioners` family declares native launch and resource schemas and same-plugin daemon Action roles through its [Protocol owner](../packages/protocol/src/plugins/contributions/machineProvisioners.ts). Discovery reads descriptors without importing provisioner leaves; selected or retained contribution demand activates only the needed leaf through the existing `activate(api)` Action ABI. Roles receive raw declared launch choices or resource values, and options receive the provider-declared query value. The host retains qualified resource references, controller and occurrence identity, current-row custody and captured credentials separately. Effectful roles require that private admission; ordinary contributed Action calls cannot supply it. Retained reads may use the same row custody, while initial checks and options can pin a private captured-account lease without inventing a managed row. Native enrollment accepts buffered argv/private-stdin execution through the same ordinary enrollment recipe; live output is optional. Buffered pairing uses the existing auth request, controller approval and auth wait producers, not another installer or enrollment authority. Only the selected guest process receives any invocation-private output observer and inherited task budget; captured preflight processes do not.
 
 For an asynchronous native deletion, a reconciling provisioner's destroy Action may return the canonical `accepted` result with its declared native-operation reference. The managed-machine row remains the custody owner: it persists that reference with the submitted Delete intent, re-supplies it to the same destroy role, and clears the resource only after a `confirmed` result. Legacy provisioners may keep returning the synchronous power-result shape; an `unknown` result never discards retained deletion custody or proves absence.
 
-In current 0.3 development source, the shared configurator consumes the options Action's explicit `inputHints.fields` and current occurrence-pinned input schema through the existing Action form owner. A schema alone does not declare rendered fields. Editable selector paths must match the executable launch paths so retained recipes can revalidate through that same options role; the UI does not guess native wrappers or merge launch fragments. Selected native prices retain every line in the canonical configuration facts' `prices` vector, including optional localized labels, exact amount, currency, unit, source and observation time. The shared receipt renders that vector without adding totals, currency conversion or guessed monthly rates. Missing native declarations remain unavailable rather than implying UI support.
+In current 0.3 development source, the shared configurator consumes the options Action's explicit `inputHints.fields` and current occurrence-pinned input schema through the existing Action form owner. A schema alone does not declare rendered fields. A field's optional JSON `defaultValue` seeds a missing initial form value; an explicit retained value, including `false`, `0` or an empty string, takes precedence. Defaults are applied once when the form opens, survive hint localization, and do not replace later edits or final Action validation. Editable selector paths must match the executable launch paths so retained recipes can revalidate through that same options role; the UI does not guess native wrappers or merge launch fragments. Selected native prices retain every line in the canonical configuration facts' `prices` vector, including optional localized labels, exact amount, currency, unit, source and observation time. The shared receipt renders that vector without adding totals, currency conversion or guessed monthly rates. Missing native declarations remain unavailable rather than implying UI support.
 
 In that development family, a returned native choice may supply `retention` using the descriptor's existing capability schema. The shared configuration input uses the selected choice's capabilities, falling back to the descriptor when absent; the sole retention resolver qualifies policy, and admission consumes those validated reviewed capabilities for the matching launch. Native duration facts remain separate from Happier's unused rule and observed expiry. Cua BYOC uses this seam for finite Modal launches and durable no-TTL AWS/GCP launches without separate provisioner ids or cloud-specific UI decisions.
 
@@ -410,14 +484,79 @@ pass exact graph and digest verification. Machine Actions and Resources remain
 bound to Administration's admitted daemon origin; the host declaration grants
 neither machine execution nor a Collection writer.
 
+Rendering and execution placement are separate in 0.3 development source.
+Portable installed UI uses the Account-selected release/digest, bundled Account
+pages use the admitted app declaration/digest, and explicitly selected trusted
+development UI keeps its source. A development byte supplier alone cannot replace
+the bundled Account UI: that requires the explicit device-local Administration
+choice matching the current development origin. A missing Run-on Machine or a pending optional
+contribution-point inventory does not make the Account page inert. The mounted
+controller continues to fence Machine Actions and Machine-owned Resource reads
+with the current exact operation origin. Byte suppliers are independent: the
+existing daemon Artifact source can ask other suppliers of the selected digest,
+and all returned files still pass the same lease verifier. A supplier never
+becomes execution authority.
+
+The surface's existing machine-requirement owner decides which capabilities
+need Run-on. An unavailable explicit local target retains its Machine name in
+those states. Optional setup and contribution-point reads may be unavailable
+while the enclosing Account Collection remains interactive; renderer interaction
+and Account Data admission do not inherit Machine reachability.
+A structurally supported native Host API method reaches that controller for its
+current unavailable result and target explanation; the renderer adapter does not
+replace that decision with an early generic refusal.
+
+The existing ephemeral UI sharing scope also remains available without an
+execution occurrence. In that case it uses the selected immutable Artifact digest
+under the current Account/plugin lifetime; this is presentation identity, not
+fabricated execution custody. Machine-owned reads can therefore leave loading
+and show their unavailable state while the Account shell stays mounted.
+
+Optional Account hosting no longer waits for its network upload before verified
+React Native or native hosted content can render. The existing publication helper
+first captures the complete verified file snapshot, then the existing Account
+publisher retains that snapshot until publication or cancellation. Disposing the
+renderer lease cannot invalidate those files. Actual mount cancellation and
+Account retirement still reach the publisher; a short acquisition/adoption owner
+does not cancel a successful renderer's upload. Hosting failure appears separately
+from the usable content. Account encryption and qualified publication remain
+client-owned; no E2EE publication custody moves to a daemon. These are development
+source contracts, not evidence of release availability or loaded-platform QA.
+Both RN acquisition and native hosted acquisition pass the outer mount's signal
+to publication separately from the short acquisition lifetime, and expose the
+publisher's completion through their existing Artifact handles.
+
 In 0.3 development source, the projection contract uses the canonical
 `executionOrigin` envelope for rows, package occurrences and embedded mounts.
 Installed releases use the install registry's materialization reference;
 bundled/development occurrences use exact runtime source custody. Administration
-stores the same identity, and Protocol equality does not equate a source with a
+resolves that exact identity for an operation while its persistent device-local
+Run-on preference retains only Home and Machine. Protocol equality does not equate a source with a
 materialization. The UI reads producer identity without reconstructing it from
 custody metadata. Projection and invocation share the CLI's canonical origin
-composer. The daemon producer and UI consumer must use the same envelope
+composer. Daemon plugin callers also carry the host-resolved `executionOrigin`
+when available. Channels projects that host-stamped origin to Home/Machine/plugin
+routing for provider callbacks and retains only Home/Machine placement alongside
+its separate provider plugin/contribution. Retained connections follow the current
+admitted same-ID provider there, including reinstall or source substitution;
+custody-only changes require no transfer, setup rerun, or authority-epoch bump.
+The generic Action executor enforces `expectedExecutionRouting` before provider
+handlers through Protocol's shared routing projection/equality. Host currentness
+still governs each invocation; a callback needs a complete host-stamped origin,
+because a materialization alone supplies no Home proof. Full `expectedExecutionOrigin`,
+approval/terminal admission, and durable webhook endpoint exact-materialization
+contracts remain unchanged. Routing continuity does not automatically repair
+an endpoint's physical target; real placement/transport/credential/config changes
+retain Channels' transfer and endpoint-convergence owners.
+In 0.3 development, connection management projects the connection-owned
+`configurationRevision` as `revision`. Setup, binding/pairing, Test, Retry,
+transfer and recovery requests guard that logical subject. Poll failures and
+readiness observations preserve it; actual configuration changes and changes to
+history-gap or old-stop custody advance it. Every storage write still uses the
+latest exact physical Collection revision. The channel-state V8→V9 migration
+seeds retained connections from their physical source row revision; fresh
+connections start at 1. No first-write capture or parallel revision owner exists.
+The daemon producer and UI consumer must use the same envelope
 contract; a moving development UI paired with a pre-migration daemon rejects
 old flat artifact stamps as an invalid response until the daemon is reloaded.
 Availability materializations qualify source admission independently of source
@@ -452,6 +591,14 @@ trust facts even when another Machine reports different web artifacts; portable
 release content admission remains Availability's responsibility.
 Missing descriptors remain preparing. Reporting an installation does not enable
 Account intent, establish trust, or grant execution.
+With an explicit absent-intent read, UI Availability can admit an exact trusted,
+enabled portable installation against its immutable census release. Renderer
+Artifact requests carry that installation's complete execution origin; the same
+reader verifies release correspondence and the platform slot before the existing
+Artifact lease verifies bytes. Missing custody, mismatched digests, replacement,
+disablement and retirement refuse admission. This does not select an Account
+release, admit Account-hosted publication or grant Account Data access; an explicit
+Account intent retains precedence.
 Before an installation supplies its declaration, first-party installed-plugin
 names and descriptions come from the manifest presentation generated by the
 canonical bundled-plugin publisher. This presentation carries no installation
@@ -495,7 +642,10 @@ Availability's `collectionWriters.claim` can return exact incumbent declarations
 and manifest-bound target bindings with `prepare:true`, without moving intent.
 The daemon loads the declaring module through the canonical activation loader
 and passes its exported `collectionMigrations` to Account Data's existing
-candidate executor. Data stages against source revisions; `transitionIntentTx`
+candidate executor. Each pure callback receives the opened value and readonly
+`{ currentRevision }` from the host-validated source row. Every step in a chain
+receives that same physical source revision; the context supplies no storage or
+writer authority. Existing callbacks may ignore it. Data stages against source revisions; `transitionIntentTx`
 re-censuses and atomically promotes those rows with the writer. Empty Collections
 still advance immediately; failed preparation retains rows and the incumbent
 writer. A schema-proven compatible widening can adopt a different digest at the
@@ -532,10 +682,20 @@ reset) permits a fresh claim; the hint grants no writer authority. Network and
 JSON Schema changes use the same compatibility decision. Incompatible changes require a new schema version and the existing
 candidate-preparation/migration path.
 
+In 0.3 development source, an app-bundled UI inventory retains the exact
+Collection reader references compiled from its manifest. Availability passes
+those references to Data unchanged, including for static queries; it never
+substitutes a newer daemon writer's schema or digest. Data admits compatible
+retained readers through its existing access resolver. Missing or incompatible
+reader contracts return `collection_update_required` (HTTP 409), preserved as a
+typed Collection rejection through the app Data adapter. The affected Collection
+requires an app update; unrelated operations remain available. This introduces
+neither an older-schema writer nor a compatibility shim for unreleased intermediates.
+
 App-scoped plugin UI does not use `plugins.home` as catalog authority. That named
 Administration target remains responsible for install, installation settings,
 Secrets and Browse operations. Machine-bound plugin effects use Administration's
-per-plugin exact-origin selector: valid saved preference, then an admitted
+per-plugin execution selector: a device-local, Account/Home-scoped Machine preference, then an admitted
 `executionTarget: { default: 'installation' }` declaration, then a sole eligible
 compatible installation, otherwise a selector. An unavailable saved choice stays
 visible and is never silently substituted on those uncontextual App surfaces.
@@ -548,16 +708,32 @@ In 0.3 development source, an App panel presented beside a Session uses that
 Session's exact Home and Machine as its initial execution context, on desktop and
 phone. Missing or unavailable contextual supply does not select another Machine.
 An explicit pick in that mounted panel is local to its Session target and Account
-lifetime; opening or picking there does not rewrite the Account-wide preference.
+lifetime; opening or picking there does not rewrite the device's per-plugin preference.
 The panel keeps its App binding and AppShell supply projection, and the same
 Administration owner resolves and freshly revalidates its execution origin.
 The existing `plugins.execution_origin.list/set/clear` Actions expose the same
-choice to Agents, MCP and CLI through the answering app. A list with
+choice to Agents, MCP and CLI through the answering app. The optional
+`clientId` addresses that exact connected app socket; list results include
+`answeringClientId` and eligible `answeringClientIds` for subsequent calls. Without a selector, reads keep the
+existing deterministic answering-client choice. Set and clear refuse with
+`client_ambiguous` when more than one eligible app can answer. A disconnected
+selected client is unavailable and never substituted. Socket addresses expire
+on reconnect; list again to obtain the current address. This routing uses the
+canonical reverse RPC transport, not an Account preference or another Run-on store.
+A list with
 `contextual: true` discovers current opaque command addresses; `contextualTarget:
 { commandId }` reads or changes that exact mounted choice. The current-UI
 command owner retires the address with its mount, target or Account lifetime.
 UI picks use those same Actions and freshly admitted candidates. Calls without
-a contextual target retain the Account preference and settings-version contract.
+a contextual target read or change the answering device's current Account/Home
+preference, including Agent, MCP and CLI requests. They do not use Account CAS.
+The existing local Administration target owner stores only the Home-qualified
+Machine. A source root or materialization id belongs to the freshly dispatched
+operation, never the preference. An unavailable explicit Machine keeps its name
+and blocks effects rather than silently running elsewhere; an unpinned operation
+may use the sole admitted local-Home candidate. Retired
+`machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId` values
+remain inert stored data: no migration ledger, pruning or dual writer.
 A source-backed occurrence carries its
 real source custody instead of an invented portable materialization. Invocation
 freshly resolves the same exact target and revalidates after approval. Machine-free
@@ -566,8 +742,12 @@ descriptors and cached bytes alone never grant daemon authority. Session contrib
 families remain scoped to their exact Session host, not the app union.
 
 In 0.3 development source, machine-bound Settings and App pages place that exact
-execution-origin selector once in the route's header actions. Desktop plugin
-`PageHeader` claims it through the same header-actions owner as core pages;
+execution-origin selector once in the route's header actions.
+Input-less `openSurface` navigation admits both page routes before execution-origin
+selection, matching direct catalog navigation and keeping selection/recovery reachable.
+This grants neither execution authority nor launch-input custody; Settings pages
+still reject launch input, and pane destinations retain their exact-origin requirement.
+Desktop plugin `PageHeader` claims it through the same header-actions owner as core pages;
 loading and unavailable bodies leave it in the existing actions band. Phone page
 actions compose beside the route context instead of overwriting it, and withdraw
 with their destination. Account fields do not imply a separate “Manage on” control:
@@ -617,6 +797,11 @@ Inspector distinguishes a semantic `plugins.list` refusal from a successful
 empty inventory: it retains the previous rows and diagnostic metadata for
 Retry. An unknown SDK failure does not establish an origin or daemon diagnosis;
 its code remains diagnostic metadata, not explanatory user-facing prose.
+
+Plugin code can use the public SDK's `projectPluginFailureText(error)` to retain
+a known failure sentence through the canonical credential and local-path
+redactor. This 0.3 development-source export delegates to Protocol's existing
+failure projection; bundled and externally installed plugins use the same owner.
 
 The daemon's final-policy runtime projection enumerates admitted source custody,
 including bundled development sources and packaged first-party runtimes that have
@@ -710,6 +895,11 @@ The fallback index contains delivered skill names and frontmatter descriptions,
 omitting skills marked `disable-model-invocation`; it does not paste bodies or
 truncate the item count. The safe `skills_read` tool reads full instructions and
 supporting file bytes through the same bundle validator as native delivery.
+Session-bound tools default an omitted `sessionId` through the `skills.read`
+Action declaration. Its canonical strict input schema also supplies the MCP
+advertisement and validation; `includeFileContents: true` returns supporting
+files with their content kind and executable modes. A name read still requires
+a current delivered Session identity before content is disclosed.
 
 The 0.3 Export retirement removes executable prompt-asset adapters and their
 registration/generator conventions. Static `promptAssets` system-prompt
@@ -832,6 +1022,19 @@ this host grant, even by claiming the same purpose address. The private subject
 uses the existing purpose, capability and refresh owners; it is not another
 public SDK target or an executable Plugin declaration.
 
+In 0.3 development source, MCP capability issuance shares the admitted
+requester's proof across nested catalog and grant readers within each existing
+currentness checkpoint. It rechecks requester authority after grant reads and
+again around the staged capability's final authority commit. Every later broker
+validation starts a fresh checkpoint; neither another issuance nor a credential
+request can reuse a settled proof. File-only phase diagnostics separate catalog
+admission, initial admission, capability-directory preparation and final commit
+without recording resource URLs, capability paths or credential content.
+Legacy catalog transfer and source maintenance leave preparation reuse while
+they capture source, promote Secrets, activate the catalog or clean retained
+source/history. Their existing effect checks stay fresh, and returning to
+preparation invalidates its earlier requester observation.
+
 The remote bridge's existing lifetime redaction lease covers per-request OAuth
 bearers and supplied static-header credential representations, including Basic
 credentials. Its Agent-facing output projection preserves SDK-owned protocol
@@ -895,6 +1098,15 @@ package construction seam; the public Host API and bridge wire stay unchanged.
 
 For collection-based plugin pages, the public Plugin UI `Collection` composes one headless model, item anatomy and detail renderer across presentations and containers. `Step`, controlled `Tabs` (including host-rendered strips) and `HappierDisclosure` belong to that public UI/presentation boundary, rather than feature-local replacements. See [Collection presentation](collection-presentation.md) and the [public author composition](../apps/docs/content/docs/plugins/ui/react-native.mdx).
 
+In 0.3 development source, `CollectionToolbar.refine` supplies a wide `render()`
+and a compact `sheet` (`groups`, optional controlled `radioGroups`, `onSelect`,
+optional `clear`, and `showResultsLabel`) from the same filter/order model.
+Choices apply immediately; the primary sheet footer closes it. Public
+`SheetMenu` shares the menu owner and adds a sheet title/footer and optional
+trigger count. `Item.titleEllipsizeMode="middle"` preserves a long title's suffix
+and full accessible name. See the [author example](../packages/plugin-ui/README.md#collection-filters-and-long-titles-03-development-source)
+and generated [public declarations](../packages/plugin-ui/api-declarations.md).
+
 In 0.3 development source, the public themed `ApprovalPrompt` and core approval
 adapter share the neutral interaction presentation's title, subtitle, icon, body
 and footer anatomy. Callers supply reviewed facts and decisions; admission,
@@ -902,6 +1114,45 @@ approval state, focus and request lifetime remain with their existing owners.
 Changing between card and inline presentation retains the mounted facts. This
 is development-only composition, not a new approval authority or released API
 availability claim.
+
+In 0.3 development source, the mounted host projects that same pending approval
+as `SurfaceContext.pendingApproval` (`artifactId`, `href`) through its existing
+context publisher on native and hosted-web surfaces. The public
+`useExecutePluginAction` controller exposes `pendingApproval` while its execution
+is pending and otherwise returns `null`. This is the mount's current presentation
+fact, so concurrent controls can observe the same review; it grants no approval
+or replay authority and adds no Artifact observer. The host's mount notice is the
+one approval notice and link for every plugin Action; while `pendingApproval` is
+set, `Action.Execute` only disables its button as "Waiting for approval" and draws
+no notice or link of its own. Authors can still compose the public
+`ApprovalPendingNotice` with the hook field in their own layouts.
+
+In 0.3 development source, `SurfaceContext.machineConnectionPending` reports
+the mounted host's positive observation that Machine-backed execution is still
+establishing or its mounted target is loading. Account/local operations and public surface activity
+keep their own availability. A Machine-owned refusal during that phase retains
+its original diagnostic and adds `plugin_surface_connection_pending` through the
+existing Host API error carrier. Once loading settles, the same refusal is an
+outage; missing targets and failed reads do not imply pending. A retained selected
+source also stays pending while its Home's live Machine census is loading; a
+failed or signed-out census is settled. Selection does not prove execution readiness.
+
+`SurfaceContext.machineExecutionReady` separately reports whether the exact
+mounted target has fresh execution admission, reachable daemon interaction and
+its required target snapshot. Loading can settle before this fact becomes true.
+Plugin UI owns the shared projection in `usePluginHostReadiness`: `pending`
+defers a Machine read and its `revision` changes when prerequisites settle or
+execution is re-admitted. Resource hooks consume it automatically; custom mounted
+read lifecycles, including Triage's aggregate, detail and fix-PR links, use that
+same projection. The existing pane bridge carries it to host-rendered details.
+Account-local reads use their own availability. Readers retain their own data,
+cancellation and single-flight/pacing owners; Triage no longer classifies host
+refusal diagnostics or maintains a separate readiness state in its aggregate.
+An undemanded reader stays cold, and a settled source outage remains terminal
+without another host transition or explicit Retry. This
+optional, read-only development fact grants no execution authority; every
+invocation still passes the host's fresh guards. Omission supplies no readiness
+edge. Both native and hosted transports use the same context producer.
 
 In 0.3 development source, public `WidgetFrame` and the core widget adapter share the same frame and controlled `disclosure` contract. The frame's `source` slot takes a name, or a bound-source descriptor (`binding: 'pin' | 'follow'`, `text`, optional `compactText` and `accessibilityLabel`): the frame draws the pin or follow glyph, keeps the short form when it narrows, and names the line for assistive tech, so a group's pinned value and a follower's "Following group · value" are one recipe for core and plugin frames. `HappierSegmentedChoiceRow` and its model `resolveHappierSegmentedChoiceRow` (public `/components`) own the "label + inline segmented choice" row, where an unavailable option stays visible and says why; core's configuration and menu rows resolve their segments through the same model. Collapse belongs to the current viewer; it keeps the body mounted and hidden without changing widget layout, input or Resource identity. Public `/components` also owns tree keyboard/focus semantics (`HappierTreeNode` and `useHappierTreeInteraction`), using explicit parent keys rather than filesystem path spelling. Filesystem trees translate their domain rows into that owner.
 
@@ -924,11 +1175,15 @@ Native finger movement in 0.3 development source uses the optional same-realm
 `nativeBinding` component (`HappierFloatingFrameNativeBindingProps`), otherwise
 the presentation host's `companionNativeFrame`. Happier supplies the app-owned
 `NativeFloatingFrame` adapter over `useCompanionNativePanGesture`; Plugin UI
-does not import Gesture Handler, Reanimated or host internals. The adapter enables
-body drag only for a floating, watching frame (`moveInput="surface"`), excluding
-controls, footer and grip. Control-mode content keeps its own touches. The frame
-and its route-stable retained body share native transform values; no per-frame
-React/layout publication occurs. Release or interruption settles through
+does not import Gesture Handler, Reanimated or host internals. Floating frames move
+from chrome backgrounds in either input mode; body drag is admitted only while
+watching (`moveInput="surface"`). Registered no-drag controls keep their presses,
+and control-mode content keeps its own touches. The binding receives the frame's
+existing `grip` element and uses the same companion pan owner for its aspect-locked
+resize. Web and native grip geometry comes from `resolveFloatingFrameResizeRect`.
+The frame and its route-stable retained body share native position and size values;
+the grip is carried above an interactive retained body in that same portal. No
+per-frame React or settled-geometry publication occurs. Release or interruption settles through
 `resolveFloatingFrameRect` (including projection, obstacles, aspect/chrome and
 minimum width), then publishes the settled rectangle or requests docking.
 Keyboard/menu placement remains available, and phone viewers retain their sticky
@@ -1165,6 +1420,16 @@ current revision, replaces the items immediately and returns the prior layout
 with its acknowledged revision; Reset/Undo refuse intervening edits. These
 owner-level contracts do not certify the loaded controls or visual acceptance.
 
+In 0.3 development, an admitted selected layout renders independently of the
+named-layout inventory; that inventory gates the view switcher. Inventory read
+failures settle offline, retaining acknowledged names unless authority is lost. A canceled
+surface read returns `cancelled`. If a surface read throws while its captured
+Account remains current, admission returns `widget_area_unavailable`, and the
+area offers Retry through its existing layout reader without resetting edits.
+Missing, changed or retired Account authority still refuses; the area directs
+the viewer to reopen the page under the current Home and Account instead of
+retrying the old authority.
+
 An attached shared dashboard binds the owner's exact Artifact, while the actor
 remains the viewing Account. Current Artifact access and key readiness admit
 each read or write; view access cannot edit and retirement never creates a
@@ -1236,6 +1501,16 @@ the requested next state and renders the supplied value; without the prop it
 retains its own initially collapsed state. Host UI and mounted agent commands
 can therefore share one caller-owned disclosure without a second chart path.
 
+Dense line and area charts retain every supplied SVG point and exact value. When
+hit ranges are narrower than a pixel, the web chart uses one plot control with
+exact Arrow/Home/End traversal and pointer selection, including compact charts
+without a Details toggle. Its label reads the selected sample; Details, when
+offered, still exposes all values. Native plots tall enough for the existing
+minimum target use one plot control with exact increment/decrement accessibility
+actions; shorter plots retain full-size Details controls. Native inline charts
+retain their complete accessible image description without mounting empty
+per-point views. This changes mounted interaction work, not the facts or scale.
+
 In development source, `StackedSeriesChart` line appearance and `BurnUpChart` can fill a band between two caller-supplied series on the same scale. Missing, non-finite or inverted bounds break the fill; an isolated point has no area. Bounds retain their exact values in the chart's accessible readout and table. The caller supplies any range meaning and sample-count disclosure; the renderer does not infer confidence or forecast facts.
 
 Bar charts also accept caller-selected `bucketShading` by semantic bucket id and labelled `barRanges` comparison outlines on the observed scale. Missing buckets and non-finite, inverted or out-of-scale bounds have no outline. An all-unknown bar slot has an explicit gap mark, while a known zero retains its original value; neither shading nor an outline adds an observation or changes the exact-value table. Reference levels and comparison bounds retain exact numbers in the accessible chart label.
@@ -1261,7 +1536,7 @@ observations remain unknown. These forms decide no machine pressure, polling,
 sample cadence or alert status; those belong to the
 [machine-vitals owner](cli-architecture.md#machine-vitals-03-development).
 
-`IntervalTimeline` also accepts point events: one known coordinate, without an inferred duration or end. The shared owner places caller-supplied marker ink and retains exact rows when the plot cannot fit. `CapacityBar` can draw a remaining-capacity projection using the same progress owner, with the projected solid remainder bounded by the current remainder. `CompositionStrip` offers a compact static/export legend; art may supply palette and type ink, but every series keeps its supplied whole and exact accessible share. Usage Reset, paced meters and recap cards consume these seams rather than owning private timeline, overlay or segmented-bar geometry.
+`IntervalTimeline` also accepts point events: one known coordinate, without an inferred duration or end. The shared owner places caller-supplied marker ink and retains exact rows when the plot cannot fit. With `layout="lanes"` it groups intervals by `lane` (a machine, an agent) and packs each lane's runs (intervals sharing a `track`) into the fewest non-overlapping tracks under one shared axis, with optional caller `ticks`; every run stays selectable and listed exactly behind Details. Each track is one press target tall: the dense pointer bar on web, the platform's native minimum target (44 pt iOS, 48 dp Android) on native, with the thin bar centred inside it; packing stays by drawn marks, so the native floor can widen a very short run's target over a neighbour on its track. Both layouts draw the same domain projection: the in-domain part of a witnessed span (including one that crosses either boundary), only an in-domain start for an unknown or reversed end, and nothing for coordinates outside the domain, which the exact rows still state. `CapacityBar` can draw a remaining-capacity projection using the same progress owner, with the projected solid remainder bounded by the current remainder. `CompositionStrip` offers a compact static/export legend; art may supply palette and type ink, but every series keeps its supplied whole and exact accessible share. Usage Reset, paced meters and recap cards consume these seams rather than owning private timeline, overlay or segmented-bar geometry.
 
 Metric comparisons project a typed value and authored label with explicit
 `good`, `bad` or `neutral` meaning; numeric sign does not choose semantic color.
@@ -1495,6 +1770,14 @@ composition, not public layout APIs. Universal Search sources use the existing
 manifest `searchProviders` Action contribution and SDK search-result schema;
 Find registration is not a new search contribution family.
 
+In 0.3 development source, a search result may carry an optional closed
+`failure: { code }` alongside `items` and `truncated`. The canonical search
+schema owns the cause vocabulary. A `root_not_found` result uses the same
+folder-level failure line as workspace search; unrelated and untyped failures
+retain their own group line and Retry. Plugins report acquisition facts, not
+host copy or a workspace inferred from the selected Session. Triage's search
+reads its Account-scoped shared window and preserves known acquisition causes.
+
 `HappierTextLinkButton` owns the shared inline note-and-action presentation used
 by Find notes and core's `TextLinkButton` adapter. Hosts bind their text renderer,
 theme ink and pointer target floor through the public presentation props. A note
@@ -1521,16 +1804,39 @@ match snippets into the candidate metadata index.
 
 The daemon-realm SDK entry point `@happier-dev/plugin-sdk/sessions/file-stores`
 exports `createExternalSessionContentSearchControl`,
-`searchExternalSessionContent`, and `ExternalSessionContentSearchYield`.
+`searchExternalSessionContent`, `prefilterExternalSessionContentPaths`, and
+`ExternalSessionContentSearchYield`.
 File sources provide their existing decoder and source-scoped paths plus
 invocation `ripgrep`; the helper prefilters safe queries, then uses Protocol's
 decoded-text `contentSearchMatch` as the match/snippet authority. Unicode,
 escaped and NUL text retain decoded fallback. Client-backed sources can omit
 paths and ripgrep, as OpenCode does. Claude, Codex, Pi, OhMyPi and Antigravity
 use the file path; all six bundled Agents declare positive content search.
+The prefilter recognizes literal and mixed JSON-escaped spellings of an ASCII
+query, including JavaScript's ASCII-producing Unicode folds. Unicode fallback
+uses only escape codes from the query's case-folded alphabet, so unrelated
+escape codes alone do not require decoding a file. A page owner can pass
+its physically admitted native root once and intersect the returned paths with
+its admitted candidates; Claude uses this instead of launching one process per
+file. Its JSONL glob and depth follow the existing top-level native candidate
+layout, excluding nested sidechains from the prefilter work.
+Non-ASCII/process-unsafe queries and truncated prefilter output exclude no files.
+Native decoders still reauthorize and re-match every published hit.
 Decoders still own branch/rollback selection and native item identity. The
 control inherits caller cancellation and the cooperative scan deadline and yields;
 plugins publish partial coverage with a continuation for unfinished work.
+The control's `prepare` operation schedules native steps after their results and
+resume positions have been retained. Source admission or metadata discovery can
+consume the scan budget before decoding starts; a resumed native page still
+commits its first indivisible unit before yielding. Cancellation remains hard
+before and after that unit. The native owner supplies and validates its cursor
+state; the helper adds no process-wide scan registry or separate time budget.
+Each native phase measures its own work cost: slow source admission or ripgrep
+must not become the predicted cost of a decoded row. Codex retains query-local
+native enumeration/metadata progress in its opaque continuations;
+selected references are reauthorized against native storage, never treated as
+authority for file paths or transcript text. The existing serialized-result byte
+budget also applies to this progress and fails explicitly if it cannot fit.
 The decoder can report source-bound EOF through `isScanComplete`; the shared
 helper then assembles verified matches under cancellation without reopening the
 cooperative scan budget. A previously yielded decoder still yields. Forward and
@@ -1541,15 +1847,26 @@ without retaining source bodies. Codex consumes that path and shares root-family
 discovery across its requested candidate page; complete native rollback selection
 still precedes publication of a match.
 
+File-backed content continuations retain source-bound native progress. Codex
+keeps its stream frontiers, rollback selection and semantic correlation; Pi and
+OhMyPi keep their existing branch-page cursors; Antigravity keeps its byte frontier
+and tool correlation. Pi and OhMyPi use the shared helper's `pageProgress` to
+accumulate older pages and compute the earliest match's full transcript ordinal.
+The helper retains the matching page/item locator and re-decodes that page before
+returning its snippet. Native source verification and hard invocation cancellation
+remain at each codec. Interrupted or unreadable source ranges stay partial.
+
 Claude uses the existing backward JSONL scanner to retain in-transcript progress
 across equally budgeted candidate pages. Its continuation binds row locations and
 branch-selection progress to the observed file identity; returned text is decoded
 from the source, not trusted from the cursor. A native row is decoded and its progress
 retained before a cooperative yield, so a row can cross the scan deadline; native
-reads and finalization still observe cancellation. Recency continuations also bind the
-unvisited ordering suffix. A changed source or ordering invalidates that continuation
-and the host returns the existing `cursorReset` result instead of reporting complete
-coverage while skipping an unvisited file.
+reads and finalization still observe cancellation. Content pages relist metadata
+and retain a compact recent-first frontier rather than an inventory or ordering
+suffix. The [search owner contract](search.md) defines the main and final
+changed-file passes. Other transcripts' appends cannot reset that frontier;
+changing the unfinished transcript's source identity still invalidates its
+continuation through the existing `cursorReset` result.
 
 Opt-in native indexing is a separate consumer of the same External Sessions
 contribution's existing `pageTranscript` / `readAfterTranscript` readers, not
@@ -1569,6 +1886,34 @@ budgets are optional for source and identity resolution, and required for paged
 candidate/transcript reads. Explicit caller paging budgets are preserved rather
 than clipped to a second host ceiling. Wire and persisted-data schemas still own
 their declared limits.
+
+In 0.3 development, qualified transcript continuation cursors count toward that
+same reply budget. When qualification alone makes a valid native transcript page
+too large, the host repeats the stateless `pageTranscript` or
+`readAfterTranscript` read at the same cursor with the producer allowance reduced
+by the measured qualification overhead, retaining the caller's cancellation and
+deadline. A producer that exceeds its own allowance still fails admission.
+
+Historical terminal follow retains the complete native correlation baseline and
+the newest display history within its existing 4 MiB replay capacity. Older display
+rows can leave that retained buffer; required source observations cannot. If the
+required observations exceed capacity, follow reports resync required. Fresh and
+nonterminal replay retain the same aggregate serialized-byte capacity. All replay
+pages follow the caller's admission lifetime with per-page transport budgets and
+cursor-progress checks, without a total-page or total-item cutoff. Backward JSONL
+continuations always end at complete row boundaries: a row beyond the existing
+scanner allowance yields explicit incompleteness rather than a cursor inside UTF-8
+text or a claim that history is complete.
+
+Native transcript readers tolerate Agent CLI record evolution in 0.3 development
+source. An unknown or malformed native record becomes the shared SDK file-store
+projection's fixed unsupported-content message, using the existing canonical
+transcript row shape. It preserves source ordering and item identity for paging
+without disclosing the native payload. The page stays readable and reports the
+unsupported record through the daemon's safe diagnostic channel. Explicitly known
+non-transcript bookkeeping still produces no row. Replacement, changed anchors
+and unread source boundaries remain discontinuities; a parser mismatch alone
+must not discard surrounding history. See [linked transcript paging](search.md).
 
 For 0.3 content-candidate pages, optional `budgetMs` is charged from RPC receipt
 through source preparation and scanning. The host forwards it as
@@ -1599,6 +1944,14 @@ acknowledges a new cursor; replacement and expired-cursor outcomes do not.
 metadata without reading transcript records. Consented machine/source accounting
 demand shares the incumbent resource reconciler with real Session links and can
 retain its watches without creating a Session identity.
+For a host-materialized native home, the host retains the state links it actually
+created with that Session's private custody and accepted-spawn marker. The one
+observation path validator admits those physical roots only for the matching
+Agent, plugin source and native home, while the current link still points to the
+captured source. Declarations and arbitrary symlinks do not grant additional
+roots. Missing, retired or mismatched custody remains refused. This applies to
+bundled and installed Agent plugins through the same materializer; it adds no
+plugin DTO, Session metadata or public filesystem grant.
 The optional `changedNativeSessionIds` read input carries complete correlated
 invalidations from that shared observer through the collector. Absent evidence
 requests coarse reconciliation; an empty list with a retained cursor has no new
@@ -1641,6 +1994,23 @@ file set and decode native records; they do not resolve `rg` on PATH or import
 the host integration. Empty paths do not scan the host working directory. This
 is a development-source SDK contract, not a claim of released plugin or loaded
 runtime availability. See the [SDK evolution contract](compatibility.md#sdk-protocol-evolution).
+
+### Voice schema composition (0.3 development)
+
+Voice schema exports at `@happier-dev/plugin-sdk/voice` and its client entry
+are native `zod/mini` schemas with the exact runtime identity of their Protocol
+owners. `VoiceSchema<T>` names the native Mini schema type. Compose them with
+functional Mini APIs such as `z.optional(schema)` and `z.array(schema)`.
+The existing record and field-composition helpers also return native Mini schemas;
+field composition retains absent fields and forwards canonical issue paths.
+This is an unreleased 0.3 author-contract cut: update and rebuild Voice consumers
+that used fluent methods or depended on Zod-free declarations. No compatibility
+wrapper or second validator is supplied.
+
+MCP SDK DTO objects remain supplier-owned. The CLI composes native Mini host
+containers around their existing child validators, preserving the supplier
+field policies and validation issues. Supplier-owned Classic child schemas do
+not require a first-party Classic container or namespace import.
 
 ### Standalone Voice attempt policy (0.3 development)
 
@@ -1718,6 +2088,21 @@ complete mounted command inventory without a separate command-count or
 aggregate-byte ceiling. Context detail and references use strict JSON; executable
 command inputs retain their own semantic-operation boundary. Invalid optional
 context is withheld, and opaque descriptors never carry executable payloads.
+
+In 0.3 development source, Ask Happier captures this same strict snapshot into
+`session.authoring.open`'s `seed.currentUiContext`. The New Session seed owner
+converts it to the manifest-declared `happier.app-context/current-screen`
+composer attachment. Its ordinary badge, removal, draft persistence and accepted
+submission use the existing Composer owners. Screen data stays out of editable
+prompt text; release notes remain editable. Agent callers use the same typed seed.
+The attachment resolver supplies captured data to the normal dispatch context
+block and never executes its opaque command descriptors or reads a later screen.
+Ask entry points borrow the incumbent mounted Action reader at the press (or
+palette inventory capture), so reparented workspace pages and sheets do not
+depend on receiving that reader through their local React ancestry.
+Existing attachment value and instance bounds apply before the seed is written;
+an invalid attachment rejects the seed rather than silently dropping its context.
+
 `VoiceClientToolDefinition` describes the sanitized,
 attempt-bound host tools supplied to providers; it is not an author registration
 owner, and effects still deliver canonical `tool_calls` through the Action barrier.
@@ -2099,6 +2484,13 @@ than inventing an account id. See [Triage source ownership](triage-sources.md).
 
 ### Connected Account refresh and quota identity (0.3 development)
 
+Usage surfaces select exact qualified services through the connected-service
+registry's usage capability: a descriptor may declare `usage`, and bundled
+services retain their generated quota-read declaration. An e-mail connection
+without that capability does not become a Usage account. Observed accounts and
+accounts awaiting their first observation are separate projections; the read
+count includes only observations admitted by the quota observation owner.
+
 Native credential resolution, Session authentication switching, daemon bootstrap
 and refresh read through the qualified established credential owner and V4
 transport. That owner validates the exact account reference, revision semantics
@@ -2334,6 +2726,17 @@ plugin/native/Provider environment layers. Plugins cannot override or unset this
 host-private marker; child ownership is resolved by the canonical daemon process
 owner, not a plugin process registry. See [machine processes](cli-architecture.md#machine-processes-03-development).
 
+Public invocation exec `run`/`spawn` options in 0.3 development source include
+`descendantDisposition: 'preserve-on-success'` for native commands that daemonize.
+The existing process supervisor hands off descendants only after an unrequested
+root exit with code zero; later disposal or invocation retirement settles the
+handle without stopping those descendants. Cancellation, timeout and disposal
+while the root runs, and unsuccessful exit retain tree termination. Omission or
+`'terminate'` preserves ordinary supervision. The native tool owns subsequent
+stop/delete; this does not establish a host-managed service or release native Job
+custody. Lima selects it only for `start`; stop/delete and guest IO stay supervised.
+Native daemons must redirect inherited streams so captured output can close.
+
 A resolved native command can return `nativeInstance` using the existing
 managed-services `{adapter, nativeResourceId}` shape. The selected adapter must
 declare and register `nativeServiceLifecycle`, and the identity must match that
@@ -2359,6 +2762,13 @@ override it. Endpoint discovery retires on caller cancellation, actual process
 exit or observation failure, or that authored deadline; a late OS scan cannot
 publish into a successor attempt. Per-probe health budgets and watchdog policy
 remain separate from the lifetime of establishment.
+
+Managed HTTP requests likewise inherit caller and exact-handle cancellation
+when `ManagedServiceRequest.timeoutMs` is omitted in 0.3 development source.
+An explicit request deadline bounds validated response headers, while the
+response body retains the caller and handle lifetime. A native prompt that
+waits for inference is ordinary request work, not server startup; the host
+does not impose its former five-minute request deadline on that turn.
 
 Managed Provider contributions may opt into `sharing: 'connectionMachine'` in
 unreleased 0.3 source. This selects the incumbent daemon managed-services and
@@ -2619,6 +3029,12 @@ producer reuses `sessionWorkStatusFactsFromStatus` and `resolveWorkStatusTone`.
 Those owners preserve report-aware settlement and offline priority; a plugin
 does not classify host Session facts independently. Existing watches digest the
 complete snapshot, so reports-only Work changes invalidate the same subscription.
+
+The Session `title` uses the host's canonical `getSessionName` projection, including
+its Home-qualified retained title and untitled fallback. The same watch observes
+that Session's list-row title changes. Plugins use the public snapshot for linked
+Session labels; an unreadable Session uses the shared untitled label rather than
+a stored relationship title or raw Session id.
 
 The optional `agent: { agentId, displayName, brand?: { pluginId } }` comes from
 the existing Session presentation identity reader and Agent catalog projection.
@@ -2920,15 +3336,47 @@ reader. Machine placement does not supply a foreign requester's private source
 catalog: without that custody, the Action returns the existing
 `approval_context_unavailable` refusal before reading sources or preparing code.
 
+Exact catalog acquisition also honors the source-bound npm profile's existing
+`allowPrivateNetwork` permission when the catalog and profile have the same
+origin. An unbound profile, a different origin or a remote catalog's profile
+field cannot grant this permission. HTTPS, same-origin redirects and assessed
+address pinning still apply. The profile must pass its ordinary Test before
+artifact access is available; creating or binding it alone does not establish
+availability.
+
+An explicitly source-bound profile can install an unscoped package without being
+the default registry. `useAsDefault` controls automatic registry selection; an
+explicit selection still checks the exact origin and any package scope. Binding
+a profile therefore does not redirect unrelated unscoped installs to that registry.
+
 The development `plugins.install` Action accepts an exact marketplace source,
-plugin and version plus the selected Machine, without public trust fields. A
-present-user UI host retains that invocation through the existing installation
-review dialog and authenticated private daemon decision. The same review owner
-serves already-prepared changes on the plugin screen. Declining cancels the
-pending change; retiring the captured Account or selected-Machine operation
-prevents a later decision from granting trust. Headless CLI and Agent callers
-receive `reviewRequired` unchanged, including when configurable Action approval
-is waived. That policy waiver is not installation trust.
+plugin and version plus the selected Machine, without public trust fields.
+For an installed plugin, `source: { kind: 'installed', pluginId }` asks the
+same daemon owner to choose its update from the retained channel and policy;
+`plugins update <pluginId>` is a CLI projection of that Action. The caller
+does not reconstruct a locator or override a pinned policy.
+Install review uses the ordinary `ApprovalRequestV2` Artifact and Inbox
+presentation. The public `approval.request.decide` Action serves UI, Agent,
+MCP and CLI decisions under the user's approval policy, using the approval
+Artifact ID rather than the daemon pending change ID. The daemon retains
+candidate custody and revalidates the evaluated facts before applying trust.
+Failed install preparation returns its domain error before creating an approval
+Artifact; a source operand alone cannot stand in for the evaluated disclosure.
+Observer-created development reviews publish through this same owner; an
+explicit `plugins install <exact-source> --dev --json` rejoins the retained
+candidate and same Artifact. `plugins change status` only inspects pending
+daemon custody. Restart expires that custody, so the original source flow must
+prepare new facts; `outcome_unknown` requires installed-state inspection before
+replay. Optional resource and credential grants retain their canonical owners.
+
+Enable, disable, rollback, forget trust and update-policy controls use semantic
+Actions in this same plugin change family on UI, CLI, Agent and MCP. Reversible
+enable/disable, retained trusted-version rollback and update-policy edits are
+direct own-UI defaults. Forgetting trust also drops rollback retention and
+retains confirmation. Agent/MCP lifecycle writes keep their configurable danger
+default; waivers never supply human authority or bypass daemon trust admission.
+The marketplace capability no longer provides a competing lifecycle mutation
+path; retained catalog reads and change-status inspection do not execute changes.
 
 Source registries and npm profile, scope and paused-source inventories have no
 independent count ceilings. Mutation receipts remain for the npm registry file's
@@ -2970,11 +3418,22 @@ line identifies Happier's transient configuration; author-owned configurations
 remain protected.
 
 Prepublication dependency preparation uses a content-addressed file override
-for the complete SDK package closure. Repeated preparations reuse its pnpm
+for the complete SDK package closure. When the CLI runs from the source
+workspace, preparation first asks the canonical source-development publisher to
+prepare the requested public packages and their dependencies; copying an older
+`dist` tree into a new author root does not establish source freshness.
+Packaged hosts and admitted source bundles use their supplied package closure.
+Repeated preparations reuse its pnpm
 virtual-store identity; the transient workspace config selects pnpm's native
 immediate orphan pruning when the closure changes. Both temporary package roots
 and the workspace config are released after preparation. Published registry
 resolution keeps its existing policy.
+
+The generated cold manifests of the external-author QA scaffolds under
+`packages/plugin-sdk/fixtures/qa-plugin-authoring/created/qa-*` are worker-local
+build outputs. Source replication excludes their `.happier-plugin` directories
+so it cannot remove a manifest between daemon bundling and UI compilation;
+authored SDK example and descriptor manifests elsewhere still synchronize.
 
 In 0.3 development, a first-party plugin at its canonical source-workspace path
 uses that repository's installed dependencies. The author toolchain checks the

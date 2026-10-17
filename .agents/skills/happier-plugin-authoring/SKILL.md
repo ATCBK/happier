@@ -21,6 +21,17 @@ Load `.agents/skills/happier-ui-craft` for the method: hierarchy, control choice
 
 For a few operations, use public `SelectionTiles variant="action"` with `onPress`: the shared owner turns a narrow page section into rows of one sheet; footer-bearing actions retain their cards. Public `CountedDisclosureItem` folds quiet aggregate details behind a title and optional count or subtitle; use public `List` controlled expansion for a collection item's own details. Import author adapters from `@happier-dev/plugin-ui/components`; `presentation` is host-internal, not an author renderer/metrics API. Public `Collection presentation="grid"` already owns compact tiles: return `null` for absent descriptions and omit unused footer slots. Check these development-source exports in the package API inventory before using them from a published toolchain.
 
+For a Collection toolbar, supply `refine.render()` for the wide controls and
+`refine.sheet` for compact Filters from the same controlled model. The sheet
+uses shared menu `groups`, optional `radioGroups`, `onSelect`, optional `clear`,
+and `showResultsLabel`; choices apply immediately and the primary footer closes
+the sheet. `render` takes no placement argument. Use public `SheetMenu` for a
+standalone controlled menu with `sheet: { title, footer? }` and optional
+`triggerCount`; keep portal/focus/dismissal with the host. For long path/name
+rows, `Item.titleEllipsizeMode="middle"` retains the suffix and full accessible
+name. These are 0.3 development-source contracts: check the generated plugin-ui
+API declarations and the [maintained example](../../../packages/plugin-ui/README.md#collection-filters-and-long-titles-03-development-source).
+
 ## Cross-plugin integrations
 
 For broader public composition patterns, use the maintained repository examples linked from the [public quickstart](https://docs.happier.dev/plugins/quickstart), including public-authoring and advanced-package-root. Installed copies at `node_modules/@happier-dev/plugin-sdk/examples/public-authoring/` and `node_modules/@happier-dev/plugin-sdk/examples/advanced-package-root/` are release-owned snapshots. Use only contribution and service families marked available in the capability matrix; an example demonstrates public package boundaries but does not create product availability. This beginner scaffold does not declare a feature integration.
@@ -46,5 +57,6 @@ Later iterations need nothing further: a trusted development source root short-c
 
 ## Reviews and reconnecting
 
-A local-path install carries code trust only. A separate authority decision still returns a daemon-issued pending ID for a present user to decide. Preserve that ID and rejoin the same change with `happier plugins change status <pendingChangeId> --json`; a present user decides it with `happier plugins change approve <pendingChangeId> --json` or `happier plugins change reject <pendingChangeId> --json`, or from Settings -> Plugins on that machine. Do not submit a second change request while a review or apply is pending. Optional host resources and secrets always stay with their canonical authority owner.
+A retained development review is published as an ordinary `plugins.install` approval Artifact in the Happier Inbox. Rerun `happier plugins install <exact-source> --dev --json` to rejoin that source's daemon-retained candidate and the same Artifact. Review its daemon-evaluated manifest, permissions, and host access before deciding; an Artifact still awaiting daemon evaluation cannot be approved. Decide in the Inbox or through the public `approval.request.decide` Action, also available to agents and MCP callers under the user's approval policy. The CLI form is `happier actions invoke approval.request.decide --input-json '{"artifactId":"<approvalArtifactId>","decision":"approve"}' --json`; use `reject` to decline. Use the ordinary approval Artifact ID, not the daemon's pending change ID. Optional host resources and secrets always stay with their canonical authority owner.
+Preserve any daemon-issued pending change ID for read-only inspection with `happier plugins change status <pendingChangeId> --json`. This status command does not decide or publish an approval. Rejoin the exact source flow instead of preparing an unrelated request while its review or apply is pending.
 A pending ID can be rejoined only during the same daemon lifetime. If status reports `expired` after a daemon restart, rerun the original development or install request and review its newly prepared facts; do not reuse the old pending ID. `outcome_unknown` is different: inspect installed state before replaying a mutation.

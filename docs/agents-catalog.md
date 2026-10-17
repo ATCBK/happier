@@ -110,6 +110,17 @@ target reader maps the 0.2 `{ kind: 'configuredAcpBackend', backendId }` selecti
 to this contribution and the same definition id; new requests and writes use the
 strict current target.
 
+Custom ACP currently declares no Connected Account purposes. In 0.3 development,
+Connected Account discovery and launch options therefore return no compatible
+services for a configured definition; explicitly supplying a binding is refused
+by the qualified-purpose authority before Connected Account credential lookup. The spawn
+result retains `connected_service_qualified_purpose_authority_unavailable` as
+its launch-error code, rather than treating the selection as malformed input.
+A command such as `opencode acp` uses its
+own native authentication configuration. It does not inherit the OpenCode
+Agent contribution's Connected Account purposes or Provider-binding adapter.
+Use the OpenCode Agent target when selecting its supported Connected Accounts.
+
 In 0.3 development, configured definitions carry a typed `launch` (`command`,
 `npm`, `archive`, or `uv`); the stored reader folds predecessor `command`/`args`
 into a command launch. `resolveAcpLaunch` is the single CLI launch owner.
@@ -129,6 +140,13 @@ Machine actor's namespace, including when that actor differs from the custodian.
 Absent admission or unstamped private requester-child custody returns
 `ACP_CATALOG_UNAVAILABLE` before managed acquisition. A damaged retained version
 requires the daemon's guarded repair/removal; Session first use cannot replace it.
+
+Definition install/update jobs refresh the admitted Account catalog before
+capturing the requested pin. Custodian jobs use the installed daemon Account's
+existing hydration owner; guest jobs use their captured requester Account ports.
+An older background catalog observation cannot decide that a just-added
+definition is missing. Uninstall retains its ability to remove an owned managed
+install after the definition has been deleted.
 
 Executable inventories expand contributions through
 `packages/protocol/src/agents/executionTargetV1.ts#listAgentExecutionTargetsV1`.
@@ -150,6 +168,9 @@ predecessor aliases.
 
 The definition id survives picker selection and draft persistence/reopening,
 then the daemon admits the installed contribution and the exact catalog row.
+Admission refreshes that row through the scoped Account catalog owner; a ready
+cached projection is not proof that a definition just saved on another client
+is absent. UI New Session and `session.spawn_new` use this same daemon admission.
 The host's existing runtime descriptor carries the selected definition into the
 runner. `accountConfiguredAcp.ts` owns captured Account custody and configured
 command, arguments, environment, authentication metadata, runtime options and
@@ -464,6 +485,17 @@ selection uses the existing `projectSetModelResponse` seam on the config-option 
 previously observed controls on unselected models. A complete authenticated per-model probe walk
 remains separate follow-up work.
 
+In development source, the generic ACP backend accepts the legacy
+`session/set_model` success response without a repeated model catalog. An empty
+acknowledgement selects the requested model from the already observed catalog,
+preserving its model controls and publishing `current_model_update`. Returned
+model state must still agree with the request; an Agent's explicit response
+projector remains responsible for its own acknowledgement format. This legacy
+response contract has only optional metadata in the
+[ACP v0.10.8 schema](https://github.com/agentclientprotocol/agent-client-protocol/blob/v0.10.8/schema/schema.unstable.json);
+the current protocol prefers
+[session configuration options](https://agentclientprotocol.com/protocol/v1/session-config-options).
+
 In the current development source, daemon model, mode and config probes demand the exact Agent
 registration from the authoritative plugin runtime and retain its lease for the operation.
 `withAgentPreflightCatalog` serves both capability RPCs and in-process Action inventories. The
@@ -691,6 +723,38 @@ binding uses its own credential transport rather than requiring native CLI login
 The Claude plugin owns the native JSON-stream Agent SDK protocol integration with
 the Claude Code CLI. It does not depend on the `@anthropic-ai/claude-agent-sdk`
 npm package; the SDK changelog below documents the upstream message contract.
+
+In 0.3 development, native SDK Sessions and detached runs request Claude Code's
+`--include-partial-messages` output on the existing JSON stream. The SDK codec
+projects genuine text-block starts and text deltas through the existing
+`message-delta` event before committed assistant text; complete assistant/result
+records do not synthesize duplicate text deltas. Replay, sidechain and cancelled
+query text cannot acquire the foreground turn identity. Voice can begin segment
+preparation before the final response, subject to actual provider output and the
+existing Voice segment boundary.
+
+In 0.3 development source, both native terminal launch paths prepare the explicitly
+selected Claude config home before spawning. They seed Claude Code's onboarding-complete
+flag and a missing theme without copying another account's `.claude.json`, changing
+credentials, or granting project trust. Existing native fields and project trust records
+are preserved; unreadable or malformed configuration fails before launch with
+`claude_terminal_config_unavailable`. Workspace trust remains a separate decision under
+the Account's Claude workspace-trust policy.
+
+Unified terminal launches enable Claude's bypass-permissions mode only when the
+user explicitly selects YOLO/bypass. Default, Auto and Plan do not add the native
+`--allow-dangerously-skip-permissions` flag: Claude Code 2.1.296 shows its bypass
+warning for that flag even without starting in bypass mode. A later mode change
+that the running native mode cycle cannot reach remains unapplied and requires
+a restart; it never silently widens the launch mode.
+
+Native startup questions retain their occurrence until an applied answer is
+acknowledged and settled in the Session. Advancing from workspace trust to the
+next native dialog does not cancel the successful trust answer. Occurrence
+disposal and an unanswered dialog replacement still cancel their own question.
+The host admits native decision application through the permission coordinator's
+same completion path. A question already withdrawing its final caller cannot
+apply a stale answer merely because its durable cancellation is still pending.
 
 Managed Provider bindings in 0.3 development carry per-connection Claude helper
 pins through the Agent provider-binding adapter. `fast`, `default`, and
@@ -1070,8 +1134,15 @@ display, but marks inventory error/stale; retained facts do not authorize launch
 Projection RPCs retain the shared connection/setup budget without imposing an
 operation deadline on daemon projection work.
 
-Machine and Agent rows describe aggregate authentication availability: a healthy
-accepted Connected Account can satisfy sign-in while the native CLI is signed out.
+Machine and Agent rows describe the Account's default authentication for a new
+Session. `useMachineAgentAuthentication` reads the admitted purpose-default catalog
+through the same Protocol default-binding reader as the composer and feeds those
+bindings into `machineAgentModel#projectMachineAgentForCredential`. An empty admitted
+catalog uses native authentication; an unread catalog remains unknown. A healthy
+Connected Account satisfies sign-in only when that account, or a pool with that
+active account, is selected by the default. Other healthy accounts remain available
+for recovery without becoming the default. Detailed inventory and passive Home/Machine
+summaries share this projection; default changes do not require another CLI probe.
 `useMachineAgents` evaluates Account health against the exact Machine's cached
 Connected Account declarations through `readConnectedAccountDescriptorProjection`,
 `mergeConnectedAccountDescriptorProjections` and `projectConnectedServiceRegistryEntries`.
@@ -1095,7 +1166,7 @@ Machine-scoped readiness uses only the selected
 Machine's published descriptors, deduplicated by the same projection owner. An
 unanswered or internally conflicted Machine remains unknown; it cannot borrow
 another Machine's authentication modes.
-The New Session launcher instead projects the credential in its emitted binding
+The New Session launcher projects the credential in its emitted binding
 through `machineAgentModel#projectMachineAgentForCredential`, using the same
 inventory sign-in and readiness owners. Native selection uses the retained native
 probe; a selected personal account uses that exact account's health, and an account

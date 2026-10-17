@@ -352,7 +352,9 @@ flowchart TD
 
 `inTx()` wraps Prisma transactions with:
 
-- In 0.3 development source, ReadCommitted is the PostgreSQL/MySQL default. Named cross-row invariants and coherent snapshots explicitly retain Serializable; SQLite retains its provider-owned transaction/read-snapshot behavior.
+- In 0.3 development source, ReadCommitted is the PostgreSQL/MySQL default. Named cross-row invariants retain Serializable. On PostgreSQL, the pure-read `readSnapshotWithCurrentAdmission` and `readHomeConfigEnv` owners use read-only RepeatableRead for coherent snapshots without SSI predicate locks; MySQL and SQLite retain their existing isolation/read-snapshot behavior.
+- RepeatableRead admits read-only serialization anomalies: a stable view need not match any serial ordering with overlapping writers ([PostgreSQL isolation](https://www.postgresql.org/docs/16/transaction-iso.html#XACT-REPEATABLE-READ)). The content owner promises a coherent capture followed by a separate fresh policy readmission, including access/mode/key rejection. The Home owner promises a request/job configuration snapshot, with mutation admission in its own transaction. Neither read owner certifies cross-transaction business invariants or serial ordering with writers.
+- PostgreSQL `readOnly: true` declares `SET TRANSACTION READ ONLY` before the caller's queries on every attempt. Persistent-table writes then fail; isolation, retry and deadline accounting stay with `inTx`. It does not enable `DEFERRABLE`, which can block snapshot acquisition ([PostgreSQL transaction modes](https://www.postgresql.org/docs/16/sql-set-transaction.html)).
 - Automatic retry on `P2034`, PostgreSQL serialization/deadlock failures and stale fenced audiences, using the existing provider-owned recovery budget.
 - `afterTx()` to emit socket updates after commit.
 

@@ -100,9 +100,11 @@ match. `--package` is therefore required for Community npm installs. Curated
 and added marketplace sources already bind the package coordinate to their
 listing. Every marketplace install names the exact version you reviewed and
 the machine that will install it. `marketplace:community-npm` is the built-in
-source ID; it does not create or save another marketplace source. Headless
-commands return the pending Install and trust review until a present user
-decides it in Happier.
+source ID; it does not create or save another marketplace source. In 0.3
+development source, a required review uses the ordinary `plugins.install`
+approval Artifact in the Happier Inbox. Agents, MCP, and CLI callers can use
+the same public `approval.request.decide` Action under the user's approval
+policy; see [Review a pending change](/plugins/packaging/authoring-cli#review-a-pending-change).
 
 ## First install and update authority
 
