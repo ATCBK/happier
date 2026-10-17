@@ -590,3 +590,16 @@ The migration edit and its retained-development reconciliation are one work unit
 That reconciliation is an operator/development action, not a shipped compatibility path. Do not add runtime checksum exceptions, migration-name aliases, duplicate no-op migrations, or automatic ledger repair merely to preserve unpublished development history.
 
 Keep PostgreSQL, SQLite, and MySQL migrations aligned by intent. Before publication, validate both a clean migration from the published baseline and the approved reconciliation path for any retained development database. After publication, preserve the exact migration history and test upgrades append-only.
+
+### Unistyles native bindings (development)
+
+The development UI upgrades Unistyles from 3.2.4 to 3.5.3 and Nitro Modules
+from 0.35.6 to 0.37.1. Non-publicdev lanes use the new `0.2.9-native`
+runtime train, so this JavaScript cannot be delivered to binaries containing
+the previous bindings on `0.2.8-native`. Publicdev retains Expo's fingerprint
+policy. Rebuild the native development client after installing these dependencies;
+a Metro reload alone cannot update the native bindings. Publish the matching
+native build before publishing an OTA update for this train.
+React Native's CocoaPods post-install owner marks glog's namespace-fragment
+headers textual, so Swift can import Nitro's public Fabric headers without
+Clang attempting a submodule import inside `namespace google`.
