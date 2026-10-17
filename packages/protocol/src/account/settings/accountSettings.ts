@@ -203,19 +203,29 @@ export type NotificationsSettingsV1 = z.infer<typeof NotificationsSettingsV1Sche
 
 export const DEFAULT_NOTIFICATIONS_SETTINGS_V1: NotificationsSettingsV1 = NotificationsSettingsV1Schema.parse({});
 
-export const DEFAULT_ACTIONS_SETTINGS_V1: ActionsSettingsV1 = ActionsSettingsV1Schema.parse({
+function defaultAgentDisabledActionSettings(): ActionSettingsOverride {
+  return {
+    enabledPlacements: [],
+    disabledSurfaces: ['agent'],
+    disabledPlacements: [],
+    approvalRequiredSurfaces: [],
+    toolExposureModes: {},
+  };
+}
+
+export const DEFAULT_ACTIONS_SETTINGS_V1: ActionsSettingsV1 = {
   v: 1,
   actions: {
     // Agent-surface coordination is enabled by default; destructive or human-decision
     // actions stay opt-in as a product courtesy.
-    'session.stop': { disabledSurfaces: ['agent'] },
-    'session.archive': { disabledSurfaces: ['agent'] },
-    'session.unarchive': { disabledSurfaces: ['agent'] },
-    'session.usageLimit.consumeResetCredit': { disabledSurfaces: ['agent'] },
-    'session.permission.respond': { disabledSurfaces: ['agent'] },
-    'session.user_action.answer': { disabledSurfaces: ['agent'] },
+    'session.stop': defaultAgentDisabledActionSettings(),
+    'session.archive': defaultAgentDisabledActionSettings(),
+    'session.unarchive': defaultAgentDisabledActionSettings(),
+    'session.usageLimit.consumeResetCredit': defaultAgentDisabledActionSettings(),
+    'session.permission.respond': defaultAgentDisabledActionSettings(),
+    'session.user_action.answer': defaultAgentDisabledActionSettings(),
   },
-});
+};
 
 const CURRENT_DEFAULT_SESSION_AGENT_DISABLED_ACTION_IDS_V1 = Object.freeze([
   'session.stop',
