@@ -147,7 +147,7 @@ AUTH_ANONYMOUS_SIGNUP_ENABLED=0
 5. Make sure the client app can return from OAuth:
    - Web (required unless you use `https://cloud.happier.dev`): set `HAPPIER_WEBAPP_URL` (or `HAPPIER_WEBAPP_OAUTH_RETURN_URL_BASE`)
    - Mobile deep link: set `HAPPIER_WEBAPP_OAUTH_RETURN_URL_BASE` and allow the scheme via `HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES` (e.g. `myapp`)
-   - Desktop (unreleased server fix): for builds using `tauri://localhost`, include `tauri` in `HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES`, preserving any other allowed schemes (e.g. `happier,tauri`). Bundled desktop origins, including Windows' `http://tauri.localhost`, return to the app's own OAuth route at its root, independently of the relay's UI prefix. Keep `HAPPIER_WEBAPP_URL` pointing to your web client for browser sign-in.
+   - Desktop (unreleased server fix): the bundled `tauri://localhost` origin is trusted by default; no additional allowed-schemes setting is needed. Bundled desktop origins, including Windows' `http://tauri.localhost`, return to the app's own OAuth route at its root, independently of the relay's UI prefix. Keep `HAPPIER_WEBAPP_URL` pointing to your web client for browser sign-in. Other custom return schemes still require `HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES`.
 6. Validate:
    - Restart the server (so it picks up env / config changes).
    - Open the Happier app and confirm the new sign-in option appears on the welcome/login screen.

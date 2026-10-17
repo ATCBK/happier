@@ -123,7 +123,7 @@ describe("connectRoutes (GitHub callback) external auth flow (integration)", () 
         { origin: "http://localhost:19081", allowedSchemes: "", expectedBase: "http://localhost:19081/ui" },
         { origin: "http://tauri.localhost", allowedSchemes: "", expectedBase: "http://tauri.localhost" },
         { origin: "tauri://localhost", allowedSchemes: "tauri", expectedBase: "tauri://localhost" },
-        { origin: "tauri://localhost", allowedSchemes: "", expectedBase: "https://app.example.test" },
+        { origin: "tauri://localhost", allowedSchemes: "", expectedBase: "tauri://localhost" },
         { origin: "tauri://evil.example.test", allowedSchemes: "tauri", expectedBase: "https://app.example.test" },
     ])("returns OAuth from $origin to $expectedBase with allowed schemes '$allowedSchemes'", async ({ origin, allowedSchemes, expectedBase }) => {
         applyGithubExternalAuthCallbackEnv(harness, {
@@ -255,7 +255,6 @@ describe("connectRoutes (GitHub callback) external auth flow (integration)", () 
         { origin: "tauri://localhost", expectedBase: "tauri://localhost" },
     ])("returns cancellation to $expectedBase without creating pending credentials", async ({ origin, expectedBase }) => {
         applyGithubExternalAuthCallbackEnv(harness, {
-            HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES: "tauri",
             HAPPIER_SERVER_UI_DIR: "/tmp/ui",
             HAPPIER_SERVER_UI_PREFIX: "/ui",
         });

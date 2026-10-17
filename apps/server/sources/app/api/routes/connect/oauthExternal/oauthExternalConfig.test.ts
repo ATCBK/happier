@@ -3,6 +3,23 @@ import { describe, expect, it } from 'vitest';
 import { resolveWebAppOAuthReturnUrlFromEnv, resolveWebAppOAuthReturnUrlFromRequestHeaders } from './oauthExternalConfig';
 
 describe('resolveWebAppOAuthReturnUrlFromEnv', () => {
+  it('allows the bundled Tauri return URL by default through the shared redirect validator', () => {
+    expect(resolveWebAppOAuthReturnUrlFromEnv({
+      HAPPIER_WEBAPP_OAUTH_RETURN_URL_BASE: 'tauri://localhost/oauth',
+    }, 'okta')).toBe('tauri://localhost/oauth/okta');
+  });
+
+  it.each([
+    'tauri://evil.example.test/oauth',
+    'tauri://sub.localhost/oauth',
+    'tauri://localhost:8080/oauth',
+    'tauri://user:pass@localhost/oauth',
+  ])('does not trust a different Tauri authority by default: %s', (returnBase) => {
+    expect(resolveWebAppOAuthReturnUrlFromEnv({
+      HAPPIER_WEBAPP_OAUTH_RETURN_URL_BASE: returnBase,
+      HAPPIER_WEBAPP_URL: 'https://app.example.test',
+    }, 'okta')).toBe('https://app.example.test/oauth/okta');
+  });
   it('uses the preferred hosted client when no web app URL is configured', () => {
     expect(resolveWebAppOAuthReturnUrlFromEnv({}, 'github'))
       .toBe('https://cloud.happier.dev/oauth/github');
@@ -122,18 +139,18 @@ describe('resolveWebAppOAuthReturnUrlFromRequestHeaders', () => {
     expect(resolved).toBe('tauri://localhost/oauth/okta');
   });
 
-  it('ignores the Tauri desktop webview origin when its scheme is not an allowed return scheme', () => {
+  it.each([undefined, '', 'happier'])('returns to the bundled Tauri origin without scheme opt-in (%s)', (allowedSchemes) => {
     const resolved = resolveWebAppOAuthReturnUrlFromRequestHeaders({
       env: {
         HAPPIER_WEBAPP_URL: 'https://stack.example.test',
-        HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES: 'happier',
+        HAPPIER_OAUTH_RETURN_ALLOWED_SCHEMES: allowedSchemes,
       },
       providerId: 'okta',
       headers: {
         origin: 'tauri://localhost',
       },
     });
-    expect(resolved).toBeNull();
+    expect(resolved).toBe('tauri://localhost/oauth/okta');
   });
 
   it('ignores a non-loopback host on the Tauri scheme', () => {

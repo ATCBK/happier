@@ -37,6 +37,8 @@ function isSafeWebRedirectUrl(env: NodeJS.ProcessEnv, url: URL): boolean {
     const scheme = url.protocol.replace(/:$/, "").toLowerCase();
     if (scheme === "https") return true;
     if (scheme === "http" && isLoopbackHostname(url.hostname)) return true;
+    // The bundled desktop callback is trusted without opting the entire Tauri scheme in.
+    if (scheme === "tauri" && url.host === "localhost" && !url.username && !url.password) return true;
     const allowedSchemes = parseAllowedOAuthReturnSchemes(env);
     return allowedSchemes.has(scheme);
 }
