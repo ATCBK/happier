@@ -4,12 +4,28 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
+/** Widget write refusals whose reason and next step the person can act on; any other code keeps the caller's fallback. */
+function readWidgetRefusalMessage(code: unknown): string | null {
+    switch (code) {
+        case 'widget_area_unavailable': return t('widgetAdd.refusals.areaUnavailable');
+        case 'widget_area_scope_retired':
+        case 'widget_scope_unavailable': return t('widgetAdd.areaScopeRecovery');
+        case 'widget_inputs_invalid': return t('widgetAdd.refusals.inputsInvalid');
+        case 'widget_type_unavailable': return t('widgetAdd.refusals.typeUnavailable');
+        case 'widget_size_unsupported': return t('widgetAdd.refusals.sizeUnsupported');
+        case 'widget_edit_denied': return t('widgetAdd.refusals.editDenied');
+        default: return null;
+    }
+}
+
 function readFailureMessage(value: unknown): string | null {
     const record = asRecord(value);
     if (!record) return null;
     const code = record.errorCode ?? record.code;
     if (code === 'server_unreachable' || code === 'home_unreachable') return t('settingsPlugins.targetSelection.unreachableThisHome');
     if (code === 'outcome_unknown' || code === 'approval_execution_outcome_unknown') return t('entityDragDrop.preview.unknownDetail');
+    const widgetRefusal = readWidgetRefusalMessage(code);
+    if (widgetRefusal) return widgetRefusal;
     const error = typeof record.error === 'string' ? record.error.trim() : '';
     if (error.length > 0) return error;
     const errorMessage = typeof record.errorMessage === 'string' ? record.errorMessage.trim() : '';

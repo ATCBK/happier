@@ -13302,6 +13302,13 @@ const widgetAddTranslations = { 'zh-Hans': {
         projectSourceUnavailableTitle: '知道此项目的仓库后，小组件会显示在这里',
         areaWriteFailed: '无法保存此更改',
         areaApprovalPending: '等待批准',
+        refusals: {
+            areaUnavailable: "此处暂时无法使用小组件。请稍后重试。",
+            inputsInvalid: "部分输入无效。请检查后重试。",
+            typeUnavailable: "此小组件已不可用。请选择其他小组件。",
+            sizeUnsupported: "此小组件不支持该尺寸。请选择其他尺寸。",
+            editDenied: "你无法在此处更改小组件。",
+        },
         valueNotFound: ({ value }) => `找不到 ${value}`,
         chooseAnother: ({ field }) => `选择其他${field}`,
         chooseField: ({ field }) => `选择${field}`,

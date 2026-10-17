@@ -16,6 +16,7 @@ import {
     isConfigurableWidgetCandidate,
     partitionWidgetCandidatesBySource,
     selectHostableWidgetCandidates,
+    runAcknowledgedWidgetSetupCommand,
     runWidgetSetupCommand,
     widgetDefinitionOfCandidate,
     widgetProvidedContext,
@@ -188,10 +189,8 @@ export function useAccountWidgetAddSections(input: Readonly<{
     const area = input.area;
     const addGroup = React.useCallback(async (fragment: WidgetLayoutFragmentSummaryV1) => {
         if (!scope) throw new Error('widget_area_unavailable');
-        const outcome = await runAddWidgetLayoutFragmentCommandV1(fragment.group, scope,
-            { name: fragment.name, ...(area ? { area } : {}) });
-        if (outcome.kind === 'refused') throw new Error(outcome.errorCode);
-        return outcome.kind === 'approvalPending' ? { ok: true as const, approvalPending: true as const } : { ok: true as const };
+        return runAcknowledgedWidgetSetupCommand(() => runAddWidgetLayoutFragmentCommandV1(fragment.group, scope,
+            { name: fragment.name, ...(area ? { area } : {}) }), t('widgetAdd.addFailed'));
     }, [area, scope]);
     const sections = React.useMemo(() => buildAccountWidgetAddSections({
         candidates,

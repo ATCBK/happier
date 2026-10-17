@@ -293,13 +293,15 @@ export async function runWidgetSetupCommand(run: () => Promise<WidgetSetupComman
  * controller has already said what happened in its own notice.
  */
 export async function runAcknowledgedWidgetSetupCommand(
-    run: () => Promise<Pick<SessionBoardCommandOutcome, 'kind'> | Readonly<{ kind: 'refused' }> | null | void> | void,
+    run: () => Promise<Pick<SessionBoardCommandOutcome, 'kind'> | Readonly<{ kind: 'refused'; errorCode?: string }> | null | void> | void,
     failure: string,
 ): Promise<WidgetSetupSubmitResult> {
     try {
         const outcome = await run();
-        return outcome && (outcome.kind === 'applied' || outcome.kind === 'approvalPending')
-            ? { ok: true, ...(outcome.kind === 'approvalPending' ? { approvalPending: true } : {}) } : { ok: false, message: failure };
+        if (outcome && (outcome.kind === 'applied' || outcome.kind === 'approvalPending'))
+            return { ok: true, ...(outcome.kind === 'approvalPending' ? { approvalPending: true } : {}) };
+        // A returned typed refusal keeps its reason through the same presenter a thrown failure uses.
+        return { ok: false, message: outcome?.kind === 'refused' ? resolveActionExecutionErrorMessage(outcome, failure) : failure };
     } catch (error) {
         return { ok: false, message: resolveActionExecutionErrorMessage(error, failure) };
     }

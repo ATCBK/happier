@@ -13,7 +13,7 @@ import { runWidgetDefinitionCommand } from '@/components/widgets/definitions/wid
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
-import { widgetProvidedContext } from '@/components/widgets/surface/widgetSurfaceSetup';
+import { runAcknowledgedWidgetSetupCommand, widgetProvidedContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { WidgetSetupPreview } from '@/components/widgets/surface/WidgetSetupPreview';
 import { useSessionWidgetSurface } from '@/components/widgets/surface/useWidgetInputsEditor';
 import { SESSION_BOARD_OVERVIEW_VIEW_ID } from '@/sync/domains/session/board';
@@ -26,9 +26,7 @@ const PLUGINS_ROUTE = '/plugins';
 
 /** Publication/privacy and approval custody stay at the same Action an agent invokes. */
 async function publishSavedBoardWidget(input: PublicActionInputById['widgets.item.add']): Promise<WidgetSetupSubmitResult> {
-    const outcome = await runWidgetDefinitionCommand('widgets.item.add', input, input.surface);
-    return outcome.kind === 'refused' ? { ok: false, message: t('widgetAdd.addFailed') }
-        : { ok: true, ...(outcome.kind === 'approvalPending' ? { approvalPending: true } : {}) };
+    return runAcknowledgedWidgetSetupCommand(() => runWidgetDefinitionCommand('widgets.item.add', input, input.surface), t('widgetAdd.addFailed'));
 }
 
 /**

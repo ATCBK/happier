@@ -13302,6 +13302,13 @@ const widgetAddTranslations = { 'zh-Hant': {
         projectSourceUnavailableTitle: '知道此專案的儲存庫後，小工具會顯示在這裡',
         areaWriteFailed: '無法儲存此變更',
         areaApprovalPending: '等待核准',
+        refusals: {
+            areaUnavailable: "此處暫時無法使用小工具。請稍後重試。",
+            inputsInvalid: "部分輸入無效。請檢查後重試。",
+            typeUnavailable: "此小工具已無法使用。請選擇其他小工具。",
+            sizeUnsupported: "此小工具不支援該尺寸。請選擇其他尺寸。",
+            editDenied: "你無法在此處變更小工具。",
+        },
         valueNotFound: ({ value }) => `找不到 ${value}`,
         chooseAnother: ({ field }) => `選擇其他${field}`,
         chooseField: ({ field }) => `選擇${field}`,

@@ -13341,6 +13341,13 @@ const widgetAddTranslations = { ca: {
         projectSourceUnavailableTitle: 'Els ginys apareixeran aquí quan se sàpiga el repositori d’aquest projecte',
         areaWriteFailed: 'No s’ha pogut desar aquest canvi',
         areaApprovalPending: 'Esperant l’aprovació',
+        refusals: {
+            areaUnavailable: "Els widgets no estan disponibles aquí ara mateix. Torna-ho a provar d’aquí a un moment.",
+            inputsInvalid: "Algunes entrades no són vàlides. Revisa-les i torna-ho a provar.",
+            typeUnavailable: "Aquest widget ja no està disponible. Tria’n un altre.",
+            sizeUnsupported: "Aquesta mida no està disponible per a aquest widget. Tria’n una altra.",
+            editDenied: "No pots canviar els widgets aquí.",
+        },
         valueNotFound: ({ value }) => `No es troba ${value}`,
         chooseAnother: ({ field }) => `Tria un altre valor per a ${field}`,
         chooseField: ({ field }) => `Tria ${field}`,

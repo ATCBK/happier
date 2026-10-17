@@ -13332,6 +13332,13 @@ const widgetAddTranslations = { pl: {
         projectSourceUnavailableTitle: 'Widżety pojawią się tutaj, gdy repozytorium tego projektu będzie znane',
         areaWriteFailed: 'Nie udało się zapisać tej zmiany',
         areaApprovalPending: 'Czeka na zatwierdzenie',
+        refusals: {
+            areaUnavailable: "Widżety nie są tu teraz dostępne. Spróbuj ponownie za chwilę.",
+            inputsInvalid: "Niektóre dane wejściowe są nieprawidłowe. Sprawdź je i spróbuj ponownie.",
+            typeUnavailable: "Ten widżet nie jest już dostępny. Wybierz inny.",
+            sizeUnsupported: "Ten rozmiar nie jest dostępny dla tego widżetu. Wybierz inny rozmiar.",
+            editDenied: "Nie możesz tu zmieniać widżetów.",
+        },
         valueNotFound: ({ value }) => `Nie znaleziono: ${value}`,
         chooseAnother: ({ field }) => `Wybierz inną wartość: ${field}`,
         chooseField: ({ field }) => `Wybierz: ${field}`,

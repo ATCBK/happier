@@ -13306,6 +13306,13 @@ const widgetAddTranslations = { ja: {
         projectSourceUnavailableTitle: 'このプロジェクトのリポジトリが判明すると、ここにウィジェットが表示されます',
         areaWriteFailed: 'この変更を保存できませんでした',
         areaApprovalPending: '承認待ち',
+        refusals: {
+            areaUnavailable: "ここでは現在ウィジェットを利用できません。しばらくしてからもう一度お試しください。",
+            inputsInvalid: "無効な入力があります。内容を確認して、もう一度お試しください。",
+            typeUnavailable: "このウィジェットは利用できなくなりました。別のものを選んでください。",
+            sizeUnsupported: "このウィジェットではそのサイズを利用できません。別のサイズを選んでください。",
+            editDenied: "ここではウィジェットを変更できません。",
+        },
         valueNotFound: ({ value }) => `${value} が見つかりません`,
         chooseAnother: ({ field }) => `別の${field}を選択`,
         chooseField: ({ field }) => `${field}を選択`,

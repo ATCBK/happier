@@ -13318,6 +13318,13 @@ const widgetAddTranslations = { pt: {
         projectSourceUnavailableTitle: 'Os widgets aparecerão aqui quando o repositório deste projeto for conhecido',
         areaWriteFailed: 'Não foi possível salvar esta alteração',
         areaApprovalPending: 'Aguardando aprovação',
+        refusals: {
+            areaUnavailable: "Os widgets não estão disponíveis aqui agora. Tente novamente em instantes.",
+            inputsInvalid: "Algumas entradas não são válidas. Revise-as e tente novamente.",
+            typeUnavailable: "Este widget não está mais disponível. Escolha outro.",
+            sizeUnsupported: "Esse tamanho não está disponível para este widget. Escolha outro tamanho.",
+            editDenied: "Você não pode alterar widgets aqui.",
+        },
         valueNotFound: ({ value }) => `Não foi possível encontrar ${value}`,
         chooseAnother: ({ field }) => `Escolher outro valor para ${field}`,
         chooseField: ({ field }) => `Escolher ${field}`,

@@ -13344,6 +13344,13 @@ const widgetAddTranslations = { ru: {
         projectSourceUnavailableTitle: 'Виджеты появятся здесь, когда станет известен репозиторий этого проекта',
         areaWriteFailed: 'Не удалось сохранить это изменение',
         areaApprovalPending: 'Ожидает одобрения',
+        refusals: {
+            areaUnavailable: "Виджеты сейчас здесь недоступны. Попробуйте ещё раз через минуту.",
+            inputsInvalid: "Некоторые значения недопустимы. Проверьте их и попробуйте ещё раз.",
+            typeUnavailable: "Этот виджет больше недоступен. Выберите другой.",
+            sizeUnsupported: "Этот размер недоступен для виджета. Выберите другой размер.",
+            editDenied: "Здесь нельзя изменять виджеты.",
+        },
         valueNotFound: ({ value }) => `Не удаётся найти: ${value}`,
         chooseAnother: ({ field }) => `Выбрать другое значение: ${field}`,
         chooseField: ({ field }) => `Выбрать: ${field}`,

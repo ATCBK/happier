@@ -122,9 +122,12 @@ export type WidgetAddTranslation = Readonly<{
     areaEmptyReason: string;
     areaEmptyAction: string;
     areaUnavailableTitle: string;
+    areaScopeRecovery: string;
     projectSourceUnavailableTitle: string;
     areaWriteFailed: string;
     areaApprovalPending: string;
+    /** Why an Add or save was refused, and the next step. */
+    refusals: Readonly<Record<'areaUnavailable' | 'inputsInvalid' | 'typeUnavailable' | 'sizeUnsupported' | 'editDenied', string>>;
     valueNotFound: (params: Readonly<{ value: string }>) => string;
     chooseAnother: (params: Readonly<{ field: string }>) => string;
     chooseField: (params: Readonly<{ field: string }>) => string;
@@ -258,9 +261,17 @@ export const widgetAddTranslationsEnglish = { en: {
         areaEmptyReason: 'Pin a widget to keep it here, just for you.',
         areaEmptyAction: 'Add a widget',
         areaUnavailableTitle: 'Widgets can’t load here',
+        areaScopeRecovery: 'Reopen this page to load widgets for the current Home and Account.',
         projectSourceUnavailableTitle: 'Widgets appear here once this project’s repository is known',
         areaWriteFailed: 'Couldn’t save this change',
         areaApprovalPending: 'Waiting for approval',
+        refusals: {
+            areaUnavailable: 'Widgets aren’t available here right now. Try again in a moment.',
+            inputsInvalid: 'Some inputs aren’t valid. Review them and try again.',
+            typeUnavailable: 'This widget isn’t available anymore. Choose another.',
+            sizeUnsupported: 'That size isn’t available for this widget. Pick another size.',
+            editDenied: 'You can’t change widgets here.',
+        },
         valueNotFound: ({ value }) => `${value} can’t be found`,
         chooseAnother: ({ field }) => `Choose another ${inSentence(field)}`,
         chooseField: ({ field }) => `Choose the ${inSentence(field)}`,
