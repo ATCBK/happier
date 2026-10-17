@@ -92,10 +92,10 @@ export function useScmReviewTabState(hostKey: string, pane: ReturnType<typeof us
 }
 
 /** Session destination authoring stays at the Session adapter; persistence is shared. */
-export function useSessionScmReviewTabState(sessionId: string, pane: ReturnType<typeof useAppPaneScope>, target: SessionScmReviewTarget = {}) {
+export function useSessionScmReviewTabState(sessionId: string, pane: ReturnType<typeof useAppPaneScope>, target: SessionScmReviewTarget = {},
+    openDetailsTab = pane.openDetailsTab) {
     // Explain is presentation on the semantic destination, shared by UI and session.open.
     const explain = target.explain === true;
-    const openDetailsTab = pane.openDetailsTab;
     const setExplain = React.useCallback((next: boolean) => {
         openDetailsTab(createSessionScmReviewDetailsTab({ ...target, explain: next }), { intent: 'pinned' });
     }, [openDetailsTab, target]);

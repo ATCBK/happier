@@ -120,6 +120,8 @@ export type SessionScmReviewDetailsViewProps = Readonly<{
   active?: boolean;
   /** The containing Details surface owns fullscreen Back and pane closing. */
   onRequestClose?: () => void;
+  /** The containing Details destination owns navigation for hosted and pane presentations. */
+  onOpenDetailsTab?: ReturnType<typeof useAppPaneScope>['openDetailsTab'];
   /** The comparison and view this destination shows (from its tab or link); absent keeps the default. */
   target?: SessionScmReviewTarget;
 }>;
@@ -169,7 +171,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       : t('walkthrough.notice.offlineA11y');
     const { theme } = useUnistyles();
     const pane = useAppPaneScope(props.scopeId);
-    const openDetailsTab = pane.openDetailsTab;
+    const openDetailsTab = props.onOpenDetailsTab ?? pane.openDetailsTab;
     const goToComposer = useReviewComposerHandoff(props.scopeId);
     const {
       persistedReviewTabState,
@@ -179,7 +181,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       onScrollTopChange,
       explain,
       setExplain,
-    } = useSessionScmReviewTabState(props.sessionId, pane, props.target);
+    } = useSessionScmReviewTabState(props.sessionId, pane, props.target, openDetailsTab);
     const sessionAddress = React.useMemo(
       () => normalizeSessionAddress(props.serverId, props.sessionId),
       [props.serverId, props.sessionId],
@@ -498,7 +500,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       (fullPath: string, intent: 'default' | 'pinned' = 'default') => {
         const fileName = fullPath.split('/').pop() ?? fullPath;
         deferOnWeb(() => {
-          pane.openDetailsTab(
+          openDetailsTab(
             {
               key: `file:${fullPath}`,
               kind: 'file',

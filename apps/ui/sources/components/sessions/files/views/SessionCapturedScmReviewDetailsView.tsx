@@ -31,6 +31,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
     const session = useSession(props.sessionId);
     const latestTurnId = (!props.serverId || session?.serverId === props.serverId) ? session?.latestTurnId ?? null : null;
     const pane = useAppPaneScope(props.scopeId);
+    const openDetailsTab = props.onOpenDetailsTab ?? pane.openDetailsTab;
     const goToComposer = useReviewComposerHandoff(props.scopeId);
     const { machineReachable } = useSessionMachineReachability(props.sessionId, props.serverId);
     const reviewDisabledReason = machineReachable ? null : t('walkthrough.notice.offlineA11y');
@@ -58,21 +59,21 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
     const maxFilesSetting = useSetting('scmReviewMaxFiles');
     const maxLinesSetting = useSetting('scmReviewMaxChangedLines');
     const { mountedInitialReviewState, explain, setExplain,
-        onCollapsedPathsChange, onScrollTopChange } = useSessionScmReviewTabState(props.sessionId, pane, props.target);
-    const selectView = React.useCallback((next: SessionScmReviewView) => pane.openDetailsTab(
-        createSessionScmReviewDetailsTab({ ...props.target, comparison, view: next }), { intent: 'pinned' }), [pane.openDetailsTab, props.target, comparison]);
+        onCollapsedPathsChange, onScrollTopChange } = useSessionScmReviewTabState(props.sessionId, pane, props.target, openDetailsTab);
+    const selectView = React.useCallback((next: SessionScmReviewView) => openDetailsTab(
+        createSessionScmReviewDetailsTab({ ...props.target, comparison, view: next }), { intent: 'pinned' }), [openDetailsTab, props.target, comparison]);
     const openReview = React.useCallback(() => {
         if (!captured.comparison || !machineReachable) return;
         presentStartReviewDialog({ sessionId: props.sessionId, serverId: props.serverId ?? null,
             cwd: captured.comparison.repository.rootPath, comparison, scopeLabel, defaultWalkthrough: true,
-            onStarted: (started, narration) => { if (narration) pane.openDetailsTab(createSessionScmReviewDetailsTab({
+            onStarted: (started, narration) => { if (narration) openDetailsTab(createSessionScmReviewDetailsTab({
                 ...props.target, comparison: { ...comparison, comparisonId: started.comparisonId }, view: 'walkthrough' }), { intent: 'pinned' }); } });
-    }, [captured.comparison, machineReachable, comparison, props.sessionId, props.serverId, props.target, scopeLabel, pane.openDetailsTab]);
+    }, [captured.comparison, machineReachable, comparison, props.sessionId, props.serverId, props.target, scopeLabel, openDetailsTab]);
     const fileCount = captured.comparison?.inventory.files.length ?? null;
     const scopeOptions = React.useMemo(() => listFilesComparisonScopeOptions(NO_LOCAL_SCOPES, latestTurnId, comparison,
         { currentFileCount: fileCount ?? undefined }), [comparison, fileCount, latestTurnId]);
-    const selectComparison = React.useCallback((next: SessionScmReviewComparison) => pane.openDetailsTab(
-        createSessionScmReviewDetailsTab({ ...props.target, comparison: next, view }), { intent: 'pinned' }), [pane.openDetailsTab, props.target, view]);
+    const selectComparison = React.useCallback((next: SessionScmReviewComparison) => openDetailsTab(
+        createSessionScmReviewDetailsTab({ ...props.target, comparison: next, view }), { intent: 'pinned' }), [openDetailsTab, props.target, view]);
     return <WorkspaceScmReviewBody
         activeReviewFile={activeReviewFile}
         comparison={comparison} view={view} scopeLabel={scopeLabel} scopeOptions={scopeOptions}

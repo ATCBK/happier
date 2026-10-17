@@ -479,6 +479,7 @@ export function createSessionDetailsSurfaceRenderers(
                     active={input.active}
                     resource={input.tab.resource}
                     onRequestClose={options.requestClose}
+                    onOpenDetailsTab={options.openDetailsTab}
                 />
             ),
         },
