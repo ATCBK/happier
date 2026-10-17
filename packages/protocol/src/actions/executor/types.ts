@@ -1381,6 +1381,8 @@ export type ActionExecutorDeps = Readonly<{
     destinationIntent?: 'use_existing' | 'materialize_from_source_workspace';
     serverId?: string | null;
     operationId: string;
+    /** Admitted root custody for the exact Machine-targeted preflight. */
+    context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<
     | Readonly<{ type: 'not_required' }>
@@ -1409,6 +1411,8 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
     targetReplacementApproval?: HandoffTargetReplacementApprovalV1 | null;
     targetReplacementApprovalReceiptId?: string | null;
+    /** Admitted root custody for the source controller Machine effect. */
+    context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<WorkspaceSyncRelationshipCreateResultV1 | unknown>;
   workspaceSyncRelationshipsList?: (args: Readonly<{

@@ -2,6 +2,7 @@ import { useSessionTranscriptSource } from '@/components/sessions/transcript/sou
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import type { ApprovalRequest } from '@happier-dev/protocol';
+import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { describeApprovalRequestFields, listActionSpecs, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -15,7 +16,7 @@ import { buildPermissionToolCallRoute, canOpenPermissionToolCallRoute } from '@/
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { ApprovalDecisionFooter } from './ApprovalDecisionFooter';
 import { ApprovalPromptChrome } from './ApprovalPromptChrome';
-import { getApprovalDecisionErrorMessage, isApprovalReplayRouteUnavailable, useApprovalDecisionHandler, useApprovalHome } from './useApprovalDecisionHandler';
+import { getApprovalDecisionErrorMessage, isApprovalReplayRouteUnavailable, presentApprovalFailure, useApprovalDecisionHandler, useApprovalHome } from './useApprovalDecisionHandler';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ActionApprovalFieldsCard } from '@/components/approvals/ActionApprovalFieldsCard';
 import { PromptDocApprovalDiff, readPromptDocUpdateApproval } from '@/components/approvals/PromptDocApprovalDiff';
@@ -75,6 +76,14 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const approveAdmission = React.useMemo(
         () => props.approval.status === 'open' ? resolveApprovalRequestApproveAdmission(props.approval) : null,
         [props.approval],
+    );
+    const executionFailure = React.useMemo(
+        () => readApprovalExecutionFailure(props.approval),
+        [props.approval],
+    );
+    const executionFailurePresentation = React.useMemo(
+        () => executionFailure ? presentApprovalFailure(executionFailure, executionFailure.error) : null,
+        [executionFailure],
     );
     const confidentialAction = isConfidentialSecretApprovalAction(props.approval.actionId);
     const confidentialApproval = readConfidentialSecretApproval(props.approval);
@@ -163,6 +172,7 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
             chrome={chrome}
             title={projectCommandTitle ?? proposalLabels?.title ?? actionTitle}
             titleNumberOfLines={1}
+            tone={executionFailure ? 'attention' : undefined}
             subtitle={projectCommand ? null : props.approval.summary || t('approvals.untitled')}
             subtitleNumberOfLines={2}
             headerAccessory={canOpenToolRoute || (proposal && proposalMode && props.approval.status === 'open') ? (
@@ -196,6 +206,14 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
                 />
             )}
         >
+            {executionFailurePresentation ? (
+                <View testID="approval-prompt-execution-failure" accessibilityRole="alert">
+                    <Text style={styles.failureText}>{executionFailurePresentation.reason}</Text>
+                    {executionFailurePresentation.code ? (
+                        <Text style={styles.failureCode}>{executionFailurePresentation.code}</Text>
+                    ) : null}
+                </View>
+            ) : null}
             {previewSummary ? (
                 <Text style={styles.previewText}>{previewSummary}</Text>
             ) : null}
@@ -244,6 +262,16 @@ const styles = StyleSheet.create((theme) => ({
     previewText: {
         fontSize: 12,
         lineHeight: 17,
+        color: theme.colors.text.secondary,
+    },
+    failureText: {
+        fontSize: 12,
+        lineHeight: 17,
+        color: theme.colors.text.destructive,
+    },
+    failureCode: {
+        fontSize: 11,
+        lineHeight: 16,
         color: theme.colors.text.secondary,
     },
 }));

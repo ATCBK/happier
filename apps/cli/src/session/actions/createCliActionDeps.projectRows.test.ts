@@ -100,9 +100,15 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
         const executor = createActionExecutor(actions);
         const context = { surface: 'cli' as const, serverId: homeId, bypassApprovals: true };
         const syncResult = await actions.workspaceSyncRelationshipCreate!({ serverId: homeId, operationId: 'portable-sync',
+          context,
           input: { v: 1, sourceWorkspaceRefId: ref.id, targetMachineId: refB.machineId, targetPath: refB.rootPath,
             mode: 'keep_both_in_sync', contentPolicy: relationship().contentPolicy, destinationIntent: 'use_existing' } });
         expect.soft(syncResult).toMatchObject({ created: true, relationshipId: 'rel-portable' });
+        expect(invoke).toHaveBeenCalledWith(
+          RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE,
+          expect.objectContaining({ operationId: 'portable-sync' }),
+          expect.objectContaining({ localActionContext: expect.objectContaining({ surface: 'cli' }) }),
+        );
         const syncRead = await actions.workspaceSyncConflictsList!({ input: { workspaceRefId: refB.id, relationshipId: 'rel-ab', limit: 50 } })
           .catch(error => ({ errorCode: error.code }));
         expect.soft(syncRead).toMatchObject({ status: 'page', relationshipId: 'rel-ab' });
@@ -127,6 +133,7 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
           expect(await executor.execute('projects.workspace.update', { serverId: rejectedHome, workspaceId: ref.id, label: 'Rejected' },
             { ...context, serverId: rejectedHome })).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
           expect(await actions.workspaceSyncRelationshipCreate!({ serverId: rejectedHome, operationId: 'rejected-sync',
+            context: { ...context, serverId: rejectedHome },
             input: { v: 1, sourceWorkspaceRefId: ref.id, targetMachineId: refB.machineId, targetPath: refB.rootPath,
               mode: 'keep_both_in_sync', contentPolicy: relationship().contentPolicy, destinationIntent: 'use_existing' } }))
             .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });

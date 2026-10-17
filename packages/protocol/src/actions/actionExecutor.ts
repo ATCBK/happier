@@ -3884,6 +3884,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             : {}),
           ...(targetServerId ? { serverId: targetServerId } : {}),
           operationId,
+          context: ctx,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
       } catch {
@@ -7797,6 +7798,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                   targetReplacementApprovalReceiptId: ctx.handoffTargetReplacementApprovalReceiptId,
                 }
               : {}),
+            context: ctx,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           return completeActionResult(res, { treatReturnedErrorEnvelopeAsFailure: true });

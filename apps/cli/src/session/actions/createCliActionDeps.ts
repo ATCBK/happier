@@ -4986,6 +4986,7 @@ export function createCliActionDeps(params: Readonly<{
       destinationIntent,
       serverId,
       operationId,
+      context,
       signal,
     }) => {
       const handoffChoosesDestination = workspaceAction?.kind === 'copy_once'
@@ -5011,6 +5012,9 @@ export function createCliActionDeps(params: Readonly<{
             ...(mirrors ? { activatesExactMirror: true } : {}),
             ...(destinationIntent ? { destinationIntent } : {}),
           },
+          context,
+          effectActionId: 'workspace.sync.relationship.create',
+          exactMachine: true,
           ...(signal ? { signal } : {}),
         }));
       } catch (error) {
@@ -5024,6 +5028,7 @@ export function createCliActionDeps(params: Readonly<{
       serverId,
       targetReplacementApproval,
       targetReplacementApprovalReceiptId,
+      context,
       signal,
     }) => {
       if (!params.credentials) return notSupported();
@@ -5052,6 +5057,9 @@ export function createCliActionDeps(params: Readonly<{
             ? { targetReplacementApproval, targetReplacementApprovalReceiptId }
             : {}),
         },
+        context,
+        effectActionId: 'workspace.sync.relationship.create',
+        exactMachine: true,
         ...(signal ? { signal } : {}),
       });
     },

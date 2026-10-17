@@ -91,9 +91,10 @@ describe('workspace.sync.relationship.create Action', () => {
       isActionApprovalRequired: () => false,
     } satisfies ActionExecutorDeps);
 
-    const response = await executor.execute('workspace.sync.relationship.create', input, {
+    const context = {
       surface: 'ui', authority: 'present_user', serverId: 'home-1', actionRequestId: 'link-request-1',
-    });
+    } as const;
+    const response = await executor.execute('workspace.sync.relationship.create', input, context);
 
     expect(response).toMatchObject({ ok: true, result });
     expect(preflight).toHaveBeenCalledWith(expect.objectContaining({
@@ -102,11 +103,13 @@ describe('workspace.sync.relationship.create Action', () => {
       destinationIntent: 'use_existing',
       activatesExactMirror: false,
       operationId: 'link-request-1',
+      context,
     }));
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       input,
       operationId: 'link-request-1',
       serverId: 'home-1',
+      context,
     }));
   });
 

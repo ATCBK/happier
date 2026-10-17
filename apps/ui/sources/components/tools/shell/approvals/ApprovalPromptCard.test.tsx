@@ -15,6 +15,7 @@ import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixt
 
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from './transcriptSettledApprovalPresentations';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -289,6 +290,30 @@ describe('ApprovalPromptCard', () => {
         expect(screen.getTextContent()).toContain('Agent wants to inspect active sessions');
     });
 
+    it('retains and renders a persisted filesystem effect refusal as failed', async () => {
+        const approval = ApprovalRequestSchema.parse({
+            v: 1,
+            status: 'executed',
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            createdBy: { surface: 'agent', sessionId: 'session-1' },
+            requestedSurface: 'agent',
+            actionId: 'daemon.filesystem.writeFile',
+            actionArgs: { root: '/home/happier/mqa2-c14-clone', path: '.', content: '' },
+            summary: 'Write file',
+            decision: { kind: 'approve', decidedAtMs: 2 },
+            execution: {
+                executedAtMs: 3,
+                ok: true,
+                result: { success: false, error: "EISDIR: illegal operation on a directory, open '/home/happier/mqa2-c14-clone'" },
+            },
+        });
+        expect(TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS.some(presents => presents(approval))).toBe(true);
+        const screen = await renderCard(approval);
+        expect(screen.findByTestId('approval-prompt-execution-failure')).toBeTruthy();
+        expect(screen.getTextContent()).toContain('EISDIR: illegal operation on a directory');
+        expect(screen.findByTestId('approval-prompt-approve')).toBeNull();
+    });
     it('names a declared Session reference on the same Home used by the approval decision', async () => {
         const fixture = createSessionFixture();
         if (!fixture.metadata) throw new Error('Missing Session metadata fixture');

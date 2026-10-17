@@ -1,4 +1,6 @@
 import type { ActionExecuteFailure } from '../actions/actionExecutionResult.js';
+import { getActionSpec } from '../actions/actionSpecs.js';
+import { isFilesystemActionId } from '../actions/filesystemActionFamily.js';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '../actions/projectActionFamily.js';
 import {
   ProjectWorkerNoAcceptanceFailureDetailsV1Schema,
@@ -121,6 +123,21 @@ export function projectApprovalExecutionFailureV2(input: Readonly<{
  * This is a read projection, not a rewrite of the durable execution receipt.
  */
 function readDomainExecutionFailure(request: ApprovalRequest): ActionExecuteFailure | null {
+  if (isFilesystemActionId(request.actionId)) {
+    const schema = getActionSpec(request.actionId).outputSchema;
+    if (!schema) return null;
+    const parsed = createStoredReadSchema(schema).safeParse(request.execution?.result);
+    if (!parsed.success) {
+      return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+    }
+    const result = parsed.data;
+    if (!result || typeof result !== 'object' || !('success' in result) || result.success !== false) return null;
+    const errorCode = 'errorCode' in result && typeof result.errorCode === 'string' && result.errorCode.trim()
+      ? result.errorCode : 'filesystem_operation_failed';
+    const error = 'error' in result && typeof result.error === 'string' && result.error.trim()
+      ? result.error : errorCode;
+    return { ok: false, errorCode, error };
+  }
   const preset = MachinePresetActionIdV1Schema.safeParse(request.actionId);
   const managed = ManagedMachineActionIdV1Schema.safeParse(request.actionId);
   const mutationId = request.actionId === 'machines.worker.policy.set'
