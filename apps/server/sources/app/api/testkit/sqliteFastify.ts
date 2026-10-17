@@ -1,7 +1,7 @@
 import Fastify, { type FastifyServerOptions } from "fastify";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
 
-export function createAuthenticatedTestApp(options: FastifyServerOptions = {}) {
+export function createAuthenticatedTestApp(options: Pick<FastifyServerOptions, "trustProxy"> = {}) {
     const app = Fastify(options);
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);

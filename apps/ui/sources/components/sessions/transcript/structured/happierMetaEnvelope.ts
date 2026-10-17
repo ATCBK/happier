@@ -5,8 +5,11 @@ export type { HappierMetaEnvelope };
 export function parseHappierMetaEnvelope(meta: unknown, key = 'happier'): HappierMetaEnvelope | null {
     if (!meta || typeof meta !== 'object') return null;
     const record = meta as Record<string, unknown>;
-    const parsed = HappierMetaEnvelopeSchema.safeParse(record[key]);
-    if (parsed.success) return parsed.data;
+    const envelope = record[key];
+    if (envelope !== undefined && envelope !== null) {
+        const parsed = HappierMetaEnvelopeSchema.safeParse(envelope);
+        if (parsed.success) return parsed.data;
+    }
     if (Object.prototype.hasOwnProperty.call(record, key)) return null;
 
     // Session-input metadata is the canonical machine contract for generated user messages.

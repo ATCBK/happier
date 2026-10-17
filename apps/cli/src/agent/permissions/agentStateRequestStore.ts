@@ -1,5 +1,5 @@
 import type { AgentState } from '@/api/types';
-import { updateAgentStateBestEffort } from '@/api/session/sessionWritesBestEffort';
+import { updateAgentStateBestEffort, type AgentStateWriteOptions } from '@/api/session/sessionWritesBestEffort';
 import { resolveAgentRequestKind } from '@/agent/permissions/requestKind';
 import {
     applyAgentStateRequestPushNotifiedAt,
@@ -54,7 +54,7 @@ export type AgentStateOutstandingRequest = Readonly<{
 
 type SessionLike = Readonly<{
     sessionId: string;
-    updateAgentState: (updater: (state: AgentState) => AgentState) => Promise<void> | void;
+    updateAgentState: (updater: (state: AgentState) => AgentState, options?: AgentStateWriteOptions) => Promise<void> | void;
     getAgentStateSnapshot?: () => AgentState | null | undefined;
     getMetadataSnapshot?: () => unknown;
 }>;
@@ -285,7 +285,9 @@ export class AgentStateRequestStore {
         };
         const completion = params.requireAck
             ? Promise.resolve(this.session.updateAgentState(update))
-            : updateAgentStateBestEffort(this.session, update, this.logPrefix, 'complete_request');
+            : updateAgentStateBestEffort(this.session, update, this.logPrefix, 'complete_request', {
+                retainPermissionCompletionsOnFailure: true,
+            });
 
         return completion.then(() => {
             if (params.requireAck && !completedRequest) {
@@ -349,6 +351,7 @@ export class AgentStateRequestStore {
             },
             this.logPrefix,
             'record_completed_request',
+            { retainPermissionCompletionsOnFailure: true },
         ).then(() => {
             if (recordedCompletion) {
                 this.markPermissionRequestCompletedBestEffort(params.requestId);
@@ -356,7 +359,11 @@ export class AgentStateRequestStore {
         });
     }
 
-    cancelAllRequests(params: Readonly<{ reason: string; decision?: string }>): void {
+    cancelAllRequests(params: Readonly<{
+        reason: string;
+        decision?: string;
+        shouldCancel?: (request: AgentStateRequestEntry) => boolean;
+    }>): void {
         updateAgentStateBestEffort(
             this.session,
             (currentState) => {
@@ -365,6 +372,7 @@ export class AgentStateRequestStore {
                 const now = Date.now();
 
                 for (const [id, request] of Object.entries(pendingRequests)) {
+                    if (params.shouldCancel && !params.shouldCancel(request)) continue;
                     if (hasPermissionResponseClaimV1(request)) continue;
                     const entry = clonePlainObjectToNullProto(request) ?? Object.create(null);
                     entry.completedAt = now;
@@ -386,6 +394,7 @@ export class AgentStateRequestStore {
             },
             this.logPrefix,
             'cancel_all_requests',
+            { retainPermissionCompletionsOnFailure: true },
         );
     }
 

@@ -1708,6 +1708,25 @@ present only in Agent state keep their existing behavior without caching a provi
 decision. Native and automatic decisions retain their non-blocking reconciliation
 paths and are outside this acknowledgement guarantee.
 
+Metadata and Agent-state retries use the current managed socket on every attempt.
+Reconnection can therefore finish the same operation within its existing retry
+budget.
+
+Native and automatic terminal permission outcomes preserve local tool progress.
+When their Agent-state write fails, the running Session client retains the decided
+completion entries and reoffers them through the existing acknowledged write path
+on reconnect or the next Agent-state write. Recovery applies only to the same
+pending request identity, or to an automatic outcome whose request remains absent;
+a newer terminal outcome, replacement request, or response claim takes precedence.
+The Session owns this recovery across permission-handler replacement. It is
+in-memory recovery for the running process and does not survive process exit.
+
+Terminal Agent-state update failures report `session_agent_state_update_failed` in the
+normal file log, including when a best-effort caller absorbs the error. This
+record contains operation context only; it excludes request contents and server
+error payloads. It does not distinguish transport from local preparation failures
+and does not imply a replay guarantee.
+
 ## Implementation references
 - CLI entry: `apps/cli/src/index.ts`
 - Daemon: `apps/cli/src/daemon`

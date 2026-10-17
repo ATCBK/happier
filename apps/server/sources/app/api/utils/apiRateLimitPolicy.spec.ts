@@ -56,38 +56,49 @@ describe("apiRateLimitPolicy", () => {
     it("parses HAPPIER_SERVER_TRUST_PROXY booleans", () => {
         expect(resolveApiTrustProxy({})).toBeUndefined();
         expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "true" })).toBe(true);
+        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: " ON " })).toBe(true);
         expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "false" })).toBe(false);
+        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: " Off " })).toBe(false);
     });
 
-    it("keys ip rate limits by X-Forwarded-For only when the peer is a listed proxy", async () => {
-        const app = Fastify({ trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "10.0.0.0/8, 127.0.0.1" }) });
+    it("uses forwarded client details only when the connecting peer is a listed proxy", async () => {
+        const app = Fastify({ trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "10.0.0.0/8, 127.0.0.1, ::1" }) });
         const keyGen = createApiRateLimitKeyGenerator({}, { strategy: "ip-only" });
-        app.get("/key", async (request) => ({ key: await keyGen(request) }));
-        const keyFrom = async (remoteAddress: string) => {
-            const res = await app.inject({
-                method: "GET",
-                url: "/key",
-                remoteAddress,
-                headers: { "x-forwarded-for": "198.51.100.7" },
-            });
-            return res.json().key;
-        };
+        app.get("/key", async (request) => ({ key: await keyGen(request), host: request.host, protocol: request.protocol }));
 
         try {
-            expect(await keyFrom("10.1.2.3")).toBe("ip:198.51.100.7");
-            expect(await keyFrom("127.0.0.1")).toBe("ip:198.51.100.7");
-            expect(await keyFrom("203.0.113.9")).toBe("ip:203.0.113.9");
+            for (const remoteAddress of ["10.1.2.3", "127.0.0.1", "::1", "::ffff:10.1.2.3"]) {
+                const res = await app.inject({
+                    method: "GET", url: "/key", remoteAddress,
+                    headers: { host: "origin.test", "x-forwarded-for": "198.51.100.7", "x-forwarded-host": "proxy.test", "x-forwarded-proto": "https" },
+                });
+                expect(res.json()).toEqual({ key: "ip:198.51.100.7", host: "proxy.test", protocol: "https" });
+            }
+            const direct = await app.inject({
+                method: "GET", url: "/key", remoteAddress: "203.0.113.9",
+                headers: { host: "origin.test", "x-forwarded-for": "198.51.100.7", "x-forwarded-host": "spoofed.test", "x-forwarded-proto": "https" },
+            });
+            expect(direct.json()).toEqual({ key: "ip:203.0.113.9", host: "origin.test", protocol: "http" });
+            const chain = await app.inject({
+                method: "GET", url: "/key", remoteAddress: "10.1.2.3",
+                headers: { "x-forwarded-for": "198.51.100.7, 203.0.113.9, 10.2.3.4" },
+            });
+            expect(chain.json().key).toBe("ip:203.0.113.9");
         } finally {
             await app.close();
         }
     });
 
-    it("rejects a HAPPIER_SERVER_TRUST_PROXY hop count instead of trusting nothing", () => {
+    it("rejects a HAPPIER_SERVER_TRUST_PROXY hop count with migration guidance", () => {
         for (const hops of ["0", "1", "2"]) {
             expect(() => resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: hops })).toThrow(
                 /HAPPIER_SERVER_TRUST_PROXY.*addresses or CIDRs/,
             );
         }
+    });
+
+    it("fails startup for an invalid proxy list instead of silently ignoring it", () => {
+        expect(() => Fastify({ trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "10.0.0.0/8,invalid-proxy" }) })).toThrow();
     });
 
     it("keys authenticated requests by verified user id (not by raw Authorization header)", async () => {

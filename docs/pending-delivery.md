@@ -91,9 +91,16 @@ acceptance or settlement; an absent server row with a stale mounted Pending row
 points to client convergence. Host contention can delay either path and is not
 itself evidence of a projection defect.
 
-When an accepted row remains unresolved after its bounded settlement attempt,
-the session runner records a file-only info diagnostic with the session and
-`localId`. This includes terminal transport failures, server no-ops or
+Accepted settlement retries transient server `internal` errors, transaction
+unavailability, and lost socket acknowledgements through the same exact-`localId`
+operation while its session/runtime authority remains current. This retries only
+the idempotent server settlement, never provider input. Existing server-directed
+delays and the acknowledgement-loss retry cadence govern retry waits; reconnect,
+runtime replacement, and close retain their existing cancellation fences.
+
+The session runner records each scheduled retry in its file log. When an accepted
+row remains unresolved after a non-retryable outcome, it records a file-only info
+diagnostic with the session and `localId`. This includes server no-ops or
 not-found responses without exact committed proof, and unexpected resolution
 crashes. The diagnostic is present at the default session file log level and
 does not write to the provider's interactive terminal.

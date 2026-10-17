@@ -5,7 +5,6 @@ import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { publicShareRoutes } from "./publicShareRoutes";
-import { resolveApiTrustProxy } from "../../utils/apiRateLimitPolicy";
 
 function currentPublicShareEncryptedDataKey(): Uint8Array<ArrayBuffer> {
     const serializedPayload = JSON.stringify({
@@ -73,66 +72,74 @@ describe("publicShareRoutes plaintext sessions (integration)", () => {
         }
     });
 
-    it("logs public-share client IPs through the configured proxy trust policy and preserves consent", async () => {
-        const owner = await db.account.create({ data: { publicKey: "pk_owner_proxy_log" }, select: { id: true } });
-        const session = await db.session.create({
-            data: { accountId: owner.id, tag: "s_proxy_log", encryptionMode: "plain", metadata: "{}" },
+    it.each([
+        { name: "disabled", trustProxy: undefined, remoteAddress: "203.0.113.9", forwardedFor: "198.51.100.7", consentRequired: true, expectedIp: "203.0.113.9" },
+        { name: "untrusted", trustProxy: "10.0.0.0/8", remoteAddress: "203.0.113.9", forwardedFor: "198.51.100.7", consentRequired: true, expectedIp: "203.0.113.9" },
+        { name: "trusted", trustProxy: "10.0.0.0/8", remoteAddress: "10.1.2.3", forwardedFor: "198.51.100.7", consentRequired: true, expectedIp: "198.51.100.7" },
+        { name: "real-ip-only", trustProxy: "10.0.0.0/8", remoteAddress: "10.1.2.3", forwardedFor: undefined, consentRequired: true, expectedIp: "10.1.2.3" },
+        { name: "untrusted-chain", trustProxy: "10.0.0.0/8", remoteAddress: "10.1.2.3", forwardedFor: "198.51.100.7, 203.0.113.8", consentRequired: true, expectedIp: "203.0.113.8" },
+        { name: "without-consent", trustProxy: "10.0.0.0/8", remoteAddress: "10.1.2.3", forwardedFor: "198.51.100.7", consentRequired: false, expectedIp: null },
+    ])("persists the canonical client IP and consent policy for $name proxies", async ({ name, trustProxy, remoteAddress, forwardedFor, consentRequired, expectedIp }) => {
+        const owner = await db.account.create({
+            data: { publicKey: `pk_owner_proxy_${name}` },
             select: { id: true },
         });
-        const token = "tok_proxy_log";
+        const session = await db.session.create({
+            data: {
+                accountId: owner.id,
+                tag: `s_plain_proxy_${name}`,
+                encryptionMode: "plain",
+                metadata: JSON.stringify({ v: 1 }),
+            },
+            select: { id: true },
+        });
+        const token = `tok_plain_proxy_${name}`;
         const share = await db.publicSessionShare.create({
             data: {
                 sessionId: session.id,
                 createdByUserId: owner.id,
                 tokenHash: createHash("sha256").update(token, "utf8").digest(),
-                isConsentRequired: true,
+                encryptedDataKey: null,
+                isConsentRequired: consentRequired,
             },
             select: { id: true },
         });
-        const app = createAuthenticatedTestApp({
-            trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "10.0.0.0/8" }),
-        });
+
+        const app = createAuthenticatedTestApp({ trustProxy });
         publicShareRoutes(app);
         await app.ready();
         try {
-            const withoutConsent = await app.inject({ method: "GET", url: `/v1/public-share/${token}` });
-            expect(withoutConsent.statusCode).toBe(403);
-            await expect(db.publicShareAccessLog.count({ where: { publicShareId: share.id } })).resolves.toBe(0);
-
-            for (const scenario of [
-                { userAgent: "direct", remoteAddress: "203.0.113.9", forwarded: "198.51.100.7", expected: "203.0.113.9" },
-                { userAgent: "proxy", remoteAddress: "10.1.2.3", forwarded: "198.51.100.7", expected: "198.51.100.7" },
-                { userAgent: "chain", remoteAddress: "10.1.2.3", forwarded: "198.51.100.7, 203.0.113.9", expected: "203.0.113.9" },
-                { userAgent: "real-ip-only", remoteAddress: "10.1.2.3", forwarded: undefined, expected: "10.1.2.3" },
-            ]) {
-                const response = await app.inject({
-                    method: "GET",
-                    url: `/v1/public-share/${token}?consent=true`,
-                    remoteAddress: scenario.remoteAddress,
-                    headers: {
-                        "user-agent": scenario.userAgent,
-                        "x-real-ip": "192.0.2.1",
-                        ...(scenario.forwarded ? { "x-forwarded-for": scenario.forwarded } : {}),
-                    },
-                });
-                expect(response.statusCode).toBe(200);
-                await expect(db.publicShareAccessLog.findFirst({
-                    where: { publicShareId: share.id, userAgent: scenario.userAgent },
-                    select: { ipAddress: true },
-                })).resolves.toEqual({ ipAddress: scenario.expected });
+            if (consentRequired) {
+                const denied = await app.inject({ method: "GET", url: `/v1/public-share/${encodeURIComponent(token)}` });
+                expect(denied.statusCode).toBe(403);
+                await expect(db.publicShareAccessLog.count({ where: { publicShareId: share.id } })).resolves.toBe(0);
             }
-
-            await db.publicSessionShare.update({ where: { id: share.id }, data: { isConsentRequired: false } });
-            const anonymous = await app.inject({
+            const response = await app.inject({
                 method: "GET",
-                url: `/v1/public-share/${token}`,
-                remoteAddress: "203.0.113.9",
-                headers: { "user-agent": "no-consent-recording", "x-forwarded-for": "198.51.100.7" },
+                url: `/v1/public-share/${encodeURIComponent(token)}?consent=true`,
+                remoteAddress,
+                headers: {
+                    ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}),
+                    "x-real-ip": "192.0.2.99",
+                    "user-agent": "share-access-test",
+                },
             });
-            expect(anonymous.statusCode).toBe(200);
-            await expect(db.publicShareAccessLog.count({
-                where: { publicShareId: share.id, ipAddress: null, userAgent: null },
-            })).resolves.toBe(1);
+            expect(response.statusCode).toBe(200);
+            await expect(db.publicShareAccessLog.findMany({
+                where: { publicShareId: share.id },
+                select: { ipAddress: true, userAgent: true },
+            })).resolves.toEqual([{
+                ipAddress: expectedIp,
+                userAgent: consentRequired ? "share-access-test" : null,
+            }]);
+            if (!consentRequired) {
+                const withoutConsentQuery = await app.inject({ method: "GET", url: `/v1/public-share/${encodeURIComponent(token)}` });
+                expect(withoutConsentQuery.statusCode).toBe(200);
+                await expect(db.publicShareAccessLog.findMany({
+                    where: { publicShareId: share.id },
+                    select: { ipAddress: true, userAgent: true },
+                })).resolves.toEqual([{ ipAddress: null, userAgent: null }, { ipAddress: null, userAgent: null }]);
+            }
         } finally {
             await app.close();
         }

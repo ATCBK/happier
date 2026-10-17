@@ -225,8 +225,8 @@ function coerceSessionMessages(input: unknown): SessionMessages {
             : undefined;
 
     const latestThinkingMessageId: string | null =
-        typeof raw?.latestThinkingMessageId === 'string'
-            ? (raw.latestThinkingMessageId as string)
+        typeof raw?.latestThinkingMessageId === 'string' || raw?.latestThinkingMessageId === null
+            ? raw.latestThinkingMessageId
             : findLatestThinkingMessageId({ idsOldestFirst: messageIdsOldestFirst, messagesById });
 
     const latestThinkingMessageActivityAtMs: number | null =
