@@ -40,6 +40,14 @@ export function canReadActiveWidgetCatalogV1(account: Pick<LazyActionAccountCont
     return areServerAccountScopesEqual(getActiveServerAccountScope(), { serverId: account.serverId, accountId: account.accountId });
 }
 
+/** Catalog metadata and typed choices share the same selected or hosting Session. */
+export function readWidgetActionSessionTargetV1(surface: WidgetSurfaceRefV1,
+    selected?: Readonly<{ serverId: string; sessionId: string }>): Readonly<{ serverId: string; sessionId: string }> | undefined {
+    const owner = surface.owner;
+    return selected ?? (owner.kind === 'sessionBoard' || owner.kind === 'companion'
+        ? { serverId: surface.serverId, sessionId: owner.sessionId } : undefined);
+}
+
 export async function readWidgetActionRuntimeV1(
     surface: WidgetSurfaceRefV1, account: LazyActionAccountContext, signal?: AbortSignal,
     sessionTarget?: Readonly<{ serverId: string; sessionId: string }>, deps?: ActionExecutorDeps,
@@ -50,8 +58,7 @@ export async function readWidgetActionRuntimeV1(
         const refusal = await admitWidgetActionSurfaceV1(deps, surface, { surface: 'ui', ...(signal ? { signal } : {}) });
         if (refusal) return refusal;
     } else if (!areServerProfileIdentifiersEquivalent(surface.serverId, account.serverId) || surface.accountId !== account.accountId) return unavailable('widget_scope_mismatch');
-    const owner = surface.owner;
-    const selectedSession = sessionTarget ?? (owner.kind === 'sessionBoard' || owner.kind === 'companion' ? { serverId: surface.serverId, sessionId: owner.sessionId } : undefined);
+    const selectedSession = readWidgetActionSessionTargetV1(surface, sessionTarget);
     const accountIsCurrent = () => account.accountLifetime?.isCurrent() === true && canReadActiveWidgetCatalogV1(account);
     if (!selectedSession) {
         if (!canReadActiveWidgetCatalogV1(account)) return unavailable('widget_catalog_unavailable');

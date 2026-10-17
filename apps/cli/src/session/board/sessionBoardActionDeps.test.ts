@@ -13,6 +13,7 @@ import {
   projectSessionAccessCapabilitiesV1,
   FeaturesResponseSchema,
   type ExternalActionExecutionAuthorizationV1,
+  type PluginInputTypeContributionV1,
 } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
 import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
@@ -58,6 +59,10 @@ import { createSessionBoardWidgetActionPortV1 } from '@happier-dev/protocol/widg
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { createRegistryInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
 
 const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
 const item = { v: 1, destination: 'board', title: 'Note', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
@@ -102,6 +107,71 @@ describe('CLI Board Action family', () => {
     });
   });
   afterEach(async () => { restore(); vi.restoreAllMocks(); await app.close(); });
+  it.each(['counter', 'snapshot-counter'])('admits the recorded installed %s Board inputs through real type and options owners', async localId => {
+    const serverIdentityId = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+    const accountId = '5e3a0581-6f3d-4e73-bf40-383db0be6c3e';
+    const sessionId = 'cmvcclhrd007jmcc96w9yb0vx';
+    const pluginId = 'examples.widget-areas';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const inputType = { pluginId, localId: 'count-kind' };
+    const type: PluginInputTypeContributionV1 = { id: inputType.localId, title: 'Count kind', semantic: 'directory-count-kind',
+      valueSchema: { type: 'string', enum: ['files', 'folders'] }, options: { resource: 'count-kinds' } };
+    const binding = normalizePluginUiInlineSurfaceBindingV1({ pluginId, surfaceId: localId,
+      rendererId: 'counter', role: 'widget', target: { kind: 'app' } });
+    if (!binding) throw new Error('Expected the canonical widget binding');
+    const occurrenceId = `${pluginId}:66`;
+    const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {
+      pluginUi: { family: 'pluginUi', entriesById: { counter: { id: 'counter', pluginId, contributionKind: 'surfacePlacement',
+        descriptorId: localId, occurrenceId, binding, target: binding.target, display: { title: 'Directory count' },
+        sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full'], defaultSize: 'medium' },
+        inputs: { fields: [{ path: 'directory', title: 'Directory on the serving machine', widget: 'text', required: true },
+          { path: 'filter', title: 'Count', widget: 'select', required: true, inputType }] },
+        inputSchema: { type: 'object', additionalProperties: false, required: ['directory', 'filter'],
+          properties: { directory: { type: 'string', minLength: 1 }, filter: type.valueSchema } },
+      } } },
+      inputTypes: { family: 'inputTypes', entriesById: { [`${pluginId}/count-kind`]: {
+        id: `${pluginId}/count-kind`, pluginId, pluginVersion: '1.0.0', occurrenceId, definition: type,
+      } } },
+    } });
+    const registry = createResolvedContributionRegistry({ occurrenceIdsByPluginId: { [pluginId]: occurrenceId },
+      inputTypes: [{ provenance: 'external', source: { kind: 'path' }, pluginId, identity: inputType,
+        manifestPath: '/plugins/widgets/plugin.json', definition: type }],
+      resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId,
+        definition: { id: 'count-kinds', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' } }],
+    });
+    app.get(`/v2/sessions/${sessionId}`, async () => ({ session: { ...rawSession, id: sessionId,
+      metadata: JSON.stringify({ machineId: 'machine-one' }) } }));
+    app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+    app.get('/v1/artifacts', async () => []);
+    app.get(`/v2/sessions/${sessionId}/system-records/record`, async () => ({ record: null }));
+    app.get(`/v2/sessions/${sessionId}/system-records`, async () => ({ records: [], hasNext: false, nextCursor: null }));
+    const { executor, deps } = createCliActionExecutorHarness({ credentials: { token, encryption: null }, token,
+      sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'local-profile', serverIdentityId, serverHttpBaseUrl: 'http://board.test',
+      machineActionDirectTargetTransport: { machineId: 'machine-one', invoke: async () => ({ protocolVersion: 1, projection }) },
+    }, createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => ({
+      resource: { pluginId, localId: 'count-kinds' }, kind: 'config', contentType: 'application/json',
+      digest: `sha256:${'a'.repeat(64)}`, bytes: new TextEncoder().encode(JSON.stringify([
+        { value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders' },
+      ])),
+    }) }));
+    const surface = { serverId: serverIdentityId, accountId, owner: { kind: 'sessionBoard' as const, sessionId } };
+    const instance = { v: 1 as const, id: 'c15c9e20-f054-4681-ae82-cb89c6cf5533',
+      definition: { kind: 'installed' as const, surface: { pluginId, localId } }, bindings: {
+        directory: { kind: 'value' as const, value: '/home/happier/happier-dev/packages/plugin-sdk/examples/widget-areas' },
+        filter: { kind: 'value' as const, value: 'files' },
+      } };
+    const context = { surface: 'cli' as const, serverId: 'local-profile', authority: 'present_user' as const };
+    const resolved = await runWithServerHttpBaseUrl('http://board.test', () => deps.widgetInputs!.resolve({
+      ref: { surface, instanceId: instance.id }, instance, admission: 'configuration', context,
+    }));
+    expect(resolved).toEqual({ status: 'ready', input: { directory: instance.bindings.directory.value, filter: 'files' } });
+    const options = await runWithServerHttpBaseUrl('http://board.test', () => executor.execute('action.options.resolve', {
+      consumer: { kind: 'widget', surface, definition: instance.definition }, fieldPath: 'filter',
+      draftInput: { directory: instance.bindings.directory.value },
+    }, context));
+    expect(options).toMatchObject({ ok: true, result: { options: [{ value: 'files' }, { value: 'folders' }] } });
+  });
   it('discovers widgets on a Session Board addressed by its portable Home', async () => {
     const serverIdentityId = 'srv_board_identity';
     const sessionId = 'c000000000000000000000052';

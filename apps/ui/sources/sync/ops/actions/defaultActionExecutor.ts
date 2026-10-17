@@ -82,7 +82,7 @@ import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/
 import { readSkillRulesForItemV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
 import { readSkillUsageCatalogV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
 import { readPromptLibraryCatalogProjectionInContext, mutatePromptLibraryRoleOverrideInContext } from '@/sync/api/account/apiPromptLibraryCatalog';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, type PublicActionInputById } from '@happier-dev/protocol/actions/actionSpecs';
 import { isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { resolveActionBackendTargetSelection } from '@happier-dev/protocol/actions/resolveActionBackendTargetSelection';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
@@ -162,7 +162,7 @@ import { createUiAccountLifecycleAction } from './accountLifecycleActionDeps';
 import { createUiNpmRegistryProfileAction } from './npmRegistryProfileActionDeps';
 import { createPluginAccountAdministrationActionDeps } from './pluginAccountAdministrationActionDeps';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
-import { createWidgetCatalogActionDepsV1 } from './widgetCatalogActionDeps';
+import { createWidgetCatalogActionDepsV1, readWidgetActionSessionTargetV1 } from './widgetCatalogActionDeps';
 import { publishHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { captureMountedWorkspaceAction, invokeWorkspaceAction } from '@/components/appShell/workspace/workspaceActionRuntime';
 import { invokeWorkflowAuthoringAction } from './workflowAuthoringAction';
@@ -1162,9 +1162,21 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         ? { workflowAction: createUiWorkflowAction({ account: accountContext }) }
         : {}),
     ...(accountContext ? {
-      readAdmittedInputTypeOptions: async ({ input, context }) => createUiAccountAction({ account: accountContext })({
-        actionId: 'action.options.resolve', input, context,
-      }),
+      readAdmittedInputTypeOptions: async ({ input, context }) => {
+        const { consumer } = getActionSpec('action.options.resolve').inputSchema.parse(input) as PublicActionInputById['action.options.resolve'];
+        if (consumer?.kind === 'widget') {
+          // A Board/Companion or explicitly bound Session supplies the same
+          // serving runtime for field metadata and its contributed choices.
+          // Consumer admission already hydrated it; do not reread the catalog.
+          const session = readWidgetActionSessionTargetV1(consumer.surface, consumer.selectedSession);
+          if (session) {
+            const target = readMachineControlTargetForSession({ ...session, accountId: accountContext.accountId });
+            if (!target) return { ok: false, errorCode: 'input_type_consumer_unavailable', error: 'input_type_consumer_unavailable' };
+            context = { ...context, externalActionTarget: { kind: 'machine', machineId: target.machineId } };
+          }
+        }
+        return createUiAccountAction({ account: accountContext })({ actionId: 'action.options.resolve', input, context });
+      },
     } satisfies Pick<ActionExecutorDeps, 'readAdmittedInputTypeOptions'> : {}),
     resolveSessionReference: opts?.resolveSessionReference ?? (async ({ sessionId, sessionTitle, context, signal }) => {
       // An exact tuple needs no corpus. A bare id or title is resolved against the one admitted

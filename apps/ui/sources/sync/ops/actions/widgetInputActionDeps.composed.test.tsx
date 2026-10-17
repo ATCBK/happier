@@ -9,7 +9,7 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { createHomeHubArtifactHttpBoundary, createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { buildWidgetSurfaceArtifactIdV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { widgetProjectionEntry, widgetProjectionOf, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -21,6 +21,9 @@ import { InputFieldHintSchema } from '@happier-dev/protocol/inputs';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { readBuiltinWidgetDescriptorV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 
 // The viewer accepts the real Action confirmation at its presentation boundary.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
@@ -393,7 +396,7 @@ it('repairs a shared mounted viewer purpose through the Account catalog without 
             } });
         try {
             expect(capturedLifetime.isCurrent()).toBe(false);
-            await expect(capturedSelect(intent)).rejects.toThrow();
+            expect(await capturedSelect(intent)).toBe(false);
             expect(writes).toHaveLength(1);
             expect(successorWrites).toEqual([]);
         } finally { await successor.dispose(); }
@@ -529,6 +532,118 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
         return { protocolVersion: 1, projection: daemon.projections.get(request.machineId) };
     },
 }));
+
+it('resolves installed Board Count choices and input admission on the consumer Session machine', async () => {
+    await import('@/sync/syncEngine');
+    const http = createHomeHubArtifactHttpBoundary('viewer');
+    const serverIdentityId = 'srv_board_counter_inputs';
+    const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId } } });
+    const invocations: ExternalActionRequesterInvocationV1[] = [];
+    const optionsHttp = await createExternalActionAccountHttpBoundary({ serverUrl: 'http://board-counter-input.test',
+        serverIdentityId, accountId: 'viewer', machineId: 'z-counter-machine', actionId: 'action.options.resolve', tokenEpoch: 0,
+        execute: (_input, context) => {
+            invocations.push(context.invocation);
+            return { actionId: 'widgets.catalog.list', fieldPath: 'filter', optionsSourceId: 'plugin-input:examples.widget-areas/count-kind',
+                options: [{ value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders' }] };
+        },
+    });
+    const { encodeSessionSystemRecordRevision } = await import('../../../../../server/sources/app/session/systemRecords/sessionSystemRecordRevision');
+    const instanceId = 'c15c9e20-f054-4681-ae82-cb89c6cf5533';
+    let localId = 'counter';
+    const instance = () => ({ v: 1 as const, id: instanceId, definition: { kind: 'installed' as const,
+        surface: { pluginId: 'examples.widget-areas', localId } }, bindings: {
+        directory: { kind: 'value' as const, value: '/home/happier/happier-dev/packages/plugin-sdk/examples/widget-areas' },
+        filter: { kind: 'value' as const, value: 'files' },
+    } });
+    const record = () => ({ id: 'counter-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: instanceId },
+        content: { t: 'plain', v: { v: 1, title: 'Directory count', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
+            source: { kind: 'widget', instance: instance() } } }, revision: encodeSessionSystemRecordRevision({ id: 'counter-row', version: 1 }),
+        createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z' });
+    if (!tryWriteServerEnabledBitInPlace(features, 'sessions.board', true)) throw new Error('Expected Board feature');
+    const connection = await restoreServerAccountForTest({ serverUrl: 'http://board-counter-input.test', serverIdentityId, accountId: 'viewer',
+        credentials: { token: createAccountTokenForTests('viewer', { currentAccount: true }) }, request: async (input, init) => {
+        const url = new URL(String(input));
+        const options = await optionsHttp.handle(url, init);
+        if (options && url.pathname === '/v1/machines') return Response.json([
+            createPlainMachineRowFixture({ id: 'a-other-machine', accountId: 'viewer' }), ...await options.json(),
+        ]);
+        if (options) return options;
+        if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Promise.resolve(Response.json(features));
+        if (url.pathname === '/v2/sessions/counter-session/system-records/record') return Promise.resolve(Response.json({ record: url.searchParams.get('kind') === 'item.v1' ? record() : null }));
+        if (url.pathname === '/v2/sessions/counter-session/system-records') return Promise.resolve(Response.json({ records: [record()], nextCursor: null, hasNext: false }));
+        return http.request(input, init);
+    } });
+    const previous = storage.getState();
+    let tree: renderer.ReactTestRenderer | null = null;
+    const account = await captureLazyActionAccountContext(connection.home.id);
+    try {
+        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        primeServerFeaturesSnapshot({ serverId: account.serverId, snapshot: { status: 'ready', features } });
+        const scope = { serverId: account.serverId, accountId: account.accountId };
+        const session = createSessionFixture({ id: 'counter-session', serverId: scope.serverId,
+            metadata: { path: '/repo', machineId: 'z-counter-machine', host: 'counter' } });
+        const machines = [createMachineFixture({ id: 'a-other-machine', activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, host: 'A other' } }),
+            createMachineFixture({ id: 'z-counter-machine', activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, host: 'Z counter' } })];
+        storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }), sessions: { [session.id]: session },
+            sessionListRowsByServerId: { [scope.serverId]: { [session.id]: createSessionListRenderableSessionFixture({ ...session }) } },
+            machines: Object.fromEntries(machines.map(machine => [machine.id, machine])), machineListByServerId: { [scope.serverId]: machines } });
+        const pluginId = 'examples.widget-areas';
+        const inputType = { pluginId, localId: 'count-kind' };
+        const countKindSchema = { type: 'string', enum: ['files', 'folders'] } satisfies PluginJsonSchemaV2;
+        const inputSchema: PluginJsonSchemaV2 = { type: 'object', additionalProperties: false, required: ['directory', 'filter'],
+            properties: { directory: { type: 'string', minLength: 1 }, filter: countKindSchema } };
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { [pluginId]: { ...widgetInstalledPackage(pluginId, 'Widget areas'), occurrenceId: 'counter-occurrence',
+                source: { kind: 'local', locator: `/plugins/${pluginId}` } } },
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(['counter', 'snapshot-counter'].map(localId => [localId,
+                widgetProjectionEntry({ pluginId, localId, target: 'app', occurrenceId: 'counter-occurrence', inputSchema, inputs: { fields: [
+                    { path: 'directory', title: 'Directory on the serving machine', widget: 'text', required: true },
+                    { path: 'filter', title: 'Count', widget: 'select', required: true, inputType },
+                ] } })])) }, inputTypes: { family: 'inputTypes', entriesById: { [`${pluginId}/count-kind`]: { id: `${pluginId}/count-kind`, pluginId,
+                    pluginVersion: '1.0.0', occurrenceId: 'counter-occurrence', definition: { id: 'count-kind', title: 'Count kind', semantic: 'directory-count-kind',
+                        valueSchema: countKindSchema, options: { resource: 'count-kinds' } } } } } } });
+        daemon.projections.set('z-counter-machine', projection);
+        clearDaemonMergedProjectionCacheForTests();
+        const projected = unionPluginUiProjections([{ machineId: 'z-counter-machine', serverId: scope.serverId, projection: normalizePluginUiProjection(projection),
+            phase: 'current', interactionEnabled: true }], new Map());
+        await act(async () => { tree = renderer.create(<AppShellPluginUiProjectionValueProvider value={{ ...projected,
+            pluginBrowserProjection: null, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
+            reloadClientExecutables() {}, reloadConnectedAccountProjection() {} }}><></></AppShellPluginUiProjectionValueProvider>); });
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const { useInputFieldOptions } = await import('@/components/sessions/actions/useInputFieldOptions');
+        const executor = createDefaultActionExecutor();
+        const surface = { ...scope, owner: { kind: 'sessionBoard' as const, sessionId: session.id } };
+        const { resolveUiAccountActionFallbackMachineId } = await import('./accountActionDeps');
+        expect(resolveUiAccountActionFallbackMachineId(scope)).toBe('a-other-machine');
+        for (const current of ['counter', 'snapshot-counter']) {
+            localId = current;
+            const definition = { kind: 'installed' as const, surface: { pluginId, localId } };
+            const admitted = await executor.execute('widgets.item.inputs.validate', { ref: { surface, instanceId }, bindings: instance().bindings },
+                { surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId });
+            expect(admitted, JSON.stringify(admitted)).toMatchObject({ ok: true, result: { status: 'ready',
+                input: { directory: instance().bindings.directory.value, filter: 'files' } } });
+            const options = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface, definition }, fieldPath: 'filter',
+                draftInput: { directory: '/home/happier/happier-dev/packages/plugin-sdk/examples/widget-areas' } },
+                { surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
+                    externalActionTarget: { kind: 'machine', machineId: 'a-other-machine' } });
+            expect(options, JSON.stringify(options)).toMatchObject({ ok: true, result: { options: [{ value: 'files' }, { value: 'folders' }] } });
+            const field = { path: 'filter', inputType };
+            const hook = await renderHook(() => useInputFieldOptions({ enabled: true, serverId: scope.serverId,
+                accountLifetime: account.accountLifetime, machineId: 'a-other-machine',
+                requests: [{ field, consumer: { kind: 'widget', surface, definition }, draftInput: { directory: instance().bindings.directory.value } }] }));
+            try {
+                await vi.waitFor(() => expect(hook.getCurrent().state(field)).toMatchObject({ status: 'ready',
+                    options: [{ value: 'files' }, { value: 'folders' }] }));
+            } finally { await hook.unmount(); }
+        }
+        expect(invocations.length).toBeGreaterThan(0);
+        expect(invocations.every(invocation => invocation.surface === 'ui' && invocation.authority === 'present_user'
+            && invocation.caller.kind === 'host')).toBe(true);
+    } finally {
+        if (tree) await act(async () => { tree!.unmount(); });
+        storage.setState(previous, true); account.dispose(); await connection.dispose();
+    }
+});
 
 it('admits and refreshes a B-only stored widget using current B inputs and Resource declarations', async () => {
     await import('@/sync/syncEngine');
