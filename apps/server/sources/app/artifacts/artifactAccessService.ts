@@ -230,10 +230,12 @@ export async function readArtifactHeaderForCallerInTx(tx: Tx, input: Readonly<{
 export async function readArtifactForCallerInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; artifactId: string;
 }>): Promise<Readonly<{ ok: true; artifact: ArtifactForCaller & { publicAudience: "retained" | "none" } }> | ArtifactReadFailure> {
-    const header = await readArtifactHeaderForCallerInTx(tx, input);
-    if (!header.ok) return header;
-    const row = await tx.artifact.findFirst({ where: artifactAddress(input.artifactId), select: { body: true, bodyVersion: true, dataEncryptionKey: true, provenance: true } });
+    const row = await tx.artifact.findFirst({ where: artifactAddress(input.artifactId), select: {
+        ...artifactReadAdmissionSelect(input.actorAccountId), body: true, bodyVersion: true, provenance: true,
+    } });
     if (!row) return { ok: false, error: "artifact_not_found" };
+    const header = projectArtifactAdmittedHeader(row, input.actorAccountId);
+    if (!header.ok) return header;
     const read = projectArtifactBody(header.artifact, row);
     if (!read.ok) return read;
     const publication = await tx.publicSessionShare.findUnique({ where: { artifactId: input.artifactId }, select: { expiresAt: true } });
