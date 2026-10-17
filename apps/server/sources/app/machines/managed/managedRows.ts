@@ -19,7 +19,8 @@ import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { resolveCurrentClaimablePluginMachineMaterializationsTx } from "@/app/plugins/availability/operations";
 import { resolveCurrentPluginDeclarationTx } from "@/app/plugins/availability/currentDeclaration";
-import { afterTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { db } from "@/storage/db";
 import { buildUpdateMachineUpdate, eventRouter } from '@/app/events/eventRouter';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 
@@ -158,12 +159,37 @@ export async function readManagedMachineInTx(tx: Tx, input: Readonly<{ homeId: s
     return row;
 }
 
-/** Fence every projection this retained row can invalidate before reading Account authority. */
-export async function acquireManagedMachinePublicationLocksInTx(tx: Tx, row: StoredManagedMachine, nextControllerMachineId?: string): Promise<void> {
-    const machineIds = [...new Set([row.controllerMachineId, row.enrolledMachineId, nextControllerMachineId]
-        .filter((id): id is string => typeof id === 'string'))];
-    const audiences = await Promise.all(machineIds.map(machineId => resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId)));
-    await acquireAccountChangePublicationLocksInTx(tx, audiences.flat(), { includeSingleAccount: true });
+/**
+ * Discover only a lock hint outside the transaction, then fence before the first
+ * Serializable snapshot. Reading the row/audience first lets an unrelated Account
+ * cursor update invalidate the snapshot at the fence itself. All authority and
+ * domain reads remain inside the transaction, after audience revalidation.
+ */
+export async function inManagedMachinePublicationTx<T>(
+    target: Readonly<{ homeId: string; managedId: string; nextControllerMachineId?: string }> | Readonly<{ controllerMachineId: string }>,
+    write: (tx: Tx) => Promise<T>,
+): Promise<T> {
+    const readAudience = async (tx: Tx) => {
+        let machineIds: string[];
+        if ('controllerMachineId' in target) machineIds = [target.controllerMachineId];
+        else {
+            const row = await readManagedMachineInTx(tx, target);
+            machineIds = [...new Set([row.controllerMachineId, row.enrolledMachineId, target.nextControllerMachineId]
+                .filter((id): id is string => typeof id === 'string'))];
+        }
+        const audiences = await Promise.all(machineIds.map(machineId => resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId)));
+        return [...new Set(audiences.flat())];
+    };
+    let audience = await readAudience(db);
+    return inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, audience, { includeSingleAccount: true });
+        const current = await readAudience(tx);
+        if (current.some(accountId => !audience.includes(accountId))) {
+            audience = current;
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
+        return write(tx);
+    }, { isolationLevel: 'Serializable' });
 }
 
 /** The existing unique enrollment association is the ordinary Machine fact owner. */
@@ -242,9 +268,8 @@ function readStoredManagedDevcontainerChild(row: StoredManagedMachine): Devconta
 export async function requireCurrentManagedMachineInTx(tx: Tx, input: Readonly<{
     homeId: string; managedId: string; expectedIntentRevision: number; requestId: string;
     controller: { machineId: string; installationId: string };
-}>, options: Readonly<{ requestAuthority?: "creation" | "intent"; allowCanceledResourceReport?: boolean; allowInactiveCurrentIntent?: boolean; lockPublication?: boolean }> = {}): Promise<StoredManagedMachine> {
+}>, options: Readonly<{ requestAuthority?: "creation" | "intent"; allowCanceledResourceReport?: boolean; allowInactiveCurrentIntent?: boolean }> = {}): Promise<StoredManagedMachine> {
     const row = await readManagedMachineInTx(tx, input);
-    if (options.lockPublication) await acquireManagedMachinePublicationLocksInTx(tx, row);
     await requireManagedControllerInTx(tx, { ...input, custodianAccountId: row.custodianAccountId });
     if (row.controllerMachineId !== input.controller.machineId || row.controllerInstallationId !== input.controller.installationId) {
         throw new ManagedMachineError("controller_retired");

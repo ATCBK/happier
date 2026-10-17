@@ -2,7 +2,6 @@ import { ManagedAdmissionInputV1Schema, resolveManagedAcquireReviewV1, type Mana
 import { ManagedMachineV1Schema, type ManagedMachineV1, type ValidatedLaunchSnapshotV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { createManagedConfigurationFactsV1Schema } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 import { type MachineEnvironmentV1 } from '@happier-dev/protocol/machines/managed/machineEnvironmentV1';
-import { inTx } from "@/storage/inTx";
 import { createPluginJsonSchemaZodValueAdapter } from "@happier-dev/protocol/plugins/actions/json-schema-validation";
 import { db, isPrismaUniqueConstraintError } from "@/storage/db";
 import { resolveMachineRetentionPolicyV1 } from "@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1";
@@ -15,11 +14,10 @@ import {
     readManagedLaunchSnapshot,
     readManagedAcquisitionIdentity,
     readManagedAdmissionState,
+    inManagedMachinePublicationTx,
 } from "./managedRows";
 import { resolveMachinePresetForAcquireInTx, validateManagedRecipeInTx } from "./machinePresetService";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
-import { resolveCurrentMachineRecipientAccountIdsInTx } from "@/app/machines/machineAccess";
 
 /** Explicit reviewed policy still receives the sole resolver's native qualification. */
 export function qualifyManagedAcquisitionPolicy(input: Pick<ReturnType<typeof resolveManagedAcquireReviewV1>, "retention" | "wakeOnAcceptedMessage">, declaration: Pick<ManagedDeclaration, "billing" | "retention">, selectedCapabilities?: RetentionCapabilitiesV1) {
@@ -43,13 +41,7 @@ export async function admitManagedAcquire(params: Readonly<{
     // Dedupe includes the private continuation without retaining its prompt,
     // attachments, or startup instructions in a Home-visible resource row.
     const admittedInputIdentity = { computeInput: request.input, continuation: request.continuationPresent ? { requestEnvelopeDigest: params.requestEnvelopeDigest } : null };
-    const execute = () => inTx(async (tx) => {
-        // Admission will publish to this same Serializable audience. Fence its
-        // Account cursors before validation/count/create, so unrelated wakes
-        // cannot repeatedly invalidate the snapshot just before publication.
-        await acquireAccountChangePublicationLocksInTx(tx,
-            await resolveCurrentMachineRecipientAccountIdsInTx(tx, review.controller.machineId),
-            { includeSingleAccount: true });
+    const execute = () => inManagedMachinePublicationTx({ controllerMachineId: review.controller.machineId }, async (tx) => {
         await requireManagedControllerInTx(tx, { homeId: review.homeId, custodianAccountId: params.custodianAccountId, controller: review.controller });
         const existing = await tx.managedMachine.findUnique({ where: { homeId_admittedActionRequestId: { homeId: review.homeId, admittedActionRequestId: request.requestId } } });
         if (existing) {
@@ -109,9 +101,6 @@ export async function admitManagedAcquire(params: Readonly<{
         } });
         await invalidateManagedMachineInTx(tx, row);
         return { machine: projectManagedMachine(row, declaration), replayed: false };
-    }, {
-        // Preset capacity count and current recipe admission precede distinct allocation insertion.
-        isolationLevel: "Serializable",
     });
     try { return await execute(); }
     catch (error) {

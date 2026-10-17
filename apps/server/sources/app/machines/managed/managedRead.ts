@@ -10,7 +10,7 @@ import { listMachineCandidatesInTx, resolveEffectiveMachineRoleInTx } from "@/ap
 import {
     ManagedMachineError, readManagedMachineInTx, projectManagedMachineInTx,
     invalidateManagedMachineInTx, projectManagedMachine, readManagedLaunchSnapshot, sameManagedInput, type StoredManagedMachine,
-    acquireManagedMachinePublicationLocksInTx,
+    inManagedMachinePublicationTx,
 } from "./managedRows";
 
 type ManagedResourceDependencyTarget =
@@ -113,9 +113,8 @@ export async function listManagedMachines(params: Readonly<{ actorAccountId: str
 /** Cancellation retires creation; only the existing intent owner can perform native cleanup. */
 export async function cancelManagedCreation(params: Readonly<{ actorAccountId: string; input: ManagedMachineActionInputV1<"machines.managed.cancel"> }>) {
     const input = ManagedCancelInputV1Schema.parse(params.input);
-    return await inTx(async tx => {
+    return await inManagedMachinePublicationTx(input, async tx => {
         const row = await readManagedMachineInTx(tx, input);
-        await acquireManagedMachinePublicationLocksInTx(tx, row);
         await requireHome(tx, input.homeId);
         await requireManagedMachineAccessInTx(tx, row, params.actorAccountId, true);
         if (row.intentRevision !== input.expectedIntentRevision) throw new ManagedMachineError("intent_changed");
@@ -130,8 +129,5 @@ export async function cancelManagedCreation(params: Readonly<{ actorAccountId: s
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current) };
-    }, {
-        // Cleanup is derived from allocation omitted by the cancellation CAS.
-        isolationLevel: "Serializable",
     });
 }
