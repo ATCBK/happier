@@ -729,6 +729,34 @@ describe('filesystem mutation failures', () => {
   beforeEach(() => nativeDownload.mockReset());
   afterEach(() => vi.useRealTimers());
 
+  it.each(['corrupt', 'unreadable'] as const)('warns without exposing contents when repairing a %s installed receipt', async (failure) => {
+    const fs = createFs();
+    const privateContents = 'private_receipt_contents';
+    new fs.File(PACK_URI, 'pack.json').write(privateContents);
+    const BaseFile = fs.File;
+    class ReceiptFile extends BaseFile {
+      override async text() {
+        if (failure === 'unreadable' && this.uri.endsWith('/pack.json')) throw new Error(privateContents);
+        return super.text();
+      }
+    }
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bytes = new Uint8Array([1]);
+      useNativeDownloads(fs, () => bytes);
+      const remote = manifest([{ path: 'model.bin', url: 'https://example.com/model.bin', sha256: await sha256Hex(bytes), sizeBytes: 1 }]);
+      await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+        fs: { ...fs, File: ReceiptFile }, fetch: fetchManifest(remote),
+      });
+      expect(fs.files.get(`${PACK_URI}/model.bin`)).toEqual(bytes);
+      expect(JSON.parse(await new fs.File(PACK_URI, 'pack.json').text()).manifest).toEqual(remote);
+      expect(warning).toHaveBeenCalled();
+      expect(warning.mock.calls.flat().map(String).join('\n')).not.toContain(privateContents);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('rejects installation when the installed receipt cannot be written', async () => {
     const fs = createFs();
     const BaseFile = fs.File;
@@ -744,6 +772,50 @@ describe('filesystem mutation failures', () => {
     await expect(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
       fs: { ...fs, File: FailingReceiptFile }, fetch: fetchManifest(remote),
     })).rejects.toThrow('ENOSPC_receipt_write');
+  });
+
+  it('warns when an existing file cannot be verified before repairing it', async () => {
+    const fs = createFs(new Map([[`${PACK_URI}/model.bin`, new Uint8Array([9])]]));
+    const readError = new Error('EIO_file_read');
+    const BaseFile = fs.File;
+    let failRead = true;
+    class UnreadableFile extends BaseFile {
+      override open() {
+        if (failRead) { failRead = false; throw readError; }
+        return super.open();
+      }
+    }
+    const bytes = new Uint8Array([1]);
+    const remote = manifest([{ path: 'model.bin', url: 'https://example.com/model.bin', sha256: await sha256Hex(bytes), sizeBytes: 1 }]);
+    useNativeDownloads(fs, () => bytes);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+        fs: { ...fs, File: UnreadableFile }, fetch: fetchManifest(remote),
+      });
+      expect(fs.files.get(`${PACK_URI}/model.bin`)).toEqual(bytes);
+      expect(warning.mock.calls.flat()).toContain(readError);
+    } finally { warning.mockRestore(); }
+  });
+
+  it('warns when failed verification cannot remove its file and preserves the causal error', async () => {
+    const fs = createFs();
+    const cleanupError = new Error('EACCES_file_delete');
+    const BaseFile = fs.File;
+    class UndeletableFile extends BaseFile {
+      override delete() { throw cleanupError; }
+    }
+    const bytes = new Uint8Array([1]);
+    const remote = manifest([{ path: 'model.bin', url: 'https://example.com/model.bin', sha256: await sha256Hex(bytes), sizeBytes: 1 }]);
+    useNativeDownloads(fs, () => new Uint8Array([9]));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+        fs: { ...fs, File: UndeletableFile }, fetch: fetchManifest(remote),
+      })).rejects.toThrow('model_pack_sha256_mismatch');
+      expect(fs.files.get(`${PACK_URI}/model.bin`)).toEqual(new Uint8Array([9]));
+      expect(warning.mock.calls.flat()).toContain(cleanupError);
+    } finally { warning.mockRestore(); }
   });
 
   it('leaves installed bytes intact when the old receipt cannot be invalidated', async () => {

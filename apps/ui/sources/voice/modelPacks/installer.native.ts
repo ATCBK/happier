@@ -33,7 +33,9 @@ async function readInstalledManifest(meta: Pick<ExpoFile, 'exists' | 'text'>): P
   try {
     const parsed = JSON.parse(await meta.text());
     return parseModelPackManifest(parsed?.manifest ?? parsed);
-  } catch {
+  } catch (error) {
+    // Parser errors can include receipt contents, so report only their type.
+    console.warn('[modelPacks] Failed to read installed model pack manifest', error instanceof Error ? error.name : 'unknown');
     return null;
   }
 }

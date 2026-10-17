@@ -82,7 +82,8 @@ export function useNativeModelPackState(params: {
       setInstalled(summary.installed);
       setModelStatus((cur) => (cur === 'downloading' ? cur : summary.installed ? 'ready' : 'idle'));
       setUpdateCheckedRemote(null);
-    } catch {
+    } catch (error) {
+      console.warn('[modelPacks] Failed to refresh native model pack state', error);
       setInstallSummary(null);
       setInstalled(false);
       setModelStatus((cur) => (cur === 'downloading' ? cur : 'idle'));

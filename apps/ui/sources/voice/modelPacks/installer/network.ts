@@ -20,11 +20,7 @@ export async function raceWithAbort<T>(signal: AbortSignal, promises: Array<Prom
     return await Promise.race([...promises, abortPromise]);
   } finally {
     if (onAbort) {
-      try {
-        signal.removeEventListener('abort', onAbort);
-      } catch {
-        // ignore
-      }
+      signal.removeEventListener('abort', onAbort);
     }
   }
 }

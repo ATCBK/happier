@@ -13,6 +13,7 @@ const boundary = vi.hoisted(() => ({
   transfers: [] as NativeModelPackTransfer[],
   failDelete: false,
   failDeleteUri: null as string | null,
+  failDocumentPath: false,
   fetch: vi.fn<typeof fetch>(),
   alert: vi.fn<typeof import('react-native')['Alert']['alert']>(),
 }));
@@ -31,7 +32,10 @@ vi.mock('expo-file-system', () => {
   const uri = (parts: Array<string | { uri: string }>) =>
     parts.map(part => (typeof part === 'string' ? part : part.uri).replace(/\/$/, '')).join('/');
   return {
-    Paths: { document: 'file:///docs' },
+    Paths: { get document() {
+      if (boundary.failDocumentPath) throw new Error('storage_unavailable');
+      return 'file:///docs';
+    } },
     Directory: class {
       uri: string;
       constructor(...parts: Array<string | { uri: string }>) { this.uri = uri(parts); }
@@ -134,6 +138,7 @@ export function useModelPackDeviceBoundary() {
     boundary.transfers.length = 0;
     boundary.failDelete = false;
     boundary.failDeleteUri = null;
+    boundary.failDocumentPath = false;
     boundary.fetch.mockReset();
     boundary.alert.mockReset().mockImplementation((_title, _message, buttons) => {
       buttons?.find(button => button.style !== 'cancel')?.onPress?.();

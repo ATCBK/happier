@@ -16,6 +16,29 @@ const input = { role: 'stt' as const, packId, manifestUrl: 'https://example.test
 useModelPackDeviceBoundary();
 
 describe('useNativeModelPackState through device boundaries', () => {
+  it('warns when native storage becomes unavailable, falls back, and recovers on a later refresh', async () => {
+    seedInstalledPack(packId, 'stt');
+    const hook = await renderHook(useNativeModelPackState, { initialProps: input });
+    expect(hook.getCurrent().installed).toBe(true);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      boundary.failDocumentPath = true;
+      await act(async () => { await hook.getCurrent().refreshInstallState(); });
+      expect(hook.getCurrent().installed).toBe(false);
+      expect(hook.getCurrent().installSummary).toBeNull();
+      expect(hook.getCurrent().modelStatus).toBe('idle');
+      expect(warning.mock.calls.some(call => call.some(value =>
+        value instanceof Error && value.message === 'storage_unavailable'))).toBe(true);
+      expect(boundary.alert).not.toHaveBeenCalled();
+      boundary.failDocumentPath = false;
+      await act(async () => { await hook.getCurrent().refreshInstallState(); });
+      expect(hook.getCurrent().installed).toBe(true);
+      expect(hook.getCurrent().modelStatus).toBe('ready');
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('refreshes installed state and reports failure when staging deletion fails after removing the live pack', async () => {
     seedInstalledPack(packId, 'stt');
     const staging = `${root}/modelPackUpdates/${packId}`;

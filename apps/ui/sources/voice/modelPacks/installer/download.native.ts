@@ -176,10 +176,11 @@ async function downloadAndVerifyFile(opts: {
     } catch (error) {
       // A cancelled verification does not invalidate an already downloaded file.
       if (opts.signal.aborted) throw error;
+      console.warn('[modelPacks] Failed to verify existing model pack file', error);
       try {
         file.delete();
-      } catch {
-        // ignore
+      } catch (cleanupError) {
+        console.warn('[modelPacks] Failed to remove unverified model pack file', cleanupError);
       }
     }
   }
@@ -192,18 +193,13 @@ async function downloadAndVerifyFile(opts: {
 
     const actual = await sha256FileHex(file, opts.signal);
     if (actual !== opts.entry.sha256.toLowerCase()) {
-      try {
-        file.delete();
-      } catch {
-        // ignore
-      }
       throw new Error('model_pack_sha256_mismatch');
     }
   } catch (error) {
     try {
       if (file.exists) file.delete();
-    } catch {
-      // ignore
+    } catch (cleanupError) {
+      console.warn('[modelPacks] Failed to remove incomplete model pack file', cleanupError);
     }
     throw error;
   }
