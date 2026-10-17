@@ -4,6 +4,7 @@ import { archiveSessionOnceInactive } from './archiveSessionOnceInactive';
 import { requestSessionStop } from './requestSessionStop';
 import { isSessionActiveArchiveError, setSessionArchivedStateById } from './sessionArchivedStateById';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 
 export { setSessionArchivedStateById } from './sessionArchivedStateById';
 
@@ -30,12 +31,14 @@ export async function setSessionArchivedState(params: Readonly<{
   | Readonly<{ ok: true; sessionId: string; archivedAt: number | null }>
   | Extract<Awaited<ReturnType<typeof requestSessionStop>>, { ok: false }>
 > {
-  const resolved = await resolveSessionIdOrPrefix({
+  const actionId = params.archived ? 'session.archive' : 'session.unarchive';
+  const rootRequestId = params.externalAction?.context.actionRequestId;
+  const resolved = await runTracedExternalActionStage(actionId, rootRequestId, 'session_archive.resolve_session', () => resolveSessionIdOrPrefix({
     credentials: params.credentials,
     idOrPrefix: params.idOrPrefix,
     ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
-  });
+  }));
   if (!resolved.ok) {
     return {
       ok: false,
@@ -46,12 +49,12 @@ export async function setSessionArchivedState(params: Readonly<{
 
   let result;
   try {
-    result = await setSessionArchivedStateById({
+    result = await runTracedExternalActionStage(actionId, rootRequestId, 'session_archive.http', () => setSessionArchivedStateById({
       token: params.credentials.token,
       sessionId: resolved.sessionId,
       archived: params.archived,
       ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
-    });
+    }));
   } catch (error) {
     if (!params.archived || !isSessionActiveArchiveError(error)) {
       throw error;
