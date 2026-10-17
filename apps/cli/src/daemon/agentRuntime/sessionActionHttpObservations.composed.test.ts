@@ -43,6 +43,14 @@ import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemon
   removeAgentRuntimeDaemonServiceAuthorityIfOwned } from './sessionBridgeAuthorization';
 import * as machineRpc from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { prepareRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
+import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { encodeStoredCredentials } from '@/persistence';
+import { registerSessionLifecycleRpcHandlers } from '@/rpc/handlers/sessionLifecycle';
+import { createMachineSessionStopLifecycleActionExecutor } from '@/session/actions/sessionLifecycleActions';
+import { MACHINE_SESSION_STOP_RPC_SCOPES } from '@/rpc/handlers/actionSpecRpcRegistration';
 import type { AgentSessionRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
 import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceTurnWitness';
@@ -130,6 +138,7 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
   app.get('/v1/account/encryption/currentness', { preHandler: app.authenticate }, async (_request, reply) =>
     currentnessRefused ? reply.code(401).send({ error: 'private-error-body' }) : createAccountEncryptionCurrentnessFixture());
   app.get('/v2/account/settings', { preHandler: app.authenticate }, async () => ({ version: settingsVersion, content: { t: 'plain', v: rawSettings } }));
+  app.get('/v1/account/profile', { preHandler: app.authenticate }, async () => ({ id: storage.account.id }));
   app.get('/v1/machines/:machineId', { preHandler: app.authenticate }, async request => ({
     machine: { id: (request.params as { machineId: string }).machineId },
   }));
@@ -208,6 +217,104 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
     omitCallerWorkspace: () => { callerWorkspaceMissing = true; },
     close: async () => { restore(); await app.close(); } };
 }
+
+it('stops a led child through the real requester RPC receiver and preserves receiver refusals', async () => {
+  const f = await fixture();
+  const channel = await createRequesterCurrentnessSocketHarness();
+  const effects: string[] = [];
+  const receiverResults: unknown[] = [];
+  const requesterResults: unknown[] = [];
+  const rpc = new RpcHandlerManager({ scopePrefix: storage.state.machineId, localMachineId: storage.state.machineId,
+    encryptionMode: 'plain', logger: () => {},
+    // Home signature admission is exercised at the transport boundary below.
+    authorizeRequest: async () => ({ ok: true }),
+    prepareRequesterAccountContext: request => prepareRequesterAccountActionContext({ ...request,
+      purpose: request.purpose ?? { kind: 'external_action' },
+      machineId: storage.state.machineId, installationId: storage.state.installationId,
+      installationPrivateKey: installation.secretKey, serverId, serverIdentityId: storage.state.homeId,
+      serverHttpBaseUrl, isCurrent: async () => storage.state.bound,
+      createExecutor: admitted => {
+        const executor = createCliActionExecutorFromCredentials({ credentials: admitted.credentials,
+          serverId, serverApiUrl: serverHttpBaseUrl, serverIdentityId: storage.state.homeId, machineId: storage.state.machineId,
+          pluginActionExecutionOwner: 'current_process',
+          readCredentials: async () => await admitted.isCurrent() ? admitted.credentials : null,
+          savedSecretOperationContext: admitted.savedSecretOperationContext,
+          actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1(admitted.accountSettingsContext.settings.actionsSettingsV1),
+            getAccountSettings: () => admitted.accountSettingsContext.settings },
+          externalActionMachineRequestPrivateKey: installation.secretKey,
+          externalActionMachineInstallationId: storage.state.installationId,
+          // Native process delivery is the boundary; the real requester executor
+          // must reach this dependency only after policy and fresh subtree admission.
+          sessionStop: async ({ sessionId: target }) => {
+            effects.push(target); f.markInactive(); return { status: 'stopped' };
+          },
+        });
+        return { execute: async (id, input, context) => {
+          const result = await executor.execute(id, input, context);
+          requesterResults.push(result);
+          return result;
+        } };
+      },
+    }),
+  });
+  registerSessionLifecycleRpcHandlers({ rpcHandlerManager: rpc, scopes: MACHINE_SESSION_STOP_RPC_SCOPES,
+    actionExecutor: createMachineSessionStopLifecycleActionExecutor({ stopSession: async target => {
+      effects.push(target); f.markInactive(); return { status: 'stopped' };
+    } }),
+  });
+  let receiverDisabled = false;
+  let receiverMembershipLost = false;
+  const transport = vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async request => {
+    if (transport.mock.calls.length > 1) throw new Error('Stop recursively redispatched to its receiver');
+    const external = request.externalAction;
+    if (!external) throw new Error('Missing original stop authority');
+    const authorization = external.context.externalActionExecutionAuthorization;
+    if (!authorization) throw new Error('Missing original stop root');
+    if (!(external.privateKey instanceof Uint8Array)) throw new Error('Expected fixture installation key');
+    const method = `${request.machineId}:${request.method}`;
+    const execution = { v: 1 as const, authorization, effectActionId: external.effectActionId,
+      target: authorization.binding.target, installationId: external.installationId,
+      machineSignature: signExternalActionMachineRpcRequestV1({ authorizationToken: authorization.token,
+        effectActionId: external.effectActionId, target: authorization.binding.target,
+        installationId: external.installationId, method, requestId: 'stop-receiver', params: request.request,
+        privateKey: external.privateKey }) };
+    expect(await verifyExternalActionMachineRpcExecution(execution, { method, params: request.request,
+      requestId: 'stop-receiver', resolveCurrentSessionMachine: async () => storage.state.machineId })).not.toBeNull();
+    const root = sealExternalActionRequesterAccountContextV1({ authorization,
+      credentials: encodeStoredCredentials(f.credentials), purpose: { kind: 'machine_rpc', method: request.method, params: request.request },
+      installationPublicKey: installation.publicKey, randomBytes: nacl.randomBytes });
+    if (receiverDisabled) f.setActionsSettings(normalizeActionsSettingsV1({ v: 1,
+      actions: { 'session.stop': { disabledSurfaces: ['agent'] } } }));
+    if (receiverMembershipLost) f.members.clear();
+    const result = await rpc.handleRequest({ method, params: request.request, requestId: 'stop-receiver',
+      callerInputAuthorization: root, sessionActionOrigin: authorization.binding.sessionActionOrigin,
+      callerAuthority: 'account_automation', machineAdmission: { actorAccountId: storage.account.id,
+        custodianAccountId: storage.account.id, machineId: storage.state.machineId,
+        installationId: storage.state.installationId, role: 'use', encryptionMode: 'plain' } });
+    receiverResults.push(result);
+    return result;
+  });
+  const run = () => f.execute(f.operation('session.stop', { sessionId: childId }), { sessionId, isCurrent: async () => true });
+  const enable = () => f.setActionsSettings(normalizeActionsSettingsV1({ v: 1, actions: { 'session.stop': { disabledSurfaces: [] } } }));
+  try {
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+    expect(effects).toEqual([]);
+    enable();
+    expect(await run(), JSON.stringify({ receiverResults, requesterResults })).toMatchObject({ ok: true, result: { stopped: true } });
+    expect(effects).toEqual([childId]);
+    expect(requesterResults).toContainEqual({ ok: true, result: { status: 'stopped' } });
+    receiverDisabled = true;
+    transport.mockClear();
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+    expect(effects).toEqual([childId]);
+    receiverDisabled = false;
+    receiverMembershipLost = true;
+    enable();
+    transport.mockClear();
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action', details: { cause: 'target_outside_led_subtree' } });
+    expect(effects).toEqual([childId]);
+  } finally { await channel.close(); await f.close(); }
+});
 
 it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
   'admits only fresh led lifecycle targets through MCP and signed Home admission: %s', async actionId => {

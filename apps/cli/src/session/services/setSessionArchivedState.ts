@@ -28,7 +28,7 @@ export async function setSessionArchivedState(params: Readonly<{
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
 }>): Promise<
   | Readonly<{ ok: true; sessionId: string; archivedAt: number | null }>
-  | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported'; candidates?: string[] }>
+  | Extract<Awaited<ReturnType<typeof requestSessionStop>>, { ok: false }>
 > {
   const resolved = await resolveSessionIdOrPrefix({
     credentials: params.credentials,
@@ -64,11 +64,7 @@ export async function setSessionArchivedState(params: Readonly<{
       ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
     if (!stopResult.ok) {
-      return {
-        ok: false,
-        code: stopResult.code,
-        ...(stopResult.candidates ? { candidates: stopResult.candidates } : {}),
-      };
+      return stopResult;
     }
 
     result = await archiveSessionOnceInactive({

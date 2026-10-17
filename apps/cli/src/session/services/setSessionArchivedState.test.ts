@@ -94,6 +94,18 @@ describe('setSessionArchivedState', () => {
     expect(post).toHaveBeenCalledTimes(2);
   });
 
+  it('preserves a definitive Stop refusal without retrying the archive mutation', async () => {
+    active = true;
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 409, data: { error: 'session_active' } });
+    const refusal = { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.stop',
+      details: { cause: 'target_outside_led_subtree' } };
+    boundary.callMachineRpc.mockResolvedValue(refusal);
+    await expect(setSessionArchivedState({ credentials, idOrPrefix: sessionId, archived: true }))
+      .resolves.toMatchObject(refusal);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(active).toBe(true);
+  });
+
   it('parks without polling after stop until an inactive event allows archive', async () => {
     vi.useFakeTimers();
     active = true;
