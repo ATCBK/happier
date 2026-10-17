@@ -1068,6 +1068,51 @@ describe('workspace sync broker authentication and attach rules', () => {
     await client.close();
   });
 
+  it.each(['machine_carrier_unavailable', 'machine_carrier_route_mismatch', 'transport_identity_mismatch',
+    'handshake_role_mismatch', 'grant_expired', 'proof_bad_signature'])(
+    'preserves the carrier refusal code and reason over broker IPC (%s)', async code => {
+      const failure = Object.assign(new Error('Carrier refused this authenticated route'), { code });
+      const fixture = await useFixture(await startBroker({ openExternalStream: async () => { throw failure; } }));
+      const client = await connectClient(fixture);
+      try {
+        await expect(client.openStream(deriveWorkspaceSyncEndpointId('carrier-operation', 'beta')))
+          .rejects.toMatchObject({ code, message: failure.message });
+      } finally { await client.close(); }
+    },
+  );
+
+  it('recovers only the pending operation own refusal from the native .11 generic error', async () => {
+    const fixture = await useFixture(await startBroker({ openExternalStream: async () => {
+      throw Object.assign(new Error('Authenticated Iroh machine carrier is unavailable'), { code: 'machine_carrier_unavailable' });
+    } }));
+    const client = await connectClient(fixture);
+    let refuse = true;
+    let nativeCode: 'engine_unavailable' | 'git_selection_unavailable' = 'engine_unavailable';
+    client.onCommand(async command => {
+      if (command.t !== 'resume') throw new Error('Unexpected native command');
+      if (refuse) {
+        await client.openStream(deriveWorkspaceSyncEndpointId('carrier-operation', 'beta')).catch(() => undefined);
+      }
+      // broker_client.go at 0139d675 wraps the refusal as an ordinary Go
+      // error; SendResult then returns this generic code at the OS boundary.
+      throw new BrokerProtocolError(nativeCode, 'Native command failed');
+    });
+    try {
+      await expect(fixture.broker.command({ t: 'resume', requestId: 'unrelated', sessionIdentifier: 'other-session' },
+        { operationId: 'other-operation' })).rejects.toMatchObject({ code: 'engine_unavailable' });
+      await expect(fixture.broker.command({ t: 'resume', requestId: 'matching', sessionIdentifier: 'session' },
+        { operationId: 'carrier-operation' })).rejects.toMatchObject({ code: 'machine_carrier_unavailable',
+        message: 'Authenticated Iroh machine carrier is unavailable' });
+      nativeCode = 'git_selection_unavailable';
+      await expect(fixture.broker.command({ t: 'resume', requestId: 'typed-native', sessionIdentifier: 'session' },
+        { operationId: 'carrier-operation' })).rejects.toMatchObject({ code: 'git_selection_unavailable' });
+      nativeCode = 'engine_unavailable';
+      refuse = false;
+      await expect(fixture.broker.command({ t: 'resume', requestId: 'retry', sessionIdentifier: 'session' },
+        { operationId: 'carrier-operation' })).rejects.toMatchObject({ code: 'engine_unavailable' });
+    } finally { await client.close(); }
+  });
+
   it('reports a dispatched command as indeterminate when the sidecar control connection drops', async () => {
     const fixture = await useFixture(await startBroker());
     const client = await connectClient(fixture);

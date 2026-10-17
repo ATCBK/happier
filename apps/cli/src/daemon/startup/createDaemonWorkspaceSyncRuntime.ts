@@ -231,7 +231,7 @@ export function createDaemonWorkspaceSyncRuntime(
       : {}),
   });
   const adapter = createWorkspaceSyncMutagenAdapter({
-    send: async (command, signal) => await lifecycle.command(command, signal),
+    send: async (command, signal, operationId) => await lifecycle.command(command, signal, operationId),
     resolveWorkspaceRef: dependencies.resolveWorkspaceRef,
   });
   const openRootedAgent: WorkspaceSyncLocalAgentStreamOpen = async (input) => {

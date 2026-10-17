@@ -348,19 +348,19 @@ describe('createDaemonWorkspaceSyncRuntime', () => {
 
     harness.publishSnapshot(snapshot([{ ...relationship, enabled: false, updatedAtMs: 2 }], 2));
     await runtime.whenProjectsSettled({ graphRevision: 2, scopeKey: 'account-1' });
-    expect(harness.command).toHaveBeenCalledWith(expect.objectContaining({ t: 'terminate' }), undefined);
+    await expect(runtime.managedWorkspaceSync.list()).resolves.toEqual([]);
     await expect(runtime.managedWorkspaceSync.get(relationship.relationshipId)).resolves.toBeNull();
 
     harness.command.mockClear();
     harness.publishSnapshot(snapshot([{ ...relationship, updatedAtMs: 3 }], 3));
     await runtime.whenProjectsSettled({ graphRevision: 3, scopeKey: 'account-1' });
-    expect(harness.command).toHaveBeenCalledWith(expect.objectContaining({ t: 'create' }), undefined);
-    expect(harness.command).toHaveBeenCalledWith(expect.objectContaining({ t: 'resume' }), undefined);
+    await expect(runtime.managedWorkspaceSync.get(relationship.relationshipId))
+      .resolves.toMatchObject({ state: 'watching' });
 
     harness.command.mockClear();
     harness.publishSnapshot(snapshot([], 4));
     await runtime.whenProjectsSettled({ graphRevision: 4, scopeKey: 'account-1' });
-    expect(harness.command).toHaveBeenCalledWith(expect.objectContaining({ t: 'terminate' }), undefined);
+    await expect(runtime.managedWorkspaceSync.list()).resolves.toEqual([]);
     await runtime.stop();
   });
 
@@ -658,7 +658,6 @@ describe('createDaemonWorkspaceSyncRuntime', () => {
       expect(harness.resolveInstalledComponentPaths).toHaveBeenCalledTimes(2);
       expect(maximumActiveSidecars).toBe(1);
       await settingsSettled;
-      expect(brokerCommands[1]).toHaveBeenCalledWith(expect.objectContaining({ t: 'create' }), undefined);
       expect(brokerEvents.indexOf('2:ready')).toBeLessThan(brokerEvents.indexOf('2:create'));
       restartReconciled = true;
     } finally {

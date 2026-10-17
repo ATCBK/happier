@@ -19,7 +19,11 @@ import type {
 import { computeWorkspaceSyncPolicyDigest } from './workspaceSyncTypes';
 import { isWorkspaceSyncStatusClean } from './workspaceSyncPreparation';
 
-export type WorkspaceSyncMutagenCommandTransport = (command: MutagenControlCommandV1, signal?: AbortSignal) => Promise<unknown>;
+export type WorkspaceSyncMutagenCommandTransport = (
+  command: MutagenControlCommandV1, signal?: AbortSignal,
+  /** Local broker correlation only; never serialized to the native command. */
+  operationId?: string,
+) => Promise<unknown>;
 export type WorkspaceSyncMutagenAdapterOptions = Readonly<{
   send: WorkspaceSyncMutagenCommandTransport;
   resolveWorkspaceRef(id: string, copyOperationId?: string): WorkspaceSyncResolvedRef | null | Promise<WorkspaceSyncResolvedRef | null>;
@@ -431,7 +435,7 @@ export class WorkspaceSyncMutagenAdapterClient implements WorkspaceSyncMutagenAd
       t: relationship.enabled ? 'resume' : 'pause',
       requestId: this.requestId(),
       sessionIdentifier: generic.identifier,
-    }, signal), relationship, relationship.enabled ? 'first_cycle' : 'none');
+    }, signal, relationship.relationshipId), relationship, relationship.enabled ? 'first_cycle' : 'none');
   }
   private async projectMissingPausedRelationship(
     relationship: WorkspaceSyncRelationshipV1,
@@ -603,7 +607,7 @@ export class WorkspaceSyncMutagenAdapterClient implements WorkspaceSyncMutagenAd
       const sessionIdentifier = this.requireSessionIdentifier(operation.operationId);
       await this.project(await this.options.send({
         t: 'resume', requestId: this.requestId(), sessionIdentifier,
-      }, signal), operation, 'none');
+      }, signal, operation.operationId), operation, 'none');
       return await this.project(await this.options.send({
         t: 'flush', requestId: this.requestId(), sessionIdentifier,
       }, signal), operation, 'operation', signal, true);
@@ -698,7 +702,7 @@ export class WorkspaceSyncMutagenAdapterClient implements WorkspaceSyncMutagenAd
     if (!definition || !('relationshipId' in definition)) throw Object.assign(new Error('Workspace sync relationship is not ready'), { code: 'relationship_not_ready' });
     return await this.project(await this.options.send({
       t: command, requestId: this.requestId(), sessionIdentifier: this.requireSessionIdentifier(relationshipId),
-    }, signal), definition, command === 'flush' ? 'operation' : 'none', signal, command === 'flush');
+    }, signal, relationshipId), definition, command === 'flush' ? 'operation' : 'none', signal, command === 'flush');
   }
   async flush(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> { return await this.selected(id, 'flush', signal); }
   async pause(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> { return await this.selected(id, 'pause', signal); }

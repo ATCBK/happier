@@ -14,6 +14,7 @@ import {
   BrokerProtocolError,
   createBrokerHelloOkProof,
   createBrokerHelloProof,
+  deriveWorkspaceSyncEndpointId,
   encodeBrokerCommandFrame,
   encodeBrokerControlFrame,
   isBrokerTerminalErrorCode,
@@ -167,6 +168,8 @@ type PendingCommand = {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   abortCleanup?: () => void;
+  endpointIds?: readonly string[];
+  openError?: BrokerProtocolError;
 };
 
 function closeServer(server: Server | undefined): Promise<void> {
@@ -327,7 +330,7 @@ export class WorkspaceSyncBroker {
 
   command(
     command: MutagenControlCommandV1,
-    options: Readonly<{ signal?: AbortSignal }> = {},
+    options: Readonly<{ signal?: AbortSignal; operationId?: string }> = {},
   ): Promise<unknown> {
     const control = this.authenticatedControl;
     if (!control || control.destroyed) {
@@ -360,7 +363,12 @@ export class WorkspaceSyncBroker {
       );
       const abortCleanup = options.signal ? () => options.signal?.removeEventListener('abort', abort) : undefined;
       options.signal?.addEventListener('abort', abort, { once: true });
-      this.commands.set(command.requestId, { resolve, reject, abortCleanup });
+      this.commands.set(command.requestId, { resolve, reject, abortCleanup,
+        ...(options.operationId ? { endpointIds: [
+          deriveWorkspaceSyncEndpointId(options.operationId, 'alpha'),
+          deriveWorkspaceSyncEndpointId(options.operationId, 'beta'),
+        ] } : {}),
+      });
       try {
         control.write(encodeBrokerCommandFrame(command));
         dispatched = true;
@@ -651,6 +659,13 @@ export class WorkspaceSyncBroker {
       clearTimeout(stream.openTimer);
       if (stream.closed) return;
       const failure = typedError(error, 'peer_unavailable', 'external stream unavailable');
+      // Native .11 drops broker refusal codes in brokerResponseError and sends
+      // engine_unavailable from Resume. Retain only this pending operation's
+      // own refusal; no prose parsing or error history survives settlement.
+      // Remove this recovery once supported engines preserve broker codes.
+      for (const command of this.commands.values()) {
+        if (command.endpointIds?.includes(message.endpointId)) command.openError ??= failure;
+      }
       this.failPending(stream, failure.code, failure.message);
     }
   }
@@ -785,7 +800,10 @@ export class WorkspaceSyncBroker {
     if (!command) return;
     this.commands.delete(requestId);
     command.abortCleanup?.();
-    if (error) command.reject(error); else command.resolve(result);
+    if (error) {
+      command.reject(error instanceof BrokerProtocolError && error.code === 'engine_unavailable'
+        ? command.openError ?? error : error);
+    } else command.resolve(result);
   }
 
   private failCommands(error: Error): void {

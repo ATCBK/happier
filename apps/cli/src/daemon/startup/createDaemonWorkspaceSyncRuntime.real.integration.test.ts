@@ -47,6 +47,7 @@ import type {
 } from '@/workspaces/sync/workspaceSyncMachineCarrierStream';
 import type { WorkspaceSyncSidecarProcess } from '@/workspaces/sync/workspaceSyncSidecarLifecycle';
 import { createWorkspaceSyncPeerIdentityValidator } from '@/workspaces/sync/transport/workspaceSyncPeerIdentity';
+import { machineCarrierUnavailableError } from '@/daemon/peer/iroh/machineCarrier';
 import { computeWorkspaceSyncPolicyDigest } from '@/workspaces/sync/workspaceSyncTypes';
 import { createWorkspaceSyncHandoffAdapter } from '@/workspaces/sync/workspaceSyncHandoffAdapter';
 import { prepareWorkspaceSyncBetween } from '@/workspaces/sync/workspaceSyncPreparation';
@@ -770,6 +771,34 @@ describe.skipIf(runInstalledArtifactIntegration)(
   'daemon workspace sync runtime with source-built Mutagen processes',
   { timeout: 150_000 },
   () => {
+    it('preserves a carrier refusal through the real .11 manager command response', async () => {
+      const binaries = await requireLiveBinaries();
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'hwse-')));
+      let runtime: DaemonWorkspaceSyncRuntime | undefined;
+      const openMachineCarrierTunnel: WorkspaceSyncMachineTunnelOpen = async () => {
+        // Iroh is the external transport boundary; the actual native manager,
+        // authenticated broker, controller and adapter remain in the test.
+        throw machineCarrierUnavailableError();
+      };
+      try {
+        runtime = await startLiveRuntime({ root, binaries, relationship: null, remote: {
+          localMachineId: 'machine-a', endpointMachineIds: { alpha: 'machine-a', beta: 'machine-b', gamma: 'machine-c' },
+          prepareRelationshipTarget: async () => undefined,
+          recoverConflictResolutionAtTarget: async () => ({ status: 'settled' }),
+          openMachineCarrierTunnel,
+        } });
+        await expect(runtime.managedWorkspaceSync.copyOnce({
+          v: 1, operationId: 'native-carrier-refusal', controllerMachineId: 'machine-a',
+          alphaWorkspaceRefId: 'alpha-ref', betaWorkspaceRefId: 'beta-ref',
+          contentPolicy: { ...contentPolicy, policyDigest: computeWorkspaceSyncPolicyDigest(contentPolicy) },
+        })).rejects.toMatchObject({ code: 'machine_carrier_unavailable',
+          message: 'Authenticated Iroh machine carrier is unavailable' });
+      } finally {
+        await runtime?.stop();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
     it.skipIf(!runPerformanceAcceptance)(
       'records a verified large initial local copy and 4 KiB delta through the real managed process corridor',
       async () => {
