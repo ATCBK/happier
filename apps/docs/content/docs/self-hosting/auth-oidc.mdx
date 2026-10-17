@@ -79,6 +79,8 @@ Notes:
 
 ## Client secret from an environment variable
 
+`clientSecretEnv` is available in development source and has not yet been released.
+
 Set `clientSecretEnv` instead of `clientSecret` when the provider config lives in non-secret deployment values (Helm values, a compose file, a ConfigMap) and the secret comes from a secret manager:
 
 ```json
@@ -96,12 +98,13 @@ Set `clientSecretEnv` instead of `clientSecret` when the provider config lives i
 ```
 
 ```bash
-OKTA_CLIENT_SECRET=…   # injected from your secret store
+export OKTA_CLIENT_SECRET='…'   # or inject it into the server environment from your secret store
 ```
 
 - The server reads the variable from its own environment when it loads the provider config.
-- A literal `clientSecret` wins when both fields are set.
-- If the named variable is unset or empty, the config is invalid: the server registers none of the configured OIDC providers and reports `auth_providers_config_invalid` under `capabilities.auth.misconfig` in `GET /v1/features`, naming the variable. It never starts a provider with an empty secret.
+- A literal `clientSecret` wins when both fields are set. An empty or invalid literal remains an error; it does not fall back to the variable.
+- The variable name is trimmed; the secret value is preserved as supplied.
+- If the named variable is unset, empty, or whitespace-only, the config is invalid: the server registers none of the configured OIDC providers and reports `auth_providers_config_invalid` under `capabilities.auth.misconfig` in `GET /v1/features`, naming the variable without exposing its value. It never starts a provider with an empty secret.
 
 ## Group overage / external claims
 

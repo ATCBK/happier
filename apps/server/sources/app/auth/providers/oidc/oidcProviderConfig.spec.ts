@@ -166,12 +166,12 @@ describe("oidcProviderConfig", () => {
 
             const env: NodeJS.ProcessEnv = {
                 AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([{ ...baseProvider, clientSecretEnv: " ACME_OIDC_SECRET " }]),
-                ACME_OIDC_SECRET: "secret-from-env",
+                ACME_OIDC_SECRET: " secret-from-env ",
             };
 
             const res = resolveAuthProviderInstancesFromEnv(env);
             expect(res.errors).toEqual([]);
-            expect(res.instances.map((i) => i.clientSecret)).toEqual(["secret-from-env"]);
+            expect(res.instances.map((i) => i.clientSecret)).toEqual([" secret-from-env "]);
         });
 
         it("prefers a literal clientSecret over clientSecretEnv", async () => {
@@ -187,6 +187,21 @@ describe("oidcProviderConfig", () => {
             const res = resolveAuthProviderInstancesFromEnv(env);
             expect(res.errors).toEqual([]);
             expect(res.instances.map((i) => i.clientSecret)).toEqual(["literal-secret"]);
+        });
+
+        it.each(["", null])("rejects an invalid literal %j without falling back to the environment", async (clientSecret) => {
+            const { resolveAuthProviderInstancesFromEnv } = await import("./oidcProviderConfig");
+
+            const res = resolveAuthProviderInstancesFromEnv({
+                AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([
+                    { ...baseProvider, clientSecret, clientSecretEnv: "ACME_OIDC_SECRET" },
+                ]),
+                ACME_OIDC_SECRET: "secret-from-env",
+            });
+
+            expect(res.instances).toEqual([]);
+            expect(res.errors).toEqual([expect.stringContaining("clientSecret for acme")]);
+            expect(res.errors.join("\n")).not.toContain("secret-from-env");
         });
 
         it.each([
@@ -208,7 +223,7 @@ describe("oidcProviderConfig", () => {
         });
     });
 
-    it("loads provider instances from AUTH_PROVIDERS_CONFIG_PATH (preferred over JSON)", async () => {
+    it("resolves environment secrets from AUTH_PROVIDERS_CONFIG_PATH (preferred over JSON)", async () => {
         const { resolveAuthProviderInstancesFromEnv } = await import("./oidcProviderConfig");
 
         const dir = await mkdtemp(join(tmpdir(), "happier-oidc-config-"));
@@ -223,7 +238,7 @@ describe("oidcProviderConfig", () => {
                         displayName: "Acme OIDC",
                         issuer: "https://issuer.example.test",
                         clientId: "cid",
-                        clientSecret: "secret",
+                        clientSecretEnv: "ACME_OIDC_SECRET",
                         redirectUrl: "https://server.example.test/v1/oauth/acme/callback",
                     },
                 ]),
@@ -233,11 +248,13 @@ describe("oidcProviderConfig", () => {
             const env: NodeJS.ProcessEnv = {
                 AUTH_PROVIDERS_CONFIG_PATH: path,
                 AUTH_PROVIDERS_CONFIG_JSON: "[]",
+                ACME_OIDC_SECRET: "secret-from-file-config",
             };
 
             const res = resolveAuthProviderInstancesFromEnv(env);
             expect(res.errors).toEqual([]);
             expect(res.instances.map((i) => i.id)).toEqual(["acme"]);
+            expect(res.instances.map((i) => i.clientSecret)).toEqual(["secret-from-file-config"]);
         } finally {
             await rm(dir, { recursive: true, force: true });
         }
