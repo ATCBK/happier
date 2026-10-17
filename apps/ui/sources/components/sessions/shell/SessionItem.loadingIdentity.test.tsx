@@ -5,6 +5,8 @@ import { createSessionFixture, createSessionListRenderableSessionFixture, render
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { createSessionItemRowViewModel } from './sessionItemRowViewModelTestFixture';
+import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -160,7 +162,8 @@ describe('SessionItem loading identity', () => {
         expect(screen.getTextContent()).not.toContain('session.untitled');
     });
 
-    it('does not start the identity skeleton animation while row attention animations are disabled', async () => {
+    it.each([false, true])('keeps a demand-pending identity still regardless of row attention animation (enabled=%s)', async (rowAttentionAnimationEnabled) => {
+        const { buildSessionListRowViewModels } = await import('./sessionListRowViewModels');
         const { Animated } = await import('react-native');
         const loopSpy = vi.spyOn(Animated, 'loop').mockReturnValue({
             start: vi.fn(),
@@ -168,16 +171,22 @@ describe('SessionItem loading identity', () => {
         } as any);
         const { SessionItem } = await import('./SessionItem');
         const session = createMetadataPendingSession('sess_offscreen_loading');
+        const item = { type: 'session', sessionId: session.id, serverId: 'server_a',
+            storageKind: 'persisted', groupKind: 'date', groupKey: 'date' } satisfies SessionListIndexItem;
+        const [rowViewModel] = buildSessionListRowViewModels({
+            listItems: [item],
+            reachableSessionDisplayById: new Map(),
+            rowRenderableByKey: new Map([[sessionAddressKey({ serverId: 'server_a', sessionId: session.id }), session]]),
+            hasMultipleMachines: false, pinnedSessionKeys: new Set(), sessionTags: {}, selectedSessionId: null,
+            showServerBadge: false, showPinnedServerBadge: false,
+        });
+        expect(rowViewModel?.isIdentityLoading).toBe(true);
+        if (!rowViewModel) throw new Error('Expected canonical pending row');
 
-        await renderScreen(
+        const screen = await renderScreen(
             <SessionItem
                 session={session}
-                rowViewModel={createSessionItemRowViewModel({
-                    session,
-                    overrides: {
-                        isIdentityLoading: true,
-                    },
-                })}
+                rowViewModel={rowViewModel}
                 serverId="server_a"
                 pinned={false}
                 selected={false}
@@ -186,10 +195,11 @@ describe('SessionItem loading identity', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
-                rowAttentionAnimationEnabled={false}
+                rowAttentionAnimationEnabled={rowAttentionAnimationEnabled}
             />,
         );
 
+        expect(screen.findByTestId('session-list-title-loading-sess_offscreen_loading')).toBeTruthy();
         expect(loopSpy).not.toHaveBeenCalled();
     });
 

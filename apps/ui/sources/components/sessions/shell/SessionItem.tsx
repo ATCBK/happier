@@ -3,7 +3,6 @@ import { HAPPIER_META_COLUMN_STYLE, HappierMaterialRoleProvider, useContainingHa
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import React from 'react';
 import {
-    Animated,
     Platform,
     Pressable,
     View,
@@ -145,7 +144,6 @@ const SESSION_ROW_ORGANIZE_LIST_MENU_ITEM_ID = 'session.organizeList';
 
 const CONTEXT_MENU_PRESS_IN_OPEN_DELAY_MS = 350;
 const CONTEXT_MENU_PRESS_SUPPRESSION_TIMEOUT_MS = 600;
-const SESSION_IDENTITY_SKELETON_ANIMATION_MS = 900;
 const SESSION_FOLDER_ROW_CHROME_INDENT_BASE = 38;
 const SESSION_FOLDER_ROW_CHROME_INDENT_STEP = 12;
 const SESSION_REPORTS_ROW_INDENT_STEP = 22;
@@ -767,31 +765,8 @@ const SessionItemContent = React.memo(
         );
         const resolvedSelectionKey = selectionKey ?? '';
         const rowSelection = useOptionalSessionListSelectionRow(resolvedSelectionKey);
-        const identitySkeletonOpacity = React.useRef(new Animated.Value(0.45)).current;
-        React.useEffect(() => {
-            if (!isSessionIdentityLoading) return;
-            if (!rowAttentionAnimationEnabled) return;
-            if (typeof Animated.loop !== 'function' || typeof Animated.sequence !== 'function') return;
-
-            const animation = Animated.loop(
-                Animated.sequence([
-                    Animated.timing(identitySkeletonOpacity, {
-                        toValue: 1,
-                        duration: SESSION_IDENTITY_SKELETON_ANIMATION_MS,
-                        useNativeDriver: true,
-                    }),
-                    Animated.timing(identitySkeletonOpacity, {
-                        toValue: 0.45,
-                        duration: SESSION_IDENTITY_SKELETON_ANIMATION_MS,
-                        useNativeDriver: true,
-                    }),
-                ]),
-            );
-            animation.start();
-            return () => {
-                animation.stop();
-            };
-        }, [isSessionIdentityLoading, identitySkeletonOpacity, rowAttentionAnimationEnabled]);
+        // Metadata can remain unopened until this row is demanded. Its reserved
+        // identity slots must stay quiet rather than running a presentation clock.
         const navigateToSession = useNavigateToSession();
         // Open in a kept tab or beside the focused pane, through the workspace owner (workspace lab O).
         const workspaceOpen = useWorkspaceOpenActions(buildScopedSessionRouteHref({
@@ -1586,7 +1561,7 @@ const SessionItemContent = React.memo(
                                 style={compact ? { width: avatarSize, height: avatarSize } : undefined}
                             />
                         ) : isSessionIdentityLoading ? (
-                            <Animated.View
+                            <View
                                 testID={`session-list-avatar-loading-${resolvedSession.id}`}
                                 style={[
                                     isMinimal
@@ -1596,7 +1571,6 @@ const SessionItemContent = React.memo(
                                         : compact
                                             ? styles.avatarLoadingCompact
                                             : styles.avatarLoading,
-                                    { opacity: identitySkeletonOpacity },
                                 ]}
                             />
                         ) : (
@@ -1640,11 +1614,10 @@ const SessionItemContent = React.memo(
                 ) : null}
                 title={<>
                         {isSessionIdentityLoading ? (
-                            <Animated.View
+                            <View
                                 testID={`session-list-title-loading-${resolvedSession.id}`}
                                 style={[
                                     identityTitleLoadingStyle,
-                                    { opacity: identitySkeletonOpacity },
                                 ]}
                             />
                         ) : (
@@ -1691,11 +1664,10 @@ const SessionItemContent = React.memo(
                         </SessionListRowSubtitle>
                     ) : showStandardSecondaryLine ? (
                         shouldShowIdentitySubtitleSkeleton ? (
-                            <Animated.View
+                            <View
                                 testID={`session-list-subtitle-loading-${resolvedSession.id}`}
                                 style={[
                                     compact ? styles.sessionSubtitleLoadingCompact : styles.sessionSubtitleLoading,
-                                    { opacity: identitySkeletonOpacity },
                                 ]}
                             />
                         ) : effectiveSecondaryLineMode === 'status' ? (
