@@ -42,6 +42,7 @@ export type CreateDefaultRuntimeActionExecutorInput = Readonly<{
     localServices?: Omit<
         CreateLocalServicesRuntimeActionExecutorInput,
         | 'fallback'
+        | 'executeOnMachine'
         | 'resolveMachineId'
         | 'fetchPreviewSnapshot'
         | 'fetchPublicPreviewStatus'
@@ -66,7 +67,7 @@ function resolveSessionMachineId(args: RuntimeActionExecuteArgs): string | null 
 export function createDefaultRuntimeActionExecutor(
     input: CreateDefaultRuntimeActionExecutorInput = {},
     accountLifetime?: ServerAccountScopeLifetime,
-    executeBrowserOnMachine?: RuntimeActionExecute,
+    executeOnMachine?: RuntimeActionExecute,
 ): RuntimeActionExecute {
     const fallback = createUnavailableRuntimeActionExecutor();
     const simulator = createSimulatorPreviewRuntimeActionExecutor({
@@ -77,6 +78,7 @@ export function createDefaultRuntimeActionExecutor(
     const computer = createComputerRuntimeActionExecutor({ fallback: simulator, accountLifetime });
     const localServices = createLocalServicesRuntimeActionExecutor({
         ...input.localServices,
+        executeOnMachine,
         readWorkspaceRefs: input.localServices?.readWorkspaceRefs ?? (() => {
             const state = readRegisteredStorageState();
             if (!state) return null;
@@ -98,7 +100,7 @@ export function createDefaultRuntimeActionExecutor(
         fallback: computer,
     });
     return createBrowserRuntimeActionExecutor({
-        executeOnMachine: executeBrowserOnMachine,
+        executeOnMachine,
         ...(input.browserControl ? { control: input.browserControl } : {}),
         ...(!input.browserControl
             ? {

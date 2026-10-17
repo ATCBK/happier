@@ -93,8 +93,8 @@ describe('launcher start action helpers', () => {
         // admission lifetime and the original Start continuation remain real.
         const runtimeActionExecute: RuntimeActionExecute = async request => {
             requests.push(request);
-            return { protocolVersion: 1, machineId: 'machine-a', targetId: target.id,
-                snapshot: startedSnapshot, ...(requests.length === 1
+            return { protocolVersion: 1, machineId: 'worker-a', targetId: target.id,
+                snapshot: { ...startedSnapshot, machineId: 'worker-a' }, ...(requests.length === 1
                     ? { status: 'denied', reasonCode: 'project_setup_consent_required', reviewedEffect: setupEffect, reviewedEffectDigest: setupDigest }
                     : requests.length === 2
                         ? { status: 'denied', reasonCode: 'project_service_effect_review_required', reviewedEffect: { v: 1, purpose: 'service' }, reviewedEffectDigest: serviceDigest }
@@ -317,7 +317,7 @@ describe('launcher start action helpers', () => {
         const { buildLocalServiceLauncherStartRequest } = await import('./launcherStartAction');
         const choice = { kind: 'workers', destination: { kind: 'machine', machineId: 'enrolled-worker' } } as const;
         expect(buildLocalServiceLauncherStartRequest({ target: startableTarget, choice }))
-            .toMatchObject({ machineId: 'machine-a', targetId: 'managed:preview', choice });
+            .toMatchObject({ machineId: 'enrolled-worker', targetId: 'managed:preview', choice });
     });
 
     it('builds the canonical launcher start runtime-action input', async () => {

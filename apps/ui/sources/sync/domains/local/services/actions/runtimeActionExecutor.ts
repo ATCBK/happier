@@ -7,7 +7,7 @@ import { DaemonLocalServiceLauncherLeafRequestV1Schema, DaemonLocalServiceLaunch
 import { requiresAgentEgressRedaction } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { resolveLocalServiceActionKindForRuntimeActionId } from '@happier-dev/protocol/actions/specs/localServices';
 import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-dev/protocol/actions/executor/types';
-import { ProjectServiceRelocateInputV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import { ProjectServiceRelocateInputV1Schema, ProjectServiceRelocateResultV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
@@ -25,7 +25,7 @@ import {
     type LocalServiceInventorySnapshotClientResult,
     type LocalServiceInventorySnapshotRequest,
 } from '../inventory/api';
-import { publishLocalServiceInventorySnapshot } from '../inventory/sharedStore';
+import { invalidateLocalServiceInventoryStore, publishLocalServiceInventorySnapshot } from '../inventory/sharedStore';
 import type { LocalServiceInventorySnapshot } from '../inventory/store';
 import {
     fetchLocalServiceLauncherSnapshot,
@@ -79,6 +79,7 @@ import type {
 import { publishLocalServicePublicPreviewSnapshot } from '../publicPreview/sharedStore';
 
 export type CreateLocalServicesRuntimeActionExecutorInput = Readonly<{
+    executeOnMachine?: RuntimeActionExecute;
     resolveMachineId?: (args: RuntimeActionExecuteArgs) => string | null | undefined;
     readWorkspaceRefs?: () => Readonly<{ serverId: string; accountId: string; refs: readonly WorkspaceRefV1[] }> | null;
     request?: LocalServiceInventorySnapshotRequest
@@ -392,7 +393,22 @@ export function createLocalServicesRuntimeActionExecutor(
             if (source.kind !== 'resolved') {
                 return refuse(source.kind === 'missing' ? 'workspace_ref_not_accepted' : `workspace_ref_${source.kind}`);
             }
-            return { status: 'unsupported' as const, reasonCode: 'service_relocation_unavailable' };
+            const target = args.context.externalActionTarget;
+            if (target && (target.kind !== 'machine' || target.machineId !== source.ref.machineId)) {
+                return refuse('target_unavailable');
+            }
+            if (!input.executeOnMachine) return disabledResult('local_services_runtime_action_unbacked');
+            const result = await input.executeOnMachine({ ...args, input: request, context: {
+                ...args.context,
+                externalActionTarget: target ?? { kind: 'machine', machineId: source.ref.machineId },
+            } });
+            const outcome = ProjectServiceRelocateResultV1Schema.safeParse(result);
+            if (outcome.success && ['accepted', 'moved', 'unchanged'].includes(outcome.data.status)) {
+                for (const machineId of new Set([source.ref.machineId, request.currentTarget.machineId, request.selectedTarget.machineId])) {
+                    invalidateLocalServiceInventoryStore({ machineId, serverId: request.workspace.serverId });
+                }
+            }
+            return result;
         }
 
         const machineId = resolveMachineId({

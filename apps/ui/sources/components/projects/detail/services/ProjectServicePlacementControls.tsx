@@ -39,6 +39,8 @@ import type { ServiceRow } from '@/sync/domains/local/services/serviceRow';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { useMachinePoolSelection } from '@/components/sessions/new/hooks/machines/useMachinePoolSelection';
 import type { ServerScopedMachinePoolSelection } from '@/components/sessions/new/components/machineSelection/useMachineSelectionListModel';
+import type { FrontDoorRuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { describeManagedCreationProgress } from '@/components/settings/machines/managed/managedCreationProgressPresentation';
 
 /** The SOURCE checkout a declared service belongs to: its Home, accepted ref and own Machine. */
 export type ProjectServiceSource = Readonly<{ serverId: string; refId: string; machineId: string }>;
@@ -177,6 +179,7 @@ async function requestServiceRelocation(
     expectedAccountId: string;
     signal: AbortSignal;
     onApprovalPending: (registration: ActionApprovalRegistration) => void;
+    runtimeActionExecute?: FrontDoorRuntimeActionExecute;
   }>,
 ): Promise<ServiceRelocationOutcome> {
   const managedServiceId =
@@ -191,10 +194,10 @@ async function requestServiceRelocation(
     async (executor, account) => {
       account.assertCurrent();
       const result = await executeServiceRelocationAction({
-        execute: async request => {
+        execute: input.runtimeActionExecute ?? (async request => {
           const result = await executor.execute(request.actionId, request.input, request.context);
           return result.ok ? result.result : result;
-        },
+        }),
         request: {
           workspace: input.address,
           serviceName: input.serviceName,
@@ -240,6 +243,8 @@ export type ProjectServiceDeclarationFacts = Readonly<{
   /** Only an explicitly portable declaration may run on a worker; anything else stays on the primary checkout. */
   portable: boolean;
   memoryDemand?: ProjectMemoryDemandV1;
+  /** The inspected declaration, so changed commands/environment retire an unsubmitted continuation. */
+  currentnessKey?: string;
 }>;
 
 /**
@@ -273,9 +278,15 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   const anchorRef = React.useRef<View>(null);
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const [requestedMove, setMove] = React.useState<MoveState>(null);
-  const observation = useProjectServicePlacementObservation(props.serviceName);
+  const managedScopeKey = JSON.stringify([props.source.serverId, props.source.refId, props.source.machineId,
+    props.serviceName, props.declaration, props.lifecycleKey]);
+  const observation = useProjectServicePlacementObservation(props.serviceName, managedScopeKey);
   const move = observation.attachment ? { phase: 'operation' as const, ...observation.attachment } : requestedMove;
   const { binding } = useServerCredentialAccountScopeBinding(props.source.serverId);
+  const [managedMove, setManagedMove] = React.useState<'confirm' | 'acquiring' | null>(null);
+  const managed = { draft: observation.managed?.draft ?? null, progress: observation.managed?.progress ?? null,
+    busy: observation.managed?.busy ?? false, acquire: observation.managed?.acquire ?? (async () => null),
+    cancel: observation.managed?.cancel ?? (() => {}), select: observation.selectManaged };
   const poolSelection = useMachinePoolSelection({
     requestKey: JSON.stringify(['project-service-move', props.source.serverId, props.source.refId, props.serviceName]),
     scopeKey: binding?.accountId,
@@ -291,11 +302,15 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
     },
   });
   const moveRequest = React.useRef<AbortController | null>(null);
+  const moveAcquisition = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
     setMove(null);
+    setManagedMove(null);
+    moveAcquisition.current?.abort();
+    moveAcquisition.current = null;
     poolSelection.cancelPendingSelection();
-    return () => { moveRequest.current?.abort(); };
-  }, [binding, poolSelection.cancelPendingSelection, props.source.serverId, props.source.refId, props.source.machineId, props.serviceName]);
+    return () => { moveRequest.current?.abort(); moveAcquisition.current?.abort(); };
+  }, [binding, managedScopeKey, poolSelection.cancelPendingSelection, props.source.serverId, props.source.refId, props.source.machineId, props.serviceName]);
   React.useEffect(() => {
     if (requestedMove?.phase !== 'resolving'
       || (poolSelection.status.kind !== 'unavailable' && poolSelection.status.kind !== 'error')) return;
@@ -347,7 +362,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
     && operation?.observation === 'available' && observed?.status === 'absent';
 
   const custodyKnown = observed?.status === 'present' || observed?.status === 'absent';
-  const moving = move?.phase === 'resolving' || move?.phase === 'requesting' || move?.phase === 'approval'
+  const moving = managed.busy || managedMove === 'acquiring' || move?.phase === 'resolving' || move?.phase === 'requesting' || move?.phase === 'approval'
     || (move?.phase === 'operation' && !stoppedBeforeStart);
   const disabled = !ready || placement.busy || moving || !custodyKnown || !portable;
   const notice = noticeText(placement.notice);
@@ -360,7 +375,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
       tone={terminal || outcomeUncertain ? 'warning' : 'neutral'}
       title={operation?.observation !== 'available' || outcomeUncertain ? t('projectServices.moveUnknown')
         : operation?.snapshot.observation?.kind === 'stop_unconfirmed' || operation?.snapshot.error?.errorCode === 'stop_unconfirmed'
-          ? t('project.run.stopUnconfirmed')
+          ? t('projects.scripts.run.stopUnconfirmed')
           : stoppedBeforeStart ? t(operationState === 'cancelled' ? 'projectServices.moveCancelledStopped' : 'projectServices.moveFailedStopped')
             : terminal ? t('projectServices.moveUnknown')
               : stop?.pending || stop?.stopRequested ? t('projectServices.cancelPending')
@@ -397,7 +412,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
       : (actualMachine ? getMachineDisplayName(actualMachine) : null) ?? t('projectServices.otherMachine')
     : null;
   // A live occurrence is named where it actually runs; desired intent only describes the next start.
-  const value = actualName ?? (observed?.status === 'ambiguous'
+  const value = actualName ?? managed.draft?.receipt.launch.name ?? (observed?.status === 'ambiguous'
       ? t('projectServices.actualAmbiguous')
       : observed?.status === 'unavailable'
         ? t('projectServices.actualUnavailable')
@@ -421,6 +436,8 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   const choose = (choice: ProjectExecutionChoiceV1, selectedPool?: ServerScopedMachinePoolSelection) => {
     setPickerOpen(false);
     if (!ready || !custodyKnown || !portable || placement.busy || moving) return;
+    managed.select(null);
+    setManagedMove(null);
     if (actual) {
       // A different target follows the person's Action policy; the same target is a no-op.
       if (!placement.canMove || choiceMatchesActual(choice, actual, props.source.machineId)) return;
@@ -433,7 +450,8 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
         void poolSelection.selectPool(selectedPool);
         return;
       }
-      void reviewMove(choice, choice.kind === 'primary' ? props.source.machineId : choice.destination.machineId);
+      if (choice.kind === 'primary') void reviewMove(choice, props.source.machineId);
+      else if (choice.destination.kind === 'machine') void reviewMove(choice, choice.destination.machineId);
       return;
     }
     if (!placement.canSaveNextStart || projectExecutionChoicesEqualV1(choice, ready.placement.runsOn)) return;
@@ -468,6 +486,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
         address: placement.address, serviceName: props.serviceName, actual, destination,
         currentPlacement: ready, selectedMachineId,
         expectedAccountId: binding.accountId, signal: lifetime.signal,
+        runtimeActionExecute: observation.runtimeActionExecute,
         onApprovalPending: registration => {
           approval.requestApproval(registration);
           setMove({ phase: 'approval', destination, selectedMachineId,
@@ -512,6 +531,20 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   }
 
   const fromName = actualName ?? sourceName;
+  const creation = managed.draft && managed.progress ? describeManagedCreationProgress(managed.draft.receipt.launch.name, managed.progress) : null;
+  const confirmManagedMove = () => {
+    if (!managed.draft || !placement.canMove || !portable || managed.busy) return;
+    setManagedMove('acquiring');
+    const cancellation = new AbortController();
+    moveAcquisition.current = cancellation;
+    void managed.acquire(cancellation.signal).then(destination => {
+      if (cancellation.signal.aborted || moveAcquisition.current !== cancellation) return;
+      moveAcquisition.current = null;
+      if (!destination) { setManagedMove('confirm'); return; }
+      setManagedMove(null);
+      if (destination.destination.kind === 'machine') void confirmMove(destination, destination.destination.machineId);
+    });
+  };
 
   return (
     <View testID={testID}>
@@ -571,6 +604,15 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
         />
       ) : null}
       {notice ? <AttentionBanner testID={`${testID}.notice`} tone="neutral" title={notice} /> : null}
+      {managedMove === 'confirm' && managed.draft ? <AttentionBanner testID={`${testID}.move`} tone="neutral"
+        title={t('projectServices.moveConfirm', { service: props.serviceName, from: fromName, to: managed.draft.receipt.launch.name })}
+        description={t('projectServices.moveDetail')}
+        action={{ label: t('projectServices.move'), testID: `${testID}.move.confirm`, onPress: confirmManagedMove }}
+        secondaryAction={{ label: t('common.cancel'), testID: `${testID}.move.cancel`, onPress: () => { managed.select(null); setManagedMove(null); } }} /> : null}
+      {creation && managed.progress?.kind !== 'ready' ? <AttentionBanner testID={`${testID}.creation`}
+        tone={creation.failed ? 'warning' : 'neutral'} title={creation.label}
+        {...(managed.progress?.kind === 'failed' ? { details: [managed.progress.code] } : {})}
+        secondaryAction={managed.busy ? { label: t('common.cancel'), testID: `${testID}.creation.cancel`, onPress: () => { moveAcquisition.current?.abort(); managed.cancel(); setManagedMove(null); } } : null} /> : null}
       {move?.phase === 'resolving' ? (
         <AttentionBanner testID={`${testID}.move.resolving`} tone="neutral" title={t('machinePools.resolvingTarget')}
           secondaryAction={{ label: t('common.cancel'), testID: `${testID}.move.cancel`, onPress: () => {
@@ -631,6 +673,13 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
           servicePresentation
           selected={stoppedBeforeStart ? placement.displayChoice : pendingDestination ?? placement.displayChoice}
           onChoose={choose}
+          selectedManagedMachine={managed.draft}
+          onChooseManagedMachine={draft => {
+            if (!ready || !custodyKnown || !portable || placement.busy || moving) return;
+            setPickerOpen(false);
+            managed.select(draft, actual ? 'move' : 'start');
+            setManagedMove(actual ? 'confirm' : null);
+          }}
         />
       ) : null}
     </View>

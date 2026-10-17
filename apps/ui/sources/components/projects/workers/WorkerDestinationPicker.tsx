@@ -141,7 +141,7 @@ function OpenWorkerDestinationPicker(props: WorkerDestinationPickerProps) {
   const onOffers = React.useCallback((home: string, offers: readonly ManagedMachineSelectionOffer[]) => {
     if (home === serverId) setManagedOffers(offers);
   }, [serverId]);
-  const creationEnabled = props.purpose === 'finite' && !props.exactTargetOnly && !!props.onChooseManagedMachine;
+  const creationEnabled = !props.exactTargetOnly && !!props.onChooseManagedMachine;
 
   const list = useMachineSelectionListModel({
     purpose: props.purpose,
@@ -278,9 +278,8 @@ function OpenWorkerDestinationPicker(props: WorkerDestinationPickerProps) {
           ({
             ...section,
             // New-machine offers keep their own heading; only Machine buckets are "Workers".
-            title: props.servicePresentation
-              ? undefined
-              : section.id === 'managed-machines' ? section.title : t('projectWorkers.workersSection'),
+            title: section.id === 'managed-machines' ? section.title
+              : props.servicePresentation ? undefined : t('projectWorkers.workersSection'),
           }) as SelectionListSectionDescriptor,
       );
     // The list's own classification (offline and nothing else): a Machine refused for another reason keeps its named row.

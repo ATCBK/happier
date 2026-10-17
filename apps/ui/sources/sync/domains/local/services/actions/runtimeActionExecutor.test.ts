@@ -23,6 +23,8 @@ import type {
     LocalServicePublicPreviewSnapshotV1,
     RuntimeActionExecuteArgs,
 } from '@happier-dev/protocol';
+import { createDefaultRuntimeActionExecutor } from '@/sync/ops/actions/defaultRuntimeActionExecutor';
+import { storage } from '@/sync/domains/state/storageStore';
 
 function runtimeArgs(
     args: Omit<RuntimeActionExecuteArgs, 'context'> & Partial<Pick<RuntimeActionExecuteArgs, 'context'>>,
@@ -187,13 +189,13 @@ describe('UI local-services runtime action executor', () => {
             const execute = createDefaultRuntimeActionExecutor();
             const args = runtimeArgs({ actionId: 'projects.service.relocate', input: {
                 workspace: { serverId: scope.serverId, refId: 'source-ref' }, serviceName: 'web', requestId: 'move-1',
-                currentTarget: { kind: 'managed_service', managedServiceId: 'native-old', machineId: 'old-worker' },
+                currentTarget: { kind: 'managed_service', managedServiceId: 'native-old', machineId: 'source-controller' },
                 destination: { kind: 'primary' },
                 selectedTarget: { machineId: 'source-controller' },
                 desiredPlacement: { workspace: { serverId: scope.serverId, refId: 'source-ref' }, serviceName: 'web',
                     expectedRevision: 'absent', expected: { kind: 'absent' }, value: { runsOn: { kind: 'primary' }, unavailable: 'fail' } },
             }, context: { serverId: scope.serverId, runtimeAccountId: scope.accountId } });
-            await expect(execute(args)).resolves.toEqual({ status: 'unsupported', reasonCode: 'service_relocation_unavailable' });
+            await expect(execute(args)).resolves.toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
             storage.getState().setProjectAccountRowsStatusForScope(scope, 'locked');
             await expect(execute(args)).resolves.toEqual({ status: 'refused', reasonCode: 'workspace_refs_unavailable' });
             expect(relocationBoundary.rpc).not.toHaveBeenCalled();
@@ -228,8 +230,8 @@ describe('UI local-services runtime action executor', () => {
                 expectedRevision: 'absent', expected: { kind: 'absent' }, value: { runsOn: { kind: 'workers',
                     destination: { kind: 'machine', machineId: 'new-worker' } }, unavailable: 'fail' } } };
         await expect(execute(runtimeArgs({ actionId: 'projects.service.relocate', input: request,
-            context: { serverId: scope.serverId, runtimeAccountId: scope.accountId, defaultSessionId: 'session-1' } }))).resolves.toEqual({
-                status: 'unsupported', reasonCode: 'service_relocation_unavailable',
+            context: { serverId: scope.serverId, runtimeAccountId: scope.accountId, defaultSessionId: 'session-1' } }))).resolves.toMatchObject({
+                ok: false, errorCode: 'runtime_action_disabled',
             });
         expect(fallbackMachine).not.toHaveBeenCalled();
 
