@@ -2,13 +2,14 @@ import * as React from 'react';
 
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { formatDownloadProgressDetail } from '@/voice/downloads/downloadProgress';
+import type { ModelPackRowStatus } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
+import { isModelPackCancellation } from '@/voice/modelPacks/installer/network';
 import { getModelPackInstallSummary } from '@/voice/modelPacks/installer.native';
 import { invokeVoiceDeviceModelPackOperation } from '@/voice/settings/voiceDeviceModelPackOperation.native';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 
-type ModelStatus = 'idle' | 'downloading' | 'ready' | 'error';
+type ModelStatus = ModelPackRowStatus;
 
 /** Native STT and TTS share settings state; consent and installer admission live in the operation owner. */
 export function useLocalNeuralModelPackState(params: {
@@ -46,6 +47,7 @@ export function useLocalNeuralModelPackState(params: {
       setInstalled(summary.installed);
       setModelStatus((cur) => cur === 'downloading' ? cur : summary.installed ? 'ready' : 'idle');
       setUpdateCheckedRemote(null);
+      return summary;
     } catch {
       if (!isCurrent() || !accountLifetime.isCurrent()) return;
       setInstallSummary(null);
@@ -133,11 +135,14 @@ export function useLocalNeuralModelPackState(params: {
       }
     } catch (error) {
       if (!isCurrent() || !accountLifetime.isCurrent()) return;
-      if (controller.signal.aborted) {
-        setModelStatus(installed ? 'ready' : 'idle');
+      if (isModelPackCancellation(error, controller.signal)) {
+        setModelStatus('idle');
+        await refreshInstallState();
         return;
       }
-      setModelStatus('error');
+      const summary = await refreshInstallState();
+      if (!isCurrent() || !accountLifetime.isCurrent()) return;
+      setModelStatus(operation === 'update' && summary?.installed ? 'ready' : 'error');
       const message = error instanceof Error ? error.message : String(error);
       if (operation === 'update') {
         await Modal.alert(
@@ -168,13 +173,7 @@ export function useLocalNeuralModelPackState(params: {
   const checkForUpdates = React.useCallback(() => {
     fireAndForget(runOperation('update'), { tag: 'useLocalNeuralModelPackState.checkForUpdates' });
   }, [runOperation]);
-  const downloadDetail = React.useMemo(() => {
-    if (modelStatus !== 'downloading') return null;
-    return downloadProgress
-      ? formatDownloadProgressDetail(downloadProgress, { prefix: t('settingsVoice.local.kokoro.modelStatus.downloadingPrefix') })
-      : t('settingsVoice.local.kokoro.modelStatus.downloading');
-  }, [downloadProgress, modelStatus]);
 
-  return { modelStatus, downloadProgress, downloadDetail, installed, installSummary, updateCheckedRemote,
+  return { modelStatus, downloadProgress, installed, installSummary, updateCheckedRemote,
     refreshInstallState, prepareModel, cancelPrepare, clearAssets, checkForUpdates } as const;
 }

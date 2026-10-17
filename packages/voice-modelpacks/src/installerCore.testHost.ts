@@ -131,6 +131,13 @@ export function createMemoryModelPackInstallerHost() {
     }
 
     const handle: ModelPackStagingHandle = {
+      copyInstalledFile: async (filePath) => {
+        const bytes = live.get(`${packId}/${filePath}`);
+        if (!bytes) return false;
+        partials.set(partialKey(filePath), bytes.slice());
+        staging.set(stagedKey(filePath), bytes.slice());
+        return true;
+      },
       partialByteLength: async (filePath) => partials.get(partialKey(filePath))?.byteLength ?? 0,
       streamPartial: async (filePath, onChunk) => {
         const partial = partials.get(partialKey(filePath));

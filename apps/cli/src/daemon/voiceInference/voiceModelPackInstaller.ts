@@ -177,6 +177,7 @@ export async function installVoiceModelPack(params: Readonly<{
     host,
     packId: safePackId,
     manifest,
+    priorManifest: await readInstalledVoiceModelPackManifest({ packsRootDir: params.packsRootDir, packId: safePackId }) ?? undefined,
     signal,
     urlPolicy: DAEMON_URL_POLICY,
     onProgress: (progress) => {

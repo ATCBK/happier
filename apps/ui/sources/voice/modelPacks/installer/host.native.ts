@@ -61,6 +61,7 @@ const BACKUP_SUFFIX = '.backup';
 const INTENT_SUFFIX = '.promote-intent';
 const RESUME_PLAN_FILE = '.resume-plan.json';
 const DOWNLOAD_SUFFIX = '.download';
+const DOWNLOADS_SUFFIX = '.downloads';
 type ExpoModelPackOperationLease = Readonly<{
   key: string;
   token: symbol;
@@ -68,6 +69,29 @@ type ExpoModelPackOperationLease = Readonly<{
 }>;
 
 const activeOperationTokens = new Map<string, symbol>();
+
+/** Payload retained for retry/discard; host metadata is not downloaded model data. */
+export function getExpoModelPackPartialBytes(opts: { fs: InstallerFs; packId: string }): number {
+  const scratch = getPackSiblingDir(opts.fs, opts.packId, SCRATCH_SUFFIX);
+  if (!scratch.exists) return 0;
+  const count = (directory: ExpoFsDirectory, root: boolean): number => {
+    let total = 0;
+    for (const entry of directory.list()) {
+      if (root && (entry.name === RESUME_PLAN_FILE || entry.name === 'pack.json')) continue;
+      if ('list' in entry) {
+        total += count(entry, false);
+      } else {
+        const size = entry.size;
+        if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) {
+          throw new Error('model_pack_partial_size_unavailable');
+        }
+        total += size;
+      }
+    }
+    return total;
+  };
+  return count(scratch, true);
+}
 
 function installKeyFor(fs: InstallerFs, packId: string): string {
   return getPackRootDir(fs, packId).uri;
@@ -205,8 +229,10 @@ function createDownloadOpener(
 ): (request: ModelPackDownloadRequest) => Promise<ModelPackDownloadStream> {
   return async (request) => {
     if (!request.packId) throw new Error('model_pack_download_packid_missing');
-    // The existing pack lease and serial file loop give this sibling one producer.
-    const temporaryFile = getPackSiblingFile(fs, request.packId, DOWNLOAD_SUFFIX);
+    // The pack lease owns directory cleanup; each concurrent transfer owns one native file.
+    const temporaryDir = getPackSiblingDir(fs, request.packId, DOWNLOADS_SUFFIX);
+    tryMkdir(temporaryDir);
+    const temporaryFile = new fs.File(temporaryDir, randomUUID());
     let chunks: ReturnType<typeof readFileChunks> | undefined;
     let closed = false;
     const close = async () => {
@@ -319,6 +345,15 @@ export function createExpoModelPackInstallerHost(opts: {
       }
 
       return {
+        copyInstalledFile: async (filePath) => {
+          const source = stagedFile(fs, getPackRootDir(fs, packId), filePath);
+          if (!source.exists) return false;
+          const target = stagedFile(fs, freshScratchDir(), filePath);
+          // Expo copy does not overwrite an empty file retained after a failed append.
+          deleteRequired(target);
+          source.copy(target);
+          return true;
+        },
         partialByteLength: async (filePath) => {
           const file = stagedFile(fs, freshScratchDir(), filePath);
           if (!file.exists) return 0;
@@ -479,7 +514,10 @@ export function createExpoModelPackInstallerHost(opts: {
           if (promoted) {
             tryDelete(freshScratchDir());
           }
-          try { deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX)); } finally { lease.release(); }
+          try {
+            deleteRequired(getPackSiblingDir(fs, packId, DOWNLOADS_SUFFIX));
+            deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX));
+          } finally { lease.release(); }
         },
       };
     },
@@ -514,6 +552,7 @@ async function reconcileExpoModelPackPromotionOwned(opts: {
 }, lease?: ExpoModelPackOperationLease): Promise<boolean> {
   const { fs, packId } = opts;
   assertOperationAvailable(fs, packId, lease);
+  deleteRequired(getPackSiblingDir(fs, packId, DOWNLOADS_SUFFIX));
   deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX));
   const intentFile = getPackSiblingFile(fs, packId, INTENT_SUFFIX);
   const liveDir = getPackRootDir(fs, packId);

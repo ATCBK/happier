@@ -1186,3 +1186,27 @@ function streamResponseForTest(bytes: Uint8Array): Response {
     },
   } as unknown as Response;
 }
+
+it('copies installed bytes into independent staging without changing live bytes', async () => {
+  const packsRootDir = await mkdtemp(join(tmpdir(), 'happier-pr560-copy-'));
+  try {
+    const live = join(packsRootDir, 'example');
+    await mkdir(live);
+    const bytes = new Uint8Array([1, 2, 3]);
+    await writeFile(join(live, 'model.bin'), bytes);
+    const manifest = { packId: 'example', kind: 'tts_sherpa' as const, model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://example.com/model.bin', sha256: 'a'.repeat(64), sizeBytes: 3 }] };
+    const host = createNodeModelPackInstallerHost({ packsRootDir });
+    const staging = await host.beginStaging('example', deriveModelPackStagingPlan(manifest));
+    try {
+      expect(await staging.copyInstalledFile('missing.bin')).toBe(false);
+      expect(await staging.copyInstalledFile('model.bin')).toBe(true);
+      expect(await staging.partialByteLength('model.bin')).toBe(3);
+      const chunks: Uint8Array[] = [];
+      expect(await staging.streamPartial('model.bin', chunk => { chunks.push(chunk); })).toBe(3);
+      expect(Buffer.concat(chunks)).toEqual(Buffer.from(bytes));
+      await staging.appendDownloadedChunk('model.bin', new Uint8Array([4]));
+      expect(await readFile(join(live, 'model.bin'))).toEqual(Buffer.from(bytes));
+    } finally { await staging.cleanup(); }
+  } finally { await rm(packsRootDir, { recursive: true, force: true }); }
+});

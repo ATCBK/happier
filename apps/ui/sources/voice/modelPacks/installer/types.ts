@@ -18,6 +18,7 @@ export type ExpoFsFile = {
   bytes: () => Promise<Uint8Array>;
   open(): Pick<ReturnType<ExpoFile['open']>, 'readBytes' | 'close'>;
   text: () => Promise<string>;
+  copy: (destination: ExpoFsFile | { uri: string }) => void;
   /** Write content; `{ append: true }` appends without rewriting the whole file. */
   write(content: string | Uint8Array, options?: { append?: boolean }): void;
   create?: (options?: { intermediates?: boolean; idempotent?: boolean }) => void;

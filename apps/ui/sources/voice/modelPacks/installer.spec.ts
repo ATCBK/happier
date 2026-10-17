@@ -45,7 +45,7 @@ describe('modelPacks installer (native)', () => {
         signal: new AbortController().signal, onProgress: (value) => progress.push(value.loaded) },
         { fs, invalidatePackRuntime: async () => {} });
       expect(files.get('file:///docs/happier/voice/modelPacks/native-download/model.onnx')).toEqual(bytes);
-      expect(files.has('file:///docs/happier/voice/modelPacks/.native-download.download')).toBe(false);
+      expect([...files.keys()].some(path => path.includes('/.native-download.downloads/'))).toBe(false);
       expect(progress.every((loaded, index) => loaded <= bytes.length && loaded >= (progress[index - 1] ?? 0))).toBe(true);
     } finally {
       vi.unstubAllGlobals(); nativeDownload.mockReset();

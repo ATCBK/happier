@@ -5,6 +5,11 @@ export function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new Error('aborted');
 }
 
+/** A cancelled signal does not make a storage/cleanup failure an expected abort. */
+export function isModelPackCancellation(error: unknown, signal: AbortSignal): boolean {
+  return signal.aborted && error instanceof Error && (error.message === 'aborted' || error.name === 'AbortError');
+}
+
 export async function raceWithAbort<T>(signal: AbortSignal, promises: Array<Promise<T>>): Promise<T> {
   throwIfAborted(signal);
   let onAbort: (() => void) | null = null;

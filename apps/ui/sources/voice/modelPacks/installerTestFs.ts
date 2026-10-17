@@ -118,6 +118,13 @@ export function createMemFs(): MemFs {
     create() {
       if (!files.has(this.uri)) files.set(this.uri, new Uint8Array());
     }
+    copy(destination: { uri: string }) {
+      // Expo File.copy rejects an existing destination on both native platforms.
+      if (files.has(destination.uri)) throw new Error('EEXIST_copy_destination');
+      const bytes = files.get(this.uri);
+      if (!bytes) throw new Error('copy_source_missing');
+      files.set(destination.uri, bytes.slice());
+    }
     write(data: string | Uint8Array, options?: { append?: boolean }) {
       const buf = typeof data === 'string' ? new TextEncoder().encode(data) : data;
       if (options?.append) {

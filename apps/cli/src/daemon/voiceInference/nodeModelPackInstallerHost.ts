@@ -28,7 +28,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { createReadStream } from 'node:fs';
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { filePathParts } from '@happier-dev/protocol/voice/modelPacks/pathSafety';
@@ -428,6 +428,17 @@ export function createNodeModelPackInstallerHost(opts: {
       }
 
       return {
+        copyInstalledFile: async (filePath) => {
+          const target = scratchPath(filePath);
+          await mkdir(dirname(target), { recursive: true });
+          try {
+            await copyFile(join(liveDir, ...filePathParts(filePath)), target);
+            return true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return false;
+            throw error;
+          }
+        },
         partialByteLength: async (filePath) => {
           try {
             const info = await stat(scratchPath(filePath));

@@ -8,6 +8,7 @@ import { forgetSpeakerCountForAssetsDir } from '@/voice/kokoro/runtime/kokoroSpe
 import { getFetch, getFs } from './installer/fs.native';
 import {
   createExpoModelPackInstallerHost,
+  getExpoModelPackPartialBytes,
   reconcileExpoModelPackPromotion,
   removeExpoModelPackWithHost,
 } from './installer/host.native';
@@ -71,6 +72,7 @@ async function installViaHost(opts: {
   manifest: ModelPackManifest;
   signal: AbortSignal;
   priorInstall: ModelPackPromotionPriorInstallV1;
+  priorManifest?: ModelPackManifest;
   onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
 }): Promise<{ packDirUri: string; manifest: ModelPackManifest }> {
   const host = createExpoModelPackInstallerHost({
@@ -84,6 +86,7 @@ async function installViaHost(opts: {
     manifest: opts.manifest,
     signal: opts.signal,
     priorInstall: opts.priorInstall,
+    priorManifest: opts.priorManifest,
     onProgress: opts.onProgress,
   });
   return { packDirUri: result.rootLocation, manifest: result.manifest };
@@ -143,6 +146,7 @@ export async function ensureModelPackInstalled(
         invalidatePackRuntime,
         packId: id,
         manifest: remote,
+        priorManifest: installedManifest,
         signal: opts.signal,
         priorInstall: Object.freeze({ scopeKey: `expo-model-pack:${rootDir.uri}`, identityKey: id }),
         onProgress: opts.onProgress,
@@ -251,7 +255,7 @@ export async function checkModelPackUpdateAvailable(
 export async function getModelPackInstallSummary(
   opts: { packId: string | null },
   overrides: InstallerOverrides = {},
-): Promise<{ installed: boolean; packDirUri: string | null; manifest: ModelPackManifest | null }> {
+): Promise<{ installed: boolean; packDirUri: string | null; manifest: ModelPackManifest | null; partialBytes: number }> {
   const fs = await getFs(overrides);
   const id = normalizePackId(opts.packId);
   // X-M1: recover an interrupted swap before reporting install state.
@@ -263,17 +267,11 @@ export async function getModelPackInstallSummary(
   const rootDir = getPackRootDir(fs, id);
   const meta = getMetaFile(fs, rootDir);
 
-  if (!meta.exists) {
-    return { installed: false, packDirUri: rootDir.uri, manifest: null };
-  }
-
-  try {
-    const parsed = JSON.parse(await meta.text());
-    const manifest = parseModelPackManifest(parsed?.manifest ?? parsed);
-    return { installed: true, packDirUri: rootDir.uri, manifest };
-  } catch {
-    return { installed: false, packDirUri: rootDir.uri, manifest: null };
-  }
+  const manifest = meta.exists ? await readInstalledManifest(meta) : null;
+  return {
+    installed: manifest !== null, packDirUri: rootDir.uri, manifest,
+    partialBytes: manifest ? 0 : getExpoModelPackPartialBytes({ fs, packId: id }),
+  };
 }
 
 export async function removeModelPack(

@@ -1,3 +1,8 @@
+import {
+  readPartialDownloadBytes,
+  resolveModelPackTransferRow,
+  resolvePartialDownloadRemoveRow,
+} from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 import * as React from 'react';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
@@ -67,7 +72,7 @@ export function LocalNeuralTtsSettings(props: {
     [effectiveAssetSetId, publicationAvailable],
   );
 
-  const { modelStatus, downloadDetail, installed, installSummary, updateCheckedRemote, prepareModel, cancelPrepare, clearAssets, checkForUpdates } =
+  const { modelStatus, downloadProgress, installed, installSummary, updateCheckedRemote, prepareModel, cancelPrepare, clearAssets, checkForUpdates } =
     useLocalNeuralModelPackState({
       packId: effectiveAssetSetId,
       manifestUrl,
@@ -137,16 +142,11 @@ export function LocalNeuralTtsSettings(props: {
   const buildLabel = formatModelPackBuildLabel((installSummary as any)?.manifest);
   const readyDetail = buildLabel ? `${t('settingsVoice.local.kokoro.modelStatus.ready')} • ${buildLabel}` : t('settingsVoice.local.kokoro.modelStatus.ready');
 
-  const modelDetail =
-    modelStatus === 'downloading'
-      ? (downloadDetail ?? t('settingsVoice.local.kokoro.modelStatus.downloading'))
-      : modelStatus === 'ready'
-        ? readyDetail
-        : modelStatus === 'error'
-          ? t('settingsVoice.local.kokoro.modelStatus.error')
-        : installed
-            ? readyDetail
-            : t('settingsVoice.local.kokoro.modelStatus.notDownloaded');
+  const partialBytes = readPartialDownloadBytes(installSummary);
+  const transferRow = resolveModelPackTransferRow({ status: modelStatus, progress: downloadProgress, partialBytes });
+  const partialRemoveRow = resolvePartialDownloadRemoveRow(partialBytes);
+  const modelDetail = transferRow?.detail
+    ?? (installed ? readyDetail : t('settingsVoice.local.kokoro.modelStatus.notDownloaded'));
 
   const updateDetail = updateCheckedRemote
     ? updateCheckedRemote.updateAvailable
@@ -229,7 +229,8 @@ export function LocalNeuralTtsSettings(props: {
           <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.ttsPrepareModel}>
           <Item
             title={t('settingsVoice.local.kokoro.model.title')}
-            subtitle={t('settingsVoice.local.kokoro.model.subtitleNative')}
+            subtitle={transferRow?.subtitle ?? t('settingsVoice.local.kokoro.model.subtitleNative')}
+            subtitleLines={transferRow ? 0 : undefined}
             detail={modelDetail}
             onPress={() => {
               if (!runtimeSupported) {
@@ -276,9 +277,9 @@ export function LocalNeuralTtsSettings(props: {
           <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.ttsRemoveModel}>
           <Item
             title={t('settingsVoice.local.kokoro.removeAssets.title')}
-            subtitle={t('settingsVoice.local.kokoro.removeAssets.subtitle')}
-            detail={installed ? t('settingsVoice.local.kokoro.removeAssets.detailRemove') : t('settingsVoice.local.kokoro.common.none')}
-            onPress={installed ? clearAssets : undefined}
+            subtitle={partialRemoveRow?.subtitle ?? t('settingsVoice.local.kokoro.removeAssets.subtitle')}
+            detail={installed ? t('settingsVoice.local.kokoro.removeAssets.detailRemove') : (partialRemoveRow?.detail ?? t('settingsVoice.local.kokoro.common.none'))}
+            onPress={installed || partialRemoveRow ? clearAssets : undefined}
             showChevron={false}
             selected={false}
           />

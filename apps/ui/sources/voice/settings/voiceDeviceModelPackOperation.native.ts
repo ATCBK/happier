@@ -2,10 +2,11 @@ import type { SettingOperationResult } from '@/components/settings/catalog/setti
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
-import { checkModelPackUpdateAvailable, ensureModelPackInstalled, removeModelPack } from '@/voice/modelPacks/installer.native';
+import { checkModelPackUpdateAvailable, ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { prepareKokoroTts } from '@/voice/kokoro/runtime/synthesizeKokoroWav';
+import { confirmDiscardPartialDownload, readPartialDownloadBytes } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 import type { VoiceDeviceModelPackOperationInput } from './voiceDeviceModelPackOperation';
 
 /** Uses the incumbent installer and runtime invalidation for the caller's lifetime. */
@@ -19,7 +20,12 @@ export async function invokeVoiceDeviceModelPackOperation(input: VoiceDeviceMode
     };
     if (!await isCurrent()) return { status: 'cancelled' };
     if (input.operation === 'remove') {
-        const confirmed = input.role === 'stt_sherpa'
+        const summary = await getModelPackInstallSummary({ packId: input.packId });
+        if (!await isCurrent()) return { status: 'cancelled' };
+        const partialBytes = readPartialDownloadBytes(summary);
+        const confirmed = partialBytes > 0
+            ? await confirmDiscardPartialDownload(partialBytes)
+            : input.role === 'stt_sherpa'
             ? await Modal.confirm(t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmTitle'),
                 t('settingsVoice.local.localNeuralStt.removeModelFiles.confirmBody'), { confirmText: t('common.remove'), destructive: true })
             : await Modal.confirm(t('settingsVoice.local.kokoro.removeAssets.confirmTitle'),

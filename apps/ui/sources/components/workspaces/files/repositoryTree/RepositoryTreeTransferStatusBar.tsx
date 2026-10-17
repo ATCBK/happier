@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { Animated, Easing, Platform, View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Text } from '@/components/ui/text/Text';
+import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
@@ -33,55 +34,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
-    progressTrack: {
-        height: BAR_HEIGHT,
-        borderRadius: 999,
-        overflow: 'hidden',
-        backgroundColor: theme.colors.surface.pressedOverlay,
-    },
-    progressFill: {
-        height: BAR_HEIGHT,
-        borderRadius: 999,
-        backgroundColor: theme.colors.text.link,
-    },
+
 }));
 
 function resolveProgress(uploadedBytes: number, totalBytes: number): number {
     if (!Number.isFinite(uploadedBytes) || uploadedBytes <= 0) return 0;
     if (!Number.isFinite(totalBytes) || totalBytes <= 0) return 0;
     return Math.max(0, Math.min(1, uploadedBytes / totalBytes));
-}
-
-function TransferProgressBar(props: Readonly<{ progress: number }>): React.ReactElement {
-    const styles = stylesheet;
-    const progress = Math.max(0, Math.min(1, props.progress));
-    const anim = React.useRef(new Animated.Value(progress)).current;
-
-    React.useEffect(() => {
-        const useNativeDriver = Platform.OS !== 'web';
-        Animated.timing(anim, {
-            toValue: progress,
-            duration: 160,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver,
-        }).start();
-    }, [anim, progress]);
-
-    return (
-        <View style={styles.progressTrack}>
-            <Animated.View
-                style={[
-                    styles.progressFill,
-                    {
-                        width: anim.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: ['0%', '100%'],
-                        }),
-                    },
-                ]}
-            />
-        </View>
-    );
 }
 
 function UploadRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { status: 'preflighting' | 'uploading' }>; onCancel: () => void }>) {
@@ -118,7 +77,7 @@ function UploadRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { stat
                     onPress={props.onCancel}
                 />
             </View>
-            {props.state.status === 'uploading' ? <TransferProgressBar progress={progress} /> : null}
+            {props.state.status === 'uploading' ? <MeterBar tone="neutral" height={BAR_HEIGHT} animated fillFraction={progress} fillColor={theme.colors.text.link} progressAccessibilityLabel={label} /> : null}
         </View>
     );
 }
@@ -153,7 +112,7 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
                     height: Math.max(DOWNLOAD_CANCEL_BUTTON_SIZE, minimumInteractiveTargetSize),
                 }} />}
             </View>
-            <TransferProgressBar progress={progress} />
+            <MeterBar tone="neutral" height={BAR_HEIGHT} animated fillFraction={progress} fillColor={theme.colors.text.link} progressAccessibilityLabel={label} />
         </View>
     );
 }

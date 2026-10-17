@@ -5,7 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installRepositoryTreeCommonModuleMocks } from './repositoryTreeTestHelpers';
 
-installRepositoryTreeCommonModuleMocks();
+installRepositoryTreeCommonModuleMocks({
+    reactNative: async () => {
+        const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+        return createReactNativeNativeMock({ platformOS: 'ios' });
+    },
+});
 
 function flattenStyle(styleProp: unknown): Record<string, unknown> {
     const resolved = typeof styleProp === 'function'
@@ -82,7 +87,7 @@ describe('RepositoryTreeTransferStatusBar', () => {
             />,
         );
 
-        const cancelControl = screen.findByTestId(cancelTestID);
+        const cancelControl = screen.findHostByTestId(cancelTestID);
         const frame = flattenStyle(cancelControl?.props.style);
         expect(cancelControl?.props.accessibilityRole).toBe('button');
         expect(cancelControl?.props.accessibilityLabel).toBe('common.cancel');
