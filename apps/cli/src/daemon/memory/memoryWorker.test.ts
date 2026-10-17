@@ -242,6 +242,12 @@ describe('memoryWorker', () => {
       if (path.startsWith('/v1/artifacts/')) return readable ? { status: 200, data: artifact(path.split('/').at(-1)!) } : { status: 404, data: { error: 'not_found' } };
       throw new Error(`Unexpected document indexing HTTP path: ${path}`);
     });
+    vi.spyOn(axios, 'post').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/project-rows/list') return { status: 200,
+        data: { status: 'listed', coverage: 'complete', rows: [] } };
+      throw new Error(`Unexpected document indexing HTTP path: ${path}`);
+    });
     // Real Session HTTP/schema parsing consumes the canonical producer's tuple.
     // Selection, metadata opening, content adapters and SQLite remain real.
     vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
