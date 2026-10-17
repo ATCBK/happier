@@ -111,6 +111,30 @@ describe('connected purpose row mutation', () => {
     expect(server.read().record).toEqual({ key: 'purposes', value: { v: 1, bindings: [binding] } });
   });
 
+  it('publishes startup reconciliation when the purpose-row write is temporarily unreachable, retaining explicit bindings', async () => {
+    const server = boundary('concurrent-reconciliation');
+    vi.mocked(axios.post).mockResolvedValue({ status: 503, data: { error: 'unavailable' } });
+    const unexpected = async (): Promise<never> => { throw new Error('Reconciliation must not select or materialize accounts'); };
+    const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials });
+    const owner = createConnectedAccountPurposeBindingOwner({
+      store, selectTarget: unexpected, resolveTarget: unexpected, materializeAccount: unexpected,
+      projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
+    });
+    let published = false;
+    await expect(owner.reconcileAuthorizedPurposes({
+      consumerScopes: [{ consumer: purpose.consumer, authorizedPurposes: [] }],
+      signal: new AbortController().signal,
+      publish: () => { published = true; },
+    })).resolves.toBeUndefined();
+    expect(published).toBe(true);
+    expect(server.read().record).toEqual({ key: 'purposes', value: { v: 1, bindings: [binding] } });
+    // A direct user mutation must still report failure, never claim a write.
+    await expect(store.update(current => ({ ...current, bindings: [] }))).rejects.toMatchObject({
+      code: 'plugin_connected_account_settings_unavailable', retryable: true,
+      details: { reason: 'unreachable' },
+    });
+  });
+
   it('never submits an old Account intent using credentials observed after Account replacement', async () => {
     const server = boundary('updated');
     const nextCredentials = { token: 'next-purpose-account', encryption: null };
@@ -125,6 +149,24 @@ describe('connected purpose row mutation', () => {
     setActiveAccountSettingsSnapshot({ ...snapshot, scopeKey: resolveAccountSettingsScopeKey(nextCredentials) });
     await expect(mutation).rejects.toMatchObject({ code: 'plugin_connected_account_settings_unavailable' });
     expect(server.read().record).toEqual({ key: 'purposes', value: { v: 1, bindings: [] } });
+  });
+
+  it.each([[401, 'unauthorized'], [403, 'forbidden']] as const)('refuses publication after an HTTP %s authorization failure', async (status, code) => {
+    const server = boundary('concurrent-reconciliation');
+    vi.mocked(axios.post).mockResolvedValue({ status, data: { error: code } });
+    const unexpected = async (): Promise<never> => { throw new Error('No credential selection or materialization'); };
+    const owner = createConnectedAccountPurposeBindingOwner({
+      store: createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials }),
+      selectTarget: unexpected, resolveTarget: unexpected, materializeAccount: unexpected,
+      projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
+    });
+    let published = false;
+    await expect(owner.reconcileAuthorizedPurposes({
+      consumerScopes: [{ consumer: purpose.consumer, authorizedPurposes: [] }],
+      signal: new AbortController().signal, publish: () => { published = true; },
+    })).rejects.toMatchObject({ code });
+    expect(published).toBe(false);
+    expect(server.read().record).toEqual({ key: 'purposes', value: { v: 1, bindings: [binding] } });
   });
 
   it('preserves a content-free acknowledged effect while refusing bindings after Account retirement', async () => {

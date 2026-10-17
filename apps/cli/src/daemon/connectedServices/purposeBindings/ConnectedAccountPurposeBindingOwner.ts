@@ -1928,8 +1928,8 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
   subscribe?: ConnectedAccountPurposeBindingStore['subscribe'];
 }> = {}): ConnectedAccountPurposeBindingStore {
   const readSnapshot = () => input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
-  const unavailable = (reason: string) => new PluginError({ code: 'plugin_connected_account_settings_unavailable',
-    message: 'Connected Account purpose catalog is unavailable', details: { reason } });
+  const unavailable = (reason: string, retryable = false) => new PluginError({ code: 'plugin_connected_account_settings_unavailable',
+    message: 'Connected Account purpose catalog is unavailable', retryable, details: { reason } });
   const captureOperation = () => {
     const snapshot = readSnapshot();
     const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
@@ -1986,6 +1986,7 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
         if (code === 'outcome_unknown') throw new PluginError({ code: 'plugin_connected_account_settings_outcome_unknown',
           message: 'Connected Account purpose mutation outcome is unknown' });
         if (code === 'scope-retired') throw unavailable('scope-retired');
+        if (code === 'unreachable') throw unavailable('unreachable', true);
         throw error;
       });
       if (result.status === 'conflict' || result.status === 'settings-conflict') {

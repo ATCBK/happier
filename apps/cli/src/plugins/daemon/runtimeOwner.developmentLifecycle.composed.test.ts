@@ -2,7 +2,14 @@ import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { expect, it } from 'vitest';
+import axios from 'axios';
+import { afterEach, expect, it, vi } from 'vitest';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+
+import { createActiveAccountSettingsConnectedAccountPurposeBindingStore, createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { deriveRegistryConnectedAccountPurposeReconciliationScopes } from '@/daemon/connectedServices/purposeBindings/deriveRegistryConnectedAccountPurposeAuthorizations';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
@@ -15,7 +22,10 @@ import { createDaemonPluginDevelopmentRootsOwner } from './developmentRoots';
 import { createPackedTestConnectedAccountsRuntime } from './packedTestConnectedAccounts';
 import { createDaemonPluginRuntimeOwner } from './runtimeOwner';
 
-function createRuntime(happyHomeDir: string, pluginId: string) {
+afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+
+function createRuntime(happyHomeDir: string, pluginId: string,
+  reconcileConnectedAccountPurposePublication?: Parameters<typeof createDaemonPluginRuntimeOwner>[0]['reconcileConnectedAccountPurposePublication']) {
   const reloadController = createPluginReloadController({
     happyHomeDir,
     resolveRuntimeRegistry: async () => resolveExecutablePluginRuntimeRegistry({
@@ -27,6 +37,7 @@ function createRuntime(happyHomeDir: string, pluginId: string) {
     staleCandidateCleanup: 'disabled',
     reloadController,
     connectedAccounts: createPackedTestConnectedAccountsRuntime({ happyHomeDir, pluginId }).owner,
+    ...(reconcileConnectedAccountPurposePublication ? { reconcileConnectedAccountPurposePublication } : {}),
   });
   return { owner, reloadController, async dispose() {
     await owner.changeService.shutdown();
@@ -134,6 +145,78 @@ it('re-enables a reviewed source in place, changes policy, and re-enables after 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('reactivates an enabled external development plugin after daemon restart without an author command', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-development-restart-')));
+  const entryPath = join(root, 'plugin.ts');
+  const pluginId = 'acme.development-restart';
+  let runtime = createRuntime(root, pluginId);
+  const manifest = createPluginManifestV2Fixture({
+    id: pluginId,
+    entrypoints: { daemon: './plugin.mjs', development: './plugin.ts' },
+    contributes: {
+      actions: [{ id: 'identity', title: 'Identity', scopes: ['global'], surfaces: ['cli'],
+        execution: { target: 'daemon' }, dangerLevel: 'safe' }],
+      resources: [{ id: 'status', source: 'dynamic', kind: 'config', contentType: 'application/json' }],
+    },
+  });
+  const source = (revision: number) => [
+    `export const manifest = ${JSON.stringify(manifest)};`,
+    'export function activate(api) {',
+    `api.actions.register('identity', async () => ({ revision: ${revision} }));`,
+    `api.resources.registerDynamicResource('status', { read: async () => JSON.stringify({ revision: ${revision} }), observe: () => ({ dispose() {} }) });`,
+    '}',
+  ].join('\n');
+  try {
+    await writeFile(entryPath, source(1));
+    const initial = await runtime.reloadController.acquireRuntimeRegistry();
+    await initial.release();
+    await runtime.owner.changeService.controlPluginDevelopment!({ kind: 'registerExplicit', rootPath: entryPath });
+    const pending = (await runtime.owner.changeService.listPendingPluginChanges()).changes[0]!;
+    await expect(runtime.owner.changeService.decidePluginChange({
+      pendingChangeId: pending.pendingChangeId, decision: 'installAndTrust',
+    })).resolves.toMatchObject({ kind: 'committed', pluginId });
+    await runtime.dispose();
+    // A new daemon gets only durable state and current source, with no CLI watcher
+    // or in-process occurrence from the previous daemon.
+    await writeFile(entryPath, source(2));
+    const credentials = { token: 'restart-fixture', encryption: null };
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(credentials),
+      settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1, loadedAtMs: 1,
+      settingsSecretsReadKeys: [], connectedPurposeCatalog: { status: 'ready', revision: 1,
+        record: { key: 'purposes', value: { v: 1, bindings: [] } } } });
+    // HTTP is the only substituted boundary: the startup registry, persisted
+    // development roots, purpose store and publication admission remain real.
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith('/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path.endsWith('/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      throw new Error(`Unexpected restart HTTP read: ${path}`);
+    });
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 503, data: { error: 'unavailable' } });
+    const unavailable = async (): Promise<never> => { throw new Error('Startup must not select or materialize credentials'); };
+    const bindings = createConnectedAccountPurposeBindingOwner({
+      store: createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials }),
+      selectTarget: unavailable, resolveTarget: unavailable, materializeAccount: unavailable,
+      projectTargetAccounts: unavailable, assertTargetAccountMaterializable: unavailable,
+    });
+    runtime = createRuntime(root, pluginId, async input => bindings.reconcileAuthorizedPurposes({
+      consumerScopes: deriveRegistryConnectedAccountPurposeReconciliationScopes(input.previous, input.candidate,
+        input.resolveOptionalAccess, { candidateActivePluginIds: input.candidateActivePluginIds }),
+      signal: new AbortController().signal, publish: input.publish,
+    }));
+    await runtime.owner.initialize();
+    expect((await runtime.owner.changeService.listPendingPluginChanges()).changes).toEqual([]);
+    expect(runtime.reloadController.readCurrentPluginOccurrenceId?.(pluginId)).toBeTruthy();
+    await expect(runtime.reloadController.getState().activeRegistry!.targetActionInvocations.invoke({
+      pluginId, localId: 'identity', input: {}, surface: 'cli',
+    })).resolves.toMatchObject({ status: 'executed', value: { revision: 2 } });
+  } finally {
+    await runtime.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 120_000);
 
 it.each([false, true])('publishes new dynamic Resources with their Actions, retaining v1 if v2 throws (%s)', async (crash) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-development-resource-update-')));
