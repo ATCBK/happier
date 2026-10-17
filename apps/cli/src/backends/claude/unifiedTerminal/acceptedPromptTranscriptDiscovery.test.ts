@@ -100,18 +100,20 @@ describe('createClaudeUnifiedAcceptedPromptTranscriptDiscovery', () => {
     expect(completed).toEqual([]);
   });
 
-  it('settles an accepted shell delivery without hooks and allows the following ordinary prompt to proceed', async () => {
+  it.each(['early_output', 'long_output_before_acceptance', 'long_output_after_acceptance'] as const)(
+    'settles shell delivery and allows the following prompt after %s', async (timing) => {
+    let nowMs = 2_000;
     const injected: string[] = [];
     const accepted: string[] = [];
     let completed = 0;
     let completion: Promise<void> | undefined;
     let bridge: ReturnType<typeof createClaudeUnifiedHookLifecycleBridge> | undefined;
     const discovery = createClaudeUnifiedAcceptedPromptTranscriptDiscovery({
-      acceptedPromptWindowMs: 5_000, nowMs: () => 2_000,
+      acceptedPromptWindowMs: 5_000, nowMs: () => nowMs,
       onAttemptLocalCommandCompleted: () => { completion = bridge?.settleAttemptLocalCommandCompleted(); return completion; },
     });
     const arbiter = createClaudeUnifiedInputArbiter({
-      nowMs: () => 2_000, quietPeriodMs: 0,
+      nowMs: () => nowMs, quietPeriodMs: 0,
       injectPrompt: async (batch) => {
         injected.push(batch.message);
         if (batch.message === '! echo hi') {
@@ -119,7 +121,7 @@ describe('createClaudeUnifiedAcceptedPromptTranscriptDiscovery', () => {
           const rows = shellRows();
           discovery.observeControlCommandTranscript(rows.caveat);
           discovery.observeControlCommandTranscript(rows.input);
-          discovery.observeControlCommandTranscript(rows.output);
+          if (timing === 'early_output') discovery.observeControlCommandTranscript(rows.output);
         }
         return { status: 'injected', at: 2_000, bytesWritten: batch.message.length };
       },
@@ -145,11 +147,17 @@ describe('createClaudeUnifiedAcceptedPromptTranscriptDiscovery', () => {
       const rows = shellRows();
       discovery.observeControlCommandTranscript(rows.caveat);
       discovery.observeControlCommandTranscript(rows.input);
+      if (timing === 'long_output_before_acceptance') {
+        nowMs = 90_000;
+        discovery.observeControlCommandTranscript({ ...rows.output, timestamp: new Date(nowMs).toISOString() });
+      }
       const match = discovery.findMatchingTranscript([rows.input]);
       expect(match).not.toBeNull();
       expect(await arbiter.confirmPromptAcceptedByProviderIf((batch) => Boolean(match && doesClaudeUnifiedPromptBatchMatchAcceptedTranscript({ batch, match })))).toBe(true);
-      discovery.observeControlCommandTranscript(rows.output);
-      discovery.observeControlCommandTranscript(rows.output);
+      if (timing === 'long_output_after_acceptance') nowMs = 90_000;
+      const output = { ...rows.output, timestamp: new Date(nowMs).toISOString() };
+      discovery.observeControlCommandTranscript(output);
+      discovery.observeControlCommandTranscript(output);
       await completion;
       await arbiter.drainWhenSafe();
       expect(accepted).toEqual(['shell-local-id']);
@@ -159,6 +167,32 @@ describe('createClaudeUnifiedAcceptedPromptTranscriptDiscovery', () => {
       bridge.dispose();
       await arbiter.dispose();
     }
+  });
+
+  it.each(['before_output', 'after_output'] as const)('retains a long-running local slash command accepted %s', (acceptanceTiming) => {
+    let nowMs = 2_000;
+    const completed: string[] = [];
+    const discovery = createClaudeUnifiedAcceptedPromptTranscriptDiscovery({
+      acceptedPromptWindowMs: 5_000, nowMs: () => nowMs,
+      onAttemptLocalCommandCompleted: ({ acceptedPromptId }) => { completed.push(acceptedPromptId); },
+    });
+    const id = discovery.recordAcceptedPrompt({ message: '/model opus', deliveryIdentity: { localIds: ['long-model'] } });
+    const command = { type: 'user', uuid: 'long-model-command', timestamp: new Date(nowMs).toISOString(),
+      message: { role: 'user', content: '<command-name>/model</command-name><command-args>opus</command-args>' } } satisfies RawJSONLines;
+    const match = discovery.findMatchingTranscript([command]);
+    expect(match).not.toBeNull();
+    if (acceptanceTiming === 'before_output') expect(match && discovery.consumeAcceptedPromptMatch(match)).toBe(true);
+    nowMs = 90_000;
+    const output = { type: 'user', uuid: 'long-model-output', parentUuid: command.uuid, timestamp: new Date(nowMs).toISOString(),
+      message: { role: 'user', content: '<local-command-stdout>Model updated</local-command-stdout>' } } satisfies RawJSONLines;
+    discovery.observeControlCommandTranscript(output);
+    if (acceptanceTiming === 'after_output') {
+      expect(completed).toEqual([]);
+      expect(match && discovery.consumeAcceptedPromptMatch(match)).toBe(true);
+    }
+    expect(completed).toEqual([id]);
+    discovery.observeControlCommandTranscript(output);
+    expect(completed).toEqual([id]);
   });
 
   it('never treats native peer content as delivery of an accepted human prompt', () => {

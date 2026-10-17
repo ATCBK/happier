@@ -395,13 +395,20 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
         independentControlCommands.splice(index, 1);
       }
     }
+    const liveAcceptedPromptIds = new Set(acceptedPrompts.map((prompt) => prompt.id));
     for (const [key, binding] of controlCommandBindings) {
-      if (binding.expiresAtMs < referenceMs) controlCommandBindings.delete(key);
+      // Echo retention cannot retire the completion evidence for an ongoing local
+      // command. Provider acceptance removes its prompt registration before stdout
+      // necessarily arrives; its binding remains authoritative until completion.
+      const awaitingAttemptLocalCompletion = binding.origin.kind === 'attempt'
+        && binding.completionOwner === 'local_stdout'
+        && !binding.completionEmitted
+        && (binding.acceptedConfirmed || liveAcceptedPromptIds.has(binding.origin.acceptedPromptId));
+      if (binding.expiresAtMs < referenceMs && !awaitingAttemptLocalCompletion) controlCommandBindings.delete(key);
     }
     for (const [uuid, expiresAtMs] of localCommandCaveats) {
       if (expiresAtMs < referenceMs) localCommandCaveats.delete(uuid);
     }
-    const liveAcceptedPromptIds = new Set(acceptedPrompts.map((prompt) => prompt.id));
     for (let index = nativeQueuedCommandCustody.length - 1; index >= 0; index -= 1) {
       const custody = nativeQueuedCommandCustody[index];
       if (!custody) continue;
