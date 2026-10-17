@@ -4,12 +4,8 @@ import type {
   HostCurrentSessionInteractionsService as PluginCurrentSessionInteractionsService,
   HostSessionApprovalRequest as PluginSessionApprovalRequest,
   HostSessionApprovalResult as PluginSessionApprovalResult,
-  HostSessionConfirmationRequest as PluginSessionConfirmationRequest,
-  HostSessionConfirmationResult as PluginSessionConfirmationResult,
   HostSessionInteractionRequest as PluginSessionInteractionRequest,
   HostSessionInteractionResult as PluginSessionInteractionResult,
-  HostSessionQuestionsRequest as PluginSessionQuestionsRequest,
-  HostSessionQuestionsResult as PluginSessionQuestionsResult,
 } from '@/agent/runtime/state/currentSessionUiTypes';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 
@@ -24,8 +20,6 @@ class TestInteractions implements PluginCurrentSessionInteractionsService {
   constructor(private readonly requestApproval: ApprovalRequester) {}
 
   request(request: PluginSessionApprovalRequest, options?: { signal?: AbortSignal }): Promise<PluginSessionApprovalResult>;
-  request(request: PluginSessionQuestionsRequest, options?: { signal?: AbortSignal }): Promise<PluginSessionQuestionsResult>;
-  request(request: PluginSessionConfirmationRequest, options?: { signal?: AbortSignal }): Promise<PluginSessionConfirmationResult>;
   async request(
     request: PluginSessionInteractionRequest,
     options?: { signal?: AbortSignal },
@@ -333,25 +327,34 @@ describe('createPublicAcpPermissionHandler', () => {
   });
 
   it('routes empty-property ACP form elicitation through confirmation and maps decline/cancel', async () => {
-    const request = vi.fn(async (req: PluginSessionInteractionRequest): Promise<PluginSessionInteractionResult> => {
-      if (req.kind !== 'confirmation') {
-        throw new Error(`Expected confirmation, got ${req.kind}`);
-      }
-      if (req.message === 'Confirm accept?') {
+    const { createNativeAgentCurrentSessionUiServices } = await import(
+      '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'
+    );
+    const handleToolCall = vi.fn(async (_toolCallId: string, toolName: string, input: unknown) => {
+      expect(toolName).toBe('AgentConfirmation');
+      const confirmation = input as { message?: string };
+      if (confirmation.message === 'Confirm accept?') {
         return {
-          requestId: 'confirm-1',
-          kind: 'confirmation',
-          status: 'approved',
+          decision: 'approved' as const,
         };
       }
       return {
-        requestId: 'confirm-2',
-        kind: 'confirmation',
-        status: 'declined',
+        decision: 'rejected' as const,
       };
     });
+    const currentSession = createNativeAgentCurrentSessionUiServices({
+      permissionHandler: { handleToolCall },
+      pluginId: 'happier.agent.omp',
+      contributionId: 'omp',
+      runtimeId: 'omp',
+      sessionId: 'public-acp-permission-test',
+      occurrenceId: 'occurrence-1',
+      interactionDeadlineMs: 1_000,
+      isCurrent: () => true,
+      signal: new AbortController().signal,
+    });
     const handler = createPublicAcpPermissionHandler({
-      interactions: { request } as unknown as PluginCurrentSessionInteractionsService,
+      interactions: currentSession.interactions,
       signal: new AbortController().signal,
       resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
     });
@@ -398,5 +401,71 @@ describe('createPublicAcpPermissionHandler', () => {
     ).resolves.toEqual({
       action: 'cancel',
     });
+    expect(handleToolCall).toHaveBeenCalledTimes(2);
+  });
+
+  it('truncates plan messages exceeding 4,096 code points without failing canonical schema validation', async () => {
+    const { createNativeAgentCurrentSessionUiServices } = await import(
+      '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'
+    );
+    const hugePlanMessage = 'Plan step details. '.repeat(350); // ~6,650 characters (> 4,096 limit)
+    let capturedQuestionPrompt: string | undefined;
+    const handleToolCall = vi.fn(async (_toolCallId: string, toolName: string, input: unknown) => {
+      expect(toolName).toBe('AskUserQuestion');
+      const questionsInput = input as { questions: Array<{ id: string; question: string }> };
+      capturedQuestionPrompt = questionsInput.questions[0]?.question;
+      return {
+        decision: 'approved' as const,
+        answers: {
+          decision: ['approve'],
+        },
+      };
+    });
+    const currentSession = createNativeAgentCurrentSessionUiServices({
+      permissionHandler: { handleToolCall },
+      pluginId: 'happier.agent.omp',
+      contributionId: 'omp',
+      runtimeId: 'omp',
+      sessionId: 'public-acp-permission-test',
+      occurrenceId: 'occurrence-1',
+      interactionDeadlineMs: 1_000,
+      isCurrent: () => true,
+      signal: new AbortController().signal,
+    });
+    const handler = createPublicAcpPermissionHandler({
+      interactions: currentSession.interactions,
+      signal: new AbortController().signal,
+      resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
+    });
+
+    const response = await handler.handleElicitation!({
+      mode: 'form',
+      sessionId: 'session-1',
+      toolCallId: 'huge-plan-1',
+      message: hugePlanMessage,
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          decision: {
+            type: 'string',
+            oneOf: [
+              { const: 'approve', title: 'Approve plan' },
+              { const: 'refine', title: 'Refine plan' },
+            ],
+          },
+        },
+        required: ['decision'],
+      },
+    });
+
+    expect(response).toEqual({
+      action: 'accept',
+      content: {
+        decision: 'approve',
+      },
+    });
+    expect(capturedQuestionPrompt).toBeDefined();
+    expect(Array.from(capturedQuestionPrompt!).length).toBeLessThanOrEqual(4_096);
+    expect(capturedQuestionPrompt!).toContain('... [truncated]');
   });
 });

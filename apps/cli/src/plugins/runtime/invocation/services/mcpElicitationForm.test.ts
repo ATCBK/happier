@@ -161,9 +161,131 @@ describe('mcpElicitationForm', () => {
     expect(content).toEqual({
       scope: 'Other (type your own)',
       scope__other: 'Custom scope',
-      tags: ['acp'],
+      tags: ['acp', 'Other (type your own)'],
       tags__other: 'Custom tag',
     });
+  });
+
+  it('matches lower-case choice IDs for "other" companion fields and retains the choice ID', () => {
+    const schema = parseMcpElicitationFormSchema({
+      type: 'object',
+      properties: {
+        choice: {
+          type: 'string',
+          title: 'Selection',
+          oneOf: [
+            { const: 'first', title: 'First option' },
+            { const: 'other', title: 'Other' },
+          ],
+        },
+        choice__other: {
+          type: 'string',
+          title: 'Other',
+        },
+      },
+      required: ['choice'],
+    });
+
+    const questions = mcpElicitationFormQuestions(schema);
+    expect(questions).toEqual([
+      {
+        id: 'choice',
+        prompt: 'Selection',
+        type: 'singleChoice',
+        required: true,
+        allowCustom: true,
+        choices: [
+          { id: 'first', label: 'First option' },
+        ],
+      },
+    ]);
+
+    const content = mcpElicitationFormContent(schema, {
+      choice: {
+        kind: 'singleChoice',
+        answer: { kind: 'custom', value: 'My custom response' },
+      },
+    });
+
+    expect(content).toEqual({
+      choice: 'other',
+      choice__other: 'My custom response',
+    });
+  });
+
+  it('does not collapse companion __other if the base property is required and has no matching other choice', () => {
+    const schema = parseMcpElicitationFormSchema({
+      type: 'object',
+      properties: {
+        choice: {
+          type: 'string',
+          title: 'Selection',
+          oneOf: [
+            { const: 'first', title: 'First option' },
+            { const: 'second', title: 'Second option' },
+          ],
+        },
+        choice__other: {
+          type: 'string',
+          title: 'Additional details',
+        },
+      },
+      required: ['choice'],
+    });
+
+    const questions = mcpElicitationFormQuestions(schema);
+    // Both properties must remain separate so the required 'choice' field is not dropped on custom input
+    expect(questions).toHaveLength(2);
+    expect(questions?.map((q) => q.id)).toEqual(['choice', 'choice__other']);
+  });
+
+  it('preserves plan summaries exceeding 512 code points when property has its own title', () => {
+    const longPlan = `### Plan Steps\n\n${'- Step description in detail with reasoning.\n'.repeat(15)}`;
+    expect(Array.from(longPlan).length).toBeGreaterThan(512);
+
+    const schema = parseMcpElicitationFormSchema({
+      type: 'object',
+      properties: {
+        decision: {
+          type: 'string',
+          title: 'Decision',
+          oneOf: [
+            { const: 'approve', title: 'Approve' },
+            { const: 'refine', title: 'Refine' },
+          ],
+        },
+      },
+      required: ['decision'],
+    });
+
+    const questions = mcpElicitationFormQuestions(schema, { message: longPlan });
+    expect(questions).toHaveLength(1);
+    expect(questions![0].prompt).toContain(longPlan);
+    expect(questions![0].prompt).toContain('Decision');
+  });
+
+  it('bounds long prompts to MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1 (4,096 code points)', () => {
+    const hugePlan = 'Very detailed plan text line.\n'.repeat(300); // ~9,000 characters
+    expect(Array.from(hugePlan).length).toBeGreaterThan(4_096);
+
+    const schema = parseMcpElicitationFormSchema({
+      type: 'object',
+      properties: {
+        decision: {
+          type: 'string',
+          oneOf: [
+            { const: 'approve', title: 'Approve' },
+            { const: 'refine', title: 'Refine' },
+          ],
+        },
+      },
+      required: ['decision'],
+    });
+
+    const questions = mcpElicitationFormQuestions(schema, { message: hugePlan });
+    expect(questions).toHaveLength(1);
+    expect(Array.from(questions![0].prompt).length).toBeLessThanOrEqual(4_096);
+    expect(questions![0].prompt).toContain('... [truncated]');
   });
 
   it('returns null for empty-property confirmation schemas', () => {

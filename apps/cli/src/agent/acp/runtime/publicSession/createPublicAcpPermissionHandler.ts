@@ -4,6 +4,7 @@ import type {
   CreateElicitationResponse,
 } from '@agentclientprotocol/sdk';
 import {
+  MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1,
   MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1,
   type SessionInputCausalPermissionAuthorityV1,
 } from '@happier-dev/protocol';
@@ -12,6 +13,7 @@ import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import type { HostCurrentSessionInteractionsService as PluginCurrentSessionInteractionsService } from '@/agent/runtime/state/currentSessionUiTypes';
 import { isWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 import {
+  clampToMaxCodePoints,
   mcpElicitationFormContent,
   mcpElicitationFormQuestions,
   parseMcpElicitationFormSchema,
@@ -219,16 +221,34 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
         }
 
         const trimmedMessage = request.message.trim();
+        const alreadyContainedInPrompt = questions.some((q) => q.prompt.includes(trimmedMessage));
         const shouldIncludeTitle =
           trimmedMessage.length > 0
-          && !(questions.length === 1 && questions[0]?.prompt === trimmedMessage)
+          && !alreadyContainedInPrompt
           && Array.from(trimmedMessage).length <= MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1;
+
+        let finalQuestions = questions;
+        if (
+          trimmedMessage.length > 0
+          && !alreadyContainedInPrompt
+          && Array.from(trimmedMessage).length > MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1
+        ) {
+          const first = questions[0];
+          const combinedPrompt = clampToMaxCodePoints(
+            `${trimmedMessage}\n\n${first.prompt}`,
+            MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1,
+          );
+          finalQuestions = [
+            Object.freeze({ ...first, prompt: combinedPrompt }),
+            ...questions.slice(1),
+          ] as unknown as typeof questions;
+        }
 
         const result = await params.interactions.request(
           {
             kind: 'questions',
             ...(shouldIncludeTitle ? { title: trimmedMessage } : {}),
-            questions,
+            questions: finalQuestions,
           },
           {
             signal: AbortSignal.any([params.signal, controller.signal]),
