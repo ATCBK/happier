@@ -70,6 +70,7 @@ export async function requestPlannedRunnerRestart(input: Readonly<{
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
   requestSignal: (request: PlannedRunnerRestartSignalRequest) => Promise<PlannedRunnerRestartSignalResult>;
   canSignal?: () => PlannedRunnerRestartSignalActivityGateResult | Promise<PlannedRunnerRestartSignalActivityGateResult>;
+  isShuttingDown?: () => boolean;
   isProcessSafeToSignal?: (params: Readonly<{
     pid: number;
     expectedProcessCommandHash?: string;
@@ -160,6 +161,11 @@ export async function requestPlannedRunnerRestart(input: Readonly<{
             if (exactActivityDisabledReason || activityGateResult === false) {
               notSignaledReason = 'activity_in_progress';
               activityDisabledReason = exactActivityDisabledReason ?? undefined;
+              return false;
+            }
+            // Final gate after every awaited probe: never stop a runner once daemon shutdown began.
+            if (input.isShuttingDown?.()) {
+              notSignaledReason = 'shutting_down';
               return false;
             }
             return true;

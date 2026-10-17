@@ -93,10 +93,12 @@ export function createClaudeLocalLifecycleTracker(opts: Readonly<{
     }
   };
 
-  const handleClaudeRuntimeActivityLoss = (reason: string): void => {
+  const handleClaudeRuntimeActivityLoss = (reason: string, options?: Readonly<{ providerStopped: true }>): void => {
     const runtimeActivityAdapter = opts.runtimeActivityAdapter;
     if (!runtimeActivityAdapter) return;
-    runRuntimeActivityEffect('runtime-loss-target', () => runtimeActivityAdapter.handleRuntimeLoss(reason));
+    runRuntimeActivityEffect('runtime-loss-target', () => (options
+      ? runtimeActivityAdapter.handleRuntimeLoss(reason, options)
+      : runtimeActivityAdapter.handleRuntimeLoss(reason)));
   };
 
   const observeLifecycle = (event: LocalTurnLifecycleEvent | null): void => {
@@ -224,9 +226,10 @@ export function createClaudeLocalLifecycleTracker(opts: Readonly<{
     handleProviderActivityObservationLoss(reason: string): void {
       handleClaudeRuntimeActivityLoss(reason);
     },
-    observeProcessExit(): void {
+    observeProcessExit(options?: Readonly<{ providerStopped?: boolean }>): void {
       clearPendingTaskNotificationReaction();
-      handleClaudeRuntimeActivityLoss('claude_process_exit');
+      handleClaudeRuntimeActivityLoss('claude_process_exit', options?.providerStopped === true
+        ? { providerStopped: true } : undefined);
       const snapshot = opts.lifecycle.snapshot();
       if (!snapshot.active || snapshot.terminal) return;
       opts.lifecycle.observe({

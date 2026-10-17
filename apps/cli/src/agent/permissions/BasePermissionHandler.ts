@@ -477,6 +477,7 @@ export abstract class BasePermissionHandler {
             context, completion: { result, completedRequest }, onAdmitted,
         });
         if (!completed && (structuredAnswers || context.status === 'live')) return false;
+        if (completed) this.pendingRequests.delete(response.id);
         if (!completed && !legacyPending) {
             logger.debug(`${this.getLogPrefix()} Permission response did not complete any pending request`);
         }

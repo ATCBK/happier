@@ -86,6 +86,7 @@ describe('buildCliBinaryArtifactPayload Windows rename fallback', () => {
         for (const sidecarPath of [
             ['apps', 'cli', 'scripts', 'childProcessOptions.cjs'],
             ['apps', 'cli', 'scripts', 'claude_launcher_runtime.cjs'],
+            ['apps', 'cli', 'scripts', 'native_process_exit.cjs'],
             ['apps', 'cli', 'scripts', 'claude_local_launcher.cjs'],
             ['apps', 'cli', 'scripts', 'claude_remote_launcher.cjs'],
             ['apps', 'cli', 'scripts', 'session_hook_forwarder.cjs'],

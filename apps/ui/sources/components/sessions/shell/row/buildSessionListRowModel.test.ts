@@ -236,7 +236,7 @@ describe('buildSessionListRowModel', () => {
         expect(modelA.testID).toBe('session-list-item-shared-id');
     });
 
-    it('merges the store renderable overlay while preserving row-only pending flags and newer activity', () => {
+    it('merges the store renderable overlay while honoring cleared pending flags and preserving newer activity', () => {
         const rowSession = createRenderable('s1', {
             metadata: {
                 name: 'Row Name',
@@ -272,8 +272,68 @@ describe('buildSessionListRowModel', () => {
         });
 
         expect(model.session.metadata?.name).toBe('Store Name');
-        expect((model.session as SessionListRenderableSession).hasPendingPermissionRequests).toBe(true);
+        expect((model.session as SessionListRenderableSession).hasPendingPermissionRequests).toBe(false);
         expect((model.session as SessionListRenderableSession).meaningfulActivityAt).toBe(900);
+    });
+
+    it.each(['foreground', 'background'] as const)('clears stale row attention when the store clears requests while %s work continues', (workKind) => {
+        const rowSession = createRenderable('s1', {
+            active: true,
+            activeAt: NOW_MS - 10,
+            latestTurnStatus: workKind === 'foreground' ? 'in_progress' : 'completed',
+            latestTurnStatusObservedAt: NOW_MS - 10,
+            runtimeActivityState: 'active',
+            runtimeActivityActiveCount: 1,
+            runtimeActivityObservedAt: NOW_MS - 10,
+            runtimeActivityRevision: 1,
+            hasPendingPermissionRequests: true,
+            hasPendingUserActionRequests: true,
+            pendingRequestObservedAt: NOW_MS - 10,
+        });
+        const item = createSessionItem(rowSession);
+        const build = (renderable: SessionListRenderableSession) => buildSessionListRowModel({
+            item,
+            state: { renderable },
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings(),
+        });
+
+        expect(build(rowSession).attention.listState).toBe('action_required');
+
+        const cleared = build({
+            ...rowSession,
+            agentStateVersion: rowSession.agentStateVersion + 1,
+            hasPendingPermissionRequests: false,
+            hasPendingUserActionRequests: false,
+            pendingRequestObservedAt: null,
+        });
+
+        expect(cleared.session).toMatchObject({
+            hasPendingPermissionRequests: false,
+            hasPendingUserActionRequests: false,
+        });
+        expect(cleared.attention.listState).not.toBe('action_required');
+        expect(cleared.status.state).toBe(workKind === 'foreground' ? 'thinking' : 'background_active');
+        expect(cleared.presentation.attentionIndicator).toBe('working');
+    });
+
+    it('preserves row pending flags when the store overlay has no pending projection', () => {
+        const model = buildSessionListRowModel({
+            item: createSessionItem(createRenderable('s1', {
+                hasPendingPermissionRequests: true,
+                hasPendingUserActionRequests: true,
+            })),
+            state: { renderable: createRenderable('s1') },
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings(),
+        });
+
+        expect((model.session as SessionListRenderableSession).hasPendingPermissionRequests).toBe(true);
+        expect((model.session as SessionListRenderableSession).hasPendingUserActionRequests).toBe(true);
     });
 
     it('preserves row-only blocked pending state when merging the store renderable overlay', () => {

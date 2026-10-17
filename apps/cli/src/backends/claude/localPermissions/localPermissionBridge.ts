@@ -710,7 +710,7 @@ export class ClaudeLocalPermissionBridge {
         return null;
     }
 
-    private tryHandlePermissionRpc(payload: PermissionRpcPayload): PermissionRpcConsumerOutcome {
+    private async tryHandlePermissionRpc(payload: PermissionRpcPayload): Promise<PermissionRpcConsumerOutcome> {
         const requestId = typeof payload?.id === 'string' ? payload.id : '';
         if (!requestId) {
             return false;
@@ -761,50 +761,43 @@ export class ClaudeLocalPermissionBridge {
             ? (normalizePermissionModeToIntent(payload.mode) ?? payload.mode)
             : undefined;
 
-        let shouldApplySideEffects = false;
-        let resolvedToolName: string | null = null;
-        const handled = this.permissionCoordinator.handleResponse({
-            requestId,
-            buildCompletion: (context) => {
-                resolvedToolName = context.toolName;
-                const updatedPermissions = this.resolveResponseUpdatedPermissions({
-                    payload: normalizedPayload,
-                    toolName: context.toolName,
-                    resolvedMode,
-                });
-                const hookResponse = this.buildHookResponse({
-                    payload: normalizedPayload,
-                    toolName: context.toolName,
-                    toolInput: this.pendingRequests.get(requestId)?.toolInput ?? context.toolInput,
+        const context = this.permissionCoordinator.getResponseContext(requestId);
+        if (!context) return false;
+        const updatedPermissions = this.resolveResponseUpdatedPermissions({
+            payload: normalizedPayload,
+            toolName: context.toolName,
+            resolvedMode,
+        });
+        const hookResponse = this.buildHookResponse({
+            payload: normalizedPayload,
+            toolName: context.toolName,
+            toolInput: this.pendingRequests.get(requestId)?.toolInput ?? context.toolInput,
+            updatedPermissions,
+            hookEventName: this.pendingRequests.get(requestId)?.hookEventName ?? 'PermissionRequest',
+        });
+        const handled = await this.permissionCoordinator.completeRpcResponse({
+            context,
+            completion: {
+                result: hookResponse,
+                completedRequest: {
+                    status: payload.approved ? 'approved' : 'denied',
+                    reason: payload.reason,
+                    mode: resolvedMode,
+                    allowedTools,
                     updatedPermissions,
-                    hookEventName: this.pendingRequests.get(requestId)?.hookEventName ?? 'PermissionRequest',
-                });
-                shouldApplySideEffects = true;
-
-                return {
-                    result: hookResponse,
-                    completedRequest: {
-                        status: payload.approved ? 'approved' : 'denied',
-                        reason: payload.reason,
-                        mode: resolvedMode,
-                        allowedTools,
-                        updatedPermissions,
-                        ...(normalizedPayload.structuredAnswersV1
-                            ? { extraCompletedFields: { structuredAnswersV1: normalizedPayload.structuredAnswersV1 } }
-                            : {}),
-                    },
-                };
+                    ...(normalizedPayload.structuredAnswersV1
+                        ? { extraCompletedFields: { structuredAnswersV1: normalizedPayload.structuredAnswersV1 } }
+                        : {}),
+                },
             },
             onAdmitted: () => {
                 this.pendingRequests.delete(requestId);
-                if (shouldApplySideEffects) {
-                    this.applyPermissionRpcState(normalizedPayload, {
-                        allowedTools,
-                        resolvedMode,
-                        excludeRequestId: requestId,
-                        toolName: resolvedToolName,
-                    });
-                }
+                this.applyPermissionRpcState(normalizedPayload, {
+                    allowedTools,
+                    resolvedMode,
+                    excludeRequestId: requestId,
+                    toolName: context.toolName,
+                });
             },
         });
 

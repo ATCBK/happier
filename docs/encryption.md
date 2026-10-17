@@ -231,6 +231,14 @@ sequenceDiagram
   - WebSocket `machine-update-metadata` / `machine-update-state`
   - `update-machine` events
 
+In 0.2, plain Account storage does not disable Machine RPC encryption. Devices with
+different content keys cannot exchange those encrypted requests. Development source
+records `rpc_params_decryption_failed` in the target's normal file log when RPC
+parameters cannot be decrypted, with the unprefixed method and encryption variant;
+it excludes payloads, ciphertext, keys, and Machine/Session identifiers. This is a
+diagnostic for rejected input, which can also be malformed, rather than proof of a
+key mismatch or a migration of existing device keys.
+
 ### Artifacts
 - `header` and `body` are encrypted bytes encoded as base64 on the wire.
 - Stored as `Bytes` in the DB.

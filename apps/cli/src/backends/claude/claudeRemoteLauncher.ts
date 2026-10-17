@@ -60,7 +60,7 @@ import {
 } from '@/agent/runtime/session/pendingDelivery/undeliverableProviderPrompt';
 import { PermissionHandler } from "./utils/permissionHandler";
 import { Future } from "@/utils/future";
-import { AbortError, type SDKAssistantMessage, type SDKMessage, type SDKUserMessage } from "./sdk/types";
+import { AbortError, hasUnverifiedProviderTermination, type SDKAssistantMessage, type SDKMessage, type SDKUserMessage } from "./sdk/types";
 import { formatClaudeMessageForInk } from "@/ui/messageFormatterInk";
 import { logger } from "@/ui/logger";
 import { SDKToLogConverter } from "./utils/sdkToLogConverter";
@@ -364,6 +364,9 @@ export function resolveClaudeRemoteLaunchErrorDisposition(params: Readonly<{
     sessionIdAtLaunchStart?: string | null;
     currentSessionId?: string | null;
 }>): 'ignore' | 'terminate' | 'surface' | 'preserve-resume-and-exit' | 'preserve-resume-and-wait' {
+    // Unverified provider termination cannot hand this Session's ledger to another provider,
+    // including a requested mode switch: the previous child may still be running.
+    if (hasUnverifiedProviderTermination(params.error)) return 'preserve-resume-and-exit';
     if (params.exitReason !== null) return 'ignore';
     if (params.runtimeTerminationStarted) return 'terminate';
 

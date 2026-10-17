@@ -30,18 +30,62 @@ describe('ClaudeLocalPermissionBridge', () => {
     let resumed = false;
     void pending.then(() => { resumed = true; });
     const respond = client.rpcHandlerManager.getHandler('permission')!;
-    await respond({ id: 'local-durable', approved: true });
+    const firstResponse = respond({ id: 'local-durable', approved: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(resumed).toBe(false);
     fail(new Error('storage admission failed'));
+    await expect(firstResponse).resolves.toMatchObject({ ok: false, errorCode: 'permission_response_failed' });
     await vi.advanceTimersByTimeAsync(0);
     expect(resumed).toBe(false);
-    await respond({ id: 'local-durable', approved: true });
+    const retriedResponse = respond({ id: 'local-durable', approved: true });
     admit();
+    await expect(retriedResponse).resolves.toEqual({ ok: true });
     await vi.advanceTimersByTimeAsync(0);
     await expect(pending).resolves.toMatchObject({ continue: true });
     bridge.dispose();
   });
+  it('keeps a failed UI approval retryable before releasing its native hook', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('local-approval-retry');
+    const bridge = new ClaudeLocalPermissionBridge(session);
+    bridge.activate();
+    const pending = bridge.handlePermissionHook({
+      hook_event_name: 'PermissionRequest', tool_name: 'Write',
+      tool_input: { file_path: '/tmp/retry.txt', content: 'hello' }, tool_use_id: 'retry',
+    });
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    const write = vi.spyOn(client, 'updateAgentState');
+    const updateState = client.updateAgentState.bind(client);
+    let failNext = true;
+    Object.defineProperty(client, 'updateAgentState', {
+      configurable: true,
+      value: async (updater: Parameters<typeof client.updateAgentState>[0]) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error('state transport unavailable');
+        }
+        updateState(updater);
+      },
+    });
+    const rpc = client.rpcHandlerManager.getHandler('permission')!;
+    try {
+      await expect(rpc({ id: 'retry', approved: true })).resolves.toMatchObject({
+        ok: false, errorCode: 'permission_response_failed',
+      });
+      expect(settled).toBe(false);
+      expect(client.agentState.requests.retry).toBeDefined();
+      await expect(rpc({ id: 'retry', approved: true })).resolves.toEqual({ ok: true });
+      await expect(pending).resolves.toMatchObject({
+        hookSpecificOutput: { decision: { behavior: 'allow' } },
+      });
+      expect(client.agentState.requests.retry).toBeUndefined();
+    } finally {
+      write.mockRestore();
+      bridge.dispose();
+    }
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
   });

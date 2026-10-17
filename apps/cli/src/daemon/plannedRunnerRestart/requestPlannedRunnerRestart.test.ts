@@ -60,6 +60,49 @@ describe('requestPlannedRunnerRestart', () => {
     expect(restartRequestedPids.has(tracked.pid)).toBe(true);
   });
 
+  it('does not signal a deferred restart whose turn boundary arrives after shutdown began', async () => {
+    const tracked = trackedSession();
+    const pidToTrackedSession = new Map([[tracked.pid, tracked]]);
+    const restartRequestedPids = new Set<number>();
+    const completionWaiters = createRestartCompletionWaiters({ timeoutMs: 60_000 });
+    const queue = createConnectedServiceSwitchDeferralQueue({ timeoutMs: 60_000, disableDeferral: false });
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'task_started' });
+    let shuttingDown = false;
+    const requestSignal = vi.fn(async ({ shouldSignal }) => (
+      await shouldSignal()
+        ? { status: 'requested' as const }
+        : { status: 'skipped_stale_owner' as const }
+    ));
+
+    const pending = requestPlannedRunnerRestart({
+      completionWaiters,
+      sessionId: 'sess-1',
+      tracked,
+      reason: 'connected_service_switch',
+      deferral: {
+        kind: 'connected_service_switch',
+        source: 'automatic',
+        policy: 'defer_until_turn_boundary',
+        target: { serviceId: 'anthropic', profileId: 'work', groupId: 'primary', generation: 2 },
+        turnDeferralQueue: queue,
+      },
+      restartRequestedPids,
+      pidToTrackedSession,
+      requestSignal,
+      canSignal: () => true,
+      isShuttingDown: () => shuttingDown,
+      isProcessSafeToSignal: async () => true,
+      logDebug: () => {},
+    });
+
+    shuttingDown = true;
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'assistant_message_end' });
+
+    await expect(pending).resolves.toEqual({ signaled: false, notSignaledReason: 'shutting_down' });
+    expect(restartRequestedPids.has(tracked.pid)).toBe(false);
+    expect(completionWaiters.hasPending()).toBe(false);
+  });
+
   it('clears the reservation and reports no signal when ownership changes before signal', async () => {
     const tracked = trackedSession();
     const pidToTrackedSession = new Map<number, TrackedSession>([[tracked.pid, tracked]]);

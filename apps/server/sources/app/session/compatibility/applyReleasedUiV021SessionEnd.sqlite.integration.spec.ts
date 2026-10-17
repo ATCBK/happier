@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { Socket } from "socket.io";
 
 import { db } from "@/storage/db";
 import { applySessionTurnMutation } from "@/app/session/sessionWriteService";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { eventRouter, type ClientConnection } from "@/app/events/eventRouter";
 
-import { eventRouter } from "@/app/events/eventRouter";
 
 import { applyReleasedUiV021SessionEnd } from "./applyReleasedUiV021SessionEnd";
+import { registerReleasedUiV021SessionEndSocketEvent } from "./registerReleasedUiV021SessionEndSocketEvent";
 
 describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
     let harness: LightSqliteHarness;
@@ -23,6 +25,42 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
 
     afterAll(async () => {
         await harness.close();
+    });
+
+    it("delivers the authoritative Stop projection to the initiating UI connection", async () => {
+        const owner = await db.account.create({ data: { publicKey: `owner-${randomUUID()}` } });
+        const session = await db.session.create({
+            data: {
+                accountId: owner.id,
+                tag: `tag-${randomUUID()}`,
+                metadata: "{}",
+                active: true,
+                lastActiveAt: new Date(1_000),
+            },
+        });
+        const emit = vi.fn();
+        const handlers = new Map<string, (raw: unknown) => void>();
+        // Socket.IO is the external transport boundary; the real event router decides delivery.
+        const socket = {
+            emit,
+            data: {},
+            on: (event: string, handler: (raw: unknown) => void) => { handlers.set(event, handler); },
+        } as unknown as Socket;
+        const connection: ClientConnection = { connectionType: "user-scoped", userId: owner.id, socket };
+        eventRouter.addConnection(owner.id, connection);
+        try {
+            registerReleasedUiV021SessionEndSocketEvent({
+                socket,
+                accountId: owner.id,
+                now: () => 2_000,
+            });
+            handlers.get("session-end")?.({ sid: session.id, time: 2_000 });
+            await vi.waitFor(() => expect(emit).toHaveBeenCalledWith("update", expect.objectContaining({
+                body: expect.objectContaining({ t: "update-session", id: session.id, active: false }),
+            })));
+        } finally {
+            eventRouter.removeConnection(owner.id, connection);
+        }
     });
 
     it("settles the current turn, publisher lifecycle, and Runtime Activity exactly once for the owner", async () => {

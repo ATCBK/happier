@@ -36,7 +36,7 @@ vi.mock('@/auth/context/AuthContext', () => ({
 }));
 
 const clipboardMocks = vi.hoisted(() => ({
-    setStringAsync: vi.fn(async () => {}),
+    setStringAsync: vi.fn(async () => true),
 }));
 vi.mock('expo-clipboard', () => clipboardMocks);
 

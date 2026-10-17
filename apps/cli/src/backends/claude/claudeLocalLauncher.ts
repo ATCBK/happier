@@ -40,6 +40,7 @@ import { createClaudeWorkflowActivitySourceForSession } from './workflows/create
 import { createWorkflowAgentTranscriptRegistrar } from './remote/sidechains/createWorkflowAgentTranscriptRegistrar';
 import type { ClaudeRemoteSubagentFileCollector } from './remote/sidechains/claudeRemoteSubagentFileCollector';
 import { loadClaudeJsonlReplayBaseline } from './utils/loadClaudeJsonlReplayBaseline';
+import { ClaudeNativeProviderExitUnverifiedError, hasUnverifiedProviderTermination } from './sdk/types';
 
 function upsertClaudePermissionModeArgs(
     args: string[] | undefined,
@@ -433,6 +434,8 @@ export async function claudeLocalLauncher(
 
             // Launch
             logger.debug('[local]: launch');
+            // No callback means creation failed; an observed wrapper exit can still be unqualified.
+            let providerStopped: boolean | undefined;
             try {
                 syncLastPermissionModeFromMetadata?.();
 
@@ -461,6 +464,7 @@ export async function claudeLocalLauncher(
                         path: session.path,
                         sessionId: resumeFromSessionId,
                         onSessionFound: handleSessionStart,
+                        onProcessExit: result => { providerStopped = result.providerStopped; },
                         onThinkingChange: applyFd3ThinkingFallback,
                         onLifecycleGapDetected: (event) => emitClaudeUnifiedLifecycleGapDetected(unifiedTelemetry, event),
                         abort: processAbortController.signal,
@@ -478,8 +482,11 @@ export async function claudeLocalLauncher(
                         hookPluginDir: session.hookPluginDir,
                     });
                 } finally {
-                    lifecycleTracker.observeProcessExit();
+                    lifecycleTracker.observeProcessExit({ providerStopped: providerStopped === true });
                     await Promise.resolve();
+                }
+                if (providerStopped === false && abortingForModeSwitch) {
+                    throw new ClaudeNativeProviderExitUnverifiedError();
                 }
 
                 // Consume one-time Claude flags after spawn
@@ -494,6 +501,23 @@ export async function claudeLocalLauncher(
                 }
             } catch (e) {
                 logger.debug('[local]: launch error', e);
+                const replacingInvocation = abortingForModeSwitch || (!exitReason && !(e instanceof ExitCodeError));
+                const launchError = providerStopped === false && replacingInvocation && !hasUnverifiedProviderTermination(e)
+                    ? new AggregateError([e, new ClaudeNativeProviderExitUnverifiedError()],
+                        'Claude local replacement refused with unverified provider termination', { cause: e })
+                    : e;
+                const restoreUnconfirmedFork = () => {
+                    if (expectsFork && session.sessionId === null) {
+                        session.sessionId = resumeFromSessionId;
+                        session.transcriptPath = resumeFromTranscriptPath;
+                    }
+                };
+                if (hasUnverifiedProviderTermination(launchError)) {
+                    restoreUnconfirmedFork();
+                    session.client.sendSessionEvent({ type: 'message', message: formatErrorForUi(launchError) });
+                    exitReason = { type: 'exit', code: 1 };
+                    break;
+                }
                 // If Claude exited with non-zero exit code, propagate it
                 if (e instanceof ExitCodeError) {
                     // When switching modes, we abort the local Claude process (SIGTERM → exit code 143).
@@ -505,12 +529,8 @@ export async function claudeLocalLauncher(
                     exitReason = { type: 'exit', code: e.exitCode };
                     break;
                 }
-                if (expectsFork && session.sessionId === null) {
-                    // If the local spawn failed before Claude reported the forked session,
-                    // restore the previous session info so remote mode can still resume it.
-                    session.sessionId = resumeFromSessionId;
-                    session.transcriptPath = resumeFromTranscriptPath;
-                }
+                // A launch that never proved its fork must preserve the previous resume identity.
+                restoreUnconfirmedFork();
                 if (!exitReason) {
                     transcriptProjector.reset();
                     errorCount += 1;

@@ -318,7 +318,7 @@ export class PermissionHandler {
         this.applyPermissionResponse({ id: toolCallId, approved: true, structuredAnswersV1: opts?.answers });
     }
 
-    private tryHandlePermissionRpc(message: PermissionResponse): boolean {
+    private async tryHandlePermissionRpc(message: PermissionResponse): Promise<boolean> {
         const id = typeof message?.id === 'string' ? message.id : '';
         if (!id) {
             return false;
@@ -346,7 +346,13 @@ export class PermissionHandler {
                 })
                 : undefined;
 
-        this.applyPermissionResponse({ ...message, ...(structuredAnswersV1 ? { structuredAnswersV1 } : {}) }, context);
+        const response = { ...message, ...(structuredAnswersV1 ? { structuredAnswersV1 } : {}) };
+        const completed = await this.permissionCoordinator.completeRpcResponse({
+            context,
+            completion: this.buildPermissionCompletion(response, context),
+            onAdmitted: () => this.recordPermissionResponse(response, context),
+        });
+        if (!completed) return false;
         return true;
     }
 
@@ -395,7 +401,6 @@ export class PermissionHandler {
             return null;
         }
     }
-
 
     private applyPermissionResponseSideEffects(params: {
         response: PermissionResponse;
@@ -450,37 +455,42 @@ export class PermissionHandler {
         this.permissionCoordinator.completeResponse({
             context,
             completion,
-            onAdmitted: () => {
-                if (this.isToolTraceEnabled()) {
-                    recordToolTraceEvent({
-                        direction: 'inbound',
-                        sessionId: this.session.client.sessionId,
-                        protocol: 'claude',
-                        provider: 'claude',
-                        kind: 'permission-response',
-                        payload: {
-                            type: 'permission-response',
-                            permissionId: id,
-                            approved: message.approved,
-                            reason: typeof message.reason === 'string' ? message.reason : undefined,
-                            mode: message.mode,
-                            allowedTools: this.redactToolTraceValue(message.allowedTools ?? message.allowTools, 'allowedTools'),
-                            answers: this.redactToolTraceValue(message.answers, 'answers'),
-                            updatedPermissions: this.redactToolTraceValue(message.updatedPermissions, 'updatedPermissions'),
-                        },
-                    });
-                }
+            onAdmitted: () => this.recordPermissionResponse(message, context),
+        });
+    }
 
-                // Store the response with timestamp only after the canonical coordinator completed it.
-                this.responses.set(id, { ...message, receivedAt: Date.now() });
 
-                this.pendingRequestMetadata.delete(id);
-                this.applyPermissionResponseSideEffects({
-                    response: message,
-                    toolName: context.toolName,
-                    sourceLocalId: context.sourceLocalId,
-                });
-            },
+    private recordPermissionResponse(message: PermissionResponse, context: PermissionRequestCoordinatorContext): void {
+        const id = message.id;
+
+        if (this.isToolTraceEnabled()) {
+            recordToolTraceEvent({
+                direction: 'inbound',
+                sessionId: this.session.client.sessionId,
+                protocol: 'claude',
+                provider: 'claude',
+                kind: 'permission-response',
+                payload: {
+                    type: 'permission-response',
+                    permissionId: id,
+                    approved: message.approved,
+                    reason: typeof message.reason === 'string' ? message.reason : undefined,
+                    mode: message.mode,
+                    allowedTools: this.redactToolTraceValue(message.allowedTools ?? message.allowTools, 'allowedTools'),
+                    answers: this.redactToolTraceValue(message.answers, 'answers'),
+                    updatedPermissions: this.redactToolTraceValue(message.updatedPermissions, 'updatedPermissions'),
+                },
+            });
+        }
+
+        // Store the response with timestamp only after the canonical coordinator completed it.
+        this.responses.set(id, { ...message, receivedAt: Date.now() });
+
+        this.pendingRequestMetadata.delete(id);
+        this.applyPermissionResponseSideEffects({
+            response: message,
+            toolName: context.toolName,
+            sourceLocalId: context.sourceLocalId,
         });
 
     }
