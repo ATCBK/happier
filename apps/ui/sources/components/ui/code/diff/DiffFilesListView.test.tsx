@@ -327,12 +327,10 @@ describe('DiffFilesListView', () => {
             );
         }
 
-        const { tree } = await renderScreen(<Wrapper tick={0} />);
+        const screen = await renderScreen(<Wrapper tick={0} />);
         const before = getLegendListProps();
 
-        await act(async () => {
-            tree.update(<Wrapper tick={1} />);
-        });
+        await screen.update(<Wrapper tick={1} />);
         const after = getLegendListProps();
 
         expect(after.keyExtractor).toBe(before.keyExtractor);

@@ -54,15 +54,13 @@ describe('useChangedFilesReviewFocusPath', () => {
         const file = { fullPath: 'src/a.ts' } as any as ScmFileStatus;
 
         const screen = await renderScreen(<Harness focusPath="src/a.ts" reviewFiles={[file]} expandPath={expandPath} scrollToPath={scrollToPath} />);
-        const tree: Awaited<ReturnType<typeof renderScreen>>['tree'] = screen.tree;
 
         await flushHookEffects({ cycles: 1, turns: 1, advanceTimersMs: 60 });
 
         expect(expandPath).toHaveBeenCalledTimes(1);
         expect(scrollToPath).toHaveBeenCalledTimes(1);
 
-        await act(async () => {
-            tree.update(
+        await screen.update(
                 <Harness
                     focusPath="src/a.ts"
                     reviewFiles={[{ ...file }]}
@@ -70,7 +68,6 @@ describe('useChangedFilesReviewFocusPath', () => {
                     scrollToPath={scrollToPath}
                 />
             );
-        });
 
         await flushHookEffects({ cycles: 1, turns: 1, advanceTimersMs: 60 });
 

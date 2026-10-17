@@ -41,6 +41,13 @@ async function settleMenuPress(screen: Awaited<ReturnType<typeof renderScreen>>,
     // clock boundary inside act, rather than asserting against the closed menu.
     await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 0)); });
     await flushHookEffects({ frames: 1 });
+    // The renderer does not emit browser layout. Supply the open overlay's real geometry boundary
+    // so its motion/visibility owner can admit presses rather than pressing a hidden tree.
+    await act(async () => {
+        for (const node of screen.findAll(node => typeof node.type === 'string' && typeof node.props.onLayout === 'function')) {
+            node.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 320, height: 300 } } });
+        }
+    });
 }
 
 it('projects phone picker labels only while the list menu is open, without losing selection', async () => {

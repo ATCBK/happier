@@ -3,6 +3,7 @@ import type { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import { installCodeViewCommonModuleMocks } from '@/components/ui/code/view/codeViewTestHelpers';
 import { createChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiffStore';
 
@@ -35,7 +36,7 @@ describe('native review block reading continuity', () => {
             viewportRef: { current: { measureInWindow: (success: (x: number, y: number) => void) => success(0, 0) } as View },
             offsetRef: { current: scrollY },
         };
-        const props = { theme: { colors: { text: { secondary: '#999' }, border: { default: '#999' } } }, sessionId: 's', snapshotSignature: null,
+        const props = { theme: createThemeFixture(), sessionId: 's', snapshotSignature: null,
             filePath: 'a.txt', diffStateSource: source, reviewCommentsEnabled, reviewCommentDrafts: [], externalScrollView };
         const screen = await renderScreen(<ChangedFilesReviewDiffBlock {...props} />, {
             createNodeMock: (element) => {

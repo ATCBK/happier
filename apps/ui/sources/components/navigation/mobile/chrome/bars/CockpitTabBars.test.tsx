@@ -667,7 +667,7 @@ describe('cockpit tab bars', () => {
 
         const browserTab = screen.findHostByTestId('session-cockpit-tab-browser');
         const servicesTab = screen.findHostByTestId('session-cockpit-tab-services');
-        expect(browserTab?.props.accessibilityRole).toBe('tab');
+        expect(browserTab?.props.role).toBe('tab');
         expect(browserTab?.props.accessibilityLabel).toBe('en:browserSurface.title');
         expect(browserTab?.props.accessibilityState).toEqual(expect.objectContaining({ selected: true }));
         expect(servicesTab).toBeNull();
@@ -892,7 +892,7 @@ describe('cockpit tab bars', () => {
         );
 
         const navigationTab = screen.findHostByTestId('session-cockpit-tab-navigation');
-        expect(navigationTab?.props.accessibilityRole).toBe('tab');
+        expect(navigationTab?.props.role).toBe('tab');
         expect(navigationTab?.props.accessibilityLabel).toBe('en:session.transcriptNavigation.title');
         expect(navigationTab?.props.accessibilityState).toEqual(expect.objectContaining({ selected: true }));
 
@@ -1026,7 +1026,7 @@ describe('cockpit tab bars', () => {
             />,
         );
 
-        expect(screen.findHostByTestId('session-cockpit-tab-git')?.props.accessibilityRole).toBe('tab');
+        expect(screen.findHostByTestId('session-cockpit-tab-git')?.props.role).toBe('tab');
         expect(screen.findHostByTestId('session-cockpit-tab-git')?.props.accessibilityLabel).toBe('en:session.rightPanel.tabs.git');
         expect(screen.findHostByTestId('session-cockpit-tab-browse')?.props.accessibilityLabel).toBe('en:common.files');
         expect(screen.findHostByTestId('session-cockpit-tab-git')?.props.accessibilityState).toEqual(expect.objectContaining({ selected: true }));

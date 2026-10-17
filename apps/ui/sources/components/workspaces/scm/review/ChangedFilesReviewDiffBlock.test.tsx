@@ -248,8 +248,7 @@ describe('ChangedFilesReviewDiffBlock', () => {
 
         expect(diffReviewCommentsViewerMock.renderCount).toBe(1);
 
-        await renderer.act(async () => {
-            screen.tree.update(<ChangedFilesReviewDiffBlock
+        await screen.update(<ChangedFilesReviewDiffBlock
                         theme={theme}
                         sessionId="s1"
                         snapshotSignature="sig"
@@ -258,12 +257,10 @@ describe('ChangedFilesReviewDiffBlock', () => {
                         reviewCommentsEnabled={true}
                         reviewCommentDrafts={[{ ...unrelatedDraft, body: 'changed elsewhere' }]}
                     />);
-        });
 
         expect(diffReviewCommentsViewerMock.renderCount).toBe(1);
 
-        await renderer.act(async () => {
-            screen.tree.update(<ChangedFilesReviewDiffBlock
+        await screen.update(<ChangedFilesReviewDiffBlock
                         theme={theme}
                         sessionId="s1"
                         snapshotSignature="sig"
@@ -272,7 +269,6 @@ describe('ChangedFilesReviewDiffBlock', () => {
                         reviewCommentsEnabled={true}
                         reviewCommentDrafts={[{ ...unrelatedDraft, filePath: 'src/a.ts' }]}
                     />);
-        });
 
         expect(diffReviewCommentsViewerMock.renderCount).toBe(2);
     });
