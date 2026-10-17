@@ -411,9 +411,10 @@ export function spawnStartFactsV1(input: Readonly<SpawnStartFactsInput>): AgentS
         capabilitySelection: input.capabilitySelection, transcriptStorage: input.transcriptStorage,
     };
 }
-export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutorDeps, 'resolveAgentStartContext'> & Partial<Pick<ActionExecutorDeps, 'sessionList'>>, context: ActionExecutorContext, targetSessionId?: string) {
+export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutorDeps, 'resolveAgentStartContext'> & Partial<Pick<ActionExecutorDeps, 'sessionList'>>, context: ActionExecutorContext, targetSessionId?: string,
+    options?: Readonly<{ purpose: 'session_scope' }>) {
     let resolved = context.agentStartContext ?? await measureActionStartPhaseV1(context, 'agent_start_context',
-      async () => await deps.resolveAgentStartContext?.(context) ?? null);
+      async () => await deps.resolveAgentStartContext?.(context, options) ?? null);
     if (context.actionCaller?.kind === 'session') {
         const caller = context.actionCaller;
         if (!resolved || resolved.caller.kind !== 'session' || resolved.caller.sessionId !== caller.sessionId) {

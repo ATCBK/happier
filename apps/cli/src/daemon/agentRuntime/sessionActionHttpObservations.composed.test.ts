@@ -5,7 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import {
   accountSettingsParse, normalizeActionsSettingsV1, SessionListQueryV1Schema, SessionListQueryResponseV1Schema,
-  type ActionsSettingsV1,
+  FeaturesResponseSchema, type ActionsSettingsV1,
 } from '@happier-dev/protocol';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions';
 import { signExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
@@ -43,7 +43,10 @@ import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemon
   removeAgentRuntimeDaemonServiceAuthorityIfOwned } from './sessionBridgeAuthorization';
 import * as machineRpc from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { prepareRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { prepareInstalledRequesterAccountActionContext, prepareRequesterAccountActionContext,
+  readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import * as installationStore from '@/daemon/identity/store';
+import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
@@ -218,6 +221,64 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
     close: async () => { restore(); await app.close(); } };
 }
 
+it('reuses admitted Stop custody for signed observations and freshly verifies the native effect', async () => {
+  const f = await fixture();
+  const channel = await createRequesterCurrentnessSocketHarness();
+  const installed = { version: 1 as const, installationId: storage.state.installationId, createdAt: 1,
+    publicKey: Buffer.from(installation.publicKey).toString('base64url'),
+    privateKey: Buffer.from(installation.secretKey).toString('base64url') };
+  const localInstallation = vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue(installed);
+  // Home feature delivery and installation storage are system boundaries.
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(FeaturesResponseSchema.parse({
+    features: {}, capabilities: { serverIdentity: { serverIdentityId: storage.state.homeId } },
+  })));
+  let prepared: Awaited<ReturnType<typeof prepareInstalledRequesterAccountActionContext>> = null;
+  try {
+    const op = f.operation('session.stop', { sessionId: childId });
+    const original = await f.prepare(op, { v: 1, caller: op.witness.agentStartCaller,
+      sourceTurnId: 'turn', callerPermissionMode: null, requestId: op.requestId });
+    if (!original) throw new Error('Missing original Stop root');
+    const purpose = { kind: 'machine_rpc', method: RPC_METHODS.STOP_SESSION, params: { sessionId: childId } } as const;
+    const sealed = sealExternalActionRequesterAccountContextV1({ authorization: original.authorization, purpose,
+      credentials: encodeStoredCredentials(f.credentials), installationPublicKey: installation.publicKey, randomBytes: nacl.randomBytes });
+    const admissionStart = f.observations.length;
+    prepared = await prepareInstalledRequesterAccountActionContext({ authorization: sealed, purpose,
+      machineId: storage.state.machineId, serverId, serverHttpBaseUrl,
+      resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+        serverUrl: serverHttpBaseUrl, resolveCurrentMachineId: () => storage.state.machineId,
+      }),
+      createExecutor: admitted => createCliActionExecutorFromCredentials({ credentials: admitted.credentials,
+        serverId, serverApiUrl: serverHttpBaseUrl, serverIdentityId: storage.state.homeId, machineId: storage.state.machineId,
+        pluginActionExecutionOwner: 'current_process', savedSecretOperationContext: admitted.savedSecretOperationContext }),
+    });
+    const custody = readRequesterAccountActionContext(prepared?.authorization);
+    const http = prepared?.authorization.requesterHttpProjection;
+    if (!prepared || !custody || !http) throw new Error('Missing installed Stop custody');
+    const verifyReads = () => f.observations.slice(admissionStart).filter(row => row.path.endsWith('/execution-authorization/verify')).length;
+    expect(verifyReads()).toBe(1);
+    const query = { v: 1 as const, storage: 'active' as const, includeInactive: true, scope: 'all_accessible' as const,
+      attention: 'any' as const, audiences: [], tagIds: [], underSessionId: sessionId };
+    const headers = await http.createRequestHeaders({ effectActionId: 'session.stop', method: 'POST', path: '/v2/sessions/query', body: query });
+    if (!headers) throw new Error('Missing signed subtree request');
+    expect((await f.app.inject({ method: 'POST', url: '/v2/sessions/query', headers, payload: query })).statusCode).toBe(200);
+    expect(verifyReads()).toBe(1);
+    expect(await custody.isCurrent()).toBe(true);
+    expect(verifyReads()).toBe(2);
+    // Home revocation still denies both a freshly checked native effect and
+    // an already-signed observation; admitted local custody cannot grant either.
+    storage.state.bound = false;
+    expect(await custody.isCurrent()).toBe(false);
+    expect((await f.app.inject({ method: 'POST', url: '/v2/sessions/query', headers, payload: query })).statusCode).toBe(401);
+    localInstallation.mockReturnValue({ ...installed, installationId: 'replaced' });
+    expect(await http.createRequestHeaders({ effectActionId: 'session.stop', method: 'POST', path: '/v2/sessions/query', body: query })).toBeNull();
+    localInstallation.mockReturnValue(installed);
+    await channel.push(storage.account.id, { ...createAccountEncryptionCurrentnessFixture(), mode: 'e2ee' });
+    expect(await http.createRequestHeaders({ effectActionId: 'session.stop', method: 'POST', path: '/v2/sessions/query', body: query })).toBeNull();
+    await prepared.dispose();
+    expect(await custody.isCurrent()).toBe(false);
+  } finally { await prepared?.dispose(); await channel.close(); await f.close(); }
+});
+
 it('stops a led child through the real requester RPC receiver and preserves receiver refusals', async () => {
   const f = await fixture();
   const channel = await createRequesterCurrentnessSocketHarness();
@@ -375,6 +436,7 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
     await runtime.mcp.connect(serverTransport);
     await client.connect(clientTransport);
     expect(effectCount()).toBe(0);
+    const admissionStart = f.observations.length;
     for (const target of [sessionId, childId]) {
       const result = await invoke(target);
       expect(result.failed, JSON.stringify({ result, diagnostics: lifecycleDiagnostics.mock.calls,
@@ -383,6 +445,11 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
         ? { ok: true, sessionId: target, stopOutcome: { status: 'already_stopped' } }
         : { ok: true, sessionId: target, archivedAt: actionId === 'session.archive' ? 123 : null });
     }
+    // Lifecycle scope needs fresh caller/subtree facts, not Role authoring or
+    // Agent launch catalogs. Each catalog read fans out through requester custody.
+    expect(f.observations.slice(admissionStart).filter(row =>
+      row.path === '/v1/artifacts' || row.path === '/v1/account/entity-rows/acp'
+      || row.path === '/v1/account/entity-rows/prompt-library')).toEqual([]);
     const signed = f.observations.filter(row => row.signed);
     expect(signed.some(row => row.path === '/v2/sessions/query')).toBe(true);
     expect(signed.every(row => row.status === 200 && !row.bearer), JSON.stringify(signed)).toBe(true);
