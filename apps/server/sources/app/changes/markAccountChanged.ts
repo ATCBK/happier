@@ -82,10 +82,14 @@ function scheduleAccountChangeWake(tx: Tx, accountId: string, cursor: number): v
 
 export type AccountChangeCursor = Readonly<{ accountId: string; cursor: number }>;
 
-/** Fence a composed publication's complete audience before its first cursor write. */
-export async function acquireAccountChangePublicationLocksInTx(tx: Tx, recipientAccountIds: readonly string[]): Promise<void> {
+/** Fence the complete audience; early readers also need the otherwise implicit single-Account write lock. */
+export async function acquireAccountChangePublicationLocksInTx(
+    tx: Tx,
+    recipientAccountIds: readonly string[],
+    options?: Readonly<{ includeSingleAccount?: boolean }>,
+): Promise<void> {
     const accountIds = [...new Set(recipientAccountIds)].sort();
-    if (accountIds.length < 2) return;
+    if (accountIds.length === 0 || (accountIds.length === 1 && !options?.includeSingleAccount)) return;
     const provider = getDbProviderFromEnv(process.env, "postgres");
     if (provider === "sqlite") return;
     if (provider === "postgres") {
