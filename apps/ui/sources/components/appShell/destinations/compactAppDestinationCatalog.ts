@@ -926,16 +926,20 @@ function resolveProjectInstanceTitle(ref: DestinationRef, workspaceRefs: readonl
 function resolvePublishedOrStaticInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef, options?: DestinationInstanceTitleOptions, storedTitle?: string | null): string | null {
     const href = hrefForDestinationRef(catalog, ref);
     const pathname = href?.split(/[?#]/, 1)[0];
-    // Home's greeting and the Boards index's selected board are content, not
-    // the identity of these areas. Their nested readers cannot rename the tab.
+    // Home's greeting is content, while the shell catalog calls its rail Sessions.
     if (ref.kind === SESSIONS_DESTINATION_ID && pathname === '/') return t('common.home');
-    if (ref.kind === 'boards' && pathname === '/boards') return resolveStaticInstanceTitle(catalog, ref);
+    const staticTitle = resolveStaticInstanceTitle(catalog, ref);
+    const destination = pathname ? resolveCurrentAppDestination(catalog, pathname) : null;
+    // Collection/status headlines and automatically selected detail panels do not
+    // rename their destination. Explicit entity routes have no static identity here.
+    if (staticTitle && (ref.kind === 'settings'
+        || (destination?.kind === 'builtin' && pathname === destination.routePath))) return staticTitle;
     // Approval history stays open by workspace policy. Its live index lifecycle,
     // including header-only socket updates, must supersede the page's earlier title.
     if (isApprovalInstanceRef(ref) && storedTitle) return storedTitle;
     const title = options?.publishedTitle?.ref === ref
         ? options.publishedTitle.title
-        : resolveStaticInstanceTitle(catalog, ref) ?? storedTitle ?? resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle);
+        : staticTitle ?? storedTitle ?? resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle);
     if (title) return title;
     // Restored/background tabs need not mount their pages. A missing publication
     // is an unnamed destination, not evidence that a title fetch is still running.

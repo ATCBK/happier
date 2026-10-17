@@ -62,6 +62,21 @@ afterEach(() => {
 });
 
 describe('Project destination instance titles', () => {
+    it('keeps destination titles when collection content publishes a headline or an automatic detail selection', () => {
+        for (const [href, headline] of [
+            ['/machines', 'Calm'], ['/settings/machines', 'Calm'], ['/settings', 'Alice'],
+            ['/settings/agents', 'Antigravity'], ['/settings/providers', 'DeepSeek'],
+        ] as const) {
+            const ref = destination(href);
+            const destinationTitle = readDestinationInstanceTitle(catalog, ref);
+            expect(destinationTitle).toBeTruthy();
+            expect(readDestinationInstanceTitle(catalog, ref, { publishedTitle: { ref, title: headline } }), href)
+                .toBe(destinationTitle);
+        }
+        const detail = destination('/settings/agents/codex');
+        expect(readDestinationInstanceTitle(catalog, detail, { publishedTitle: { ref: detail, title: 'Codex detail' } }))
+            .toBe('Codex detail');
+    });
     it('settles deleted Session identities without treating an uncached or other-Home Session as deleted', async () => {
         const entries = ['/session/gone?serverId=home-a', '/session/gone/info?serverId=home-a',
             '/session/gone?serverId=home-b', '/session/uncached?serverId=home-a'].map((href, index) => ({
