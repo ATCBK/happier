@@ -3820,7 +3820,7 @@ export class AcpBackend implements AgentBackend {
       this.postIdleWithoutAssistantMessageTimeout = null;
     }
     this.clearResponseCompletionTimeout();
-    this.emit({ type: 'status', status: 'idle', turnFinished: true });
+    this.emit({ type: 'status', status: 'idle', turnFinished: this.waitingForResponse ? true : undefined });
     this.clearActiveToolCallStateForTerminalTurn('idle finalization');
     this.closeCurrentTurnGeneration();
     // Avoid races where the idle signal arrives before `waitForResponseComplete()` starts waiting.
