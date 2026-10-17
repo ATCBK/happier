@@ -3,7 +3,7 @@ import {
     type ElicitRequestFormParams,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type {
     InteractionTransientAuthorQuestionV1,
     InteractionTransientQuestionAnswerV1,
@@ -16,9 +16,28 @@ type McpElicitationChoice = Readonly<{
 }>;
 
 export type McpElicitationFormSchema = ElicitRequestFormParams['requestedSchema'];
+export type McpElicitationFormContentValue = string | number | boolean | string[];
 
 function invalidForm(message: string): PluginError {
     return new PluginError({ code: 'plugin_mcp_elicitation_invalid', message });
+}
+
+function mergeChoiceDescriptions(
+    parsedChoices: unknown,
+    rawChoices: unknown,
+): unknown {
+    if (!Array.isArray(parsedChoices) || !Array.isArray(rawChoices)) return parsedChoices;
+    return parsedChoices.map((entry, index) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+        const rawEntry = rawChoices[index];
+        if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) return entry;
+        const description = (rawEntry as { description?: unknown }).description;
+        if (typeof description !== 'string' || description.trim().length === 0) return entry;
+        return {
+            ...(entry as Record<string, unknown>),
+            description,
+        };
+    });
 }
 
 export function parseMcpElicitationFormSchema(value: unknown): McpElicitationFormSchema {
@@ -28,7 +47,51 @@ export function parseMcpElicitationFormSchema(value: unknown): McpElicitationFor
         requestedSchema: value,
     });
     if (!parsed.success) throw invalidForm('MCP elicitation schema is invalid');
-    return parsed.data.requestedSchema;
+    const rawProperties =
+        value && typeof value === 'object' && !Array.isArray(value)
+            ? (value as { properties?: unknown }).properties
+            : undefined;
+    if (!rawProperties || typeof rawProperties !== 'object' || Array.isArray(rawProperties)) {
+        return parsed.data.requestedSchema;
+    }
+    const mergedProperties: Record<string, unknown> = {
+        ...parsed.data.requestedSchema.properties,
+    };
+    for (const [key, parsedProp] of Object.entries(mergedProperties)) {
+        if (!parsedProp || typeof parsedProp !== 'object' || Array.isArray(parsedProp)) continue;
+        const rawProp = (rawProperties as Record<string, unknown>)[key];
+        if (!rawProp || typeof rawProp !== 'object' || Array.isArray(rawProp)) continue;
+        const propRecord = { ...(parsedProp as Record<string, unknown>) };
+        if ('oneOf' in propRecord && 'oneOf' in (rawProp as Record<string, unknown>)) {
+            propRecord.oneOf = mergeChoiceDescriptions(
+                propRecord.oneOf,
+                (rawProp as Record<string, unknown>).oneOf,
+            );
+        }
+        if (
+            propRecord.items
+            && typeof propRecord.items === 'object'
+            && !Array.isArray(propRecord.items)
+            && (rawProp as Record<string, unknown>).items
+            && typeof (rawProp as Record<string, unknown>).items === 'object'
+            && !Array.isArray((rawProp as Record<string, unknown>).items)
+        ) {
+            const parsedItems = { ...(propRecord.items as Record<string, unknown>) };
+            const rawItems = (rawProp as { items: Record<string, unknown> }).items;
+            if ('anyOf' in parsedItems && 'anyOf' in rawItems) {
+                parsedItems.anyOf = mergeChoiceDescriptions(parsedItems.anyOf, rawItems.anyOf);
+            }
+            if ('oneOf' in parsedItems && 'oneOf' in rawItems) {
+                parsedItems.oneOf = mergeChoiceDescriptions(parsedItems.oneOf, rawItems.oneOf);
+            }
+            propRecord.items = parsedItems;
+        }
+        mergedProperties[key] = propRecord;
+    }
+    return {
+        ...parsed.data.requestedSchema,
+        properties: mergedProperties as McpElicitationFormSchema['properties'],
+    };
 }
 
 function choicesForProperty(property: Readonly<Record<string, unknown>>): readonly McpElicitationChoice[] {
@@ -43,12 +106,16 @@ function choicesForProperty(property: Readonly<Record<string, unknown>>): readon
         return property.oneOf.flatMap((value) => {
             if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
             const item = value as Readonly<Record<string, unknown>>;
-            return typeof item.const === 'string'
-                ? [Object.freeze({
-                    id: item.const,
-                    label: typeof item.title === 'string' ? item.title : item.const,
-                })]
-                : [];
+            if (typeof item.const !== 'string') return [];
+            const description =
+                typeof item.description === 'string' && item.description.trim().length > 0
+                    ? item.description
+                    : undefined;
+            return [Object.freeze({
+                id: item.const,
+                label: typeof item.title === 'string' ? item.title : item.const,
+                ...(description ? { description } : {}),
+            })];
         });
     }
     return [];
@@ -61,12 +128,16 @@ function arrayItemChoices(property: Readonly<Record<string, unknown>>): readonly
         return items.anyOf.flatMap((value) => {
             if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
             const item = value as Readonly<Record<string, unknown>>;
-            return typeof item.const === 'string'
-                ? [Object.freeze({
-                    id: item.const,
-                    label: typeof item.title === 'string' ? item.title : item.const,
-                })]
-                : [];
+            if (typeof item.const !== 'string') return [];
+            const description =
+                typeof item.description === 'string' && item.description.trim().length > 0
+                    ? item.description
+                    : undefined;
+            return [Object.freeze({
+                id: item.const,
+                label: typeof item.title === 'string' ? item.title : item.const,
+                ...(description ? { description } : {}),
+            })];
         });
     }
     return choicesForProperty(items);
@@ -79,40 +150,120 @@ function nonEmptyChoices(
     return [...choices] as [McpElicitationChoice, ...McpElicitationChoice[]];
 }
 
+function isChoiceProperty(property: Readonly<Record<string, unknown>>): boolean {
+    if (property.type === 'array') {
+        return arrayItemChoices(property).length > 0;
+    }
+    if (property.type === 'boolean') return false;
+    return choicesForProperty(property).length > 0;
+}
+
+function readCompanionOtherProperty(
+    properties: Readonly<Record<string, unknown>>,
+    id: string,
+    property: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> | null {
+    if (id.endsWith('__other') || !isChoiceProperty(property)) return null;
+    const candidate = properties[`${id}__other`];
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+    const record = candidate as Readonly<Record<string, unknown>>;
+    if (record.type !== 'string' || choicesForProperty(record).length > 0) return null;
+    return record;
+}
+
+function isCompanionOtherKey(
+    properties: Readonly<Record<string, unknown>>,
+    key: string,
+): boolean {
+    if (!key.endsWith('__other')) return false;
+    const baseId = key.slice(0, -'__other'.length);
+    const baseProperty = properties[baseId];
+    if (!baseProperty || typeof baseProperty !== 'object' || Array.isArray(baseProperty)) return false;
+    return readCompanionOtherProperty(properties, baseId, baseProperty as Readonly<Record<string, unknown>>) !== null;
+}
+
 export function mcpElicitationFormQuestions(
     schema: McpElicitationFormSchema,
+    options?: Readonly<{ message?: string }>,
 ): readonly [InteractionTransientAuthorQuestionV1, ...InteractionTransientAuthorQuestionV1[]] | null {
     const required = new Set(schema.required ?? []);
-    const questions = Object.entries(schema.properties).map(([id, rawProperty]): InteractionTransientAuthorQuestionV1 => {
+    const properties = schema.properties as Readonly<Record<string, unknown>>;
+    const primaryEntries = Object.entries(properties).filter(
+        ([id]) => !isCompanionOtherKey(properties, id),
+    );
+    const fallbackMessage =
+        typeof options?.message === 'string' && options.message.trim().length > 0
+            ? options.message.trim()
+            : undefined;
+
+    const questions = primaryEntries.map(([id, rawProperty]): InteractionTransientAuthorQuestionV1 => {
         const property = rawProperty as Readonly<Record<string, unknown>>;
-        const prompt = typeof property.title === 'string'
+        const prompt = typeof property.title === 'string' && property.title.trim().length > 0
             ? property.title
-            : typeof property.description === 'string'
+            : typeof property.description === 'string' && property.description.trim().length > 0
                 ? property.description
-                : id;
+                : primaryEntries.length === 1 && fallbackMessage
+                    ? fallbackMessage
+                    : id;
+        const companionOther = readCompanionOtherProperty(properties, id, property);
+        const companionOtherTitle =
+            companionOther && typeof companionOther.title === 'string' && companionOther.title.trim().length > 0
+                ? companionOther.title
+                : undefined;
+
         if (property.type === 'array') {
+            const rawChoices = arrayItemChoices(property);
+            const filteredChoices =
+                companionOtherTitle && rawChoices.length > 1
+                    ? rawChoices.filter((choice) => choice.id !== companionOtherTitle)
+                    : rawChoices;
             return Object.freeze({
-                id, prompt, type: 'multipleChoice' as const, required: required.has(id),
-                choices: nonEmptyChoices(arrayItemChoices(property)),
+                id,
+                prompt,
+                type: 'multipleChoice' as const,
+                required: required.has(id),
+                ...(companionOther ? { allowCustom: true } : {}),
+                choices: nonEmptyChoices(filteredChoices.length > 0 ? filteredChoices : rawChoices),
             });
         }
         if (property.type === 'boolean') {
             return Object.freeze({
-                id, prompt, type: 'singleChoice' as const, required: required.has(id),
+                id,
+                prompt,
+                type: 'singleChoice' as const,
+                required: required.has(id),
                 choices: nonEmptyChoices(Object.freeze([
                     Object.freeze({ id: 'true', label: 'true' }),
                     Object.freeze({ id: 'false', label: 'false' }),
                 ])),
             });
         }
-        const choices = choicesForProperty(property);
-        if (choices.length > 0) {
+        const rawChoices = choicesForProperty(property);
+        if (rawChoices.length > 0) {
+            const filteredChoices =
+                companionOtherTitle && rawChoices.length > 1
+                    ? rawChoices.filter((choice) => choice.id !== companionOtherTitle)
+                    : rawChoices;
             return Object.freeze({
-                id, prompt, type: 'singleChoice' as const, required: required.has(id),
-                choices: nonEmptyChoices(choices),
+                id,
+                prompt,
+                type: 'singleChoice' as const,
+                required: required.has(id),
+                ...(companionOther ? { allowCustom: true } : {}),
+                choices: nonEmptyChoices(filteredChoices.length > 0 ? filteredChoices : rawChoices),
             });
         }
-        return Object.freeze({ id, prompt, type: 'text' as const, required: required.has(id) });
+        const initialValue =
+            typeof property.default === 'string' && property.default.length > 0
+                ? property.default
+                : undefined;
+        return Object.freeze({
+            id,
+            prompt,
+            type: 'text' as const,
+            required: required.has(id),
+            ...(initialValue ? { initialValue } : {}),
+        });
     });
     return questions.length === 0
         ? null
@@ -130,7 +281,7 @@ function selectedValue(answer: InteractionTransientQuestionAnswerV1): string {
 function answerValue(
     answer: InteractionTransientQuestionAnswerV1,
     property: Readonly<Record<string, unknown>>,
-): JsonValue {
+): McpElicitationFormContentValue {
     if (property.type === 'array') {
         if (answer.kind !== 'multipleChoice') throw invalidForm('MCP elicitation answer is not a list');
         return answer.answers.map((entry) => entry.kind === 'choice' ? entry.choiceId : entry.value);
@@ -155,11 +306,45 @@ function answerValue(
 export function mcpElicitationFormContent(
     schema: McpElicitationFormSchema,
     answers: Readonly<Record<string, InteractionTransientQuestionAnswerV1>>,
-): Readonly<Record<string, JsonValue>> {
-    const content = Object.create(null) as Record<string, JsonValue>;
+): Readonly<Record<string, McpElicitationFormContentValue>> {
+    const properties = schema.properties as Readonly<Record<string, unknown>>;
+    const content = Object.create(null) as Record<string, McpElicitationFormContentValue>;
     for (const [id, answer] of Object.entries(answers)) {
-        const property = schema.properties[id];
-        if (property) content[id] = answerValue(answer, property as Readonly<Record<string, unknown>>);
+        const rawProperty = properties[id];
+        if (!rawProperty || typeof rawProperty !== 'object' || Array.isArray(rawProperty)) continue;
+        if (isCompanionOtherKey(properties, id)) continue;
+        const property = rawProperty as Readonly<Record<string, unknown>>;
+        const companionOther = readCompanionOtherProperty(properties, id, property);
+
+        if (companionOther && property.type === 'array' && answer.kind === 'multipleChoice') {
+            const choiceIds = answer.answers
+                .filter((entry): entry is Extract<typeof entry, { kind: 'choice' }> => entry.kind === 'choice')
+                .map((entry) => entry.choiceId);
+            const customValues = answer.answers
+                .filter((entry): entry is Extract<typeof entry, { kind: 'custom' }> => entry.kind === 'custom')
+                .map((entry) => entry.value.trim())
+                .filter((value) => value.length > 0);
+            content[id] = choiceIds;
+            if (customValues.length > 0) {
+                content[`${id}__other`] = customValues.join(', ');
+            }
+            continue;
+        }
+
+        if (companionOther && answer.kind === 'singleChoice' && answer.answer.kind === 'custom') {
+            const otherTitle =
+                typeof companionOther.title === 'string' && companionOther.title.trim().length > 0
+                    ? companionOther.title
+                    : undefined;
+            const choices = choicesForProperty(property);
+            if (otherTitle && choices.some((choice) => choice.id === otherTitle)) {
+                content[id] = otherTitle;
+            }
+            content[`${id}__other`] = answer.answer.value;
+            continue;
+        }
+
+        content[id] = answerValue(answer, property);
     }
     return Object.freeze(content);
 }

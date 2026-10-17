@@ -254,4 +254,149 @@ describe('createPublicAcpPermissionHandler', () => {
     expect(interactionSettled).toBe(true);
     await expect(pending).resolves.toEqual(expect.objectContaining({ decision: 'abort' }));
   });
+
+  it('presents ACP form elicitation through nativeAgentSessionInteractions and returns accepted answers', async () => {
+    const { createNativeAgentCurrentSessionUiServices } = await import(
+      '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'
+    );
+    const multiLinePlanMessage = `${"# Plan Summary\n\n"}${"- Step 1: Inspect ACP form elicitation.\n".repeat(20)}`;
+    const handleToolCall = vi.fn(async (_toolCallId: string, toolName: string, input: unknown) => {
+      expect(toolName).toBe('AskUserQuestion');
+      expect(input).toMatchObject({
+        questions: [
+          {
+            id: 'value',
+            question: multiLinePlanMessage.trim(),
+            options: [
+              { id: 'approve', label: 'Approve plan', description: 'Exit plan mode and execute' },
+              { id: 'refine', label: 'Refine plan', description: 'Stay in plan mode' },
+            ],
+          },
+        ],
+      });
+      return {
+        decision: 'approved' as const,
+        answers: {
+          value: ['approve'],
+        },
+      };
+    });
+    const currentSession = createNativeAgentCurrentSessionUiServices({
+      permissionHandler: { handleToolCall },
+      pluginId: 'happier.agent.omp',
+      contributionId: 'omp',
+      runtimeId: 'omp',
+      sessionId: 'public-acp-permission-test',
+      occurrenceId: 'occurrence-1',
+      interactionDeadlineMs: 1_000,
+      isCurrent: () => true,
+      signal: new AbortController().signal,
+    });
+    const handler = createPublicAcpPermissionHandler({
+      interactions: currentSession.interactions,
+      signal: new AbortController().signal,
+      resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
+      resolveTurnId: () => 'turn-1',
+      resolveCausalPermissionAuthority: () => ({
+        kind: 'admittedSessionInputV1',
+        admittedPermissionCeiling: 'plan',
+      }),
+    });
+
+    await expect(
+      handler.handleElicitation!({
+        mode: 'form',
+        sessionId: 'session-1',
+        toolCallId: 'elicit-plan-1',
+        message: multiLinePlanMessage,
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            value: {
+              type: 'string',
+              oneOf: [
+                { const: 'approve', title: 'Approve plan', description: 'Exit plan mode and execute' },
+                { const: 'refine', title: 'Refine plan', description: 'Stay in plan mode' },
+              ],
+            },
+          },
+          required: ['value'],
+        },
+      }),
+    ).resolves.toEqual({
+      action: 'accept',
+      content: {
+        value: 'approve',
+      },
+    });
+    expect(handleToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes empty-property ACP form elicitation through confirmation and maps decline/cancel', async () => {
+    const request = vi.fn(async (req: PluginSessionInteractionRequest): Promise<PluginSessionInteractionResult> => {
+      if (req.kind !== 'confirmation') {
+        throw new Error(`Expected confirmation, got ${req.kind}`);
+      }
+      if (req.message === 'Confirm accept?') {
+        return {
+          requestId: 'confirm-1',
+          kind: 'confirmation',
+          status: 'approved',
+        };
+      }
+      return {
+        requestId: 'confirm-2',
+        kind: 'confirmation',
+        status: 'declined',
+      };
+    });
+    const handler = createPublicAcpPermissionHandler({
+      interactions: { request } as unknown as PluginCurrentSessionInteractionsService,
+      signal: new AbortController().signal,
+      resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
+    });
+
+    await expect(
+      handler.handleElicitation!({
+        mode: 'form',
+        sessionId: 'session-1',
+        toolCallId: 'confirm-1',
+        message: 'Confirm accept?',
+        requestedSchema: {
+          type: 'object',
+          properties: {},
+        },
+      }),
+    ).resolves.toEqual({
+      action: 'accept',
+      content: {},
+    });
+
+    await expect(
+      handler.handleElicitation!({
+        mode: 'form',
+        sessionId: 'session-1',
+        toolCallId: 'confirm-2',
+        message: 'Confirm decline?',
+        requestedSchema: {
+          type: 'object',
+          properties: {},
+        },
+      }),
+    ).resolves.toEqual({
+      action: 'decline',
+    });
+
+    await expect(
+      handler.handleElicitation!({
+        mode: 'url',
+        sessionId: 'session-1',
+        elicitationId: 'url-1',
+        message: 'Open URL',
+        url: 'https://example.com',
+      } as never),
+    ).resolves.toEqual({
+      action: 'cancel',
+    });
+  });
 });
