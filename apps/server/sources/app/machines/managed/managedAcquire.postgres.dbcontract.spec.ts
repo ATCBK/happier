@@ -11,6 +11,7 @@ import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { createReleaseLessDeclarationV1 } from '@/app/plugins/availability/currentDeclaration';
 import { admitManagedAcquire } from './managedAcquire';
 import { createMachinePreset } from './machinePresetService';
+import { reportManagedAcquire, submitManagedAcquire } from './managedMutations';
 
 describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('managed admission under PostgreSQL Account contention', () => {
     beforeAll(async () => {
@@ -24,10 +25,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
     afterAll(async () => { await db.$disconnect(); });
 
     it.each([
-        { selectionKind: 'one-off', publicationAccount: 'custodian' },
-        { selectionKind: 'preset', publicationAccount: 'custodian' },
-        { selectionKind: 'one-off', publicationAccount: 'viewer' },
-    ] as const)('admits $selectionKind once while an unrelated $publicationAccount publication races its insertion', async ({ selectionKind, publicationAccount }) => {
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'admit' },
+        { selectionKind: 'preset', publicationAccount: 'custodian', phase: 'admit' },
+        { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'admit' },
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report' },
+        { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'report' },
+    ] as const)('$phase $selectionKind survives an unrelated $publicationAccount publication', async ({ selectionKind, publicationAccount, phase }) => {
         const homeId = `srv_${'a'.repeat(32)}`;
         vi.stubEnv('HAPPIER_SERVER_IDENTITY_ID', homeId);
         vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
@@ -76,13 +79,18 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
                 owner: { kind: 'account', accountId: account.id }, controller, recipe: launchSnapshot,
                 simultaneousLimit: { maximum: 1 } } })).toMatchObject({ kind: 'saved' });
         }
-        const { seq: initialSeq } = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
         const request: Parameters<typeof admitManagedAcquire>[0] = {
             custodianAccountId: account.id, requesterAccountId: account.id, requestEnvelopeDigest: 'contention-test',
             input: { requestId: randomUUID(), continuationPresent: false, input: selectionKind === 'one-off'
                 ? { selection: { kind: 'one-off', homeId, controller, launch: launchSnapshot, retention, wakeOnAcceptedMessage: true } }
                 : { selection: { kind: 'preset', homeId, id: presetId, revision: 0 }, controller, retention, wakeOnAcceptedMessage: true } },
         };
+        const allocated = phase === 'report' ? await admitManagedAcquire(request) : undefined;
+        const correlation = allocated ? { homeId, managedId: allocated.machine.id, controller,
+            requestId: request.input.requestId, expectedIntentRevision: 0 } : undefined;
+        if (correlation) await submitManagedAcquire(correlation);
+        const { seq: initialSeq } = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+        const viewerSeq = viewer ? (await db.account.findUniqueOrThrow({ where: { id: viewer.id }, select: { seq: true } })).seq : 0;
         const originalTransaction = db.$transaction;
         let writer: Promise<unknown> | undefined;
         let writerOutcome: Promise<PromiseSettledResult<unknown>[]> | undefined;
@@ -95,7 +103,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
                     const machines = new Proxy(tx.managedMachine, {
                         get(owner, property, receiver) {
                             const method: unknown = Reflect.get(owner, property, receiver);
-                            if (property !== 'create' || typeof method !== 'function') return method;
+                            if (property !== (phase === 'report' ? 'updateMany' : 'create') || typeof method !== 'function') return method;
                             return async (...values: unknown[]) => {
                                 let ready!: (pid: number) => void;
                                 const started = new Promise<number>(resolve => { ready = resolve; });
@@ -125,15 +133,18 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
             },
         });
         try {
-            const admitted = await admitManagedAcquire(request);
+            const admitted = correlation ? await reportManagedAcquire({ ...correlation, result: { kind: 'bound', resource: {
+                contributionRef: launchSnapshot.provider, schemaVersion: 1, value: { id: 'native-created-before-report' },
+            } } }) : await admitManagedAcquire(request);
             await writer;
-            expect(admitted).toMatchObject({ replayed: false, machine: { retention, wakeOnAcceptedMessage: true } });
+            expect(admitted).toMatchObject({ machine: { retention, wakeOnAcceptedMessage: true,
+                ...(correlation ? { allocation: 'bound', resource: { value: { id: 'native-created-before-report' } } } : {}) } });
             expect(await db.managedMachine.count({ where: { custodianAccountId: account.id } })).toBe(1);
             db.$transaction = originalTransaction;
             expect(await admitManagedAcquire(request)).toMatchObject({ replayed: true, machine: { id: admitted.machine.id } });
             expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } }))
                 .toEqual({ seq: initialSeq + (viewer ? 1 : 2) });
-            if (viewer) expect(await db.account.findUniqueOrThrow({ where: { id: viewer.id }, select: { seq: true } })).toEqual({ seq: 2 });
+            if (viewer) expect(await db.account.findUniqueOrThrow({ where: { id: viewer.id }, select: { seq: true } })).toEqual({ seq: viewerSeq + 2 });
             if (selectionKind === 'preset') {
                 await expect(admitManagedAcquire({ ...request, input: { ...request.input, requestId: randomUUID() } }))
                     .rejects.toMatchObject({ code: 'preset_limit_reached' });

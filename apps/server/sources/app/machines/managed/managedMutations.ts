@@ -7,7 +7,8 @@ import { type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protoc
 import { MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { isMachineRetentionPolicySupportedV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
-import { resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
+import { resolveCurrentMachineRecipientAccountIdsInTx, resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { validateManagedRecipeInTx } from "./machinePresetService";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 import { createSavedSecretResourceInTx } from "@/app/account/savedSecrets/savedSecretResourceService";
@@ -404,6 +405,11 @@ export async function submitManagedAcquire(input: ManagedControllerSubmitInputV1
 export async function reportManagedAcquire(input: ManagedControllerReportV1, options: Readonly<{ requestAuthority?: 'creation' | 'intent' }> = {}) {
     const canonical = ManagedControllerReportV1Schema.parse(input);
     return await inTx(async (tx) => {
+        // A native allocation already exists. Fence the same publication audience
+        // before currentness/declaration reads, as acquisition admission does.
+        await acquireAccountChangePublicationLocksInTx(tx,
+            await resolveCurrentMachineRecipientAccountIdsInTx(tx, canonical.controller.machineId),
+            { includeSingleAccount: true });
         const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: options.requestAuthority ?? 'creation',
             allowCanceledResourceReport: (canonical.result.kind === "bound" || canonical.result.kind === "pending") && options.requestAuthority !== 'intent',
             allowInactiveCurrentIntent: options.requestAuthority === 'intent' });
