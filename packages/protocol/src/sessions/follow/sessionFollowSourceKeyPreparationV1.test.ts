@@ -8,6 +8,7 @@ import {
   SessionFollowSourceKeyPrepareAuthorizationV1Schema,
   SessionFollowSourceKeyPrepareRequestV1Schema,
   SessionFollowSourceKeyPrepareResponseV1Schema,
+  SessionFollowSourceKeyPreparationResultV1Schema,
   projectSessionFollowSourceKeyPreparationAfterSetV1,
   decodeSessionFollowSourceDataEncryptionKeyV1,
   resolveSessionFollowSourceKeyPreparationFailureV1,
@@ -80,6 +81,7 @@ describe('Session Follow source-key preparation V1', () => {
     expect(projectSessionFollowSourceKeyPreparationAfterSetV1(committed, {
       kind: 'waiting',
       reason: 'runner_key_unavailable',
+      cause: 'machine_content_key_unavailable',
     })).toEqual({
       ok: false,
       errorCode: 'session_follow_source_key_preparation_waiting',
@@ -87,10 +89,20 @@ describe('Session Follow source-key preparation V1', () => {
       details: {
         status: 'waiting',
         reason: 'runner_key_unavailable',
+        cause: 'machine_content_key_unavailable',
         edgeCommitted: true,
         source: committed.source,
       },
     });
+  });
+
+  it('accepts old waiting results and only bounded content-free diagnostic causes', () => {
+    const waiting = { kind: 'waiting', reason: 'runner_unreachable' };
+    expect(SessionFollowSourceKeyPreparationResultV1Schema.parse(waiting)).toEqual(waiting);
+    const diagnosed = { ...waiting, cause: 'destination_transport_unavailable' };
+    expect(SessionFollowSourceKeyPreparationResultV1Schema.parse(diagnosed)).toEqual(diagnosed);
+    expect(SessionFollowSourceKeyPreparationResultV1Schema.safeParse({ ...waiting, cause: 'private HTTP response' }).success).toBe(false);
+    expect(SessionFollowSourceKeyPreparationResultV1Schema.safeParse({ ...diagnosed, message: 'private HTTP response' }).success).toBe(false);
   });
 
   it('classifies Runner preparation failures once for every host', () => {
@@ -98,19 +110,21 @@ describe('Session Follow source-key preparation V1', () => {
     const transportError = (code: string) => Object.assign(new Error(code), { code });
 
     expect(resolveSessionFollowSourceKeyPreparationFailureV1(rpcError(RPC_ERROR_CODES.METHOD_NOT_AVAILABLE)))
-      .toEqual({ kind: 'waiting', reason: 'unsupported' });
+      .toEqual({ kind: 'waiting', reason: 'unsupported', cause: 'rpc_method_unavailable' });
     expect(resolveSessionFollowSourceKeyPreparationFailureV1(transportError('machine_kind_mismatch')))
       .toEqual({ kind: 'not_needed' });
     expect(resolveSessionFollowSourceKeyPreparationFailureV1(transportError('machine_content_key_unavailable')))
-      .toEqual({ kind: 'waiting', reason: 'runner_key_unavailable' });
+      .toEqual({ kind: 'waiting', reason: 'runner_key_unavailable', cause: 'machine_content_key_unavailable' });
     expect(resolveSessionFollowSourceKeyPreparationFailureV1(transportError('machine_content_mode_mismatch')))
-      .toEqual({ kind: 'waiting', reason: 'runner_key_unavailable' });
+      .toEqual({ kind: 'waiting', reason: 'runner_key_unavailable', cause: 'machine_content_mode_mismatch' });
+    expect(resolveSessionFollowSourceKeyPreparationFailureV1(transportError('machine_target_not_current')))
+      .toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'machine_target_not_current' });
     expect(resolveSessionFollowSourceKeyPreparationFailureV1(rpcError('RPC_TIMEOUT')))
-      .toEqual({ kind: 'waiting', reason: 'runner_unreachable' });
+      .toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'machine_rpc_failed' });
     expect(resolveSessionFollowSourceKeyPreparationFailureV1(new Error('socket closed')))
-      .toEqual({ kind: 'waiting', reason: 'runner_unreachable' });
+      .toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'machine_rpc_failed' });
     expect(resolveSessionFollowSourceKeyPreparationFailureV1(undefined))
-      .toEqual({ kind: 'waiting', reason: 'runner_unreachable' });
+      .toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'machine_rpc_failed' });
   });
 
   it('classifies the private carrier as internal and server-required for sharing admission', () => {

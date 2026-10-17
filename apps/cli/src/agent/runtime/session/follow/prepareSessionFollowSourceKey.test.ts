@@ -101,7 +101,7 @@ describe('prepareSessionFollowSourceKey', () => {
       sourceSessionId: 'source',
       destinationSessionId: 'destination',
       sourceDataEncryptionKey: new Uint8Array(32).fill(9),
-    })).resolves.toEqual({ kind: 'waiting', reason: 'runner_key_unavailable' });
+    })).resolves.toEqual({ kind: 'waiting', reason: 'runner_key_unavailable', cause: 'machine_content_key_unavailable' });
     expect(callExactMachineRpc).toHaveBeenCalledWith(expect.not.objectContaining({
       expectedRunnerMachineContentKeyBinding: expect.anything(),
     }));
@@ -119,7 +119,7 @@ describe('prepareSessionFollowSourceKey', () => {
       sourceSessionId: 'source',
       destinationSessionId: 'destination',
       sourceDataEncryptionKey: new Uint8Array(32).fill(9),
-    })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable' });
+    })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'machine_target_not_current' });
   });
 
   it('does not require source-key preparation for a persistent destination Machine', async () => {

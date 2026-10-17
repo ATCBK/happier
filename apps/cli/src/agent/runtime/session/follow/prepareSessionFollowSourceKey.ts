@@ -57,10 +57,12 @@ export async function prepareSessionFollowSourceKey(input: Readonly<{
       ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    SessionFollowSourceKeyPrepareResponseV1Schema.parse(response);
+    if (!SessionFollowSourceKeyPrepareResponseV1Schema.safeParse(response).success) {
+      return { kind: 'waiting', reason: 'runner_unreachable', cause: 'machine_rpc_invalid_response' };
+    }
     return { kind: 'prepared' };
   } catch (error) {
-    if (error === sourceKeyUnavailable) return { kind: 'waiting', reason: 'source_key_unavailable' };
+    if (error === sourceKeyUnavailable) return { kind: 'waiting', reason: 'source_key_unavailable', cause: 'source_key_unavailable' };
     // One classification for both DEK-sending hosts; the UI leaf calls the same
     // Protocol owner after its own store-backed pre-checks.
     return resolveSessionFollowSourceKeyPreparationFailureV1(error);

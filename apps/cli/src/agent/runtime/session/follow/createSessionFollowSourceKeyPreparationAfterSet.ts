@@ -1,5 +1,5 @@
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
-import type { SessionFollowSourceKeyPreparationResultV1 } from '@happier-dev/protocol';
+import type { SessionFollowSourceKeyPreparationResultV1, SessionFollowSourceKeyPreparationWaitingCauseV1 } from '@happier-dev/protocol';
 
 import { resolveExternalActionServerRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import type { ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
@@ -71,82 +71,96 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
         return resolved.ok ? resolved.headers : null;
       };
 
-      const serverFeaturesSnapshot = await input.resolveServerFeaturesSnapshot?.();
-      const [source, destination] = await Promise.all([
-        resolveSessionTransportContext({
-          credentials: input.credentials,
-          idOrPrefix: sourceSessionId,
-          resolveAuthorizationHeaders,
-          ...(signal ? { signal } : {}),
-          ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}),
-        }),
-        resolveSessionTransportContext({
-          credentials: input.credentials,
-          idOrPrefix: destinationSessionId,
-          resolveAuthorizationHeaders,
-          ...(signal ? { signal } : {}),
-          ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}),
-        }),
-      ]);
-      if (!source.ok) return { kind: 'waiting', reason: 'source_key_unavailable' };
-      if (!destination.ok) return { kind: 'waiting', reason: 'runner_unreachable' };
-      if (source.mode === 'plain') return { kind: 'not_needed' };
-      // Cooperative Follow may transfer only the standalone Session DEK opened
-      // from this Session's published envelope. The general transport resolver
-      // deliberately retains released absent-envelope Account-key fallback for
-      // ordinary Session reads; that compatibility key must never be exported
-      // as source material to another runtime.
-      const sourceDataEncryptionKey = openSessionDataEncryptionKey({
-        credential: input.credentials,
-        encryptedDataEncryptionKeyBase64: source.rawSession.dataEncryptionKey,
-      });
-      // An Account-backed persistent daemon already reads Session content
-      // through its ordinary credentials. Only the exact Runner class needs
-      // this standalone key; the Machine RPC owner decides that before it
-      // constructs any private key-transfer request.
+      let exceptionCause: SessionFollowSourceKeyPreparationWaitingCauseV1 = 'server_features_exception';
       try {
-        if (!homeServerIdentityId) {
-          return { kind: 'waiting', reason: 'runner_unreachable' };
-        }
-
-        const destinationMachine = resolveSessionOwningMachineId({
-          credentials: input.credentials,
-          rawSession: destination.rawSession,
-          accountEncryptionMode: destination.accountEncryptionCurrentness.mode,
+        const serverFeaturesSnapshot = await input.resolveServerFeaturesSnapshot?.();
+        const [source, destination] = await Promise.all([
+          resolveSessionTransportContext({
+            credentials: input.credentials,
+            idOrPrefix: sourceSessionId,
+            resolveAuthorizationHeaders,
+            ...(signal ? { signal } : {}),
+            ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}),
+          }).catch(() => { signal?.throwIfAborted(); return null; }),
+          resolveSessionTransportContext({
+            credentials: input.credentials,
+            idOrPrefix: destinationSessionId,
+            resolveAuthorizationHeaders,
+            ...(signal ? { signal } : {}),
+            ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}),
+          }).catch(() => { signal?.throwIfAborted(); return null; }),
+        ]);
+        if (!source) return { kind: 'waiting', reason: 'runner_unreachable', cause: 'source_transport_exception' };
+        if (!destination) return { kind: 'waiting', reason: 'runner_unreachable', cause: 'destination_transport_exception' };
+        if (!source.ok) return { kind: 'waiting', reason: 'source_key_unavailable', cause: 'source_transport_unavailable' };
+        if (!destination.ok) return { kind: 'waiting', reason: 'runner_unreachable', cause: 'destination_transport_unavailable' };
+        if (source.mode === 'plain') return { kind: 'not_needed' };
+        // Cooperative Follow may transfer only the standalone Session DEK opened
+        // from this Session's published envelope. The general transport resolver
+        // deliberately retains released absent-envelope Account-key fallback for
+        // ordinary Session reads; that compatibility key must never be exported
+        // as source material to another runtime.
+        exceptionCause = 'source_key_exception';
+        const sourceDataEncryptionKey = openSessionDataEncryptionKey({
+          credential: input.credentials,
+          encryptedDataEncryptionKeyBase64: source.rawSession.dataEncryptionKey,
         });
-        if (!destinationMachine.ok || !destinationMachine.machineId) {
-          return { kind: 'waiting', reason: 'runner_unreachable' };
+        // An Account-backed persistent daemon already reads Session content
+        // through its ordinary credentials. Only the exact Runner class needs
+        // this standalone key; the Machine RPC owner decides that before it
+        // constructs any private key-transfer request.
+        try {
+          if (!homeServerIdentityId) {
+            return { kind: 'waiting', reason: 'runner_unreachable', cause: 'home_identity_unavailable' };
+          }
+
+          exceptionCause = 'destination_machine_exception';
+          const destinationMachine = resolveSessionOwningMachineId({
+            credentials: input.credentials,
+            rawSession: destination.rawSession,
+            accountEncryptionMode: destination.accountEncryptionCurrentness.mode,
+          });
+          if (!destinationMachine.ok) {
+            return { kind: 'waiting', reason: 'runner_unreachable', cause: 'destination_machine_unresolved' };
+          }
+          if (!destinationMachine.machineId) {
+            return { kind: 'waiting', reason: 'runner_unreachable', cause: 'destination_machine_missing' };
+          }
+
+          const externalAction = context.externalActionExecutionAuthorization
+            && input.externalActionMachineInstallationId
+            && input.externalActionMachineRequestPrivateKey
+            ? {
+                context,
+                effectActionId,
+                installationId: input.externalActionMachineInstallationId,
+                privateKey: input.externalActionMachineRequestPrivateKey,
+              }
+            : undefined;
+
+          exceptionCause = 'preparation_exception';
+          return await prepareSessionFollowSourceKey({
+            credentials: input.credentials,
+            homeServerIdentityId,
+            machineId: destinationMachine.machineId,
+            sourceSessionId,
+            destinationSessionId,
+            sourceDataEncryptionKey,
+            serverUrl: serverHttpBaseUrl,
+            ...(signal ? { signal } : {}),
+            ...(externalAction ? { externalAction } : {}),
+          });
+        } finally {
+          // The opened Session DEK is sender-owned scratch material for this one
+          // preparation attempt: zero it once the post-open outcome is decided.
+          // The preparer encodes the original bytes before its RPC and retains no
+          // reference; caller-owned and receiver-owned key material is never
+          // cleared here.
+          sourceDataEncryptionKey?.fill(0);
         }
-
-        const externalAction = context.externalActionExecutionAuthorization
-          && input.externalActionMachineInstallationId
-          && input.externalActionMachineRequestPrivateKey
-          ? {
-              context,
-              effectActionId,
-              installationId: input.externalActionMachineInstallationId,
-              privateKey: input.externalActionMachineRequestPrivateKey,
-            }
-          : undefined;
-
-        return await prepareSessionFollowSourceKey({
-          credentials: input.credentials,
-          homeServerIdentityId,
-          machineId: destinationMachine.machineId,
-          sourceSessionId,
-          destinationSessionId,
-          sourceDataEncryptionKey,
-          serverUrl: serverHttpBaseUrl,
-          ...(signal ? { signal } : {}),
-          ...(externalAction ? { externalAction } : {}),
-        });
-      } finally {
-        // The opened Session DEK is sender-owned scratch material for this one
-        // preparation attempt: zero it once the post-open outcome is decided.
-        // The preparer encodes the original bytes before its RPC and retains no
-        // reference; caller-owned and receiver-owned key material is never
-        // cleared here.
-        sourceDataEncryptionKey?.fill(0);
+      } catch {
+        signal?.throwIfAborted();
+        return { kind: 'waiting', reason: 'runner_unreachable', cause: exceptionCause };
       }
     },
   );

@@ -5,6 +5,7 @@ import {
   accountSettingsParse,
   FeaturesResponseSchema,
   SessionFollowSourceKeyPrepareRequestV1Schema,
+  SessionFollowSourceKeyPreparationResultV1Schema,
   computeRunnerMachineContentKeyFingerprintV1,
   normalizeActionsSettingsV1,
   sealEncryptedDataKeyEnvelopeV1,
@@ -71,9 +72,12 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       persistent: true, standaloneSourceKey: false },
     { name: 'Runner destination without standalone source key', fixed: true, provenance: 'public', plain: false, prepares: false,
       persistent: false, standaloneSourceKey: false },
+    ...(['source_missing', 'destination_missing', 'source_read_failed', 'destination_read_failed',
+      'destination_locality_missing', 'machine_read_failed', 'invalid_response'] as const)
+      .map(fault => ({ name: fault, fixed: true, provenance: 'public' as const, plain: false, prepares: false, fault })),
   ] as const).flatMap((scenario) => (['follow', 'reports_to', 'spawn'] as const).map((relation) => ({
-    persistent: false, standaloneSourceKey: true, layoutOne: false, ...scenario, relation,
-  }))))('$name ($relation)', async ({ fixed, provenance, plain, prepares, persistent, standaloneSourceKey, layoutOne, relation }) => {
+    persistent: false, standaloneSourceKey: true, layoutOne: false, fault: undefined, ...scenario, relation,
+  }))))('$name ($relation)', async ({ fixed, provenance, plain, prepares, persistent, standaloneSourceKey, layoutOne, relation, fault }) => {
     const serverUrl = normalizeServerHttpBaseUrl(fixed ? 'https://fixed-follow.example.test' : configuration.apiServerUrl);
     // Follow-source mutation is a dangerous CLI Action. Keep the production
     // approval owner wired (the credentialed artifact store remains available)
@@ -91,6 +95,8 @@ describe('credentialed CLI relation source-key preparation composition', () => {
     // target normalization, create settlement and key preparation remain real.
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ id: accountId }), { status: 200 }));
     app.post('/v2/sessions/lookup-by-tags', async () => ({ sessions: [] }));
+    app.get('/v2/sessions', async () => ({ sessions: [], nextCursor: null, hasNext: false }));
+    app.get('/v2/sessions/archived', async () => ({ sessions: [], nextCursor: null, hasNext: false }));
     const source = {
       sourceSessionId, destinationSessionId, deliveryState: 'eligible', hasPendingUpdates: false,
     };
@@ -104,8 +110,16 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       return reportsTo;
     });
     app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'e2ee' }));
-    app.get('/v2/sessions/:sessionId', async (request) => {
+    app.get('/v2/sessions/:sessionId', async (request, reply) => {
       const id = (request.params as { sessionId: string }).sessionId;
+      if (events.includes('edge_committed') && (fault === 'source_read_failed' && id === sourceSessionId
+        || fault === 'destination_read_failed' && id === destinationSessionId)) {
+        return reply.code(403).send({ error: 'private boundary detail' });
+      }
+      if (events.includes('edge_committed') && (fault === 'source_missing' && id === sourceSessionId
+        || fault === 'destination_missing' && id === destinationSessionId)) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
       return { session: createSessionRecordFixture({
         id,
         ...(layoutOne && id === destinationSessionId ? {
@@ -120,7 +134,8 @@ describe('credentialed CLI relation source-key preparation composition', () => {
           ? JSON.stringify({ sessionCreationCorrespondenceV1: creationCorrespondence })
           : encodeBase64(encrypt(id === sourceSessionId && !standaloneSourceKey ? machineKey : sourceKey, 'dataKey',
             layoutOne && id === destinationSessionId ? { v: 1 }
-              : { machineId, sessionCreationCorrespondenceV1: creationCorrespondence })),
+              : { ...(fault === 'destination_locality_missing' && id === destinationSessionId ? {} : { machineId }),
+                sessionCreationCorrespondenceV1: creationCorrespondence })),
       }) };
     });
     const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(19));
@@ -134,8 +149,9 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       installationId: 'runner-installation',
       machineContentKeyFingerprint: computeRunnerMachineContentKeyFingerprintV1(runnerKey),
     };
-    app.get(`/v1/machines/${machineId}`, async () => {
+    app.get(`/v1/machines/${machineId}`, async (_request, reply) => {
       events.push('exact_machine');
+      if (fault === 'machine_read_failed') return reply.code(403).send({ error: 'private boundary detail' });
       return { machine: {
         id: machineId,
         kind: persistent ? 'persistent' : 'ephemeral_session_runner',
@@ -170,7 +186,8 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       preparedRequests.push(request);
       expect(call.authorization).toEqual({ kind: 'session.follow.sourceKey.prepare', sourceSessionId, destinationSessionId });
       return {
-        ok: true, result: await socketRpcCodec.encodeResponse(runnerContent, { v: 1, outcome: 'installed' }, decoded.callId),
+        ok: true, result: await socketRpcCodec.encodeResponse(runnerContent,
+          fault === 'invalid_response' ? { v: 1, outcome: 'private boundary detail' } : { v: 1, outcome: 'installed' }, decoded.callId),
       };
     } });
     io.mockReturnValue(socket);
@@ -215,6 +232,26 @@ describe('credentialed CLI relation source-key preparation composition', () => {
             directory: { kind: 'path', path: '/repo' }, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
             connectedServices: { v: 2, bindingsByServiceId: {} }, reportsTo: { sessionId: destinationSessionId },
           }, { surface: 'cli' });
+      if (fault) {
+        const preparation = { kind: 'waiting', reason: fault === 'source_missing' ? 'source_key_unavailable' : 'runner_unreachable',
+          cause: ({ source_missing: 'source_transport_unavailable', destination_missing: 'destination_transport_unavailable',
+            source_read_failed: 'source_transport_exception', destination_read_failed: 'destination_transport_exception',
+            destination_locality_missing: 'destination_machine_missing', machine_read_failed: 'machine_rpc_failed',
+            invalid_response: 'machine_rpc_invalid_response' } as const)[fault] };
+        // Follow projects the same typed diagnostics into its partial-failure envelope;
+        // Reports-to/spawn retain them inside their strict committed result schemas.
+        expect(result, JSON.stringify({ result, events })).toMatchObject(relation === 'follow'
+          ? { ok: false, errorCode: 'session_follow_source_key_preparation_waiting', details: {
+            edgeCommitted: true, reason: preparation.reason, cause: preparation.cause } }
+          : { ok: true, result: { sourceKeyPreparation: preparation } });
+        expect(SessionFollowSourceKeyPreparationResultV1Schema.parse(preparation)).toEqual(preparation);
+        return;
+      }
+      if (!prepares && !plain && !persistent && standaloneSourceKey) {
+        expect(result).toMatchObject(relation === 'follow'
+          ? { details: { cause: 'home_identity_unavailable' } }
+          : { result: { sourceKeyPreparation: { cause: 'home_identity_unavailable' } } });
+      }
       if (relation === 'spawn') {
         expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: true, result: {
           type: 'success', sessionId: sourceSessionId,

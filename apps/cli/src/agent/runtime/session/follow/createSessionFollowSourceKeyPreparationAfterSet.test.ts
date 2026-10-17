@@ -175,7 +175,7 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
       sourceSessionId: 'source',
       destinationSessionId: 'destination',
       context: {} as never,
-    })).resolves.toEqual({ kind: 'waiting', reason: 'source_key_unavailable' });
+    })).resolves.toEqual({ kind: 'waiting', reason: 'source_key_unavailable', cause: 'source_key_unavailable' });
 
     expect(socket.emitWithAck).not.toHaveBeenCalled();
     expect(socket.connect).not.toHaveBeenCalled();
@@ -315,7 +315,7 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
       sourceSessionId: 'source',
       destinationSessionId: 'destination',
       context: {} as never,
-    })).resolves.toEqual({ kind: 'waiting', reason: 'source_key_unavailable' });
+    })).resolves.toEqual({ kind: 'waiting', reason: 'source_key_unavailable', cause: 'source_key_unavailable' });
 
     expect(socket.emitWithAck).not.toHaveBeenCalled();
     expect(socket.connect).not.toHaveBeenCalled();
@@ -352,7 +352,7 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
         sourceSessionId: 'source',
         destinationSessionId: 'destination',
         context: {} as never,
-      })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable' });
+      })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'destination_machine_unresolved' });
       expect(prepareSessionFollowSourceKey).not.toHaveBeenCalled();
     },
   );
@@ -467,7 +467,7 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
         sourceSessionId: 'source',
         destinationSessionId: 'destination',
         context: {} as never,
-      })).rejects.toThrow('rpc failure');
+      })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'preparation_exception' });
 
       expectDownstreamObservedOriginalBeforeCleanup(sourceDataEncryptionKey);
     });
@@ -508,7 +508,7 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
         sourceSessionId: 'source',
         destinationSessionId: 'destination',
         context: {} as never,
-      })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable' });
+      })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'home_identity_unavailable' });
 
       expect(prepareSessionFollowSourceKey).not.toHaveBeenCalled();
       expect(openedSourceKey()).toEqual(new Uint8Array(sourceDataEncryptionKey.length));
@@ -524,7 +524,7 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
         sourceSessionId: 'source',
         destinationSessionId: 'destination',
         context: {} as never,
-      })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable' });
+      })).resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'destination_machine_unresolved' });
 
       expect(prepareSessionFollowSourceKey).not.toHaveBeenCalled();
       expect(openedSourceKey()).toEqual(new Uint8Array(sourceDataEncryptionKey.length));
