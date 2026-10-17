@@ -86,6 +86,10 @@ describe('createAcpRuntime (provider-initiated turns)', () => {
     backend.emit({ type: 'status', status: 'running' });
     backend.emit({ type: 'status', status: 'idle' });
 
+    for (let attempt = 0; attempt < 50 && !findTaskMarker(sent, 'task_complete'); attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+
     const taskStarted = findTaskMarker(sent, 'task_started');
     const taskComplete = findTaskMarker(sent, 'task_complete');
     expect(taskStarted).toBeTruthy();
@@ -196,6 +200,87 @@ describe('createAcpRuntime (provider-initiated turns)', () => {
     expect(turnCancelled.id).toBe(providerTurnId);
   });
 
+  it('marks a provider-initiated turn cancelled, not completed, when idle races the cancel', async () => {
+    // Pi's abort acknowledgement waits for provider idle, so the trailing agent_end can
+    // arrive while cancel() is still awaiting the backend. The turn must end cancelled.
+    const backend = createFakeAcpRuntimeBackend({
+      cancel: async () => {
+        backend.emit({ type: 'status', status: 'idle' });
+      },
+    });
+    const sent: any[] = [];
+
+    const session = createBasicSessionClientWithOverrides({
+      sendAgentMessage: (_provider, body) => {
+        sent.push(body);
+      },
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({ type: 'status', status: 'running' });
+    await runtime.cancel();
+
+    const providerTurnId = findTaskMarker(sent, 'task_started')?.id;
+    expect(sent.some((message) => message?.type === 'task_complete')).toBe(false);
+    const turnCancelled = sent.find((message) => message?.type === 'turn_cancelled');
+    expect(turnCancelled).toBeTruthy();
+    expect(turnCancelled.id).toBe(providerTurnId);
+  });
+
+  it('flushes the final assistant text before completing a provider-initiated turn', async () => {
+    const backend = createFakeAcpRuntimeBackend();
+    const orderedRows: any[] = [];
+
+    const session = createBasicSessionClientWithOverrides({
+      sendAgentMessage: (_provider, body) => {
+        orderedRows.push(body);
+      },
+      sendAgentMessageCommitted: async (_provider, body) => {
+        orderedRows.push(body);
+      },
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({ type: 'status', status: 'running' });
+    backend.emit({ type: 'model-output', fullText: 'final answer', fullTextScope: 'segment' });
+    backend.emit({ type: 'status', status: 'idle' });
+
+    // The task_complete marker must land only after the flushed assistant row is durable.
+    for (let attempt = 0; attempt < 50 && !orderedRows.some((message) => message?.type === 'task_complete'); attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    const taskCompleteIndex = orderedRows.findIndex((message) => message?.type === 'task_complete');
+    const assistantRowIndex = orderedRows.findIndex(
+      (message) => message?.type === 'message' && message?.message === 'final answer',
+    );
+    expect(assistantRowIndex).toBeGreaterThan(-1);
+    expect(taskCompleteIndex).toBeGreaterThan(assistantRowIndex);
+  });
+
   it('commits provider-observed user prompts to the transcript as user rows', async () => {
     const backend = createFakeAcpRuntimeBackend();
     const committedUserMessages: Array<{ text: string; opts: { localId: string; meta?: Record<string, unknown> } }> = [];
@@ -227,12 +312,13 @@ describe('createAcpRuntime (provider-initiated turns)', () => {
 
     expect(committedUserMessages).toHaveLength(1);
     expect(committedUserMessages[0]!.text).toBe('<system-reminder>[BACKGROUND BASH COMPLETED]</system-reminder>');
-    expect(committedUserMessages[0]!.opts.localId).toEqual(expect.any(String));
-    // A repeat event for the same text carries the same deterministic localId so the
-    // server transcript dedupes instead of duplicating the row.
+    expect(committedUserMessages[0]!.opts.localId).toEqual(expect.stringMatching(/^provider-user-prompt:/));
+    // Identical prompt text observed in two separate events commits two distinct rows:
+    // the identity is per-occurrence, not text-derived, so legitimate repeats (e.g. two
+    // "continue" injections) do not collapse into one transcript row.
     backend.emit({ type: 'user-message', text: '<system-reminder>[BACKGROUND BASH COMPLETED]</system-reminder>' });
     expect(committedUserMessages).toHaveLength(2);
-    expect(committedUserMessages[1]!.opts.localId).toBe(committedUserMessages[0]!.opts.localId);
+    expect(committedUserMessages[1]!.opts.localId).not.toBe(committedUserMessages[0]!.opts.localId);
     // Provider-observed user prompts are transcript rows, not ACP-forwarded agent messages.
     expect(sent.some((message) => typeof message?.message === 'string' && message.message.includes('BACKGROUND BASH'))).toBe(false);
   });

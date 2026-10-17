@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { logger } from '@/ui/logger';
 import type { AgentBackend, AgentMessage, McpServerConfig } from '@/agent';
@@ -101,16 +101,6 @@ import { applyProviderSessionInfoUpdate } from '@/agent/acp/runtime/providerSess
 import { createSessionMediaTurnState } from '@/agent/acp/runtime/sessionMediaTurnState';
 
 const ACP_FAILURE_TRACE_ENV = 'HAPPIER_ACP_FAILURE_TRACE';
-
-/**
- * Deterministic localId for provider-observed user prompts (extension-injected prompts
- * such as pi background-bash completion reminders). Repeats of the same text commit the
- * same row identity so the server transcript dedupes instead of duplicating the row.
- */
-function buildProviderUserPromptLocalId(text: string): string {
-  const digest = createHash('sha256').update(text).digest('hex').slice(0, 24);
-  return `provider-user-prompt:${digest}`;
-}
 
 type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
 type RuntimeSessionMediaSource = RuntimeSessionMediaMessage['media'][number];
@@ -1477,13 +1467,20 @@ export function createAcpRuntime(params: {
             params.session.keepAlive(false, 'remote');
           }
           if (msg.status === 'idle' && !turnInFlight) {
-            if (providerInitiatedTurnId) {
-              const providerTurnId = providerInitiatedTurnId;
-              providerInitiatedTurnId = null;
-              params.session.sendAgentMessage(params.provider, { type: 'task_complete', id: providerTurnId });
-              void streamedTranscriptWriter.flushAll({ reason: 'turn-end' }).catch((error) => {
-                logger.debug(`[${params.provider}] Failed to flush streamed transcript after provider-initiated turn`, error);
-              });
+            const providerInitiatedTurnToComplete = providerInitiatedTurnId;
+            providerInitiatedTurnId = null;
+            if (providerInitiatedTurnToComplete) {
+              // Complete only after the final assistant text is durably flushed, mirroring
+              // flushTurn's flush-then-task_complete ordering so clients never see the turn
+              // complete before its last answer row lands.
+              void (async () => {
+                try {
+                  await streamedTranscriptWriter.flushAll({ reason: 'turn-end' });
+                } catch (error) {
+                  logger.debug(`[${params.provider}] Failed to flush streamed transcript after provider-initiated turn`, error);
+                }
+                params.session.sendAgentMessage(params.provider, { type: 'task_complete', id: providerInitiatedTurnToComplete });
+              })();
             }
             params.onThinkingChange(false);
             params.session.keepAlive(false, 'remote');
@@ -1494,8 +1491,12 @@ export function createAcpRuntime(params: {
         case 'user-message': {
           // A user prompt observed on the provider side (extension-injected). Commit it as
           // a user transcript row so Happier clients show why the provider kept working.
+          // The localId is occurrence-unique: pi message events carry no provider id, and a
+          // text-derived id would collapse legitimate repeats of identical prompt text
+          // (e.g. two "continue" injections) into one transcript row. Commit retries reuse
+          // the localId captured by this single enqueue, so delivery stays idempotent.
           void params.session.sendUserTextMessageCommitted(msg.text, {
-            localId: buildProviderUserPromptLocalId(msg.text),
+            localId: `provider-user-prompt:${randomUUID()}`,
             meta: { providerObservedUserPrompt: true, provider: params.provider },
           }).catch((error) => {
             logger.debug(`[${params.provider}] Failed to commit provider-observed user prompt (non-fatal)`, error);
@@ -2247,14 +2248,18 @@ export function createAcpRuntime(params: {
     async cancel(): Promise<void> {
       if (!sessionId) return;
       await streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'cancelled' });
+      // Claim the provider-initiated turn BEFORE awaiting the backend cancel: pi's abort
+      // acknowledgement waits for provider idle, so the trailing agent_end/idle can arrive
+      // (and run the idle handler below) while that await is pending. Clearing first keeps
+      // the idle path from completing a turn this cancellation is about to cancel.
+      const providerInitiatedTurnToCancel = providerInitiatedTurnId;
+      providerInitiatedTurnId = null;
       const b = await ensureBackend();
       try {
         await b.cancel(sessionId);
       } finally {
-        if (providerInitiatedTurnId) {
-          const providerTurnId = providerInitiatedTurnId;
-          providerInitiatedTurnId = null;
-          params.session.sendAgentMessage(params.provider, { type: 'turn_cancelled', id: providerTurnId });
+        if (providerInitiatedTurnToCancel) {
+          params.session.sendAgentMessage(params.provider, { type: 'turn_cancelled', id: providerInitiatedTurnToCancel });
         }
         await abortPendingAcpPermissionRequests(params.permissionHandler, 'ACP runtime cancelled', (error) => {
           logger.debug(`[${params.provider}] Failed to abort pending permission requests after cancel`, error);

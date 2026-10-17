@@ -73,12 +73,25 @@ rl.on('line', (line) => {
       out({ id: command.id, type: 'response', command: command.type, success: true, data: { commands: [] } });
       break;
     case 'prompt': {
+      if (command.message.includes('REJECT-BEFORE-EFFECT')) {
+        out({ id: command.id, type: 'response', command: 'prompt', success: false, error: 'prompt rejected while busy' });
+        // Later, an extension injects a prompt with the identical text; it must surface.
+        setTimeout(() => {
+          out({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: command.message }] } });
+          out({ type: 'agent_start' });
+          setTimeout(() => out({ type: 'agent_end' }), 20);
+        }, 40);
+        break;
+      }
+      const echoText = command.message.includes('TEMPLATE')
+        ? 'EXPANDED TEMPLATE BODY: review the concurrency of src/index.ts carefully.'
+        : command.message;
       out({ id: command.id, type: 'response', command: command.type, success: true });
       // Pi echoes the accepted prompt as a user message before the run starts.
-      out({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: command.message }] } });
+      out({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: echoText }] } });
       out({ type: 'agent_start' });
       setTimeout(() => out({ type: 'agent_end' }), 20);
-      if (!injected) {
+      if (!injected && !command.message.includes('TEMPLATE')) {
         injected = true;
         // An extension (e.g. AFT) injects a background-bash completion prompt into the
         // now-idle session, triggering a fresh provider-initiated run.
@@ -133,5 +146,58 @@ rl.on('line', (line) => {
 
     const userMessages = messages.filter((msg) => msg.type === 'user-message');
     expect(userMessages).toEqual([{ type: 'user-message', text: injectedText }]);
+  });
+
+  it('suppresses the template-expanded echo of a slash-command prompt before agent_start', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'happier-pi-template-echo-'));
+    tempDirs.push(dir);
+    const backend = new PiRpcBackend({
+      cwd: dir,
+      command: process.execPath,
+      args: [makeFakePiRpcProcessScript(dir)],
+    });
+    backends.push(backend);
+
+    const messages: AgentMessage[] = [];
+    backend.onMessage((msg) => {
+      messages.push(msg);
+    });
+
+    const session = await backend.startSession();
+    // Pi expands the /review template before the user message exists, so the echo text
+    // differs from the raw RPC prompt text.
+    await backend.sendPrompt(session.sessionId, '/review concurrency TEMPLATE');
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(messages.filter((msg) => msg.type === 'user-message')).toEqual([]);
+  });
+
+  it('surfaces a later injection whose text matches a prompt rejected before effect', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'happier-pi-rejected-echo-'));
+    tempDirs.push(dir);
+    const backend = new PiRpcBackend({
+      cwd: dir,
+      command: process.execPath,
+      args: [makeFakePiRpcProcessScript(dir)],
+    });
+    backends.push(backend);
+
+    const messages: AgentMessage[] = [];
+    backend.onMessage((msg) => {
+      messages.push(msg);
+    });
+
+    const session = await backend.startSession();
+    const rejectedText = 'REJECT-BEFORE-EFFECT continue the interrupted work';
+    await expect(backend.sendPrompt(session.sessionId, rejectedText)).rejects.toThrow();
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (messages.some((msg) => msg.type === 'user-message' && msg.text === rejectedText)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(messages.filter((msg) => msg.type === 'user-message')).toEqual([
+      { type: 'user-message', text: rejectedText },
+    ]);
   });
 });
