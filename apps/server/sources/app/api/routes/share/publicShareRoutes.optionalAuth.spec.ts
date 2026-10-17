@@ -12,7 +12,6 @@ vi.mock("@/app/auth/auth", () => ({
 const logPublicShareAccess = vi.fn(async () => {});
 vi.mock("@/app/share/accessLogger", () => ({
     logPublicShareAccess,
-    getIpAddress: vi.fn(() => "1.2.3.4"),
     getUserAgent: vi.fn(() => "ua"),
 }));
 
