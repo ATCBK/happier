@@ -77,9 +77,6 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
             payload: expect.objectContaining({
                 body: expect.objectContaining({
                     latestTurnStatus: "cancelled",
-                    pendingPermissionRequestCount: 0,
-                    pendingUserActionRequestCount: 0,
-                    pendingRequestObservedAt: null,
                 }),
             }),
         }));
@@ -93,6 +90,9 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
                 runtimeActivityState: true,
                 runtimeActivityActiveCount: true,
                 runtimeActivityRevision: true,
+                pendingPermissionRequestCount: true,
+                pendingUserActionRequestCount: true,
+                pendingRequestObservedAt: true,
             },
         })).resolves.toEqual({
             active: false,
@@ -101,6 +101,9 @@ describe("released UI v0.2.1 Stop lifecycle compatibility", () => {
             runtimeActivityState: "unknown",
             runtimeActivityActiveCount: 0,
             runtimeActivityRevision: BigInt(2),
+            pendingPermissionRequestCount: 1,
+            pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: new Date(1_000),
         });
     });
 });

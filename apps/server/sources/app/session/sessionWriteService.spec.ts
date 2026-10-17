@@ -2904,11 +2904,6 @@ describe("sessionWriteService", () => {
                 latestTurnStatus: "completed",
                 latestTurnStatusObservedAt: 200,
                 lastRuntimeIssue: null,
-                pendingRequestProjection: {
-                    pendingPermissionRequestCount: 0,
-                    pendingUserActionRequestCount: 0,
-                    pendingRequestObservedAt: null,
-                },
                 participantCursors: [{ accountId: "u1", cursor: 101 }],
                 badgeAttentionChanged: false,
             });

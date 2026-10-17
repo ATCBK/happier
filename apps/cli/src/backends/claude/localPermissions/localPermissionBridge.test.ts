@@ -11,6 +11,37 @@ import {
 } from '@happier-dev/agents';
 
 describe('ClaudeLocalPermissionBridge', () => {
+  it('keeps the hook pending until durable settlement admission and permits an admission retry', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('session-durable-local-admission');
+    const bridge = new ClaudeLocalPermissionBridge(session);
+    bridge.activate();
+    const pending = bridge.handlePermissionHook({
+      hook_event_name: 'PermissionRequest', tool_name: 'Write',
+      tool_input: { file_path: '/workspace/file' }, tool_use_id: 'local-durable',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    let admit!: () => void;
+    let fail!: (error: Error) => void;
+    const original = client.updateAgentStateRequestSettlement.bind(client);
+    client.updateAgentStateRequestSettlement = (updater) => new Promise<void>((resolve, reject) => {
+      admit = () => { void original(updater).then(resolve, reject); };
+      fail = reject;
+    });
+    let resumed = false;
+    void pending.then(() => { resumed = true; });
+    const respond = client.rpcHandlerManager.getHandler('permission')!;
+    await respond({ id: 'local-durable', approved: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resumed).toBe(false);
+    fail(new Error('storage admission failed'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resumed).toBe(false);
+    await respond({ id: 'local-durable', approved: true });
+    admit();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(pending).resolves.toMatchObject({ continue: true });
+    bridge.dispose();
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });

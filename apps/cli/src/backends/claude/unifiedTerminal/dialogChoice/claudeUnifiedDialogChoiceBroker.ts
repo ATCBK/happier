@@ -257,6 +257,9 @@ export class ClaudeUnifiedDialogChoiceBroker {
       // paused across the handoff to the terminal control task.
       this.noteTerminalAnswerStarted(params.dialog);
       return decision;
+    }).catch(async (error: unknown) => {
+      await this.drainSourceCompletions(requestId);
+      throw error;
     }).finally(() => {
       if (this.pendingChoice?.requestId === requestId) {
         this.pendingChoice = null;
@@ -306,12 +309,11 @@ export class ClaudeUnifiedDialogChoiceBroker {
         }),
       }),
       completeRequest: (params) => {
-        this.trackSourceCompletion(
+        return this.trackSourceCompletion(
           params.requestId,
           this.requestStore.completeRequest(params),
         );
       },
-      cancelAllRequests: (params) => { void this.cancelAllSourceOwnedRequests(params.reason); },
       hasOutstandingRequest: (requestId) => this.readSourceOwnedOutstandingRequest(requestId) !== null,
       isOutstandingRequestClaimed: (requestId) => {
         const rawRequest = this.session.client.getAgentStateSnapshot?.()?.requests?.[requestId] ?? null;

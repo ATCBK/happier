@@ -27,6 +27,12 @@ import {
     type CommittedClaudeJsonlMessageBaseline,
 } from '@/backends/claude/utils/claudeJsonlMessageKey';
 import { randomUUID } from 'node:crypto';
+import { resolveMachineEncryptionContext } from '@/api/client/encryptionKey';
+import {
+    AgentStateRequestSettlementSchema,
+    applyAgentStateRequestSettlement,
+    buildAgentStateRequestSettlement,
+} from './agentStateRequestSettlement';
 import { AsyncLock } from '@/utils/lock';
 import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
@@ -740,7 +746,7 @@ export class ApiSessionClient extends EventEmitter {
         },
     });
     private daemonTurnLifecycleNotifyTail: Promise<void> = Promise.resolve();
-    private readonly pendingSessionTurnWrites = new Set<Promise<void>>();
+    private readonly pendingDurableSessionWrites = new Set<Promise<void>>();
     private readonly committedUserMessageSeqTracker = new CommittedUserMessageSeqTracker();
     private readonly sessionMutationOutbox: SessionMutationOutbox;
     private readonly runtimeActivitySnapshotPublisher: RuntimeActivitySnapshotSessionMutationPublisher;
@@ -1086,6 +1092,15 @@ export class ApiSessionClient extends EventEmitter {
             sessionId: this.sessionId,
             getSocket: () => this.socket as any,
             requestReconnect: (reason) => this.kickSessionSocketReconnectForDurableMutation(reason),
+            deliverAgentStateRequestSettlement: async (mutation) => {
+                const credentials = await readCredentials();
+                if (!credentials) throw new Error('Request settlement recovery requires account credentials');
+                const context = resolveMachineEncryptionContext(credentials);
+                const settlement = AgentStateRequestSettlementSchema.parse(decrypt(
+                    context.encryptionKey, context.encryptionVariant, decodeBase64(mutation.content.c),
+                ));
+                await this.updateAgentState((state) => applyAgentStateRequestSettlement(state, settlement));
+            },
         });
         this.runtimeActivitySnapshotPublisher = createRuntimeActivitySnapshotSessionMutationPublisher({
             sessionId: this.sessionId,
@@ -5740,6 +5755,39 @@ export class ApiSessionClient extends EventEmitter {
         });
     }
 
+    /** Durable exact request completion; publication and unrelated state updates retain their owner. */
+    updateAgentStateRequestSettlement(
+        handler: (state: AgentState) => AgentState,
+        requireAck = false,
+    ): Promise<void> {
+        const admission = this.admitAgentStateRequestSettlement(handler, requireAck);
+        this.pendingDurableSessionWrites.add(admission);
+        void admission.then(
+            () => this.pendingDurableSessionWrites.delete(admission),
+            () => this.pendingDurableSessionWrites.delete(admission),
+        );
+        return admission;
+    }
+
+    private async admitAgentStateRequestSettlement(handler: (state: AgentState) => AgentState, requireAck: boolean): Promise<void> {
+        const settlement = await this.agentStateLock.inLock(async () => {
+            const state = this.agentState ?? {};
+            return buildAgentStateRequestSettlement(state, handler(state));
+        });
+        if (settlement.entries.length === 0) return;
+        const credentials = await readCredentials();
+        if (!credentials) throw new Error('Request settlement admission requires account credentials');
+        const context = resolveMachineEncryptionContext(credentials);
+        const result = await this.sessionMutationOutbox.enqueueAgentStateRequestSettlement({
+            v: 1, source: 'agent_state_request_settlement', sessionId: this.sessionId,
+            mutationId: randomUUID(),
+            content: { t: 'encrypted', c: encodeBase64(encrypt(context.encryptionKey, context.encryptionVariant, settlement)) },
+        }, requireAck);
+        if (!result.persisted || (requireAck && !result.delivered)) {
+            throw new Error(requireAck ? 'Request settlement is awaiting server acknowledgement' : 'Request settlement was not durably admitted');
+        }
+    }
+
     private trackSessionTurnWrite(
         update: Promise<void>,
         record: Readonly<{ latestTurnStatus?: PrimaryTurnStatusV1 }>,
@@ -5753,9 +5801,9 @@ export class ApiSessionClient extends EventEmitter {
                 error: serializeAxiosErrorForLog(error),
             });
         });
-        this.pendingSessionTurnWrites.add(tracked);
+        this.pendingDurableSessionWrites.add(tracked);
         void tracked.finally(() => {
-            this.pendingSessionTurnWrites.delete(tracked);
+            this.pendingDurableSessionWrites.delete(tracked);
         });
     }
 
@@ -5788,7 +5836,7 @@ export class ApiSessionClient extends EventEmitter {
         await Promise.all([
             this.messageCommitQueueTail.catch(() => undefined),
             this.sessionMutationOutbox.flush('flush').catch(() => undefined),
-            ...[...this.pendingSessionTurnWrites].map((update) => update.catch(() => undefined)),
+            ...this.pendingDurableSessionWrites,
         ]);
     }
 

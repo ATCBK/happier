@@ -24,7 +24,7 @@ import {
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { blockInheritedProviderDeliveryClaims } from "@/app/session/pending/providerDeliveryClaimStaleness";
-import { applyLatestSessionTurnEndInTx, selectSessionActivityBadgeInputs, type TerminalTurnPendingRequestProjection } from "@/app/session/sessionWriteService";
+import { applyLatestSessionTurnEndInTx, selectSessionActivityBadgeInputs } from "@/app/session/sessionWriteService";
 import { didSessionActivityBadgeContributionChange } from "@/app/activity/accountActivityBadge";
 import { AsyncLock } from "@/utils/runtime/lock";
 import type { Tx } from "@/storage/inTx";
@@ -56,7 +56,6 @@ export type ClosePublisherResult =
             latestTurnStatus: PrimaryTurnStatusV1 | null;
             latestTurnStatusObservedAt: number | null;
             lastRuntimeIssue: SessionRuntimeIssueV1 | null;
-            pendingRequestProjection?: TerminalTurnPendingRequestProjection;
         }>;
       }
     | { status: "already_inactive" }
@@ -350,9 +349,6 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                         latestTurnStatus: turnResult.latestTurnStatus,
                         latestTurnStatusObservedAt: turnResult.latestTurnStatusObservedAt,
                         lastRuntimeIssue: turnResult.lastRuntimeIssue,
-                        ...(turnResult.pendingRequestProjection
-                            ? { pendingRequestProjection: turnResult.pendingRequestProjection }
-                            : {}),
                     },
                 }
                 : {}),

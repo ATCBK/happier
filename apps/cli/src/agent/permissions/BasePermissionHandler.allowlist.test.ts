@@ -18,6 +18,13 @@ class FakeSession {
     return this.agentState;
   }
 
+  async updateAgentStateRequestSettlement(updater: Parameters<FakeSession['updateAgentState']>[0]): Promise<void> {
+
+    await this.updateAgentState(updater);
+
+  }
+
+
   updateAgentState(updater: any) {
     this.agentState = updater(this.agentState);
     return this.agentState;
@@ -559,7 +566,7 @@ describe('BasePermissionHandler allowlist', () => {
     expect(handler.isAllowed('bash', input)).toBe(false);
   });
 
-  it('does not emit unhandledRejection when updateAgentState rejects', async () => {
+  it('retains provider retry authority without an unhandled rejection when settlement fails', async () => {
     const session = new FakeSession();
     session.updateAgentState = async () => {
       throw new Error('updateAgentState failed');
@@ -571,10 +578,17 @@ describe('BasePermissionHandler allowlist', () => {
     try {
       const promise = handler.request('perm-1', 'bash', { command: ['bash', '-lc', 'echo hello'] });
       const rpc = session.rpcHandlerManager.handlers.get('permission');
+      await expect(rpc!({ id: 'perm-1', approved: true, decision: 'approved' })).rejects.toThrow('updateAgentState failed');
+      let resumed = false;
+      void promise.then(() => { resumed = true; });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(resumed).toBe(false);
+      session.updateAgentState = (updater) => {
+        session.agentState = updater(session.agentState);
+        return session.agentState;
+      };
       await rpc!({ id: 'perm-1', approved: true, decision: 'approved' });
       await promise;
-
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       expect(onUnhandled).not.toHaveBeenCalled();
     } finally {
       process.off('unhandledRejection', onUnhandled);

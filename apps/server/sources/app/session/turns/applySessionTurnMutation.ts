@@ -74,7 +74,7 @@ function isNewerMatchingRecoveryLifecycleEvidence(params: Readonly<{
     return doesProviderContextMatchFailedTurn(params.turn, params.mutation);
 }
 
-export function resolveTerminalStatus(action: SessionTurnMutationV1["action"]): PrimaryTurnStatusV1 | null {
+function resolveTerminalStatus(action: SessionTurnMutationV1["action"]): PrimaryTurnStatusV1 | null {
     if (action === "complete") return "completed";
     if (action === "fail") return "failed";
     if (action === "cancel" || action === "end_session") return "cancelled";

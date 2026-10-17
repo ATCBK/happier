@@ -467,7 +467,6 @@ export function startSocket(app: Fastify) {
                             latestTurnStatusObservedAt,
                             lastRuntimeIssue,
                             badgeAttentionChanged,
-                            pendingRequestProjection,
                             participantCursor,
                         }) => {
                             await publishSessionPublisherLifecycleUpdate({
@@ -481,7 +480,6 @@ export function startSocket(app: Fastify) {
                                 ...(latestTurnStatusObservedAt !== undefined ? { latestTurnStatusObservedAt } : {}),
                                 ...(lastRuntimeIssue !== undefined ? { lastRuntimeIssue } : {}),
                                 ...(typeof badgeAttentionChanged === 'boolean' ? { badgeAttentionChanged } : {}),
-                                ...(pendingRequestProjection ? { pendingRequestProjection } : {}),
                                 skipSenderAccountId: userId,
                                 skipSenderConnection: connection,
                             });

@@ -20,6 +20,13 @@ class FakeSession {
         return this.agentState;
     }
 
+    async updateAgentStateRequestSettlement(updater: Parameters<FakeSession['updateAgentState']>[0]): Promise<void> {
+
+      await this.updateAgentState(updater);
+
+    }
+
+
     updateAgentState(updater: (state: AgentState) => AgentState) {
         this.agentState = updater(this.agentState);
     }
@@ -61,6 +68,83 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
 }
 
 describe('PermissionRequestCoordinator', () => {
+    it('does not apply an approval after cancellation retired its pending entry', async () => {
+        const { coordinator, store } = createHarness();
+        let approveAdmission!: () => void;
+        store.completeRequest = ({ status }) => status === 'approved'
+            ? new Promise<void>((resolve) => { approveAdmission = resolve; })
+            : Promise.resolve();
+        const pending = coordinator.requestDecision(bashRequest);
+        const rejected = expect(pending).rejects.toThrow('canceled');
+        let granted = false;
+        coordinator.completeResponse({
+            context: coordinator.getResponseContext(bashRequest.requestId)!,
+            completion: { result: approve(), completedRequest: { status: 'approved' } },
+            onAdmitted: () => { granted = true; },
+        });
+        await coordinator.cancelAll('canceled');
+        await rejected;
+        approveAdmission();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(granted).toBe(false);
+    });
+    it('does not grant approval while its cancellation is awaiting durable admission', async () => {
+        const { coordinator, store } = createHarness();
+        const admissions = new Map<string, () => void>();
+        store.completeRequest = ({ status }) => new Promise<void>((resolve) => { admissions.set(status, resolve); });
+        const pending = coordinator.requestDecision(bashRequest);
+        const rejected = expect(pending).rejects.toThrow('canceled');
+        let granted = false;
+        coordinator.completeResponse({
+            context: coordinator.getResponseContext(bashRequest.requestId)!,
+            completion: { result: approve(), completedRequest: { status: 'approved' } },
+            onAdmitted: () => { granted = true; },
+        });
+        const cancellation = coordinator.cancelAll('canceled');
+        admissions.get('approved')!();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(granted).toBe(false);
+        admissions.get('canceled')!();
+        await cancellation;
+        await rejected;
+    });
+    it('does not release a provider waiter claimed while durable admission is pending', async () => {
+        const { coordinator, store } = createHarness();
+        let claimed = false;
+        store.isOutstandingRequestClaimed = () => claimed;
+        let admit!: () => void;
+        store.completeRequest = () => new Promise<void>((resolve) => { admit = resolve; });
+        const pending = coordinator.requestDecision(bashRequest);
+        let resumed = false;
+        void pending.then(() => { resumed = true; }, () => {});
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        coordinator.completeResponse({ context, completion: { result: approve(), completedRequest: { status: 'approved' } } });
+        claimed = true;
+        admit();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(resumed).toBe(false);
+        coordinator.cancelRequest(bashRequest.requestId, 'test cleanup');
+        await expect(pending).rejects.toThrow('test cleanup');
+    });
+    it('holds the provider waiter until request settlement obtains durable custody', async () => {
+        const { coordinator, store } = createHarness();
+        let admit!: () => void;
+        store.completeRequest = () => new Promise<void>((resolve) => { admit = resolve; });
+        const provider = coordinator.requestDecision(bashRequest);
+        let providerResumed = false;
+        void provider.then(() => { providerResumed = true; });
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        expect(coordinator.completeResponse({ context, completion: {
+            result: approve(), completedRequest: { status: 'approved' },
+        } })).toBe(true);
+        await Promise.resolve();
+        expect(providerResumed).toBe(false);
+        admit();
+        await expect(provider).resolves.toEqual(approve());
+    });
     it('rejects invalid AskUserQuestion input before request publication or waiter insertion', async () => {
         const { coordinator, session } = createHarness();
         const invalid = {
@@ -92,7 +176,7 @@ describe('PermissionRequestCoordinator', () => {
                     publishCount += 1;
                     if (rejectPublication) throw new InvalidAskUserQuestionInputError();
                 },
-                completeRequest: () => {},
+                completeRequest: async () => {},
                 hasOutstandingRequest: () => false,
                 isOutstandingRequestClaimed: () => false,
                 readOutstandingRequest: () => null,
@@ -336,6 +420,7 @@ describe('PermissionRequestCoordinator', () => {
         ).toBe(true);
 
         const retryAbort = new AbortController();
+        await expect.poll(() => coordinator.getResponseContext(bashRequest.requestId)).toBeNull();
         const retry = coordinator.requestDecision(
             {
                 ...bashRequest,
@@ -376,6 +461,7 @@ describe('PermissionRequestCoordinator', () => {
         ).toBe(true);
 
         const incompatibleAbort = new AbortController();
+        await expect.poll(() => coordinator.getResponseContext(bashRequest.requestId)).toBeNull();
         const incompatible = coordinator.requestDecision(
             {
                 ...bashRequest,
@@ -521,7 +607,7 @@ describe('PermissionRequestCoordinator', () => {
             }),
         ).toBe(true);
 
-        coordinator.cancelAll('Session ended');
+        await coordinator.cancelAll('Session ended');
 
         const retryAbort = new AbortController();
         const retry = coordinator.requestDecision(bashRequest, { signal: retryAbort.signal });

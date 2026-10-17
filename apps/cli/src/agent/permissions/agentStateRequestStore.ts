@@ -19,6 +19,8 @@ import {
     isAgentStateRequestCoveredByCompletedRequests,
 } from '@happier-dev/agents';
 import { normalizeAskUserQuestionInputForPublication } from '@/agent/questions/normalizeAskUserQuestionInput';
+import { logger } from '@/ui/logger';
+import { deepEqual } from '@/utils/deterministicJson';
 
 type AgentStateRequestEntry = NonNullable<AgentState['requests']>[string];
 type AgentStateCompletedEntry = NonNullable<AgentState['completedRequests']>[string];
@@ -42,6 +44,15 @@ export function hasPermissionResponseClaimV1(value: unknown): value is Record<ty
     return hasOwnProperty(value, PERMISSION_RESPONSE_CLAIM_V1);
 }
 
+export function isSameAgentStateRequestOccurrence(left: unknown, right: unknown): boolean {
+    if (!left || typeof left !== 'object' || !right || typeof right !== 'object') return false;
+    const request = left as Record<string, unknown>;
+    const expected = right as Record<string, unknown>;
+    return request.createdAt === expected.createdAt && request.tool === expected.tool
+        && deepEqual(request.arguments, expected.arguments)
+        && (expected.source === undefined || request.source === expected.source);
+}
+
 export type AgentStateOutstandingRequest = Readonly<{
     requestId: string;
     toolName: string;
@@ -55,6 +66,7 @@ export type AgentStateOutstandingRequest = Readonly<{
 type SessionLike = Readonly<{
     sessionId: string;
     updateAgentState: (updater: (state: AgentState) => AgentState) => Promise<void> | void;
+    updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState, requireAck?: boolean) => Promise<void>;
     getAgentStateSnapshot?: () => AgentState | null | undefined;
     getMetadataSnapshot?: () => unknown;
 }>;
@@ -198,7 +210,6 @@ export class AgentStateRequestStore {
         updatedPermissions?: unknown;
         extraCompletedFields?: Readonly<Record<string, unknown>> | null;
         fallback?: Readonly<{ toolName: string; toolInput: unknown; createdAt: number; kind?: string; source?: string }> | null;
-        updateState?: (state: AgentState) => AgentState;
         requireAck?: boolean;
     }>): Promise<void> {
         let completedRequest = false;
@@ -211,6 +222,10 @@ export class AgentStateRequestStore {
             if (hasPermissionResponseClaimV1(existing)) {
                 return currentState;
             }
+            if (existing && params.fallback && !isSameAgentStateRequestOccurrence(existing, {
+                tool: params.fallback.toolName, arguments: params.fallback.toolInput,
+                createdAt: params.fallback.createdAt, source: params.fallback.source,
+            })) return currentState;
             delete requests[params.requestId];
 
             const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
@@ -281,15 +296,13 @@ export class AgentStateRequestStore {
                 completedRequests,
             };
             completedRequest = true;
-            return typeof params.updateState === 'function' ? params.updateState(nextState) : nextState;
+            return nextState;
         };
-        const completion = params.requireAck
-            ? Promise.resolve(this.session.updateAgentState(update))
-            : updateAgentStateBestEffort(this.session, update, this.logPrefix, 'complete_request');
+        const completion = this.settleRequests(update, params.requireAck);
 
         return completion.then(() => {
-            if (params.requireAck && !completedRequest) {
-                throw new Error(`Permission request ${params.requestId} was not completed by the acknowledged write`);
+            if (!completedRequest) {
+                throw new Error(`Permission request ${params.requestId} did not match an outstanding request settlement`);
             }
             if (completedRequest) {
                 this.markPermissionRequestCompletedBestEffort(params.requestId);
@@ -310,10 +323,9 @@ export class AgentStateRequestStore {
         kind?: string;
         source?: string;
         reason?: string;
-    }>): void {
+    }>): Promise<void> {
         let recordedCompletion = false;
-        void updateAgentStateBestEffort(
-            this.session,
+        return Promise.resolve(this.session.updateAgentState(
             (currentState) => {
                 if (hasPermissionResponseClaimV1(currentState.requests?.[params.requestId])) {
                     return currentState;
@@ -347,24 +359,27 @@ export class AgentStateRequestStore {
                 recordedCompletion = true;
                 return { ...currentState, completedRequests } satisfies AgentState;
             },
-            this.logPrefix,
-            'record_completed_request',
-        ).then(() => {
+        )).then(() => {
             if (recordedCompletion) {
                 this.markPermissionRequestCompletedBestEffort(params.requestId);
             }
+        }).catch(() => {
+            logger.infoFile(`${this.logPrefix} Failed to publish automatic decision history`);
         });
     }
 
-    cancelAllRequests(params: Readonly<{ reason: string; decision?: string }>): void {
-        updateAgentStateBestEffort(
-            this.session,
+    cancelAllRequests(params: Readonly<{ reason: string; decision?: string; requestIds?: readonly string[] }>): void {
+        const selected = new Map(Object.entries(this.session.getAgentStateSnapshot?.()?.requests ?? {})
+            .filter(([id]) => !params.requestIds || params.requestIds.includes(id)));
+        void this.settleRequests(
             (currentState) => {
                 const pendingRequests = cloneStringKeyedRecordToNullProto(currentState.requests);
                 const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
                 const now = Date.now();
 
                 for (const [id, request] of Object.entries(pendingRequests)) {
+                    const expected = selected.get(id);
+                    if (!expected || !isSameAgentStateRequestOccurrence(request, expected)) continue;
                     if (hasPermissionResponseClaimV1(request)) continue;
                     const entry = clonePlainObjectToNullProto(request) ?? Object.create(null);
                     entry.completedAt = now;
@@ -384,9 +399,20 @@ export class AgentStateRequestStore {
                     completedRequests,
                 };
             },
-            this.logPrefix,
-            'cancel_all_requests',
-        );
+        ).catch(() => undefined); // settleRequests reports admission failures on the default file log.
+    }
+
+    private settleRequests(updater: (state: AgentState) => AgentState, requireAck = false): Promise<void> {
+        try {
+            const result = this.session.updateAgentStateRequestSettlement(updater, requireAck);
+            return Promise.resolve(result).catch((error) => {
+                logger.infoFile(`${this.logPrefix} Request settlement failed; provider completion was not admitted`);
+                throw error;
+            });
+        } catch (error) {
+            logger.infoFile(`${this.logPrefix} Request settlement failed; provider completion was not admitted`);
+            return Promise.reject(error);
+        }
     }
 
     dispose(): void {

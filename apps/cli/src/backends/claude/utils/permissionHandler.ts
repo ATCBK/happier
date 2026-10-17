@@ -373,7 +373,6 @@ export class PermissionHandler {
                 }),
             }),
             completeRequest: (params) => this.agentStateRequestStore.completeRequest(params),
-            cancelAllRequests: (params) => this.cancelRemoteOutstandingRequests(params.reason),
             hasOutstandingRequest: (requestId) => this.readOutstandingRemoteRequest(requestId) !== null,
             isOutstandingRequestClaimed: (requestId) => {
                 const rawRequest = (this.session.client as any).getAgentStateSnapshot?.()?.requests?.[requestId] ?? null;
@@ -397,37 +396,6 @@ export class PermissionHandler {
         }
     }
 
-    private cancelRemoteOutstandingRequests(reason: string): void {
-        updateAgentStateBestEffort(
-            this.session.client,
-            (currentState) => {
-                const requests = cloneStringKeyedRecordToNullProto(currentState.requests);
-                const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
-                const now = Date.now();
-
-                for (const [id, request] of Object.entries(requests)) {
-                    if (isRequestOwnedOutsideRemotePermissionHandler(request)) continue;
-                    if (hasPermissionResponseClaimV1(request)) continue;
-                    delete requests[id];
-                    const completedEntry = { ...(request && typeof request === 'object' ? request : {}) } as Record<string, unknown>;
-                    completedEntry.completedAt = now;
-                    completedEntry.status = 'canceled';
-                    completedEntry.reason = reason;
-                    completedEntry.decision = 'abort';
-                    completedRequests[id] = completedEntry as never;
-                    this.agentStateRequestStore.markPermissionRequestCompletedBestEffort(id);
-                }
-
-                return {
-                    ...currentState,
-                    requests,
-                    completedRequests,
-                };
-            },
-            '[Claude]',
-            'cancel_remote_permission_requests',
-        );
-    }
 
     private applyPermissionResponseSideEffects(params: {
         response: PermissionResponse;
@@ -479,39 +447,40 @@ export class PermissionHandler {
 
         const completion = this.buildPermissionCompletion(message, context);
 
-        if (!this.permissionCoordinator.completeResponse({ context, completion })) {
-            logger.debug('[Claude] Permission response did not complete an outstanding request');
-            return;
-        }
+        this.permissionCoordinator.completeResponse({
+            context,
+            completion,
+            onAdmitted: () => {
+                if (this.isToolTraceEnabled()) {
+                    recordToolTraceEvent({
+                        direction: 'inbound',
+                        sessionId: this.session.client.sessionId,
+                        protocol: 'claude',
+                        provider: 'claude',
+                        kind: 'permission-response',
+                        payload: {
+                            type: 'permission-response',
+                            permissionId: id,
+                            approved: message.approved,
+                            reason: typeof message.reason === 'string' ? message.reason : undefined,
+                            mode: message.mode,
+                            allowedTools: this.redactToolTraceValue(message.allowedTools ?? message.allowTools, 'allowedTools'),
+                            answers: this.redactToolTraceValue(message.answers, 'answers'),
+                            updatedPermissions: this.redactToolTraceValue(message.updatedPermissions, 'updatedPermissions'),
+                        },
+                    });
+                }
 
-        if (this.isToolTraceEnabled()) {
-            recordToolTraceEvent({
-                direction: 'inbound',
-                sessionId: this.session.client.sessionId,
-                protocol: 'claude',
-                provider: 'claude',
-                kind: 'permission-response',
-                payload: {
-                    type: 'permission-response',
-                    permissionId: id,
-                    approved: message.approved,
-                    reason: typeof message.reason === 'string' ? message.reason : undefined,
-                    mode: message.mode,
-                    allowedTools: this.redactToolTraceValue(message.allowedTools ?? message.allowTools, 'allowedTools'),
-                    answers: this.redactToolTraceValue(message.answers, 'answers'),
-                    updatedPermissions: this.redactToolTraceValue(message.updatedPermissions, 'updatedPermissions'),
-                },
-            });
-        }
+                // Store the response with timestamp only after the canonical coordinator completed it.
+                this.responses.set(id, { ...message, receivedAt: Date.now() });
 
-        // Store the response with timestamp only after the canonical coordinator completed it.
-        this.responses.set(id, { ...message, receivedAt: Date.now() });
-
-        this.pendingRequestMetadata.delete(id);
-        this.applyPermissionResponseSideEffects({
-            response: message,
-            toolName: context.toolName,
-            sourceLocalId: context.sourceLocalId,
+                this.pendingRequestMetadata.delete(id);
+                this.applyPermissionResponseSideEffects({
+                    response: message,
+                    toolName: context.toolName,
+                    sourceLocalId: context.sourceLocalId,
+                });
+            },
         });
 
     }
@@ -966,8 +935,9 @@ export class PermissionHandler {
             decision?: 'abort';
         },
     ): void {
-        this.pendingRequestMetadata.clear();
-        this.permissionCoordinator.cancelAll(reason);
+        void this.permissionCoordinator.cancelAll(reason).then(() => {
+            this.pendingRequestMetadata.clear();
+        }).catch(() => logger.infoFile('[Claude] Cancellation request settlement admission failed'));
     }
 
     async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {

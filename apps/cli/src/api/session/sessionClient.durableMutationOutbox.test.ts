@@ -17,6 +17,7 @@ import {
   createApiSessionSocketStub,
 } from '@/testkit/backends/apiSessionSocketHarness';
 import type { ACPMessageData } from './sessionMessageTypes';
+import type { AgentState } from '@/api/types';
 import type { createSessionSocketTransport } from './connection/createSessionSocketTransport';
 import type { createUserScopedSocket } from './sockets';
 
@@ -201,6 +202,82 @@ const taskCompleteMessage = { type: 'task_complete', id: 'turn-1' } satisfies AC
 const reusableUnknownTurnId = ['primary', 'runtime'].join('-') + ':s1:unknown';
 
 describe('ApiSessionClient durable mutation outbox', () => {
+  it('fails request settlement admission without credentials and drains cancellation custody during close', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { result: 'error' } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const request = { tool: 'Write', arguments: { path: 'private' }, createdAt: 10 };
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-close-settlement', agentState: {
+      requests: { foreground: request, background: { ...request, createdAt: 11 } },
+    } }));
+    const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
+    const store = new AgentStateRequestStore({ session: client, logPrefix: '[Test]' });
+    await expect(store.completeRequest({ requestId: 'foreground', status: 'canceled' }))
+      .rejects.toThrow('requires account credentials');
+    const { writeCredentialsLegacy } = await import('@/persistence');
+    await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(9), token: 'tok' });
+    store.cancelAllRequests({ reason: 'source retired', requestIds: ['foreground'] });
+    await client.close();
+    const queued = await readPersistedOutboxMutations('s-close-settlement');
+    expect(queued).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'agent_state_request_settlement' })]));
+    expect(JSON.stringify(queued)).not.toContain('private');
+  });
+
+  it.each(['legacy', 'dataKey'] as const)('recovers %s encrypted exact request settlement after restart and rebases on concurrent requests', async (variant) => {
+    const { writeCredentialsLegacy, writeCredentialsDataKey } = await import('@/persistence');
+    if (variant === 'legacy') await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });
+    else await writeCredentialsDataKey({ publicKey: new Uint8Array(32).fill(8), machineKey: new Uint8Array(32).fill(9), token: 'tok' });
+    const foreground = { tool: 'Write', arguments: { path: 'private-foreground-path' }, createdAt: 10 };
+    const background = { tool: 'Write', arguments: { path: 'private-background-path' }, createdAt: 11 };
+    let serverState: AgentState = { requests: { foreground, background }, completedRequests: {} };
+    let serverVersion = 0;
+    let online = false;
+    const publishedCounts: unknown[] = [];
+    const makeSocket = () => createApiSessionSocketStub({
+      connected: true,
+      emitWithAck: async (event, payload) => {
+        if (event === 'ping') return { v: 1 };
+        if (event !== 'update-state') return { ok: true };
+        if (!online) return { result: 'error' };
+        const request = payload as { expectedVersion: number; agentState: string; activitySummaryV1: unknown };
+        if (request.expectedVersion !== serverVersion) {
+          return { result: 'version-mismatch', version: serverVersion, agentState: JSON.stringify(serverState) };
+        }
+        serverState = JSON.parse(request.agentState);
+        serverVersion += 1;
+        publishedCounts.push(request.activitySummaryV1);
+        return { result: 'success', version: serverVersion, agentState: request.agentState };
+      },
+    });
+    sessionSocketStub = makeSocket();
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
+    const first = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-settlement', agentState: serverState }));
+    await new AgentStateRequestStore({ session: first, logPrefix: '[Test]' }).completeRequest({
+      requestId: 'foreground', status: 'approved', decision: 'approved',
+    });
+    const saved = JSON.stringify(await readPersistedOutboxMutations('s-settlement'));
+    expect(saved).toContain('agent_state_request_settlement');
+    expect(saved).not.toContain('private-foreground-path');
+    expect(saved).not.toContain('private-background-path');
+    await first.close();
+
+    // The new process has an older snapshot; the server also gained another request.
+    serverState.requests = { ...serverState.requests, newer: { ...foreground, createdAt: 30 } };
+    serverVersion += 1;
+    online = true;
+    sessionSocketStub = makeSocket();
+    const restarted = new ApiSessionClient('tok', createPlainSessionFixture({
+      id: 's-settlement', agentState: { requests: { foreground, background } }, agentStateVersion: 0,
+    }));
+    await expect.poll(async () => await readPersistedOutboxMutations('s-settlement')).toEqual([]);
+    expect(serverState.requests).toEqual({ background, newer: { ...foreground, createdAt: 30 } });
+    expect(serverState.completedRequests).toMatchObject({ foreground: { status: 'approved' } });
+    expect(publishedCounts).toContainEqual({ pendingPermissionRequestCount: 2, pendingUserActionRequestCount: 0 });
+    await restarted.close();
+  });
+
   beforeEach(async () => {
     vi.resetModules();
     vi.mocked(axios.get).mockReset();

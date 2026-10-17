@@ -201,9 +201,9 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
             latestTurnId: turnId,
             latestTurnStatus: 'cancelled',
             thinking: false,
-            pendingPermissionRequestCount: 0,
-            pendingUserActionRequestCount: 0,
-            pendingRequestObservedAt: null,
+            pendingPermissionRequestCount: 1,
+            pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: expect.any(Date),
         });
         expect(publishedValues).toEqual(expect.arrayContaining([
             expect.objectContaining({
@@ -211,11 +211,6 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
                 latestTurnStatus: 'cancelled',
                 latestTurnStatusObservedAt: expect.any(Number),
                 badgeAttentionChanged: true,
-                pendingRequestProjection: {
-                    pendingPermissionRequestCount: 0,
-                    pendingUserActionRequestCount: 0,
-                    pendingRequestObservedAt: null,
-                },
             }),
         ]));
     });

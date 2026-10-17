@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,8 +11,11 @@ import {
   type ConnectedServiceBindingsV1,
   type SessionMcpSelectionV1,
 } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 import { createRunDirs } from '../../src/testkit/runDir';
+import { decryptLegacyBase64, encryptLegacyBase64 } from '../../src/testkit/messageCrypto';
 import { repoRootDir } from '../../src/testkit/paths';
 import type { Metadata } from '../../../../apps/cli/src/api/types';
 
@@ -19,17 +23,41 @@ const {
   fetchSessionById,
   resolveDaemonSpawnSessionByNonce,
   spawnDaemonSession,
+  machineSpawn,
   updateSessionMetadataWithRetry,
 } = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
   resolveDaemonSpawnSessionByNonce: vi.fn(),
   spawnDaemonSession: vi.fn(),
+  machineSpawn: vi.fn(),
   updateSessionMetadataWithRetry: vi.fn(),
 }));
 
 vi.mock('../../../../apps/cli/src/daemon/controlClient', () => ({
   resolveDaemonSpawnSessionByNonce,
   spawnDaemonSession,
+}));
+
+// Machine-targeted creation uses Socket.IO rather than local daemon control.
+// Keep its RPC encryption, transport selection, and creator logic real beneath this network boundary.
+vi.mock('socket.io-client', () => ({
+  io: () => {
+    const events = new EventEmitter();
+    return {
+      on: events.on.bind(events),
+      off: events.off.bind(events),
+      connect: () => events.emit('connect'),
+      disconnect: () => {},
+      close: () => {},
+      emit: (event: string, payload: { method: string; params: string }, acknowledge: (response: unknown) => void) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        const secret = createCredentials().encryption.secret;
+        const request = decryptLegacyBase64(payload.params, secret);
+        const result = machineSpawn(payload.method, request);
+        acknowledge({ ok: true, result: encryptLegacyBase64(result, secret) });
+      },
+    };
+  },
 }));
 
 vi.mock('../../../../apps/cli/src/session/transport/http/sessionsHttp', async (importOriginal) => {
@@ -121,6 +149,7 @@ async function createSessionAgentMcpScenario(params?: Readonly<{
     flavor: 'claude',
   }));
   spawnDaemonSession.mockResolvedValue({ success: true, sessionId: childSessionId });
+  machineSpawn.mockReturnValue({ type: 'success', sessionId: childSessionId });
   resolveDaemonSpawnSessionByNonce.mockResolvedValue({ status: 'unsupported' });
   updateSessionMetadataWithRetry.mockResolvedValue({ ok: true });
 
@@ -180,6 +209,7 @@ describe('core e2e: session-agent spawn actions', () => {
     fetchSessionById.mockReset();
     resolveDaemonSpawnSessionByNonce.mockReset();
     spawnDaemonSession.mockReset();
+    machineSpawn.mockReset();
     updateSessionMetadataWithRetry.mockReset();
   });
 
@@ -247,7 +277,7 @@ describe('core e2e: session-agent spawn actions', () => {
         created: true,
         sessionId: scenario.childSessionId,
       }));
-      expect(spawnDaemonSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      expect(machineSpawn).toHaveBeenLastCalledWith(`machine-local:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`, expect.objectContaining({
         directory: scenario.workspaceDir,
         machineId: 'machine-local',
         backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
@@ -293,7 +323,7 @@ describe('core e2e: session-agent spawn actions', () => {
         type: 'success',
         sessionId: scenario.childSessionId,
       }));
-      expect(spawnDaemonSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      expect(machineSpawn).toHaveBeenLastCalledWith(`machine-local:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`, expect.objectContaining({
         directory: scenario.workspaceDir,
         backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
         permissionMode: 'read-only',
@@ -307,7 +337,7 @@ describe('core e2e: session-agent spawn actions', () => {
         },
       }));
 
-      const spawnCallsBeforeEscalation = spawnDaemonSession.mock.calls.length;
+      const spawnCallsBeforeEscalation = machineSpawn.mock.calls.length;
       const escalationPayload = parseMcpJsonText(await scenario.client.callTool({
         name: 'action_execute',
         arguments: {
@@ -328,7 +358,8 @@ describe('core e2e: session-agent spawn actions', () => {
           callerOrdinal: 2,
         }),
       }));
-      expect(spawnDaemonSession).toHaveBeenCalledTimes(spawnCallsBeforeEscalation);
+      expect(machineSpawn).toHaveBeenCalledTimes(spawnCallsBeforeEscalation);
+      expect(spawnDaemonSession).not.toHaveBeenCalled();
     } finally {
       await scenario.close();
     }

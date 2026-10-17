@@ -13,7 +13,7 @@ import { waitFor } from '../../src/testkit/timing';
 
 const run = createRunDirs({ runLabel: 'core' });
 
-describe('core e2e: terminal turn pending requests', () => {
+describe('core e2e: pending request settlement ownership', () => {
   let server: StartedServer | null = null;
 
   afterEach(async () => {
@@ -21,7 +21,7 @@ describe('core e2e: terminal turn pending requests', () => {
     server = null;
   });
 
-  it.each(['http-complete', 'publisher-close', 'released-ui-stop'] as const)('clears pending requests through %s without a best-effort clear', async (settlement) => {
+  it.each(['http-complete', 'publisher-close', 'released-ui-stop'] as const)('preserves pending requests through %s until their state settles', async (settlement) => {
     server = await startServerLight({ testDir: run.testDir(`terminal-turn-pending-requests-${settlement}`), dbProvider: 'sqlite' });
     const auth = await createTestAuth(server.baseUrl);
     const { sessionId } = await createSession(server.baseUrl, auth.token);
@@ -59,7 +59,7 @@ describe('core e2e: terminal turn pending requests', () => {
         pendingUserActionRequestCount: 1,
       });
 
-      // The HTTP fallback must publish the same committed clear to both socket scopes.
+      // Lifecycle transitions publish turn facts without settling unrelated pending requests.
       const terminalMutation = {
         v: 1, sessionId, mutationId: randomUUID(), turnId, action: 'complete', observedAt: Date.now(),
       };
@@ -80,18 +80,14 @@ describe('core e2e: terminal turn pending requests', () => {
       const terminalStatus = settlement === 'http-complete' ? 'completed' : 'cancelled';
       for (const client of [sessionObserver, observer]) {
         await waitFor(() => client.getEvents().some((event) => event.kind === 'update'
-          && event.payload.body?.latestTurnStatus === terminalStatus
-          && event.payload.body?.pendingPermissionRequestCount === 0
-          && event.payload.body?.pendingUserActionRequestCount === 0
-          && event.payload.body?.pendingRequestObservedAt === null), {
-          timeoutMs: 20_000, context: `${settlement} terminal request clear for ${client === observer ? 'initiating UI' : 'session observer'}`,
+          && event.payload.body?.latestTurnStatus === terminalStatus), {
+          timeoutMs: 20_000, context: `${settlement} terminal update for ${client === observer ? 'initiating UI' : 'session observer'}`,
         });
       }
       expect(await fetchSessionV2(server.baseUrl, auth.token, sessionId)).toMatchObject({
         latestTurnStatus: terminalStatus,
-        pendingPermissionRequestCount: 0,
-        pendingUserActionRequestCount: 0,
-        pendingRequestObservedAt: null,
+        pendingPermissionRequestCount: 1,
+        pendingUserActionRequestCount: 1,
       });
       if (settlement === 'http-complete') {
         const duplicate = await fetchJson(`${server.baseUrl}/v1/sessions/${sessionId}/turns/mutations`, {
@@ -101,6 +97,20 @@ describe('core e2e: terminal turn pending requests', () => {
         });
         expect(duplicate.data).toMatchObject({ success: true, applied: false });
       }
+      // Only the actual request-state write clears the committed count projection.
+      const beforeSettlement = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
+      await expect(observer.emitWithAck('update-state', {
+        sid: sessionId,
+        expectedVersion: beforeSettlement.agentStateVersion,
+        agentState: 'settled-ciphertext',
+        activitySummaryV1: { pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 },
+      })).resolves.toMatchObject({ result: 'success' });
+      await waitFor(() => sessionObserver.getEvents().some((event) => event.kind === 'update'
+        && event.payload.body?.pendingPermissionRequestCount === 0
+        && event.payload.body?.pendingUserActionRequestCount === 0
+        && event.payload.body?.pendingRequestObservedAt === null), {
+        timeoutMs: 20_000, context: `${settlement} committed request settlement`,
+      });
       await expect(publisher.emitWithAck('session-turn-mutation', {
         v: 1, sessionId, mutationId: randomUUID(), turnId: randomUUID(), action: 'begin', observedAt: Date.now(),
       })).resolves.toMatchObject({ result: 'success', applied: true });

@@ -166,11 +166,12 @@ export class ClaudeLocalPermissionBridge {
         const requests = this.session.client.getAgentStateSnapshot?.()?.requests ?? {};
         for (const [requestId, request] of Object.entries(requests)) {
             if (!isClaudeLocalPermissionBridgeAgentStateRequest(request)) continue;
+            if (this.requestStore.isOutstandingRequestClaimed(requestId)) continue;
             void this.requestStore.completeRequest({
                 requestId,
                 status: 'canceled',
                 reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
-            });
+            }).catch(() => logger.infoFile('[claude-local-permissions] Stale request retirement admission failed'));
         }
     }
 
@@ -189,22 +190,20 @@ export class ClaudeLocalPermissionBridge {
         }
         this.localWaiterTimeouts.clear();
 
-        for (const pending of [...this.pendingRequests.values()]) {
-            this.completeRequest({
-                requestId: pending.id,
-                toolName: pending.toolName,
-                toolInput: pending.toolInput,
-                createdAt: pending.createdAt,
-                status: 'canceled',
-                reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
-                hookResponse: DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE,
-            });
-            this.permissionCoordinator.cancelRequest(pending.id, CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON);
-        }
-        this.pendingRequests.clear();
-        this.localWaitersByRequestId.clear();
-        this.permissionCoordinator.dispose();
-        this.requestStore.dispose();
+        const settlements = [...this.pendingRequests.values()].map(async (pending) => {
+            const context = this.permissionCoordinator.getResponseContext(pending.id);
+            if (!context) return;
+            await this.permissionCoordinator.completeRpcResponse({ context, completion: {
+                result: DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE,
+                completedRequest: { status: 'canceled', reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON },
+            } });
+        });
+        void Promise.all(settlements).then(() => {
+            this.pendingRequests.clear();
+            this.localWaitersByRequestId.clear();
+            this.permissionCoordinator.dispose();
+            this.requestStore.dispose();
+        }).catch(() => logger.infoFile('[claude-local-permissions] Disposal request settlement admission failed'));
     }
 
     async handlePermissionHook(data: PermissionHookData): Promise<PermissionHookResponse> {
@@ -444,10 +443,7 @@ export class ClaudeLocalPermissionBridge {
                 });
             },
             completeRequest: (params) => {
-                this.requestStore.completeRequest(params);
-            },
-            cancelAllRequests: (params) => {
-                this.cancelLocalOutstandingRequests(params.reason);
+                return this.requestStore.completeRequest(params);
             },
             hasOutstandingRequest: (requestId) => this.readLocalOutstandingRequest(requestId) !== null,
             isOutstandingRequestClaimed: (requestId) => {
@@ -799,19 +795,20 @@ export class ClaudeLocalPermissionBridge {
                     },
                 };
             },
+            onAdmitted: () => {
+                this.pendingRequests.delete(requestId);
+                if (shouldApplySideEffects) {
+                    this.applyPermissionRpcState(normalizedPayload, {
+                        allowedTools,
+                        resolvedMode,
+                        excludeRequestId: requestId,
+                        toolName: resolvedToolName,
+                    });
+                }
+            },
         });
 
         if (!handled) return false;
-
-        this.pendingRequests.delete(requestId);
-        if (shouldApplySideEffects) {
-            this.applyPermissionRpcState(normalizedPayload, {
-                allowedTools,
-                resolvedMode,
-                excludeRequestId: requestId,
-                toolName: resolvedToolName,
-            });
-        }
         return true;
     }
 
@@ -1057,8 +1054,6 @@ export class ClaudeLocalPermissionBridge {
             }),
         });
 
-        this.pendingRequests.delete(params.requestId);
-
         if (!handledByCoordinator) {
             this.requestStore.completeRequest({
                 requestId: params.requestId,
@@ -1078,36 +1073,6 @@ export class ClaudeLocalPermissionBridge {
         }
     }
 
-    private cancelLocalOutstandingRequests(reason: string): void {
-        updateAgentStateBestEffort(
-            this.session.client,
-            (currentState) => {
-                const requests = cloneStringKeyedRecordToNullProto(currentState.requests);
-                const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
-                const now = Date.now();
-
-                for (const [id, request] of Object.entries(requests)) {
-                    if (!isClaudeLocalPermissionBridgeAgentStateRequest(request)) continue;
-                    if (hasPermissionResponseClaimV1(request)) continue;
-                    delete requests[id];
-                    const completedEntry = clonePlainObjectToNullProto(request) ?? Object.create(null);
-                    completedEntry.completedAt = now;
-                    completedEntry.status = 'canceled';
-                    completedEntry.reason = reason;
-                    completedRequests[id] = completedEntry;
-                    this.requestStore.markPermissionRequestCompletedBestEffort(id);
-                }
-
-                return {
-                    ...currentState,
-                    requests,
-                    completedRequests,
-                };
-            },
-            '[claude-local-permissions]',
-            'cancel_local_requests',
-        );
-    }
 
     private resolvePermissionSuggestions(data: ClaudeToolHookData): unknown[] | null {
         const raw = data.permission_suggestions ?? data.permissionSuggestions ?? data.permissionSuggestionsV1;

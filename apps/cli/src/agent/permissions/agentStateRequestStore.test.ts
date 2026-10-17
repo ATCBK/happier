@@ -19,12 +19,51 @@ class FakeSession {
         return this.agentState;
     }
 
+    async updateAgentStateRequestSettlement(updater: Parameters<FakeSession['updateAgentState']>[0]): Promise<void> {
+
+      await this.updateAgentState(updater);
+
+    }
+
+
     updateAgentState(updater: (state: AgentState) => AgentState) {
         this.agentState = updater(this.agentState);
     }
 }
 
 describe('AgentStateRequestStore', () => {
+    it.each(['claimed', 'replacement', 'missing'] as const)('rejects a %s occurrence before settlement admission', async (change) => {
+        const session = new FakeSession();
+        const request = { tool: 'Write', arguments: { path: '/workspace/original' }, createdAt: 10 };
+        session.agentState = { requests: { sameId: request }, completedRequests: {} };
+        let apply!: () => void;
+        session.updateAgentStateRequestSettlement = (updater) => new Promise<void>((resolve) => {
+            apply = () => { session.updateAgentState(updater); resolve(); };
+        });
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+        const completion = store.completeRequest({
+            requestId: 'sameId', status: 'approved',
+            fallback: { toolName: request.tool, toolInput: request.arguments, createdAt: request.createdAt },
+        });
+        if (change === 'claimed') {
+            const claimed = { ...request, permissionResponseClaimV1: { opaque: true } };
+            session.agentState.requests = { sameId: claimed };
+        } else if (change === 'replacement') {
+            session.agentState.requests = { sameId: { ...request, createdAt: 20 } };
+        } else {
+            session.agentState.requests = {};
+        }
+        const current = structuredClone(session.agentState);
+        apply();
+        if (change === 'missing') {
+            // A live provider waiter still supplies its exact fallback even if publication was lost.
+            await completion;
+            expect(session.agentState.completedRequests?.sameId).toMatchObject({ createdAt: 10, status: 'approved' });
+        } else {
+            await expect(completion).rejects.toThrow('did not match');
+            expect(session.agentState).toEqual(current);
+        }
+    });
     it('can persist private request input without forwarding it to push notification rendering', () => {
         const session = new FakeSession();
         const sendToAllDevicesAsync = vi.fn(async () => {});
@@ -163,12 +202,12 @@ describe('AgentStateRequestStore', () => {
         expect(Object.prototype.hasOwnProperty.call(republished, 'permissionResponseClaimV1')).toBe(true);
         expect(republished.permissionResponseClaimV1).toBe(opaqueClaim);
 
-        await store.completeRequest({
+        await expect(store.completeRequest({
             requestId: 'claimed',
             status: 'approved',
             decision: 'approved_for_session',
             allowedTools: ['Bash(*)'],
-        });
+        })).rejects.toThrow('did not match');
         store.recordCompletedRequest({
             requestId: 'claimed',
             toolName: 'Bash',

@@ -28,9 +28,6 @@ export async function publishSessionTurnUpdate(params: {
     const rollbackEligibleTurnStarts = "rollbackEligibleTurnStarts" in params.result
         ? params.result.rollbackEligibleTurnStarts
         : undefined;
-    const pendingRequestProjection = "pendingRequestProjection" in params.result
-        ? params.result.pendingRequestProjection
-        : undefined;
     await Promise.all(params.result.participantCursors.map(async ({ accountId, cursor }) => {
         const payload = buildUpdateSessionUpdate(
             params.sessionId,
@@ -43,7 +40,6 @@ export async function publishSessionTurnUpdate(params: {
                 latestTurnStatus: params.result.latestTurnStatus,
                 latestTurnStatusObservedAt: params.result.latestTurnStatusObservedAt,
                 lastRuntimeIssue: params.result.lastRuntimeIssue,
-                ...pendingRequestProjection,
                 ...(rollbackEligibleTurnStarts !== undefined
                     ? { rollbackEligibleTurnStarts }
                     : {}),

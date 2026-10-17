@@ -44,7 +44,6 @@ import {
 } from "./attention/sessionAttentionFacts";
 import {
     applySessionTurnMutationToTurns,
-    resolveTerminalStatus,
     type SessionTurnNoOpReason,
 } from "./turns/applySessionTurnMutation";
 import type { PrimaryTurnMaterializedProjection } from "./turns/materializePrimaryTurnProjection";
@@ -519,16 +518,6 @@ export type EnsureSessionEditAccessResult =
     | { ok: true; sessionOwnerId: string; sessionEncryptionMode: "e2ee" | "plain" }
     | { ok: false; error: "session-not-found" | "forbidden" };
 
-// Pending request counts ride on best-effort agent-state writes, while the turn status is durable.
-// A durable lifecycle end of the latest turn clears its pending request projection.
-const TERMINAL_TURN_PENDING_REQUEST_PROJECTION = {
-    pendingPermissionRequestCount: 0,
-    pendingUserActionRequestCount: 0,
-    pendingRequestObservedAt: null,
-} as const;
-
-export type TerminalTurnPendingRequestProjection = typeof TERMINAL_TURN_PENDING_REQUEST_PROJECTION;
-
 type SessionTurnMutationTxResult = Readonly<{
     didApply: boolean;
     reason?: SessionTurnNoOpReason;
@@ -537,7 +526,6 @@ type SessionTurnMutationTxResult = Readonly<{
     latestTurnStatus: PrimaryTurnStatusV1 | null;
     latestTurnStatusObservedAt: number | null;
     lastRuntimeIssue: SessionRuntimeIssueV1 | null;
-    pendingRequestProjection?: TerminalTurnPendingRequestProjection;
     participantCursors: ParticipantCursor[];
     badgeAttentionChanged: boolean;
 }>;
@@ -757,11 +745,6 @@ export async function applySessionTurnMutationInTx(params: Readonly<{
         turns,
         appliedAt: Date.now(),
     });
-    const pendingRequestProjection = decision.apply
-        && decision.materialized.latestTurnId === decision.changedTurn.turnId
-        && resolveTerminalStatus(params.mutation.action) !== null
-        ? TERMINAL_TURN_PENDING_REQUEST_PROJECTION
-        : null;
 
     if (decision.apply) {
         const existingRow = turnRows.find((row) => row.turnId === decision.changedTurn.turnId);
@@ -796,7 +779,6 @@ export async function applySessionTurnMutationInTx(params: Readonly<{
                 // session into or out of attention — and nothing here has to say so:
                 // `Session.needsAttention` is generated from this very column.
                 ...buildLegacyThinkingProjectionWriteData(decision.materialized),
-                ...pendingRequestProjection,
             },
         });
     }
@@ -833,7 +815,6 @@ export async function applySessionTurnMutationInTx(params: Readonly<{
                 ...toSessionActivityBadgeInputs(params.session),
                 latestTurnStatus: decision.materialized.latestTurnStatus,
                 lastRuntimeIssue: decision.materialized.lastRuntimeIssue,
-                ...pendingRequestProjection,
             },
         )
         : false;
@@ -846,7 +827,6 @@ export async function applySessionTurnMutationInTx(params: Readonly<{
         latestTurnStatus: decision.materialized.latestTurnStatus,
         latestTurnStatusObservedAt: decision.materialized.latestTurnStatusObservedAt,
         lastRuntimeIssue: decision.materialized.lastRuntimeIssue,
-        ...(pendingRequestProjection ? { pendingRequestProjection } : {}),
         participantCursors,
         badgeAttentionChanged,
     };
@@ -1821,7 +1801,6 @@ export type ApplySessionTurnMutationResult =
         latestTurnStatus: PrimaryTurnStatusV1 | null;
         latestTurnStatusObservedAt: number | null;
         lastRuntimeIssue: SessionRuntimeIssueV1 | null;
-        pendingRequestProjection?: TerminalTurnPendingRequestProjection;
         participantCursors: ParticipantCursor[];
         badgeAttentionChanged: boolean;
       }
@@ -1877,7 +1856,6 @@ async function applySessionTurnMutationWithOwnerAccess(params: {
             latestTurnStatus: result.latestTurnStatus,
             latestTurnStatusObservedAt: result.latestTurnStatusObservedAt,
             lastRuntimeIssue: result.lastRuntimeIssue,
-            ...(result.pendingRequestProjection ? { pendingRequestProjection: result.pendingRequestProjection } : {}),
             participantCursors: result.participantCursors,
             badgeAttentionChanged: result.badgeAttentionChanged,
             ...(rollbackEligibleTurnStarts !== undefined ? { rollbackEligibleTurnStarts } : {}),
