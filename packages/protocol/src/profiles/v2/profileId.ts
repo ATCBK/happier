@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 
 import {
   createProtocolComposableSchema,
@@ -15,7 +16,7 @@ export const ProfileRecordIdV1Schema = lazyZodSchema(() => z.string().check(z.mi
 /** Neutral projection of the same parser, for references embedded in Action inputs. */
 export const LaunchProfileIdV2ProtocolSchema = createProtocolComposableSchema<string, string>(
   // Zod's non-enumerable Standard Schema annotation is not part of the JSON projection.
-  { ...z.toJSONSchema(LaunchProfileIdV2Schema, { io: 'input', target: 'draft-7' }) },
+  zodSchemaToJsonSchemaObject(LaunchProfileIdV2Schema, { target: 'draft-7' }),
   (input) => {
     const parsed = LaunchProfileIdV2Schema.safeParse(input);
     return parsed.success

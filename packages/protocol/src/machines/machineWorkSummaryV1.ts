@@ -1,4 +1,5 @@
 import * as z from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 
 import { lazyDefinition } from '../lazyZodSchema.js';
 import { createProtocolComposableSchema, ProtocolValidationError } from '../plugins/actions/protocolComposableSchema.js';
@@ -44,12 +45,12 @@ const machineWorkSummaryGetResultSchema = lazyDefinition(() => z.union([
 export const MachineWorkSummaryGetResultV1Schema = lazyDefinition(() => createProtocolComposableSchema<
   z.input<typeof machineWorkSummaryGetResultSchema>, z.output<typeof machineWorkSummaryGetResultSchema>
 >(
-  { ...z.toJSONSchema(machineWorkSummaryGetResultSchema, {
-    target: 'draft-7', io: 'input',
+  zodSchemaToJsonSchemaObject(machineWorkSummaryGetResultSchema, {
+    target: 'draft-7',
     // Readonly freezes the admitted value; its JSON annotation is not an
     // admission constraint in the neutral Protocol vocabulary.
     override: ({ jsonSchema }) => { delete jsonSchema.readOnly; },
-  }) },
+  }),
   value => {
     const parsed = machineWorkSummaryGetResultSchema.safeParse(value);
     return parsed.success ? { success: true, data: parsed.data } : {

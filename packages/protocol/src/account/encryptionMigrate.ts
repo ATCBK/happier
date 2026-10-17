@@ -1,4 +1,5 @@
 import * as zMini from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { lazyDefinition, lazyZodSchema } from '../lazyZodSchema.js';
 import { AccountEncryptionMigrateConnectedConfigurationsDirectiveV1Schema, AccountEncryptionMigrateConnectedPurposesDirectiveV1Schema,
   AccountEncryptionMigrateConnectedConfigurationsResultV1Schema, AccountEncryptionMigrateConnectedPurposesResultV1Schema,
@@ -127,7 +128,7 @@ function accountEncryptionCatalogProtocolSchema<TSchema extends z.core.$ZodType>
   schema: TSchema & { safeParse(value: unknown): z.core.util.SafeParseResult<z.output<TSchema>> },
 ) {
   return lazyDefinition(() => createProtocolComposableSchema<z.input<TSchema>, z.output<TSchema>>(
-    { ...z.toJSONSchema(schema, { io: 'input', target: 'draft-7' }) },
+    zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' }),
     input => {
       const parsed = schema.safeParse(input);
       return parsed.success ? { success: true, data: parsed.data } : {

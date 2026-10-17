@@ -20,6 +20,10 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+// Zod 4.6 emits these check names as formats as well as their complete pattern
+// constraints. They are not JSON Schema formats; keep the patterns portable.
+const patternOnlyStringChecks = new Set(['starts_with', 'ends_with', 'includes', 'lowercase', 'uppercase']);
+
 /**
  * Uses Zod's canonical JSON Schema projection, shared with public manifest
  * and contribution-schema tooling. Action schemas are parser contracts, so
@@ -27,7 +31,7 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
  */
 export function zodSchemaToJsonSchemaObject(
   schema: z.core.$ZodType,
-  options?: Readonly<{ target?: 'draft-2020-12' | 'draft-7'; reused?: 'inline' | 'ref' }>,
+  options?: Readonly<{ target?: 'draft-2020-12' | 'draft-7'; reused?: 'inline' | 'ref'; override?: z.core.ToJSONSchemaParams['override'] }>,
 ): JsonSchemaObject {
   try {
     // The top-level projector supplies native processors for genuine Mini/Core
@@ -37,6 +41,14 @@ export function zodSchemaToJsonSchemaObject(
       target: options?.target ?? 'draft-2020-12',
       reused: options?.reused ?? 'inline',
       unrepresentable: 'throw',
+      override: context => {
+        options?.override?.(context);
+        const { jsonSchema } = context;
+        if (typeof jsonSchema.format === 'string' && patternOnlyStringChecks.has(jsonSchema.format)
+          && (typeof jsonSchema.pattern === 'string' || jsonSchema.allOf?.some(part => typeof part.pattern === 'string'))) {
+          delete jsonSchema.format;
+        }
+      },
     });
     if (!isJsonSchemaObject(projectedSchema)) {
       throw new ActionJsonSchemaProjectionError('Zod produced a non-object JSON Schema');
@@ -45,7 +57,7 @@ export function zodSchemaToJsonSchemaObject(
     // Zod decorates the root with non-enumerable Standard Schema methods. They
     // are useful on Zod values but are not JSON and cross realm boundaries
     // (notably voice-tool catalogs) as function-bearing metadata. Keep the
-    // canonical JSON Schema fields exactly as Zod projected them.
+    // portable JSON Schema fields after the projection override.
     return Object.fromEntries(Object.entries(projectedSchema));
   } catch (error) {
     if (error instanceof ActionJsonSchemaProjectionError) throw error;

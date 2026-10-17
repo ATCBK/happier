@@ -4,6 +4,7 @@ import type { WidgetDefinitionRefV1, WidgetInstanceV1 } from './widgetInstanceV1
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import type { WidgetSizeDeclarationV1 } from './widgetPresentationV1.js';
 import { z } from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { lazyDefinition } from '../lazyZodSchema.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import { WorkspaceRefV1WriteSchema } from '../workspaces/workspaceRefV1.js';
@@ -97,9 +98,9 @@ const sessionInputs: WidgetInputDescriptorV1 = {
     }, required: ['serverId', 'sessionId'], additionalProperties: false } }, required: ['session'], additionalProperties: false },
 };
 const nativeSizeDeclaration = { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' } satisfies WidgetSizeDeclarationV1;
-const workspaceInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(z.strictObject({
+const workspaceInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(z.strictObject({
     checkout: WorkspaceRefV1WriteSchema,
-}), { io: 'input', target: 'draft-7' })));
+}), { target: 'draft-7' })));
 const workspaceInputs: WidgetInputDescriptorV1 = {
     inputs: { fields: [{ path: 'checkout', title: 'Checkout', prompt: 'Which workspace?', widget: 'json', inputType: { hostType: 'workspace' }, required: true }] },
     inputSchema: workspaceInputSchema,
@@ -110,7 +111,7 @@ const usagePresentationInputs: Readonly<Partial<Record<UsageBuiltinWidgetIdV1, r
     usage_breakdowns: ['metric', 'breakdown'], usage_project_ledger: ['metric'], usage_session_value: ['metric'],
     usage_outcomes: ['metric'], usage_recap: ['metric'],
 };
-const usageInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(UsageQuerySchema, { io: 'input', target: 'draft-7' })));
+const usageInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(UsageQuerySchema, { target: 'draft-7' })));
 const usageInputs = (id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 => ({
     inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow'
         || usagePresentationInputs[id]?.some(path => path === field.path))
@@ -123,7 +124,7 @@ const usageInputs = (id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 => ({
 const sourceInventoryInputs: WidgetInputDescriptorV1 = {
     inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => ['agents', 'machines', 'sources'].includes(field.path))
         .map(field => ({ ...field, required: field.required ?? true })) },
-    inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(UsageSourceInventoryScopeSchema, { io: 'input', target: 'draft-7' }))),
+    inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(UsageSourceInventoryScopeSchema, { target: 'draft-7' }))),
 };
 
 const machineField: InputFieldHint = { path: 'machine', title: 'Machine', prompt: 'Which machine?', widget: 'select',
@@ -166,7 +167,7 @@ function machineWidgetContract(id: MachineBuiltinWidgetIdV1): WidgetInputDescrip
     }
     const fourSizes = id === 'machine_left_behind' || id === 'machine_worktrees' || id === 'machine_cleanup_suggestion';
     const defaultSize = id === 'machine_fleet' ? 'wide' : id === 'machine_vitals' || id === 'machine_left_behind' || id === 'machine_worktrees' ? 'small' : 'medium';
-    return { inputs: { fields }, inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(schema, { io: 'input', target: 'draft-7' }))),
+    return { inputs: { fields }, inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' }))),
         sizeDeclaration: { sizes: fourSizes ? ['small', 'medium', 'wide', 'full'] : nativeSizeDeclaration.sizes, defaultSize } };
 }
 
