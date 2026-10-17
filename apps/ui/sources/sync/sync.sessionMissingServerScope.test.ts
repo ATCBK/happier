@@ -4064,13 +4064,15 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             const ownerToken = buildTokenWithSub('owner-account');
             const crossedToken = buildTokenWithSub('crossed-account');
             const replacementLocalId = 'server-owned-replacement';
-            getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken, secret: 'owner-secret' });
-            createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+            // This case refreshes plain content: match the real keyless Account
+            // boundary instead of manufacturing an empty E2EE owner.
+            getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken });
+            createEncryptionFromAuthCredentialsMock.mockResolvedValue(null);
             runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
                 const url = String(input);
                 if (url.endsWith(`/pending/${pendingId}/delivery/send-as-new`)) {
                     if (crossed) {
-                        getCredentialsForServerUrlMock.mockResolvedValue({ token: crossedToken, secret: 'crossed-secret' });
+                        getCredentialsForServerUrlMock.mockResolvedValue({ token: crossedToken });
                     }
                     return Response.json({ newLocalId: replacementLocalId });
                 }
