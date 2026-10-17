@@ -78,6 +78,27 @@ async function canvas(snap = false, displayedCard = card) {
 }
 
 describe('WorkBoard mounted canvas carry', () => {
+    it('draws a returning Canvas from its last measurement before fresh layout events', async () => {
+        const { screen, binding } = await canvas();
+        const retainedLayout = { current: null };
+        const props = { cards: [card], positionsByItemRef: {}, snap: false, binding,
+            onOpen: () => {}, retainedLayout };
+        await screen.update(<BoardCanvas {...props} />);
+        const layout = { x: 0, y: 0, width: 800, height: 800 };
+        const frame = () => screen.findAllByType('View').find(node =>
+            typeof node.props.onLayout === 'function' && typeof node.props.accessibilityElementsHidden === 'boolean')!;
+        await act(async () => {
+            screen.findByTestId('board-canvas')!.props.onLayout({ nativeEvent: { layout } });
+            frame().props.onLayout({ nativeEvent: { layout: { ...layout, width: 408, height: 240 } } });
+        });
+        expect(frame().props.accessibilityElementsHidden).toBe(false);
+        await screen.update(<></>);
+        // Phone By status has replaced Canvas. Returning must not wait for the
+        // native/browser measurement round trip to show this already known card.
+        await screen.update(<BoardCanvas {...props} />);
+        expect(frame().props.accessibilityElementsHidden).toBe(false);
+    });
+
     it('retains the held card action and its accessible disabled state during carry', async () => {
         const runRef = { kind: 'workflow_run', qualifiedId: { serverId: 'home-a', id: 'held' } } as const;
         const held = buildBoardCards([{ key: buildWorkBoardItemKeyV1(runRef), ref: runRef, picked: true, sourced: false, available: true }], {

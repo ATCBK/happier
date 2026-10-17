@@ -52,6 +52,14 @@ type CanvasMember =
     | Readonly<{ kind: 'work'; key: string; title: string; span: 1; card: BoardCard }>
     | Readonly<{ kind: 'widget'; key: string; title: string; span: 1 | 2; widget: BoardCanvasWidget }>;
 
+/** Measured presentation only; retained by the open Board while phone By status replaces Canvas. */
+export type BoardCanvasLayoutSnapshot = Readonly<{
+    width: number;
+    viewportHeight: number;
+    heights: ReadonlyMap<string, number>;
+    positions: ReadonlyMap<string, BoardCanvasPoint>;
+}>;
+
 export type BoardCanvasProps = Readonly<{
     cards: readonly BoardCard[];
     /** The Board's widgets, in Board order; drawn by `renderWidget`. */
@@ -62,6 +70,7 @@ export type BoardCanvasProps = Readonly<{
     positionsByItemRef: Readonly<Record<string, BoardCanvasPoint>>;
     snap: boolean;
     binding: WorkBoardEntityBinding;
+    retainedLayout?: React.RefObject<BoardCanvasLayoutSnapshot | null>;
     placingKey?: string | null;
     onPlaced?: () => void;
     onOpen: (card: BoardCard) => void;
@@ -76,12 +85,12 @@ function memberWidthPx(span: 1 | 2): number {
 
 /** Saved XY and flow are layout; the shared entity owner admits and commits every move. */
 export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasProps) {
-    const [width, setWidth] = React.useState(0);
-    const [viewportHeight, setViewportHeight] = React.useState(0);
+    const [width, setWidth] = React.useState(() => props.retainedLayout?.current?.width ?? 0);
+    const [viewportHeight, setViewportHeight] = React.useState(() => props.retainedLayout?.current?.viewportHeight ?? 0);
     const [focusedKey, setFocusedKey] = React.useState<string | null>(null);
     const measured = React.useRef(new Map<string, BoardCanvasRect>());
-    const [heights, setHeights] = React.useState<ReadonlyMap<string, number>>(() => new Map());
-    const previousPositions = React.useRef<ReadonlyMap<string, BoardCanvasPoint>>(new Map());
+    const [heights, setHeights] = React.useState<ReadonlyMap<string, number>>(() => props.retainedLayout?.current?.heights ?? new Map());
+    const previousPositions = React.useRef<ReadonlyMap<string, BoardCanvasPoint>>(props.retainedLayout?.current?.positions ?? new Map());
     const previousMembers = React.useRef<readonly CanvasMember[]>([]);
     const canvas = useBoardCanvasEntityDrop(props.binding, measured, props.snap);
     // The existing Canvas grid is the quantization boundary; Home's owner supplies demand overscan.
@@ -119,7 +128,8 @@ export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasPro
     }, [drawingMembers, members, heights, props.positionsByItemRef, columnCount, props.snap, width]);
     React.useLayoutEffect(() => {
         previousPositions.current = positions; previousMembers.current = members;
-    }, [positions, members]);
+        if (props.retainedLayout) props.retainedLayout.current = { width, viewportHeight, heights, positions };
+    }, [positions, members, props.retainedLayout, width, viewportHeight, heights]);
     const reportRect = React.useCallback((key: string, rect: CardRect | null) => {
         if (rect) measured.current.set(key, rect);
         else measured.current.delete(key);

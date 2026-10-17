@@ -31,7 +31,7 @@ import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
 import { BoardByStatus } from './byStatus/BoardByStatus';
-import { BoardCanvas, type BoardCanvasWidget, type BoardCanvasWidgetRender } from './canvas/BoardCanvas';
+import { BoardCanvas, type BoardCanvasLayoutSnapshot, type BoardCanvasWidget, type BoardCanvasWidgetRender } from './canvas/BoardCanvas';
 import { BoardWidgetCard, describeBoardWidgetTitle } from './cards/BoardWidgetCard';
 import { AddToBoardButton } from './header/AddToBoardPopover';
 import { BoardSettingsButton } from './header/BoardSettingsPopover';
@@ -164,6 +164,8 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
     const phone = useDeviceType() === 'phone';
     const mode = phone ? 'by_status' : board.mode;
     const binding = useWorkBoardEntityBinding({ board, membership, isHomeMounted: homes.isHomeMounted }, routeFocused);
+    const canvasLayout = React.useMemo<React.RefObject<BoardCanvasLayoutSnapshot | null>>(
+        () => ({ current: null }), [board.id, binding?.scope]);
     const [addOpen, setAddOpen] = React.useState(false);
     const [settingsOpen, setSettingsOpen] = React.useState(false);
     /** The card just added with ⌘↵ "Add and place": focused on Canvas so arrows or a drag place it. */
@@ -367,6 +369,7 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
             ) : <>
             {mode === 'canvas' && binding ? (
                 <BoardCanvas
+                    retainedLayout={canvasLayout}
                     cards={cards}
                     widgets={canvasWidgets}
                     renderWidget={renderWidget}
