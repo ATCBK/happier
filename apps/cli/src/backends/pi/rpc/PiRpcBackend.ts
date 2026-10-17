@@ -1201,6 +1201,35 @@ export class PiRpcBackend implements AgentBackend {
     return { admission: admission.promise, completion };
   }
 
+  /**
+   * Prompt texts this backend sent through the RPC `prompt` command whose user-message
+   * echo from Pi has not arrived yet. Pi emits `message_end` user events for EVERY user
+   * message, including Happier-submitted prompts and prompts injected inside Pi by
+   * extensions (`pi.sendUserMessage`, e.g. AFT background-bash completions). Only the
+   * injected ones may surface as `user-message` agent messages; Happier already wrote
+   * its own prompt rows at submission time.
+   */
+  private readonly awaitingPromptEchoTexts: string[] = [];
+  private static readonly MAX_AWAITING_PROMPT_ECHOES = 64;
+
+  private notePromptSentToPi(text: string): void {
+    this.awaitingPromptEchoTexts.push(text);
+    if (this.awaitingPromptEchoTexts.length > PiRpcBackend.MAX_AWAITING_PROMPT_ECHOES) {
+      this.awaitingPromptEchoTexts.splice(0, this.awaitingPromptEchoTexts.length - PiRpcBackend.MAX_AWAITING_PROMPT_ECHOES);
+    }
+  }
+
+  private filterHappierPromptEchoes(messages: AgentMessage[]): AgentMessage[] {
+    if (this.awaitingPromptEchoTexts.length === 0) return messages;
+    return messages.filter((msg) => {
+      if (msg.type !== 'user-message') return true;
+      const echoIndex = this.awaitingPromptEchoTexts.indexOf(msg.text);
+      if (echoIndex === -1) return true;
+      this.awaitingPromptEchoTexts.splice(echoIndex, 1);
+      return false;
+    });
+  }
+
   private async sendPromptAndObserveCompletion(
     sessionId: SessionId,
     prompt: string,
@@ -1264,6 +1293,7 @@ export class PiRpcBackend implements AgentBackend {
       const pendingTurn = this.createPendingTurn(this.getPendingTurnStallTimeoutMs());
       const turn = pendingTurn.promise;
       providerSendAttempted = true;
+      this.notePromptSentToPi(message);
       try {
         await this.sendCommand({ type: 'prompt', message }, 30_000, { processAlreadyEnsured: true });
       } catch (error) {
@@ -2179,7 +2209,7 @@ export class PiRpcBackend implements AgentBackend {
     }
     this.notePendingTurnActivity(normalizedEvent);
 
-    const mappedMessages = mapPiRpcEventToAgentMessages(normalizedEvent);
+    const mappedMessages = this.filterHappierPromptEchoes(mapPiRpcEventToAgentMessages(normalizedEvent));
     this.tracePiRpcFailureBoundary('event_mapped', normalizedEvent, {
       mappedAgentMessageTypes: mappedMessages.map((msg) => msg.type).slice(0, PI_RPC_FAILURE_TRACE_MAX_ARRAY_LENGTH),
     });
@@ -3142,6 +3172,7 @@ export class PiRpcBackend implements AgentBackend {
     this.armPendingTurnInactivityTimer(pending);
 
     try {
+      this.notePromptSentToPi(this.getCompactionAutoContinuePrompt());
       await this.sendCommand(
         {
           type: 'prompt',

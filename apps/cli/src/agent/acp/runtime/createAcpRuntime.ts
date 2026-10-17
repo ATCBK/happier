@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { logger } from '@/ui/logger';
 import type { AgentBackend, AgentMessage, McpServerConfig } from '@/agent';
@@ -101,6 +101,16 @@ import { applyProviderSessionInfoUpdate } from '@/agent/acp/runtime/providerSess
 import { createSessionMediaTurnState } from '@/agent/acp/runtime/sessionMediaTurnState';
 
 const ACP_FAILURE_TRACE_ENV = 'HAPPIER_ACP_FAILURE_TRACE';
+
+/**
+ * Deterministic localId for provider-observed user prompts (extension-injected prompts
+ * such as pi background-bash completion reminders). Repeats of the same text commit the
+ * same row identity so the server transcript dedupes instead of duplicating the row.
+ */
+function buildProviderUserPromptLocalId(text: string): string {
+  const digest = createHash('sha256').update(text).digest('hex').slice(0, 24);
+  return `provider-user-prompt:${digest}`;
+}
 
 type RuntimeSessionMediaMessage = Extract<AgentMessage, { type: 'session-media' }>;
 type RuntimeSessionMediaSource = RuntimeSessionMediaMessage['media'][number];
@@ -601,6 +611,13 @@ export function createAcpRuntime(params: {
   let loadingSession = false;
   let turnInFlight = false;
   let currentTurnId: string | null = null;
+  /**
+   * Provider turn id of a provider-initiated turn (the backend reported `running` with
+   * no Happier turn in flight — e.g. a pi extension injected a prompt and triggered a
+   * run). Owns the task_started/task_complete pairing so the session shows the turn in
+   * Happier clients, mirroring the claude hook-driven session lifecycle.
+   */
+  let providerInitiatedTurnId: string | null = null;
   let turnMediaGeneration = 0;
   let startOrLoadFlight: Readonly<{ intentKey: string; promise: Promise<string> }> | null = null;
   let postStartPendingDrainFlight: Promise<void> | null = null;
@@ -1104,9 +1121,9 @@ export function createAcpRuntime(params: {
   }>;
 
   const captureTerminalTurn = (): TerminalTurnSnapshot => ({
-    providerTurnId: currentTurnId ?? (turnInFlight ? ensureCurrentTurnId() : null),
-    turnInFlight,
-    taskStartedSent,
+    providerTurnId: currentTurnId ?? providerInitiatedTurnId ?? (turnInFlight ? ensureCurrentTurnId() : null),
+    turnInFlight: turnInFlight || providerInitiatedTurnId !== null,
+    taskStartedSent: taskStartedSent || providerInitiatedTurnId !== null,
   });
 
   const beginCapturedLifecycleTurn = (turn: TerminalTurnSnapshot): Promise<string | null> => {
@@ -1417,11 +1434,25 @@ export function createAcpRuntime(params: {
                   payload: { event: 'acp_status_running' },
                 });
               }
+            } else if (!providerInitiatedTurnId) {
+              // The provider started a run on its own (e.g. a pi extension injected a
+              // prompt while the session was idle). Open a task turn so the session
+              // shows as working in Happier clients instead of silently generating.
+              providerInitiatedTurnId = randomUUID();
+              params.session.sendAgentMessage(params.provider, {
+                type: 'task_started',
+                id: providerInitiatedTurnId,
+              });
+              params.onThinkingChange(true);
+              params.session.keepAlive(true, 'remote');
             }
           }
 
           if (msg.status === 'error') {
             const statusErrorTurn = captureTerminalTurn();
+            // A terminal error settles the provider-initiated turn through the captured
+            // snapshot; it must not also close through the idle path below.
+            providerInitiatedTurnId = null;
             const shouldSurfaceFailure = !turnAborted && !isAbortLikeError(msg.detail);
             const statusErrorSettlement = shouldSurfaceFailure
               ? beginStatusErrorSurface(msg.detail, statusErrorTurn)
@@ -1446,9 +1477,29 @@ export function createAcpRuntime(params: {
             params.session.keepAlive(false, 'remote');
           }
           if (msg.status === 'idle' && !turnInFlight) {
+            if (providerInitiatedTurnId) {
+              const providerTurnId = providerInitiatedTurnId;
+              providerInitiatedTurnId = null;
+              params.session.sendAgentMessage(params.provider, { type: 'task_complete', id: providerTurnId });
+              void streamedTranscriptWriter.flushAll({ reason: 'turn-end' }).catch((error) => {
+                logger.debug(`[${params.provider}] Failed to flush streamed transcript after provider-initiated turn`, error);
+              });
+            }
             params.onThinkingChange(false);
             params.session.keepAlive(false, 'remote');
           }
+          break;
+        }
+
+        case 'user-message': {
+          // A user prompt observed on the provider side (extension-injected). Commit it as
+          // a user transcript row so Happier clients show why the provider kept working.
+          void params.session.sendUserTextMessageCommitted(msg.text, {
+            localId: buildProviderUserPromptLocalId(msg.text),
+            meta: { providerObservedUserPrompt: true, provider: params.provider },
+          }).catch((error) => {
+            logger.debug(`[${params.provider}] Failed to commit provider-observed user prompt (non-fatal)`, error);
+          });
           break;
         }
 
@@ -2168,10 +2219,20 @@ export function createAcpRuntime(params: {
 
     beginTurn(): void {
       closeOpenStreamedTranscriptSegmentsBeforeTurn();
+      const adoptProviderTurnId = providerInitiatedTurnId;
+      providerInitiatedTurnId = null;
       turnInFlight = true;
       publishInFlightSteerCapabilities(true);
       turnAborted = false;
       resetTurnState();
+      if (adoptProviderTurnId) {
+        // A Happier prompt is steering a provider-initiated run (e.g. the user replied
+        // while an extension-triggered turn was working). Adopt the open task turn so
+        // the existing task_started pairs with this turn's task_complete instead of
+        // opening a second overlapping turn.
+        currentTurnId = adoptProviderTurnId;
+        taskStartedSent = true;
+      }
       ensureCurrentTurnId();
       startPendingPumpIfNeeded();
       params.onThinkingChange(true);
@@ -2190,6 +2251,11 @@ export function createAcpRuntime(params: {
       try {
         await b.cancel(sessionId);
       } finally {
+        if (providerInitiatedTurnId) {
+          const providerTurnId = providerInitiatedTurnId;
+          providerInitiatedTurnId = null;
+          params.session.sendAgentMessage(params.provider, { type: 'turn_cancelled', id: providerTurnId });
+        }
         await abortPendingAcpPermissionRequests(params.permissionHandler, 'ACP runtime cancelled', (error) => {
           logger.debug(`[${params.provider}] Failed to abort pending permission requests after cancel`, error);
         });
@@ -2237,6 +2303,7 @@ export function createAcpRuntime(params: {
         sessionId = null;
         pendingProviderSessionInfo = null;
         turnInFlight = false;
+        providerInitiatedTurnId = null;
         publishInFlightSteerCapabilities(false);
         resetTurnState();
         loadingSession = false;

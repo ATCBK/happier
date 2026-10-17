@@ -47,6 +47,17 @@ export interface StatusMessage {
 }
 
 /**
+ * User prompt observed on the provider side (e.g. injected by a provider extension
+ * such as pi background-bash completion reminders) rather than submitted through
+ * Happier. Emitted so the transcript shows what started a provider-initiated turn;
+ * Happier-submitted prompts must NOT be re-emitted as this type by backends.
+ */
+export interface ProviderUserPromptMessage {
+  type: 'user-message';
+  text: string;
+}
+
+/**
  * Tool call message - agent is calling a tool
  */
 export interface ToolCallMessage {
@@ -216,6 +227,7 @@ export interface PatchApplyEndMessage {
 export type AgentMessage =
   | ModelOutputMessage
   | StatusMessage
+  | ProviderUserPromptMessage
   | ToolCallMessage
   | ToolResultMessage
   | SessionMediaMessage
