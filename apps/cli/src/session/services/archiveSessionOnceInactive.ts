@@ -1,5 +1,6 @@
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { openSessionEventSource } from '@/session/transport/socket/sessionSocketAgentState';
+import type { resolveSessionIdOrPrefix } from '@/session/query/resolveSessionId';
 
 import { isSessionActiveArchiveError, setSessionArchivedStateById } from './sessionArchivedStateById';
 
@@ -9,6 +10,7 @@ export async function archiveSessionOnceInactive(params: Readonly<{
   token: string;
   sessionId: string;
   timeoutMs?: number;
+  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionIdOrPrefix>[0]['resolveAuthorizationHeaders'];
 }>): Promise<Readonly<{ archivedAt: number | null }>> {
   const deadlineMs = Date.now() + (params.timeoutMs ?? DEFAULT_ARCHIVE_TIMEOUT_MS);
   const events = openSessionEventSource(params);
@@ -21,6 +23,7 @@ export async function archiveSessionOnceInactive(params: Readonly<{
           token: params.token,
           sessionId: params.sessionId,
           archived: true,
+          ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
         });
       } catch (error) {
         if (!isSessionActiveArchiveError(error)) {
@@ -34,6 +37,7 @@ export async function archiveSessionOnceInactive(params: Readonly<{
       const rawSession = await fetchSessionByIdCompat({
         token: params.token,
         sessionId: params.sessionId,
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
       }).catch(() => null);
 
       if (!rawSession || rawSession.active !== false || inactiveRetryRevision === revision) {

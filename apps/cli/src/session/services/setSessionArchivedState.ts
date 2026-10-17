@@ -23,6 +23,8 @@ export async function setSessionArchivedState(params: Readonly<{
   credentials: StoredCredentials;
   idOrPrefix: string;
   archived: boolean;
+  externalAction?: Parameters<typeof requestSessionStop>[0]['externalAction'];
+  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionIdOrPrefix>[0]['resolveAuthorizationHeaders'];
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
 }>): Promise<
   | Readonly<{ ok: true; sessionId: string; archivedAt: number | null }>
@@ -31,6 +33,7 @@ export async function setSessionArchivedState(params: Readonly<{
   const resolved = await resolveSessionIdOrPrefix({
     credentials: params.credentials,
     idOrPrefix: params.idOrPrefix,
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
   });
   if (!resolved.ok) {
@@ -47,6 +50,7 @@ export async function setSessionArchivedState(params: Readonly<{
       token: params.credentials.token,
       sessionId: resolved.sessionId,
       archived: params.archived,
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
   } catch (error) {
     if (!params.archived || !isSessionActiveArchiveError(error)) {
@@ -56,6 +60,8 @@ export async function setSessionArchivedState(params: Readonly<{
     const stopResult = await requestSessionStop({
       credentials: params.credentials,
       idOrPrefix: resolved.sessionId,
+      ...(params.externalAction ? { externalAction: params.externalAction } : {}),
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
     if (!stopResult.ok) {
       return {
@@ -68,6 +74,7 @@ export async function setSessionArchivedState(params: Readonly<{
     result = await archiveSessionOnceInactive({
       token: params.credentials.token,
       sessionId: resolved.sessionId,
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
   }
 

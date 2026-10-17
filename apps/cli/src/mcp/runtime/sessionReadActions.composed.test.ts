@@ -36,6 +36,7 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
   'session.unarchive', 'session.fork', 'session.open'] as const)(
   'executes through the real Session MCP envelope and credentialed owner: %s', async actionId => {
   const read = actionId === 'session.status.get' || actionId === 'session.messages.recent.get';
+  const ledLifecycle = actionId === 'session.stop' || actionId === 'session.archive' || actionId === 'session.unarchive';
   const sessionId = 'c123456789012345678901230';
   const children = ['c123456789012345678901231', 'c123456789012345678901232'];
   const serverId = 'session-read-home';
@@ -85,7 +86,7 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
   });
   vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
     const pathname = new URL(String(url)).pathname;
-    if (pathname === `/v2/sessions/${sessionId}/archive` || pathname === `/v2/sessions/${sessionId}/unarchive`) {
+    if ([sessionId, ...children].some(id => pathname === `/v2/sessions/${id}/archive` || pathname === `/v2/sessions/${id}/unarchive`)) {
       return { status: 200, data: { success: true, archivedAt: pathname.endsWith('/unarchive') ? null : 123 } };
     }
     queryRequests.push({ url: String(url), body });
@@ -149,7 +150,8 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
   try {
     await runtime.mcp.connect(serverTransport);
     await client.connect(clientTransport);
-    for (const child of read ? children : [sessionId]) {
+    const targets = read ? children : ledLifecycle ? [sessionId, ...children] : [sessionId];
+    for (const child of targets) {
       const result = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
         arguments: { actionId, input: { sessionId: child,
           ...(actionId === 'session.open' ? { intent: 'resume', serverId } : {}) } } }));
@@ -167,17 +169,17 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
             stopOutcome: { status: 'already_stopped', reason: 'no_runtime_session_inactive' } }
           : { ok: true, sessionId: child, archivedAt: actionId === 'session.archive' ? 123 : null });
     }
-    expect(forwarded).toEqual((read ? children : [sessionId]).map(() => actionId));
+    expect(forwarded).toEqual(targets.map(() => actionId));
     if (actionId === 'session.fork') expect(machineRequests).toMatchObject([{ parentSessionId: sessionId, forkPoint: { type: 'latest' } }]);
-    if (actionId === 'session.stop') expect(stop).toHaveBeenCalledWith(expect.objectContaining({
-      method: RPC_METHODS.STOP_SESSION, request: { sessionId }, authorization: { kind: 'session.write', sessionId },
+    if (actionId === 'session.stop') for (const target of targets) expect(stop).toHaveBeenCalledWith(expect.objectContaining({
+      method: RPC_METHODS.STOP_SESSION, request: { sessionId: target }, authorization: { kind: 'session.write', sessionId: target },
     }));
     if (actionId === 'session.messages.recent.get') {
       for (const child of children) expect(httpReads).toContain(`/v1/sessions/${child}/messages`);
     }
-    // Captured facts do not keep read authority after relationship loss;
-    // lifecycle mutations remain current-Session-only even for led children.
-    if (read) members.delete(children[0]!);
+    // Captured facts cannot retain read/lifecycle authority after relationship
+    // loss. Fork/open retain their current-Session-only semantics.
+    if (read || ledLifecycle) members.delete(children[0]!);
     httpReads.length = 0;
     const refused = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
       arguments: { actionId, input: { sessionId: children[0],
