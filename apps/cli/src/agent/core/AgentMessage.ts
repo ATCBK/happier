@@ -44,13 +44,14 @@ export interface StatusMessage {
   status: AgentStatus;
   /** Additional details (e.g., error message) */
   detail?: string;
+  /** The provider conclusively settled its response; an unqualified idle may be transient. */
+  turnFinished?: true;
 }
 
 /**
- * User prompt observed on the provider side (e.g. injected by a provider extension
- * such as pi background-bash completion reminders) rather than submitted through
- * Happier. Emitted so the transcript shows what started a provider-initiated turn;
- * Happier-submitted prompts must NOT be re-emitted as this type by backends.
+ * Provider-observed input submission, such as input submitted by a provider extension.
+ * Later provider handlers may transform or handle the submission without starting a turn.
+ * Host-submitted inputs are already recorded by the host and must not be emitted again.
  */
 export interface ProviderUserPromptMessage {
   type: 'user-message';

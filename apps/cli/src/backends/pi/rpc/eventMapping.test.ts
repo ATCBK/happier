@@ -256,33 +256,13 @@ describe('mapPiRpcEventToAgentMessages', () => {
   it('returns an empty list for unknown events', () => {
     expect(mapPiRpcEventToAgentMessages({ type: 'something_new' })).toEqual([]);
   });
+
+  it('does not infer user-input origin from native message_end events', () => {
+    for (const content of ['continue the work', [{ type: 'text', text: 'continue the work' }]]) {
+      expect(mapPiRpcEventToAgentMessages({
+        type: 'message_end',
+        message: { role: 'user', content },
+      })).toEqual([]);
+    }
+  });
 });
-
-  it('maps extension-injected user prompts from message_end to user-message agent messages', () => {
-    const output = mapPiRpcEventToAgentMessages({
-      type: 'message_end',
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text: '<system-reminder>[BACKGROUND BASH COMPLETED]</system-reminder>' }],
-      },
-    });
-    expect(output).toEqual([
-      { type: 'user-message', text: '<system-reminder>[BACKGROUND BASH COMPLETED]</system-reminder>' },
-    ]);
-  });
-
-  it('maps a plain string user message_end content to a user-message agent message', () => {
-    const output = mapPiRpcEventToAgentMessages({
-      type: 'message_end',
-      message: { role: 'user', content: 'continue the work' },
-    });
-    expect(output).toEqual([{ type: 'user-message', text: 'continue the work' }]);
-  });
-
-  it('drops user message_end events without text content', () => {
-    const output = mapPiRpcEventToAgentMessages({
-      type: 'message_end',
-      message: { role: 'user', content: [{ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }] },
-    });
-    expect(output).toEqual([]);
-  });

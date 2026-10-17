@@ -119,36 +119,6 @@ function extractTextFromToolResult(value: unknown): string | null {
   return text;
 }
 
-/**
- * Extract the text of a finished user message. Pi streams `message_end` events for
- * every session message, including user prompts echoed from Happier's own `prompt`
- * commands and prompts injected inside Pi by extensions (e.g. AFT background-bash
- * completion reminders delivered via `pi.sendUserMessage`). The caller filters the
- * Happier echo; this mapping only extracts the text.
- */
-function extractUserPromptText(message: unknown): string | null {
-  const record = asRecord(message);
-  if (!record) return null;
-  if (record.role !== 'user') return null;
-
-  if (typeof record.content === 'string') {
-    return record.content.length > 0 ? record.content : null;
-  }
-  if (!Array.isArray(record.content)) return null;
-
-  let text = '';
-  for (const item of record.content) {
-    const entry = asRecord(item);
-    if (!entry) continue;
-    if (entry.type !== 'text') continue;
-    const chunk = asString(entry.text);
-    if (chunk === null) continue;
-    text += chunk;
-  }
-
-  return text.length > 0 ? text : null;
-}
-
 export function mapPiRpcEventToAgentMessages(event: unknown): AgentMessage[] {
   const record = asRecord(event);
   if (!record) return [];
@@ -247,10 +217,6 @@ export function mapPiRpcEventToAgentMessages(event: unknown): AgentMessage[] {
   }
 
   if (type === 'message_end') {
-    const userPromptText = extractUserPromptText(record.message);
-    if (userPromptText !== null) {
-      return [{ type: 'user-message', text: userPromptText }];
-    }
     const thinking = extractAssistantThinking(record.message);
     const fullText = extractAssistantText(record.message);
     const messages: AgentMessage[] = [];

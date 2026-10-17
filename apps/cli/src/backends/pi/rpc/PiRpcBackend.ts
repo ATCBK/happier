@@ -78,6 +78,7 @@ import {
   buildPiExtensionAskUserQuestionInput,
   buildPiExtensionUiResponse,
   parsePiBlockingExtensionUiRequest,
+  parsePiExtensionUserInput,
   type PiExtensionUiResponse,
 } from './piExtensionUiRequest';
 import {
@@ -786,7 +787,6 @@ export class PiRpcBackend implements AgentBackend {
         this.sessionFile = existingSessionFile;
         await this.captureAuthJsonSnapshot();
         this.publishRuntimeState(stateBefore);
-        this.emitMessage({ type: 'status', status: 'idle' });
         return { sessionId: existingSessionId };
       }
 
@@ -813,7 +813,6 @@ export class PiRpcBackend implements AgentBackend {
       this.sessionFile = nextSessionFile;
       await this.captureAuthJsonSnapshot();
       this.publishRuntimeState(stateAfter);
-      this.emitMessage({ type: 'status', status: 'idle' });
       return { sessionId: nextSessionId };
     } catch (error) {
       if (Date.now() >= lifecycle.deadlineMs) {
@@ -957,7 +956,6 @@ export class PiRpcBackend implements AgentBackend {
       this.sessionFile = asNonEmptyString(state.sessionFile) ?? sessionFile;
       await this.captureAuthJsonSnapshot();
       this.publishRuntimeState(state);
-      this.emitMessage({ type: 'status', status: 'idle' });
       return { sessionId: expectedSessionId };
     } catch (error) {
       this.sessionId = null;
@@ -1201,48 +1199,6 @@ export class PiRpcBackend implements AgentBackend {
     return { admission: admission.promise, completion };
   }
 
-  /**
-   * Prompt texts this backend sent through the RPC `prompt` command whose user-message
-   * echo from Pi has not arrived yet. Pi emits `message_end` user events for EVERY user
-   * message, including Happier-submitted prompts and prompts injected inside Pi by
-   * extensions (`pi.sendUserMessage`, e.g. AFT background-bash completions). Only the
-   * injected ones may surface as `user-message` agent messages; Happier already wrote
-   * its own prompt rows at submission time.
-   */
-  private readonly awaitingPromptEchoTexts: string[] = [];
-  private static readonly MAX_AWAITING_PROMPT_ECHOES = 64;
-
-  private discardAwaitingPromptEcho(text: string): void {
-    const echoIndex = this.awaitingPromptEchoTexts.indexOf(text);
-    if (echoIndex !== -1) this.awaitingPromptEchoTexts.splice(echoIndex, 1);
-  }
-
-  private notePromptSentToPi(text: string): void {
-    this.awaitingPromptEchoTexts.push(text);
-    if (this.awaitingPromptEchoTexts.length > PiRpcBackend.MAX_AWAITING_PROMPT_ECHOES) {
-      this.awaitingPromptEchoTexts.splice(0, this.awaitingPromptEchoTexts.length - PiRpcBackend.MAX_AWAITING_PROMPT_ECHOES);
-    }
-  }
-
-  private filterHappierPromptEchoes(messages: AgentMessage[]): AgentMessage[] {
-    const awaitingAgentStart = this.isAcceptedPromptAwaitingAgentStart();
-    if (this.awaitingPromptEchoTexts.length === 0 && !awaitingAgentStart) return messages;
-    return messages.filter((msg) => {
-      if (msg.type !== 'user-message') return true;
-      // Between our own prompt (pre-)acceptance and the run's agent_start, any user
-      // message_end is the echo of that prompt: exact text for plain prompts, or the
-      // template-expanded text for slash commands (pi expands templates in the RPC prompt
-      // command before the user message exists). Extension injections arrive idle — before
-      // their OWN agent_start with no pending Happier turn — or mid-turn after agent_start,
-      // never inside this window.
-      if (awaitingAgentStart) return false;
-      const echoIndex = this.awaitingPromptEchoTexts.indexOf(msg.text);
-      if (echoIndex === -1) return true;
-      this.awaitingPromptEchoTexts.splice(echoIndex, 1);
-      return false;
-    });
-  }
-
   private async sendPromptAndObserveCompletion(
     sessionId: SessionId,
     prompt: string,
@@ -1306,17 +1262,11 @@ export class PiRpcBackend implements AgentBackend {
       const pendingTurn = this.createPendingTurn(this.getPendingTurnStallTimeoutMs());
       const turn = pendingTurn.promise;
       providerSendAttempted = true;
-      this.notePromptSentToPi(message);
       try {
         await this.sendCommand({ type: 'prompt', message }, 30_000, { processAlreadyEnsured: true });
       } catch (error) {
         const promptError = asError(error);
         const rejectedBeforeEffect = promptError instanceof PiRpcPromptRejectedBeforeEffectError;
-        if (rejectedBeforeEffect) {
-          // No provider effect occurred, so no user-message echo will arrive; drop the
-          // queued echo text so a later extension injection with identical text surfaces.
-          this.discardAwaitingPromptEcho(message);
-        }
         settleAdmission(rejectedBeforeEffect
           ? { status: 'rejected_before_effect', error: promptError }
           : { status: 'effect_may_have_occurred', error: promptError });
@@ -1867,7 +1817,6 @@ export class PiRpcBackend implements AgentBackend {
     }));
     this.sessionFile = asNonEmptyString(state.sessionFile) ?? sessionFile;
     this.publishRuntimeState(state);
-    this.emitMessage({ type: 'status', status: 'idle' });
     return true;
   }
 
@@ -1988,6 +1937,12 @@ export class PiRpcBackend implements AgentBackend {
 
     const record = asRecord(parsed);
     if (!record) return;
+    const extensionUserInput = parsePiExtensionUserInput(record);
+    if (extensionUserInput !== null) {
+      this.notePendingTurnActivity(record);
+      this.emitMessage({ type: 'user-message', text: extensionUserInput });
+      return;
+    }
     if (this.pendingTurn) {
       this.tracePiRpcFailureBoundary('stdout_record', record);
     }
@@ -2228,7 +2183,7 @@ export class PiRpcBackend implements AgentBackend {
     }
     this.notePendingTurnActivity(normalizedEvent);
 
-    const mappedMessages = this.filterHappierPromptEchoes(mapPiRpcEventToAgentMessages(normalizedEvent));
+    const mappedMessages = mapPiRpcEventToAgentMessages(normalizedEvent);
     this.tracePiRpcFailureBoundary('event_mapped', normalizedEvent, {
       mappedAgentMessageTypes: mappedMessages.map((msg) => msg.type).slice(0, PI_RPC_FAILURE_TRACE_MAX_ARRAY_LENGTH),
     });
@@ -2631,7 +2586,7 @@ export class PiRpcBackend implements AgentBackend {
     this.pendingTurn = null;
     this.clearPendingTurnTimers(pending);
     this.openPromptRequestIds.clear();
-    this.emitMessage({ type: 'status', status: 'idle' });
+    this.emitMessage({ type: 'status', status: 'idle', turnFinished: true });
     pending.resolve();
     return true;
   }
@@ -3190,13 +3145,11 @@ export class PiRpcBackend implements AgentBackend {
     this.cancelPendingTurnCompactionResume(pending);
     this.armPendingTurnInactivityTimer(pending);
 
-    const compactionAutoContinuePrompt = this.getCompactionAutoContinuePrompt();
     try {
-      this.notePromptSentToPi(compactionAutoContinuePrompt);
       await this.sendCommand(
         {
           type: 'prompt',
-          message: compactionAutoContinuePrompt,
+          message: this.getCompactionAutoContinuePrompt(),
           streamingBehavior: 'followUp',
         },
         this.getLivenessProbeTimeoutMs(),
@@ -3211,9 +3164,6 @@ export class PiRpcBackend implements AgentBackend {
         this.armPendingTurnInactivityTimer(pending);
         return;
       }
-      // The continue prompt never reached pi, so no echo will arrive; drop the queued
-      // echo text so a later extension injection with identical text still surfaces.
-      this.discardAwaitingPromptEcho(compactionAutoContinuePrompt);
       this.rejectPendingTurnAsStalled(pending);
     }
   }
