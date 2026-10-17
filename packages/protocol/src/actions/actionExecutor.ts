@@ -1209,7 +1209,10 @@ function mapApprovalCreatedBySurface(surface: ActionExecutorContext['surface']):
  * name it from there), so it is never appended to the title as a raw id.
  */
 function buildApprovalSummary(spec: ActionSpec, input?: unknown, preview?: unknown): string {
-  const summary = String(spec.title ?? '').trim() || String(spec.id);
+  const previewSummary = readRecord(preview).summary;
+  const summary = typeof previewSummary === 'string' && previewSummary.trim()
+    ? previewSummary.trim()
+    : buildApprovalPreviewSummary(spec, input);
   const fragmentName = WidgetLayoutFragmentActionIdV1Schema.safeParse(spec.id).success
     ? readWidgetLayoutFragmentApprovalNameV1(input, preview) : null;
   if (fragmentName) return `${summary} · ${fragmentName}`;

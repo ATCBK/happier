@@ -1302,6 +1302,7 @@ describe('createActionExecutor (approvals)', () => {
 
     const produced = approvalsCreate.mock.calls[0]?.[0]?.request;
     const consumed = ApprovalRequestV2Schema.parse(produced);
+    expect(consumed.summary).toBe('Send a message to the agent in a session.');
     expect(consumed.preview).toEqual(expect.objectContaining({
       summary: 'Send a message to the agent in a session.',
     }));
@@ -2177,7 +2178,7 @@ describe('createActionExecutor (approvals)', () => {
     expect(approvalsCreate).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({
         actionId: 'agents.backends.list',
-        summary: 'List agent backends',
+        summary: 'List agent backends.',
       }),
     }));
   });
@@ -2341,7 +2342,7 @@ describe('createActionExecutor (approvals)', () => {
       request: expect.objectContaining({
         status: 'open',
         actionId: 'session.message.send',
-        summary: 'Send a message to a session',
+        summary: 'Send a message to the agent in a session.',
       }),
     }));
   });
@@ -2579,7 +2580,7 @@ describe('createActionExecutor (approvals)', () => {
     expect(approvalsCreate).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({
         actionId: 'review.start',
-        summary: 'Start review',
+        summary: 'Start one or more parallel review runs against the current worktree.',
       }),
     }));
   });

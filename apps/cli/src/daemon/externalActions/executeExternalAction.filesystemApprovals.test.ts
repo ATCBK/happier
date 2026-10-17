@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { requiresExactDaemonApprovalReplay } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -265,8 +265,16 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       : { rootPath: h.rootPath, path: '.', ...(actionId === 'daemon.filesystem.getDirectoryTree' ? { maxDepth: 1 } : {}) };
     try {
       expect(await h.run(input, surface)).toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId } });
-      expect(await h.approval()).toMatchObject({ status: 'open', actionArgs: input, executionOriginV1: { requestId: 'original-request',
-        surface, authority: 'account_automation', accountId: 'account', externalActionInputSignature: expect.any(String) } });
+      const checkoutName = basename(h.rootPath);
+      const expectedSummary = actionId === 'daemon.filesystem.writeFile' ? `Write binary in ${checkoutName}`
+        : actionId === 'daemon.filesystem.createDirectory' ? `Create the folder folder in ${checkoutName}`
+        : actionId === 'daemon.filesystem.rename' ? `Rename original to renamed in ${checkoutName}`
+        : actionId === 'daemon.filesystem.delete' ? `Delete original from ${checkoutName}`
+        : null;
+      expect(await h.approval()).toMatchObject({ status: 'open', actionArgs: input,
+        ...(expectedSummary ? { summary: `${expectedSummary}.`, preview: { summary: `${expectedSummary}.` } } : {}),
+        executionOriginV1: { requestId: 'original-request', surface, authority: 'account_automation', accountId: 'account',
+          externalActionInputSignature: expect.any(String) } });
       expect(await readdir(h.rootPath)).toEqual(['original']);
       expect(await readFile(join(h.rootPath, 'original'))).toEqual(bytes);
       const decided = await h.decide(decision);
