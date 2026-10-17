@@ -880,8 +880,60 @@ describe('usePluginUiProjectionCurrentness', () => {
         });
         await flushHookEffects();
         expect(snapshot.current!.pluginUiProjection).toBe(settledProjection);
+        const projectionWork = vi.spyOn(await import('./projectionUnion'), 'mergeInstalledPluginUiProjections');
+        try {
+            await act(async () => {
+                replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                    availabilityCursor: 2, intentReads: [], materializations: [materialization],
+                    snapshots: [{ serverIdentityId, machineId: 'machine-1', materializations: [materialization] }],
+                } });
+            });
+            await flushHookEffects();
+            expect(snapshot.current!.pluginUiProjection).toBe(settledProjection);
+            expect(projectionWork).not.toHaveBeenCalled();
+        } finally { projectionWork.mockRestore(); }
         await rendered.unmount();
         clearPluginAccountAvailabilityProjection();
+    });
+
+    it('does no AppShell machine projection work for unrelated Account store publications', async () => {
+        projectionRuntime.describe.mockResolvedValue(supportedProjection('Stable catalog'));
+        const presence = await import('@/utils/sessions/machineUtils');
+        const unions = await import('./projectionUnion');
+        // Observe real computation without replacing internal domain decisions.
+        const membershipWork = vi.spyOn(presence, 'readMachineStatusNextRefreshAtMs');
+        const projectionWork = vi.spyOn(unions, 'mergeInstalledPluginUiProjections');
+        const snapshots: ReturnType<typeof useAppShellPluginUiProjection>[] = [];
+        function Probe() { snapshots.push(useAppShellPluginUiProjection()); return null; }
+        const rendered = await renderWithAppProviders(<AppShellPluginUiProjectionProvider><Probe /></AppShellPluginUiProjectionProvider>);
+        try {
+            await waitForHomeGovernance(() => expect(snapshots.at(-1)?.phase).toBe('current'));
+            await flushHookEffects();
+            const settled = snapshots.at(-1);
+            expect(settled?.pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles)
+                .toEqual({ en: { title: 'Stable catalog' } });
+            membershipWork.mockClear();
+            projectionWork.mockClear();
+            const publications = snapshots.length;
+            await act(async () => {
+                storage.setState(state => ({ sessions: { ...state.sessions } }));
+            });
+            await flushHookEffects();
+            expect(snapshots.at(-1)).toBe(settled);
+            expect(snapshots).toHaveLength(publications);
+            expect(projectionWork).not.toHaveBeenCalled();
+            expect(membershipWork).not.toHaveBeenCalled();
+            projectionRuntime.describe.mockResolvedValue(supportedProjection('Updated catalog'));
+            await act(async () => { invalidateProjection(); });
+            await waitForHomeGovernance(() => {
+                expect(snapshots.at(-1)?.pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles)
+                    .toEqual({ en: { title: 'Updated catalog' } });
+            });
+        } finally {
+            await rendered.unmount();
+            membershipWork.mockRestore();
+            projectionWork.mockRestore();
+        }
     });
 
     it('reports an answered unsupported projection as unavailable', async () => {
