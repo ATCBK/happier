@@ -171,8 +171,10 @@ export function useAccountWidgetAddSections(input: Readonly<{
     testID: string;
 }>): Readonly<{
     sections: readonly WidgetAddSection[];
-    /** True while the Account's own widgets or saved groups are still being read: a search that finds nothing waits. */
+    /** Aggregate saved-inventory state retained for callers migrating to pendingSections. */
     loading: boolean;
+    /** Local sections are ready independently; only these remote sections are still unresolved. */
+    pendingSections: readonly Pick<WidgetAddSection, 'id' | 'title'>[];
 }> {
     const installed = useHomeWidgetCandidates();
     const appRuntime = useAppShellPluginUiProjection();
@@ -214,5 +216,9 @@ export function useAccountWidgetAddSections(input: Readonly<{
             ),
         } : {}),
     }), [addGroup, addInstance, appRuntime, candidates, context, fragmentActions, fragments, groupCapable, instances, labels, phone, scope, testID]);
-    return { sections, loading: !yoursLoaded || (groupCapable && !fragmentsLoaded) };
+    const loading = !yoursLoaded || (groupCapable && !fragmentsLoaded);
+    const pendingSections = React.useMemo(() => loading
+        ? [{ id: 'yours', title: t('widgetDefinition.yourWidgets') }]
+        : [], [loading, sections]);
+    return { sections, loading, pendingSections };
 }

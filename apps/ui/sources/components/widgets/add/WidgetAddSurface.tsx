@@ -86,8 +86,8 @@ export type WidgetAddPanelProps = Readonly<{
     hint?: string;
     searchPlaceholder: string;
     sections: readonly WidgetAddSection[];
-    /** Your widgets and saved groups are still being read: a search that finds nothing yet says so quietly. */
-    loading?: boolean;
+    /** Sections still being read (Your widgets): only they say so; what is already here is searched and shown at once. */
+    pendingSections?: readonly Readonly<{ id: string; title: string }>[];
     ask?: WidgetAddAsk;
     /** Where an entry without its own setup goes ("Add to Home"). */
     addLabel: string;
@@ -452,9 +452,7 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
                         {section.entries.map(row)}
                     </View>
                 ))}
-                {nothing && props.loading ? (
-                    <Text style={styles.empty} testID={`${props.testID}.loading`}>{t('common.loading')}</Text>
-                ) : nothing ? (
+                {nothing ? (
                     // A search that finds nothing is never a dead end: it says so on one quiet line and
                     // clears in place (lab wsplit A4), keeping the list column's size.
                     <SurfaceStateCard
@@ -466,6 +464,14 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
                         action={{ testID: `${props.testID}.clearSearch`, label: t('selectionList.clearInput'), onPress: () => props.onQueryChange('') }}
                     />
                 ) : null}
+                {props.pendingSections?.map((section) => (
+                    <View key={section.id} style={styles.section} accessibilityLabel={section.title} testID={`${props.testID}.pending.${section.id}`}>
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle} accessibilityRole="header" numberOfLines={1}>{section.title}</Text>
+                            <Text style={styles.sectionHint} numberOfLines={1}>{t('common.loading')}</Text>
+                        </View>
+                    </View>
+                ))}
                 {props.askEntry ? <View style={styles.section}>{row(props.askEntry)}</View> : null}
             </ScrollView>
         </View>

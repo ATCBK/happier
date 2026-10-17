@@ -106,7 +106,7 @@ async function renderPanel(props: Readonly<{
     composition?: 'split' | 'push';
     ask?: WidgetAddAsk;
     initialEntryId?: string;
-    loading?: boolean;
+    pendingSections?: readonly Readonly<{ id: string; title: string }>[];
     onRequestClose?: () => void;
 }>) {
     const screen = await renderScreen(
@@ -118,7 +118,7 @@ async function renderPanel(props: Readonly<{
             addLabel="Add to Home"
             composition={props.composition ?? 'split'}
             sections={props.sections}
-            {...(props.loading ? { loading: true } : {})}
+            {...(props.pendingSections ? { pendingSections: props.pendingSections } : {})}
             {...(props.ask ? { ask: props.ask } : {})}
             {...(props.initialEntryId ? { initialEntryId: props.initialEntryId } : {})}
             {...(props.serverId ? { serverId: props.serverId } : {})}
@@ -371,16 +371,18 @@ describe('WidgetAddSurface', () => {
         expect(close).toHaveBeenCalledTimes(1);
     });
 
-    it('says Loading, not "No widgets match", while Your widgets are still being read', async () => {
+    it('says no match at once for a local search and marks only the pending Your widgets section', async () => {
         const rec = recorder();
         const screen = await renderPanel({
             sections: [{ id: 'all', title: 'All', entries: [widgetEntry(SIGNUPS, rec)] }],
-            loading: true,
+            pendingSections: [{ id: 'yours', title: 'Your widgets' }],
         });
-        screen.changeTextByTestId('add.search', 'copy');
+        screen.changeTextByTestId('add.search', 'kanban');
         await flushHookEffects({ cycles: 2 });
-        expect(screen.findAllByTestId('add.noMatch')).toHaveLength(0);
-        expect(screen.findAllByTestId('add.loading').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('add.noMatch').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('add.clearSearch').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('add.pending.yours').length).toBeGreaterThan(0);
+        expect(screen.getTextContent()).toContain('Your widgets');
     });
 
     it('narrows by search and offers the ask entry, which drafts and closes', async () => {

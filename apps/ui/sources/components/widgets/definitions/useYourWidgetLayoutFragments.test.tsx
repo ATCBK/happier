@@ -32,6 +32,8 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
 const { act } = await import('react-test-renderer');
+const { renderHook } = await import('@/dev/testkit');
+const { filterWidgetAddSections } = await import('../add/widgetAddModel');
 
 const ACCOUNT_ID = 'account-a';
 const DRAFT = { name: 'Release checks', inputs: { fields: [] }, inputSchema: { type: 'object' },
@@ -71,9 +73,9 @@ async function renderGallery(options: Readonly<{ waiveManagementApproval?: boole
     expect(await executor.execute('widgets.fragment.create', { account, artifactId: 'saved', fragment: DRAFT }, context)).toMatchObject({ ok: true });
     const scope = { ...account, owner: { kind: 'home' } } as const;
     function Gallery() {
-        const sections = useAccountWidgetAddSections({ scope, instances: NO_INSTANCES, labels: LABELS, addInstance, testID: 'gallery' });
+        const { sections, pendingSections } = useAccountWidgetAddSections({ scope, instances: NO_INSTANCES, labels: LABELS, addInstance, testID: 'gallery' });
         return <WidgetAddPanel title="Add" searchPlaceholder="Search" addLabel="Add" composition="split"
-            sections={sections} onRequestClose={() => {}} testID="gallery" />;
+            sections={sections} pendingSections={pendingSections} onRequestClose={() => {}} testID="gallery" />;
     }
     const screen = await renderScreen(<AppShellPluginUiProjectionValueProvider value={{
         pluginUiProjection: null, pluginBrowserProjection: null, phase: 'current', interactionEnabled: false, machineId: null,
@@ -99,6 +101,29 @@ describe('saved-group Gallery management', () => {
         restoreUuid = null;
         if (connection) { await connection.dispose(); connection = null; installHomeGovernanceBoundaries(harness); }
         if (previousSettings) { storage.setState({ settings: previousSettings }); previousSettings = null; }
+    });
+
+    it('publishes local search results independently of pending saved widgets and groups', async () => {
+        const { account, screen, serverId } = await renderGallery();
+        await screen.unmount();
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const inventory = await harness.artifacts(serverId).handle('/v1/artifacts?includeBody=true');
+        if (!inventory) throw new Error('Expected the canonical Artifact inventory boundary');
+        harness.answer(serverId, 'GET /v1/artifacts', { respondAfter: held, body: await inventory.json() });
+        const scope = { ...account, owner: { kind: 'home' } } as const;
+        const hook = await renderHook(() => useAccountWidgetAddSections({ scope, instances: NO_INSTANCES,
+            labels: LABELS, addInstance, testID: 'pending-gallery' }));
+        try {
+            expect(hook.getCurrent().sections.some(section => section.id.startsWith('builtins') && section.entries.length > 0)).toBe(true);
+            expect(filterWidgetAddSections(hook.getCurrent().sections, 'no-widget-matches-this')).toEqual([]);
+            expect(hook.getCurrent().pendingSections).toEqual([{ id: 'yours', title: expect.any(String) }]);
+            await act(async () => { release(); await flushHookEffects({ cycles: 2 }); });
+            await vi.waitFor(() => expect(hook.getCurrent().pendingSections).toEqual([]));
+        } finally {
+            release();
+            await hook.unmount();
+        }
     });
 
     it('ends Save group on a failed platform operation and lets Retry save through the real Artifact Action without a daemon', async () => {
