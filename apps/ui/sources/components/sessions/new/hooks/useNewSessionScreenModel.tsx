@@ -1288,6 +1288,10 @@ export function useNewSessionScreenModel(input?: Readonly<{
         acpCatalog,
         settings.backendEnabledByTargetKey,
     ]);
+    const resolvedBackendTargets = React.useMemo(
+        () => resolvedBackendEntries.map((entry) => entry.backendTarget),
+        [resolvedBackendEntries],
+    );
     const profilePreferredBackendTarget = React.useMemo(() => {
         if (!initialProfileAuthoringIntent.preferredAgentTargetKey) return null;
         return resolveBackendTargetFromRouteParams({
@@ -2457,7 +2461,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         selectedProfileId,
         newSessionDefaultPersistenceModeV1,
         newSessionDefaultPersistenceModeByTargetKeyV1,
-        resolvedBackendTargets: resolvedBackendEntries.map((entry) => entry.backendTarget),
+        resolvedBackendTargets,
         agentType: agentPolicyType,
         selectedMachineId,
         backendTarget,

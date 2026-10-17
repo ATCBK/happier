@@ -27,7 +27,7 @@ import {
 } from '@/components/sessions/new/navigation/newSessionHost';
 import { useNewSessionPanelPropsForCreationProfile } from '@/components/sessions/new/modules/newSessionCreationProfile';
 import { useResolveNewSessionOrdinaryEntryRoute } from '@/components/sessions/new/navigation/newSessionOrdinaryEntryRoute';
-import { isNewSessionDraftLaunchInCustody } from '@/components/sessions/new/modules/newSessionDraftLaunchCustody';
+import { isNewSessionDraftLaunchOperationInCustody } from '@/components/sessions/new/modules/newSessionDraftLaunchCustody';
 import { NewSessionDraftComposerActions } from '@/components/sessions/drafts/NewSessionDraftComposerActions';
 import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -38,7 +38,7 @@ import {
 } from '@/components/sessions/drafts/SessionDraftConflictResolution';
 import { ComposerAuxiliaryFrame } from '@/components/sessions/shell/view/ComposerAuxiliaryFrame';
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
-import { useAllActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
+import { useActionOperationByRequestId } from '@/sync/domains/actionOperations/useActionOperations';
 import { parseNewSessionCheckoutDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
 import {
     clearNewSessionOrdinaryEntryDraftIdExact,
@@ -349,11 +349,16 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
             setOrdinaryEntryDraftId(pointerDelta.newSessionOrdinaryEntryDraftId);
         }
     }, [draftIdentity.draftId, draftIdentity.draftOrigin, exactDraft?.materialized, ordinaryEntryDraftId, setOrdinaryEntryDraftId]);
-    const actionOperations = useAllActionOperations();
-    const launchInCustody = Boolean(draftScope && exactDraft && isNewSessionDraftLaunchInCustody({
+    const launchUserAttemptId = exactDraft?.localSupplement.launchUserAttemptId ?? null;
+    const launchOperation = useActionOperationByRequestId(
+        launchUserAttemptId,
+        draftScope?.serverId ?? null,
+        draftScope?.accountId ?? null,
+    );
+    const launchInCustody = Boolean(draftScope && isNewSessionDraftLaunchOperationInCustody({
         accountId: draftScope.accountId,
-        launchUserAttemptId: exactDraft.localSupplement.launchUserAttemptId,
-        operations: actionOperations,
+        launchUserAttemptId,
+        operation: launchOperation,
     }));
     const startAnother = React.useCallback(() => {
         openDraft(resolveOrdinaryEntry({ forceFresh: true }), 'push');

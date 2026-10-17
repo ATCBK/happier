@@ -141,12 +141,30 @@ vi.mock('@/sync/domains/scope/useServerCredentialAccountScopes', () => ({
             ? { kind: 'bound', scope: mockState.requestedDraftScope }
             : { kind: 'unknown_home' }
     ),
+    useServerCredentialAccountScopeBinding: (serverId: string | null | undefined) => {
+        if (!serverId) return { resolution: { kind: 'unknown_home' }, binding: null };
+        const scope = mockState.requestedDraftScope?.serverId === serverId
+            ? mockState.requestedDraftScope
+            : { serverId, accountId: 'account-1' };
+        return {
+            resolution: { kind: 'bound', scope },
+            binding: {
+                scope,
+                isCurrent: () => true,
+                onRetire: () => ({ dispose: () => undefined }),
+                serverId,
+                accountId: scope.accountId,
+                revision: 1,
+            },
+        };
+    },
     useServerCredentialAccountScopeBindings: (serverIds: readonly string[]) => new Map(
         serverIds.flatMap((serverId) => (
             mockState.requestedDraftScope?.serverId === serverId
                 ? [[serverId, {
                     scope: mockState.requestedDraftScope,
                     isCurrent: () => true,
+                    onRetire: () => ({ dispose: () => undefined }),
                     serverId,
                     accountId: mockState.requestedDraftScope.accountId,
                     revision: 1,
@@ -195,19 +213,10 @@ vi.mock('@/sync/ops/sessionDrafts/sessionDraftRepository', () => ({
     }),
 }));
 
-vi.mock('@/sync/domains/actionOperations/useActionOperations', () => ({
-    useAllActionOperations: () => [],
-    readAllActionOperations: () => [],
-}));
-
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({ spies: { confirm: async () => true } }).module;
 });
-
-vi.mock('@/components/sessions/new/modules/newSessionDraftLaunchCustody', () => ({
-    isNewSessionDraftLaunchInCustody: () => false,
-}));
 
 vi.mock('@/components/sessions/drafts/SessionDraftConflictResolution', () => ({
     SessionDraftConflictResolution: () => React.createElement('ConflictNotice', { testID: 'draft-conflict-notice' }),
@@ -317,9 +326,11 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
 await loadSyncSingletonForTests();
 const Screen = (await import('@/app/(app)/new')).default;
 const { storage } = await import('@/sync/domains/state/storage');
+const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
 const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 
 beforeEach(() => {
+    actionOperationStore.reset();
     setMockServerId('s1');
     storage.getState().activateProfileScope({ serverId: 's1', accountId: 'account-1' });
     publishAppliedActiveServerSnapshot({ serverId: 's1', serverUrl: 'https://api.happier.dev', generation: 1 });
@@ -328,6 +339,7 @@ beforeEach(() => {
 
 afterEach(async () => {
     await standardCleanup();
+    actionOperationStore.reset();
     publishAppliedActiveServerRuntimeAvailability(false);
     storage.getState().clearProfileScope();
     mockState.persistedDraft = null;
@@ -470,6 +482,73 @@ describe('/new (blocking guidance)', () => {
                 draftOrigin: 'ordinary',
             },
         });
+    });
+
+    it('ignores unrelated Action operation updates while retaining exact launch custody', async () => {
+        const draftId = mockState.localSearchParams.draftId!;
+        mockState.shouldBlockNewSession = false;
+        mockState.persistedDraft = {
+            address: { kind: 'newSession', draftId },
+            document: {
+                v: 1,
+                composer: {
+                    text: { mutationId: 'text-1', value: '' },
+                    mentions: { mutationId: 'mentions-1', value: [] },
+                    attachments: { mutationId: 'attachments-1', value: [] },
+                },
+                target: { kind: 'newSession', authoring: {} },
+                extensions: {},
+            },
+            status: 'clean',
+            conflict: null,
+            createdAt: 1,
+            updatedAt: 2,
+            materialized: true,
+            deleteWhenEmpty: false,
+            localSupplement: { launchUserAttemptId: 'draft-launch' },
+        };
+
+        const screen = await renderScreen(React.createElement(Screen));
+        const rendersBeforeActionUpdates = mockState.wizardRenders;
+        expect(screen.findByProps({ testID: 'new-session-draft-delete' }).props.disabled).toBe(false);
+
+        React.act(() => actionOperationStore.mergeSnapshots({
+            serverId: 's1',
+            snapshots: [{
+                version: 1,
+                operationId: 'unrelated-operation',
+                revision: 1,
+                requestId: 'unrelated-request',
+                actionId: 'projects.list',
+                state: 'succeeded',
+                scope: { accountId: 'account-1', machineId: 'machine-1' },
+                title: 'List projects',
+                createdAt: 10,
+                settledAt: 11,
+                cancellation: 'unsupported',
+            }],
+        }));
+
+        expect(mockState.wizardRenders).toBe(rendersBeforeActionUpdates);
+
+        React.act(() => actionOperationStore.mergeSnapshots({
+            serverId: 's1',
+            snapshots: [{
+                version: 1,
+                operationId: 'matching-launch',
+                revision: 1,
+                requestId: 'draft-launch',
+                actionId: 'session.spawn_new',
+                state: 'accepted',
+                scope: { accountId: 'account-1', machineId: 'machine-1' },
+                title: 'Create session',
+                createdAt: 20,
+                cancellation: 'unsupported',
+            }],
+        }));
+
+        expect(mockState.wizardRenders).toBeGreaterThan(rendersBeforeActionUpdates);
+        expect(screen.findByProps({ testID: 'new-session-draft-delete' }).props.disabled).toBe(true);
     });
 
     it('reopens and deletes a waiting draft through its route-qualified inactive Home Account', async () => {
