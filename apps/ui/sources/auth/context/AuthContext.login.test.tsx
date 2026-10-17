@@ -70,7 +70,7 @@ describe('AuthContext.login', () => {
         vi.unstubAllGlobals();
     });
 
-    it('resolves without waiting for syncSwitchServer to finish', async () => {
+    it('resolves with the authenticated encryption context ready while initial network sync is pending', async () => {
         // Make sync's initial HTTP work hang so `syncSwitchServer` cannot complete until timers advance.
         vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
 
@@ -91,9 +91,33 @@ describe('AuthContext.login', () => {
             if (!auth) throw new Error('Expected current auth to be set');
 
             await act(async () => {
-                await auth.login(buildTokenWithSub('server-test'), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+                const login = auth.loginWithCredentials({ token: buildTokenWithSub('server-test') });
+                await vi.advanceTimersByTimeAsync(3000);
+                await login;
             });
-            await vi.advanceTimersByTimeAsync(1);
+            const { sync } = await import('@/sync/sync');
+            expect(sync.encryption).toBeDefined();
+            expect(sync.encryption.hasEncryptionMaterial()).toBe(false);
+        } finally {
+            await screen.unmount();
+        }
+    });
+
+    it('reports encryption initialization failures to the sign-in caller', async () => {
+        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
+        const screen = await renderScreen(React.createElement(AuthProvider, {
+            initialCredentials: null,
+            children: React.createElement(React.Fragment, null),
+        }));
+        try {
+            const auth = getCurrentAuth();
+            if (!auth) throw new Error('Expected current auth to be set');
+            await act(async () => {
+                await expect(auth.loginWithCredentials({
+                    token: buildTokenWithSub('server-test'),
+                    encryption: { publicKey: 'a', machineKey: 'b' },
+                })).rejects.toThrow('Invalid dataKey credential key lengths');
+            });
         } finally {
             await screen.unmount();
         }

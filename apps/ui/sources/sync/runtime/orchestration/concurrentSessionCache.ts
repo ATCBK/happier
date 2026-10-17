@@ -1,4 +1,5 @@
-import { TokenStorage, type AuthCredentials, isLegacyAuthCredentials } from '@/auth/storage/tokenStorage';
+import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { Encryption } from '@/sync/encryption/encryption';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { fetchAndApplyMachines, type MachineDataKeyCacheEntry } from '@/sync/engine/machines/syncMachines';
@@ -82,18 +83,9 @@ function readRefreshIntervalMs(): number {
 const managedServers = new Map<string, ManagedConcurrentServer>();
 
 function areAuthCredentialsEquivalent(a: AuthCredentials, b: AuthCredentials): boolean {
-    if (a.token !== b.token) return false;
-    const aLegacy = isLegacyAuthCredentials(a);
-    const bLegacy = isLegacyAuthCredentials(b);
-    if (aLegacy && bLegacy) return a.secret === b.secret;
-    if (!aLegacy && !bLegacy) {
-        return (
-            a.encryption.publicKey === b.encryption.publicKey
-            && a.encryption.machineKey === b.encryption.machineKey
-        );
-    }
-    return false;
+    return resolveAuthCredentialsScopeKey(a) === resolveAuthCredentialsScopeKey(b);
 }
+
 let started = false;
 let storageUnsubscribe: (() => void) | null = null;
 let activeServerUnsubscribe: (() => void) | null = null;

@@ -37,7 +37,6 @@ import {
   resolveServerProfileScopeIdForIdentifier,
 } from '../domains/server/serverProfiles';
 import {
-  resolveLatestUnreadAffectingCommittedMessageSeq,
   resolveSessionReadableSeq,
 } from '../domains/session/readCursor/resolveSessionReadableSeq';
 import { resolveSessionWorkspacePath } from '../domains/session/resolveSessionWorkspacePath';
@@ -92,7 +91,7 @@ import {
   compareTranscriptMessagesOldestFirst,
   normalizeTranscriptSeq,
 } from '../domains/messages/transcriptOrdering';
-import { readStoredSessionMessagesFromStateLike } from '../domains/messages/readStoredSessionMessages';
+import { readStoredSessionMessagesReadProjectionFromStateLike } from '../domains/messages/readStoredSessionMessages';
 import { registerSessionTranscriptDerivedCacheClear } from '../runtime/sessionTranscriptDerivedCaches';
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
 import type { AgentEvent } from '../typesRaw';
@@ -997,9 +996,7 @@ export function useSessionVisibleReadSeq(
 function resolveLatestUnreadAffectingCommittedMessageSeqForHooks(
   sessionMessages: StorageState['sessionMessages'][string],
 ): number | null {
-  return resolveLatestUnreadAffectingCommittedMessageSeq(
-    readStoredSessionMessagesFromStateLike(sessionMessages),
-  );
+  return readStoredSessionMessagesReadProjectionFromStateLike(sessionMessages).latestUnreadAffectingMessageSeq;
 }
 
 function resolveLatestUnreadAffectingCommittedMessageSeqForHooksCached(

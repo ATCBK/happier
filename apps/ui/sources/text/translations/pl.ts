@@ -4802,6 +4802,8 @@ export const pl: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "Nie można odszyfrować danych tego komputera. Zaloguj się przy użyciu pasującego klucza konta i spróbuj ponownie.",
+    machineRpcContextUnavailable: "Połączenie z tym komputerem jest niedostępne. Odśwież komputery i spróbuj ponownie.",
     networkError: "Wystąpił błąd sieci",
     serverError: "Wystąpił błąd serwera",
     unknownError: "Wystąpił nieznany błąd",

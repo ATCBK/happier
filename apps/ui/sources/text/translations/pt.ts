@@ -4895,6 +4895,8 @@ export const pt: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "Não foi possível descriptografar os dados desta máquina. Entre com a chave de conta correspondente e tente novamente.",
+    machineRpcContextUnavailable: "A conexão com esta máquina está indisponível. Atualize suas máquinas e tente novamente.",
     networkError: "Ocorreu um erro de rede",
     serverError: "Ocorreu um erro do servidor",
     unknownError: "Ocorreu um erro desconhecido",

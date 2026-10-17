@@ -4,9 +4,9 @@ import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/sess
 import { randomUUID } from 'node:crypto';
 import { open as openFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { clonePlainObjectToNullProto, cloneStringKeyedRecordToNullProto } from '@/api/session/agentStateRecords';
+import { cloneStringKeyedRecordToNullProto } from '@/api/session/agentStateRecords';
 import { resolveAgentRequestKind } from '@/agent/permissions/requestKind';
-import { AgentStateRequestStore, hasPermissionResponseClaimV1 } from '@/agent/permissions/agentStateRequestStore';
+import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import { createPermissionRequestCoordinator } from '@/agent/permissions/permissionRequestCoordinator';
 import type { PermissionRequestCoordinatorStore } from '@/agent/permissions/permissionRequestCoordinator';
 
@@ -1070,34 +1070,10 @@ export class ClaudeLocalPermissionBridge {
     }
 
     private cancelLocalOutstandingRequests(reason: string): void {
-        updateAgentStateBestEffort(
-            this.session.client,
-            (currentState) => {
-                const requests = cloneStringKeyedRecordToNullProto(currentState.requests);
-                const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
-                const now = Date.now();
-
-                for (const [id, request] of Object.entries(requests)) {
-                    if (!isClaudeLocalPermissionBridgeAgentStateRequest(request)) continue;
-                    if (hasPermissionResponseClaimV1(request)) continue;
-                    delete requests[id];
-                    const completedEntry = clonePlainObjectToNullProto(request) ?? Object.create(null);
-                    completedEntry.completedAt = now;
-                    completedEntry.status = 'canceled';
-                    completedEntry.reason = reason;
-                    completedRequests[id] = completedEntry;
-                    this.requestStore.markPermissionRequestCompletedBestEffort(id);
-                }
-
-                return {
-                    ...currentState,
-                    requests,
-                    completedRequests,
-                };
-            },
-            '[claude-local-permissions]',
-            'cancel_local_requests',
-        );
+        this.requestStore.cancelAllRequests({
+            reason,
+            shouldCancel: isClaudeLocalPermissionBridgeAgentStateRequest,
+        });
     }
 
     private resolvePermissionSuggestions(data: ClaudeToolHookData): unknown[] | null {

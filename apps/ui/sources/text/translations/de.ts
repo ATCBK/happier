@@ -4445,6 +4445,8 @@ export const de: TranslationStructure = {
     },
 
     errors: {
+        machineRpcDecryptionFailed: "Die Daten dieses Rechners können nicht entschlüsselt werden. Melde dich mit dem passenden Kontoschlüssel an und versuche es erneut.",
+        machineRpcContextUnavailable: "Die Verbindung zu diesem Rechner ist nicht verfügbar. Aktualisiere deine Rechner und versuche es erneut.",
         networkError: 'Netzwerkfehler aufgetreten',
         serverError: 'Serverfehler aufgetreten',
         unknownError: 'Ein unbekannter Fehler ist aufgetreten',

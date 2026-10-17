@@ -73,6 +73,7 @@ This document records the server implementation behind deployment. Operator reci
     - `VOICE_LEASE_CLEANUP` (`true`/`false`, default `false`)
     - `VOICE_LEASE_RETENTION_DAYS` (default `30`, clamp 7–365)
     - `VOICE_LEASE_CLEANUP_INTERVAL_MS` (default `21600000` = 6h, min `10000`)
+- Logging format (development source): `HAPPIER_SERVER_LOG_FORMAT=json` opts Node into structured stdout; unset or invalid values retain pretty output. See the published self-hosting environment reference for logging settings.
 - Debug logging: `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING` (enables file logging + dev log endpoint).
 
 ## Docker image

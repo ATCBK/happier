@@ -33,7 +33,6 @@ import {
 import { applyAllowedToolsToAllowlist, applyUpdatedPermissionsToAllowlist, seedAllowlistFromCompletedRequests } from '@/agent/permissions/applyPermissionAllowlistUpdates';
 import {
     AgentStateRequestStore,
-    hasPermissionResponseClaimV1,
     type AgentStateOutstandingRequest,
 } from '@/agent/permissions/agentStateRequestStore';
 import {
@@ -404,35 +403,11 @@ export class PermissionHandler {
     }
 
     private cancelRemoteOutstandingRequests(reason: string): void {
-        updateAgentStateBestEffort(
-            this.session.client,
-            (currentState) => {
-                const requests = cloneStringKeyedRecordToNullProto(currentState.requests);
-                const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
-                const now = Date.now();
-
-                for (const [id, request] of Object.entries(requests)) {
-                    if (isRequestOwnedOutsideRemotePermissionHandler(request)) continue;
-                    if (hasPermissionResponseClaimV1(request)) continue;
-                    delete requests[id];
-                    const completedEntry = { ...(request && typeof request === 'object' ? request : {}) } as Record<string, unknown>;
-                    completedEntry.completedAt = now;
-                    completedEntry.status = 'canceled';
-                    completedEntry.reason = reason;
-                    completedEntry.decision = 'abort';
-                    completedRequests[id] = completedEntry as never;
-                    this.agentStateRequestStore.markPermissionRequestCompletedBestEffort(id);
-                }
-
-                return {
-                    ...currentState,
-                    requests,
-                    completedRequests,
-                };
-            },
-            '[Claude]',
-            'cancel_remote_permission_requests',
-        );
+        this.agentStateRequestStore.cancelAllRequests({
+            reason,
+            decision: 'abort',
+            shouldCancel: (request) => !isRequestOwnedOutsideRemotePermissionHandler(request),
+        });
     }
 
     private applyPermissionResponseSideEffects(params: {

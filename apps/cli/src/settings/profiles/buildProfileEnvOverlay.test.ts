@@ -19,7 +19,7 @@ function makeCredentials(): Credentials {
 function assertLegacyCredentials(credentials: Credentials): asserts credentials is Credentials & {
   encryption: { type: 'legacy'; secret: Uint8Array };
 } {
-  if (credentials.encryption.type !== 'legacy') {
+  if (credentials.encryption?.type !== 'legacy') {
     throw new Error('expected legacy credentials');
   }
 }

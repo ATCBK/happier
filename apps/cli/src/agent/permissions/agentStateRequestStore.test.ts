@@ -130,6 +130,24 @@ describe('AgentStateRequestStore', () => {
         );
     });
 
+    it('cancels only the selected source through the shared terminal write', async () => {
+        const session = new FakeSession();
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+        store.publishRequest({ requestId: 'local', toolName: 'Write', toolInput: {}, createdAt: 1, source: 'local' });
+        store.publishRequest({ requestId: 'remote', toolName: 'Bash', toolInput: {}, createdAt: 2, source: 'remote' });
+        const cancel: Parameters<typeof store.cancelAllRequests>[0] & {
+            shouldCancel: (request: NonNullable<AgentState['requests']>[string]) => boolean;
+        } = {
+            reason: 'Bridge stopped',
+            shouldCancel: (request) => (request as { source?: string }).source === 'local',
+        };
+        store.cancelAllRequests(cancel);
+        await Promise.resolve();
+        expect(Object.keys(session.agentState.requests ?? {})).toEqual(['remote']);
+        expect(session.agentState.completedRequests?.local).toMatchObject({ status: 'canceled', reason: 'Bridge stopped' });
+        expect(session.agentState.completedRequests?.remote).toBeUndefined();
+    });
+
     it('preserves an opaque claim through republish and leaves it outstanding across terminal and cancellation paths', async () => {
         const session = new FakeSession();
         const store = new AgentStateRequestStore({

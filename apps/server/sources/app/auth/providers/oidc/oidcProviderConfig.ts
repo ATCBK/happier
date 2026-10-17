@@ -73,6 +73,32 @@ function expectString(value: unknown, field: string, errors: string[]): string |
     return value;
 }
 
+/**
+ * A literal `clientSecret` wins. Otherwise `clientSecretEnv` names the environment variable that holds the
+ * secret, so provider config can live in non-secret deployment values while the secret comes from a secret store.
+ * An unset or empty variable is a config error, like a missing literal secret.
+ */
+function resolveClientSecret(
+    record: Record<string, unknown>,
+    env: NodeJS.ProcessEnv,
+    providerId: string,
+    errors: string[],
+): string | null {
+    if (record.clientSecret !== undefined || record.clientSecretEnv === undefined) {
+        return expectString(record.clientSecret, `clientSecret for ${providerId}`, errors);
+    }
+
+    const envName = expectString(record.clientSecretEnv, `clientSecretEnv for ${providerId}`, errors)?.trim();
+    if (!envName) return null;
+
+    const value = env[envName];
+    if (typeof value !== "string" || value.trim() === "") {
+        errors.push(`Invalid clientSecretEnv for ${providerId}: environment variable ${envName} is unset or empty`);
+        return null;
+    }
+    return value;
+}
+
 function parseBoolean(value: unknown, fallback: boolean): boolean {
     if (typeof value === "boolean") return value;
     if (typeof value !== "string") return fallback;
@@ -255,7 +281,7 @@ export function resolveAuthProviderInstancesFromEnv(env: NodeJS.ProcessEnv): Res
         const displayName = expectString(record.displayName, `displayName for ${normalizedId}`, errors);
         const issuer = expectString(record.issuer, `issuer for ${normalizedId}`, errors);
         const clientId = expectString(record.clientId, `clientId for ${normalizedId}`, errors);
-        const clientSecret = expectString(record.clientSecret, `clientSecret for ${normalizedId}`, errors);
+        const clientSecret = resolveClientSecret(record, env, normalizedId, errors);
         const redirectUrl = expectString(record.redirectUrl, `redirectUrl for ${normalizedId}`, errors);
 
         if (!displayName || !issuer || !clientId || !clientSecret || !redirectUrl) continue;

@@ -4,6 +4,7 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { resetScopedMachineDataKeyCacheForTests } from './serverScopedRpcPool';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { createServerFetchWithReachabilityProbe } from '@/dev/testkit';
+import { encodeBase64 } from '@/encryption/base64';
 
 const machineRpcSpy = vi.hoisted(() => vi.fn());
 const createEphemeralSocketSpy = vi.hoisted(() => vi.fn());
@@ -62,7 +63,7 @@ function findTelemetryEvent(name: string) {
 }
 
 function installRealActiveMachineRpc(params: Readonly<{
-    machineEncryption: { encryptRaw: (payload: unknown) => Promise<unknown>; decryptRaw: (payload: unknown) => Promise<unknown> } | null;
+    machineEncryption: { encodeRpcPayload: (payload: unknown) => Promise<unknown>; decodeRpcResult: (payload: unknown) => Promise<unknown> } | null;
     socket: unknown;
 }>): void {
     activeApiSocketHarness.useReal = true;
@@ -74,13 +75,13 @@ function installRealActiveMachineRpc(params: Readonly<{
 }
 
 function installScopedFallback(): Readonly<{
-    machineEncryption: { encryptRaw: ReturnType<typeof vi.fn>; decryptRaw: ReturnType<typeof vi.fn> };
+    machineEncryption: { encodeRpcPayload: ReturnType<typeof vi.fn>; decodeRpcResult: ReturnType<typeof vi.fn> };
     emitWithAck: ReturnType<typeof vi.fn>;
 }> {
     getCredentialsSpy.mockResolvedValue({ token: 'token-a', secret: 'secret-a' });
     const machineEncryption = {
-        encryptRaw: vi.fn(async () => 'scoped-encrypted-payload'),
-        decryptRaw: vi.fn(async () => ({ decoded: 'scoped' })),
+        encodeRpcPayload: vi.fn(async () => 'scoped-encrypted-payload'),
+        decodeRpcResult: vi.fn(async () => ({ decoded: 'scoped' })),
     };
     createEncryptionSpy.mockResolvedValue({
         decryptEncryptionKey: vi.fn(async () => null),
@@ -91,7 +92,7 @@ function installScopedFallback(): Readonly<{
         ok: true,
         json: async () => [{ id: 'machine-1', dataEncryptionKey: null }],
     }))));
-    const emitWithAck = vi.fn(async () => ({ ok: true, result: 'scoped-encrypted-result' }));
+    const emitWithAck = vi.fn(async (_event: string, _payload: unknown) => ({ ok: true, result: 'scoped-encrypted-result' }));
     createEphemeralSocketSpy.mockResolvedValueOnce({
         timeout: vi.fn(() => ({ emitWithAck })),
         emit: vi.fn(),
@@ -101,6 +102,18 @@ function installScopedFallback(): Readonly<{
 }
 
 describe('machineRpcWithServerScope', () => {
+    it('uses raw JSON for active plain Machine RPC through the real keyless encryption owner', async () => {
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        const encryption = Encryption.createWithoutKeyMaterial();
+        await encryption.initializeMachines(new Map([['machine-1', null]]), { plainMachineIds: new Set(['machine-1']) });
+        const emitWithAck = vi.fn(async (_event: string, _payload: unknown) => ({ ok: true, result: null }));
+        installRealActiveMachineRpc({ machineEncryption: encryption.getMachineEncryption('machine-1'), socket: { emitWithAck, timeout: () => ({ emitWithAck }) } });
+        getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
+        const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
+        await expect(machineRpcWithServerScope({ machineId: 'machine-1', method: 'method-test', payload: { path: '/repo' } })).resolves.toBeNull();
+        expect(emitWithAck.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ params: { path: '/repo' } }));
+    });
+
     afterEach(() => {
         machineRpcSpy.mockReset();
         createEphemeralSocketSpy.mockReset();
@@ -118,6 +131,30 @@ describe('machineRpcWithServerScope', () => {
             activeApiSocketHarness.real.socket = null;
             activeApiSocketHarness.real.encryption = null;
         }
+    });
+
+    it.each(['plain', 'e2ee'] as const)('checks %s account mode before using a scoped machine plain marker', async (accountMode) => {
+        const { emitWithAck } = installScopedFallback();
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        createEncryptionSpy.mockResolvedValue(Encryption.createWithoutKeyMaterial());
+        const typedContent = (value: unknown) => encodeBase64(new TextEncoder().encode(JSON.stringify({ t: 'plain', v: value })), 'base64');
+        vi.stubGlobal('fetch', vi.fn(createServerFetchWithReachabilityProbe(async (input) => ({
+            ok: true, json: async () => String(input).includes('/v1/account/encryption') ? { mode: accountMode, updatedAt: 1 } : [{ id: 'machine-1', dataEncryptionKey: typedContent(null) }],
+        }))));
+        emitWithAck.mockResolvedValue({ ok: true, result: { accepted: true } });
+        getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
+        listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test' }]);
+        const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
+        const result = machineRpcWithServerScope({ machineId: 'machine-1', method: 'method-test', payload: { path: '/repo' }, serverId: 'server-b' });
+        if (accountMode === 'e2ee') {
+            await expect(result).rejects.toMatchObject({ rpcErrorCode: 'machine_rpc_context_unavailable' });
+            expect(emitWithAck).not.toHaveBeenCalled();
+            return;
+        }
+        await expect(result)
+            .resolves.toEqual({ accepted: true });
+        const request = emitWithAck.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CALL)?.[1] as { params: unknown };
+        expect(request.params).toEqual({ path: '/repo' });
     });
 
     it('delegates to apiSocket.machineRPC when target server is omitted', async () => {
@@ -158,6 +195,56 @@ describe('machineRpcWithServerScope', () => {
         }));
         expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
         expect(onIssued).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects encrypted RPC responses that cannot be decrypted instead of returning a success-shaped null', async () => {
+        const { emitWithAck } = installScopedFallback();
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        const encryption = await Encryption.create(new Uint8Array(32).fill(1));
+        createEncryptionSpy.mockResolvedValue(encryption);
+        emitWithAck.mockResolvedValue({ ok: true, result: 'undecryptable-response' });
+        getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
+        listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test' }]);
+        const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
+        await expect(machineRpcWithServerScope({ machineId: 'machine-1', method: 'method-test', payload: {}, serverId: 'server-b' }))
+            .rejects.toMatchObject({ rpcErrorCode: 'machine_rpc_decryption_failed' });
+        installRealActiveMachineRpc({
+            machineEncryption: encryption.getMachineEncryption('machine-1'),
+            socket: { emitWithAck, timeout: () => ({ emitWithAck }) },
+        });
+        await expect(activeApiSocketHarness.real.machineRPC('machine-1', 'method-test', {}))
+            .rejects.toMatchObject({ rpcErrorCode: 'machine_rpc_decryption_failed' });
+        emitWithAck.mockClear();
+        installRealActiveMachineRpc({ machineEncryption: null, socket: { emitWithAck, timeout: () => ({ emitWithAck }) } });
+        await expect(activeApiSocketHarness.real.machineRPC('machine-1', 'method-test', {}))
+            .rejects.toMatchObject({ rpcErrorCode: 'machine_rpc_context_unavailable' });
+        expect(emitWithAck).not.toHaveBeenCalled();
+    });
+
+    it('preserves a target crypto failure through handoff preflight before source mutation', async () => {
+        const { emitWithAck } = installScopedFallback();
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        createEncryptionSpy.mockResolvedValue(await Encryption.create(new Uint8Array(32).fill(1)));
+        emitWithAck.mockResolvedValue({ ok: true, result: 'undecryptable-response' });
+        getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
+        listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test' }]);
+        const features = createRootLayoutFeaturesResponse({ features: {
+            sessions: { enabled: true, handoff: { enabled: true } },
+            machines: { enabled: true, transfer: { enabled: true, directPeer: { enabled: true }, serverRouted: { enabled: true } } },
+        } });
+        vi.stubGlobal('fetch', vi.fn(createServerFetchWithReachabilityProbe(async (input) => Response.json(
+            String(input).includes('/v1/features') ? features : [{ id: 'machine-1', dataEncryptionKey: null }],
+        ))));
+        const { completeSessionHandoff } = await import('@/sync/ops/sessionHandoffs');
+        const metadata = createSessionFixture().metadata;
+        if (!metadata) throw new Error('Expected session fixture metadata');
+        const result = await completeSessionHandoff({ sessionId: 'handoff-session', sourceMachineId: 'machine-source', targetMachineId: 'machine-1',
+            serverId: 'server-b', sessionStorageMode: 'direct', preferredTransportStrategies: ['direct_peer'], sourceMetadata: metadata });
+        expect(result).toMatchObject({ ok: false, errorCode: 'machine_rpc_decryption_failed' });
+        expect(emitWithAck.mock.calls.map((call) => (call[1] as { method: string }).method))
+            .toEqual(['machine-1:daemon.sessionHandoff.capability.v2.get']);
     });
 
     it('preserves authorization on active direct machine RPC calls', async () => {
@@ -201,7 +288,7 @@ describe('machineRpcWithServerScope', () => {
         });
         const scoped = installScopedFallback();
         const onIssued = vi.fn(() => {
-            expect(scoped.machineEncryption.encryptRaw).toHaveBeenCalledTimes(1);
+            expect(scoped.machineEncryption.encodeRpcPayload).toHaveBeenCalledTimes(1);
             expect(activeEmitWithAck).not.toHaveBeenCalled();
         });
 
@@ -225,14 +312,14 @@ describe('machineRpcWithServerScope', () => {
             generation: 1,
         });
         const activeEncryption = {
-            encryptRaw: vi.fn(async () => 'active-encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: 'active' })),
+            encodeRpcPayload: vi.fn(async () => 'active-encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: 'active' })),
         };
         installRealActiveMachineRpc({ machineEncryption: activeEncryption, socket: null });
         const scoped = installScopedFallback();
         const onIssued = vi.fn(() => {
-            expect(activeEncryption.encryptRaw).toHaveBeenCalledTimes(1);
-            expect(scoped.machineEncryption.encryptRaw).toHaveBeenCalledTimes(1);
+            expect(activeEncryption.encodeRpcPayload).toHaveBeenCalledTimes(1);
+            expect(scoped.machineEncryption.encodeRpcPayload).toHaveBeenCalledTimes(1);
         });
 
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
@@ -255,8 +342,8 @@ describe('machineRpcWithServerScope', () => {
             generation: 1,
         });
         const activeEncryption = {
-            encryptRaw: vi.fn(async () => 'active-encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: 'active' })),
+            encodeRpcPayload: vi.fn(async () => 'active-encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: 'active' })),
         };
         const activeEmitWithAck = vi.fn(async () => ({ ok: true, result: 'active-encrypted-result' }));
         const timeout = vi.fn(() => ({ emitWithAck: activeEmitWithAck }));
@@ -265,7 +352,7 @@ describe('machineRpcWithServerScope', () => {
             socket: { timeout, emitWithAck: activeEmitWithAck },
         });
         const onIssued = vi.fn(() => {
-            expect(activeEncryption.encryptRaw).toHaveBeenCalledTimes(1);
+            expect(activeEncryption.encodeRpcPayload).toHaveBeenCalledTimes(1);
             expect(timeout).toHaveBeenCalledWith(5_000);
             expect(activeEmitWithAck).not.toHaveBeenCalled();
         });
@@ -293,8 +380,8 @@ describe('machineRpcWithServerScope', () => {
             generation: 1,
         });
         const activeEncryption = {
-            encryptRaw: vi.fn(async () => 'active-encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: 'active' })),
+            encodeRpcPayload: vi.fn(async () => 'active-encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: 'active' })),
         };
         const activeEmitWithAck = vi.fn(() => new Promise<unknown>(() => {}));
         installRealActiveMachineRpc({
@@ -332,10 +419,10 @@ describe('machineRpcWithServerScope', () => {
         });
         let resolveActiveEncryption!: (value: string) => void;
         const activeEncryption = {
-            encryptRaw: vi.fn(() => new Promise<string>((resolve) => {
+            encodeRpcPayload: vi.fn(() => new Promise<string>((resolve) => {
                 resolveActiveEncryption = resolve;
             })),
-            decryptRaw: vi.fn(async () => ({ decoded: 'active' })),
+            decodeRpcResult: vi.fn(async () => ({ decoded: 'active' })),
         };
         const activeEmitWithAck = vi.fn(async () => ({ ok: true, result: 'active-encrypted-result' }));
         installRealActiveMachineRpc({
@@ -375,8 +462,8 @@ describe('machineRpcWithServerScope', () => {
             generation: 1,
         });
         const activeEncryption = {
-            encryptRaw: vi.fn(async () => 'active-encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: 'active' })),
+            encodeRpcPayload: vi.fn(async () => 'active-encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: 'active' })),
         };
         const activeEmitWithAck = vi.fn(() => new Promise<unknown>(() => {}));
         installRealActiveMachineRpc({
@@ -420,8 +507,8 @@ describe('machineRpcWithServerScope', () => {
         getCredentialsSpy.mockResolvedValue({ token: 'token-b', secret: 'secret-b' });
 
         const machineEncryption = {
-            encryptRaw: vi.fn(async () => 'encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: true })),
+            encodeRpcPayload: vi.fn(async () => 'encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: true })),
         };
         createEncryptionSpy.mockResolvedValue({
             decryptEncryptionKey: vi.fn(async () => null),
@@ -442,7 +529,7 @@ describe('machineRpcWithServerScope', () => {
         };
         createEphemeralSocketSpy.mockResolvedValueOnce(fakeSocket);
         const onIssued = vi.fn(() => {
-            expect(machineEncryption.encryptRaw).toHaveBeenCalledWith({ value: 2 });
+            expect(machineEncryption.encodeRpcPayload).toHaveBeenCalledWith({ value: 2 });
             expect(createEphemeralSocketSpy).toHaveBeenCalledTimes(1);
             expect(fakeSocket.timeout).toHaveBeenCalledWith(5000);
             expect(emitWithAck).not.toHaveBeenCalled();
@@ -466,8 +553,8 @@ describe('machineRpcWithServerScope', () => {
             token: 'token-b',
             timeoutMs: 5000,
         }));
-        expect(machineEncryption.encryptRaw).toHaveBeenCalledWith({ value: 2 });
-        expect(machineEncryption.decryptRaw).toHaveBeenCalledWith('encrypted-result');
+        expect(machineEncryption.encodeRpcPayload).toHaveBeenCalledWith({ value: 2 });
+        expect(machineEncryption.decodeRpcResult).toHaveBeenCalledWith('encrypted-result');
         expect(findTelemetryEvent('sync.encryption.machine.encryptRaw.scopedRpc.other')).toMatchObject({
             count: 1,
             fields: { items: 1 },
@@ -500,8 +587,8 @@ describe('machineRpcWithServerScope', () => {
         getCredentialsSpy.mockResolvedValue({ token: 'token-b', secret: 'secret-b' });
 
         const machineEncryption = {
-            encryptRaw: vi.fn(async () => 'encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: true })),
+            encodeRpcPayload: vi.fn(async () => 'encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: true })),
         };
         createEncryptionSpy.mockResolvedValue({
             decryptEncryptionKey: vi.fn(async () => null),
@@ -554,22 +641,19 @@ describe('machineRpcWithServerScope', () => {
         ]);
         getCredentialsSpy.mockResolvedValue({ token: 'token-b', secret: 'secret-b' });
 
-        const machineEncryption = {
-            encryptRaw: vi.fn(async () => 'encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: true })),
-        };
-        createEncryptionSpy.mockResolvedValue({
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(() => machineEncryption),
-        });
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        const encryption = await Encryption.create(new Uint8Array(32).fill(3));
+        await encryption.initializeMachines(new Map([['machine-1', null]]));
+        const machineEncryption = encryption.getMachineEncryption('machine-1')!;
+        const encryptedResult = await machineEncryption.encryptRaw({ decoded: true });
+        createEncryptionSpy.mockResolvedValue(encryption);
 
         vi.stubGlobal('fetch', vi.fn(createServerFetchWithReachabilityProbe(async () => ({
             ok: true,
             json: async () => [{ id: 'machine-1', dataEncryptionKey: null }],
         }))));
 
-        const emitWithAck = vi.fn(async () => ({ ok: true, result: ['encrypted-result'] }));
+        const emitWithAck = vi.fn(async () => ({ ok: true, result: [encryptedResult] }));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
             emit: vi.fn(),
@@ -586,7 +670,6 @@ describe('machineRpcWithServerScope', () => {
         });
 
         expect(result).toEqual({ decoded: true });
-        expect(machineEncryption.decryptRaw).toHaveBeenCalledWith('encrypted-result');
     });
 
     it('falls back to a scoped socket on the active server when active machine encryption is unavailable', async () => {
@@ -600,8 +683,8 @@ describe('machineRpcWithServerScope', () => {
         getCredentialsSpy.mockResolvedValue({ token: 'token-a', secret: 'secret-a' });
 
         const machineEncryption = {
-            encryptRaw: vi.fn(async () => 'encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: true })),
+            encodeRpcPayload: vi.fn(async () => 'encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: true })),
         };
         createEncryptionSpy.mockResolvedValue({
             decryptEncryptionKey: vi.fn(async () => null),
@@ -636,8 +719,8 @@ describe('machineRpcWithServerScope', () => {
             token: 'token-a',
             timeoutMs: 30000,
         }));
-        expect(machineEncryption.encryptRaw).toHaveBeenCalledWith({ value: 3 });
-        expect(machineEncryption.decryptRaw).toHaveBeenCalledWith('encrypted-result');
+        expect(machineEncryption.encodeRpcPayload).toHaveBeenCalledWith({ value: 3 });
+        expect(machineEncryption.decodeRpcResult).toHaveBeenCalledWith('encrypted-result');
         expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
     });
 
@@ -661,8 +744,8 @@ describe('machineRpcWithServerScope', () => {
         getCredentialsSpy.mockResolvedValue({ token: 'token-a', secret: 'secret-a' });
 
         const machineEncryption = {
-            encryptRaw: vi.fn(async () => 'encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: true })),
+            encodeRpcPayload: vi.fn(async () => 'encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: true })),
         };
         createEncryptionSpy.mockResolvedValue({
             decryptEncryptionKey: vi.fn(async () => null),
@@ -704,8 +787,8 @@ describe('machineRpcWithServerScope', () => {
             token: 'token-a',
             timeoutMs: 30000,
         }));
-        expect(machineEncryption.encryptRaw).toHaveBeenCalledWith({ directory: '/tmp/repo' });
-        expect(machineEncryption.decryptRaw).toHaveBeenCalledWith('encrypted-result');
+        expect(machineEncryption.encodeRpcPayload).toHaveBeenCalledWith({ directory: '/tmp/repo' });
+        expect(machineEncryption.decodeRpcResult).toHaveBeenCalledWith('encrypted-result');
         expect(emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CALL, {
             method: 'machine-1:spawn-happy-session',
             params: 'encrypted-payload',
@@ -731,8 +814,8 @@ describe('machineRpcWithServerScope', () => {
         getCredentialsSpy.mockResolvedValue({ token: 'token-a', secret: 'secret-a' });
 
         const machineEncryption = {
-            encryptRaw: vi.fn(async () => 'encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: true })),
+            encodeRpcPayload: vi.fn(async () => 'encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: true })),
         };
         createEncryptionSpy.mockResolvedValue({
             decryptEncryptionKey: vi.fn(async () => null),
@@ -770,8 +853,8 @@ describe('machineRpcWithServerScope', () => {
             token: 'token-a',
             timeoutMs: 1_000,
         }));
-        expect(machineEncryption.encryptRaw).toHaveBeenCalledWith({ handoffId: 'handoff_1' });
-        expect(machineEncryption.decryptRaw).toHaveBeenCalledWith('encrypted-result');
+        expect(machineEncryption.encodeRpcPayload).toHaveBeenCalledWith({ handoffId: 'handoff_1' });
+        expect(machineEncryption.decodeRpcResult).toHaveBeenCalledWith('encrypted-result');
         expect(emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CALL, {
             method: 'machine-1:daemon.sessionHandoff.prepareTarget',
             params: 'encrypted-payload',
@@ -791,8 +874,8 @@ describe('machineRpcWithServerScope', () => {
         getCredentialsSpy.mockResolvedValue({ token: 'token-a', secret: 'secret-a' });
 
         const machineEncryption = {
-            encryptRaw: vi.fn(async () => 'encrypted-payload'),
-            decryptRaw: vi.fn(async () => ({ decoded: true })),
+            encodeRpcPayload: vi.fn(async () => 'encrypted-payload'),
+            decodeRpcResult: vi.fn(async () => ({ decoded: true })),
         };
         createEncryptionSpy.mockResolvedValue({
             decryptEncryptionKey: vi.fn(async () => null),
@@ -829,8 +912,8 @@ describe('machineRpcWithServerScope', () => {
             token: 'token-a',
             timeoutMs: 1_000,
         }));
-        expect(machineEncryption.encryptRaw).toHaveBeenCalledWith({ handoffId: 'handoff_1' });
-        expect(machineEncryption.decryptRaw).toHaveBeenCalledWith('encrypted-result');
+        expect(machineEncryption.encodeRpcPayload).toHaveBeenCalledWith({ handoffId: 'handoff_1' });
+        expect(machineEncryption.decodeRpcResult).toHaveBeenCalledWith('encrypted-result');
         expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
     });
 });

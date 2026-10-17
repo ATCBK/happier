@@ -2,7 +2,7 @@ import { test, expect, type Page, type BrowserContext } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createRunDirs } from '../../src/testkit/runDir';
-import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
@@ -163,6 +163,14 @@ test.describe('ui e2e: plaintext mode + public share', () => {
     await mkdir(testDir, { recursive: true });
 
     const diagnostics = collectBrowserDiagnostics({ page });
+    const daemonEnv = {
+      ...process.env,
+      HAPPIER_SERVER_URL: server.baseUrl,
+      HAPPIER_WEBAPP_URL: uiBaseUrl,
+      HAPPIER_CLAUDE_PATH: fakeClaudeFixturePath(),
+      HAPPIER_VARIANT: 'dev',
+      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
+    };
 
     let daemon: StartedDaemon | null = null;
     let thrown: unknown = null;
@@ -173,9 +181,7 @@ test.describe('ui e2e: plaintext mode + public share', () => {
         cliHomeDir,
         serverUrl: server.baseUrl,
         uiBaseUrl,
-        extraEnv: {
-          HAPPIER_CLAUDE_PATH: fakeClaudeFixturePath(),
-        },
+        extraEnv: daemonEnv,
       });
 
       await page.goto(`${uiBaseUrl}/settings/account`, { waitUntil: 'domcontentloaded' });
@@ -191,6 +197,13 @@ test.describe('ui e2e: plaintext mode + public share', () => {
       const migrateJson = (await migrateResp.json()) as { success?: unknown; mode?: unknown };
       expect(migrateJson?.success).toBe(true);
       expect(migrateJson?.mode).toBe('plain');
+      await mkdir(join(testDir, 'daemon-after-plain'), { recursive: true });
+      await daemon.stop();
+      daemon = await startTestDaemon({
+        testDir: join(testDir, 'daemon-after-plain'),
+        happyHomeDir: cliHomeDir,
+        env: daemonEnv,
+      });
 
       const tag = `ui-e2e-plain-${run.runId}`;
       const message = `hello from plain ${run.runId}`;
