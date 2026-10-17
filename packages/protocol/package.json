@@ -8073,6 +8073,11 @@
       "happier-source": "./src/workflows/actionsV1.ts",
       "types": "./dist/workflows/actionsV1.d.ts",
       "default": "./dist/workflows/actionsV1.js"
+    },
+    "./machines/machineDisplayNames": {
+      "happier-source": "./src/machines/machineDisplayNames.ts",
+      "types": "./dist/machines/machineDisplayNames.d.ts",
+      "default": "./dist/machines/machineDisplayNames.js"
     }
   },
   "files": [

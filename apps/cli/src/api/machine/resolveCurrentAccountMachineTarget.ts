@@ -6,6 +6,7 @@ import { AccessibleMachineAccessV1Schema, type AccessibleMachineAccessV1 } from 
 import { DevcontainerChildProjectionV1Schema, type DevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { isMachineReachableV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 import { StoredMachinePublishedMetadataV1Schema, type MachinePublishedMetadataV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { readMachineName, resolveMachineDisplayNameParts, type MachineNameMetadata } from '@happier-dev/protocol/machines/machineDisplayNames';
 import type { StoredCredentials } from '@/persistence';
 import { resolvePublishedMachineContentCodec } from './machineDataEncryptionKey';
 import { readAccountEncryptionModeOnce } from '@/api/client/accountEncryptionMode';
@@ -50,14 +51,15 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function readMachineLabel(metadata: string | undefined, fallback: string): string {
-  if (!metadata) return fallback;
+function readMachineNameMetadata(metadata: string | undefined): MachineNameMetadata | null {
+  if (!metadata) return null;
   try {
     const value: unknown = JSON.parse(metadata);
-    if (!value || typeof value !== 'object') return fallback;
-    return nonEmptyString((value as Readonly<Record<string, unknown>>).host) ?? fallback;
+    if (!value || typeof value !== 'object') return null;
+    const record = value as Readonly<Record<string, unknown>>;
+    return { displayName: nonEmptyString(record.displayName), host: nonEmptyString(record.host) };
   } catch {
-    return fallback;
+    return null;
   }
 }
 
@@ -102,7 +104,7 @@ export async function listCurrentAccountMachines(params: Readonly<{
       `${serverHttpBaseUrl}/v1/account/encryption`, { headers: { Authorization: `Bearer ${credentials.token}` },
         timeout: 20_000, ...(params.signal ? { signal: params.signal } : {}) },
     ) }).then(mode => mode.kind === 'resolved' ? mode.mode : 'unknown' as const).catch(() => 'unknown' as const);
-    return await Promise.all(inventory.data.map(async (row) => {
+    const namedMachines = await Promise.all(inventory.data.map(async (row) => {
       let metadata: ReturnType<typeof StoredMachinePublishedMetadataV1Schema.parse> | undefined;
       if (params.credentials && row.metadata && (!row.access || row.access.accessState === 'ready')) {
         try {
@@ -120,19 +122,27 @@ export async function listCurrentAccountMachines(params: Readonly<{
         }
       }
       params.signal?.throwIfAborted();
+      const nameMetadata = metadata ?? (params.credentials ? null : readMachineNameMetadata(row.metadata));
       return {
-      id: row.id, label: metadata ? nonEmptyString(metadata.host) ?? row.id
-        : params.credentials ? row.id : readMachineLabel(row.metadata, row.id), kind: row.kind, active: row.active,
-      revokedAt: row.revokedAt, replacedByMachineId: row.replacedByMachineId,
-      ...(row.activeAt === undefined ? {} : { activeAt: row.activeAt }),
-      ...(metadata ? { platform: metadata.platform, ...(metadata.arch === undefined ? {} : { arch: metadata.arch }) } : {}),
-      ...(metadata?.agentInventory ? { agentInventory: metadata.agentInventory } : {}),
-      ...(row.access ? { access: row.access } : {}),
-      ...(row.devcontainerChild ? { devcontainerChild: row.devcontainerChild } : {}),
-      ...(row.operationProtocolCapabilities === undefined ? {} : { operationProtocolCapabilities: row.operationProtocolCapabilities }),
-      ...(row.operationProtocolCapabilitiesRevision === undefined ? {} : { operationProtocolCapabilitiesRevision: row.operationProtocolCapabilitiesRevision }),
+        host: nameMetadata?.host,
+        machine: {
+          id: row.id, label: readMachineName(nameMetadata) ?? row.id, kind: row.kind, active: row.active,
+          revokedAt: row.revokedAt, replacedByMachineId: row.replacedByMachineId,
+          ...(row.activeAt === undefined ? {} : { activeAt: row.activeAt }),
+          ...(metadata ? { platform: metadata.platform, ...(metadata.arch === undefined ? {} : { arch: metadata.arch }) } : {}),
+          ...(metadata?.agentInventory ? { agentInventory: metadata.agentInventory } : {}),
+          ...(row.access ? { access: row.access } : {}),
+          ...(row.devcontainerChild ? { devcontainerChild: row.devcontainerChild } : {}),
+          ...(row.operationProtocolCapabilities === undefined ? {} : { operationProtocolCapabilities: row.operationProtocolCapabilities }),
+          ...(row.operationProtocolCapabilitiesRevision === undefined ? {} : { operationProtocolCapabilitiesRevision: row.operationProtocolCapabilitiesRevision }),
+        },
       };
     }));
+    const names = resolveMachineDisplayNameParts(namedMachines.map(({ host, machine }) => ({ id: machine.id, name: machine.label, host })));
+    return namedMachines.map(({ machine }) => {
+      const name = names.get(machine.id)!;
+      return { ...machine, label: name.hint ? `${name.name} · ${name.hint}` : name.name };
+    });
   } catch (error) {
     params.signal?.throwIfAborted();
     throw Object.assign(new Error('The current machine inventory is unavailable.'), { code: 'machine_inventory_unavailable', cause: error });

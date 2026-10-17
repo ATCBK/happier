@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import type { DetectProviderMcpServersResult } from '@/mcp/providerDetection/detectProviderMcpServers';
+import axios from 'axios';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { createMachineContentCodec } from '@/api/machine/machineStoredContent';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 const {
   fetchSessionById,
@@ -42,6 +47,37 @@ describe('createCliActionInventoryDeps', () => {
     probeAgentModelsBestEffort,
     probeAgentModesBestEffort,
     probeAgentConfigOptionsBestEffort,
+  });
+
+  it('offers distinguishable canonical machine names through daemon input discovery without changing target identities', async () => {
+    const codec = createMachineContentCodec({ encryptionMode: 'plain' });
+    const machines = [
+      { id: 'mac-machine', displayName: 'Studio', host: 'mac.local' },
+      { id: 'linux-machine', displayName: 'Studio', host: 'linux.local' },
+      { id: 'f98b0-machine', displayName: 'Build', host: 'worker.local' },
+      { id: 'f98b1-machine', displayName: 'Build', host: 'worker.local' },
+      { id: 'laptop-machine', displayName: 'Laptop', host: 'portable.local' },
+    ];
+    vi.spyOn(axios, 'get').mockResolvedValue({ data: machines.map(machine => ({
+      id: machine.id, active: true, revokedAt: null, replacedByMachineId: null,
+      storageMode: 'plain', dataEncryptionKey: null,
+      metadata: codec.encodeStored(MachinePublishedMetadataV1Schema.parse({
+        host: machine.host, displayName: machine.displayName, platform: 'linux', happyCliVersion: 'test',
+        homeDir: '/home/worker', happyHomeDir: '/home/worker/.happier',
+      })),
+    })) });
+    const inventory = createCliActionInventoryDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      serverId: 'home', serverHttpBaseUrl: 'https://machine-names.test', sessionId: 'session', mode: 'plain', ctx: null });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...inventory,
+      widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
+    const result = await executor.execute('action.options.resolve', {
+      consumer: { kind: 'widget', surface: { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' } },
+        definition: { kind: 'builtin', id: 'machine_vitals' } }, fieldPath: 'machine',
+    }, { surface: 'ui', authority: 'present_user', serverId: 'home' });
+    expect(result).toMatchObject({ ok: true, result: { options: machines.map((machine, index) => ({
+      value: { serverId: 'home', machineId: machine.id },
+      label: ['Studio · mac.local', 'Studio · linux.local', 'Build · f98b0', 'Build · f98b1', 'Laptop'][index],
+    })) } });
   });
 
   it('lists built-in backend models through the canonical dynamic probe when scoped to the session machine', async () => {

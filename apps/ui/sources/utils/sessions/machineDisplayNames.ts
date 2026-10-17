@@ -1,4 +1,5 @@
 import { t } from '@/text';
+import { readMachineName as readPublishedMachineName, resolveMachineDisplayNameParts as resolvePublishedMachineNameParts, type MachineNameMetadata as PublishedMachineNameMetadata } from '@happier-dev/protocol/machines/machineDisplayNames';
 
 /**
  * How the app names machines. `getMachineDisplayName` names one machine, optionally in its inventory;
@@ -10,7 +11,7 @@ import { t } from '@/text';
  * (`absence`), and the short id appears only as the suffix that tells such machines apart. Keys,
  * dedupe and agent-facing data use `readMachineName` with their own id fallback.
  */
-type MachineNameMetadata = Readonly<{ displayName?: string | null; host?: string | null }> | null;
+type MachineNameMetadata = PublishedMachineNameMetadata | null;
 type MachineNameAvailability = Readonly<{ kind: string; reason?: string }> | null;
 /**
  * Why a referenced machine is not in the inventory: removed (revoked), replaced, a temporary
@@ -70,10 +71,7 @@ export function describeMachineLockedReason(machine: MachineNameInput | null | u
 /** The name a person gave the machine, else its host; `null` when it has neither or is locked. */
 export function readMachineName(machine: MachineNameInput | null | undefined): string | null {
     if (machine && (machine.absence || isMachineLocked(machine))) return null;
-    const displayName = typeof machine?.metadata?.displayName === 'string' ? machine.metadata.displayName.trim() : '';
-    if (displayName) return displayName;
-    const host = typeof machine?.metadata?.host === 'string' ? machine.metadata.host.trim() : '';
-    return host || null;
+    return readPublishedMachineName(machine?.metadata);
 }
 
 /** What a machine whose details cannot be read is called on screen. */
@@ -104,16 +102,6 @@ export function getMachineDisplayName(machine: MachineNameInput | null | undefin
 
 type MachineNameSource = MachineNameInput & Readonly<{ id: string }>;
 
-const MACHINE_ID_HINT_MIN_LENGTH = 4;
-
-function uniqueIdHint(id: string, others: readonly string[]): string {
-    for (let length = Math.min(MACHINE_ID_HINT_MIN_LENGTH, id.length); length < id.length; length += 1) {
-        const prefix = id.slice(0, length);
-        if (others.every((other) => !other.startsWith(prefix))) return prefix;
-    }
-    return id;
-}
-
 /**
  * The names of machines shown together (a list, a picker, the home hub): each machine's
  * `getMachineDisplayName`, and only where two share a name (ignoring case, unnamed machines
@@ -131,29 +119,9 @@ export function resolveMachineDisplayNames(machines: readonly MachineNameSource[
  * shortens the name and keeps the suffix whole.
  */
 export function resolveMachineDisplayNameParts(machines: readonly MachineNameSource[]): ReadonlyMap<string, Readonly<{ name: string; hint: string | null }>> {
-    const baseById = new Map(machines.map((machine) => [machine.id, getMachineDisplayName(machine)]));
-    const idsByName = new Map<string, string[]>();
-    for (const machine of machines) {
-        const key = baseById.get(machine.id)!.toLocaleLowerCase();
-        idsByName.set(key, [...(idsByName.get(key) ?? []), machine.id]);
-    }
-    const byId = new Map(machines.map((machine) => [machine.id, machine]));
-    const names = new Map<string, Readonly<{ name: string; hint: string | null }>>();
-    for (const machine of machines) {
-        const base = baseById.get(machine.id)!;
-        const collidingIds = idsByName.get(base.toLocaleLowerCase()) ?? [];
-        // A machine still loading its name has a placeholder, not an identity: an id suffix on it
-        // would read as the machine's name until the real one arrives.
-        if (collidingIds.length < 2 || isMachineDisplayHydrating(machine)) {
-            names.set(machine.id, { name: base, hint: null });
-            continue;
-        }
-        const others = collidingIds.filter((id) => id !== machine.id);
-        const host = machine.absence || isMachineLocked(machine) ? '' : machine.metadata?.host?.trim() ?? '';
-        const hostDistinct = host.length > 0
-            && host.toLocaleLowerCase() !== base.toLocaleLowerCase()
-            && others.every((id) => (byId.get(id)?.metadata?.host?.trim() ?? '').toLocaleLowerCase() !== host.toLocaleLowerCase());
-        names.set(machine.id, { name: base, hint: hostDistinct ? host : uniqueIdHint(machine.id, others) });
-    }
-    return names;
+    return resolvePublishedMachineNameParts(machines.map(machine => ({
+        id: machine.id, name: getMachineDisplayName(machine),
+        host: machine.absence || isMachineLocked(machine) ? null : machine.metadata?.host,
+        disambiguate: !isMachineDisplayHydrating(machine),
+    })));
 }
