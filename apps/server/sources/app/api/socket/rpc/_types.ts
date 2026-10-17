@@ -7,8 +7,9 @@ export type RpcAckResponseEmitter = Readonly<{
 }>;
 
 export type RpcTargetSelectionResult =
-    | Readonly<{ type: "target"; target: RpcAckResponseEmitter; hadMultipleTargets: boolean }>
+    | Readonly<{ type: "target"; target: RpcAckResponseEmitter; hadMultipleTargets: boolean; clientIds?: readonly string[] }>
     | Readonly<{ type: "self-call" }>
+    | Readonly<{ type: "ambiguous"; clientIds: readonly string[] }>
     | Readonly<{ type: "not-available" }>;
 
 export type RpcForwardTargetGuard = Readonly<{

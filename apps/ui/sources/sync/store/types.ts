@@ -199,6 +199,7 @@ export interface MachinesDomainSlice {
     machineListStatusByServerId: Record<string, 'idle' | 'loading' | 'signedOut' | 'error'>;
     applyMachines: (machines: Machine[], replace?: boolean, options?: ApplyMachinesOptions) => void;
     replaceMachineDisplays: import('./domains/machines').MachinesDomain['replaceMachineDisplays'];
+    markMachineListSettled: import('./domains/machines').MachinesDomain['markMachineListSettled'];
     markMachineListUnavailable: (serverId: string) => void;
 }
 
@@ -270,7 +271,7 @@ export interface ArtifactsDomainSlice {
     artifacts: Record<string, DecryptedArtifact>;
     artifactsLoaded: boolean;
     artifactsStorageRevision: number;
-    applyArtifacts: (artifacts: DecryptedArtifact[]) => void;
+    applyArtifacts: (artifacts: DecryptedArtifact[], inventoryReadStartedWith?: Readonly<Record<string, DecryptedArtifact>>) => void;
     addArtifact: (artifact: DecryptedArtifact) => void;
     updateArtifact: (artifact: DecryptedArtifact) => void;
     deleteArtifact: (artifactId: string) => void;

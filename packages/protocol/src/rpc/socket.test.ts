@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import * as socketProtocol from './socket.js';
-import { RPC_METHODS } from './methods.js';
+import { RPC_METHODS, SESSION_RPC_METHODS } from './methods.js';
+import { resolveMachineRpcRoutePolicy } from '../machines/peer/mediation/rpc/routePolicyV1.js';
+
+it('classifies detached execution reads without weakening Session authority or the Session-only broker', () => {
+  for (const method of [SESSION_RPC_METHODS.EXECUTION_RUN_GET, SESSION_RPC_METHODS.EXECUTION_RUN_LIST, SESSION_RPC_METHODS.EXECUTION_RUN_WAIT]) {
+    expect(socketProtocol.resolveSocketRpcSessionAuthorization(method)).toMatchObject({
+      authority: 'readTranscript', routeToSessionOwnerDaemon: true, machineScope: true,
+    });
+    expect(resolveMachineRpcRoutePolicy(method)).toMatchObject({ routeClass: 'server_required', sharedMachineAccess: 'custodian_only',
+      scope: { sessionRequired: false } });
+  }
+  expect(socketProtocol.resolveSocketRpcSessionAuthorization(SESSION_RPC_METHODS.EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE_V1))
+    .toMatchObject({ authority: 'sessionOwner', routeToSessionOwnerDaemon: true });
+  expect(socketProtocol.resolveSocketRpcSessionAuthorization(SESSION_RPC_METHODS.EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE_V1)?.machineScope).toBeUndefined();
+});
 
 it('admits turn abort under its own Action while retaining submit-input capability', () => {
   expect(socketProtocol.resolveSocketRpcSessionAuthorization('session-a:abort')).toMatchObject({

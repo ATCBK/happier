@@ -13,7 +13,7 @@ import type { MachineReachabilityScope } from '@/sync/domains/machines/reachabil
 import { getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
-import { readMachineInventoryStatus, type ServerMachineInventorySnapshotV1 } from '@/sync/domains/machines/machineInventorySnapshots';
+import { readMachineInventoryStatus } from '@/sync/domains/machines/machineInventorySnapshots';
 import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/useMachineInventorySnapshots';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import {
@@ -35,6 +35,7 @@ import {
     setMachineAdministrationTargetPreference,
 } from './selectionPreferences';
 import {
+    areMachineAdministrationInventoriesKnown,
     isMachineAdministrationCandidateExplicitlySelectable,
     resolveMachineAdministrationTargetState,
     type MachineAdministrationExplicitSelectionPolicy,
@@ -98,10 +99,6 @@ export function doesMachineAdministrationTargetMatchActiveAccount(params: Readon
             params.target.serverIdentityId,
             activeAccountServerId,
         );
-}
-
-function areAllProfileInventoriesKnown(snapshots: readonly ServerMachineInventorySnapshotV1[]): boolean {
-    return snapshots.every((snapshot) => snapshot.kind === 'resolved');
 }
 
 /**
@@ -237,7 +234,7 @@ export function useMachineAdministrationTargetSelection(
         () => buildMachineAdministrationCandidateInventoryRowsFromSnapshots({ snapshots }),
         [reachabilityRevision, snapshots],
     );
-    const allowSoleCandidate = enabled && areAllProfileInventoriesKnown(snapshots)
+    const allowSoleCandidate = enabled && areMachineAdministrationInventoriesKnown(snapshots)
         && options.allowSoleCandidate !== false;
     const targetState = React.useMemo(() => resolveMachineAdministrationTargetState({
         storedTarget,

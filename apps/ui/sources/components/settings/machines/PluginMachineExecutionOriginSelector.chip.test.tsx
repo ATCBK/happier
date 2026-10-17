@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
+import { renderScreen, reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
 import { composePluginMachineExecutionOriginV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { PluginMachineExecutionOriginCandidateV1, PluginMachineSourceExecutionOriginCandidateV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { PluginMachineExecutionOriginSelectionV1 } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
@@ -68,6 +68,7 @@ function createSelection(machineIds: readonly [string, string] = ['machine-a', '
         state: { kind: 'selectionRequired', candidates },
         selectedOrigin: null,
         canExecute: false,
+        loading: false,
         selectOrigin,
         clearOrigin: async () => ({ status: 'applied', settingsVersion: 8, value: undefined }),
         resolveExecutionOrigin: () => null,
@@ -76,6 +77,35 @@ function createSelection(machineIds: readonly [string, string] = ['machine-a', '
 }
 
 describe('PluginMachineExecutionOriginSelector header chip', () => {
+    it('can clear a remembered Machine even when its current source candidates are absent', () => withPopoverWebGlobals(async () => {
+        const fixture = createSelection();
+        const storedTarget = { serverIdentityId: 'srv_picker_one', machineId: 'machine-a' };
+        const clearOrigin = vi.fn(async () => ({ status: 'applied' as const, value: undefined }));
+        const selection: PluginMachineExecutionOriginSelectionV1 = { ...fixture.selection, candidates: [], storedTarget,
+            state: { kind: 'unavailable', storedTarget, storedOrigin: null, candidates: [], reasons: ['offline'] }, clearOrigin };
+        const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={selection} presentation="chip" testIDPrefix="absent.execution" />, {
+            // Test Renderer supplies neither browser anchor geometry nor portal layout.
+            createNodeMock: () => ({ getBoundingClientRect: () => ({ left: 100, top: 100, width: 320, height: 40 }) }),
+        });
+        await screen.pressByTestIdAsync('absent.execution.chip');
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
+        await screen.pressByTestIdAsync('absent.execution.clear');
+        expect(clearOrigin).toHaveBeenCalledOnce();
+        await screen.unmount();
+    }));
+    it('names a remembered unavailable Machine as offline on the chip and keeps it marked in the list', () => withPopoverWebGlobals(async () => {
+        const fixture = createSelection();
+        const storedTarget = { serverIdentityId: 'srv_picker_one', machineId: 'machine-b' };
+        const selection: PluginMachineExecutionOriginSelectionV1 = { ...fixture.selection, storedTarget,
+            state: { kind: 'unavailable', storedTarget, storedOrigin: null, candidates: fixture.candidates, reasons: ['offline'] } };
+        const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={selection} presentation="chip" testIDPrefix="pinned.execution" />);
+        const chip = screen.findHostByTestId('pinned.execution.chip');
+        expect(chip?.props.accessibilityHint).toBe('settingsProviders.detail.machineOffline');
+        await screen.pressByTestIdAsync('pinned.execution.chip');
+        const pinned = screen.findHostByTestId('pinned.execution.picker-option:machine-b');
+        expect(pinned?.props.accessibilityState?.selected ?? pinned?.props['aria-selected']).toBe(true);
+        await screen.unmount();
+    }));
     it('shows real Online presence despite an old unchanged plugin observation', () => withPopoverWebGlobals(async () => {
         await installLiveMachine();
         const fixture = createSelection();
@@ -85,6 +115,21 @@ describe('PluginMachineExecutionOriginSelector header chip', () => {
         expect(screen.getTextContent()).toContain('settingsOverview.machineOnline');
         expect(screen.getTextContent()).not.toContain('settingsOverview.machineOffline');
         expect(screen.getTextContent()).toContain('common.version 1.0.0');
+    }));
+
+    it.each(['offline', 'stale', 'home_unreachable'] as const)('states a Machine\'s connectivity once: a %s plugin observation never repeats it beside the presence line', (reason) => withPopoverWebGlobals(async () => {
+        await installLiveMachine();
+        const fixture = createSelection();
+        const rejected = { ...fixture.candidates[0]!, validation: { kind: 'rejected' as const, reason } };
+        const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={{ ...fixture.selection, candidates: [rejected] }}
+            presentation="chip" testIDPrefix="plugin.execution" />);
+        await screen.pressByTestIdAsync('plugin.execution.chip');
+        const text = screen.getTextContent();
+        expect(text).toContain('settingsOverview.machineOnline');
+        expect(text).not.toContain('settingsPlugins.machineMatrix.state.staleOffline');
+        expect(text).not.toContain('settingsProviders.detail.machineOffline');
+        expect(text).not.toContain('pluginSurfaces.originReason.home_unreachable');
+        expect(text).toContain('common.version 1.0.0');
     }));
 
     it('keeps plugin rejection separate from live Machine presence', () => withPopoverWebGlobals(async () => {
@@ -177,10 +222,15 @@ describe('PluginMachineExecutionOriginSelector header chip', () => {
             selection={fixture.selection}
             presentation="chip"
             testIDPrefix="plugin.execution"
-        />);
+        />, {
+            // Supply the browser anchor measurement that Test Renderer cannot produce.
+            createNodeMock: () => ({ getBoundingClientRect: () => ({ left: 100, top: 100, width: 320, height: 40 }) }),
+        });
         expect(screen.findHostByTestId('plugin.execution.chip')).not.toBeNull();
         expect(screen.findHostByTestId('plugin.execution.picker-list')).toBeNull();
         await screen.pressByTestIdAsync('plugin.execution.chip');
+        // Test Renderer supplies no native layout event for the measured portal.
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
         expect(screen.findHostByTestId('plugin.execution.picker-list')).not.toBeNull();
         const offline = screen.findHostByTestId('plugin.execution.picker-option:machine-b');
         expect(offline?.props.disabled ?? offline?.props.accessibilityState?.disabled ?? offline?.props['aria-disabled']).toBe(true);
@@ -188,6 +238,18 @@ describe('PluginMachineExecutionOriginSelector header chip', () => {
         expect(fixture.selectOrigin).toHaveBeenCalledWith(composePluginMachineExecutionOriginV1(fixture.candidates[0]!.materialization));
         const chip = screen.findHostByTestId('plugin.execution.chip');
         expect(chip?.props.accessibilityState?.expanded ?? chip?.props['aria-expanded']).toBe(false);
+    }));
+
+    it('keeps Clear selection inside the machine list so a long list cannot clip it out of the popover', () => withPopoverWebGlobals(async () => {
+        const fixture = createSelection();
+        const selection = { ...fixture.selection, selectedOrigin: composePluginMachineExecutionOriginV1(fixture.candidates[0]!.materialization) };
+        const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={selection}
+            presentation="chip" testIDPrefix="plugin.execution" />);
+        await screen.pressByTestIdAsync('plugin.execution.chip');
+        let node = screen.findHostByTestId('plugin.execution.clear')?.parent ?? null;
+        const ancestors: string[] = [];
+        while (node) { if (typeof node.props?.testID === 'string') ancestors.push(node.props.testID); node = node.parent; }
+        expect(ancestors.some((id) => id.startsWith('plugin.execution.picker-list') && id.endsWith('bodyFooter'))).toBe(true);
     }));
 
     it('tells same-named machines apart by a short suffix, never by the opaque machine id', () => withPopoverWebGlobals(async () => {

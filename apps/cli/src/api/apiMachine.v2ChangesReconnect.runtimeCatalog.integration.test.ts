@@ -15,11 +15,14 @@ import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSe
 import { buildPromptLibraryPhysicalKeyV1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1, readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import * as persistence from '@/persistence';
+import { ApiClient } from '@/api/api';
+import { createHttpStatusError } from '@/api/client/httpStatusError';
+import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 
 import type { Machine } from '@/api/types';
 import { encodeBase64, encrypt } from '@/api/encryption';
 import { configuration } from '@/configuration';
-import { readProjectAccountRows, getActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { readProjectAccountRows, getActiveProjectAccountRowsSnapshot, withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import {
     clearActiveAccountSettingsSnapshot,
@@ -31,6 +34,7 @@ import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/
 import { createDeferred } from '@/testkit/async/deferred';
 import { logger } from '@/ui/logger';
 import { resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
+import { readCurrentCatalogHook } from '@/agent/catalog/runtimeEntry';
 import { ConnectedServiceGenerationReconciliationNotAcknowledgeableError } from '@/daemon/connectedServices/accountGroups/generation/reconcileConnectedServiceAuthGroupGenerations';
 import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
 import { bootstrapMachineSyncRuntime } from '@/daemon/machine/bootstrapMachineSyncRuntime';
@@ -106,9 +110,11 @@ vi.mock('@/ui/logger', () => ({
     logger: {
         debug: vi.fn(),
         info: vi.fn(),
+        infoFile: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
         debugLargeJson: vi.fn(),
+        warnLocalFile: vi.fn(),
     },
 }));
 
@@ -117,7 +123,41 @@ const publishPluginAccountCollectionWatchInvalidation = vi.fn();
 const publishPluginAccountSettingsWatchInvalidation = vi.fn();
 let unsubscribeCollection: () => void;
 let unsubscribeSettings: () => void;
+function admitAccountSnapshot(token = 'token') {
+    clearActiveAccountSettingsSnapshot();
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+        settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+        scopeKey: resolveAccountSettingsScopeKeyForToken(token) });
+}
+
+async function createRefreshingMachineClient(token: string, machine: Machine) {
+    if (machine.encryptionMode === 'plain' || machine.encryptionVariant !== 'legacy') {
+        throw new Error('The refresh fixture requires its legacy Account credential');
+    }
+    return (await ApiClient.create({ token, encryption: { type: 'legacy', secret: machine.encryptionKey } })).machineSyncClient(machine);
+}
+
+// These are neighboring Home HTTP routes used by the real Account hydrator
+// and connection supervisor. Keep each test's change-feed response independent.
+function mockAccountGet(implementation: (url: string, options?: Readonly<{ signal?: AbortSignal; params?: unknown }>) => unknown) {
+    axiosGet.mockImplementation(async (url: string, options?: Readonly<{ signal?: AbortSignal; params?: unknown }>) => {
+        if (url.endsWith('/v1/account/saved-secrets/resources/materials')) {
+            return { status: 200, data: SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [] }) };
+        }
+        if (url.endsWith('/v1/auth/ping')) return { status: 200, data: {} };
+        return await implementation(url, options);
+    });
+}
+
 beforeEach(() => {
+    axiosGet.mockReset();
+    mockAccountGet(async url => { throw new Error(`Unexpected Account HTTP read: ${url}`); });
+    axiosPost.mockReset();
+    readAccountChangesCursor.mockReset().mockResolvedValue(0);
+    writeAccountChangesCursor.mockReset().mockResolvedValue(undefined);
+    withdrawActiveProjectAccountRowsSnapshot();
+    admitAccountSnapshot();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: {} })));
     const accountScopeKey = resolveAccountSettingsScopeKeyForToken('token');
     retirePluginAccountCollectionWatchScope(accountScopeKey);
     publishPluginAccountCollectionWatchInvalidation.mockClear();
@@ -131,6 +171,9 @@ afterEach(() => {
     unsubscribeCollection();
     unsubscribeSettings();
     retirePluginAccountCollectionWatchScope(resolveAccountSettingsScopeKeyForToken('token'));
+    clearActiveAccountSettingsSnapshot();
+    vi.mocked(globalThis.fetch).mockRestore();
+    vi.useRealTimers();
 });
 
 function createMachineSocket(options: {
@@ -169,7 +212,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
         let changes: Array<{ cursor: number; kind: 'automation' | 'account'; entityId: string; changedAt: number; hint: null }> = [];
         let cursorGone = false;
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'source-observer-account' } };
             if (url.includes('/v2/changes')) return cursorGone
                 ? { status: 410, data: { error: 'cursor-gone', currentCursor: 2 } }
@@ -209,7 +252,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
         const socket = createMachineSocket();
         bindApiSessionSocketMock(mockIo, socket);
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'observer-account' } };
             if (url.includes('/v2/changes')) return { status: 200, data: { changes: [], nextCursor: 1 } };
             throw new Error(`Unexpected observer transport request: ${new URL(url).pathname}`);
@@ -242,7 +285,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7,
             loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token),
             providerConnectionsCatalog: { status: 'ready', revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } });
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             const path = new URL(url).pathname;
             if (path === '/v1/account/profile') return { status: 200, data: { id: 'provider-row-account' } };
             if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
@@ -279,7 +322,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         setActiveAccountSettingsSnapshot({ source: 'network', settings: {} as never, rawSettings: {}, settingsVersion: 7,
             loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token) });
         let revision = 1;
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             const path = new URL(url).pathname;
             if (path === '/v1/account/profile') return { status: 200, data: { id: 'prompt-library-account' } };
             if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
@@ -324,7 +367,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const control = { status: 'present', revision: 1, content: { t: 'plain', v: {
             v: 1, phase: 'active', sourceSettingsVersion: 1, migratedLogicalRevision: 1, inventory: [],
         } } };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             const path = new URL(url).pathname;
             if (path === '/v1/account/profile') return { status: 200, data: { id: 'profile-row-account' } };
             if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
@@ -372,9 +415,11 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const socket = createMachineSocket();
         socket.connect.mockImplementation(() => { socket.connected = true; return socket; });
         bindApiSessionSocketMock(mockIo, socket);
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'project-row-daemon-account' } };
             if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+            if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+                mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
             if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 7 } };
             if (url.includes('/v2/changes')) return { status: 200, data: { changes: [
                 { cursor: 4, kind: 'account', entityId: buildProjectAccountRowPhysicalKeyV1(key), changedAt: 1, hint: { projectAccountRow: true, key, revision: 2 } },
@@ -432,15 +477,16 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
 
     it('refetches Project rows for a row-only Account hint without refreshing Account settings', async () => {
         const credentials = { token: 'project-row-token', encryption: null };
+        admitAccountSnapshot(credentials.token);
         const machine: Machine = {
             id: 'machine-1', encryptionKey: new Uint8Array(32).fill(7), encryptionVariant: 'legacy',
             metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
         };
         const key = { kind: 'workspace-ref' as const, serverId: configuration.activeServerId, id: 'project-row-ref' };
         const ref = { id: key.id, serverId: key.serverId, machineId: machine.id, rootPath: '/project-row', createdAtMs: 1 };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'project-row-account' } };
-            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain' } };
+            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
             if (url.includes('/v2/changes')) return { status: 200, data: { changes: [
                 { cursor: 4, kind: 'account', entityId: buildProjectAccountRowPhysicalKeyV1(key), changedAt: 1, hint: { projectAccountRow: true, key, revision: 2 } },
             ], nextCursor: 4 } };
@@ -470,14 +516,15 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
 
     it('retains the Account cursor when Project-row delivery fails and replays it on retry', async () => {
         const credentials = { token: 'project-row-token', encryption: null };
+        admitAccountSnapshot(credentials.token);
         const key = { kind: 'relationship-graph' as const };
         const machine: Machine = {
             id: 'machine-1', encryptionKey: new Uint8Array(32).fill(7), encryptionVariant: 'legacy',
             metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'project-row-account' } };
-            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain' } };
+            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
             if (url.includes('/v2/changes')) return { status: 200, data: { changes: [
                 { cursor: 4, kind: 'account', entityId: buildProjectAccountRowPhysicalKeyV1(key), changedAt: 1, hint: {
                     projectAccountRow: true, key, revision: 2,
@@ -509,11 +556,12 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
     });
 
     it.each(['reconnect', 'cursor-gone', 'page-limit'] as const)('refreshes Project rows when changes completeness is lost: %s', async (recovery) => {
+        admitAccountSnapshot('project-row-token');
         const machine: Machine = {
             id: 'machine-1', encryptionKey: new Uint8Array(32).fill(7), encryptionVariant: 'legacy',
             metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'project-row-account' } };
             if (url.includes('/v2/changes')) {
                 if (recovery === 'cursor-gone') return { status: 410, data: { error: 'cursor-gone', currentCursor: 9 } };
@@ -537,7 +585,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         expect(writeAccountChangesCursor).toHaveBeenCalledWith('project-row-account', 9);
     });
 
-    it('advances a Saved Secret AccountChange cursor without hydration retries when Teams is disabled', async () => {
+    it('hydrates private Saved Secrets and advances its AccountChange cursor when Teams is disabled', async () => {
         const machine: Machine = {
             id: 'machine-1',
             encryptionKey: new Uint8Array(32).fill(7),
@@ -547,7 +595,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'account-1' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -587,7 +635,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
 
         expect(resolveServerFeaturesSnapshot).toHaveBeenCalledTimes(1);
         expect(axiosGet.mock.calls.some(([url]) => String(url).includes('/saved-secrets/resources/materials')))
-            .toBe(false);
+            .toBe(true);
         expect(writeAccountChangesCursor).toHaveBeenCalledTimes(1);
         expect(writeAccountChangesCursor).toHaveBeenCalledWith('account-1', 1);
     });
@@ -602,7 +650,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string, options?: Readonly<{ params?: unknown }>) => {
+        mockAccountGet(async (url: string, options?: Readonly<{ params?: unknown }>) => {
             if (url.endsWith('/v1/account/profile')) {
                 return { status: 200, data: { id: 'account-1' } };
             }
@@ -649,7 +697,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => (
+        mockAccountGet(async (url: string) => (
             url.endsWith('/v1/account/profile')
                 ? { status: 200, data: { id: 'account-1' } }
                 : { status: 200, data: { changes: [], nextCursor: 0 } }
@@ -685,7 +733,8 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const url = ((mockIo as any).mock?.calls as any[] | undefined)?.[0]?.[0];
         expect(typeof url).toBe('string');
         expect(String(url).startsWith('http')).toBe(true);
-        expect(socket.connect).toHaveBeenCalled();
+        await vi.waitFor(() => expect(socket.connect).toHaveBeenCalled());
+        await client.shutdown();
     });
 
     it('connect does not crash if the socket lacks connect() and uses open() as a fallback', async () => {
@@ -709,7 +758,8 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const client = new ApiMachineClient('token', machine);
         client.connect();
 
-        expect(socketNoConnect.open).toHaveBeenCalled();
+        await vi.waitFor(() => expect(socketNoConnect.open).toHaveBeenCalled());
+        await client.shutdown();
     });
 
     it('refreshes machine snapshot when /v2/changes includes a machine change', async () => {
@@ -736,7 +786,8 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
 
         const socket = createMachineSocket();
         bindApiSessionSocketMock(mockIo, socket);
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
+            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -767,9 +818,11 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         writeAccountChangesCursor.mockClear();
         readAccountChangesCursor.mockClear();
 
-        const client = new ApiMachineClient('token', machine);
+        const client = await createRefreshingMachineClient('token', machine);
         client.onConnectedServicesProjection(async () => {});
         client.connect();
+
+        await vi.waitFor(() => expect(socket.connect).toHaveBeenCalled());
 
         // First connect
         socket.trigger('connect');
@@ -778,16 +831,12 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         socket.trigger('disconnect');
         socket.trigger('connect');
         await vi.waitFor(() => {
-            expect(machine.metadataVersion).toBe(2);
+            expect(client.getMachineMetadataSnapshot()).toMatchObject({ status: 'ready', metadataVersion: 2 });
         });
 
-        expect(machine.metadata).toEqual(
-            expect.objectContaining({
-                host: 'h',
-                platform: 'p',
-            }),
-        );
+        expect(client.getMachineMetadataSnapshot()).toMatchObject({ status: 'ready', metadata: { host: 'h', platform: 'p' } });
         expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 1);
+        await client.shutdown();
     });
 
     it('reports account settings version hints from /v2/changes to the refresh callback', async () => {
@@ -801,7 +850,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -858,11 +907,8 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
-            if (url.includes('/v1/account/saved-secrets/resources/materials')) {
-                return { status: 404, data: {} };
-            }
             if (url.includes('/v2/changes')) {
                 return {
                     status: 200,
@@ -913,7 +959,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -998,7 +1044,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return {
                     status: 200,
@@ -1062,6 +1108,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         client.onPendingSessionActivationHint(activation);
         client.onConnectedServicesProjection(async () => {});
         client.connect();
+        await vi.waitFor(() => expect(socket.connect).toHaveBeenCalled());
         const target = { homeId: 'requester-home', accountId: 'bob', sessionId: 'inactive-session',
             machineId: machine.id, installationId: 'installation-1' };
         const hint = { type: 'pending-activation-requested', target, requestId: 'pending-request', requestedAt: 12, pendingVersion: 9 };
@@ -1073,6 +1120,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             pendingVersion: hint.pendingVersion, source: 'live',
         }));
         expect(writeAccountChangesCursor).not.toHaveBeenCalled();
+        await client.shutdown();
     });
 
     it('surfaces the same exact Pending authorization from a live machine-only update', async () => {
@@ -1092,6 +1140,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         client.onPendingSessionActivationHint(activation);
         client.onConnectedServicesProjection(async () => {});
         client.connect();
+        await vi.waitFor(() => expect(socket.connect).toHaveBeenCalled());
 
         socket.trigger('update', {
             id: 'update-1',
@@ -1115,6 +1164,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 source: 'live',
             });
         });
+        await client.shutdown();
     });
 
     it('advances the durable account cursor while semantic generation deferral remains event-eligible', async () => {
@@ -1122,6 +1172,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const originalActiveServerDir = configuration.activeServerDir;
         const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
         Object.assign(configuration, { activeServerDir: join(tempRoot, 'server') });
+        admitAccountSnapshot();
         if (originalPlatformDescriptor) {
             Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'linux' });
         }
@@ -1270,7 +1321,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         });
         bindApiSessionSocketMock(mockIo, socket);
         const client = new ApiMachineClient('token', machine);
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: projection };
             if (url.includes('/v2/sessions/')) return { status: 404, data: {} };
             if (url.includes('/v2/changes')) {
@@ -1329,7 +1380,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             expect(writeAccountChangesCursor).toHaveBeenCalledOnce();
             expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 3);
 
-            const materializedRoot = resolveConnectedServiceMaterializedHomeRoot('claude', {
+            const materializedRoot = await readCurrentCatalogHook('claude', entry => resolveConnectedServiceMaterializedHomeRoot('claude', {
                 activeServerDir: configuration.activeServerDir,
                 serviceId: 'claude-subscription',
                 profileId: 'team',
@@ -1342,7 +1393,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                     generation: 9,
                     policy: null,
                 },
-            });
+            }, entry));
             expect(materializedRoot).toEqual(expect.any(String));
             const provenancePath = join(materializedRoot!, '.happier-claude-connected-service-home.json');
             const effectAfterLostResponse = await stat(provenancePath, { bigint: true });
@@ -1397,7 +1448,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -1432,7 +1483,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return {
                     status: 200,
@@ -1476,7 +1527,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 daemonState: null,
                 daemonStateVersion: 0,
             };
-            axiosGet.mockImplementation(async (url: string) => {
+            mockAccountGet(async (url: string) => {
                 if (url.includes('/v1/account/profile')) return {
                     status: 200,
                     data: {
@@ -1513,7 +1564,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -1553,7 +1604,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -1596,7 +1647,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 daemonState: null,
                 daemonStateVersion: 0,
             };
-            axiosGet.mockImplementation(async (url: string) => {
+            mockAccountGet(async (url: string) => {
                 if (url.includes('/v1/account/profile')) {
                     return {
                         status: 200,
@@ -1651,7 +1702,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 daemonState: null,
                 daemonStateVersion: 0,
             };
-            axiosGet.mockImplementation(async (url: string) => {
+            mockAccountGet(async (url: string) => {
                 if (url.includes('/v1/account/profile')) {
                     return {
                         status: 200,
@@ -1704,7 +1755,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             let activeFetches = 0;
             let maxActiveFetches = 0;
             let profileCalls = 0;
-            axiosGet.mockImplementation(async (url: string) => {
+            mockAccountGet(async (url: string) => {
                 if (!url.includes('/v1/account/profile')) throw new Error(`unexpected url: ${url}`);
                 profileCalls += 1;
                 activeFetches += 1;
@@ -1836,7 +1887,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 daemonStateVersion: 0,
             };
             let requestSignal: AbortSignal | undefined;
-            axiosGet.mockImplementation(async (_url: string, config?: { signal?: AbortSignal }) => {
+            mockAccountGet(async (_url: string, config?: { signal?: AbortSignal }) => {
                 requestSignal = config?.signal;
                 await new Promise<void>((_resolve, reject) => {
                     config?.signal?.addEventListener('abort', () => reject(config.signal?.reason), { once: true });
@@ -1906,7 +1957,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1', connectedServicesV2: [], connectedServiceCredentialRevisionsV1: [] } };
             }
@@ -1991,7 +2042,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -2042,7 +2093,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
 
         const socket = createMachineSocket();
         bindApiSessionSocketMock(mockIo, socket);
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -2100,7 +2151,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -2164,7 +2215,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const applyResourceSessionAccessWitness = vi.fn(() => {
             order.push('witness');
         });
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) {
                 return phase === 'initial'
@@ -2209,6 +2260,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         });
         client.onConnectedServicesProjection(async () => {});
         client.connect();
+        await vi.waitFor(() => expect(socket.connect).toHaveBeenCalled());
         socket.trigger('connect');
         await vi.waitFor(() => {
             expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 0);
@@ -2261,7 +2313,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const applyResourceSessionAccessWitness = vi.fn(() => {
             order.push('witness');
         });
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -2315,7 +2367,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const applyResourceSessionAccessWitness = vi.fn(() => {
             order.push('witness');
         });
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) {
                 return { status: 410, data: { error: 'cursor-gone', currentCursor: 11 } };
@@ -2365,7 +2417,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         };
         const applyResourceSessionAccessWitness = vi.fn();
         axiosGet.mockClear();
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) return { status: 410, data: { error: 'not-cursor-gone' } };
             if (url.includes('/v1/machines/machine-resource-session-malformed-cursor-gone')) {
@@ -2423,7 +2475,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
         const order: string[] = [];
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'account-a' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -2469,6 +2521,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const encodeJwtPart = (value: unknown): string =>
             Buffer.from(JSON.stringify(value)).toString('base64url');
         const deletionAccountToken = `${encodeJwtPart({ alg: 'none' })}.${encodeJwtPart({ sub: 'account-deletion-a' })}.`;
+        admitAccountSnapshot(deletionAccountToken);
         const client = new ApiMachineClient(deletionAccountToken, machine);
         client.onConnectedServicesProjection(async () => {});
         const deleted = vi.fn(async () => {
@@ -2492,7 +2545,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
     it('delivers same-sequence transcript revisions before acknowledging the Account cursor', async () => {
         const machine: Machine = { id: 'machine-memory-revision', encryptionKey: new Uint8Array(32).fill(7),
             encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'account-memory-revision' } };
             if (url.includes('/v2/changes')) return { status: 200, data: {
                 changes: [{ cursor: 12, kind: 'session', entityId: 'session-edited', changedAt: 2,
@@ -2511,12 +2564,8 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         writeAccountChangesCursor.mockImplementation(async () => { order.push('cursor'); });
         const client = new ApiMachineClient('fake-token', machine);
         client.onConnectedServicesProjection(async () => {});
-        // The optional lookup leaves the current client executable so RED is
-        // the missing revision delivery, not a missing-method setup exception.
-        const revisionClient = client as unknown as { onSessionTranscriptRevised?: (
-            listener: (change: unknown) => Promise<void>,
-        ) => () => void };
-        const dispose = revisionClient.onSessionTranscriptRevised?.(async change => {
+        admitAccountSnapshot('fake-token');
+        const dispose = client.onSessionTranscriptRevised(async change => {
             revisions.push(change); order.push('revision');
         });
         try {
@@ -2525,7 +2574,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             expect(revisions).toEqual([{ sessionId: 'session-edited', seq: 8, messageId: 'message-edited', cursor: 12 },
                 { sessionId: 'session-coalesced', seq: 9, cursor: 13 }]);
             expect(order).toEqual(['revision', 'revision', 'cursor']);
-        } finally { dispose?.(); await client.shutdown(); }
+        } finally { dispose(); await client.shutdown(); }
     });
 
     it('retains the Account cursor when authoritative Session cleanup is deferred', async () => {
@@ -2539,7 +2588,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'account-a' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -2569,6 +2618,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const encodeJwtPart = (value: unknown): string =>
             Buffer.from(JSON.stringify(value)).toString('base64url');
         const cleanupAccountToken = `${encodeJwtPart({ alg: 'none' })}.${encodeJwtPart({ sub: 'account-deletion-a' })}.`;
+        admitAccountSnapshot(cleanupAccountToken);
         const client = new ApiMachineClient(cleanupAccountToken, machine);
         client.onConnectedServicesProjection(async () => {});
         const cleanup = vi.fn()
@@ -2607,7 +2657,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const applyResourceSessionAccessWitness = vi.fn(() => {
             order.push('witness');
         });
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'account-b' } };
             if (url.includes('/v2/changes')) {
                 return {
@@ -2625,6 +2675,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         writeAccountChangesCursor.mockImplementation(async () => {
             order.push('cursor');
         });
+        admitAccountSnapshot('account-b-token');
         const client = new ApiMachineClient('account-b-token', machine, undefined, {
             resourceSessionLifecycle: {
                 applyResourceSessionAccessWitness,
@@ -2658,7 +2709,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 order.push('witness');
             });
             let changesAttempts = 0;
-            axiosGet.mockImplementation(async (url: string) => {
+            mockAccountGet(async (url: string) => {
                 if (url.includes('/v1/account/profile')) {
                     return {
                         status: 200,
@@ -2764,7 +2815,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 };
                 const applyResourceSessionAccessWitness = vi.fn();
                 let changesAttempts = 0;
-                axiosGet.mockImplementation(async (url: string) => {
+                mockAccountGet(async (url: string) => {
                     if (url.includes('/v1/account/profile')) {
                         return {
                             status: 200,
@@ -2837,7 +2888,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -2894,7 +2945,8 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
 
         const socket = createMachineSocket();
         bindApiSessionSocketMock(mockIo, socket);
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
+            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -2926,18 +2978,12 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         readAccountChangesCursor.mockClear();
 
         const applyResourceSessionAccessWitness = vi.fn();
-        const client = new ApiMachineClient('token', machine, undefined, {
-            resourceSessionLifecycle: { applyResourceSessionAccessWitness },
-        });
+        const api = await ApiClient.create({ token: 'token', encryption: { type: 'legacy', secret: machine.encryptionKey } });
+        const client = api.machineSyncClient(machine, undefined, { resourceSessionLifecycle: { applyResourceSessionAccessWitness } });
         client.onConnectedServicesProjection(async () => {});
         await (client as any).syncChangesOnConnect({ reason: 'reconnect' });
 
-        expect(machine.metadata).toEqual(
-            expect.objectContaining({
-                host: 'h',
-                platform: 'p',
-            }),
-        );
+        expect(client.getMachineMetadataSnapshot()).toMatchObject({ status: 'ready', metadata: { host: 'h', platform: 'p' } });
         expect(writeAccountChangesCursor).not.toHaveBeenCalled();
         expect(applyResourceSessionAccessWitness).toHaveBeenCalledExactlyOnceWith({ accountId: 'acc-1' });
     });
@@ -2953,7 +2999,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -3011,7 +3057,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return {
                     status,
@@ -3116,7 +3162,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -3160,13 +3206,13 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockResolvedValue({
-            status,
-            data: { error: 'not-authenticated' },
+        mockAccountGet(async url => {
+            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
+            throw createHttpStatusError(status, 'Machine authentication failed');
         });
         axiosGet.mockClear();
 
-        const client = new ApiMachineClient('token', machine);
+        const client = await createRefreshingMachineClient('token', machine);
         const reportProbeResult = vi.fn();
         Object.defineProperty(client, 'connectionSupervisor', {
             configurable: true,
@@ -3204,7 +3250,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockRejectedValueOnce({
+        const failure = {
             isAxiosError: true,
             name: 'AxiosError',
             message: 'socket hang up',
@@ -3215,12 +3261,16 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 headers: { Authorization: 'Bearer fake-token' },
                 data: { encryptionKeyBase64: 'super-secret-key' },
             },
+        };
+        mockAccountGet(async url => {
+            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
+            throw failure;
         });
         axiosGet.mockClear();
         const debug = vi.mocked(logger.debug);
         debug.mockClear();
 
-        const client = new ApiMachineClient('fake-token', machine);
+        const client = await createRefreshingMachineClient('fake-token', machine);
         await (client as any).refreshMachineFromServer();
 
         const logged = JSON.stringify(debug.mock.calls);
@@ -3230,7 +3280,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         expect(logged).not.toContain('super-secret-key');
     });
 
-    it('reports retryable machine snapshot refresh failures to the machine supervisor', async () => {
+    it('keeps retryable machine snapshot refresh failures local to the HTTP request', async () => {
         const machine: Machine = {
             id: 'machine-1',
             encryptionKey: new Uint8Array(32).fill(7),
@@ -3241,17 +3291,19 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonStateVersion: 0,
         };
 
-        axiosGet.mockResolvedValue({
-            status: 503,
-            data: { error: 'busy' },
+        mockAccountGet(async url => {
+            if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
+            throw createHttpStatusError(503, 'Machine snapshot busy');
         });
         axiosGet.mockClear();
 
-        const client = new ApiMachineClient('token', machine);
+        const client = await createRefreshingMachineClient('token', machine);
         const reportProbeResult = vi.fn();
+        const probeScope = { generation: 1 };
         Object.defineProperty(client, 'connectionSupervisor', {
             configurable: true,
             value: {
+                captureProbeReportScope: () => probeScope,
                 getState: () => ({
                     phase: 'online',
                     reason: null,
@@ -3265,12 +3317,11 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             },
         });
 
+        axiosGet.mockClear();
         await (client as any).refreshMachineFromServer();
 
-        expect(reportProbeResult).toHaveBeenCalledWith({
-            status: 'retry_later',
-            errorMessage: expect.any(String),
-        } satisfies ReadinessProbeResult);
+        expect(axiosGet).toHaveBeenCalledWith(expect.stringContaining('/v1/machines/machine-1'), expect.anything());
+        expect(reportProbeResult).not.toHaveBeenCalled();
     });
 
     it('catches up the existing AccountChange cursor after a live content-free wake', async () => {
@@ -3286,7 +3337,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const socket = createMachineSocket();
         bindApiSessionSocketMock(mockIo, socket);
         let phase: 'initial' | 'live' = 'initial';
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) {
                 return { status: 200, data: { id: 'acc-1' } };
             }
@@ -3345,6 +3396,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const client = new ApiMachineClient('token', machine);
         client.onConnectedServicesProjection(async () => {});
         client.connect();
+        await vi.waitFor(() => expect(socket.connect).toHaveBeenCalled());
         socket.trigger('connect');
         await vi.waitFor(() => {
             expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 0);
@@ -3414,7 +3466,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => (
+        mockAccountGet(async (url: string) => (
             url.endsWith('/v1/account/profile')
                 ? { status: 200, data: { id: 'account-1' } }
                 : {
@@ -3458,7 +3510,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => (
+        mockAccountGet(async (url: string) => (
             url.endsWith('/v1/account/profile')
                 ? { status: 200, data: { id: 'account-1' } }
                 : {
@@ -3495,7 +3547,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'account-1' } };
             if (url.includes('/v2/changes')) {
                 return { status: 410, data: { error: 'cursor-gone', currentCursor: 42 } };
@@ -3530,7 +3582,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
-        axiosGet.mockImplementation(async (url: string) => {
+        mockAccountGet(async (url: string) => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'account-1' } };
             if (url.includes('/v2/changes')) {
                 return { status: 410, data: { error: 'cursor-gone', currentCursor: 42 } };

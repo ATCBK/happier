@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps, RPC_METHODS, UiActionDispatchRequestV1Schema, ActionIdSchema } from '@happier-dev/protocol';
 import { createClientActionReverseDispatcher, type ClientActionMachineRpc } from './clientActionReverseDispatch';
 import { createCliSettingsDeclarationAction } from './settingsDeclarationAction';
+import { mountedWorkReadClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
 
 function executor(client: ClientActionMachineRpc | null) {
   return createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => client),
@@ -9,6 +10,66 @@ function executor(client: ClientActionMachineRpc | null) {
 }
 
 describe('client Action reverse delivery', () => {
+  it.each(['cli', 'mcp'] as const)('addresses Run-on mutations to an exact answering client from %s', async surface => {
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, raw, options) => {
+        const request = UiActionDispatchRequestV1Schema.parse(raw);
+        expect(options).toMatchObject({ answeringClient: { clientId: 'app-b', requireSingle: true } });
+        expect(request.input).toEqual({ pluginId: 'acme.plugin', clientId: 'app-b' });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: { status: 'applied' } } } };
+      },
+    };
+    expect(await executor(client).execute('plugins.execution_origin.clear', { pluginId: 'acme.plugin', clientId: 'app-b' },
+      { surface, authority: 'account_automation' })).toEqual({ ok: true, result: { status: 'applied' } });
+  });
+
+  it('keeps a typed no-effect ambiguity even after the reverse transport was issued', async () => {
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, _raw, options) => {
+        expect(options).toMatchObject({ answeringClient: { requireSingle: true } });
+        options.onIssued();
+        return { ok: false, errorCode: 'RPC_CLIENT_AMBIGUOUS' };
+      },
+    };
+    expect(await executor(client).execute('plugins.execution_origin.clear', { pluginId: 'acme.plugin' },
+      { surface: 'cli', authority: 'account_automation' })).toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
+  });
+  it('keeps Run-on reads unambiguous and exposes current client addresses for the next mutation', async () => {
+    const result = { status: 'available', storedTarget: null, storedOrigin: null, selectedOrigin: null, candidates: [] };
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, _raw, options) => {
+        expect(options.answeringClient).toEqual({});
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result } },
+          answeringClientId: 'app-a', answeringClientIds: ['app-a', 'app-b'] };
+      },
+    };
+    expect(await executor(client).execute('plugins.execution_origin.list', { pluginId: 'acme.plugin' },
+      { surface: 'mcp', authority: 'account_automation' })).toEqual({ ok: true,
+        result: { ...result, answeringClientId: 'app-a', answeringClientIds: ['app-a', 'app-b'] } });
+  });
+  it.each([
+    { actionId: 'workspace.tabs.list', input: {}, result: { ok: true, tabs: [], groups: [], splits: [], rootNodeId: 'main', focusedGroupId: 'main', maximizedGroupId: null } },
+  ] as const)('admits $actionId from CLI and preserves its surface through mounted-client delivery', async request => {
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      // Only the network hop is substituted; admission, carrier and output validation remain real.
+      callConnectedClientRpc: async (_method, payload, options) => {
+        expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({
+          actionId: request.actionId, input: request.input, context: { surface: 'cli', authority: 'account_automation' },
+        });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: request.result } } };
+      },
+    };
+    const context = { surface: 'cli', authority: 'account_automation', serverId: 'home', bypassApprovals: true } as const;
+    expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
+    expect(await executor(null).execute(request.actionId, request.input, context)).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+  });
   it('discovers and delegates keyed device Storage preferences without admitting unsupported Account keys', async () => {
     const anchor = 'machines.storage.view';
     const key = 'home\u0000machine';
@@ -84,10 +145,14 @@ describe('client Action reverse delivery', () => {
       directory: { kind: 'path', path: '/checkout' } }, result: { status: 'applied' },
       absent: { ok: true, result: { status: 'unavailable' } } },
   ] as const)('invokes $actionId from CLI through the answering client and reports typed absence', async request => {
+    const expectedMethod = request.actionId === 'session.work.get'
+      ? mountedWorkReadClientRpcMethod(request.actionId, request.input.sessionId)
+      : request.actionId === 'inbox.get' ? mountedWorkReadClientRpcMethod(request.actionId) : RPC_METHODS.UI_ACTION_EXECUTE;
     const client: ClientActionMachineRpc = {
-      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      hasConnectedClientRpcHandler: method => method === expectedMethod,
       // Replace only the process/network hop; admission and result validation stay real.
       callConnectedClientRpc: async (_method, payload, options) => {
+        expect(_method).toBe(expectedMethod);
         expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({
           actionId: request.actionId, input: request.input, context: { surface: 'cli', authority: 'present_user' },
         });
@@ -316,7 +381,7 @@ describe('client Action reverse delivery', () => {
   it.each([
     ['ui.find', { op: 'read' }, { ok: true, result: { status: 'unavailable', reason: 'noClient' } }],
     ['session.pending.next', {}, { ok: true, result: { status: 'unavailable' } }],
-    ['workspace.tabs.list', {}, { ok: false, errorCode: 'unavailable', error: 'noClient' }],
+    ['workspace.tabs.list', {}, { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:workspace.tabs.list' }],
   ] as const)('returns typed absence for %s with an older or disconnected app', async (actionId, input, result) => {
     await expect(executor({ hasConnectedClientRpcHandler: () => false,
       callConnectedClientRpc: async () => { throw new Error('must not issue'); },
@@ -348,6 +413,6 @@ describe('client Action reverse delivery', () => {
       },
     };
     await expect(executor(client).execute('workspace.tabs.list', {}, { surface: 'agent' }))
-      .resolves.toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+      .resolves.toEqual({ ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:workspace.tabs.list' });
   });
 });

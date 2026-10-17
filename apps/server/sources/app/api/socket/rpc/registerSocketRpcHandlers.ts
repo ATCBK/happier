@@ -6,6 +6,7 @@ import type { Server, Socket } from "socket.io";
 
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { readProjectServiceMoveChildEffectV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
 import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS, parseSocketRpcAuthorizationContext, isSocketRpcSessionAuthorizationNamespace, resolveSocketRpcSessionAuthorization, type SocketRpcAuthorizationContext, type SocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import { AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/automations/event';
 import { CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
@@ -34,6 +35,8 @@ import {
     SocketRpcCancellationPayloadSchema,
     SocketRpcRequestIdSchema,
     SocketRpcTimeoutMsSchema,
+    SocketRpcAnsweringClientV1Schema,
+    ANSWERING_CLIENT_RPC_PREFIX_V1,
     SessionTransferRoutingV1Schema,
     SessionTransferRpcMethodV1Schema,
     WorkspaceSyncSourceRoutingV1Schema,
@@ -87,6 +90,7 @@ import type { RpcForwardTargetGuard } from "./_types";
 import { buildRpcMethodRoom } from "./rpcMethodRoom";
 import { getMachineSocketRoom } from "../../socketRooms";
 import { isWorkflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
+import { isMountedWorkReadClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
 
 const MAX_RPC_METHOD_NAME_LENGTH = 512;
 const RPC_REGISTERED_METHODS_SOCKET_DATA_KEY = "rpcRegisteredMethods";
@@ -143,12 +147,15 @@ function normalizeRpcMethodName(value: unknown): string | null {
     const trimmed = value.trim();
     if (!trimmed) return null;
     const separatorIndex = trimmed.indexOf(':');
-    if (separatorIndex > 0 && isWorkflowDraftClientRpcMethod(trimmed.slice(separatorIndex + 1))) {
-        // Scope and draft identities have no schema length ceiling. Their
+    if (separatorIndex > 0 && (isWorkflowDraftClientRpcMethod(trimmed.slice(separatorIndex + 1))
+        || isMountedWorkReadClientRpcMethod(trimmed.slice(separatorIndex + 1)))) {
+        // Mounted addresses have no schema length ceiling. Their
         // encoded suffix is content carried by this known method family and
         // remains under the existing Socket.IO packet boundary. Retain the
         // ordinary method-name budget for the Machine and fixed method prefix.
-        return separatorIndex + 1 + `${RPC_METHODS.UI_ACTION_EXECUTE}.workflow.`.length <= MAX_RPC_METHOD_NAME_LENGTH
+        const familyPrefix = isWorkflowDraftClientRpcMethod(trimmed.slice(separatorIndex + 1))
+            ? `${RPC_METHODS.UI_ACTION_EXECUTE}.workflow.` : `${RPC_METHODS.UI_ACTION_EXECUTE}.work.`;
+        return separatorIndex + 1 + familyPrefix.length <= MAX_RPC_METHOD_NAME_LENGTH
             ? trimmed : null;
     }
     const automationMethod = separatorIndex > 0
@@ -167,7 +174,8 @@ function parseMachineScopedRpcMethod(method: string): MachineScopedRpcMethod | n
     const machineId = method.slice(0, separatorIndex).trim();
     const rpcMethod = method.slice(separatorIndex + 1).trim();
     if (!machineId || (!MACHINE_VISIBLE_CLIENT_RPC_METHODS.has(rpcMethod)
-        && !isUiBrowserAutomationDispatchMethod(rpcMethod) && !isWorkflowDraftClientRpcMethod(rpcMethod))) return null;
+        && !isUiBrowserAutomationDispatchMethod(rpcMethod) && !isWorkflowDraftClientRpcMethod(rpcMethod)
+        && !isMountedWorkReadClientRpcMethod(rpcMethod))) return null;
     return { machineId, rpcMethod };
 }
 
@@ -492,6 +500,7 @@ function createExactMachineRpcTargetGuard(
 function createCurrentMachineAdmissionTargetGuard(
     admission: SocketRpcMachineAdmissionContextV1,
     rpcMethod: string,
+    requireOnline: boolean,
     requiredRole?: 'use',
     isHandoffCurrent?: () => Promise<boolean>,
     sourceSocket?: Pick<Socket, 'data' | 'connected'>,
@@ -511,7 +520,7 @@ function createCurrentMachineAdmissionTargetGuard(
             if (!matches(target) || !latest || !matches(latest)) return { status: 'unavailable' };
             if (isHandoffCurrent && !await isHandoffCurrent()) return { status: 'refused', response: buildForbiddenRpcResponse() };
             const current = await resolveMachineAdmission({ actorAccountId: admission.actorAccountId,
-                machineId: admission.machineId, ...(requiredRole ? { requiredRole } : { rpcMethod }), requireOnline: true });
+                machineId: admission.machineId, ...(requiredRole ? { requiredRole } : { rpcMethod }), requireOnline });
             if (current.kind !== 'admitted'
                 || current.custodianAccountId !== admission.custodianAccountId
                 || current.installationId !== admission.installationId
@@ -931,6 +940,9 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 sessionAuthorization?.routeToSessionOwnerDaemon === true
                 && readSocketClientType(params.socket) !== "session-scoped"
                 && !isMachineOwnedSessionSpawnRegistration
+                && !(sessionAuthorization.machineScope === true
+                    && readSocketClientType(params.socket) === "machine-scoped"
+                    && readMachineScopedSocketMachineId(params.socket) === readMachineIdPrefix(method))
             ) {
                 reject("Forbidden", false);
                 return;
@@ -1026,6 +1038,9 @@ export function registerSocketRpcHandlers(params: Readonly<{
         let method: string | null = null;
         let callerRequestId: string | undefined;
         let cancellation: ActiveSocketRpcCancellation | undefined;
+        let machineAdmission: SocketRpcMachineAdmissionContextV1 | undefined;
+        let forwardStartedAt: number | undefined;
+        let forwardCompletedAt: number | undefined;
         try {
             // Runner socket compositions are restricted RPC receivers. A future
             // Runner-originated call needs its own explicit source authority;
@@ -1074,6 +1089,19 @@ export function registerSocketRpcHandlers(params: Readonly<{
             }
             method = normalizeRpcMethodName((data as { method?: unknown } | undefined)?.method);
             const callParams = (data as { params?: unknown } | undefined)?.params;
+            const separator = method?.indexOf(':') ?? -1;
+            const usesAnsweringClientRouting = separator > 0
+                && method!.slice(separator + 1).startsWith(ANSWERING_CLIENT_RPC_PREFIX_V1);
+            const rawAnsweringClient = (data as { answeringClient?: unknown } | undefined)?.answeringClient;
+            const parsedAnsweringClient = usesAnsweringClientRouting ? SocketRpcAnsweringClientV1Schema.safeParse(rawAnsweringClient) : null;
+            if (usesAnsweringClientRouting && !parsedAnsweringClient?.success || !usesAnsweringClientRouting && rawAnsweringClient !== undefined) {
+                callback?.(buildForbiddenRpcResponse());
+                return;
+            }
+            const answeringClient = parsedAnsweringClient?.success ? parsedAnsweringClient.data : undefined;
+            if (usesAnsweringClientRouting) {
+                method = normalizeRpcMethodName(`${method!.slice(0, separator + 1)}${method!.slice(separator + 1 + ANSWERING_CLIENT_RPC_PREFIX_V1.length)}`);
+            }
             if (data && typeof data === 'object' && 'machineAdmission' in data) {
                 callback?.(buildForbiddenRpcResponse());
                 return;
@@ -1099,9 +1127,14 @@ export function registerSocketRpcHandlers(params: Readonly<{
             const rawTransferRouting = (data as { transferRouting?: unknown } | undefined)?.transferRouting;
             const reverseAutomationSeparator = method.indexOf(':');
             const reverseClientContinuation = reverseAutomationSeparator > 0
-                && (method.slice(reverseAutomationSeparator + 1) === RPC_METHODS.UI_ACTION_EXECUTE
+                && (MACHINE_VISIBLE_CLIENT_RPC_METHODS.has(method.slice(reverseAutomationSeparator + 1))
+                    || isMountedWorkReadClientRpcMethod(method.slice(reverseAutomationSeparator + 1))
                     || isWorkflowDraftClientRpcMethod(method.slice(reverseAutomationSeparator + 1))
                     || isUiBrowserAutomationDispatchMethod(method.slice(reverseAutomationSeparator + 1)));
+            if (answeringClient && !reverseClientContinuation) {
+                callback?.(buildForbiddenRpcResponse());
+                return;
+            }
             if (reverseClientContinuation && (readMachineScopedSocketMachineId(params.socket) !== method.slice(0, reverseAutomationSeparator)
                     || !await isMachineScopedRpcMethodAvailable({ userId: params.userId, method }))) {
                 // Continue only an Action admitted by the exact daemon. An Account
@@ -1118,7 +1151,8 @@ export function registerSocketRpcHandlers(params: Readonly<{
             }
             const transferRouting = parsedTransferRouting?.success ? parsedTransferRouting.data : undefined;
             const sourcePhaseMethod = method.slice(method.indexOf(':') + 1) === RPC_METHODS.DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE;
-            const projectSourceMethod = method.slice(method.indexOf(':') + 1) === RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN;
+            const projectSourceMethod = method.slice(method.indexOf(':') + 1) === RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN
+                || method.slice(method.indexOf(':') + 1) === RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN;
             const rawSourceRouting = (data as { workspaceSyncSourceRouting?: unknown } | undefined)?.workspaceSyncSourceRouting;
             const parsedSourceRouting = rawSourceRouting === undefined ? null : WorkspaceSyncSourceRoutingV1Schema.safeParse(rawSourceRouting);
             if ((sourcePhaseMethod && (!readMachineIdPrefix(method) || !parsedSourceRouting?.success))
@@ -1186,8 +1220,12 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 ?.externalActionExecution;
             const rawOriginalActionEnvelope = (data as { originalActionEnvelope?: unknown } | undefined)?.originalActionEnvelope;
             const parsedOriginalActionEnvelope = rawOriginalActionEnvelope === undefined ? null : ExternalActionRequestEnvelopeSchema.safeParse(rawOriginalActionEnvelope);
+            const originalActionMethod = method.slice(method.indexOf(':') + 1);
             if (rawOriginalActionEnvelope !== undefined && (!parsedOriginalActionEnvelope?.success
-                || method.slice(method.indexOf(':') + 1) !== RPC_METHODS.PROJECTS_OPEN
+                || originalActionMethod !== RPC_METHODS.PROJECTS_OPEN
+                    && originalActionMethod !== PROJECT_FINITE_ACTION_RPC_METHODS_V1['projects.script.run']
+                    && originalActionMethod !== PROJECT_FINITE_ACTION_RPC_METHODS_V1['projects.compute.exec']
+                    && !readProjectServiceMoveChildEffectV1(originalActionMethod)
                 || transferRouting || workspaceSyncRouting || workspaceSyncSourceWriterTargetRouting || workspaceSyncSeedRouting || viewer)) {
                 callback?.(buildForbiddenRpcResponse());
                 return;
@@ -1215,6 +1253,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     ...(workspaceSyncSourceWriterTargetRouting && workspaceSyncTargetRouting ? { workspaceSyncTargetRouting } : {}),
                     ...(retainedProjectSourceExecution ? { workspaceSyncSourceExecution: retainedProjectSourceExecution } : {}),
                     ...(workspaceSyncSeedRouting ? { workspaceSyncSeedRouting } : {}),
+                    ...(originalActionEnvelope ? { originalActionEnvelope } : {}),
                 })
                 : null;
             const verifiedPairedTargetSender = Boolean(verifiedExternalAction && workspaceSyncSourceWriterTargetRouting && workspaceSyncTargetRouting
@@ -1245,19 +1284,26 @@ export function registerSocketRpcHandlers(params: Readonly<{
             }
             if (originalActionEnvelope) {
                 const binding = verifiedExternalAction?.binding;
+                const moveChild = binding?.actionId === 'projects.service.relocate'
+                    && verifiedExternalAction?.effectActionId === readProjectServiceMoveChildEffectV1(originalActionMethod);
                 const socketData = readSocketData(params.socket);
                 const plainParams = originalActionEnvelope.v === 1 && typeof callParams !== 'string'
                     ? StrictJsonValueSchema.safeParse(callParams) : null;
-                if (!binding || binding.actionId !== 'projects.open' || verifiedExternalAction?.effectActionId !== 'projects.open'
-                    || method !== `${binding.machineId}:${RPC_METHODS.PROJECTS_OPEN}`
-                    || !isExternalActionAuthorizationBoundToEnvelope(binding, { actionId: 'projects.open', machineId: binding.machineId, envelope: originalActionEnvelope })
-                    || originalActionEnvelope.v === 1 && plainParams
+                const rootMethod = binding?.actionId === 'projects.open' ? RPC_METHODS.PROJECTS_OPEN
+                    : binding?.actionId === 'projects.script.run' || binding?.actionId === 'projects.compute.exec'
+                        ? PROJECT_FINITE_ACTION_RPC_METHODS_V1[binding.actionId] : null;
+                if (!binding || !moveChild && (!rootMethod || verifiedExternalAction?.effectActionId !== binding.actionId
+                    || method !== `${binding.machineId}:${rootMethod}`)
+                    || !isExternalActionAuthorizationBoundToEnvelope(binding, { actionId: binding.actionId, machineId: binding.machineId, envelope: originalActionEnvelope })
+                    || !moveChild && originalActionEnvelope.v === 1 && plainParams
                         && (!plainParams.success || !sameStrictJsonValue(originalActionEnvelope.input, plainParams.data))
-                    || params.socket.connected !== true || socketData.authTokenKind !== 'account'
+                    || params.socket.connected !== true || (socketData.authTokenKind !== 'account'
+                        && !(moveChild && socketData.authTokenKind === 'terminal'))
                     || socketData.ephemeralRunnerAdmission != null || socketData.apiTokenPrincipal != null
-                    || params.userId !== binding.custodianAccountId || !await hasCurrentSocketCredential(params.userId, params.socket)
-                    || readMachineScopedSocketMachineId(params.socket) !== binding.machineId
-                    || readVerifiedMachineSocketInstallationIdFromSocketData(socketData) !== binding.installationId) {
+                    || !await hasCurrentSocketCredential(params.userId, params.socket)
+                    || (moveChild ? params.userId !== binding.accountId
+                        : params.userId !== binding.custodianAccountId || readMachineScopedSocketMachineId(params.socket) !== binding.machineId
+                            || readVerifiedMachineSocketInstallationIdFromSocketData(socketData) !== binding.installationId)) {
                     callback?.(buildForbiddenRpcResponse());
                     return;
                 }
@@ -1269,6 +1315,10 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 callback?.(buildForbiddenRpcResponse());
                 return;
             }
+            const moveChildExecution = originalActionEnvelope && verifiedExternalAction?.binding.actionId === 'projects.service.relocate'
+                && externalActionExecution?.success ? WorkspaceSyncSourceExecutionV1Schema.parse({ method,
+                    requestId: callerRequestId, ...(callParams === undefined ? {} : { params: callParams }),
+                    externalActionExecution: externalActionExecution.data, originalActionEnvelope }) : null;
             if (verifiedExternalAction?.binding.sessionActionOrigin) {
                 // Original Session facts come only from the verified Home carrier,
                 // never from caller-authored socket fields.
@@ -1292,6 +1342,19 @@ export function registerSocketRpcHandlers(params: Readonly<{
             // Only the routing header selects the Session-owned encrypted carrier.
             const methodSessionAuthorization = isTransferMethod && !transferRouting ? null : resolveSocketRpcSessionAuthorization(method);
             const rawSessionAuthorization = (data as { authorization?: unknown } | undefined)?.authorization;
+            const scopedMachineId = methodSessionAuthorization?.machineScope === true
+                && readSocketClientType(params.socket) !== 'session-scoped' ? readMachineIdPrefix(method) : null;
+            // A declared dual-scope method selects Machine scope only from an exact
+            // persisted identity. Session scope never falls back after refusal.
+            const detachedMachine = scopedMachineId
+                ? await db.machine.findUnique({ where: { id: scopedMachineId },
+                    select: { id: true, kind: true, accountId: true, installationId: true } }) : null;
+            if (detachedMachine) {
+                if (detachedMachine.kind === 'ephemeral_session_runner' || rawSessionAuthorization !== undefined) {
+                    callback?.(buildForbiddenRpcResponse());
+                    return;
+                }
+            }
             if (rawSessionAuthorization && typeof rawSessionAuthorization === "object"
                 && "kind" in rawSessionAuthorization && rawSessionAuthorization.kind === "session.action") {
                 const parsed = parseSocketRpcAuthorizationContext(rawSessionAuthorization);
@@ -1421,7 +1484,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 return;
             }
 
-            const sessionAuthorization = methodSessionAuthorization;
+            const sessionAuthorization = detachedMachine ? null : methodSessionAuthorization;
             if (sessionAuthorization
                 && (sessionAuthorization.optionalSessionScope !== true || rawSessionAuthorization !== undefined)) {
                 const separatorIndex = method.lastIndexOf(":");
@@ -1549,7 +1612,6 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     };
                 }
             }
-            let machineAdmission: SocketRpcMachineAdmissionContextV1 | undefined;
             let machineAdmissionGuard: RpcForwardTargetGuard | null = null;
             const machinePrefix = readMachineIdPrefix(method);
             const signedHandoff = verifiedExternalAction?.binding.handoffAdmission;
@@ -1759,25 +1821,32 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     },
                 };
             } else if (machinePrefix && sessionWriteTargetUserId === null && !sourceKeyPreparationTargetGuard) {
-                const machine = await db.machine.findUnique({ where: { id: machinePrefix },
+                const machine = detachedMachine ?? await db.machine.findUnique({ where: { id: machinePrefix },
                     select: { kind: true, accountId: true, installationId: true } });
-                if (machine && machine.kind !== 'ephemeral_session_runner'
+                if (detachedMachine || (machine && machine.kind !== 'ephemeral_session_runner'
                     // Retained owned rows without an installation keep the predecessor carrier.
                     // Foreign routing never uses this legacy seam.
-                    && (machine.installationId || machine.accountId !== actorAccountId)) {
+                    && (machine.installationId || machine.accountId !== actorAccountId))) {
                     const rpcMethod = method.slice(method.indexOf(':') + 1);
+                    // Reviewed composite effects use their already verified root;
+                    // raw method policy must not reinterpret that proof as a new grant.
+                    const requiredRole = isHandoffCurrent || moveChildExecution ? 'use' as const : undefined;
+                    // Passive worker status does not wake a Machine. Admit authority
+                    // independently of presence so the existing forwarder classifies
+                    // a disconnected target for every client using this transport.
+                    const requireOnline = rpcMethod !== 'projects.worker.status';
                     const admitted = await resolveMachineAdmission({ actorAccountId,
                         machineId: machinePrefix,
-                        ...(isHandoffCurrent ? { requiredRole: 'use' as const } : { rpcMethod }),
-                        requireOnline: finiteWake?.kind === 'ready' ? false : true });
+                        ...(requiredRole ? { requiredRole } : { rpcMethod }),
+                        requireOnline: finiteWake?.kind === 'ready' ? false : requireOnline });
                     if (admitted.kind !== 'admitted') {
                         callback?.(buildForbiddenRpcResponse());
                         return;
                     }
                     const { kind: _kind, ...context } = admitted;
                     machineAdmission = context;
-                    machineAdmissionGuard = createCurrentMachineAdmissionTargetGuard(context, rpcMethod,
-                        isHandoffCurrent ? 'use' : undefined, isHandoffCurrent,
+                    machineAdmissionGuard = createCurrentMachineAdmissionTargetGuard(context, rpcMethod, requireOnline,
+                        requiredRole, isHandoffCurrent,
                         reverseClientContinuation ? params.socket : undefined);
                 }
             }
@@ -1807,7 +1876,9 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 }
                 explicitMachineStopCapture = await presence.captureExplicitMachineStop({
                     binding: {
-                        accountId: targetUserId,
+                        // Stop admission above proves the actor is the Session
+                        // owner; targetUserId is only the Machine custodian route.
+                        accountId: actorAccountId,
                         machineId: explicitMachineStopRequest.machineId,
                         sessionId: explicitMachineStopRequest.sessionId,
                     },
@@ -1883,12 +1954,14 @@ export function registerSocketRpcHandlers(params: Readonly<{
                         ...(workspaceSyncSourceWriterTargetRouting && workspaceSyncTargetRouting ? { workspaceSyncTargetRouting } : {}),
                         ...(retainedProjectSourceExecution ? { workspaceSyncSourceExecution: retainedProjectSourceExecution } : {}),
                         ...(workspaceSyncSeedRouting ? { workspaceSyncSeedRouting } : {}),
+                        ...(originalActionEnvelope ? { originalActionEnvelope } : {}),
                     }) ? { status: 'current' as const, value: await operation() }
                         : { status: 'refused' as const, response: buildForbiddenRpcResponse() },
                 } satisfies RpcForwardTargetGuard] : []),
             ]);
             const verifiedCallerGrant = verifiedExternalAction && 'grant' in verifiedExternalAction.binding
                 ? verifiedExternalAction.binding.grant : viewer?.principal.grant;
+            forwardStartedAt = Date.now();
             const forwarded = await forwardRpcCall({
                 io: params.io,
                 targetUserId,
@@ -1905,19 +1978,22 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 ...(workspaceSyncSourceWriterTargetRouting ? { workspaceSyncSourceWriterTargetRouting } : {}),
                 ...(projectSourceExecution?.success ? { workspaceSyncSourceExecution: projectSourceExecution.data } : {}),
                 ...(retainedProjectSourceExecution ? { workspaceSyncSourceExecution: retainedProjectSourceExecution } : {}),
+                ...(moveChildExecution ? { workspaceSyncSourceExecution: moveChildExecution } : {}),
                 ...(workspaceSyncSeedRouting ? { workspaceSyncSeedRouting } : {}),
                 ...(originalActionEnvelope ? { originalActionEnvelope } : {}),
                 ...(workspaceSyncContext ? {
                     callerAuthority: sessionActionOrigin ? 'account_automation' as const : workspaceSyncContext.callerAuthority,
-                } : (isHandoffCurrent || isTransitionRoot) && verifiedExternalAction
+                } : (moveChildExecution || isHandoffCurrent || isTransitionRoot || verifiedExternalAction?.binding.workflowActionOrigin) && verifiedExternalAction
                     ? { callerAuthority: verifiedExternalAction.effectiveAuthority } : {}),
                 ...(explicitMachineStopRequest
                     ? { transportResponseEnvelopeVersion: 1 as const }
                     : {}),
                 callerSocketId: params.socket.id,
+                ...(answeringClient ? { answeringClient } : {}),
                 callerSocket: params.socket,
                 ...(sessionActionOrigin ? { sessionActionOrigin } : {}),
-                ...((isTransitionRoot || verifiedExternalAction?.binding.sessionActionOrigin || verifiedExternalAction?.binding.handoffAdmission || isProjectSource
+                ...((isTransitionRoot || verifiedExternalAction?.binding.sessionActionOrigin || verifiedExternalAction?.binding.workflowActionOrigin
+                    || verifiedExternalAction?.binding.handoffAdmission || isProjectSource
                     || retainedProjectSourceExecution || originalActionEnvelope)
                     && externalActionExecution?.success
                     ? { createCallerInputAuthorization: async () => externalActionExecution.data.authorization }
@@ -1961,6 +2037,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     }
                     : {}),
             });
+            forwardCompletedAt = Date.now();
             const unscopedMethod = method.slice(method.lastIndexOf(":") + 1);
             const presentationClientId = callParams && typeof callParams === "object" && !Array.isArray(callParams)
                 ? (callParams as { clientId?: unknown }).clientId
@@ -2016,7 +2093,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     if (closed.status === "closed") {
                         await publishSessionPublisherClose({
                             sessionId: explicitMachineStopRequest.sessionId,
-                            publisherAccountId: targetUserId,
+                            publisherAccountId: explicitMachineStopCapture.target.binding.accountId,
                             closed,
                         });
                     } else if (closed.status !== "already_inactive") {
@@ -2047,6 +2124,15 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 error: error instanceof Error ? error.message : "Internal error",
             });
         } finally {
+            if (method && callerRequestId && (machineAdmission || parseMachineScopedRpcMethod(method))) {
+                log({ module: "websocket-rpc", event: "machine-rpc-relay-completed",
+                    method, requestId: callerRequestId, targetRequestId: cancellation?.targetRequestId,
+                    targetSocketId: cancellation?.targetSocketId,
+                    durationMs: Date.now() - startedAt,
+                    admissionMs: (forwardStartedAt ?? Date.now()) - startedAt,
+                    relayMs: forwardStartedAt === undefined ? null : (forwardCompletedAt ?? Date.now()) - forwardStartedAt,
+                }, "Machine RPC relay completed");
+            }
             if (
                 callerRequestId
                 && cancellation

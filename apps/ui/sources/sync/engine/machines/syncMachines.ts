@@ -434,6 +434,8 @@ export async function fetchAndApplyMachines(params: {
      * response), so the list owner can end its loading state instead of waiting forever.
      */
     onListUnavailable?: (error: unknown) => void;
+    /** Called after the complete list is published, including display-first hydration. */
+    onListComplete?: () => void;
     /**
      * When true, drop any locally-cached machines that are missing from the
      * latest fetch response.
@@ -886,7 +888,10 @@ export async function fetchAndApplyMachines(params: {
                 }
                 return publication;
             };
-            void runTasksWithLimit(
+            // Keep this read joined to its InvalidateSync attempt. Display rows
+            // are already published; otherwise this older completion could
+            // overwrite the outcome of a newer list read.
+            await runTasksWithLimit(
                 machinesNeedingHydration.map((machine) => async () => {
                     // Reuse the crypto owner's cooperative release before the
                     // next background open; foreground RPCs do not join this fleet.
@@ -900,12 +905,17 @@ export async function fetchAndApplyMachines(params: {
                     return decryptedMachine;
                 }),
                 concurrencyLimit,
-            ).catch((error) => {
+            ).then(() => {
+                if (shouldContinue()) params.onListComplete?.();
+            }).catch((error) => {
                 console.error('[machinesSnapshot] Background hydration failed', error);
+                if (shouldContinue()) params.onListUnavailable?.(error);
             });
+        } else if (shouldContinue()) {
+            params.onListComplete?.();
         }
 
-        log.log(`🖥️ fetchMachines completed - rendered ${displayEntries.length} machine display rows before selective hydration`);
+        log.log(`🖥️ fetchMachines completed - rendered ${displayEntries.length} machine display rows and completed selective hydration`);
         return;
     }
 
@@ -920,5 +930,6 @@ export async function fetchAndApplyMachines(params: {
     // particular refresh response unless the caller opts into a hard replace.
     if (!shouldContinue()) return;
     applyCurrentMachines(decryptedMachines, (params.replace ?? false) && !hasOlderRows && machines.every((machine) => isMachineCurrent(machine.id)));
+    if (shouldContinue()) params.onListComplete?.();
     log.log(`🖥️ fetchMachines completed - processed ${decryptedMachines.length} machines`);
 }

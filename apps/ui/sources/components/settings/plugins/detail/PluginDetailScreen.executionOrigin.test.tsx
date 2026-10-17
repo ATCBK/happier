@@ -96,6 +96,7 @@ function snapshotsFor(origin: typeof ORIGIN_A | typeof ORIGIN_B) {
     return [{
         kind: 'resolved',
         profileId: `profile-${origin.serverIdentityId}`,
+        accountId: 'account-origin-detail',
         serverIdentityId: origin.serverIdentityId,
         serverName: origin.serverIdentityId,
         observation: 'live',
@@ -168,7 +169,7 @@ vi.mock('@/sync/domains/machines/useMachineInventorySnapshots', () => ({
 vi.mock('@/sync/domains/state/storageStore', async () => {
     const { createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
     const store = createLiveStorageStoreMock(() => ({
-        settings: { machineAdministrationSelectionsV1: fixture.selections } as never,
+        settings: { machineAdministrationTargetsLocalV1: fixture.selections } as never,
         settingsVersion: 7,
         settingsScope: { serverId: 'server-account', accountId: 'account-origin-detail' },
     }));
@@ -257,14 +258,11 @@ describe('PluginDetailScreen execution-origin ownership', () => {
             compatibility: { status: 'compatible', diagnostics: [] },
             diagnostics: [],
         }]]);
-        fixture.selections = {
-            v: 1,
-            pluginExecutionOriginsByPluginId: {},
-        };
+        fixture.selections = {};
         fixture.materializationAdmission = availableAdmission(1, [materializationFor(ORIGIN_A)]);
         fixture.snapshots = snapshotsFor(ORIGIN_A);
         fixture.accountSettings = {
-            machineAdministrationSelectionsV1: fixture.selections,
+            machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} },
         };
         mutateAccountSettingsOnceMock.mockReset();
         mutateAccountSettingsOnceMock.mockImplementation(async (params: AccountSettingsOneShotMutation) => {
@@ -326,8 +324,7 @@ describe('PluginDetailScreen execution-origin ownership', () => {
         }));
 
         fixture.selections = {
-            v: 1,
-            pluginExecutionOriginsByPluginId: { 'acme.plugin': ORIGIN_B },
+            'plugin.runOn:acme.plugin': { serverIdentityId: ORIGIN_B.serverIdentityId, machineId: ORIGIN_B.materializationRef.machineId },
         };
         fixture.materializationAdmission = availableAdmission(2, [materializationFor(ORIGIN_B)]);
         fixture.snapshots = snapshotsFor(ORIGIN_B);

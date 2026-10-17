@@ -4,10 +4,14 @@ import {
     buildPluginMachineExecutionOriginCandidates,
     buildPluginMachineSourceExecutionOriginCandidates,
     combinePluginMachineExecutionOriginCandidates,
+    composePluginMachineExecutionOriginV1,
     resolvePluginMachineExecutionOriginState,
     type PluginMachineExecutionOriginCandidateV1,
 } from './pluginExecutionOrigin';
+import { resolveFleetMachineRejection } from './fleetUnion';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/machineInventorySnapshots';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { parseToken } from '@/utils/auth/parseToken';
 
@@ -44,6 +48,28 @@ function candidate(input: Readonly<{
 }
 
 describe('resolvePluginMachineExecutionOriginState', () => {
+    it('uses only the local Home for an unpinned operation', () => {
+        const local = candidate({ serverIdentityId: 'srv_one', machineId: 'local', materializationId: 'local-custody' });
+        const foreign = candidate({ serverIdentityId: 'srv_two', machineId: 'foreign', materializationId: 'foreign-custody' });
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
+            homeServerIdentityId: 'srv_one', candidates: [foreign] })).toMatchObject({ kind: 'unavailable' });
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
+            homeServerIdentityId: 'srv_one', candidates: [foreign, local], declaredDefaultOrigins: [composePluginMachineExecutionOriginV1(foreign.materialization)] }))
+            .toMatchObject({ kind: 'selected', origin: composePluginMachineExecutionOriginV1(local.materialization), selectionSource: 'soleCandidate' });
+    });
+    it('keeps an offline explicit Machine pinned while resolving replacement custody on that Machine', () => {
+        const own = candidate({ serverIdentityId: 'srv_one', machineId: 'pinned-machine', materializationId: 'new-custody' });
+        const other = candidate({ serverIdentityId: 'srv_one', machineId: 'online-machine', materializationId: 'other' });
+        const storedTarget = { serverIdentityId: 'srv_one', machineId: 'pinned-machine' };
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null, storedTarget,
+            candidates: [own, other] })).toMatchObject({ kind: 'selected', origin: composePluginMachineExecutionOriginV1(own.materialization) });
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null, storedTarget,
+            candidates: [{ ...own, validation: { kind: 'rejected', reason: 'offline' } }, other] }))
+            .toMatchObject({ kind: 'unavailable', storedTarget, reasons: ['offline'] });
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null, storedTarget,
+            candidates: [other], storedOriginMachinePresence: 'offline' }))
+            .toMatchObject({ kind: 'unavailable', storedTarget, reasons: ['offline'] });
+    });
     it('defaults a contextual Session panel to its exact machine rather than an unrelated saved offline origin', () => {
         const own = candidate({ serverIdentityId: 'srv_one', machineId: 'session-machine', materializationId: 'own' });
         const other = candidate({ serverIdentityId: 'srv_one', machineId: 'unrelated-machine', materializationId: 'other',
@@ -95,9 +121,9 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         expect(readSelection()).toMatchObject({ kind: 'selected', origin: source.source.origin });
         recordMachineRequestFailed({ ...scope, machineId, observedAtMs: 2 });
         expect(readCandidates().map(entry => entry.validation)).toEqual([
-            { kind: 'rejected', reason: 'offline' }, { kind: 'rejected', reason: 'offline' },
+            { kind: 'rejected', reason: 'home_unreachable' }, { kind: 'rejected', reason: 'home_unreachable' },
         ]);
-        expect(readSelection()).toMatchObject({ kind: 'unavailable', storedOrigin: source.source.origin, reasons: ['offline'] });
+        expect(readSelection()).toMatchObject({ kind: 'unavailable', storedOrigin: source.source.origin, reasons: ['home_unreachable'] });
         recordMachineRequestSucceeded({ ...scope, machineId, observedAtMs: 3 });
         expect(readSelection()).toMatchObject({ kind: 'selected', origin: source.source.origin });
     });
@@ -147,6 +173,11 @@ describe('resolvePluginMachineExecutionOriginState', () => {
             candidates: [offline, b], declaredDefaultOrigins: [origin(b)] })).toMatchObject({ kind: 'unavailable', reasons: ['offline'] });
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
             candidates: [a, b], declaredDefaultOrigins: [origin(a), origin(b)] }).kind).toBe('selectionRequired');
+        const replacement = { ...b, materialization: { ...b.materialization, machineId: a.materialization.machineId } };
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
+            storedTarget: { serverIdentityId: 'srv_one', machineId: 'machine-a' },
+            candidates: [a, replacement], declaredDefaultOrigins: [origin(replacement)] }))
+            .toMatchObject({ kind: 'selected', origin: origin(replacement), selectionSource: 'stored' });
     });
     it('composes uncollapsed Availability rows with exact machine state and Artifact-owned release validation', () => {
         const materialization = candidate({
@@ -291,6 +322,30 @@ describe('resolvePluginMachineExecutionOriginState', () => {
             machineSnapshots: machineSnapshot({}),
             classifyRelease,
         })[0]?.validation).toEqual({ kind: 'rejected', reason: 'untrusted' });
+    });
+
+    it('keeps a stored origin selected through its Home\'s machine-list refresh and fails it closed once the read failed', () => {
+        const base = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'mat-a' }).materialization;
+        const stored = composePluginMachineExecutionOriginV1(base);
+        const row: Machine = { id: 'machine-a', seq: 1, createdAt: 1, updatedAt: 20, active: true, activeAt: Date.now(), revokedAt: null,
+            replacedByMachineId: null, metadata: null, metadataVersion: 1, daemonState: null, daemonStateVersion: 0 };
+        const profile = { id: 'local-one', name: 'Server One', serverUrl: 'https://one.example.test', serverIdentityId: 'srv_one',
+            createdAt: 1, updatedAt: 1, lastUsedAt: 1 };
+        const stateWhen = (status: 'idle' | 'loading' | 'error') => resolvePluginMachineExecutionOriginState({
+            pluginId: 'acme.plugin', storedOrigin: stored,
+            candidates: buildPluginMachineExecutionOriginCandidates({
+                pluginId: 'acme.plugin', materializations: [base],
+                classifyRelease: () => ({ releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }),
+                machineSnapshots: resolveAllProfileMachineInventorySnapshots({
+                    profiles: [profile], activeServerId: 'local-one', activeMachines: [row],
+                    machineListByServerId: { 'local-one': [row] }, machineListStatusByServerId: { 'local-one': status },
+                    accountScopesByServerId: new Map([['srv_one', { serverId: 'srv_one', accountId }]]), loadWarmEntries: () => ({}),
+                }),
+            }),
+        });
+        expect(stateWhen('idle')).toMatchObject({ kind: 'selected' });
+        expect(stateWhen('loading')).toMatchObject({ kind: 'selected' });
+        expect(stateWhen('error')).toMatchObject({ kind: 'unavailable', reasons: ['stale'] });
     });
 
     it('does not call a materialization\'s machine missing while its Home\'s machine list is unread', () => {
@@ -447,6 +502,28 @@ describe('resolvePluginMachineExecutionOriginState', () => {
             candidates: [old, replacement],
             reasons: ['offline'],
         });
+    });
+
+    it('names an offline machine, not a missing source, when the stored source left with its machine', () => {
+        // Live 2026-10-16 (PLUGVIS 2h): PRs & Issues pinned to an offline machine said "Its source isn't
+        // available" — an offline machine stops advertising its sources, so the stored source had no candidate.
+        const machineId = 'pinned-offline-machine';
+        const origin = { serverIdentityId: 'srv_pinned', sourceRef: { machineId, pluginId: 'acme.plugin',
+            sourceCustody: { kind: 'development', registeredRootId: 'pinned-root' } } } as const;
+        const snapshotWith = (activeAt: number, machines = [{ id: machineId, updatedAt: 1, active: activeAt > 0,
+            activeAt, revokedAt: null, metadataVersion: 1, metadata: null }]) => [{ kind: 'resolved', accountId,
+            profileId: 'pinned-home', serverIdentityId: 'srv_pinned', serverName: 'Studio', observation: 'live',
+            settled: true, machines }] as const;
+        const stateWith = (machineSnapshots: ReturnType<typeof snapshotWith>) => resolvePluginMachineExecutionOriginState({
+            pluginId: 'acme.plugin', storedOrigin: origin, candidates: [],
+            storedOriginMachinePresence: resolveFleetMachineRejection({ serverIdentityId: 'srv_pinned', machineId, machineSnapshots }) });
+        recordMachineRequestFailed({ serverId: 'srv_pinned', accountId, machineId, observedAtMs: 2 });
+        expect(stateWith(snapshotWith(0))).toMatchObject({ kind: 'unavailable', storedOrigin: origin, reasons: ['home_unreachable'] });
+        // The machine itself is gone from its Home: the source is missing, not offline.
+        expect(stateWith(snapshotWith(0, []))).toMatchObject({ kind: 'unavailable', reasons: ['missing'] });
+        // An online machine that no longer offers the stored source keeps blaming the source.
+        recordMachineRequestSucceeded({ serverId: 'srv_pinned', accountId, machineId, observedAtMs: 3 });
+        expect(stateWith(snapshotWith(Date.now()))).toMatchObject({ kind: 'unavailable', reasons: ['missing'] });
     });
 
     it('reports a vanished install epoch as missing instead of relocating to a healthy replica', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { t } from '@/text';
 
 import {
+    areMachineAdministrationInventoriesKnown,
     buildMachineAdministrationTargetRouteParams,
     isMachineAdministrationCandidateExplicitlySelectable,
     isMachineAdministrationCandidateSelectable,
@@ -140,6 +141,33 @@ describe('resolveMachineAdministrationTargetState', () => {
             storedTarget: null,
             candidates: [only],
         })).toEqual({ kind: 'online', target: only.target, machine: only });
+    });
+
+    it('selects the only live online machine when the others are away, and still asks between two live ones', () => {
+        // Live 2026-10-16 (PLUGVIS 2h): a fresh device asked "Choose a machine in the header" while exactly one
+        // of the Account's machines was online; the offline ones cannot run anything, so there is no choice yet.
+        const online = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-online' });
+        const offline = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-away', availability: 'offline' });
+        const stale = candidate({ serverIdentityId: 'srv_two', machineId: 'machine-stale', observation: 'stale' });
+        const secondOnline = candidate({ serverIdentityId: 'srv_two', machineId: 'machine-online-b' });
+
+        expect(resolveMachineAdministrationTargetState({ storedTarget: null, candidates: [offline, online, stale] }))
+            .toEqual({ kind: 'online', target: online.target, machine: online });
+        expect(resolveMachineAdministrationTargetState({ storedTarget: null, candidates: [offline, online, secondOnline] }))
+            .toEqual({ kind: 'unselected', candidates: [offline, online, secondOnline] });
+        expect(resolveMachineAdministrationTargetState({ storedTarget: null, candidates: [offline, online], allowSoleCandidate: false }))
+            .toMatchObject({ kind: 'unselected' });
+    });
+
+    it('waits for every Home that can supply machines, but not for a Home this device never identified', () => {
+        // Live 2026-10-16 (PLUGVIS 2h): a stack-default Home profile this device never reached (no identity, so
+        // no sign-in) kept the sole-online pre-pick waiting forever.
+        const resolved = { kind: 'resolved', accountId: null, profileId: 'p1', serverIdentityId: 'srv_one', serverName: 'Studio',
+            observation: 'live', machines: [] } as const;
+        const unidentified = { kind: 'missingIdentity', profileId: 'p2', serverName: 'Laptop', machines: [] } as const;
+        const loading = { kind: 'unknown', profileId: 'p3', serverIdentityId: 'srv_three', serverName: 'Office', machines: [] } as const;
+        expect(areMachineAdministrationInventoriesKnown([resolved, unidentified])).toBe(true);
+        expect(areMachineAdministrationInventoriesKnown([resolved, loading])).toBe(false);
     });
 
     it('leaves a sole candidate unselected when its consumer requires an explicit choice', () => {

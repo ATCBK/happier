@@ -10,6 +10,24 @@ function createCandidate(id: string) {
 }
 
 describe("selectRpcTarget", () => {
+    it('selects only the exact answering client and never substitutes a disconnected selection', () => {
+        const first = createCandidate('client-a');
+        const selected = createCandidate('client-b');
+        expect(selectRpcTarget({ targets: [first, selected], answeringClient: { clientId: selected.id } }))
+            .toMatchObject({ type: 'target', target: selected });
+        expect(selectRpcTarget({ targets: [first], answeringClient: { clientId: selected.id } }))
+            .toEqual({ type: 'not-available' });
+    });
+
+    it('refuses ambiguous mutations while preserving unselected reads and sole eligible clients', () => {
+        const first = createCandidate('client-a');
+        const second = createCandidate('client-b');
+        expect(selectRpcTarget({ targets: [first, second], answeringClient: { requireSingle: true } }))
+            .toEqual({ type: 'ambiguous', clientIds: ['client-a', 'client-b'] });
+        expect(selectRpcTarget({ targets: [first, second] })).toMatchObject({ type: 'target', target: first });
+        expect(selectRpcTarget({ targets: [first, second], excludedSocketId: first.id, answeringClient: { requireSingle: true } }))
+            .toMatchObject({ type: 'target', target: second });
+    });
     it("rejects a self-call when the caller is the only available target", () => {
         expect(selectRpcTarget({
             targets: [createCandidate("caller-socket")],

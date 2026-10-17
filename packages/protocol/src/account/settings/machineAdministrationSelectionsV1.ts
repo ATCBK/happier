@@ -3,8 +3,10 @@ import { z } from 'zod/mini';
 
 import { SERVER_IDENTITY_ID_PATTERN } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 import { PluginMachineExecutionOriginV1Schema } from '../../machines/administration/pluginMachineExecutionOriginV1.js';
+import { MAX_PLUGIN_IDENTIFIER_BYTES } from '../../plugins/pluginId.js';
 
-export const MACHINE_ADMINISTRATION_SELECTION_KEY_MAX_LENGTH_V1 = 200;
+// Local Run-on entries namespace a canonical plugin id; valid ids must fit in full.
+export const MACHINE_ADMINISTRATION_SELECTION_KEY_MAX_LENGTH_V1 = Math.max(200, 'plugin.runOn:'.length + MAX_PLUGIN_IDENTIFIER_BYTES);
 export const MACHINE_ADMINISTRATION_SELECTION_MAX_ENTRIES_V1 = 256;
 
 const MachineAdministrationSelectionKeyV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(MACHINE_ADMINISTRATION_SELECTION_KEY_MAX_LENGTH_V1)));
@@ -31,7 +33,7 @@ function boundedRecord<T extends z.ZodMiniType>(valueSchema: T) {
 export const MachineAdministrationTargetsV1Schema = z._default(boundedRecord(MachineAdministrationTargetV1Schema), {});
 export type MachineAdministrationTargetsV1 = z.infer<typeof MachineAdministrationTargetsV1Schema>;
 
-/** Portable execution-origin policy, distinct from device target memory. */
+/** Retired Account carrier. Stored readers tolerate it; Run-on uses only local target memory. */
 export const MachineAdministrationSelectionsV1Schema = lazyZodSchema(() => z.strictObject({
   v: z._default(z.literal(1), 1),
   pluginExecutionOriginsByPluginId: z._default(boundedRecord(PluginMachineExecutionOriginV1Schema), {}),

@@ -21,6 +21,7 @@ import {
     type WorkspaceSyncSeedRoutingV1,
     type SessionActionRpcOriginV1,
     type SocketRpcTransportAcknowledgementV1,
+    type SocketRpcAnsweringClientV1,
 } from "@happier-dev/protocol/socketRpc";
 
 import {
@@ -54,6 +55,8 @@ export type RpcForwardResult =
     | Readonly<{
         ok: true;
         result: unknown;
+        answeringClientId?: string;
+        answeringClientIds?: readonly string[];
         transportAcknowledgement?: SocketRpcTransportAcknowledgementV1;
       }>
     | Readonly<{
@@ -114,6 +117,7 @@ export async function forwardRpcCall(params: Readonly<{
     machineAdmission?: SocketRpcMachineAdmissionContextV1;
     transportResponseEnvelopeVersion?: 1;
     callerSocketId?: string;
+    answeringClient?: SocketRpcAnsweringClientV1;
     callerSocket?: Pick<Socket, "data">;
     /** Trusted source continuation ceiling, never copied from inbound generic RPC fields. */
     callerAuthority?: SocketRpcRequestPayload['callerAuthority'];
@@ -156,6 +160,7 @@ export async function forwardRpcCall(params: Readonly<{
         graceMs: resolveRpcMethodAvailabilityGraceMs(params.method),
         pollMs: resolveRpcMethodAvailabilityPollMs(),
         excludedSocketId: params.callerSocketId,
+        answeringClient: params.answeringClient,
         ...(params.callerLifetime ? { callerLifetime: params.callerLifetime } : {}),
         discoverTargets: async () => {
             const targets = await discoverRpcTargets({
@@ -175,6 +180,12 @@ export async function forwardRpcCall(params: Readonly<{
         result: selection.type === "not-available" ? "miss" : "resolved",
     });
 
+    if (selection.type === 'ambiguous') {
+        recordRpcCallFailure(params.method, 'request_error');
+        observeRpcCall({ method: params.method, durationMs: Date.now() - callStartedAt, result: 'error' });
+        return { ok: false, error: 'Choose an exact answering client', errorCode: RPC_ERROR_CODES.CLIENT_AMBIGUOUS };
+    }
+
     if (selection.type === "self-call") {
         recordRpcSelfCallRejection(params.method);
         recordRpcCallFailure(params.method, "self_call");
@@ -190,6 +201,7 @@ export async function forwardRpcCall(params: Readonly<{
     }
 
     if (selection.type === "not-available") {
+        if (params.answeringClient) return { ok: false, error: 'Answering client unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
         return recordMethodUnavailable({
             method: params.method,
             callStartedAt,
@@ -405,6 +417,8 @@ export async function forwardRpcCall(params: Readonly<{
         return {
             ok: true,
             result: envelope.success ? envelope.data.result : response,
+            ...(params.answeringClient ? { answeringClientId: selection.target.id } : {}),
+            ...(selection.clientIds ? { answeringClientIds: selection.clientIds } : {}),
             ...(envelope.success && envelope.data.acknowledgement
                 ? { transportAcknowledgement: envelope.data.acknowledgement }
                 : {}),
