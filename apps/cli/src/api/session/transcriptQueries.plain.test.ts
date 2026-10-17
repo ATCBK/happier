@@ -13,7 +13,10 @@ import { encodeBase64, encrypt } from '@/api/encryption'
 
 import { HttpStatusError, isAuthenticationError } from '@/api/client/httpStatusError'
 import { logger } from '@/ui/logger'
+import { buildAcpAgentMessageEnvelope } from './acpMessageEnvelope'
+import { SessionMessageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1'
 import {
+  fetchCommittedTranscriptLocalIdBaseline,
   fetchLatestUserPermissionIntentFromEncryptedTranscript,
   fetchRecentTranscriptTextItemsForAcpImportFromServer,
   hasCommittedUserMessageAfterMs,
@@ -33,6 +36,31 @@ afterEach(() => {
 })
 
 describe('transcriptQueries (plaintext envelopes)', () => {
+  it.each(['plain', 'e2ee'] as const)('retains consumed source facts from every transcript scope in a cold %s identity baseline', async encryptionMode => {
+    const marker = buildAcpAgentMessageEnvelope({ provider: 'claude',
+      body: { type: 'output', data: { type: 'progress', marker: 'source_fact_consumed', reason: 'host_prompt_echo' } },
+      meta: { happier: { kind: 'source_fact_consumed.v1' } },
+    })
+    const rows = [null, 'child-run'].map((sidechainId, index) => SessionMessageV1Schema.parse({
+      id: `marker-${index}`, seq: index + 1, localId: `native-user-${index}`, sidechainId, messageRole: 'unknown', createdAt: 100,
+      content: encryptionMode === 'plain' ? { t: 'plain', v: marker }
+        : { t: 'encrypted', c: encodeBase64(encrypt(queryParams.encryptionKey, queryParams.encryptionVariant, marker)) },
+    }))
+    // Home HTTP is the boundary. Honor its role/scope filters so an incomplete
+    // reader request cannot accidentally receive the very markers it excluded.
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const query = new URL(String(url)).searchParams
+      const roles = query.get('roles')?.split(',')
+      return { status: 200, data: { messages: rows.filter(row =>
+        (!roles || roles.includes(row.messageRole!)) && (query.get('scope') === 'all' || row.sidechainId === null)),
+        hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+      } } as AxiosResponse
+    })
+    const result = await fetchCommittedTranscriptLocalIdBaseline(encryptionMode === 'plain'
+      ? { token: 't', sessionId: 's1', encryptionMode } : queryParams)
+    expect(result).toEqual({ complete: true, localIds: new Set(['native-user-0', 'native-user-1']) })
+  })
+
   it.each(['legacy', 'dataKey'] as const)('preserves authenticated %s text and permission intent', async (encryptionVariant) => {
     const payload = { role: 'user', content: { type: 'text', text: 'authenticated request' }, meta: { permissionMode: 'yolo' } }
     vi.spyOn(axios, 'get').mockResolvedValue({
