@@ -1,12 +1,12 @@
 import * as React from 'react';
-import { Platform, StyleSheet as RNStyleSheet, View } from 'react-native';
+import { StyleSheet as RNStyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { parseThemeColor } from '@/theme/parseThemeColor';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { getBlurViewComponent } from '@/components/ui/glass/blurMaterial';
+import { getBlurViewComponent, isNativeBlurAvailable } from '@/components/ui/glass/blurMaterial';
 import { resolveGlassCapability } from '@/components/ui/glass/resolveGlassCapability';
 import { useGlassBlurSetting } from '@/components/ui/glass/useGlassBlurSetting';
 import { useLiquidGlassAvailable } from '@/components/ui/glass/liquidGlass';
@@ -46,9 +46,8 @@ import { scrimMaskBand, scrimRamp } from './progressiveScrimFalloff';
  *
  * ANDROID GETS THE DIM, NOT THE BLUR
  *
- * `expo-blur` resolves its blur root by walking up to the nearest react-native-screens `Screen`,
- * which for a modal is the modal's own transparent screen — it would blur nothing. That root
- * selection is deliberate upstream behaviour, not a bug to patch around.
+ * SDK 55 Android requires an explicit content target. This scrim lives inside its modal,
+ * without a target for the content behind that modal, so it uses the shared dim fallback.
  */
 
 /**
@@ -186,11 +185,11 @@ export const OverlayScrim = React.memo(function OverlayScrim(props: OverlayScrim
     // which is the honest degradation — the dim still seats the card, it just stops being frost.
     const capability = resolveGlassCapability({
         liquidGlassAvailable,
-        blurAvailable: Platform.OS === 'ios',
+        blurAvailable: isNativeBlurAvailable(),
         webBlurAvailable: false,
         reduceTransparency,
     });
-    const showsBlur = Platform.OS === 'ios' && glassBlurEnabled && capability !== 'solid';
+    const showsBlur = isNativeBlurAvailable() && glassBlurEnabled && capability !== 'solid';
     const animatedStyle = useAnimatedStyle(() => ({ opacity: props.progress.value }), [props.progress]);
 
     return (

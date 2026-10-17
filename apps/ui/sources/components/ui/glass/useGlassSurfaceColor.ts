@@ -8,7 +8,7 @@ import { useGlassMaterialSettings } from './useGlassMaterialSettings';
 import { useGlassRuntimeEnvironment } from './glassRuntimeEnvironment';
 import { glassSurfaceTintColor, resolveGlassSurfacePlaneMaterial } from './glassSurfacePaint';
 import { resolveGlassCapability } from './resolveGlassCapability';
-import { getBlurViewComponent } from './blurMaterial';
+import { getBlurViewComponent, isNativeBlurAvailable } from './blurMaterial';
 import { getGlassViewComponent, useLiquidGlassAvailable } from './liquidGlass';
 
 /** Renderer SDKs need concrete colors rather than CSS material variables. */
@@ -34,7 +34,7 @@ export function useGlassSurfaceColor(color: string, group: GlassSurfaceGroup, ne
     const liquidGlassAvailable = useLiquidGlassAvailable();
     // Outer arrows/fades/container paint follows the same capability and SDK loaders as GlassSurface.
     const capability = resolveGlassCapability({ ...environment, settings, surfaceGroup: group, liquidGlassAvailable,
-        blurAvailable: Platform.OS === 'ios', webBlurAvailable: Platform.OS === 'web', reduceTransparency: environment.reduceTransparency === true });
+        blurAvailable: isNativeBlurAvailable(), webBlurAvailable: Platform.OS === 'web', reduceTransparency: environment.reduceTransparency === true });
     const available = tintAvailable ?? (Platform.OS === 'web' || Platform.OS === 'android' || capability === 'tint'
         || (capability === 'blur' && getBlurViewComponent() !== null)
         || (capability === 'liquidGlass' && getGlassViewComponent() !== null));

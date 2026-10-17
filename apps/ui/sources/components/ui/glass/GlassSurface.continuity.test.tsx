@@ -1,8 +1,9 @@
 import * as React from 'react';
 import type { OpaqueColorValue } from 'react-native';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { flattenTestStyle, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installExpoBlurRequireStub } from '@/dev/testkit/mocks/expoBlur';
 
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -14,27 +15,21 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock({ theme: darkTheme });
 });
 const blur = vi.hoisted(() => ({ available: true }));
-// This thin native SDK loader is the OS boundary. All material policy,
-// settings subscriptions, child state and React reconciliation remain real.
-vi.mock('./blurMaterial', () => {
-    const BlurView = (props: React.PropsWithChildren<Record<string, unknown>>) =>
-        React.createElement('NativeBlurView', props, props.children);
-    return { getBlurViewComponent: () => blur.available ? BlurView : null };
-});
+// Substitute only native SDK exports; keep the blur loader and platform policy real.
+const restoreExpoBlur = installExpoBlurRequireStub({ isAvailable: () => blur.available });
+afterAll(restoreExpoBlur);
 const liquid = vi.hoisted(() => ({ available: false }));
 vi.mock('./liquidGlass', () => ({
     useLiquidGlassAvailable: () => liquid.available,
     getGlassViewComponent: () => (props: Record<string, unknown>) => React.createElement('NativeGlassView', props),
 }));
 
-let GlassSurface: typeof import('./GlassSurface')['GlassSurface'];
-let storage: typeof import('@/sync/domains/state/storage')['storage'];
+// Resolve the real owner graph during collection, outside lifecycle-test deadlines.
+const { storage } = await import('@/sync/domains/state/storage');
+const { GlassSurface } = await import('./GlassSurface');
+const { resolveGlassPresetSettingsDelta: resolvePreset } = await import('./glassMaterial');
 let previousState: ReturnType<typeof storage.getState>;
-let resolvePreset: typeof import('./glassMaterial')['resolveGlassPresetSettingsDelta'];
-beforeAll(async () => {
-    ({ storage } = await import('@/sync/domains/state/storage'));
-    ({ GlassSurface } = await import('./GlassSurface'));
-    ({ resolveGlassPresetSettingsDelta: resolvePreset } = await import('./glassMaterial'));
+beforeAll(() => {
     previousState = storage.getState();
 });
 afterEach(() => {
@@ -61,7 +56,7 @@ describe('native material child continuity', () => {
         </GlassRuntimeEnvironmentProvider>;
         const screen = await renderScreen(scene('wallpaper'));
         expect(screen.findAllByType('NativeGlassView')).toHaveLength(0);
-        expect(screen.findAllByType('NativeBlurView')).toHaveLength(0);
+        expect(screen.findAllByType('BlurView')).toHaveLength(0);
         expect(screen.findAllByType('Rect')).toHaveLength(1);
         expect(flattenTestStyle(screen.findHostByTestId('card')?.props.style).backgroundColor).toBe('rgba(34, 28, 28, 0.25)');
         expect(flattenTestStyle(screen.findHostByTestId('inner-card')?.props.style).backgroundColor).toBe('transparent');
@@ -110,7 +105,7 @@ describe('native material child continuity', () => {
         blur.available = false;
         act(() => storage.setState({ settings: { ...previousState.settings, ...resolvePreset(previousState.settings, 'clear') } }));
         const screen = await renderScreen(<GlassSurface testID="unavailable" solidColor="#292b2d"><DraftInput /></GlassSurface>);
-        expect(screen.findAllByType('NativeBlurView')).toHaveLength(0);
+        expect(screen.findAllByType('BlurView')).toHaveLength(0);
         expect(flattenTestStyle(screen.findHostByTestId('unavailable')?.props.style)?.backgroundColor).toBe('#292b2d');
     });
     it('does not treat a nested control as glass when its containing iOS plane fell back solid', async () => {
@@ -162,7 +157,7 @@ describe('native material child continuity', () => {
         </GlassSurface>);
         const overlays = () => screen.findAllByType('Rect');
         expect(overlays()).toHaveLength(1);
-        expect(screen.findAllByType('NativeBlurView')).toHaveLength(1);
+        expect(screen.findAllByType('BlurView')).toHaveLength(1);
         expect(flattenTestStyle(screen.findHostByTestId('plane')?.props.style)?.backgroundColor).toBe('transparent');
         expect(flattenTestStyle(screen.findHostByTestId('nested')?.props.style)?.backgroundColor).toBe('transparent');
         await act(async () => { screen.changeTextByTestId('draft', 'keep the native draft'); });
@@ -192,16 +187,16 @@ describe('native material child continuity', () => {
             if (blur === 'regular') expect(screen.findByType('NativeGlassView').props.glassEffectStyle).toBe('regular');
             if (blur === 'strong') {
                 expect(screen.findAllByType('NativeGlassView')).toHaveLength(0);
-                expect(screen.findByType('NativeBlurView').props.intensity).toBe(80);
+                expect(screen.findByType('BlurView').props.intensity).toBe(80);
             }
-            if (blur === 'off') expect(screen.findAllByType('NativeBlurView')).toHaveLength(0);
+            if (blur === 'off') expect(screen.findAllByType('BlurView')).toHaveLength(0);
         }
     });
 
     it('preserves an edited input when the native blur tier becomes solid and returns', async () => {
         act(() => storage.setState({ settings: { ...previousState.settings, ...resolvePreset(previousState.settings, 'auto') } }));
         const screen = await renderScreen(<GlassSurface><DraftInput /></GlassSurface>);
-        expect(screen.findAllByType('NativeBlurView')).toHaveLength(1);
+        expect(screen.findAllByType('BlurView')).toHaveLength(1);
         await act(async () => { screen.changeTextByTestId('draft', 'keep this draft'); });
         for (const preset of ['solid', 'auto'] as const) {
             act(() => storage.setState({ settings: { ...storage.getState().settings, ...resolvePreset(storage.getState().settings, preset) } }));

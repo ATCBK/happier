@@ -47,7 +47,12 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
     return createInlinePopoverModuleMock(importOriginal);
 });
 
-let previousState: ReturnType<typeof import('@/sync/domains/state/storage')['storage']['getState']>;
+// Warm the real sync graph during collection; each fixture retains its own require bridge.
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+
+let previousState: ReturnType<typeof storage.getState>;
 beforeEach(async () => {
     routeParams.setting = undefined;
     osLinking.openSettings.mockClear();
@@ -55,8 +60,6 @@ beforeEach(async () => {
     osFeedback.alertAsync.mockClear();
     osFeedback.desktop = false;
     await loadSyncSingletonForTests();
-    const { storage } = await import('@/sync/domains/state/storage');
-    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     previousState = storage.getState();
     act(() => storage.setState({ settingsScope: { serverId: 'glass-test-server', accountId: 'glass-test-account' }, settingsVersion: 0, settings: settingsDefaults }));
 });
@@ -128,6 +131,36 @@ describe('AppShellThemeToggle', () => {
                 expect(screen.findAllByProps({ title: `settingsAppearance.glassControls.${opacity === 1 ? 'effectiveFloatingSolid' : 'effectiveTint'}` }).length).toBeGreaterThan(0);
                 standardCleanup();
             }
+        } finally {
+            Platform.OS = previousOS;
+        }
+    });
+
+    it.each(['tiles', 'compact', 'panel'] as const)('hides ineffective Android blur controls in the %s presentation while retaining tint choices', async (presentation) => {
+        const { Platform } = await import('react-native');
+        const previousOS = Platform.OS;
+        Platform.OS = 'android';
+        try {
+            const { GlassAppearanceControls } = await import('@/components/settings/appearance/GlassAppearanceControls');
+            const screen = await renderScreen(<GlassAppearanceControls presentation={presentation} />);
+            expect(screen.findByTestId('appearance-material:everywhere')).not.toBeNull();
+            expect(screen.findAll(node => typeof node.type === 'string' && String(node.props.testID ?? '').startsWith('appearance-tint:')).length).toBeGreaterThan(0);
+            expect(screen.findByTestId('appearance-blur:regular')).toBeNull();
+        } finally {
+            Platform.OS = previousOS;
+        }
+    });
+
+    it.each(['ios', 'web'] as const)('retains effective %s blur controls alongside material and tint choices', async (platform) => {
+        const { Platform } = await import('react-native');
+        const previousOS = Platform.OS;
+        Platform.OS = platform;
+        try {
+            const { GlassAppearanceControls } = await import('@/components/settings/appearance/GlassAppearanceControls');
+            const screen = await renderScreen(<GlassAppearanceControls presentation="compact" />);
+            expect(screen.findByTestId('appearance-material:everywhere')).not.toBeNull();
+            expect(screen.findAll(node => typeof node.type === 'string' && String(node.props.testID ?? '').startsWith('appearance-tint:')).length).toBeGreaterThan(0);
+            expect(screen.findByTestId('appearance-blur:regular')).not.toBeNull();
         } finally {
             Platform.OS = previousOS;
         }

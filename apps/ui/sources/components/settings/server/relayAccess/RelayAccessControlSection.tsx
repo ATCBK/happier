@@ -21,6 +21,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SelectableRow } from '@/components/ui/lists/SelectableRow';
+import { getBlurViewComponent } from '@/components/ui/glass/blurMaterial';
 import { createBackdropNativeStyle, createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import { Text } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
@@ -530,6 +531,7 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
     if (presentation === 'wizard') {
         const overlayScrimColor = theme.colors.overlay?.scrimWizard ?? theme.colors.surface.base;
         const showBusyOverlay = isBusy && activeTaskSnapshot != null;
+        const BlurView = showBusyOverlay ? getBlurViewComponent() : null;
         return (
             <View testID={props.testID} style={{ width: '100%', gap: theme.space.s12, position: 'relative' }}>
                 <View style={{ width: '100%', gap: theme.space.s12 }}>
@@ -563,31 +565,10 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
                     >
                         {Platform.OS !== 'web' ? (
                             (() => {
-                                try {
-                                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                                    const { BlurView } = require('expo-blur');
-                                    if (BlurView) {
-                                        return (
-                                            <BlurView
-                                                testID="settings.server.relayAccess.busyOverlay.frosted"
-                                                intensity={Platform.OS === 'ios' ? 12 : 3}
-                                                tint="default"
-                                                pointerEvents="none"
-                                                style={StyleSheet.absoluteFillObject}
-                                            />
-                                        );
-                                    }
-                                } catch {
-                                    return (
-                                        <View
-                                            testID="settings.server.relayAccess.busyOverlay.fallback"
-                                            pointerEvents="none"
-                                            style={[
-                                                StyleSheet.absoluteFillObject,
-                                                createBackdropNativeStyle({ backgroundColor: overlayScrimColor }),
-                                            ]}
-                                        />
-                                    );
+                                if (BlurView) {
+                                    return <BlurView testID="settings.server.relayAccess.busyOverlay.frosted"
+                                        intensity={12} tint="default" pointerEvents="none"
+                                        style={StyleSheet.absoluteFillObject} />;
                                 }
                                 return (
                                     <View

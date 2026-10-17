@@ -8,7 +8,7 @@ import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle'
 import { createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import { useReduceTransparency } from '@/hooks/ui/useReduceTransparency';
 
-import { getBlurViewComponent } from './blurMaterial';
+import { getBlurViewComponent, isNativeBlurAvailable } from './blurMaterial';
 import { getGlassViewComponent, useLiquidGlassAvailable } from './liquidGlass';
 import { resolveGlassCapability } from './resolveGlassCapability';
 import { GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, resolveGlassBackdropMap, resolveGlassSurfaceMaterial, type FloatingSurfaceRole, type GlassSurfaceGroup } from './glassMaterial';
@@ -72,7 +72,8 @@ export type GlassSurfaceProps = Pick<ViewProps, 'accessibilityRole' | 'accessibi
  * Tiered "glass" chrome material used by the bottom tab bars.
  *
  * - iOS 26 with Liquid Glass → real `GlassView` (`expo-glass-effect`).
- * - Other native builds        → translucent `expo-blur` `BlurView`.
+ * - Other iOS builds         → translucent `expo-blur` `BlurView`.
+ * - Android                  → the authored tint, without a targetless SDK view.
  * - Web                      → the group's live tint/blur projection.
  * - Reduce Transparency      → solid, without changing the stored choice.
  *
@@ -142,7 +143,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
         : resolveGlassCapability({
             liquidGlassAvailable,
             // SDK 55 Android has no shared blur target; use the honest tint fallback.
-            blurAvailable: Platform.OS === 'ios',
+            blurAvailable: isNativeBlurAvailable(),
             webBlurAvailable: Platform.OS === 'web',
             ...environment,
             reduceTransparency: reduceTransparency || environment.reduceTransparency === true,
