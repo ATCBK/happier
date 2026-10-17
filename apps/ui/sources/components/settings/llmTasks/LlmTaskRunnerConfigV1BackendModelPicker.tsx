@@ -7,6 +7,7 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { LlmTaskRunnerConfigV1WriteSchema, type LlmTaskRunnerConfigV1 } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
 
+import { NEUTRAL_AGENT_ICON_NAME } from '@/agents/backendCatalog/agentCatalogProjection';
 import { getAgentCore } from '@/agents/catalog/catalog';
 import { resolvePreferredMachineId } from '@/components/settings/pickers/resolvePreferredMachineId';
 import { useAgentModelChoices } from '@/components/settings/pickers/useAgentModelChoices';
@@ -68,7 +69,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
   const backendMenuItems = React.useMemo(() => {
     return backendEntries.map((entry) => {
       const displayAgentId = entry.iconAgentId ?? entry.catalogAgentId ?? entry.builtInAgentId;
-      const iconName = getAgentCore(displayAgentId ?? '')?.ui?.agentPickerIconName ?? 'layers-outline';
+      const iconName = getAgentCore(displayAgentId ?? '')?.ui?.agentPickerIconName ?? NEUTRAL_AGENT_ICON_NAME;
       return {
         id: entry.backendTargetKey,
         title: entry.title,

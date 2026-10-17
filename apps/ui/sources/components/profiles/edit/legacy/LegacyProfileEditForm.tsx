@@ -31,6 +31,7 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
 import { getResolvedBackendCatalogEntries, type ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
+import { NEUTRAL_AGENT_ICON_NAME } from '@/agents/backendCatalog/agentCatalogProjection';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { buildBackendTargetRouteParams } from '@/agents/backendCatalog/backendTargetRouteParams';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -210,7 +211,7 @@ function LegacyProfileEditFormReady({
 
     const getDisplayAgentIconNameForEntry = React.useCallback((entry: ResolvedBackendCatalogEntry): string => {
         const displayAgentId = getDisplayAgentIdForEntry(entry);
-        return getAgentCore(displayAgentId ?? '')?.ui.agentPickerIconName ?? 'layers-outline';
+        return getAgentCore(displayAgentId ?? '')?.ui.agentPickerIconName ?? NEUTRAL_AGENT_ICON_NAME;
     }, [getDisplayAgentIdForEntry]);
 
     const toggleFavoriteMachineId = React.useCallback((machineIdToToggle: string) => {

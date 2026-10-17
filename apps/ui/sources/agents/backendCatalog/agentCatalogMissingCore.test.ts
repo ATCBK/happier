@@ -17,6 +17,7 @@ vi.mock('@/agents/registry/generatedBundledPluginEntries', async (importOriginal
 });
 
 import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
+import { asIconName } from '@/components/ui/icons/asIconName';
 import { getEnabledAgentIds } from '@/agents/catalog/enabled';
 import { getAgentPickerOptions } from '@/agents/catalog/agentPickerOptions';
 import { getPermissionModeOptionsForAgentType, normalizePermissionModeForAgentType } from '@/sync/domains/permissions/permissionModeOptions';
@@ -34,8 +35,10 @@ describe('optional bundled Agent without a published UI core', () => {
         });
         expect(entries.map((entry) => entry.agentId)).toEqual(['claude']);
         expect(resolveAgentCatalogProjection('antigravity', { enabledAgentIds: [] })).toMatchObject({
-            agentId: 'antigravity', title: 'Antigravity', iconName: 'layers-outline', channel: null, catalogAgentId: null,
+            agentId: 'antigravity', title: 'Antigravity', iconName: 'stack-simple', channel: null, catalogAgentId: null,
         });
+        // The neutral presentation must be a glyph the icon registry ships; an unknown name draws an empty box.
+        expect(asIconName(resolveAgentCatalogProjection('antigravity', { enabledAgentIds: [] }).iconName)).toBeDefined();
     });
 
     it('keeps launcher, Settings and Roles inventories usable and excludes unavailable bundled choices', () => {
@@ -57,7 +60,7 @@ describe('optional bundled Agent without a published UI core', () => {
         });
         expect(entries).toEqual([expect.objectContaining({
             agentId: 'antigravity', title: 'Antigravity on this machine', catalogAgentId: null,
-            agentCatalogEntry: expect.objectContaining({ channel: null, iconName: 'layers-outline' }),
+            agentCatalogEntry: expect.objectContaining({ channel: null, iconName: 'stack-simple' }),
         })]);
     });
 });
