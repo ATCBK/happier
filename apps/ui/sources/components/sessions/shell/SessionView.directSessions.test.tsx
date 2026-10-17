@@ -4027,11 +4027,11 @@ describe('SessionView (direct sessions)', () => {
         v: 1,
         authority: 'account_automation',
         surface: 'agent',
-        caller: { kind: 'host' },
+        caller: { kind: 'session', sessionId: 's1', starterDepth: 0, turnDepth: 0 },
         serverId: 'server-route-1',
         sessionId: 's1',
         actionId: 'daemon.filesystem.writeFile',
-        requestId: '42279c0c-08dd-4db1-8cbc-7cfe8ecbdb0d',
+        requestId: 'bba3f744-3d49-4e65-a4f5-7abf18ea7b10',
       },
       decision: { kind: 'approve', decidedAtMs: 2 },
       execution: {
