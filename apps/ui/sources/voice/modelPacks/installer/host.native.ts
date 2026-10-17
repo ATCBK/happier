@@ -128,7 +128,7 @@ function assertOperationAvailable(
 
 function tryDelete(node: Pick<ExpoFsFile | ExpoFsDirectory, 'exists' | 'delete'>): void {
   try {
-    if (node.exists && node.delete) node.delete({ idempotent: true });
+    if (node.exists && node.delete) node.delete();
   } catch (error) {
     console.warn('model_pack_file_cleanup_failed', error);
   }
@@ -137,7 +137,7 @@ function tryDelete(node: Pick<ExpoFsFile | ExpoFsDirectory, 'exists' | 'delete'>
 function deleteRequired(node: Pick<ExpoFsFile | ExpoFsDirectory, 'exists' | 'delete'>): void {
   if (!node.exists) return;
   if (!node.delete) throw new Error('model_pack_scratch_cleanup_unavailable');
-  node.delete({ idempotent: true });
+  node.delete();
   if (node.exists) throw new Error('model_pack_scratch_cleanup_failed');
 }
 
@@ -374,7 +374,7 @@ export function createExpoModelPackInstallerHost(opts: {
         },
         resetPartial: async (filePath) => {
           const file = stagedFile(fs, freshScratchDir(), filePath);
-          tryDelete(file);
+          deleteRequired(file);
         },
         appendDownloadedChunk: async (filePath, chunk) => {
           // LB-L1: append in place — no read-back / concat / full rewrite.
@@ -405,9 +405,9 @@ export function createExpoModelPackInstallerHost(opts: {
                 : null)
             : declaredPriorInstall;
           if (liveDir.exists && freshBackupDir().exists && !freshIntentFile().exists) {
-            tryDelete(freshBackupDir());
+            deleteRequired(freshBackupDir());
           }
-          tryDelete(freshResumePlanFile());
+          deleteRequired(freshResumePlanFile());
           // Durable promote-intent marker, written BEFORE the swap window opens so
           // a crash between the two moves is recoverable on boot (X-M1).
           const intent = freshIntentFile();
@@ -479,8 +479,8 @@ export function createExpoModelPackInstallerHost(opts: {
               // before this promotion can complete, so only a later load can
               // publish an engine for the successor bytes.
               await invalidateLivePackRuntime();
+              deleteRequired(freshIntentFile());
               promotionSettled = true;
-              tryDelete(freshIntentFile());
               tryDelete(freshBackupDir());
             },
             rollback: async () => {

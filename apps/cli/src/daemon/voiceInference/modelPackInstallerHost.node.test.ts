@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import fileSystem from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -80,7 +82,83 @@ function createTestNodeModelPackInstallerHost(
 }
 
 describe('node model-pack installer host — real Range resume (FIND-010)', () => {
-  it('logs genuine partial stat and cleanup failures locally while absent files stay quiet', async () => {
+  it('logs failed postcommit backup cleanup without failing commit or replacing new live bytes', async () => {
+    const packId = 'backup-cleanup-warning';
+    const bytes = new Uint8Array([2]);
+    const manifest = { packId, kind: 'tts_sherpa', model: 'kokoro', version: 'v2',
+      files: [{ path: 'model.bin', url: 'https://models.example/model.bin', sha256: sha256Hex(bytes), sizeBytes: 1 }] } satisfies ModelPackManifest;
+    const liveDir = join(packsRootDir, packId);
+    const backupDir = join(packsRootDir, `.${packId}.backup`);
+    await mkdir(liveDir);
+    await writeFile(join(liveDir, 'model.bin'), new Uint8Array([1]));
+    const logPath = join(root, 'backup-warning.log');
+    await writeFile(logPath, '');
+    const log = new Logger({ logFilePath: logPath, pruneCurrentProcessLogs: false, allowDangerousRemoteLogging: false });
+    const restore = bindProcessLogger(log);
+    const cleanupError = Object.assign(new Error('EACCES_postcommit_backup_cleanup'), { code: 'EACCES' });
+    const remove = fileSystem.rm;
+    // Node filesystem IO is the system boundary; all other paths use the real implementation.
+    const removeSpy = vi.spyOn(fileSystem, 'rm').mockImplementation(async (path, options) => {
+      if (String(path) === backupDir) throw cleanupError;
+      return remove(path, options);
+    });
+    try {
+      syncBuiltinESMExports();
+      const host = createTestNodeModelPackInstallerHost({ packsRootDir });
+      const staging = await host.beginStaging(packId, deriveModelPackStagingPlan(manifest));
+      try {
+        await staging.appendDownloadedChunk('model.bin', bytes);
+        await staging.writeManifest(manifest);
+        const promotion = await staging.promote({ scopeKey: 'fixture', identityKey: packId });
+        await expect(promotion.commit()).resolves.toBeUndefined();
+        expect(await readFile(join(liveDir, 'model.bin'))).toEqual(Buffer.from(bytes));
+        expect(await exists(join(packsRootDir, `.${packId}.promote-intent`))).toBe(false);
+        expect(await exists(backupDir)).toBe(true);
+        log.flushSync();
+        expect(await readFile(logPath, 'utf8')).toContain(cleanupError.message);
+      } finally { await staging.cleanup(); }
+    } finally {
+      try {
+        removeSpy.mockRestore();
+        syncBuiltinESMExports();
+      } finally { restore(); }
+    }
+  });
+
+  it.each(['first install', 'update'] as const)('rejects commit intent deletion before settling a node %s and permits rollback', async (mode) => {
+    const before = new Uint8Array([1]);
+    const after = new Uint8Array([2]);
+    const packId = 'intent-delete';
+    const manifest = { packId, kind: 'tts_sherpa', model: 'kokoro', version: 'v2',
+      files: [{ path: 'model.bin', url: 'https://models.example/model.bin', sha256: sha256Hex(after), sizeBytes: 1 }] } satisfies ModelPackManifest;
+    const liveDir = join(packsRootDir, packId);
+    if (mode === 'update') {
+      await mkdir(liveDir);
+      await writeFile(join(liveDir, 'model.bin'), before);
+    }
+    const host = createTestNodeModelPackInstallerHost({ packsRootDir });
+    const staging = await host.beginStaging(packId, deriveModelPackStagingPlan(manifest));
+    try {
+      await staging.appendDownloadedChunk('model.bin', after);
+      await staging.writeManifest(manifest);
+      const promotion = await staging.promote(mode === 'update' ? { scopeKey: 'fixture', identityKey: packId } : null);
+      const marker = join(packsRootDir, `.${packId}.promote-intent`);
+      const intent = await readFile(marker);
+      await rm(marker);
+      await mkdir(marker);
+      await writeFile(join(marker, 'blocks-delete'), 'retained');
+      await expect(promotion.commit()).rejects.toMatchObject({ code: 'ERR_FS_EISDIR' });
+      await rm(marker, { recursive: true });
+      await writeFile(marker, intent);
+      await promotion.rollback();
+      await promotion.completeRollback();
+      expect(await exists(liveDir)).toBe(mode === 'update');
+      if (mode === 'update') expect(await readFile(join(liveDir, 'model.bin'))).toEqual(Buffer.from(before));
+      expect(await readModelPackPromotionIntents(packsRootDir)).toEqual([]);
+    } finally { await staging.cleanup(); }
+  });
+
+  it('logs genuine partial stat failures and rejects required reset failure while absent files stay quiet', async () => {
     const logPath = join(root, 'warning.log');
     await writeFile(logPath, '');
     const log = new Logger({ logFilePath: logPath, pruneCurrentProcessLogs: false, allowDangerousRemoteLogging: false });
@@ -102,11 +180,10 @@ describe('node model-pack installer host — real Range resume (FIND-010)', () =
       await writeFile(logPath, '');
       await mkdir(join(scratch, 'model.bin'));
       await writeFile(join(scratch, 'model.bin', 'retained.bin'), 'retained');
-      await staging.resetPartial('model.bin');
+      await expect(staging.resetPartial('model.bin')).rejects.toMatchObject({ code: 'ERR_FS_EISDIR' });
       expect(await readFile(join(scratch, 'model.bin', 'retained.bin'), 'utf8')).toBe('retained');
       log.flushSync();
       expect(statLog).toContain('ENOTDIR');
-      expect(await readFile(logPath, 'utf8')).toContain('EISDIR');
     } finally { await staging.cleanup(); restore(); }
   });
 

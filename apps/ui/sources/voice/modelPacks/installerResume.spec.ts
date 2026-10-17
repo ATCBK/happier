@@ -57,12 +57,14 @@ function streamResponse(bytes: Uint8Array, status: number): any {
 }
 
 describe('Expo native host — real Range resume (FIND-010)', () => {
-  it('reports failed partial reads and cleanup while absent files stay quiet', async () => {
+  it('reports failed partial reads and rejects required reset failure while absent files stay quiet', async () => {
     const { fs, files } = createMemFs();
     const bytes = new Uint8Array([1]);
     const manifest = makeManifest(bytes);
     seedResumePlan(files, manifest);
     files.set('file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin', bytes);
+    files.set(`${PACK_DIR}/model.bin`, bytes);
+    files.set(`${PACK_DIR}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
     const readError = new Error('EIO_partial_read');
     const cleanupError = new Error('EACCES_partial_delete');
     const BaseFile = fs.File;
@@ -82,10 +84,10 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
       await staging.resetPartial('absent.bin');
       expect(warning).not.toHaveBeenCalled();
       expect(await staging.partialByteLength('model.bin')).toBe(0);
-      await staging.resetPartial('model.bin');
+      await expect(staging.resetPartial('model.bin')).rejects.toBe(cleanupError);
       expect(files.get('file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin')).toEqual(bytes);
+      expect(files.get(`${PACK_DIR}/model.bin`)).toEqual(bytes);
       expect(warning.mock.calls.flat()).toContain(readError);
-      expect(warning.mock.calls.flat()).toContain(cleanupError);
     } finally { await staging.cleanup(); warning.mockRestore(); }
   });
 

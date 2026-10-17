@@ -63,6 +63,8 @@ export function createMemFs(): MemFs {
       // Directories are implicit (defined by the files they contain).
     }
     delete() {
+      // Expo's native bridge rejects any JS arguments for File/Directory.delete().
+      if (arguments.length > 0) throw new Error('expo_delete_invalid_argument_count');
       const prefix = `${this.uri}/`;
       for (const key of Array.from(files.keys())) {
         if (key === this.uri || key.startsWith(prefix)) files.delete(key);
@@ -191,6 +193,7 @@ export function createMemFs(): MemFs {
       return new TextDecoder().decode(files.get(this.uri) ?? new Uint8Array());
     }
     delete() {
+      if (arguments.length > 0) throw new Error('expo_delete_invalid_argument_count');
       files.delete(this.uri);
     }
     arrayBuffer(): Promise<ArrayBuffer> {

@@ -470,9 +470,7 @@ export function createNodeModelPackInstallerHost(opts: {
           }
         },
         resetPartial: async (filePath) => {
-          await rm(scratchPath(filePath), { force: true }).catch((error) => {
-            logger.warnLocalFile('model_pack_partial_cleanup_failed', error);
-          });
+          await rm(scratchPath(filePath), { force: true });
         },
         appendDownloadedChunk: async (filePath, chunk) => {
           const target = scratchPath(filePath);
@@ -499,7 +497,7 @@ export function createNodeModelPackInstallerHost(opts: {
             recovery: null,
           };
           if ((await pathExists(liveDir)) && (await pathExists(backupDir)) && !(await pathExists(intentFile))) {
-            await rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+            await rm(backupDir, { recursive: true, force: true });
           }
           // Host-owned scratch metadata is never part of the installed pack.
           await rm(resumePlanFile, { force: true });
@@ -558,11 +556,13 @@ export function createNodeModelPackInstallerHost(opts: {
             },
             commit: async () => {
               if (promotionSettled) return;
-              promotionSettled = true;
               // Clearing intent is the commit linearization point. If cleanup
               // crashes afterwards, startup sees an orphan backup and drops it.
-              await rm(intentFile, { force: true }).catch(() => undefined);
-              await rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+              await rm(intentFile, { force: true });
+              promotionSettled = true;
+              await rm(backupDir, { recursive: true, force: true }).catch((error: unknown) => {
+                logger.warnLocalFile('model_pack_backup_cleanup_failed', error);
+              });
             },
             rollback: async () => {
               if (promotionSettled) return;
