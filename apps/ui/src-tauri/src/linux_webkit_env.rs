@@ -63,8 +63,17 @@ pub fn apply_before_gtk_init() {
         default_wayland_socket_present(),
         gdk_backend.as_deref(),
     ) {
-        std::env::set_var(NVIDIA_EXPLICIT_SYNC_VAR, "1");
+        disable_nvidia_explicit_sync();
     }
+}
+
+fn disable_nvidia_explicit_sync() {
+    std::env::set_var(NVIDIA_EXPLICIT_SYNC_VAR, "1");
+    // Tauri's logger is not installed yet; stderr also reaches desktop session logs.
+    eprintln!(
+        "Happier: applying NVIDIA Wayland startup mitigation (__NV_DISABLE_EXPLICIT_SYNC=1); \
+         an explicit user value overrides this default (tauri-apps/tauri#10702)"
+    );
 }
 
 #[cfg(test)]
@@ -175,5 +184,32 @@ mod tests {
                 "GDK_BACKEND={backend}"
             );
         }
+    }
+
+    #[test]
+    fn workaround_sets_an_inherited_default_and_reports_activation() {
+        const CHILD: &str = "HAPPIER_TEST_NVIDIA_EXPLICIT_SYNC_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            super::disable_nvidia_explicit_sync();
+            let inherited = std::process::Command::new("/bin/sh")
+                .args(["-c", "test \"$__NV_DISABLE_EXPLICIT_SYNC\" = 1"])
+                .status()
+                .expect("start the child that inherits the WebKit environment");
+            assert!(inherited.success());
+            return;
+        }
+
+        // Environment mutation runs in a separate process, away from other test threads.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", std::thread::current().name().unwrap(), "--nocapture"])
+            .env(CHILD, "1")
+            .env_remove(super::NVIDIA_EXPLICIT_SYNC_VAR)
+            .output()
+            .expect("start the isolated workaround test");
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            !output.stderr.is_empty(),
+            "activating the graphics mitigation must be observable before GTK starts"
+        );
     }
 }
