@@ -273,6 +273,72 @@ describe('web glass material', () => {
             standardCleanup();
         }
     });
+    it('steps the tertiary meta inside a card up on glass with a picture behind it, below the secondary step, and leaves unbacked glass alone', async () => {
+        const { Text } = await import('@/components/ui/text/Text');
+        const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials } = await import('./glassMaterial');
+        const { darkTheme } = await import('@/theme');
+        themeMode.dark = true;
+        const rgba = (value: unknown) => Color(String(value)).rgb().string();
+        const inkOf = (screen: Awaited<ReturnType<typeof renderScreen>>, text: string) => (flattenTestStyle(
+            screen.findAll(node => String(node.type) === 'Text' && node.props.children === text)[0]?.props.style) as Record<string, unknown> | null)?.color;
+        for (const [group, atmosphereBehind, backed] of [
+            ['card', 'wallpaper', true], ['floating', 'band', true], ['card', 'none', false],
+        ] as const) {
+            const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
+                <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind }}>
+                    <GlassSurface surfaceGroup={group} finishRole={null}>
+                        <Text style={{ color: darkTheme.colors.text.secondary }}>Secondary line</Text>
+                        <Text style={{ color: darkTheme.colors.text.tertiary }}>Meta line</Text>
+                    </GlassSurface>
+                </GlassRuntimeEnvironmentProvider>
+            </GlassMaterialSettingsProvider>);
+            if (!backed) {
+                expect(inkOf(screen, 'Meta line')).toBe(darkTheme.colors.text.tertiary);
+            } else {
+                const secondary = Color(inkOf(screen, 'Secondary line') as string);
+                const tertiary = Color(inkOf(screen, 'Meta line') as string);
+                // The theme's own tertiary is one quiet step; here it is primary ink, still fainter than the secondary step.
+                expect(rgba(tertiary)).not.toBe(rgba(darkTheme.colors.text.tertiary));
+                expect(tertiary.alpha()).toBeGreaterThan(0.4);
+                expect(tertiary.alpha()).toBeLessThan(secondary.alpha());
+                expect(tertiary.rgb().array().slice(0, 3)).toEqual(Color(darkTheme.colors.text.primary).rgb().array().slice(0, 3));
+            }
+            standardCleanup();
+        }
+    });
+    it('reads quiet head lines in the primary ink where the cleared page is the Wallpaper picture itself, and gives Elements on it their own ink', async () => {
+        const { SectionActionButton } = await import('@/components/ui/lists/SectionActionButton');
+        const { Text } = await import('@/components/ui/text/Text');
+        const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials } = await import('./glassMaterial');
+        const { darkTheme } = await import('@/theme');
+        themeMode.dark = true;
+        const rgba = (value: unknown) => Color(String(value)).rgb().string();
+        const colorOf = (screen: Awaited<ReturnType<typeof renderScreen>>, text: string) => rgba((flattenTestStyle(
+            screen.findAll(node => String(node.type) === 'Text' && node.props.children === text)[0]?.props.style) as Record<string, unknown> | null)?.color);
+        for (const [atmosphereBehind, onPicture] of [['wallpaper', true], ['band', false], ['none', false]] as const) {
+            const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('solid') }}>
+                <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind }}>
+                    <GlassSurface plane surfaceGroup="content" finishRole={null}>
+                        <SectionActionButton testID="customize" title="Customize" icon="sliders-horizontal" onPress={() => {}} />
+                        <Text style={{ color: darkTheme.colors.text.tertiary }}>Overview is yours now</Text>
+                        <GlassSurface surfaceGroup="card" finishRole={null}>
+                            <Text style={{ color: darkTheme.colors.text.tertiary }}>On a card</Text>
+                        </GlassSurface>
+                    </GlassSurface>
+                </GlassRuntimeEnvironmentProvider>
+            </GlassMaterialSettingsProvider>);
+            const primary = Color(darkTheme.colors.text.primary).rgb().string();
+            expect(colorOf(screen, 'Customize')).toBe(onPicture ? primary : Color(darkTheme.colors.text.secondary).rgb().string());
+            expect(colorOf(screen, 'Overview is yours now')).toBe(onPicture ? primary : Color(darkTheme.colors.text.tertiary).rgb().string());
+            // Solid Elements stand on their own paint, so their quiet ink stays the theme's.
+            expect(colorOf(screen, 'On a card')).toBe(Color(darkTheme.colors.text.tertiary).rgb().string());
+            standardCleanup();
+        }
+    });
     it('gives panels (dialogs and anchored panels) the page at a heavy coat at Subtle, landing on the floating paint over a plain page, while menus keep their hair of tint', async () => {
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
         const { glassPresetMaterials } = await import('./glassMaterial');

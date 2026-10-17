@@ -6,7 +6,9 @@ import {
 import * as React from 'react';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { GlassSurface, useGlassContentOverWallpaper } from '@/components/ui/glass/GlassSurface';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
@@ -36,16 +38,20 @@ export const EmptySlot = React.memo(function EmptySlot(
   }>,
 ) {
   const { theme } = useUnistyles();
+  // Directly on the Wallpaper picture the page has no colour behind the slot, so its line would sit on raw
+  // pixels (dark ink on a dark patch); it stands on Elements there, as every card on that plane does. Its
+  // dashed edge steps up to the quiet ink with it, since the ordinary hairline vanishes on glass.
+  const overPicture = useGlassContentOverWallpaper();
   const colors = React.useMemo(
     () => ({
-      border: theme.colors.border.default,
+      border: overPicture ? theme.colors.text.tertiary : theme.colors.border.default,
       activeFill: theme.colors.surface.selected,
       focusRing: theme.colors.border.focus,
     }),
-    [theme],
+    [theme, overPicture],
   );
   const row = props.labelRole === 'row';
-  return (
+  const slot = (
     <HappierEmptySlot
       testID={props.testID}
       colors={colors}
@@ -98,9 +104,18 @@ export const EmptySlot = React.memo(function EmptySlot(
       style={props.style}
     />
   );
+  return overPicture ? (
+    <GlassSurface surfaceGroup="card" finishRole={null} style={styles.ground}>
+      {slot}
+    </GlassSurface>
+  ) : (
+    slot
+  );
 });
 
 const styles = StyleSheet.create((theme) => ({
+  // Takes the slot's place in its container (the slot grows with it) and follows the slot's own radius.
+  ground: { flexGrow: 1, minWidth: 0, borderRadius: PAGE_LIST_METRICS.sheetRadiusPx },
   label: {
     ...Typography.default(),
     ...happierPageTextMetrics('meta'),
