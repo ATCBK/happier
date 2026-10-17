@@ -4,12 +4,16 @@ import tweetnacl from 'tweetnacl';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol';
 
 import { decodeBase64 } from '@/api/encryption';
+import { createAccountProfileFixture, createAccountTokenFixture } from '@/testkit/backends/accountFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
 import { setStdioTtyForTest } from '@/testkit/process/stdio';
 
+const accountId = 'pair-remote-account';
+const localToken = createAccountTokenFixture(accountId);
+const signingSeed = new Uint8Array(32).fill(9);
 const spawnSyncMock = vi.fn();
 
 vi.mock('cross-spawn', () => {
@@ -56,10 +60,14 @@ describe('auth pair-remote (ssh)', () => {
   it('orchestrates remote request + local approve + remote wait using ssh', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
+    app.get(`/v1/user/${accountId}`, async (request) => {
+      expect(request.headers.authorization).toBe(`Bearer ${localToken}`);
+      return { user: createAccountProfileFixture({ accountId, signingSeed }) };
+    });
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
-      if (authHeader !== 'Bearer local-token') return reply.code(401).send({ error: 'unauthorized' });
+      if (authHeader !== `Bearer ${localToken}`) return reply.code(401).send({ error: 'unauthorized' });
       const body = req.body as { publicKey?: unknown; response?: unknown } | undefined;
       const publicKey = typeof body?.publicKey === 'string' ? body.publicKey : '';
       const response = typeof body?.response === 'string' ? body.response : '';
@@ -82,7 +90,7 @@ describe('auth pair-remote (ssh)', () => {
       vi.resetModules();
       const { writeCredentialsLegacy } = await import('@/persistence');
       const legacySecret = new Uint8Array(32).fill(9);
-      await writeCredentialsLegacy({ secret: legacySecret, token: 'local-token' });
+      await writeCredentialsLegacy({ secret: legacySecret, token: localToken });
 
       const remoteKeypair = tweetnacl.box.keyPair();
       const remotePublicKey = Buffer.from(remoteKeypair.publicKey).toString('base64');
@@ -166,10 +174,14 @@ describe('auth pair-remote (ssh)', () => {
   it('skips the post-pair repair check when the remote CLI cannot report the paired server id', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
+    app.get(`/v1/user/${accountId}`, async (request) => {
+      expect(request.headers.authorization).toBe(`Bearer ${localToken}`);
+      return { user: createAccountProfileFixture({ accountId, signingSeed }) };
+    });
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
-      if (authHeader !== 'Bearer local-token') return reply.code(401).send({ error: 'unauthorized' });
+      if (authHeader !== `Bearer ${localToken}`) return reply.code(401).send({ error: 'unauthorized' });
       const body = req.body as { publicKey?: unknown; response?: unknown } | undefined;
       const publicKey = typeof body?.publicKey === 'string' ? body.publicKey : '';
       const response = typeof body?.response === 'string' ? body.response : '';
@@ -191,7 +203,7 @@ describe('auth pair-remote (ssh)', () => {
       });
       vi.resetModules();
       const { writeCredentialsLegacy } = await import('@/persistence');
-      await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(9), token: 'local-token' });
+      await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(9), token: localToken });
 
       const remoteKeypair = tweetnacl.box.keyPair();
       const remotePublicKey = Buffer.from(remoteKeypair.publicKey).toString('base64');
@@ -244,10 +256,14 @@ describe('auth pair-remote (ssh)', () => {
   it('reuses the approving machine data key when pairing a remote machine', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
+    app.get(`/v1/user/${accountId}`, async (request) => {
+      expect(request.headers.authorization).toBe(`Bearer ${localToken}`);
+      return { user: createAccountProfileFixture({ accountId, signingSeed, machineKey: new Uint8Array(32).fill(7) }) };
+    });
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
-      if (authHeader !== 'Bearer local-token') return reply.code(401).send({ error: 'unauthorized' });
+      if (authHeader !== `Bearer ${localToken}`) return reply.code(401).send({ error: 'unauthorized' });
       const body = req.body as { publicKey?: unknown; response?: unknown } | undefined;
       const publicKey = typeof body?.publicKey === 'string' ? body.publicKey : '';
       const response = typeof body?.response === 'string' ? body.response : '';
@@ -273,7 +289,7 @@ describe('auth pair-remote (ssh)', () => {
       await writeCredentialsDataKey({
         publicKey: tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey,
         machineKey,
-        token: 'local-token',
+        token: localToken,
       });
 
       const remoteKeypair = tweetnacl.box.keyPair();
