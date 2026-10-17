@@ -18,7 +18,7 @@ if (process.env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING) {
         const min = String(now.getMinutes()).padStart(2, '0');
         const sec = String(now.getSeconds()).padStart(2, '0');
         consolidatedLogFile = join(logsDir, `${month}-${day}-${hour}-${min}-${sec}.log`);
-        console.log(`[PINO] Remote debugging logs enabled - writing to ${consolidatedLogFile}`);
+        console.error(`[PINO] Remote debugging logs enabled - writing to ${consolidatedLogFile}`);
     } catch (error) {
         console.error('Failed to create logs directory:', error);
     }
@@ -76,8 +76,15 @@ export function createLoggingTransportTargets(env: NodeJS.ProcessEnv = process.e
     }
 
     if (env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING && consolidatedLogFile) {
+        // Preserve the single JSON destination's level when adding a second output.
+        const fileLevel = transports.length === 0 ? 'trace' : undefined;
+        // A file transport replaces Pino's default stdout destination. Keep both outputs.
+        if (transports.length === 0) {
+            transports.push({ target: 'pino/file', level: 'trace', options: { destination: 1 } });
+        }
         transports.push({
             target: 'pino/file',
+            level: fileLevel,
             options: {
                 destination: consolidatedLogFile,
                 mkdir: true,
