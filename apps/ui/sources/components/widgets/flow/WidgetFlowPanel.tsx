@@ -267,7 +267,7 @@ export function WidgetPreviewWell(props: Readonly<{
 export const widgetFlowText = StyleSheet.create((theme) => ({
     primary: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.primary },
     strong: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
-    secondary: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.tertiary },
+    secondary: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.secondary },
     link: { ...Typography.default('semiBold'), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.primary },
 }));
 
@@ -291,8 +291,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     mark: { height: happierPageTextMetrics('sectionTitle').lineHeight, justifyContent: 'center' },
     titleBlock: { flex: 1, minWidth: 0, gap: theme.space.s2 },
     title: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), color: theme.colors.text.primary },
-    hint: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
-    provenance: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, marginTop: theme.space.s2 },
+    hint: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary },
+    provenance: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary, marginTop: theme.space.s2 },
     body: { paddingHorizontal: theme.space.s4 },
     bodyFill: { flex: 1, minHeight: 0 },
     // Bounded by its floating surface: the body gives way and scrolls; header and footer stay.
@@ -331,7 +331,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderTopColor: theme.colors.border.default,
     },
     factPhone: { flexDirection: 'column', gap: theme.space.s2 },
-    factLabel: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), width: 88, color: theme.colors.text.tertiary },
+    // A flow panel is panel glass: its quiet labels are the secondary role, which takes the stronger backed step
+    // over a picture and keeps its place over a chart; tertiary sank into both.
+    factLabel: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), width: 88, color: theme.colors.text.secondary },
     factLabelPhone: { width: undefined },
     factBody: { flex: 1, minWidth: 0, gap: theme.space.s2 },
     textAction: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, borderRadius: MENU_ROW_METRICS.radiusPx },

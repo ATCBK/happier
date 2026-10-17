@@ -743,7 +743,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     listHeader: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, paddingLeft: HAPPIER_COLLECTION_LIST_METRICS.contentInset - 4, paddingRight: theme.space.s10, paddingTop: HAPPIER_COLLECTION_LIST_METRICS.headerPaddingTop + 4, paddingBottom: theme.space.s8 },
     titleBlock: { flex: 1, minWidth: 0, gap: 1 },
     title: { ...listText('title'), color: theme.colors.text.primary },
-    hint: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
+    // Panel glass lets the page show through at a heavy coat; the faint ink here is the secondary role, which takes
+    // the stronger backed step over a picture (tertiary would sink into it).
+    hint: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary },
     search: { marginHorizontal: theme.space.s10, marginBottom: theme.space.s4 },
     // The Collection list's column geometry and type rhythm (`HAPPIER_COLLECTION_LIST_*`).
     listContent: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset - 4, paddingBottom: theme.space.s10 },
@@ -808,7 +810,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     sketchCardHalf: { flex: 1, minWidth: 0 },
     legend: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, marginTop: theme.space.s12 },
     legendItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-    legendLabel: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, marginLeft: 3 },
+    legendLabel: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary, marginLeft: 3 },
     askDraft: {
         borderRadius: MENU_ROW_METRICS.radiusPx,
         borderWidth: StyleSheet.hairlineWidth,
