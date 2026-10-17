@@ -13324,6 +13324,8 @@ const widgetAddTranslations = { ru: {
         countOnBoard: ({ count }) => `На доске: ${count}`,
         countInCompanion: ({ count }) => `В компаньоне: ${count}`,
         thisPage: 'Эта страница',
+        ownValue: 'Своё значение',
+        ownValueHint: 'Задайте здесь; значение перестаёт следовать',
         thisProject: 'Этот проект',
         thisCheckout: 'Эта рабочая копия',
         areaPinned: 'Закреплённые',

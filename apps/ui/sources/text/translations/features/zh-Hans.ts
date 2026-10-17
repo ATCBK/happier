@@ -13282,6 +13282,8 @@ const widgetAddTranslations = { 'zh-Hans': {
         countOnBoard: ({ count }) => `看板上有 ${count} 个`,
         countInCompanion: ({ count }) => `伴侣中有 ${count} 个`,
         thisPage: '此页面',
+        ownValue: '自定义值',
+        ownValueHint: '在此设置；不再跟随',
         thisProject: '此项目',
         thisCheckout: '此检出',
         areaPinned: '已固定',

@@ -13312,6 +13312,8 @@ const widgetAddTranslations = { pl: {
         countOnBoard: ({ count }) => `Na tablicy: ${count}`,
         countInCompanion: ({ count }) => `W towarzyszu: ${count}`,
         thisPage: 'Ta strona',
+        ownValue: 'Własna wartość',
+        ownValueHint: 'Ustaw tutaj; przestaje podążać',
         thisProject: 'Ten projekt',
         thisCheckout: 'Ta kopia robocza',
         areaPinned: 'Przypięte',

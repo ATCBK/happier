@@ -13298,6 +13298,8 @@ const widgetAddTranslations = { pt: {
         countOnBoard: ({ count }) => `${count} no quadro`,
         countInCompanion: ({ count }) => `${count} no acompanhante`,
         thisPage: 'Esta página',
+        ownValue: 'Valor próprio',
+        ownValueHint: 'Defina aqui; deixa de acompanhar',
         thisProject: 'Este projeto',
         thisCheckout: 'Esta cópia de trabalho',
         areaPinned: 'Fixados',

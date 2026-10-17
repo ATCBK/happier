@@ -13286,6 +13286,8 @@ const widgetAddTranslations = { ja: {
         countOnBoard: ({ count }) => `ボードに ${count} 件`,
         countInCompanion: ({ count }) => `コンパニオンに ${count} 件`,
         thisPage: 'このページ',
+        ownValue: '独自の値',
+        ownValueHint: 'ここで設定します。追従しなくなります',
         thisProject: 'このプロジェクト',
         thisCheckout: 'このチェックアウト',
         areaPinned: 'ピン留め',

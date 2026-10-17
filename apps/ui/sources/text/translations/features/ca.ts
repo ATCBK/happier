@@ -13321,6 +13321,8 @@ const widgetAddTranslations = { ca: {
         countOnBoard: ({ count }) => `${count} al tauler`,
         countInCompanion: ({ count }) => `${count} a l’acompanyant`,
         thisPage: 'Aquesta pàgina',
+        ownValue: 'Valor propi',
+        ownValueHint: 'Defineix-lo aquí; deixa de seguir',
         thisProject: 'Aquest projecte',
         thisCheckout: 'Aquesta còpia de treball',
         areaPinned: 'Fixats',

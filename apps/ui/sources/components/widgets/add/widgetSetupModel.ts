@@ -162,7 +162,8 @@ export type WidgetSetupRow =
     /** Each viewer's own connection; nothing to choose here. */
     | Readonly<{ kind: 'viewer' }>
     | Readonly<{ kind: 'needed' }>
-    | Readonly<{ kind: 'invalid'; label: string | null; issue: WidgetInputIssueV1 }>;
+    /** `follows` when what stopped resolving is the surface value the input follows, not its own value. */
+    | Readonly<{ kind: 'invalid'; label: string | null; issue: WidgetInputIssueV1; follows?: true }>;
 
 function issueFor(resolution: WidgetBindingResolutionV1, path: string): WidgetInputIssueV1 | null {
     return resolution.status === 'ready' ? null : resolution.fields.find((issue) => issue.path === path) ?? null;
@@ -213,7 +214,7 @@ export function describeWidgetSetupRow(input: Readonly<{
         return { kind: 'viewer' };
     }
     if (binding?.kind === 'context') {
-        if (issue) return issue.status === 'selection_required' ? { kind: 'needed' } : { kind: 'invalid', label: entry.follow?.label ?? null, issue };
+        if (issue) return issue.status === 'selection_required' ? { kind: 'needed' } : { kind: 'invalid', label: entry.follow?.label ?? null, issue, follows: true };
         return { kind: 'follows', label: entry.follow?.label ?? binding.slot, valueLabel: offered[0]?.label ?? null };
     }
     if (binding?.kind === 'value') {

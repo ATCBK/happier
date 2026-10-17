@@ -106,6 +106,8 @@ export type WidgetAddTranslation = Readonly<{
     widthFull: string;
     thisSession: string;
     thisPage: string;
+    ownValue: string;
+    ownValueHint: string;
     thisProject: string;
     thisCheckout: string;
     areaPinned: string;
@@ -240,6 +242,8 @@ export const widgetAddTranslationsEnglish = { en: {
         countOnBoard: ({ count }) => `${count} on the board`,
         countInCompanion: ({ count }) => `${count} in Companion`,
         thisPage: 'This page',
+        ownValue: 'Own value',
+        ownValueHint: 'Set it here; it stops following',
         thisProject: 'This project',
         thisCheckout: 'This checkout',
         areaPinned: 'Pinned',
