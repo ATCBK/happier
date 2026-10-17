@@ -608,6 +608,12 @@ export function createAcpRuntime(params: {
    * Happier clients, mirroring the claude hook-driven session lifecycle.
    */
   let providerInitiatedTurnId: string | null = null;
+  /**
+   * Pending async close of a provider-initiated turn (final flush -> completion marker).
+   * A new provider run must queue behind it so lifecycle markers never reorder
+   * (task_started of the next turn before task_complete of the previous one).
+   */
+  let pendingProviderInitiatedTurnCompletion: Promise<void> | null = null;
   let turnMediaGeneration = 0;
   let startOrLoadFlight: Readonly<{ intentKey: string; promise: Promise<string> }> | null = null;
   let postStartPendingDrainFlight: Promise<void> | null = null;
@@ -1428,13 +1434,24 @@ export function createAcpRuntime(params: {
               // The provider started a run on its own (e.g. a pi extension injected a
               // prompt while the session was idle). Open a task turn so the session
               // shows as working in Happier clients instead of silently generating.
+              // Queue behind a still-pending previous completion so its task_complete
+              // cannot land after this turn's task_started.
               providerInitiatedTurnId = randomUUID();
-              params.session.sendAgentMessage(params.provider, {
-                type: 'task_started',
-                id: providerInitiatedTurnId,
-              });
-              params.onThinkingChange(true);
-              params.session.keepAlive(true, 'remote');
+              const newProviderTurnId = providerInitiatedTurnId;
+              const openProviderTurn = (): void => {
+                params.session.sendAgentMessage(params.provider, {
+                  type: 'task_started',
+                  id: newProviderTurnId,
+                });
+                params.onThinkingChange(true);
+                params.session.keepAlive(true, 'remote');
+              };
+              const pendingCompletion = pendingProviderInitiatedTurnCompletion;
+              if (pendingCompletion) {
+                void pendingCompletion.then(openProviderTurn, openProviderTurn);
+              } else {
+                openProviderTurn();
+              }
             }
           }
 
@@ -1471,16 +1488,28 @@ export function createAcpRuntime(params: {
             providerInitiatedTurnId = null;
             if (providerInitiatedTurnToComplete) {
               // Complete only after the final assistant text is durably flushed, mirroring
-              // flushTurn's flush-then-task_complete ordering so clients never see the turn
-              // complete before its last answer row lands.
-              void (async () => {
-                try {
-                  await streamedTranscriptWriter.flushAll({ reason: 'turn-end' });
-                } catch (error) {
-                  logger.debug(`[${params.provider}] Failed to flush streamed transcript after provider-initiated turn`, error);
-                }
-                params.session.sendAgentMessage(params.provider, { type: 'task_complete', id: providerInitiatedTurnToComplete });
-              })();
+              // flushTurn's flush-then-marker ordering. If the durable flush fails, mark
+              // the turn failed instead of completed so clients never see success without
+              // the final answer; a later provider start queues behind this close.
+              let closeProviderTurn: () => Promise<void>;
+              const completion = new Promise<void>((resolve) => {
+                closeProviderTurn = async (): Promise<void> => {
+                  try {
+                    await streamedTranscriptWriter.flushAll({ reason: 'turn-end' });
+                    params.session.sendAgentMessage(params.provider, { type: 'task_complete', id: providerInitiatedTurnToComplete });
+                  } catch (error) {
+                    logger.debug(`[${params.provider}] Failed to flush streamed transcript after provider-initiated turn`, error);
+                    params.session.sendAgentMessage(params.provider, { type: 'turn_failed', id: providerInitiatedTurnToComplete });
+                  } finally {
+                    if (pendingProviderInitiatedTurnCompletion === completion) {
+                      pendingProviderInitiatedTurnCompletion = null;
+                    }
+                    resolve();
+                  }
+                };
+                void closeProviderTurn();
+              });
+              pendingProviderInitiatedTurnCompletion = completion;
             }
             params.onThinkingChange(false);
             params.session.keepAlive(false, 'remote');
@@ -2247,13 +2276,12 @@ export function createAcpRuntime(params: {
 
     async cancel(): Promise<void> {
       if (!sessionId) return;
-      await streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'cancelled' });
-      // Claim the provider-initiated turn BEFORE awaiting the backend cancel: pi's abort
-      // acknowledgement waits for provider idle, so the trailing agent_end/idle can arrive
-      // (and run the idle handler below) while that await is pending. Clearing first keeps
-      // the idle path from completing a turn this cancellation is about to cancel.
+      // Claim the provider-initiated turn BEFORE the first await (abort flush included):
+      // provider idle can run while any pending await in this method is in flight, and the
+      // idle handler would otherwise complete a turn this cancellation is about to cancel.
       const providerInitiatedTurnToCancel = providerInitiatedTurnId;
       providerInitiatedTurnId = null;
+      await streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'cancelled' });
       const b = await ensureBackend();
       try {
         await b.cancel(sessionId);

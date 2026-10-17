@@ -281,6 +281,50 @@ describe('createAcpRuntime (provider-initiated turns)', () => {
     expect(taskCompleteIndex).toBeGreaterThan(assistantRowIndex);
   });
 
+  it('never lets the next provider turn open before the previous completion marker', async () => {
+    const backend = createFakeAcpRuntimeBackend();
+    const sent: any[] = [];
+    const session = createBasicSessionClientWithOverrides({
+      sendAgentMessage: (_provider, body) => {
+        sent.push(body);
+      },
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({ type: 'status', status: 'running' });
+    backend.emit({ type: 'model-output', fullText: 'answer one', fullTextScope: 'segment' });
+    backend.emit({ type: 'status', status: 'idle' });
+    // The provider immediately starts its next run while the previous close is still
+    // flushing; the new task_started must queue behind the pending task_complete.
+    backend.emit({ type: 'status', status: 'running' });
+    backend.emit({ type: 'model-output', fullText: 'answer two', fullTextScope: 'segment' });
+    backend.emit({ type: 'status', status: 'idle' });
+
+    for (let attempt = 0; attempt < 50 && sent.filter((message) => message?.type === 'task_complete').length < 2; attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+
+    const firstTaskComplete = sent.findIndex((message) => message?.type === 'task_complete');
+    const secondTaskStart = sent
+      .map((message, index) => ({ message, index }))
+      .filter((entry) => entry.message?.type === 'task_started')
+      .at(1);
+    expect(firstTaskComplete).toBeGreaterThan(-1);
+    expect(secondTaskStart?.index).toBeGreaterThan(firstTaskComplete);
+  });
+
   it('commits provider-observed user prompts to the transcript as user rows', async () => {
     const backend = createFakeAcpRuntimeBackend();
     const committedUserMessages: Array<{ text: string; opts: { localId: string; meta?: Record<string, unknown> } }> = [];
