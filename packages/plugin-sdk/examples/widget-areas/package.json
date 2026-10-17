@@ -12,7 +12,8 @@
   },
   "exports": {
     "./happier-plugin-ui/overview-native": "./ui/overview-native.tsx",
-    "./happier-plugin-ui/counter-native": "./ui/counter-native.tsx"
+    "./happier-plugin-ui/counter-native": "./ui/counter-native.tsx",
+    "./happier-plugin-ui/entity-drag-drop": "./ui/entity-drag-drop.ts"
   },
   "files": [
     "dist",

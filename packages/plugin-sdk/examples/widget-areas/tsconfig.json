@@ -5,6 +5,6 @@
     "rootDir": ".", "outDir": "dist", "noEmit": true,
     "declaration": false, "strict": true, "skipLibCheck": true, "jsx": "react"
   },
-  "include": ["index.ts", "ui/**/*.tsx"],
+  "include": ["index.ts", "entityContract.ts", "ui/**/*.ts", "ui/**/*.tsx"],
   "exclude": ["node_modules", "dist"]
 }
