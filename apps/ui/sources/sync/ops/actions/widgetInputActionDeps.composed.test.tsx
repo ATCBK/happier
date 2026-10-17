@@ -550,6 +550,7 @@ it('resolves installed Board Count choices and input admission on the consumer S
     const { encodeSessionSystemRecordRevision } = await import('../../../../../server/sources/app/session/systemRecords/sessionSystemRecordRevision');
     const instanceId = 'c15c9e20-f054-4681-ae82-cb89c6cf5533';
     let localId = 'counter';
+    let boardRecordReads = 0;
     const instance = () => ({ v: 1 as const, id: instanceId, definition: { kind: 'installed' as const,
         surface: { pluginId: 'examples.widget-areas', localId } }, bindings: {
         directory: { kind: 'value' as const, value: '/home/happier/happier-dev/packages/plugin-sdk/examples/widget-areas' },
@@ -569,8 +570,8 @@ it('resolves installed Board Count choices and input admission on the consumer S
         ]);
         if (options) return options;
         if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Promise.resolve(Response.json(features));
-        if (url.pathname === '/v2/sessions/counter-session/system-records/record') return Promise.resolve(Response.json({ record: url.searchParams.get('kind') === 'item.v1' ? record() : null }));
-        if (url.pathname === '/v2/sessions/counter-session/system-records') return Promise.resolve(Response.json({ records: [record()], nextCursor: null, hasNext: false }));
+        if (url.pathname === '/v2/sessions/counter-session/system-records/record') { boardRecordReads++; return Promise.resolve(Response.json({ record: url.searchParams.get('kind') === 'item.v1' ? record() : null })); }
+        if (url.pathname === '/v2/sessions/counter-session/system-records') { boardRecordReads++; return Promise.resolve(Response.json({ records: [record()], nextCursor: null, hasNext: false })); }
         return http.request(input, init);
     } });
     const previous = storage.getState();
@@ -639,6 +640,20 @@ it('resolves installed Board Count choices and input admission on the consumer S
         expect(invocations.length).toBeGreaterThan(0);
         expect(invocations.every(invocation => invocation.surface === 'ui' && invocation.authority === 'present_user'
             && invocation.caller.kind === 'host')).toBe(true);
+        const catalog = createWidgetCatalogActionDepsV1(account, {});
+        const definition = { kind: 'installed' as const, surface: { pluginId, localId: 'counter' } };
+        const selected = { ...session, id: 'selected-counter-session' };
+        storage.setState({ sessions: { [session.id]: session, [selected.id]: selected } });
+        const readFields = () => catalog.widgetCatalog!.readInstalledInputFields!({ surface, definition,
+            context: { surface: 'ui', authority: 'present_user' }, boundSession: { serverId: scope.serverId, sessionId: selected.id } });
+        const beforeMetadata = boardRecordReads;
+        expect(await readFields()).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'filter', inputType })]));
+        expect(boardRecordReads).toBe(beforeMetadata);
+        for (const denied of [session, selected]) {
+            storage.setState({ sessions: { [session.id]: session, [selected.id]: selected,
+                [denied.id]: { ...denied, access: { ...denied.access!, capabilities: { ...denied.access!.capabilities, readTranscript: false } } } } });
+            expect(await readFields()).toMatchObject({ ok: false, errorCode: 'widget_read_denied' });
+        }
     } finally {
         if (tree) await act(async () => { tree!.unmount(); });
         storage.setState(previous, true); account.dispose(); await connection.dispose();

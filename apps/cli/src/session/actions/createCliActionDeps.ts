@@ -1722,15 +1722,25 @@ export function createCliActionDeps(params: Readonly<{
     });
   };
 
-  const readWidgetProjection = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>) => {
+  const resolveWidgetSessionTransport = async (sessionRef: Readonly<{ serverId: string; sessionId: string }>, signal?: AbortSignal) => {
     signal?.throwIfAborted();
-    if (sessionRef && !isSameActionHomeId(sessionRef.serverId)) {
+    if (!isSameActionHomeId(sessionRef.serverId)) {
       throw Object.assign(new Error('server_scope_mismatch'), { code: 'server_scope_mismatch' });
     }
-    const transport = sessionRef ? await resolveTransportForSession(sessionRef.sessionId, signal) : null;
-    if (transport && (!transport.ok || transport.sessionId !== sessionRef!.sessionId)) {
+    const transport = await resolveTransportForSession(sessionRef.sessionId, signal);
+    if (!transport.ok || transport.sessionId !== sessionRef.sessionId) {
       throw Object.assign(new Error('widget_catalog_unavailable'), { code: 'widget_catalog_unavailable' });
     }
+    // The Home's current Account projection owns Session read authority.
+    // Machine metadata alone does not admit a widget's hosting or selected Session.
+    if (transport.rawSession.effectiveAccess?.capabilities.readTranscript !== true) {
+      throw Object.assign(new Error('widget_read_denied'), { code: 'widget_read_denied' });
+    }
+    return transport;
+  };
+  const readWidgetProjection = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>) => {
+    signal?.throwIfAborted();
+    const transport = sessionRef ? await resolveWidgetSessionTransport(sessionRef, signal) : null;
     const machineId = transport?.ok
       ? normalizeStringValue(readTransportSessionOwnerMetadata(transport)?.machineId)
       : params.machineActionDirectTargetTransport?.machineId ?? normalizeStringValue(await resolveCurrentSessionValue('machineId'));
@@ -3610,7 +3620,18 @@ export function createCliActionDeps(params: Readonly<{
       const accountId = params.credentials ? readAccountIdFromToken(params.credentials.token) : null;
       return accountId ? { serverId: widgetHomeId, accountId, isSameServerId: isSameActionHomeId } : null;
     },
-    widgetCatalog: { list: async (surface, _context, signal, boundSession) => {
+    widgetCatalog: { readInstalledInputFields: async ({ surface, definition, signal, boundSession }) => {
+      const owner = surface.owner;
+      const physicalSession = owner.kind === 'sessionBoard' || owner.kind === 'companion'
+        ? { serverId: surface.serverId, sessionId: owner.sessionId } : undefined;
+      const candidates = await readWidgetCandidates(signal, boundSession ?? physicalSession);
+      if (physicalSession && boundSession && physicalSession.sessionId !== boundSession.sessionId) {
+        await resolveWidgetSessionTransport(physicalSession, signal);
+      }
+      const candidate = candidates.find(candidate => candidate.availability === 'available'
+        && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition));
+      return candidate?.fields ?? null;
+    }, list: async (surface, _context, signal, boundSession) => {
       const port = readWidgetActionSurfacePortV1(actionDeps, surface);
       if (!port) return { ok: false, errorCode: 'unsupported_widget_surface', error: 'unsupported_widget_surface' };
       const sessionRef = boundSession ?? (surface.owner.kind === 'sessionBoard' ? { serverId: surface.serverId, sessionId: surface.owner.sessionId } : undefined);

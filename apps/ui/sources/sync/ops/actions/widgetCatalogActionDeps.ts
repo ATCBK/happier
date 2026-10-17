@@ -59,6 +59,7 @@ export async function readWidgetActionRuntimeV1(
         if (refusal) return refusal;
     } else if (!areServerProfileIdentifiersEquivalent(surface.serverId, account.serverId) || surface.accountId !== account.accountId) return unavailable('widget_scope_mismatch');
     const selectedSession = readWidgetActionSessionTargetV1(surface, sessionTarget);
+    const physicalSession = readWidgetActionSessionTargetV1(surface);
     const accountIsCurrent = () => account.accountLifetime?.isCurrent() === true && canReadActiveWidgetCatalogV1(account);
     if (!selectedSession) {
         if (!canReadActiveWidgetCatalogV1(account)) return unavailable('widget_catalog_unavailable');
@@ -67,6 +68,15 @@ export async function readWidgetActionRuntimeV1(
             isCurrent: () => accountIsCurrent() && readCurrentAppShellPluginUiProjection() === projection };
     }
     if (!areServerProfileIdentifiersEquivalent(selectedSession.serverId, account.serverId)) return unavailable('widget_scope_mismatch');
+    if (physicalSession && physicalSession.sessionId !== selectedSession.sessionId) {
+        const admission = await sync.withSessionSystemRecordRuntime(physicalSession, async runtime => {
+            return runtime.scope.accountId === account.accountId && runtime.isCurrent()
+                && runtime.session.access?.capabilities.readTranscript === true;
+        });
+        account.assertCurrent();
+        signal?.throwIfAborted();
+        if (admission.status !== 'ok' || !admission.value) return unavailable('widget_read_denied');
+    }
     const outcome = await sync.withSessionSystemRecordRuntime(selectedSession, async runtime => {
         if (runtime.scope.accountId !== account.accountId || !areServerProfileIdentifiersEquivalent(runtime.scope.serverId, account.serverId)) return unavailable('widget_scope_mismatch');
         if (!runtime.session.access?.capabilities.readTranscript) return unavailable('widget_read_denied');
@@ -97,7 +107,10 @@ export async function readWidgetActionRuntimeV1(
                 // The exact-Session request lease ends with this callback. Read
                 // current canonical Account/Session facts, never retain its authority.
                 const session = storage.getState().sessions[selectedSession.sessionId];
+                const physical = physicalSession ? storage.getState().sessions[physicalSession.sessionId] : null;
                 return accountIsCurrent() && session?.access?.capabilities.readTranscript === true
+                    && (!physicalSession || physical?.access?.capabilities.readTranscript === true
+                        && areServerProfileIdentifiersEquivalent(physical.serverId, physicalSession.serverId))
                     && areServerProfileIdentifiersEquivalent(session.serverId, selectedSession.serverId)
                     && readMachineControlTargetForSession({ ...selectedSession, accountId: account.accountId })?.machineId === target.machineId;
             } };
@@ -123,7 +136,12 @@ export function createWidgetCatalogActionDepsV1(account: LazyActionAccountContex
     const catalogDeps = { ...deps, widgetAccountScope };
     return {
         widgetAccountScope,
-        widgetCatalog: { list: async (surface, context, signal, boundSession) => {
+        widgetCatalog: { readInstalledInputFields: async ({ surface, definition, signal, boundSession }) => {
+            const runtime = await readWidgetActionRuntimeV1(surface, account, signal, boundSession, catalogDeps);
+            if ('ok' in runtime) return runtime;
+            if (!runtime.isCurrent()) return unavailable('widget_scope_unavailable');
+            return runtime.candidates.find(candidate => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition))?.inputs?.fields ?? null;
+        }, list: async (surface, context, signal, boundSession) => {
             const port = readWidgetSurfaceActionPortV1(catalogDeps, surface);
             if (!port) return unavailable('unsupported_widget_surface');
             const read = await port.read(surface, context, signal);

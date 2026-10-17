@@ -1069,7 +1069,17 @@ export type ActionExecutorDeps = Readonly<{
   /** Answering mounted area owner; a successful selection changes only its device-local presentation. */
   widgetAreaLayoutSelect?: (surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal) => Promise<ActionExecuteResult>;
   widgetInputs?: WidgetActionInputResolverV1;
-  widgetCatalog?: Readonly<{ list(surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal, boundSession?: Readonly<{ serverId: string; sessionId: string }>): Promise<readonly WidgetCatalogSourceEntryV1[] | ActionExecuteFailure> }>;
+  widgetCatalog?: Readonly<{
+    list(surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal, boundSession?: Readonly<{ serverId: string; sessionId: string }>): Promise<readonly WidgetCatalogSourceEntryV1[] | ActionExecuteFailure>;
+    /** Installed metadata needs its admitted runtime, not the surface's saved content or instance counts. */
+    readInstalledInputFields?(args: Readonly<{
+      surface: WidgetSurfaceRefV1;
+      definition: Extract<WidgetCatalogSourceEntryV1['definition'], { kind: 'installed' }>;
+      context: ActionExecutorContext;
+      signal?: AbortSignal;
+      boundSession?: Readonly<{ serverId: string; sessionId: string }>;
+    }>): Promise<Readonly<WidgetCatalogSourceEntryV1['fields']> | ActionExecuteFailure | null>;
+  }>;
   /** Host-captured viewer Account inventory for an already-admitted widget field. */
   widgetConnectedAccountOptions?: (args: Readonly<{ consumer: Extract<import('../../inputs/inputOptionsConsumer.js').InputOptionsConsumerV1, { kind: 'widget' }>;
     fieldPath: string; context: ActionExecutorContext }>) => Promise<readonly import('../../inputs/inputFields.js').InputOption[] | ActionExecuteFailure>;

@@ -12,6 +12,7 @@ import {
   verifyExternalActionMachineRequestV1,
   projectSessionAccessCapabilitiesV1,
   FeaturesResponseSchema,
+  ExternalActionExecutionAuthorizationV1Schema,
   type ExternalActionExecutionAuthorizationV1,
   type PluginInputTypeContributionV1,
 } from '@happier-dev/protocol';
@@ -107,7 +108,7 @@ describe('CLI Board Action family', () => {
     });
   });
   afterEach(async () => { restore(); vi.restoreAllMocks(); await app.close(); });
-  it.each(['counter', 'snapshot-counter'])('admits the recorded installed %s Board inputs through real type and options owners', async localId => {
+  it.each(['counter', 'snapshot-counter'].flatMap(localId => [false, true].map(native => ({ localId, native }))))('admits the recorded installed $localId Board inputs (native Account: $native) through real type and options owners', async ({ localId, native }) => {
     const serverIdentityId = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
     const accountId = '5e3a0581-6f3d-4e73-bf40-383db0be6c3e';
     const sessionId = 'cmvcclhrd007jmcc96w9yb0vx';
@@ -139,22 +140,44 @@ describe('CLI Board Action family', () => {
       resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId,
         definition: { id: 'count-kinds', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' } }],
     });
+    let revoked: 'owner' | 'selected' | null = null;
+    const selectedSessionId = 'c000000000000000000000063';
+    const signedRequests: string[] = [];
+    app.addHook('preHandler', async (request, reply) => {
+      if (request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]) {
+        signedRequests.push(request.url);
+        // Home admits an authenticated original root only for its own effect.
+        // A composite options read cannot borrow session.board.get authority.
+        if (request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] !== 'action.options.resolve') {
+          return reply.code(401).send({ error: 'not_authenticated' });
+        }
+      }
+    });
     app.get(`/v2/sessions/${sessionId}`, async () => ({ session: { ...rawSession, id: sessionId,
-      metadata: JSON.stringify({ machineId: 'machine-one' }) } }));
+      metadata: JSON.stringify({ machineId: 'machine-one' }),
+      ...(revoked === 'owner' ? { effectiveAccess: { ...rawSession.effectiveAccess!,
+        capabilities: { ...rawSession.effectiveAccess!.capabilities, readTranscript: false } } } : {}),
+    } }));
+    app.get(`/v2/sessions/${selectedSessionId}`, async (_request, reply) => revoked === 'selected'
+      ? reply.code(403).send({ error: 'forbidden' })
+      : { session: { ...rawSession, id: selectedSessionId, metadata: JSON.stringify({ machineId: 'machine-one' }) } });
     app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
     app.get('/v1/artifacts', async () => []);
     app.get(`/v2/sessions/${sessionId}/system-records/record`, async () => ({ record: null }));
     app.get(`/v2/sessions/${sessionId}/system-records`, async () => ({ records: [], hasNext: false, nextCursor: null }));
+    const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31));
+    let resourceReads = 0;
     const { executor, deps } = createCliActionExecutorHarness({ credentials: { token, encryption: null }, token,
       sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'local-profile', serverIdentityId, serverHttpBaseUrl: 'http://board.test',
+      externalActionMachineInstallationId: 'widget-installation', externalActionMachineRequestPrivateKey: signingKey.secretKey,
       machineActionDirectTargetTransport: { machineId: 'machine-one', invoke: async () => ({ protocolVersion: 1, projection }) },
-    }, createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => ({
+    }, createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => { resourceReads++; return ({
       resource: { pluginId, localId: 'count-kinds' }, kind: 'config', contentType: 'application/json',
       digest: `sha256:${'a'.repeat(64)}`, bytes: new TextEncoder().encode(JSON.stringify([
         { value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders' },
       ])),
-    }) }));
+    }); } }));
     const surface = { serverId: serverIdentityId, accountId, owner: { kind: 'sessionBoard' as const, sessionId } };
     const instance = { v: 1 as const, id: 'c15c9e20-f054-4681-ae82-cb89c6cf5533',
       definition: { kind: 'installed' as const, surface: { pluginId, localId } }, bindings: {
@@ -166,11 +189,37 @@ describe('CLI Board Action family', () => {
       ref: { surface, instanceId: instance.id }, instance, admission: 'configuration', context,
     }));
     expect(resolved).toEqual({ status: 'ready', input: { directory: instance.bindings.directory.value, filter: 'files' } });
-    const options = await runWithServerHttpBaseUrl('http://board.test', () => executor.execute('action.options.resolve', {
+    const optionsContext = native ? { ...context, surface: 'ui' as const, actionCaller: { kind: 'host' as const },
+      externalActionTarget: { kind: 'machine' as const, machineId: 'machine-one' },
+      externalActionExecutionAuthorization: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'native-options-proof', binding: {
+        accountId, authentication: { kind: 'account', tokenEpoch: 1 }, accountEncryptionMode: 'plain',
+        serverIdentityId, machineId: 'machine-one', custodianAccountId: accountId, installationId: 'widget-installation',
+        actionId: 'action.options.resolve', requestId: 'native-options', requestEnvelopeDigest: 'a'.repeat(43),
+        target: { kind: 'machine', machineId: 'machine-one' },
+      } }),
+    } : context;
+    const optionsInput = {
       consumer: { kind: 'widget', surface, definition: instance.definition }, fieldPath: 'filter',
       draftInput: { directory: instance.bindings.directory.value },
-    }, context));
-    expect(options).toMatchObject({ ok: true, result: { options: [{ value: 'files' }, { value: 'folders' }] } });
+    };
+    const options = await runWithServerHttpBaseUrl('http://board.test', () => executor.execute('action.options.resolve', optionsInput, optionsContext));
+    expect(options, JSON.stringify({ options, signedRequests })).toMatchObject({ ok: true, result: { options: [{ value: 'files' }, { value: 'folders' }] } });
+    expect(signedRequests).toEqual([]);
+    for (const owner of ['sessionBoard', 'companion'] as const) {
+      const selectedInput = { ...optionsInput, consumer: { ...optionsInput.consumer,
+        surface: { ...surface, owner: { kind: owner, sessionId } }, selectedSession: { serverId: serverIdentityId, sessionId: selectedSessionId } } };
+      expect(await runWithServerHttpBaseUrl('http://board.test', () => executor.execute('action.options.resolve', selectedInput, optionsContext)))
+        .toMatchObject({ ok: true, result: { options: [{ value: 'files' }, { value: 'folders' }] } });
+      for (const deniedSession of ['owner', 'selected'] as const) {
+        revoked = deniedSession;
+        const beforeRead = resourceReads;
+        const denied = await runWithServerHttpBaseUrl('http://board.test', () => executor.execute('action.options.resolve', selectedInput, optionsContext));
+        expect(denied).toMatchObject({ ok: false });
+        expect(denied).not.toHaveProperty('result.options');
+        expect(resourceReads).toBe(beforeRead);
+      }
+      revoked = null;
+    }
   });
   it('discovers widgets on a Session Board addressed by its portable Home', async () => {
     const serverIdentityId = 'srv_board_identity';
