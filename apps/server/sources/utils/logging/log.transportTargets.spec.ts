@@ -1,7 +1,8 @@
 import pino from 'pino';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,10 +74,10 @@ describe('createLoggingTransportTargets', () => {
 
 
 describe('JSON stdout', () => {
-  it.each([false, true])('keeps structured stdout and optional debug file output (debug=%s)', (debug) => {
+  it.each([false, true])('keeps structured stdout and optional debug file output (debug=%s)', async (debug) => {
     const cwd = mkdtempSync(join(tmpdir(), 'happier-json-log-'));
     try {
-      const result = spawnSync(process.execPath, [
+      const result = await promisify(execFile)(process.execPath, [
         '--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href, '--eval',
         `(async () => { const { logger, fileConsolidatedLogger } = await import(${JSON.stringify(new URL('./log.ts', import.meta.url).href)});
          logger.debug({ route: '/v1/ping' }, 'hello json');
@@ -92,8 +93,6 @@ describe('JSON stdout', () => {
           DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING: debug ? '1' : '',
         },
       });
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
       const records = result.stdout.trim().split('\n').map(line => JSON.parse(line));
       expect(records).toHaveLength(2);
       expect(records[0]).toMatchObject({ level: 20, route: '/v1/ping', msg: 'hello json' });
