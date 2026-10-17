@@ -28,6 +28,8 @@ import { readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils'
 import { resolveMachineDestinationPurposeEligibility } from '@/components/sessions/new/components/machineSelection/buildMachineDestinationModel';
 import { useManagedMachineInventory } from '@/components/settings/machines/managed/useManagedMachineInventory';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { t } from '@/text';
 
 import {
     createBoardCardProjection,
@@ -39,6 +41,7 @@ import {
 } from './boardCards';
 import { projectBoardMembership, type BoardMembership } from './boardMembership';
 import { fromBoardSessionFilter } from './boardSessionFilter';
+import { readBoardMachineSourceState, readBoardPagedEntitySourceState, readBoardSessionSourceState, shouldLoadNextBoardEntityPage } from './boardEntityBinding';
 
 /**
  * The live board: which items are on it (each source from its existing owner) and one summary card
@@ -268,23 +271,32 @@ function useBoardFacts(membership: BoardMembership, homes: BoardHomes, enabled =
     const sessionRows = getStorage()(useShallow((state) => sessionMembers.map((member) => (
         readSessionListRowForServerId(state.sessionListRowsByServerId, member.ref.qualifiedId.serverId, member.ref.qualifiedId.id)
     ))));
+    const sessionSourceStates = getStorage()(useShallow(state => sessionMembers.map(member => readBoardSessionSourceState(state, member.ref))));
     // Machine counts read the already-loaded rows of the mounted Homes, only when a machine is on the board.
     const allRows = useSessionListRowsByServerId(hasMachines ? homes.mountedServerIds : NO_IDS);
     const machineMembers = React.useMemo(() => members.filter(member => member.available && member.ref.kind === 'machine'), [members]);
     const managedHomes = React.useMemo(() => [...new Set(machineMembers.map(member => member.ref.qualifiedId.serverId))], [machineMembers]);
     const { machinesByEnrolledMachineIdByServerId, bindings: machineScopeBindings } = useManagedMachineInventory(managedHomes);
     const reachabilityRevision = useMachineReachabilityRevision(hasMachines);
-    const machines = getStorage()(useShallow(state => machineMembers.map(member => {
-        for (const [serverId, list] of Object.entries(state.machineListByServerId)) {
-            if (areServerProfileIdentifiersEquivalent(serverId, member.ref.qualifiedId.serverId)) {
-                return list?.find(machine => machine.id === member.ref.qualifiedId.id) ?? null;
-            }
-        }
-        return null;
-    })));
+    const machines = getStorage()(useShallow(state => machineMembers.map(member => resolveServerScopedMachineInventory<Machine>({
+        serverId: member.ref.qualifiedId.serverId, activeServerId: '', activeMachines: [],
+        machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId,
+    }).machines?.find(machine => machine.id === member.ref.qualifiedId.id) ?? null)));
+    const machineSourceStates = getStorage()(useShallow(state => machineMembers.map(member => readBoardMachineSourceState(state, member.ref))));
     const runRows = useWorkflowRunRows(runIds);
+    const missingRun = runIds.some(id => !runRows.some(row => row.id === id && row.summary !== null));
+    const runWindow = useWorkflowRunWindow('all', { enabled: missingRun });
     const library = useWorkflowDefinitionLibrary({ enabled: workflowIds.length > 0 });
     const summaries = useWorkflowLibrarySummaries(workflowIds);
+    const missingWorkflow = workflowIds.some(id => !library.definitions.some(definition => definition.definitionId === id));
+    // These readers already own paging and in-flight sharing. Continue only while the Board's
+    // exact ref is absent; a first page is not evidence that a later page cannot supply it.
+    React.useEffect(() => {
+        if (shouldLoadNextBoardEntityPage(runWindow, missingRun)) runWindow.loadMore();
+    }, [missingRun, runWindow.status, runWindow.hasMore, runWindow.loadingMore, runWindow.loadMoreFailed, runWindow.loadMore]);
+    React.useEffect(() => {
+        if (shouldLoadNextBoardEntityPage(library, missingWorkflow)) library.loadMore();
+    }, [missingWorkflow, library.status, library.hasMore, library.loadingMore, library.loadMoreFailed, library.loadMore]);
     const readsRuntimeTime = enabled && (sessionMembers.length > 0 || hasMachines);
     const readNextRefreshAtMs = React.useCallback((nowMs: number) => {
         let next: number | null = null;
@@ -335,6 +347,14 @@ function useBoardFacts(membership: BoardMembership, homes: BoardHomes, enabled =
         const sessionByKey = new Map(sessionMembers.map((member, index) => [member.key, sessionRows[index] ?? null] as const));
         const runById = new Map(runRows.map((row) => [row.id, row] as const));
         const machineByKey = new Map(machineMembers.map((member, index) => [member.key, machines[index] ?? null] as const));
+        const missingReasons = new Map<string, string>();
+        sessionMembers.forEach((member, index) => {
+            if (sessionByKey.get(member.key) || sessionSourceStates[index] === 'loading') return;
+            missingReasons.set(member.key, t(sessionSourceStates[index] === 'retired' ? 'errors.sessionNotFound' : 'boards.card.notLoaded'));
+        });
+        machineMembers.forEach((member, index) => {
+            if (!machineByKey.get(member.key) && machineSourceStates[index] === 'settled') missingReasons.set(member.key, t('boards.card.notLoaded'));
+        });
         const activeServerId = homes.activeServerId;
         const facts: BoardCardFacts = {
             nowMs,
@@ -354,9 +374,23 @@ function useBoardFacts(membership: BoardMembership, homes: BoardHomes, enabled =
                 ] as const), nowMs)
                 : new Map(),
             workflow: (ref) => workflowById.get(ref.qualifiedId.id) ?? null,
+            missingEntityReason: ref => {
+                if (ref.kind === 'workflow' && !workflowById.has(ref.qualifiedId.id)) {
+                    return library.status === 'failed' || library.loadMoreFailed
+                        ? library.failure?.message ?? t('boards.card.notLoaded')
+                        : library.deletedDefinitionId === ref.qualifiedId.id || readBoardPagedEntitySourceState(library) === 'settled'
+                            ? t('boards.card.notLoaded') : null;
+                }
+                if (ref.kind === 'workflow_run' && !runById.get(ref.qualifiedId.id)?.summary) {
+                    return runWindow.status === 'failed' || runWindow.loadMoreFailed
+                        ? runWindow.failure?.message ?? t('boards.card.notLoaded')
+                        : readBoardPagedEntitySourceState(runWindow) === 'settled' ? t('boards.card.notLoaded') : null;
+                }
+                return missingReasons.get(buildWorkBoardItemKeyV1(ref)) ?? null;
+            },
         };
         return facts;
-    }, [allRows, hasMachines, homes.activeServerId, machineMembers, machines, machineScopeBindings, machinesByEnrolledMachineIdByServerId, reachabilityRevision, runRows, runtimeNowMs, sessionMembers, sessionRows, workflowById]);
+    }, [allRows, hasMachines, homes.activeServerId, machineMembers, machines, machineSourceStates, machineScopeBindings, machinesByEnrolledMachineIdByServerId, reachabilityRevision, runRows, runWindow.status, runWindow.failure, runWindow.hasMore, runWindow.loadMoreFailed, runtimeNowMs, sessionMembers, sessionRows, sessionSourceStates, workflowById, library.status, library.failure, library.hasMore, library.loadMoreFailed, library.deletedDefinitionId]);
     return facts;
 }
 

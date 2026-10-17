@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HAPPIER_DRAG_GRIP_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_DRAG_GRIP_METRICS, HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -15,6 +15,7 @@ import { getStorage } from '@/sync/domains/state/storage';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { getSessionWorkContext } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { formatNextScheduledRun, readNextScheduledRunRefreshAtMs } from '@/components/workflows/triggers/formatTriggerSummary';
 import { describeWorkflowRunProgress } from '@/components/workflows/presentation/workflowRunProgress';
 
@@ -133,6 +134,9 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
     const { theme } = useUnistyles();
     const { card } = props;
     const unavailable = card.availability !== 'ready';
+    // The item is still arriving: the card holds its title's line with a skeleton rather than naming it unavailable.
+    const loading = card.availability === 'not_loaded';
+    const reducedMotion = useReducedMotionPreference();
     // In a status group the column names the bucket, so the title row drops the word. A card that needs
     // the person or is in trouble still says what it is waiting for ("Permission required") on its own
     // line; a healthy word ("Idle") would only repeat the column.
@@ -150,8 +154,12 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
             <View style={[styles.titleRow, props.gripped ? styles.titleRowGripped : null]}>
                 <View style={styles.mark}><Icon name={KIND_ICON[card.ref.kind]} size={16} color={theme.colors.text.secondary} /></View>
                 {/* A grouped card sits in a narrow column: its name may take a second line rather than truncate. */}
-                <Text numberOfLines={grouped ? 2 : 1} style={[styles.title, unavailable ? styles.quiet : null]}>{card.title}</Text>
-                {grouped ? null : <Text
+                {loading
+                    ? <View testID={`board-card:${card.key}:loading`} accessible accessibilityLabel={card.title} style={styles.titleSkeleton}>
+                        <HappierSkeletonBlock width="55%" height={10} radius={5} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
+                    </View>
+                    : <Text numberOfLines={grouped ? 2 : 1} style={[styles.title, unavailable ? styles.quiet : null]}>{card.title}</Text>}
+                {grouped || loading ? null : <Text
                     testID={`board-card:${card.key}:word`}
                     numberOfLines={1}
                     style={[styles.word, workStatusWordStyle(card.status.tone)]}
@@ -258,6 +266,13 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
         flex: 1,
         minWidth: 0,
+    },
+    // The skeleton bar is centred in the title's own line, so the loaded title lands without a jump.
+    titleSkeleton: {
+        flex: 1,
+        minWidth: 0,
+        height: Typography.variant('label', 'semiBold').lineHeight,
+        justifyContent: 'center',
     },
     word: {
         ...Typography.variant('meta'),
