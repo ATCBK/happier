@@ -214,6 +214,17 @@ contain secrets. The runner's existing strict-mode fact travels with
 `mcpServers` as `mcpServersStrictMode` on Session and Run requests; strict startup
 failure closes all connections and refuses startup instead of continuing.
 
+Pi's development input observer also uses the existing Happier tools extension.
+Every conversation launch prepares that extension, including Sessions and Runs
+without configured tools. The extension observes extension-origin text at Pi's
+public `input` hook and sends it through the native RPC notification stream. The
+Pi runtime consumes that observation before diagnostic logging and publishes one
+session-scoped user transcript fact per submission through the existing host
+projection. Host input keeps its existing recording owner; raw user-message
+echoes do not create additional rows. A recorded submission may be transformed,
+handled or cancelled later and does not prove final model delivery. Provider-started
+turns continue through the existing Pi runtime and host turn invariant.
+
 In 0.3 development source, prompt Artifact preparation uses the admitted Session
 HTTP route for the active Home; a saved descriptor supplies Home identity rather
 than overriding that route with its HTTPS endpoint. Optional prompt entries with

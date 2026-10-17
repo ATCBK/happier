@@ -45,7 +45,6 @@ import {
 } from './client.js';
 import {
   createPiRuntimeEventProjector,
-  extractPiUserPromptText,
   readPiProviderTurnId,
   readPiRuntimeRecordType,
   type PiRuntimeEvent,
@@ -70,10 +69,12 @@ import {
   buildPiExtensionUiQuestionRequest,
   buildPiExtensionUiResponse,
   parsePiBlockingExtensionUiRequest,
+  parsePiExtensionUserInput,
   type PiBlockingExtensionUiRequest,
   type PiExtensionUiResponse,
 } from './extensionUi.js';
 import { PI_MCP_APPROVAL_CALL_PREFIX, PI_MCP_CAPABILITY_NOTICE_RECORD_TYPE } from '../../tools/extensionSource.js';
+import { preparePiHappierToolsExtension, type PreparedPiHappierToolsExtension } from '../../tools/assets.js';
 
 const PI_VERSION_PROBE_TIMEOUT_MS = 30_000;
 // Session opening is one provider-lifecycle operation. Keep every RPC in that
@@ -480,18 +481,6 @@ function createPiExecSpec(
   };
 }
 
-/**
- * Occurrence-unique message id for provider-observed user prompts (extension-injected
- * prompts such as Pi background-bash completion reminders). Pi message events carry no
- * provider id, and a text-derived id would collapse legitimate repeats of identical
- * prompt text (e.g. two "continue" injections) into one transcript row. One id is
- * generated per observed event; the runtime event is published once, so retries of its
- * transcript commit reuse the same captured id and stay idempotent.
- */
-function buildProviderUserPromptLocalId(): string {
-  return `provider-user-prompt:${randomUUID()}`;
-}
-
 function createRuntimeOperations(params: Readonly<{
   rpc: PiJsonStreamRpcClient;
   logger: PluginLoggerService;
@@ -524,46 +513,6 @@ function createRuntimeOperations(params: Readonly<{
   let pendingPromptAdmission: PendingPromptAdmission | null = null;
   let pendingCancellation: PendingCancellation | null = null;
   let piCompactionInProgress = false;
-
-  /**
-   * Prompt texts this runtime sent through the Pi RPC `prompt` command whose user-message
-   * echo has not arrived yet. Pi emits `message_end` user events for EVERY user message,
-   * so host-submitted prompts (new turns, follow-ups, steers) echo back identically to
-   * extension-injected prompts. Only injected prompts may surface as user transcript
-   * rows; the host already committed its own prompt text at submission time.
-   */
-  const awaitingPromptEchoTexts: string[] = [];
-  const MAX_AWAITING_PROMPT_ECHOES = 64;
-
-  function noteHostPromptSentToPi(text: string): void {
-    awaitingPromptEchoTexts.push(text);
-    if (awaitingPromptEchoTexts.length > MAX_AWAITING_PROMPT_ECHOES) {
-      awaitingPromptEchoTexts.splice(0, awaitingPromptEchoTexts.length - MAX_AWAITING_PROMPT_ECHOES);
-    }
-  }
-
-  function consumeHostPromptEcho(text: string): boolean {
-    const echoIndex = awaitingPromptEchoTexts.indexOf(text);
-    if (echoIndex === -1) return false;
-    awaitingPromptEchoTexts.splice(echoIndex, 1);
-    return true;
-  }
-
-  function discardHostPromptEcho(text: string): void {
-    const echoIndex = awaitingPromptEchoTexts.indexOf(text);
-    if (echoIndex !== -1) awaitingPromptEchoTexts.splice(echoIndex, 1);
-  }
-
-  function publishProviderUserPromptText(text: string): void {
-    params.publishRuntimeEvent({
-      kind: 'transcript-message-committed',
-      emittedAtMs: Date.now(),
-      messageId: buildProviderUserPromptLocalId(),
-      role: 'user',
-      text,
-      ...(activeTurn ? { turnId: activeTurn.turnId } : {}),
-    });
-  }
 
   function beginTurn(
     agentTurnId: string | null = null,
@@ -731,21 +680,6 @@ function createRuntimeOperations(params: Readonly<{
       readOrBeginTurn(agentTurnId);
       activeTurnStartObserved = true;
       return;
-    }
-    if (type === 'message_end') {
-      const userPromptText = extractPiUserPromptText(record.message);
-      if (userPromptText !== null) {
-        // Between our own prompt's acceptance and that run's agent_start, any user
-        // message_end is the echo of the prompt we sent: exact text for plain prompts, or
-        // the template-expanded text for slash commands (pi expands templates in the RPC
-        // prompt command before the user message exists). Extension injections arrive
-        // idle — before their OWN agent_start, with no active host turn — or mid-turn
-        // after agent_start, never inside this window.
-        if (activeTurn !== null && !activeTurnStartObserved) return;
-        if (consumeHostPromptEcho(userPromptText)) return;
-        publishProviderUserPromptText(userPromptText);
-        return;
-      }
     }
     const turn = activeTurn;
     const providerFailureDiagnostic = readPiProviderFailureDiagnostic(record);
@@ -931,7 +865,6 @@ function createRuntimeOperations(params: Readonly<{
       };
       pendingPromptAdmission = admission;
       const providerNativeCommand = params.resolveProviderNativeCommand(prompt);
-      noteHostPromptSentToPi(prompt);
       const accept = () => {
         admission.onAccepted();
         readOrBeginTurn(null, admission.turnId, 'host');
@@ -994,12 +927,6 @@ function createRuntimeOperations(params: Readonly<{
         }
       } catch (error) {
         const promptError = error instanceof Error ? error : new Error(String(error));
-        const rejectedBeforeProviderEffect = promptError instanceof PiRpcNegativeAcknowledgementError;
-        if (rejectedBeforeProviderEffect) {
-          // No provider effect occurred, so no user-message echo will arrive; drop the
-          // queued echo text so a later extension injection with identical text surfaces.
-          discardHostPromptEcho(prompt);
-        }
         if (admission.bufferFailure !== null) {
           admission.bufferedRecords.dispose();
           pendingPromptAdmission = null;
@@ -1027,7 +954,6 @@ function createRuntimeOperations(params: Readonly<{
       if (pendingPromptAdmission) {
         throw new Error('Pi prompt admission is already in progress');
       }
-      noteHostPromptSentToPi(message);
       try {
         await params.rpc.send({ type: 'prompt', message, streamingBehavior: 'steer' }, 30_000);
       } catch (error) {
@@ -1389,7 +1315,8 @@ async function createPiConversationRuntimeOperations(
     : null;
   const sessionOpenLifecycle = params.sessionOpenLifecycle ?? ownedSessionOpenLifecycle;
   let modelDiscoveryDirectory: ReturnType<typeof createSecureTempDirectorySync> | null = null;
-  let runtimeOwnsDiscoveryDirectory = false;
+  let runtimeOwnsResources = false;
+  let ownedToolsExtension: PreparedPiHappierToolsExtension | null = null;
   try {
   const normalizedEnv = normalizeEnv(params.env);
   const requestAuthEnabled = hasPiRequestAuthProvider(normalizedEnv);
@@ -1414,6 +1341,17 @@ async function createPiConversationRuntimeOperations(
       sessionOpenLifecycle ?? undefined,
     );
   }
+  let happierToolsExtension = params.happierToolsExtension;
+  if (!happierToolsExtension) {
+    // The bridge observes extension input even when no host tools or MCP servers are configured.
+    const preparation = preparePiHappierToolsExtension({
+      directory: params.cwd,
+    });
+    ownedToolsExtension = sessionOpenLifecycle
+      ? await sessionOpenLifecycle.waitFor(preparation, 'Happier input bridge preparation', async lateTools => await lateTools.dispose())
+      : await preparation;
+    happierToolsExtension = ownedToolsExtension;
+  }
   let modelDiscoveryExtensionPath: string | undefined;
   if (params.models) {
     modelDiscoveryDirectory = createSecureTempDirectorySync({ prefix: 'happier-pi-models-' });
@@ -1426,6 +1364,7 @@ async function createPiConversationRuntimeOperations(
   }
   const processSpawn = params.services.exec.clients.spawn(createPiExecSpec({
     ...params,
+    happierToolsExtension,
     env: {
       ...normalizedEnv,
       ...(requestAuthProducerVersion
@@ -1579,6 +1518,17 @@ async function createPiConversationRuntimeOperations(
   rpc = createPiJsonStreamRpcClient({
     handle,
     onEvent(record) {
+      const extensionUserInput = parsePiExtensionUserInput(record);
+      if (extensionUserInput !== null) {
+        // Submission provenance is supplied by Pi's input hook, never inferred from user echoes.
+        publishRuntimeEvent({
+          kind: 'transcript-message-committed',
+          messageId: `provider-user-prompt:${randomUUID()}`,
+          role: 'user',
+          text: extensionUserInput,
+        });
+        return;
+      }
       if (record.type === PI_MCP_CAPABILITY_NOTICE_RECORD_TYPE) {
         const parsed = SessionCapabilityNoticeV1Schema.safeParse(record.notice);
         if (!parsed.success) {
@@ -1738,16 +1688,22 @@ async function createPiConversationRuntimeOperations(
       throw error;
     }
   }
-  runtimeOwnsDiscoveryDirectory = true;
+  runtimeOwnsResources = true;
   return {
     ...runtime,
     async dispose() {
       try { await runtime.dispose(); }
-      finally { modelDiscoveryDirectory?.cleanup(); }
+      finally {
+        try { await ownedToolsExtension?.dispose(); }
+        finally { modelDiscoveryDirectory?.cleanup(); }
+      }
     },
   };
   } finally {
-    if (!runtimeOwnsDiscoveryDirectory) modelDiscoveryDirectory?.cleanup();
+    if (!runtimeOwnsResources) {
+      try { await ownedToolsExtension?.dispose(); }
+      finally { modelDiscoveryDirectory?.cleanup(); }
+    }
     ownedSessionOpenLifecycle?.dispose();
   }
 }

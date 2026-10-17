@@ -512,34 +512,6 @@ export function createPiRuntimeEventProjector(): Readonly<{
   };
 }
 
-/**
- * Extract the text of a finished user message. Pi streams `message_end` events for every
- * session message: prompts the host submitted through the RPC `prompt` command echo back as
- * user messages, and prompts injected inside Pi by extensions (`pi.sendUserMessage`, e.g.
- * AFT background-bash completion reminders) arrive the same way. The operations owner
- * filters the host echo; this extractor only reads the text.
- */
-export function extractPiUserPromptText(message: unknown): string | null {
-  const record = isRecord(message) ? message : null;
-  if (!record || record.role !== 'user') return null;
-
-  if (typeof record.content === 'string') {
-    return record.content.length > 0 ? record.content : null;
-  }
-  if (!Array.isArray(record.content)) return null;
-
-  let text = '';
-  for (const item of record.content) {
-    const entry = isRecord(item) ? item : null;
-    if (!entry || entry.type !== 'text') continue;
-    const chunk = readRawString(entry.text);
-    if (chunk === null) continue;
-    text += chunk;
-  }
-
-  return text.length > 0 ? text : null;
-}
-
 export function readPiProviderTurnId(record: unknown): string | null {
   const raw = isRecord(record) ? record : null;
   if (!raw) return null;

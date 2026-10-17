@@ -9,6 +9,7 @@ describe('pi compaction turn outcome', () => {
     ) as { exports?: Record<string, unknown> };
 
     expect(packageJson.exports).toHaveProperty('./agent/runtime/compaction', {
+      'happier-source': './src/agent/runtime/compaction/index.ts',
       types: './dist/agent/runtime/compaction/index.d.ts',
       default: './dist/agent/runtime/compaction/index.js',
     });
