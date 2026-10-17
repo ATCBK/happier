@@ -27,6 +27,7 @@ import {
 import { SessionBoardSurface } from './SessionBoardSurface';
 import { useSessionBoardController } from './useSessionBoardController';
 import { realBoardActions } from './sessionBoardActionsTestkit';
+import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityTargetFeedback } from './SessionSurfaceEntityDrag';
 
 vi.mock('react-native', async () => {
     // The mock factory, not the testkit index: the index's graph imports react-native, so loading it here
@@ -511,6 +512,48 @@ describe('SessionBoardSurface', () => {
             await vi.waitFor(() => {
                 expect(screen.findHostByTestId('session-board-item-note-1-move-handle')?.props.accessibilityState.expanded).toBe(true);
             });
+        } finally { await screen.unmount(); }
+    });
+
+    it('admits a configured Board widget over the opposite visible view tab without waiting on transfer preflight', async () => {
+        const serverUrl = 'https://board-view-drop.example.test';
+        const serverId = 'srv_board_view_drop';
+        await upsertServerProfile({ serverUrl, name: 'Board view drop Home' });
+        await setServerProfileIdentityForUrl(serverUrl, serverId);
+        expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId }, {
+            token: `e30.${Buffer.from(JSON.stringify({ sub: 'board-editor' })).toString('base64url')}.signature`,
+        })).toBe(true);
+        const screen = await renderScreen(<Harness serverId={serverId} snapshot={snapshot({
+            layout: { v: 1, tabs: [
+                { id: 'overview', title: 'Overview', items: [{ itemId: 'note-1', width: 'medium' }] },
+                { id: 'research', title: 'Research', items: [] },
+            ] }, items: [{ itemId: 'note-1', item: {
+                ...note('Plan'), source: { kind: 'widget', instance: {
+                    v: 1, id: 'note-1', definition: { kind: 'builtin', id: 'machine_vitals' }, bindings: {},
+                } },
+            } }],
+        })} />, { createNodeMock: (element) => {
+            const { children } = element.props as { children?: React.ReactNode };
+            const card = React.Children.toArray(children).some(child => React.isValidElement(child)
+                && child.type === SessionSurfaceEntityTargetFeedback);
+            return { getBoundingClientRect: () => card
+                ? { x: 100, y: 200, width: 400, height: 200 }
+                : { x: 100, y: 100, width: 400, height: 50 } };
+        } });
+        try {
+            await vi.waitFor(() => expect(screen.findHostByTestId('session-board-item-note-1-move-handle')).not.toBeNull());
+            const drag = screen.tree.root.findByType(SessionSurfaceEntityDragHandle).props.drag as React.ComponentProps<typeof SessionSurfaceEntityDragHandle>['drag'];
+            await act(async () => {
+                screen.findHostByTestId('session-board-views-view-overview')!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 100, height: 40 } } });
+                screen.findHostByTestId('session-board-views-view-research')!.props.onLayout({ nativeEvent: { layout: { x: 110, y: 0, width: 100, height: 40 } } });
+                const carry = drag.runtime.begin(drag.sourceId, 'pointer');
+                expect(carry).not.toBeNull();
+                carry!.move({ x: 250, y: 120 });
+            });
+            expect(drag.runtime.getSnapshot().admission).toMatchObject({ status: 'allowed', effect: {
+                actionId: 'session.board.layout.update', input: { operation: { op: 'item.move', fromTabId: 'overview', toTabId: 'research' } },
+            } });
+            await act(async () => { drag.runtime.cancel('test-end'); });
         } finally { await screen.unmount(); }
     });
 

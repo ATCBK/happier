@@ -52,12 +52,9 @@ export function resolveSessionBoardEntityDrop(input: Context & Readonly<{ viewId
     const without = ids.filter(id => id !== item.itemId);
     const index = anchor ? without.indexOf(anchor.itemId) + (anchor.side === 'after' ? 1 : 0) : without.length;
     if (source.id === target.id && ids.indexOf(item.itemId) === index) return sessionSurfaceDropRefused('same-position');
-    const state = board.itemsById.get(item.itemId)?.state;
-    if (state?.kind === 'ready' && state.item.source.kind === 'widget') {
-        const surface = { ...input.scope, owner: { kind: 'sessionBoard' as const, sessionId: input.address.sessionId } };
-        return { status: 'allowed', effect: { actionId: 'widgets.item.move', preview: { ...input.preview, glyph: 'move' },
-            input: { ref: { surface, instanceId: state.item.source.instance.id }, to: { surface, tabId: target.id, index } } } };
-    }
+    // A move within this Board changes only its shared layout. The current Board
+    // projection already proves the item and editor rights; configured widgets
+    // use this same owner rather than waiting on cross-surface transfer admission.
     return { status: 'allowed', effect: { actionId: 'session.board.layout.update', preview: { ...input.preview, glyph: anchor ? anchor.side === 'before' ? 'above' : 'below' : 'move' }, input: {
         sessionId: input.address.sessionId, expectedLayoutRevision: board.layoutRevision,
         operation: { op: 'item.move', itemId: item.itemId, fromTabId: source.id, toTabId: target.id, ...(anchor ? { anchor } : {}) },
