@@ -7,6 +7,7 @@ import { createServer } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import psList from 'ps-list';
 
 import { HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY } from './platform/linux/daemonSpawnedSessionCgroupSelfMigration';
 import { createHttpStatusError } from '@/api/client/httpStatusError';
@@ -433,6 +434,11 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
+vi.mock('ps-list', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('ps-list')>();
+  return { ...actual, default: vi.fn(actual.default) };
+});
+
 vi.mock('@/api/machine/ensureMachineRegistered', () => ({
   ensureMachineRegistered: vi.fn(async ({ machineId }: { machineId: string }) => ({
     machineId,
@@ -725,7 +731,8 @@ vi.mock('@/backends/catalog', async (importOriginal) => {
   };
 });
 
-vi.mock('@/persistence', () => ({
+vi.mock('@/persistence', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/persistence')>(),
   writeDaemonState: vi.fn(),
   writeDaemonStateIfLockOwned: vi.fn(() => true),
   writeConnectedServiceBrokerState: vi.fn(),
@@ -1630,6 +1637,15 @@ describe('startDaemon spawn resume wiring (integration)', () => {
 
   it.each(['existing', 'fresh', 'encrypted', 'stale_pid', 'legacy', 'other_machine', 'unknown_process', 'lookup_failed', 'webhook_during_lookup', 'exit_during_lookup', 'locked_runner', 'wrapper', 'windows_dispatcher'] as const)('handles an accepted %s launch before its session webhook', async (startup) => {
     const isFresh = startup !== 'existing';
+    const actualPsList = await vi.importActual<typeof import('ps-list')>('ps-list');
+    const { clearProcessSnapshotCacheForTests } = await import('./processSnapshotCache');
+    // These runners have fixture PIDs; their OS inventory must describe the same
+    // processes as the run-state and fingerprint boundaries below.
+    vi.mocked(psList).mockResolvedValue([12345, 23456].map(pid => ({
+      pid, ppid: process.pid, name: 'node',
+      cmd: 'node /tmp/lib/dist/index.mjs codex --started-by daemon',
+    })));
+    clearProcessSnapshotCacheForTests();
     const spawnBoundary = spawnHappyCliBoundary;
     spawnHappyCLI.mockImplementationOnce(spawnBoundary).mockImplementationOnce((argv, options) => {
       const child = spawnBoundary(argv, options);
@@ -1847,6 +1863,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       await restoreDaemonExitBoundary(exitSpy);
       featureDecisionSpy.mockRestore();
       fingerprintSpy.mockRestore();
+      vi.mocked(psList).mockImplementation(actualPsList.default);
+      clearProcessSnapshotCacheForTests();
       spawnHappyCLI.mockReset();
       spawnHappyCLI.mockImplementation(spawnBoundary);
     }

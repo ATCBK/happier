@@ -1,8 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/configuration', () => ({
-  configuration: {},
-}));
+vi.mock('@/configuration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configuration')>();
+  return {
+    ...actual,
+    configuration: {
+      ...actual.configuration,
+      get daemonReattachCatchUpConcurrency(): number {
+        throw new Error('Existing-session concurrency must not be read at module import time');
+      },
+    },
+  };
+});
 
 import { resolveExistingSessionAttachContext } from './resolveExistingSessionAttachContext';
 
