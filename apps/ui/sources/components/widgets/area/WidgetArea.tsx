@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { Platform, View, type LayoutChangeEvent } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
-import { HAPPIER_PAGE_METRICS, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_PAGE_METRICS, HappierPageSectionContext, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { EmptySlot } from '@/components/ui/empty/EmptySlot';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { useOptionalPluginUiScrollActivityTracker } from '@happier-dev/plugin-ui/advanced';
@@ -51,7 +52,7 @@ import {
     useWidgetMenuAlwaysShown,
     WIDGET_MENU_MAX_HEIGHT_PX,
 } from '@/components/widgets/frame/widgetFrameMenu';
-import { WIDGET_FRAME_PLACEMENT_DEFAULTS, resolveWidgetFrameStyle } from '@/components/widgets/frame/widgetFrameStyle';
+import { useWidgetAreaFrame } from '@/components/widgets/frame/useWidgetFrameStyle';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
 import { WidgetFrameBodyCaptionContext, WidgetFrameBodyMetaContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { WidgetFrameBodyActionsContext } from '@/components/widgets/frame/widgetFrameBodyActions';
@@ -72,6 +73,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { useWidgetMovementAdmission } from '@/components/widgets/surface/useWidgetMovementAdmission';
 import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityFeedback, SessionSurfaceEntityTargetFeedback, useSessionSurfaceCarriedStyle, useSessionSurfaceEntityDrag, useSessionSurfaceGeometryRefresh } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 import { resolveEntityFlatRowPosition } from '@/components/ui/treeDragDrop/geometry/entityFlatListStrategy';
+import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { resolveWidgetAreaEntityDrop } from './widgetAreaEntityDrop';
 import type { EntityDropEffectV1, EntityDropAdmissionV1 } from '@happier-dev/protocol/plugins/ui';
 
@@ -91,6 +93,8 @@ const GEOMETRY_PLACEMENT: Readonly<Record<WidgetAreaGeometry, WidgetFramePlaceme
 /** Configuration stays in the quiet ⋯ menu; movement also has the shared grip. */
 const ALWAYS_OVERFLOW = Number.POSITIVE_INFINITY;
 const ADD_TARGET_PX = resolveMinimumInteractiveTargetSize(Platform.OS);
+/** The settled empty line's height (its description step), held while a page-section area loads. */
+const EMPTY_LINE_PX = happierPageTextMetrics('sectionDescription').lineHeight;
 
 export type WidgetAreaProps = Readonly<{
     /**
@@ -128,6 +132,12 @@ export type WidgetAreaProps = Readonly<{
      */
     dashboard?: Readonly<{ addLabel: string; emptyTitle: string; /** The gallery says where the widget goes ("Add to Release · side area"). */ addTitle?: string;
         /**
+         * An area that is one section of a page (a plugin page's widget area) holds its settled empty
+         * line's place while it loads, rather than a card that may never come: the page around it does
+         * not jump, and the heading above it already reads as it will.
+         */
+        holdsEmptyLineWhileLoading?: true;
+        /**
          * One Add that serves both areas of a dashboard (stacked and on a phone): the gallery offers the
          * areas, each with its own title, and adds into the chosen one through the same layout write.
          */
@@ -148,6 +158,7 @@ export function WidgetArea(props: WidgetAreaProps): React.ReactElement {
         return (
             <View testID={props.testID} style={styles.area}>
                 {props.dashboard ? null : <WidgetAreaHeader title={props.title} meta={props.meta} testID={props.testID} />}
+                <DashboardAreaEdge active={!!props.dashboard}>
                 <SurfaceStateCard
                     testID={`${props.testID}.unavailable`}
                     kind="unavailable"
@@ -157,6 +168,7 @@ export function WidgetArea(props: WidgetAreaProps): React.ReactElement {
                     {...(unavailable.reason ? { reason: unavailable.reason } : {})}
                     diagnosticCode={unavailable.reasonCode}
                 />
+                </DashboardAreaEdge>
             </View>
         );
     }
@@ -175,6 +187,7 @@ function WidgetAreaUncontrolled(props: WidgetAreaProps & Readonly<{ port: Widget
 
 function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAreaPort; layout: WidgetAreaLayout<WidgetSurfaceContext> }>): React.ReactElement {
     const { layout } = props;
+    const loadingFrame = useWidgetAreaFrame(GEOMETRY_PLACEMENT[props.geometry]).style;
     const addAnchorRef = React.useRef<View | null>(null);
     const [addOpen, setAddOpen] = React.useState(false);
     // What the last change came to, said where it belongs (never a line that pushes the area down):
@@ -219,7 +232,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
         const outcome = await layoutWrite(operation);
         setNotice(outcome.kind === 'approvalPending' ? { kind: 'pending' }
             : outcome.kind === 'refused' && 'instanceId' in operation
-                ? { kind: 'failed', instanceId: operation.instanceId, retry: () => write(operation) }
+                ? { kind: 'failed', instanceId: operation.instanceId, errorCode: outcome.errorCode, retry: () => write(operation) }
                 : null);
         return outcome;
     }, [layoutWrite]);
@@ -264,15 +277,23 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     </View>
                 ) : null}
             />}
-            {props.display === 'add' ? null : state.status === 'loading' ? (
+            {props.display === 'add' ? null : state.status === 'loading' && props.dashboard?.holdsEmptyLineWhileLoading ? (
+                <View testID={`${props.testID}.loading`} style={styles.dashboardLoading}>
+                    <SkeletonRows rows={1} lines={1} rowHeight={EMPTY_LINE_PX}
+                        geometry={{ insetStart: 0, insetEnd: 0, glyphColumn: 0, gap: 0 }} accessibilityLabel={t('common.loading')} />
+                    {/* The dashed Add line's place: it arrives once the layout says the viewer may add. */}
+                    <View style={styles.addLineSpace} />
+                </View>
+            ) : state.status === 'loading' ? (
                 <WidgetFrame
                     testID={`${props.testID}.loading`}
                     title={null}
-                    frameStyle={props.geometry === 'grid' ? 'card' : 'plain'}
+                    frameStyle={loadingFrame}
                     placement={GEOMETRY_PLACEMENT[props.geometry]}
                     body={{ kind: 'loading', accessibilityLabel: t('common.loading') }}
                 />
             ) : state.status === 'unavailable' ? (
+                <DashboardAreaEdge active={!!props.dashboard}>
                 <SurfaceStateCard
                     testID={`${props.testID}.unavailable`}
                     kind="unavailable"
@@ -283,6 +304,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     diagnosticCode={state.reasonCode}
                     {...(!scopeRefused ? { action: { label: t('common.retry'), onPress: layout.reload, testID: `${props.testID}.retry` } } : {})}
                 />
+                </DashboardAreaEdge>
             ) : ready && ready.placements.length === 0 && props.dashboard ? (
                 <Text testID={`${props.testID}.empty`} style={styles.dashboardEmpty}>{props.dashboard.emptyTitle}</Text>
             ) : ready && ready.placements.length === 0 ? (
@@ -345,6 +367,19 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
     );
 }
 
+/**
+ * A dashboard area draws no sheet: its cards, empty line and Add line start on the area's own edge.
+ * Its area-level state line stands there too (glyph on that edge), as a section's line stands on its
+ * rows' edge, rather than inset like a line among a list's rows.
+ */
+function DashboardAreaEdge(props: Readonly<{ active: boolean; children: React.ReactNode }>): React.ReactElement {
+    const { theme } = useUnistyles();
+    const section = React.useMemo(() => ({ rowDividerColor: theme.colors.border.default, rowInsetPx: 0 }), [theme.colors.border.default]);
+    return props.active
+        ? <HappierPageSectionContext.Provider value={section}>{props.children}</HappierPageSectionContext.Provider>
+        : <>{props.children}</>;
+}
+
 function WidgetAreaHeader(props: Readonly<{ title: string; meta?: string | undefined; add?: React.ReactNode; testID: string }>): React.ReactElement {
     return (
         <View style={styles.header}>
@@ -358,7 +393,7 @@ function WidgetAreaHeader(props: Readonly<{ title: string; meta?: string | undef
 
 type AreaNotice =
     | Readonly<{ kind: 'pending' }>
-    | Readonly<{ kind: 'failed'; instanceId: string; retry: () => Promise<WidgetAreaWriteOutcome> }>;
+    | Readonly<{ kind: 'failed'; instanceId: string; errorCode: string; retry: () => Promise<WidgetAreaWriteOutcome> }>;
 
 type PlacementsProps = WidgetAreaProps & Readonly<{
     failed: Extract<AreaNotice, { kind: 'failed' }> | null;
@@ -532,7 +567,7 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
         operations: props.operations, showWidth: true, geometry: { phone, columns: props.columns }, testID,
         rename: props.canEdit ? async (title) => {
             const outcome = await write({ actionId: 'widgets.item.rename', instanceId: group.id, displayName: title ?? null });
-            if (outcome.kind === 'refused') throw new Error(outcome.errorCode);
+            if (outcome.kind === 'refused') throw Object.assign(new Error(outcome.errorCode), { code: outcome.errorCode });
         } : undefined,
         setInputs: props.canEdit ? (bindings: WidgetInputBindingsV1) => runAcknowledgedWidgetSetupCommand(
             () => write({ actionId: 'widgets.group.inputs.set', instanceId: group.id, bindings }), t('widgetAdd.saveFailed'),
@@ -625,7 +660,9 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
     const size = props.size;
     const widgetPresentation = React.useMemo(() => size ? { size, footprint: getWidgetSizeFootprintV1(surface.owner.kind, size)! } : undefined,
         [size, surface.owner.kind]);
-    const frameStyle = resolveWidgetFrameStyle({ placement: GEOMETRY_PLACEMENT[geometry], override: placement.frameStyle ?? null });
+    const frame = useWidgetAreaFrame(GEOMETRY_PLACEMENT[geometry], placement.frameStyle);
+    // A group's child stands inside its group's own card.
+    const frameStyle = props.parent ? 'plain' : frame.style;
     const providedContext = React.useMemo(() => widgetProvidedContext(context), [context]);
     const focused = useIsFocused();
     const hover = useRowActionHoverHost();
@@ -733,7 +770,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
             const displayName = next.length > 0 && next !== candidate?.title ? next : null;
             if ((displayName ?? undefined) === instance.displayName) return;
             const outcome = await write({ actionId: 'widgets.item.rename', instanceId: instance.id, displayName });
-            if (outcome.kind === 'refused') throw new Error(outcome.errorCode);
+            if (outcome.kind === 'refused') throw Object.assign(new Error(outcome.errorCode), { code: outcome.errorCode });
         } } : {}),
     });
 
@@ -774,7 +811,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                     size: buildWidgetSizeActions(sizeControl),
                     frame: parent ? [] : buildWidgetFrameStyleActions({
                         placement: GEOMETRY_PLACEMENT[geometry],
-                        surfaceDefault: WIDGET_FRAME_PLACEMENT_DEFAULTS[GEOMETRY_PLACEMENT[geometry]],
+                        surfaceDefault: frame.areaDefault,
                         override: placement.frameStyle ?? null,
                         surfaceLabel: props.surfaceName,
                         onSet: (style) => { void write({ actionId: 'widgets.item.frame.set', instanceId: instance.id, frameStyle: style }); },
@@ -870,7 +907,8 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                 } } : {})}
                 body={body}
                 // A change to this card that was refused stays on it, with Retry, until one succeeds.
-                footer={props.failed ? { kind: 'refreshFailed', reason: t('widgetAdd.areaWriteFailed'), onRetry: props.failed.retry } : null}
+                // The reason is the one failure presenter's (the same copy an Add refusal gets); a code it does not map keeps the static line.
+                footer={props.failed ? { kind: 'refreshFailed', reason: resolveActionExecutionErrorMessage({ errorCode: props.failed.errorCode }, t('widgetAdd.areaWriteFailed')), onRetry: props.failed.retry } : null}
             />
             {edit.popover}
             {definition.panel}
@@ -952,6 +990,8 @@ const styles = StyleSheet.create((theme) => ({
     column: { gap: theme.space.s12 },
     // Below the layout tabs' rule the line keeps a section header's breath, as a description under a title does.
     dashboardEmpty: { ...Typography.default(), ...happierPageTextMetrics('sectionDescription'), color: theme.colors.text.secondary, paddingTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx },
+    dashboardLoading: { gap: theme.space.s8, paddingTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx },
+    addLineSpace: { height: ADD_TARGET_PX },
     // The frame fills its grid cell, so cards in one row share a height.
     cell: { flexGrow: 1 },
 }));

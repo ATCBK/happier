@@ -212,10 +212,17 @@ const WidgetSurfaceArtifactHeaderV1Schema = lazyZodSchema(() => z.strictObject({
     surface: z.optional(WidgetAreaSurfaceRefV1Schema), sortKey: z.optional(z.string().check(z.minLength(1))),
 }));
 const WidgetSurfaceArtifactHeaderV1StoredSchema = createStoredReadSchema(WidgetSurfaceArtifactHeaderV1Schema);
+/**
+ * The stored title of a layout nobody named: the area's stock layout. Readers that know the area's
+ * own title (a plugin page's declared area) show that instead; a viewer-chosen name always wins.
+ */
+export function widgetAreaStockLayoutNameV1(surface: Pick<WidgetSurfaceRefV1, 'owner'>): string {
+    return surface.owner.kind === 'project' ? 'Overview' : 'Widget area';
+}
 /** Header discovery and body opening use the same identity and known-field projections. */
 export function buildWidgetSurfaceArtifactHeaderV1(layout: WidgetAreaLayoutV1, sortKey = 'a0'): Readonly<Record<string, unknown>> {
     return { kind: WIDGET_SURFACE_ARTIFACT_KIND_V1, v: 1,
-        title: layout.name ?? (layout.surface.owner.kind === 'project' ? 'Overview' : 'Widget area'),
+        title: layout.name ?? widgetAreaStockLayoutNameV1(layout.surface),
         surface: storedSurface(layout.surface), sortKey };
 }
 /** Inventory discovery and publication observers share the stored header's identity rule. */
@@ -233,7 +240,7 @@ export function readWidgetSurfaceArtifactV1(row: Pick<HomeHubArtifactV1, 'artifa
         const parsed = WidgetAreaLayoutV1StoredSchema.safeParse(JSON.parse(row.body));
         if (!parsed.success || parsed.data.surface.artifactId || buildWidgetSurfaceArtifactIdV1(parsed.data.surface) !== row.artifactId) return null;
         if (!header.data.surface || !sameStrictJsonValue(header.data.surface, parsed.data.surface)
-            || header.data.title !== (parsed.data.name ?? (parsed.data.surface.owner.kind === 'project' ? 'Overview' : 'Widget area'))) return null;
+            || header.data.title !== (parsed.data.name ?? widgetAreaStockLayoutNameV1(parsed.data.surface))) return null;
         return parsed.data;
     } catch { return null; }
 }

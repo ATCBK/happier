@@ -34,12 +34,15 @@ export type BuiltinWidgetIdV1 = SessionBuiltinWidgetIdV1 | ProjectBuiltinWidgetI
 export const BuiltinWidgetIdV1Schema = z.enum([...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...PROJECT_BUILTIN_WIDGET_IDS_V1,
     ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1]);
 
-/** Missing default Overview only: render without writing, then retain the whole layout on its first edit. */
+/**
+ * Missing default Overview only: render without writing, then retain the whole layout on its first edit.
+ * The preset makes no frame choice, so each widget follows its area's default until the person picks one.
+ */
 export function projectOverviewDefaultPlacementsV1(): WidgetLayoutWidgetV1[] {
     return [
         ...(['code', 'readme'] as const).map(id => ({ id, area: 'main' as const })),
         ...(['about', 'changes', 'checkouts', 'scripts', 'sessions'] as const).map(id => ({ id, area: 'aside' as const })),
-    ].map(({ id, area }) => ({ kind: 'widget', area, frameStyle: 'plain', instance: {
+    ].map(({ id, area }) => ({ kind: 'widget' as const, area, instance: {
         v: 1, id, definition: { kind: 'builtin', id: `project_${id}` }, bindings: { checkout: { kind: 'context', slot: 'checkout' } },
     } }));
 }

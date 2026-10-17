@@ -9,6 +9,7 @@ import {
   isHappierFocusVisible,
   type HappierTabDescriptor,
   HAPPIER_ICON_BUTTON_SIZE,
+  happierPageTextMetrics,
 } from '@happier-dev/plugin-ui/presentation';
 
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
@@ -22,6 +23,7 @@ import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { pageTitleTypography } from '@/components/ui/layout/pageTitleTypography';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 /** One named layout of an area: a host preset, one of the viewer's own, or one shared with them. */
@@ -116,6 +118,12 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
     onCreate: (() => void) | null;
     actions: WidgetAreaLayoutActions | null;
     labels: WidgetAreaLayoutLabels;
+    /**
+     * What the bar heads: a whole page or pane (a Project's dashboards, Usage's views) speaks at the
+     * page-title step; an area that is one section of a page (a plugin page's widget area, lab
+     * `dplugin` PG) speaks at the section-title step, under the page's own title.
+     */
+    heading?: 'page' | 'section';
     testID: string;
   }>,
 ) {
@@ -178,11 +186,14 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
           onSelect={props.onSelect}
           onCreate={props.onCreate}
           labels={labels}
+          heading={props.heading ?? 'page'}
           testID={`${testID}.current`}
         />
         <View style={styles.grow} />
-        {/* The same trailing pair as the tabs (lab p-overview HOMEp): Create, then the selected one's ⋯. */}
-        {create}
+        {/* The same trailing pair as the tabs (lab p-overview HOMEp): Create, then the selected one's ⋯.
+            A page section's lone layout creates from its name's menu instead: a `+` on the section's
+            heading would read as adding a widget, which the area's own Add line does (lab dplugin PG). */}
+        {props.heading === 'section' && props.layouts.length < 2 ? null : create}
         {actionSlot}
       </View>
     );
@@ -333,6 +344,7 @@ function LayoutCurrentNameMenu(
     onSelect: (layoutId: string) => void;
     onCreate: (() => void) | null;
     labels: WidgetAreaLayoutLabels;
+    heading: 'page' | 'section';
     testID: string;
   }>,
 ) {
@@ -459,7 +471,7 @@ function LayoutCurrentNameMenu(
           ) : null}
           <Text
             numberOfLines={1}
-            style={[styles.currentName, { color: theme.colors.text.primary }]}
+            style={[props.heading === 'section' ? styles.currentSectionName : styles.currentName, { color: theme.colors.text.primary }]}
           >
             {name}
           </Text>
@@ -630,4 +642,5 @@ const styles = StyleSheet.create(() => ({
     minWidth: 0,
   },
   currentName: { ...pageTitleTypography(), flexShrink: 1 },
+  currentSectionName: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), flexShrink: 1 },
 }));

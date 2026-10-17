@@ -95,6 +95,9 @@ it('uses a stable Project key without a Source through the actual Account Artifa
         const saved = flattenWidgetLayoutWidgetsV1(boundary.layout().items);
         expect(saved.filter(entry => entry.instance.id !== instance.id).map(entry => ({ id: entry.instance.id, area: entry.area })))
             .toEqual(defaults.map(entry => ({ id: entry.instance.id, area: entry.area })));
+        // The retained preset is not the person's frame choice: each widget keeps following its area's default.
+        expect(saved.filter(entry => entry.instance.id !== instance.id).map(entry => entry.frameStyle ?? null))
+            .toEqual(defaults.map(() => null));
         expect(saved.find(entry => entry.instance.id === instance.id)).toMatchObject({ instance, area: 'main' });
         expect(await executor.execute('widgets.item.rename', { ref: { surface, instanceId: instance.id }, displayName: 'My project' }, context))
             .toMatchObject({ ok: true });

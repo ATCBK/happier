@@ -37,6 +37,7 @@ import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol';
 
 import { PluginPageWidgetArea } from './PluginPageWidgetArea';
 import { WidgetArea } from './WidgetArea';
+import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { WidgetAreaLayoutBar } from './WidgetAreaLayoutBar';
 import { WidgetAreaPresetLine } from './WidgetAreaPresetLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -335,7 +336,7 @@ describe('a plugin page widget area', () => {
         } else {
             expect(screen.findAllByType(DropdownMenu).find(row => row.props.testID === fieldId)!.props.selectedId).toBe('follow');
             expect(group?.kind === 'group' ? group.context ?? {} : null).toEqual({});
-            expect(screen.getTextContent()).toContain(kind === 'approvalPending' ? 'widgetAdd.areaApprovalPending' : 'widgetAdd.saveFailed');
+            expect(screen.getTextContent()).toContain(kind === 'approvalPending' ? 'widgetAdd.areaApprovalPending' : 'widgetAdd.refusals.areaUnavailable');
         }
     });
     it('shows named layouts through the shared tab owner and switches the displayed document through an agent Action', async () => {
@@ -350,6 +351,10 @@ describe('a plugin page widget area', () => {
             expect(displayed, JSON.stringify(displayed)).toMatchObject({ status: 'ready' });
             expect(screen.findByType(WidgetAreaLayoutBar)?.props.layouts).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Empty' })]));
         });
+        // The stored stock layout keeps the area's declared name (FA18 P4: never "Widget area" once
+        // loaded), and the bar heads a section of the page, not the page (FA18 P1).
+        expect(screen.findByType(WidgetAreaLayoutBar).props.layouts.find((entry: { isDefault?: boolean }) => entry.isDefault).name).toBe('widgetAdd.areaPinned');
+        expect(screen.findByType(WidgetAreaLayoutBar).props.heading).toBe('section');
         expect(screen.findByTestId('prs.pinned.widget.follow')).not.toBeNull();
         await act(async () => {
             const selected = await executor.execute('widgets.area.layout.select', { surface: { ...surface, owner: { ...surface.owner, layoutId: 'empty' } } }, { surface: 'mcp', bypassApprovals: true });
@@ -402,6 +407,17 @@ describe('a plugin page widget area', () => {
         expect(screen.findByTestId('loading-area.loading')).not.toBeNull();
         expect(screen.findByTestId('loading-area.add')).toBeNull();
         expect(screen.findByTestId('loading-area.empty')).toBeNull();
+    });
+    it('holds a page-section area at its settled empty line while it loads, never a card (FA18 P4)', async () => {
+        const { hostApi } = createArea();
+        const port: WidgetAreaPort = { execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) };
+        const screen = await renderScreen(page(hostApi, 'happier', <WidgetArea port={port} context={{}}
+            layout={{ state: { status: 'loading' }, reload: async () => {}, write: async () => ({ kind: 'applied' }) }}
+            geometry="grid" title="Pinned" surfaceName="Widget areas" testID="section-area"
+            dashboard={{ addLabel: 'Add widget', emptyTitle: 'Empty', holdsEmptyLineWhileLoading: true }} />));
+        expect(screen.findByTestId('section-area.loading')).not.toBeNull();
+        expect(screen.findAllByType(WidgetFrame)).toHaveLength(0);
+        expect(screen.findByTestId('section-area.add')).toBeNull();
     });
     it.each([false, true])('reaches the full untitled group menu through Organize on desktop (dashboard=%s)', async dashboard => {
         const fixture = projectMovementFixture().first;
@@ -881,6 +897,28 @@ describe('a plugin page widget area', () => {
             && cell.findAll(node => node.props.testID === 'prs.pinned.widget.pin').length > 0)).toBe(true);
         // Size is one of the area's own steps; the follower keeps its medium intent.
         expect(menuOf(reloaded, 'follow').props.actions.find((entry: { id: string }) => entry.id === 'size-medium')?.selected).toBe(true);
+    });
+
+    it.each([
+        ['widget_area_unavailable', 'widgetAdd.refusals.areaUnavailable'],
+        ['widget_edit_denied', 'widgetAdd.refusals.editDenied'],
+        ['permission_denied', 'widgetAdd.areaWriteFailed'],
+    ] as const)('says why a refused remove failed on its card, from the one failure presenter (%s)', async (errorCode, reason) => {
+        const area = createArea();
+        await area.store.apply({ kind: 'add', instance: pin });
+        const hostApi: PluginUiHostApi = { ...area.hostApi, widgetArea: async (raw, options) => {
+            const request = PluginUiWidgetAreaRequestV1Schema.parse(raw);
+            if (request.operation.actionId === 'widgets.item.remove') return PluginUiWidgetAreaResultV1Schema.parse({ ok: false, errorCode, error: errorCode });
+            return area.hostApi.widgetArea(raw, options);
+        } };
+        const screen = await renderScreen(page(hostApi, 'happier'));
+        await flushHookEffects({ cycles: 4 });
+        await runAction(screen, 'pin', 'remove');
+        expect(screen.findByTestId('prs.pinned.widget.pin.frame.stale')).not.toBeNull();
+        expect(screen.getTextContent()).toContain(reason);
+        // A reason the presenter owns replaces the static line; it never shows next to it.
+        if (reason !== 'widgetAdd.areaWriteFailed') expect(screen.getTextContent()).not.toContain('widgetAdd.areaWriteFailed');
+        expect(widgetPlacements(await area.store.read())).toEqual([{ instance: pin, size: 'medium' }]);
     });
 
     it('adds a contributed widget from the shared Add surface that follows the page from its pane', async () => {

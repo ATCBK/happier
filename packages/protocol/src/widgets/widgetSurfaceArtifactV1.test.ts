@@ -214,7 +214,7 @@ describe('personal widget areas at the Account Artifact owner', () => {
         ]);
         expect(b.rows.size).toBe(0);
         expect(await createWidgetAreaActionPortV1(() => port).read(project, {})).toMatchObject({
-            state: 'missing', instances: expect.arrayContaining([{ area: 'main', frameStyle: 'plain', instance: {
+            state: 'missing', instances: expect.arrayContaining([{ area: 'main', instance: {
                 v: 1, id: 'code', definition: { kind: 'builtin', id: 'project_code' }, bindings: { checkout: { kind: 'context', slot: 'checkout' } },
             } }]),
         });
