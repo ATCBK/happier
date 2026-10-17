@@ -22,7 +22,7 @@ import { registerExternalActionRoutes } from '../../../../server/sources/app/api
 import type { Fastify } from '../../../../server/sources/app/api/types';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createAccountEncryptionCurrentnessFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
-import { prepareExternalActionRequesterAccountAuthorization, resolveExternalActionServerRequestHeaders } from '@/api/externalActionExecutionAuthorization';
+import { createExternalActionAuthorizedRequestHeaders, prepareExternalActionRequesterAccountAuthorization, resolveExternalActionServerRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import { createSessionListActionDependency } from '@/session/actions/sessionListActionDependency';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
@@ -130,6 +130,9 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
   app.get('/v1/account/encryption/currentness', { preHandler: app.authenticate }, async (_request, reply) =>
     currentnessRefused ? reply.code(401).send({ error: 'private-error-body' }) : createAccountEncryptionCurrentnessFixture());
   app.get('/v2/account/settings', { preHandler: app.authenticate }, async () => ({ version: settingsVersion, content: { t: 'plain', v: rawSettings } }));
+  app.get('/v1/machines/:machineId', { preHandler: app.authenticate }, async request => ({
+    machine: { id: (request.params as { machineId: string }).machineId },
+  }));
   app.get('/v1/artifacts', { preHandler: app.authenticate }, async () => []);
   app.get('/v1/account/entity-rows/acp', { preHandler: app.authenticate }, async () =>
     AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
@@ -446,6 +449,21 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
       expect(response.statusCode, JSON.stringify(f.observations)).toBe(200);
     }
     if (actionId === 'session.stop' || actionId === 'session.archive' || actionId === 'session.unarchive') {
+      // Native Machine RPC must read its exact content codec before it can emit
+      // the lifecycle effect. Use the production Machine HTTP signature producer;
+      // the MCP lifecycle test substitutes that process/transport boundary.
+      const readMachine = (machineId: string) => {
+        const path = `/v1/machines/${encodeURIComponent(machineId)}`;
+        const headers = createExternalActionAuthorizedRequestHeaders({ authorization: prepared.authorization,
+          effectActionId: actionId, target: prepared.target, installationId: storage.state.installationId,
+          method: 'GET', path, privateKey: installation.secretKey });
+        return f.app.inject({ method: 'GET', url: path, headers });
+      };
+      expect((await readMachine(storage.state.machineId)).statusCode, JSON.stringify(f.observations)).toBe(200);
+      expect((await readMachine('another-machine')).statusCode).toBe(401);
+      storage.state.bound = false;
+      expect((await readMachine(storage.state.machineId)).statusCode).toBe(401);
+      storage.state.bound = true;
       const path = `/v2/sessions/${childId}/${actionId === 'session.archive' ? 'unarchive' : 'archive'}`;
       const body = {};
       const headers = resolveExternalActionServerRequestHeaders({ context, effectActionId: actionId,
