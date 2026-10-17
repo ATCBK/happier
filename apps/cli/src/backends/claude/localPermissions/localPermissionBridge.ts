@@ -198,17 +198,23 @@ export class ClaudeLocalPermissionBridge {
         const settlements = [...this.pendingRequests.values()].map(async (pending) => {
             const context = this.permissionCoordinator.getResponseContext(pending.id);
             if (!context) return;
-            await this.permissionCoordinator.completeRpcResponse({ context, completion: {
-                result: DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE,
-                completedRequest: { status: 'canceled', reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON },
-            } });
+            await this.permissionCoordinator.completeCancellationResponse({
+                context, result: DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE,
+                reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
+            });
         });
-        void Promise.all(settlements).then(() => {
-            this.pendingRequests.clear();
+        void Promise.allSettled(settlements).then((results) => {
             this.localWaitersByRequestId.clear();
-            this.permissionCoordinator.dispose();
             this.requestStore.dispose();
-        }).catch(() => logger.infoFile('[claude-local-permissions] Disposal request settlement admission failed'));
+            if (results.some((result) => result.status === 'rejected')) {
+                // Failed cancellation retains the coordinator's detached occurrence for
+                // another retirement attempt; its local hook has already been rejected.
+                logger.infoFile('[claude-local-permissions] Disposal request settlement admission failed');
+                return;
+            }
+            this.pendingRequests.clear();
+            this.permissionCoordinator.dispose();
+        });
     }
 
     async handlePermissionHook(data: PermissionHookData): Promise<PermissionHookResponse> {
@@ -364,6 +370,7 @@ export class ClaudeLocalPermissionBridge {
             createdAt: pending.createdAt,
             status: 'approved',
             reason: 'Approved in Claude terminal',
+            observedCompletion: true,
             hookResponse: this.buildAllowHookResponse({
                 hookEventName: pending.hookEventName,
                 toolInput: pending.toolInput,
@@ -1036,10 +1043,12 @@ export class ClaudeLocalPermissionBridge {
         allowedTools?: string[];
         updatedPermissions?: unknown;
         hookResponse: PermissionHookResponse;
+        observedCompletion?: true;
     }): void {
         if (this.requestStore.isOutstandingRequestClaimed(params.requestId)) return;
         const handledByCoordinator = this.permissionCoordinator.handleResponse({
             requestId: params.requestId,
+            observedCompletion: params.observedCompletion,
             buildCompletion: () => ({
                 result: params.hookResponse,
                 completedRequest: {
@@ -1053,20 +1062,18 @@ export class ClaudeLocalPermissionBridge {
         });
 
         if (!handledByCoordinator) {
-            this.requestStore.completeRequest({
+            void this.requestStore.recordCompletedRequest({
                 requestId: params.requestId,
+                toolName: params.toolName,
+                toolInput: params.toolInput,
+                createdAt: params.createdAt,
+                kind: resolveAgentRequestKind(params.toolName),
+                source: CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
                 status: params.status,
                 reason: params.reason,
-                mode: params.mode,
                 allowedTools: params.allowedTools,
                 updatedPermissions: params.updatedPermissions,
-                fallback: {
-                    toolName: params.toolName,
-                    toolInput: params.toolInput,
-                    createdAt: params.createdAt,
-                    kind: resolveAgentRequestKind(params.toolName),
-                    source: CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
-                },
+                extraCompletedFields: typeof params.mode === 'string' ? { mode: params.mode } : null,
             });
         }
     }

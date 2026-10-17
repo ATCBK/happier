@@ -1705,16 +1705,23 @@ and response side effects advance only after the existing Agent-state write
 acknowledges request completion. A failed write reaches the RPC caller while the
 request remains retryable and independent pending requests remain intact. Requests
 present only in Agent state keep their existing behavior without caching a provider
-decision. Native responses durably admit exact settlement before provider progress;
-UI responses additionally wait for the server acknowledgement. Automatic decisions
-without an outstanding request publish history without blocking provider progress.
+decision. Pre-effect provider decisions use this same acknowledged writer. A failed
+response is not queued for later permission execution. Already observed native
+PostToolUse completions and lifecycle cancellation retirements instead durably admit
+the exact completion. Automatic decisions without an outstanding request publish
+history without blocking provider progress.
 
 Metadata and Agent-state retries use the current managed socket on every attempt.
 Reconnection can therefore finish the same operation within its existing retry
 budget.
 
-Actual pending permission settlements use the Session's existing durable mutation
-journal before provider progress. Automatic history first uses the normal
+An observed Claude PostToolUse completion and lifecycle cancellation use the Session's
+existing durable mutation journal. PostToolUse is the explicit evidence that a native
+tool already ran; the journal never replays an unapplied UI or provider approval.
+Cancellation rejects local waiters even if admission fails, retaining the detached
+occurrence for a retirement retry and reporting the failure. Local bridge disposal
+waits for cancellation admission rather than a server round trip. Automatic history
+first uses the normal
 acknowledged Agent-state write; if that fails, the same journal retains its exact
 completion delta. These entries are encrypted with the canonical account machine
 encryption context even for plaintext sessions. The journal retries through the

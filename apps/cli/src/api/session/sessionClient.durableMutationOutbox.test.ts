@@ -202,6 +202,52 @@ const taskCompleteMessage = { type: 'task_complete', id: 'turn-1' } satisfies AC
 const reusableUnknownTurnId = ['primary', 'runtime'].join('-') + ':s1:unknown';
 
 describe('ApiSessionClient durable mutation outbox', () => {
+  it('does not retain a pre-effect UI decision for later journal replay after acknowledgement failure', async () => {
+    const { writeCredentialsLegacy } = await import('@/persistence');
+    await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });
+    const request = { tool: 'Write', kind: 'permission', arguments: {}, createdAt: 1 };
+    let serverState: AgentState = { requests: { ui: request } };
+    let serverVersion = 0;
+    let online = true;
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+      if (event === 'ping') return { v: 1 };
+      if (event !== 'update-state') return { ok: true };
+      if (!online) return { result: 'error' };
+      const value = payload as { expectedVersion: number; agentState: string };
+      if (value.expectedVersion !== serverVersion) return {
+        result: 'version-mismatch', version: serverVersion, agentState: JSON.stringify(serverState),
+      };
+      serverState = JSON.parse(value.agentState);
+      return { result: 'success', version: ++serverVersion, agentState: value.agentState };
+    } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
+    const { createPermissionRequestCoordinator } = await import('@/agent/permissions/permissionRequestCoordinator');
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-ui-failure', agentState: serverState }));
+    const coordinator = createPermissionRequestCoordinator<boolean>({ store: new AgentStateRequestStore({ session: client, logPrefix: '[Test]' }) });
+    const provider = coordinator.requestDecision({ requestId: 'ui', toolName: request.tool, toolInput: request.arguments, createdAt: 1 });
+    let outcome = 'pending';
+    void provider.then(() => { outcome = 'allowed'; }, () => { outcome = 'canceled'; });
+    try {
+      await expect.poll(() => serverVersion).toBeGreaterThan(0);
+      online = false;
+      await expect(coordinator.completeRpcResponse({
+        context: coordinator.getResponseContext('ui')!,
+        completion: { result: true, completedRequest: { status: 'approved' } },
+      })).rejects.toThrow();
+      online = true;
+      await client.flush();
+      expect(await readPersistedOutboxMutations('s-ui-failure')).toEqual([]);
+      expect(serverState.requests?.ui).toBeDefined();
+      expect(serverState.completedRequests?.ui).toBeUndefined();
+      expect(outcome).toBe('pending');
+    } finally {
+      coordinator.cancelRequest('ui', 'test cleanup');
+      await client.close();
+    }
+  });
+
   it.each(['before-handler', 'ack'] as const)('journals automatic history after a %s failure and replays it after same-session reconstruction', async (failure) => {
     const { writeCredentialsLegacy } = await import('@/persistence');
     await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });
@@ -307,7 +353,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
     const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
     const first = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-settlement', agentState: serverState }));
     await new AgentStateRequestStore({ session: first, logPrefix: '[Test]' }).completeRequest({
-      requestId: 'foreground', status: 'approved', decision: 'approved',
+      requestId: 'foreground', status: 'approved', decision: 'approved', observedCompletion: true,
     });
     const saved = JSON.stringify(await readPersistedOutboxMutations('s-settlement'));
     expect(saved).toContain('agent_state_request_settlement');

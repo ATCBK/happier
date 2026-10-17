@@ -64,7 +64,7 @@ export type DeferredApiSessionTarget = Readonly<{
   }>) => Promise<SessionUserMessageEnqueueResult>;
   updateMetadata: (updater: (metadata: Metadata) => Metadata) => void | Promise<void>;
   updateAgentState: (updater: (state: AgentState) => AgentState, options?: AgentStateWriteOptions) => void | Promise<void>;
-  updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState, requireAck?: boolean) => Promise<void>;
+  updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState) => Promise<void>;
   getRuntimeActivitySnapshotPublisher?: () => SessionRuntimeActivitySnapshotPublisher | null;
   keepAlive: (thinking: boolean, mode: 'local' | 'remote') => void;
   getMetadataSnapshot: () => Metadata | null;
@@ -489,9 +489,9 @@ export class DeferredApiSessionClient {
     return deferred.promise;
   }
 
-  updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState, requireAck = false): Promise<void> {
+  updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
     const target = this.target;
-    if (target && !this.flushInFlight) return target.updateAgentStateRequestSettlement(updater, requireAck);
+    if (target && !this.flushInFlight) return target.updateAgentStateRequestSettlement(updater);
     const deferred = createDeferredPromise<void>();
     const dropped = () => deferred.reject(new Error('Request settlement was canceled before durable session attachment'));
     if (this.cancelled) {
@@ -499,7 +499,7 @@ export class DeferredApiSessionClient {
       return deferred.promise;
     }
     this.pushBufferedCall(async (attached) => {
-      await attached.updateAgentStateRequestSettlement(updater, requireAck);
+      await attached.updateAgentStateRequestSettlement(updater);
       deferred.resolve();
     }, { hint: 'updateAgentStateRequestSettlement' }, {
       onDrop: dropped,

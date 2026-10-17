@@ -66,7 +66,7 @@ export type AgentStateOutstandingRequest = Readonly<{
 type SessionLike = Readonly<{
     sessionId: string;
     updateAgentState: (updater: (state: AgentState) => AgentState, options?: AgentStateWriteOptions) => Promise<void> | void;
-    updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState, requireAck?: boolean) => Promise<void>;
+    updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState) => Promise<void>;
     getAgentStateSnapshot?: () => AgentState | null | undefined;
     getMetadataSnapshot?: () => unknown;
 }>;
@@ -200,7 +200,7 @@ export class AgentStateRequestStore {
         }
     }
 
-    completeRequest(params: Readonly<{
+    async completeRequest(params: Readonly<{
         requestId: string;
         status: string;
         decision?: string;
@@ -211,9 +211,16 @@ export class AgentStateRequestStore {
         extraCompletedFields?: Readonly<Record<string, unknown>> | null;
         fallback?: Readonly<{ toolName: string; toolInput: unknown; createdAt: number; kind?: string; source?: string }> | null;
         requireAck?: boolean;
+        /** An actual provider effect was observed, such as Claude PostToolUse. */
+        observedCompletion?: true;
     }>): Promise<void> {
+        const requireAck = params.requireAck === true
+            || (params.status !== 'canceled' && params.observedCompletion !== true);
         let completedRequest = false;
+        let expectedCompletion: AgentStateCompletedEntry | null = null;
+        const completedAt = Date.now();
         const update = (currentState: AgentState): AgentState => {
+            completedRequest = false;
             const requests = cloneStringKeyedRecordToNullProto(currentState.requests);
             const existing = requests[params.requestId] as unknown;
             if (!existing && !params.fallback) {
@@ -226,6 +233,13 @@ export class AgentStateRequestStore {
                 tool: params.fallback.toolName, arguments: params.fallback.toolInput,
                 createdAt: params.fallback.createdAt, source: params.fallback.source,
             })) return currentState;
+            const previousCompletion = currentState.completedRequests?.[params.requestId];
+            if (requireAck && !existing && previousCompletion) {
+                // An ACK may have been lost after our exact write committed. A different
+                // terminal outcome belongs to its writer and cannot be replaced by fallback.
+                completedRequest = expectedCompletion !== null && deepEqual(previousCompletion, expectedCompletion);
+                return currentState;
+            }
             delete requests[params.requestId];
 
             const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
@@ -249,7 +263,7 @@ export class AgentStateRequestStore {
                 }
             }
 
-            completedEntry.completedAt = Date.now();
+            completedEntry.completedAt = completedAt;
             completedEntry.status = params.status;
             if (typeof params.decision === 'string') completedEntry.decision = params.decision;
             if (typeof params.reason === 'string' && params.reason.length > 0) completedEntry.reason = params.reason;
@@ -268,7 +282,8 @@ export class AgentStateRequestStore {
                 }
             }
 
-            completedRequests[params.requestId] = completedEntry as AgentStateCompletedEntry;
+            expectedCompletion = completedEntry as AgentStateCompletedEntry;
+            completedRequests[params.requestId] = expectedCompletion;
             for (const [id, request] of Object.entries(requests)) {
                 if (id === params.requestId) continue;
                 if (!isAgentStateRequestCoveredByCompletedRequests({
@@ -298,16 +313,19 @@ export class AgentStateRequestStore {
             completedRequest = true;
             return nextState;
         };
-        const completion = this.settleRequests(update, params.requireAck);
-
-        return completion.then(() => {
-            if (!completedRequest) {
-                throw new Error(`Permission request ${params.requestId} did not match an outstanding request settlement`);
+        if (requireAck) await this.session.updateAgentState(update);
+        else await this.settleRequests(update);
+        if (!completedRequest) {
+            throw new Error(`Permission request ${params.requestId} did not match an outstanding request settlement`);
+        }
+        if (requireAck) {
+            const committed = this.session.getAgentStateSnapshot?.();
+            if (!expectedCompletion || committed?.requests?.[params.requestId] !== undefined
+                || !deepEqual(committed?.completedRequests?.[params.requestId], expectedCompletion)) {
+                throw new Error(`Permission request ${params.requestId} was superseded before acknowledgement`);
             }
-            if (completedRequest) {
-                this.markPermissionRequestCompletedBestEffort(params.requestId);
-            }
-        });
+        }
+        this.markPermissionRequestCompletedBestEffort(params.requestId);
     }
 
     recordCompletedRequest(params: Readonly<{
@@ -409,9 +427,9 @@ export class AgentStateRequestStore {
         ).catch(() => undefined); // settleRequests reports admission failures on the default file log.
     }
 
-    private settleRequests(updater: (state: AgentState) => AgentState, requireAck = false): Promise<void> {
+    private settleRequests(updater: (state: AgentState) => AgentState): Promise<void> {
         try {
-            const result = this.session.updateAgentStateRequestSettlement(updater, requireAck);
+            const result = this.session.updateAgentStateRequestSettlement(updater);
             return Promise.resolve(result).catch((error) => {
                 logger.infoFile(`${this.logPrefix} Request settlement failed; provider completion was not admitted`);
                 throw error;

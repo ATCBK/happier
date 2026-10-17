@@ -42,7 +42,7 @@ describe('AgentStateRequestStore', () => {
         });
         const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
         const completion = store.completeRequest({
-            requestId: 'sameId', status: 'approved',
+            requestId: 'sameId', status: 'approved', observedCompletion: true,
             fallback: { toolName: request.tool, toolInput: request.arguments, createdAt: request.createdAt },
         });
         if (change === 'claimed') {
@@ -74,6 +74,24 @@ describe('AgentStateRequestStore', () => {
             createdAt: 1, status: 'approved',
         });
         expect(session.agentState).toEqual({ requests: { reused: request }, completedRequests: {} });
+    });
+
+    it('recognizes its exact committed completion after a lost acknowledgement rebases the updater', async () => {
+        const session = new FakeSession();
+        const request = { tool: 'Write', arguments: {}, createdAt: 1 };
+        session.agentState = { requests: { ack: request } };
+        session.updateAgentState = (updater) => {
+            session.agentState = updater(session.agentState);
+            // The first update committed; its lost ACK forces another CAS attempt.
+            session.agentState = updater(session.agentState);
+        };
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+        await expect(store.completeRequest({
+            requestId: 'ack', status: 'approved',
+            fallback: { toolName: request.tool, toolInput: request.arguments, createdAt: request.createdAt },
+        })).resolves.toBeUndefined();
+        expect(session.agentState.requests?.ack).toBeUndefined();
+        expect(session.agentState.completedRequests?.ack).toMatchObject({ status: 'approved' });
     });
 
     it('can persist private request input without forwarding it to push notification rendering', () => {

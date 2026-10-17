@@ -15,7 +15,11 @@ process.stdout.write(`Runtime ${input.phase}: constructing session client\n`);
 const client = new ApiSessionClient(input.token, input.session);
 if (input.phase === 'admit') {
   const requests = new AgentStateRequestStore({ session: client, logPrefix: '[Settlement recovery test]' });
-  await requests.completeRequest({ requestId: input.requestId, status: 'approved', decision: 'approved' });
+  // Model an already executed native tool (PostToolUse), whose completion must
+  // survive offline delivery independently of a pre-effect permission response.
+  await requests.completeRequest({
+    requestId: input.requestId, status: 'approved', decision: 'approved', observedCompletion: true,
+  });
   // Model the runtime ending immediately after durable admission, without a graceful flush.
   process.exit(0);
 }

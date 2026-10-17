@@ -104,7 +104,7 @@ export type RuntimeActivitySnapshotTail = Readonly<{
 }>;
 
 export type SessionMutationOutbox = Readonly<{
-    enqueueAgentStateRequestSettlement(mutation: AgentStateRequestSettlementMutationV1, awaitDelivery?: boolean): Promise<SessionMutationEnqueueResult>;
+    enqueueAgentStateRequestSettlement(mutation: AgentStateRequestSettlementMutationV1): Promise<SessionMutationEnqueueResult>;
     enqueueSessionTurn(mutation: SessionTurnMutationV1): Promise<void>;
     enqueueTranscriptMessage(mutation: TranscriptMessageAppendMutationV1): Promise<Readonly<{
         persisted: boolean;
@@ -313,8 +313,8 @@ export function createSessionMutationJournal(params: CreateSessionMutationJourna
     };
 
     return {
-        enqueueAgentStateRequestSettlement: async (mutation, awaitDelivery) => await enqueueIfOpen(
-            () => sharedEntry.outbox.enqueueAgentStateRequestSettlement(mutation, awaitDelivery),
+        enqueueAgentStateRequestSettlement: async (mutation) => await enqueueIfOpen(
+            () => sharedEntry.outbox.enqueueAgentStateRequestSettlement(mutation),
             { persisted: false, delivered: false },
         ),
         enqueueSessionTurn: async (mutation) => {
@@ -1215,12 +1215,12 @@ function createSessionMutationOutboxInstance(params: CreateSessionMutationJourna
     });
 
     return {
-        async enqueueAgentStateRequestSettlement(mutation, awaitDelivery) {
+        async enqueueAgentStateRequestSettlement(mutation) {
             if (mutation.sessionId !== params.sessionId) throw new Error('Request settlement sessionId must match journal');
             return await enqueue({
                 kind: 'agent_state_request_settlement', mutationId: mutation.mutationId,
                 payload: mutation, createdAt: Date.now(), attempts: 0, nextAttemptAt: 0,
-            }, { awaitFlush: awaitDelivery });
+            });
         },
         async enqueueSessionTurn(mutation) {
             return await enqueue(createQueuedSessionTurn(mutation), {

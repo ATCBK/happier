@@ -5780,7 +5780,7 @@ export class ApiSessionClient extends EventEmitter {
                         // handler. The same lock still owns this snapshot and exact history delta.
                         if (!handlerInvoked) capture(this.agentState ?? {});
                         if (captured.entries.length > 0) {
-                            await this.enqueueAgentStateRequestSettlement(captured, false);
+                            await this.enqueueAgentStateRequestSettlement(captured);
                             logger.infoFile('[API] session_permission_completion_deferred', {
                                 sessionId: this.sessionId, operation: 'update-state',
                             });
@@ -5808,9 +5808,8 @@ export class ApiSessionClient extends EventEmitter {
     /** Durable exact request completion; publication and unrelated state updates retain their owner. */
     updateAgentStateRequestSettlement(
         handler: (state: AgentState) => AgentState,
-        requireAck = false,
     ): Promise<void> {
-        const admission = this.admitAgentStateRequestSettlement(handler, requireAck);
+        const admission = this.admitAgentStateRequestSettlement(handler);
         this.pendingDurableSessionWrites.add(admission);
         void admission.then(
             () => this.pendingDurableSessionWrites.delete(admission),
@@ -5819,17 +5818,16 @@ export class ApiSessionClient extends EventEmitter {
         return admission;
     }
 
-    private async admitAgentStateRequestSettlement(handler: (state: AgentState) => AgentState, requireAck: boolean): Promise<void> {
+    private async admitAgentStateRequestSettlement(handler: (state: AgentState) => AgentState): Promise<void> {
         const settlement = await this.agentStateLock.inLock(async () => {
             const state = this.agentState ?? {};
             return buildAgentStateRequestSettlement(state, handler(state));
         });
-        await this.enqueueAgentStateRequestSettlement(settlement, requireAck);
+        await this.enqueueAgentStateRequestSettlement(settlement);
     }
 
     private async enqueueAgentStateRequestSettlement(
         settlement: ReturnType<typeof buildAgentStateRequestSettlement>,
-        requireAck: boolean,
     ): Promise<void> {
         if (settlement.entries.length === 0) return;
         const credentials = await readCredentials();
@@ -5839,10 +5837,8 @@ export class ApiSessionClient extends EventEmitter {
             v: 1, source: 'agent_state_request_settlement', sessionId: this.sessionId,
             mutationId: randomUUID(),
             content: { t: 'encrypted', c: encodeBase64(encrypt(context.encryptionKey, context.encryptionVariant, settlement)) },
-        }, requireAck);
-        if (!result.persisted || (requireAck && !result.delivered)) {
-            throw new Error(requireAck ? 'Request settlement is awaiting server acknowledgement' : 'Request settlement was not durably admitted');
-        }
+        });
+        if (!result.persisted) throw new Error('Request settlement was not durably admitted');
     }
 
     private trackSessionTurnWrite(

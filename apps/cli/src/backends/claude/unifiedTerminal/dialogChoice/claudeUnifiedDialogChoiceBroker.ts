@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { logger } from '@/ui/logger';
+
 import { AgentStateRequestStore, type AgentStateOutstandingRequest } from '@/agent/permissions/agentStateRequestStore';
 import {
   createPermissionRequestCoordinator,
@@ -339,7 +341,9 @@ export class ClaudeUnifiedDialogChoiceBroker {
     const context = this.permissionCoordinator.getResponseContext(requestId);
     if (!isDialogChoiceContext(context)) return false;
     if (context.status !== 'live') {
-      void this.completeSourceOwnedCancellation(requestId, 'claude_unified_dialog_choice_no_live_waiter');
+      void this.completeSourceOwnedCancellation(requestId, 'claude_unified_dialog_choice_no_live_waiter').catch(() => {
+        logger.infoFile('[claude-unified-dialog-choice] Cancellation settlement admission failed');
+      });
       return true;
     }
 
@@ -347,7 +351,9 @@ export class ClaudeUnifiedDialogChoiceBroker {
       const reason = typeof payload.reason === 'string' && payload.reason.length > 0
         ? payload.reason
         : 'claude_unified_dialog_choice_denied';
-      void this.completeSourceOwnedCancellation(requestId, reason);
+      void this.completeSourceOwnedCancellation(requestId, reason).catch(() => {
+        logger.infoFile('[claude-unified-dialog-choice] Cancellation settlement admission failed');
+      });
       return true;
     }
 
@@ -363,7 +369,9 @@ export class ClaudeUnifiedDialogChoiceBroker {
       // (e.g. a freeform "Other" entry) cannot be injected. Fail closed with a typed cancellation
       // rather than throwing an opaque `permission_response_failed`; the still-visible dialog is
       // re-surfaced by the next screen observation / turn-end probe.
-      void this.completeSourceOwnedCancellation(requestId, 'claude_unified_dialog_choice_unsupported_freeform_answer');
+      void this.completeSourceOwnedCancellation(requestId, 'claude_unified_dialog_choice_unsupported_freeform_answer').catch(() => {
+        logger.infoFile('[claude-unified-dialog-choice] Cancellation settlement admission failed');
+      });
       return true;
     }
 
