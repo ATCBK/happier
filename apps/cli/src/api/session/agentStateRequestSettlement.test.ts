@@ -46,6 +46,25 @@ describe('exact AgentState request settlement', () => {
         expect(applyAgentStateRequestSettlement(settled, intent)).toEqual(settled);
     });
 
+    it('preserves an observed completion when later cancellation captured from the same stale request replays', () => {
+        const cancellation = buildAgentStateRequestSettlement(original, {
+            requests: { background },
+            completedRequests: { foreground: { ...completed, completedAt: 21, status: 'canceled' } },
+        });
+        const observed = applyAgentStateRequestSettlement(original, intent);
+        expect(applyAgentStateRequestSettlement(observed, cancellation)).toBe(observed);
+
+        // A live replacement occurrence still supplies authority for its own terminal result.
+        const replacement = { ...foreground, createdAt: 30 };
+        const replacementCompletion = { ...replacement, completedAt: 40, status: 'canceled' as const };
+        const current = { ...observed, requests: { background, foreground: replacement } };
+        const replacementIntent = buildAgentStateRequestSettlement(current, {
+            ...current, requests: { background }, completedRequests: { foreground: replacementCompletion },
+        });
+        expect(applyAgentStateRequestSettlement(current, replacementIntent).completedRequests?.foreground)
+            .toEqual(replacementCompletion);
+    });
+
     it('does not settle a replacement occurrence with the same request id or a claimed request', () => {
         const replacement = { ...foreground, createdAt: 30 };
         expect(applyAgentStateRequestSettlement({ requests: { foreground: replacement } }, intent).requests)

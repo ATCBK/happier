@@ -1727,6 +1727,8 @@ completion delta. These entries are encrypted with the canonical account machine
 encryption context even for plaintext sessions. The journal retries through the
 existing current-version Agent-state updater. It preserves unrelated requests,
 replacement occurrences, response claims, and already committed automatic outcomes.
+Once a request is absent, replay preserves its committed terminal outcome even
+when a later cancellation was captured from a stale snapshot.
 An authenticated, decrypted settlement that fails schema validation is quarantined
 in the existing dead-letter file, preserving its encrypted bytes and allowing later
 mutations to proceed. Missing credentials or an undecryptable payload remain
@@ -1741,8 +1743,9 @@ the first write after a version conflict.
 
 This is runtime-owned recovery: reconstructing an ApiSessionClient for the same
 session resumes admitted settlements after a process restart. Closing drains local
-admission before closing the journal. A permanently offline runtime can leave an
-admitted entry pending until that session resumes; daemon-terminal custody does not
+admission attempts before closing the journal; a failed attempt still rejects to
+its caller without interrupting client cleanup. A permanently offline runtime can
+leave an admitted entry pending until that session resumes; daemon-terminal custody does not
 assume permission authority. Failed automatic writes report
 `session_permission_completion_deferred` after durable admission, and admission
 failure reports `session_permission_completion_retention_failed` in the normal

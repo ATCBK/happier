@@ -43,7 +43,7 @@ describe("terminal session turns preserve request ownership on SQLite", () => {
                 accountId: account.id,
                 tag: `tag-${randomUUID()}`,
                 metadata: "{}",
-                // A best-effort agent-state write left these behind; the durable turn end must not keep them alive.
+                // Session-wide requests may belong to independent runs and survive this foreground turn.
                 pendingPermissionRequestCount: 2,
                 pendingUserActionRequestCount: 1,
                 pendingRequestObservedAt,

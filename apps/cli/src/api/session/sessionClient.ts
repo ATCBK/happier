@@ -5822,11 +5822,9 @@ export class ApiSessionClient extends EventEmitter {
         handler: (state: AgentState) => AgentState,
     ): Promise<void> {
         const admission = this.admitAgentStateRequestSettlement(handler);
-        this.pendingDurableSessionWrites.add(admission);
-        void admission.then(
-            () => this.pendingDurableSessionWrites.delete(admission),
-            () => this.pendingDurableSessionWrites.delete(admission),
-        );
+        const tracked = admission.catch(() => undefined);
+        this.pendingDurableSessionWrites.add(tracked);
+        void tracked.then(() => this.pendingDurableSessionWrites.delete(tracked));
         return admission;
     }
 

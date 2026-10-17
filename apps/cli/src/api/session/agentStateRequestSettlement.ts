@@ -53,7 +53,7 @@ export function applyAgentStateRequestSettlement(current: AgentState, settlement
         if (hasPermissionResponseClaimV1(request)) continue;
         if (request && !isSameAgentStateRequestOccurrence(request, entry.completed)) continue;
         const previousCompletion = completedRequests[entry.requestId];
-        if (entry.requestAbsent && previousCompletion !== undefined) continue;
+        if (request === undefined && previousCompletion !== undefined) continue;
         if (previousCompletion && previousCompletion.createdAt > entry.completed.createdAt) continue;
         if (previousCompletion && previousCompletion.completedAt > entry.completed.completedAt) continue;
         if (deepEqual(previousCompletion, entry.completed)) continue;

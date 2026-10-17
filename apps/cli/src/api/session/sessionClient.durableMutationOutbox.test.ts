@@ -225,6 +225,71 @@ const taskCompleteMessage = { type: 'task_complete', id: 'turn-1' } satisfies AC
 const reusableUnknownTurnId = ['primary', 'runtime'].join('-') + ':s1:unknown';
 
 describe('ApiSessionClient durable mutation outbox', () => {
+  it('acknowledges a fast-start permission through the attached Deferred client before resolving its provider', async () => {
+    const request = { tool: 'Write', arguments: {}, createdAt: 1 };
+    let serverState: AgentState = {};
+    let version = 0;
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+      if (event !== 'update-state') return { ok: true };
+      const value = payload as { agentState: string };
+      serverState = JSON.parse(value.agentState);
+      return { result: 'success', version: ++version, agentState: value.agentState };
+    } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const { DeferredApiSessionClient } = await import('@/agent/runtime/startup/DeferredApiSessionClient');
+    const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
+    const { createPermissionRequestCoordinator } = await import('@/agent/permissions/permissionRequestCoordinator');
+    const deferred = new DeferredApiSessionClient({
+      placeholderSessionId: 'PID-permission', limits: { maxEntries: 10, maxBytes: 10_000 },
+    });
+    const coordinator = createPermissionRequestCoordinator<boolean>({ store: new AgentStateRequestStore({ session: deferred, logPrefix: '[Test]' }) });
+    const provider = coordinator.requestDecision({ requestId: 'permission', toolName: request.tool, toolInput: request.arguments, createdAt: 1 });
+    void provider.catch(() => undefined);
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-deferred-permission' }));
+    try {
+      // Match the production Claude fast-start attachment boundary in runClaude.
+      await deferred.attach(client as unknown as import('@/agent/runtime/startup/DeferredApiSessionClient').DeferredApiSessionTarget);
+      await expect.poll(() => serverState.requests?.permission).toEqual(expect.objectContaining(request));
+      await expect(coordinator.completeRpcResponse({
+        context: coordinator.getResponseContext('permission')!,
+        completion: { result: true, completedRequest: { status: 'approved' } },
+      })).resolves.toBe(true);
+      await expect(provider).resolves.toBe(true);
+      expect(serverState.requests?.permission).toBeUndefined();
+      expect(serverState.completedRequests?.permission.status).toBe('approved');
+    } finally {
+      coordinator.cancelRequest('permission', 'test cleanup');
+      await client.close();
+    }
+  });
+
+  it('finishes client close cleanup while returning a concurrent settlement admission failure to its caller', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const request = { tool: 'Write', arguments: {}, createdAt: 1 };
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({
+      id: 's-close-failed-admission', agentState: { requests: { request } },
+    }));
+    let closed = false;
+    client.on('local-closed', () => { closed = true; });
+    const admission = client.updateAgentStateRequestSettlement(() => ({
+      requests: {}, completedRequests: { request: { ...request, completedAt: 2, status: 'canceled' } },
+    }));
+    const rejected = expect(admission).rejects.toThrow('requires account credentials');
+    try {
+      await expect(client.close()).resolves.toBeUndefined();
+      await rejected;
+      expect(closed).toBe(true);
+      expect(userSocketStub.close).toHaveBeenCalledOnce();
+      expect(supervisorControl?.getState().phase).toBe('shutting_down');
+    } finally {
+      await rejected;
+      if (!closed) await client.close();
+    }
+  });
+
   it('quarantines an authenticated invalid settlement without blocking the following turn or replaying it after restart', async () => {
     const { writeCredentialsLegacy } = await import('@/persistence');
     const key = new Uint8Array(32).fill(7);
