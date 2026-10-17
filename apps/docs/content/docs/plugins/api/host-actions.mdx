@@ -473,6 +473,52 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `query` (text): Query — Natural-language search text.
 - `limit` (text): Limit — Maximum number of action specs to return.
 
+## `actions.policy.get`
+
+**Read Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `voice`, `rpc`, `api`.
+
+### Input guidance
+
+- `actionId` (text, required): Action id
+- `audience` (text, required): Audience
+
+## `actions.policy.reset`
+
+**Reset Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `voice`, `rpc`.
+
+### Input guidance
+
+- `actionId` (text, required): Action id
+- `audience` (text, required): Audience
+
+## `actions.policy.set`
+
+**Change Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `voice`, `rpc`.
+
+### Input guidance
+
+- `actionId` (text, required): Action id
+- `audience` (text, required): Audience
+- `mode` (text, required): Policy
+
 ## `agents.acp.backends.delete`
 
 **Delete custom ACP agent** — Remove one custom ACP agent from the Account agent catalog.
@@ -8028,7 +8074,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.execution_origin.clear`
 
-**Clear plugin execution origin preference** — Use the answering app’s exact plugin origin selector for Account preferences or an addressed mounted contextual choice.
+**Clear plugin execution origin preference** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -8040,11 +8086,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `pluginId` (text, required): Plugin
 - `contextualTarget` (json): Mounted contextual target
-- `expectedSettingsVersion` (number): Settings version for Account preferences
 
 ## `plugins.execution_origin.list`
 
-**List plugin execution origins** — Use the answering app’s exact plugin origin selector for Account preferences or an addressed mounted contextual choice.
+**List plugin execution origins** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -8060,7 +8105,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.execution_origin.set`
 
-**Choose where a plugin runs** — Use the answering app’s exact plugin origin selector for Account preferences or an addressed mounted contextual choice.
+**Choose where a plugin runs** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -8073,7 +8118,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `pluginId` (text, required): Plugin
 - `contextualTarget` (json): Mounted contextual target
 - `origin` (json, required): Exact execution origin
-- `expectedSettingsVersion` (number): Settings version for Account preferences
 
 ## `plugins.install`
 
@@ -13048,7 +13092,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session events** — Inspect raw session events (tool calls, tool results, token counts, lifecycle, permission, stream, session events) for diagnostics. Use session_transcript_get for normal transcript reading.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13101,7 +13145,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `folderId` (text, required): Folder ID
+- `assignmentBehavior` (select): Assignment behavior
 
 ## `session.folders.list`
 
@@ -13279,7 +13324,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session goal** — Get the editable session goal when the provider supports native goals.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13329,7 +13374,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session handoff status** — Read scalar status for an in-progress session handoff.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13343,7 +13388,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session history** — DEPRECATED: use session_events_get. Returns diagnostic session events with cleaner pagination.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13493,7 +13538,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get recent messages** — DEPRECATED: use session_transcript_get. Returns semantic transcript items with cleaner pagination.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -14098,7 +14143,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **List session skills** — List provider-visible skills available to the session.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -14148,7 +14193,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session status** — Get summary status for a session, optionally refreshing live agent state.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -14199,7 +14244,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `tagId` (text, required): Tag ID
+- `assignmentBehavior` (select): Assignment behavior
 
 ## `session.tags.list`
 
@@ -14747,7 +14793,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **List session vendor plugins** — List provider-owned vendor plugins available to the session.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -14808,7 +14854,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session work state** — Get the normalized current goal, task, and todo snapshot for a session.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -15073,7 +15119,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.get`
 
-**Read a declared setting** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**Read a setting** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -15087,7 +15133,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.invoke`
 
-**Invoke a declared settings operation** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**Run a settings operation** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -15101,7 +15147,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.list`
 
-**List declared settings** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**List settings** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -15115,7 +15161,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.reset`
 
-**Reset a declared setting** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**Reset a setting** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -15129,7 +15175,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.set`
 
-**Change a declared setting** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**Change a setting** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -19095,7 +19141,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Inspect workspace sync conflict** — Inspect the current endpoint versions of a linked workspace path. Reads current bytes, not history; coverage can be partial.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -19131,7 +19177,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **List workspace sync conflicts** — Read one bounded conflict page for a linked workspace relationship. Pages keep their cursor; coverage can be partial.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -19226,7 +19272,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **List linked workspace relationships** — List linked workspace relationships and their current sync status on the exact controller. Missing status stays unknown, never zero.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.

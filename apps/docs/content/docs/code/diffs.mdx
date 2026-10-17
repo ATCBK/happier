@@ -86,6 +86,13 @@ command palette and a Walkthrough board widget also open that surface. Opening
 it does not run a model. Select a model and choose **Start** when you want an
 explanation; an existing saved result can reopen without generation.
 
+Reopening first checks for saved output. While that read is pending, the surface
+shows restoration progress; an unavailable read offers retry. It does not treat
+an unknown machine connection as proof that no saved explanation exists or that
+the machine is offline. A newer failed attempt without prose can leave an older
+published explanation readable. Walkthrough and Commits each restore their own
+output, so a failed explanation does not hide a usable commit proposal.
+
 The explanation is an ordered set of stops, with prose beside the captured code.
 Use **Contents** to jump between stops, or expand **Overview** for the code map.
 **Other changes** keeps changes outside the story reachable. Generated files and
@@ -95,11 +102,14 @@ keeps its availability notice. A missing patch is not evidence of an empty file.
 **Files** and **Walkthrough** share the comparison destination. In Files,
 **Explain** displays a one-sentence gist beside the corresponding hunk, with
 **Read in Walkthrough** to open the full explanation. On phones the note follows
-its hunk. A secondary stop on the same hunk shows only its title, and repeated
-stops are deduplicated within each file. These notes use the same saved explanation
+its hunk. A stop's gist appears at its first matched hunk; later files and
+secondary stops show its title, with repeated stops deduplicated within each file.
+These notes use the same saved explanation
 and personal reviewed marks; they do not generate a second explanation.
 The turn card's **Open in Files** keeps the selected turn, even after a later turn.
 List/tree presentation shares the existing changed-files preference with Git.
+In the phone cockpit, full-screen Files and Walkthrough hide the Session tab bar
+while reading. Use the reading controls and Back to return to the conversation.
 
 ### What the comparison means
 
@@ -134,8 +144,9 @@ Refreshing to a different code basis does not transfer marks by similar lines.
 
 ### Edit or discuss a saved walkthrough
 
-Use **Edit walkthrough** to change titles or explanations, reorder stops, or
-merge with the next stop. **Refine** asks the model to revise selected output;
+Open the comparison's **More** menu and choose **Edit walkthrough** to change
+titles or explanations, reorder stops, or merge with the next stop.
+**Refine** asks the model to revise selected output;
 **Undo** restores the immediate previous output change. These operations compare
 the saved revision. If another device edited it first, your draft stays available:
 choose **Load latest version**, review the differences and save again. A late
@@ -147,6 +158,9 @@ Run transcript. Asking an ordinary question does not itself replace saved prose.
 When continuation is unavailable, **Start a new conversation** selects a pending
 recipient; your first message starts a labelled conversation seeded from the
 saved explanation and evidence. **Ask this session** targets the Session Agent.
+When a replacement conversation is needed, it keeps the saved Connected Services
+choice and checks its current admission. An unavailable credential route requires
+recovery; choosing the same model does not silently switch it to native sign-in.
 
 Saved results live on their owning machine beyond the generator's lifetime.
 Already-loaded content can remain readable while that machine is unavailable;
