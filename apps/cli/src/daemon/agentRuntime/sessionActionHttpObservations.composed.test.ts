@@ -1,10 +1,14 @@
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import nacl from 'tweetnacl';
 import {
-  accountSettingsParse, normalizeActionsSettingsV1, SessionListQueryV1Schema, SessionListQueryResponseV1Schema,
+  accountSettingsParse, SessionListQueryV1Schema, SessionListQueryResponseV1Schema,
 } from '@happier-dev/protocol';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions';
 import { parseSessionListQueryActionResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { auth } from '../../../../server/sources/app/auth/auth';
 import { createAuthenticatedTestApp } from '../../../../server/sources/app/api/testkit/sqliteFastify';
 import { installedSessionExternalActionStorage as storage } from '../../../../server/sources/app/api/testkit/installedSessionExternalActionStorage';
@@ -15,9 +19,12 @@ import { createAccountEncryptionCurrentnessFixture, createSessionNotificationCon
 import { prepareExternalActionRequesterAccountAuthorization, resolveExternalActionServerRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import { createSessionListActionDependency } from '@/session/actions/sessionListActionDependency';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
-import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgentStartContextV1';
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
 import { logger } from '@/ui/logger';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createDaemonSessionAccountActionExecutor } from './createDaemonSessionAccountActionExecutor';
 import type { AgentRuntimeDaemonServiceRequestV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 
@@ -40,10 +47,10 @@ beforeAll(async () => {
   vi.stubEnv('AUTH_REQUIRED_LOGIN_PROVIDERS', '');
   await auth.init();
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 afterAll(() => vi.unstubAllEnvs());
 
-async function fixture() {
+async function fixture(metadataLayout: 0 | 1 = 1) {
   storage.state.sessionId = sessionId;
   storage.state.bound = true;
   storage.state.publisherBound = true;
@@ -51,6 +58,9 @@ async function fixture() {
   storage.state.publicKey = installation.publicKey;
   const token = await auth.createToken(storage.account.id, undefined, { kind: 'account', authority: 'present_user' });
   const credentials = { token, encryption: null };
+  const scopeKey = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => resolveAccountSettingsScopeKey(credentials));
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, scopeKey,
+    settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], promptLibraryCatalog: { status: 'loading' } });
   const app: Fastify = createAuthenticatedTestApp({ authentication: 'real' });
   app.decorate('resolveCurrentSessionMachine', async () => storage.state.bound ? storage.state.machineId : null);
   registerExternalActionRoutes(app, { dispatch: async () => { throw new Error('Unexpected external dispatch'); } });
@@ -70,15 +80,36 @@ async function fixture() {
   });
   const members = new Set([childId]);
   let currentnessRefused = false;
-  const row = (id: string) => ({ ...createSessionNotificationContextFixture(id), encryptionMode: 'plain' as const,
-    metadata: JSON.stringify({ machineId: storage.state.machineId, path: '/workspace', flavor: 'codex' }), active: true,
-    ...(id === childId ? { reportsTo: { sessionId } } : {}) });
+  let subtreeRefused = false;
+  let callerWorkspaceMissing = false;
+  const row = (id: string) => {
+    const metadata = { machineId: storage.state.machineId,
+      ...(id === sessionId && callerWorkspaceMissing ? {} : { path: '/workspace' }), flavor: 'codex' };
+    const owner = createSessionOwnerMetadataV1({ metadata });
+    if (!owner.ok) throw new Error('Invalid caller metadata fixture');
+    return { ...createSessionNotificationContextFixture(id), encryptionMode: 'plain' as const, share: null, active: true,
+      ...(metadataLayout === 0 ? { metadata: JSON.stringify(metadata) } : {
+        metadataLayoutVersion: 1,
+        metadata: JSON.stringify(projectSessionSharedMetadataV1({ metadata })),
+        ownerMetadata: { t: 'plain' as const, v: owner.ownerMetadata },
+      }),
+      ...(id === childId ? { reportsTo: { sessionId } } : {}) };
+  };
   app.get('/v1/account/encryption/currentness', { preHandler: app.authenticate }, async (_request, reply) =>
     currentnessRefused ? reply.code(401).send({ error: 'private-error-body' }) : createAccountEncryptionCurrentnessFixture());
   app.get('/v2/account/settings', { preHandler: app.authenticate }, async () => ({ version: 1, content: { t: 'plain', v: {} } }));
-  app.post('/v2/sessions/query', { preHandler: app.authenticate }, async request => {
+  app.get('/v1/artifacts', { preHandler: app.authenticate }, async () => []);
+  app.get('/v1/account/entity-rows/acp', { preHandler: app.authenticate }, async () =>
+    AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+      content: { t: 'plain', v: { v: 1, definitions: [] } } }));
+  app.get('/v1/account/entity-rows/prompt-library', { preHandler: app.authenticate }, async () =>
+    PromptLibraryRowsListResponseV1Schema.parse({ status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
+      key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) },
+    })) }));
+  app.post('/v2/sessions/query', { preHandler: app.authenticate }, async (request, reply) => {
     const query = SessionListQueryV1Schema.parse(request.body);
     expect(query.underSessionId).toBe(sessionId);
+    if (subtreeRefused) return reply.code(401).send({ error: 'private-error-body' });
     return SessionListQueryResponseV1Schema.parse({ sessions: query.storage === 'active' ? [...members].map(row) : [],
       nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false });
   });
@@ -94,12 +125,6 @@ async function fixture() {
     config: { apiTokenSessionAction: 'session.archive', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
   }, async () => ({ success: true }));
   const restore = installAxiosFastifyAdapter({ app, origin: serverHttpBaseUrl });
-  // The incumbent host supplies its launch snapshot; this producer does not
-  // grant subtree membership. The real scope owner must still read Home fresh.
-  const agentStartContext = resolveCliAgentStartContextV1({ sessionId, machineId: storage.state.machineId, directory: '/workspace',
-    backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, metadata: {},
-    starterDepth: 0, turnDepth: 0, callerPermissionMode: 'default', settings: accountSettingsParse({}), roles: {} });
-  if (!agentStartContext) throw new Error('Missing host launch snapshot');
   const prepare = async (operation: Pick<Operation, 'actionId' | 'input' | 'requestId'>,
     sessionActionOrigin: Parameters<typeof prepareExternalActionRequesterAccountAuthorization>[0]['sessionActionOrigin']) => {
     const target = { kind: 'machine' as const, machineId: storage.state.machineId };
@@ -119,24 +144,30 @@ async function fixture() {
       const executor = createCliActionExecutor({ token, credentials, sessionId: '', mode: 'plain', ctx: null,
         serverId, serverIdentityId: storage.state.homeId, serverHttpBaseUrl,
         externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: storage.state.installationId,
-        actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1 }),
-          getAccountSettings: () => accountSettingsParse({}) },
+        actionsSettingsProvider: createActionSettingsProvider({ scopeKey }),
       });
-      return { execute: (id, input, context) => executor.execute(id, input, { ...context, agentStartContext }) };
+      return executor;
     },
   });
   const operation = (actionId: Operation['actionId'], input: Operation['input']): Operation => ({ kind: 'action.execute',
     actionId, input, requestId: 'signed-observation', surface: 'agent',
-    witness: { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0,
+    witness: { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0, callerPermissionMode: 'default',
       agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 } } });
   return { credentials, app, observations, members, prepare, execute, operation,
     refuseCurrentness: () => { currentnessRefused = true; },
+    refuseSubtree: () => { subtreeRefused = true; },
+    omitCallerWorkspace: () => { callerWorkspaceMissing = true; },
     close: async () => { restore(); await app.close(); } };
 }
 
-it.each(['session.status.get', 'session.messages.recent.get'] as const)(
-  'admits fresh subtree observation through the real daemon/Home preparer: %s', async actionId => {
-  const f = await fixture();
+it.each([
+  { actionId: 'session.status.get', metadataLayout: 0 },
+  { actionId: 'session.messages.recent.get', metadataLayout: 0 },
+  { actionId: 'session.status.get', metadataLayout: 1 },
+  { actionId: 'session.messages.recent.get', metadataLayout: 1 },
+] as const)(
+  'admits fresh subtree observation through real caller resolution: $actionId, layout $metadataLayout', async ({ actionId, metadataLayout }) => {
+  const f = await fixture(metadataLayout);
   try {
     const run = () => f.execute(f.operation(actionId, { sessionId: childId }), { sessionId, isCurrent: async () => true });
     const result = await run();
@@ -146,8 +177,24 @@ it.each(['session.status.get', 'session.messages.recent.get'] as const)(
     const queries = f.observations.filter(row => row.path === '/v2/sessions/query');
     expect(queries.length).toBeGreaterThan(0);
     expect(queries.every(row => row.status === 200 && row.signed && !row.bearer)).toBe(true);
+    const diagnostics = vi.spyOn(logger, 'warnLocalFile');
     f.members.clear();
-    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'target_outside_led_subtree' } });
+    f.refuseSubtree();
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'subtree_observation_unavailable' } });
+    f.omitCallerWorkspace();
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'caller_context_unavailable' } });
+    expect(diagnostics).toHaveBeenCalledWith('[Session Account Action] Refused', expect.objectContaining({
+      errorCode: 'unsupported_action', scopeFailureCause: 'caller_context_unavailable',
+      refusalPhase: 'agent_start_context', refusalReason: 'caller_workspace_unavailable',
+    }));
+    expect(diagnostics).toHaveBeenCalledWith('[Session Account Action] Refused', expect.objectContaining({
+      errorCode: 'unsupported_action', scopeFailureCause: 'subtree_observation_unavailable',
+    }));
+    expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private-error-body');
   } finally { await f.close(); }
 });
 

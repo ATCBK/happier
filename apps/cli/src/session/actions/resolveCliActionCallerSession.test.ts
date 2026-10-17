@@ -31,7 +31,9 @@ describe('Account Action caller Session metadata authority', () => {
       caller.abort(reason);
       release();
       expect(await pending).toEqual({ error: reason });
-      expect(get).toHaveBeenCalledTimes(1);
+      // Currentness and exact Session reads may overlap. Cancellation must
+      // reach every dispatched HTTP read, independently of their ordering.
+      expect(get.mock.calls.every(([, config]) => config?.signal?.aborted === true)).toBe(true);
     } finally { get.mockRestore(); }
   });
   it('keeps a Session bearer closed to layout-1 owner metadata', async () => {
