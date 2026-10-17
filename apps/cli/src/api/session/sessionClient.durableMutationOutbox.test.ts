@@ -544,17 +544,22 @@ describe('ApiSessionClient durable mutation outbox', () => {
     }
   });
 
-  it.each(['before-handler', 'ack'] as const)('journals automatic history after a %s failure and replays it after same-session reconstruction', async (failure) => {
+  it.each(['before-handler', 'ack'] as const)('keeps automatic policy immediate and journals its history after a %s failure for restart recovery', async (failure) => {
     const { writeCredentialsLegacy } = await import('@/persistence');
     await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });
     let online = false;
     let serverState: AgentState = { requests: {} };
     let serverVersion = 0;
-    const automatic = { tool: 'Write', arguments: { path: 'private-automatic' }, createdAt: 1, completedAt: 2, status: 'approved' as const };
+    const failAcknowledgement = createDeferred<void>();
+    const automatic = { tool: 'Write', arguments: { path: 'private-automatic' }, createdAt: 1_000, completedAt: 1_000,
+      kind: 'permission', status: 'approved', decision: 'approved' };
     const makeSocket = () => createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
       if (event === 'ping') return { v: 1 };
       if (event !== 'update-state') return { ok: true };
-      if (!online) return { result: 'error' };
+      if (!online) {
+        if (failure === 'ack') await failAcknowledgement.promise;
+        return { result: 'error' };
+      }
       const request = payload as { expectedVersion: number; agentState: string };
       if (request.expectedVersion !== serverVersion) return {
         result: 'version-mismatch', version: serverVersion, agentState: JSON.stringify(serverState),
@@ -572,16 +577,22 @@ describe('ApiSessionClient durable mutation outbox', () => {
     sessionSocketStub.connected = failure !== 'before-handler';
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
     const { ApiSessionClient } = await import('./sessionClient');
+    const { ProviderEnforcedPermissionHandler } = await import('@/agent/permissions/ProviderEnforcedPermissionHandler');
     const first = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-auto-history', agentState: serverState }));
+    const handler = new ProviderEnforcedPermissionHandler(first, { logPrefix: '[AutomaticHistoryTest]' });
+    handler.setPermissionMode('yolo');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     try {
-      await expect(first.updateAgentState((state) => ({ ...state, completedRequests: { automatic } }), {
-        retainPermissionCompletionsOnFailure: true,
-      })).rejects.toThrow();
-      expect(await readPersistedOutboxMutations('s-auto-history'))
+      await expect(handler.handleToolCall('automatic', automatic.tool, automatic.arguments))
+        .resolves.toEqual({ decision: 'approved' });
+      failAcknowledgement.resolve();
+      await expect.poll(async () => await readPersistedOutboxMutations('s-auto-history'))
         .toEqual([expect.objectContaining({ kind: 'agent_state_request_settlement' })]);
     } finally {
+      failAcknowledgement.resolve();
       connectionReady.resolve();
       await first.close();
+      clock.mockRestore();
     }
     useRealSupervisor = false;
     sessionConnectionGate = null;

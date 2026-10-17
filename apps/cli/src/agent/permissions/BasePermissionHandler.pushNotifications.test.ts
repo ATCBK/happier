@@ -133,7 +133,9 @@ describe('BasePermissionHandler push notifications', () => {
 
     const rpc = session.rpcHandlerManager.handlers.get('permission');
     await rpc?.({ id: 'perm-1', approved: false, decision: 'denied' });
-    await Promise.all([p1, p2]);
+    await expect(Promise.all([p1, p2])).resolves.toEqual([
+      { decision: 'denied' }, { decision: 'denied' },
+    ]);
   });
 
   it('keeps a reconnected permission answerable with its original occurrence and retries its push', async () => {
