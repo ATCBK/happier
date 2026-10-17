@@ -867,11 +867,12 @@ describe('runGemini input consumer migration', () => {
   });
 
   it.each([
-    { cancelOutcome: 'completed', overlapping: false, shutdown: false },
-    { cancelOutcome: 'completed', overlapping: true, shutdown: false },
-    { cancelOutcome: 'failed', overlapping: true, shutdown: false },
-    { cancelOutcome: 'completed', overlapping: true, shutdown: true },
-  ] as const)('parks Gemini input until Stop cancellation has $cancelOutcome (overlapping: $overlapping, shutdown: $shutdown)', async ({ cancelOutcome, overlapping, shutdown }) => {
+    { cancelOutcome: 'completed', overlapping: false, shutdown: false, transportFails: false },
+    { cancelOutcome: 'completed', overlapping: true, shutdown: false, transportFails: false },
+    { cancelOutcome: 'failed', overlapping: true, shutdown: false, transportFails: false },
+    { cancelOutcome: 'completed', overlapping: true, shutdown: true, transportFails: false },
+    { cancelOutcome: 'completed', overlapping: true, shutdown: false, transportFails: true },
+  ] as const)('parks Gemini input until Stop cancellation has $cancelOutcome (overlapping: $overlapping, shutdown: $shutdown, transportFails: $transportFails)', async ({ cancelOutcome, overlapping, shutdown, transportFails }) => {
     const actualConsumerModule = await vi.importActual<
       typeof import('@/agent/runtime/sessionInput/SessionProviderInputConsumer')
     >('@/agent/runtime/sessionInput/SessionProviderInputConsumer');
@@ -890,7 +891,11 @@ describe('runGemini input consumer migration', () => {
     const { createCurrentSessionTranscriptPort } = await import('@/api/session/createCurrentSessionTranscriptPort');
     vi.mocked(createCurrentSessionTranscriptPort).mockImplementationOnce(actualTranscriptPort.createCurrentSessionTranscriptPort);
     createProviderEnforcedPermissionHandlerMock.mockImplementationOnce(actualPermissions.createProviderEnforcedPermissionHandler);
-    createStreamedTranscriptWriterMock.mockImplementationOnce(actualTranscript.createStreamedTranscriptWriter);
+    let transcriptWriter!: ReturnType<typeof actualTranscript.createStreamedTranscriptWriter>;
+    createStreamedTranscriptWriterMock.mockImplementationOnce((options) => {
+      transcriptWriter = actualTranscript.createStreamedTranscriptWriter(options);
+      return transcriptWriter;
+    });
     const permissionSession = new FakePermissionSession();
     // Session state writes and transcript commits are the server transport boundary.
     const session = Object.assign(getFakeSession(), {
@@ -950,6 +955,11 @@ describe('runGemini input consumer migration', () => {
     const abortHandler = session.rpcHandlerManager.registerHandler.mock.calls.find(
       ([name]) => name === 'abort',
     )?.[1] as () => Promise<boolean>;
+    if (transportFails) {
+      session.flush.mockRejectedValueOnce(new Error('session flush transport unavailable'));
+      session.sendAgentMessageCommitted.mockRejectedValue(new Error('transcript commit transport unavailable'));
+      transcriptWriter.appendThinkingDelta('thinking interrupted by Stop');
+    }
     const firstStop = abortHandler();
     const overlappingStop = overlapping ? abortHandler() : firstStop;
     const exitRequest = shutdown ? createGeminiTerminalUiMock.mock.calls[0]?.[0].onExit() : undefined;
@@ -974,6 +984,20 @@ describe('runGemini input consumer migration', () => {
       'gemini-acp-session-1', expect.stringContaining('follow-up prompt'),
     );
     expect(await abortHandler()).toBe(false);
+    expect(session.close).toHaveBeenCalled();
+    expect(fakeBackend.dispose).toHaveBeenCalled();
+    if (transportFails) {
+      expect(session.sendAgentMessageCommitted).toHaveBeenCalledWith(
+        'gemini', { type: 'thinking', text: 'thinking interrupted by Stop' },
+        expect.objectContaining({ meta: expect.objectContaining({
+          happierStreamSegmentV1: expect.objectContaining({ segmentKind: 'thinking', segmentState: 'interrupted' }),
+        }) }),
+      );
+      const { logger } = await import('@/ui/logger');
+      expect(logger.infoFile).toHaveBeenCalledWith(
+        expect.any(String), expect.objectContaining({ kind: 'thinking', state: 'interrupted', textLength: 28 }),
+      );
+    }
   });
 
   it('ignores stale abort requests after a cancelled Gemini turn so later pending input can run', async () => {

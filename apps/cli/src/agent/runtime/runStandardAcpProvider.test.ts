@@ -1147,7 +1147,7 @@ describe('runStandardAcpProvider', () => {
     expect(harness.metrics.cleanupCalls).toBe(1);
   });
 
-  it.each(['completed', 'failed'] as const)(
+  it.each(['completed', 'failed', 'flush-failed'] as const)(
     'resumes queued input immediately after %s Stop cancellation without polling',
     async (cancelOutcome) => {
       // Only the provider transport and Session API are faked; the runtime, permissions,
@@ -1159,6 +1159,9 @@ describe('runStandardAcpProvider', () => {
         overrides: {
           ...harness.session,
           onUserMessage: () => undefined,
+          flush: async () => {
+            if (cancelOutcome === 'flush-failed') throw new Error('Session transport flush failed');
+          },
           shouldAttemptPendingMaterialization: () => false,
           waitForMetadataUpdate: (signal) => new Promise<boolean>((resolve) => {
             if (signal?.aborted) resolve(false);
