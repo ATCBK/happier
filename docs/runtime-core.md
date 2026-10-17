@@ -228,6 +228,13 @@ The same event-publication owner retains startup events until the first host
 consumer attaches, then delivers them in order. Internal observers do not consume
 that startup history; later observers retain the existing metadata catch-up.
 
+In 0.3 development source, the shared Session loop captures a completed host
+turn's nullable assistant preview in the ordered terminal transcript projection.
+Ready notification dispatch consumes that captured result, preserving an empty
+answer even if a provider successor has already produced text. Working state
+continues to follow the canonical Session turn lifecycle, so host-loop cleanup
+cannot mark an active provider successor idle.
+
 In 0.3 development source, prompt Artifact preparation uses the admitted Session
 HTTP route for the active Home; a saved descriptor supplies Home identity rather
 than overriding that route with its HTTPS endpoint. Optional prompt entries with
