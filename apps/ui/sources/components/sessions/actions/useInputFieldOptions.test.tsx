@@ -3,20 +3,19 @@ import * as React from 'react';
 import { Text, View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storage';
 import type { InputFieldOptionsState } from './inputFieldOptionsStore';
 import { recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
@@ -28,18 +27,20 @@ installApprovalCommonModuleMocks({ text: async () => vi.importActual<typeof impo
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const rpc = vi.hoisted(() => ({ read: vi.fn() }));
+const optionsBoundaries = new Map<string, Awaited<ReturnType<typeof createExternalActionAccountHttpBoundary>>>();
+async function requestOptions(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = new URL(String(input));
+    return await optionsBoundaries.get(url.origin)?.handle(url, init) ?? harness.request(input, init);
+}
 installDisconnectedServerSocketBoundary(socket => {
     vi.mocked(socket.connect).mockImplementation(() => {
         socket.connected = true;
         for (const listener of socket.listeners('connect')) listener();
         return socket;
     });
-    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event) => {
         if (event !== 'rpc-call') throw new Error(`Unexpected options transport event: ${event}`);
-        // Socket.IO supplies an untyped payload; assertions inspect its published wire shape.
-        const request = payload as SocketRpcRequestPayload;
-        const carrier = socket as unknown as { io: { uri: string }; auth: { token?: string } };
-        return { ok: true, result: await rpc.read({ serverUrl: carrier.io.uri, token: carrier.auth.token, request }) };
+        throw new Error('Native contributed options must use the private Account HTTP carrier');
     });
 });
 const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
@@ -47,14 +48,14 @@ const { useInputFieldOptions } = await import('./useInputFieldOptions');
 const { scopedHomeActionExecutor, resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
 const { repositoryInputTypeRef } = await import('../../../../../../packages/plugin-sdk/examples/public-authoring/inputTypes');
 let disposeModuleLoader: (() => void) | undefined;
-beforeEach(async () => { await harness.reset(); rpc.read.mockReset(); resetScopedHomeActionExecutorsForTests();
+beforeEach(async () => { await harness.reset(); rpc.read.mockReset(); optionsBoundaries.clear(); resetScopedHomeActionExecutorsForTests();
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     // The scoped socket's authenticated readiness probe uses the raw network boundary,
     // distinct from the Home harness's scoped Action/row request adapters.
     setRuntimeFetch(async (input, init) => {
         const url = new URL(String(input));
         const home = harness.findByServerUrl(url.origin);
-        if (url.pathname !== '/v1/auth/ping' || !home) return harness.request(input, init);
+        if (url.pathname !== '/v1/auth/ping' || !home) return requestOptions(input, init);
         return Response.json(new Headers(init?.headers).get('Authorization') === `Bearer ${home.token}` ? { ok: true } : { error: 'unauthorized' },
             { status: new Headers(init?.headers).get('Authorization') === `Bearer ${home.token}` ? 200 : 401 });
     });
@@ -110,6 +111,17 @@ function NativeSessionOptionsProbe(props: Readonly<{ serverId: string }>) {
 }
 
 async function createTypedWorkflow(serverId: string, accountId: string, definitionId = '00000000-0000-4000-8000-000000000051', mixed = false) {
+    const home = getServerProfileById(serverId);
+    if (!home?.serverIdentityId) throw new Error('Expected the options Home identity');
+    // Exercise the current private Account HTTP carrier, including its real crypto.
+    optionsBoundaries.set(new URL(home.serverUrl).origin, await createExternalActionAccountHttpBoundary({
+        serverUrl: home.serverUrl, serverIdentityId: home.serverIdentityId, accountId,
+        machineId: 'controller-a', actionId: 'action.options.resolve', tokenEpoch: 0,
+        execute: (input, context) => {
+            expect(context.invocation).toEqual({ caller: { kind: 'host' }, surface: 'ui', authority: 'present_user' });
+            return rpc.read({ serverUrl: home.serverUrl, accountId, input, ...context });
+        },
+    }));
     const machine = createPlainMachineRowFixture({ id: 'controller-a', accountId });
     harness.answer(serverId, 'GET /v1/machines/controller-a', { body: { machine } });
     harness.answer(serverId, 'GET /v1/machines', { body: [machine] });
@@ -131,7 +143,7 @@ function reply(label: string) {
 
 describe('qualified input field options scope', () => {
     it('retains host choices while a refused plugin sibling changes fallback relay', async () => {
-        const serverId = await harness.addHome({ name: 'Mixed inputs', serverUrl: 'https://mixed-options.example', accountId: 'viewer', currentAccount: true });
+        const serverId = await harness.addHome({ name: 'Mixed inputs', serverUrl: 'https://mixed-options.example', serverIdentityId: 'srv_mixed_options', accountId: 'viewer', currentAccount: true });
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
         setRuntimeFetch(harness.request);
         const workflow = await createTypedWorkflow(serverId, 'viewer', undefined, true);
@@ -207,7 +219,7 @@ describe('qualified input field options scope', () => {
         await screen.unmount();
     });
     it('withdraws a retired target Account response and resolves only the replacement binding', async () => {
-        const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://retired-options.example', serverIdentityId: 'srv_retired_options', accountId: 'original-owner' });
+        const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://retired-options.example', serverIdentityId: 'srv_retired_options', accountId: 'original-owner', currentAccount: true });
         await harness.addHome({ name: 'Focused', serverUrl: 'https://other-options.example', serverIdentityId: 'srv_other_options', accountId: 'focused-owner', currentAccount: true });
         const workflow = await createTypedWorkflow(target, 'original-owner');
         let releaseOriginal: (() => void) | undefined;
@@ -221,7 +233,7 @@ describe('qualified input field options scope', () => {
         await waitForHomeGovernance(() => expect(rpc.read.mock.calls.length > 0
             || screen.findByTestId('native-field.options')?.props.accessibilityLabel === 'failed').toBe(true));
         expect(rpc.read).toHaveBeenCalledTimes(1);
-        await act(async () => harness.switchAccount(target, 'replacement-owner'));
+        await act(async () => harness.switchAccount(target, 'replacement-owner', { currentAccount: true }));
         // The replacement Account has its own authored definition, not the retired Account's content.
         harness.artifacts(target).clear();
         const replacement = await createTypedWorkflow(target, 'replacement-owner', '00000000-0000-4000-8000-000000000052');
@@ -233,7 +245,7 @@ describe('qualified input field options scope', () => {
         await screen.unmount();
     });
     it('resolves a declared native input type in the captured target Home instead of borrowing the focused Account', async () => {
-        const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://compute-options.example', serverIdentityId: 'srv_compute_options', accountId: 'compute-owner' });
+        const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://compute-options.example', serverIdentityId: 'srv_compute_options', accountId: 'compute-owner', currentAccount: true });
         await harness.addHome({ name: 'Focused', serverUrl: 'https://focused-options.example', serverIdentityId: 'srv_focused_options', accountId: 'focused-owner', currentAccount: true });
         const workflow = await createTypedWorkflow(target, 'compute-owner');
         rpc.read.mockResolvedValue(reply('Target repository'));
@@ -243,10 +255,9 @@ describe('qualified input field options scope', () => {
             code: screen.findByTestId('native-field.options')?.props.accessibilityHint }).toEqual({ status: 'ready', code: undefined });
         expect(screen.getTextContent()).toContain('Target repository');
         expect(rpc.read).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: expect.stringContaining('compute-options.example'),
-            token: createAccountTokenForTests('compute-owner'), request: expect.objectContaining({ method: 'controller-a:action.options.resolve', params: {
-                v: 1, kind: 'targeted_action_rpc', target: { kind: 'machine', machineId: 'controller-a' },
+            accountId: 'compute-owner', target: { kind: 'machine', machineId: 'controller-a' },
                 input: { consumer: { kind: 'workflow', workflow }, fieldPath: field.path, draftInput: { machineId: 'controller-a' } },
-            } }) }));
+        }));
         await screen.unmount();
     });
 });
