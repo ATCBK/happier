@@ -280,7 +280,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 expect(applied).toMatchObject({ reversal: { before: { unset: true }, applied: { value: true } } });
                 const restored = await action({ actionId: 'settings.set', input: { anchor, value: false,
                     reversal: { kind: 'restore', ...applied.reversal } } });
-                expect.soft(restored).toEqual({ anchor, unset: true });
+                expect.soft(restored).toEqual({ anchor, unset: true, settingsVersion: 7 });
                 expect(SettingsDeclarationActionOutputSchemasV1['settings.set'].safeParse(restored).success).toBe(true);
                 expect(Object.hasOwn(raw, 'scmIncludeCoAuthoredBy')).toBe(false);
                 return;
@@ -306,7 +306,7 @@ describe('scoped Account workflow Artifact operations', () => {
                     input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversal: { kind: 'capture' } } }));
                 expect(applied).toMatchObject({ reversal: { beforeVersion: 5, appliedVersion: 6, before: { unset: true }, applied: { value: false } } });
                 expect(history.size).toBe(0);
-                expect(await action({ actionId: 'settings.set', input: { anchor: applied.anchor, value: 'ignored caller value',
+                expect(await action({ actionId: 'settings.set', input: { anchor: applied.anchor, value: false,
                     reversal: { kind: 'restore', ...applied.reversal } } })).toMatchObject({ anchor: applied.anchor, value: true });
                 expect(raw).toEqual({ futureSibling: { retained: 'winner' } });
                 const inverted = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(await action({ actionId: 'settings.set',
@@ -340,7 +340,7 @@ describe('scoped Account workflow Artifact operations', () => {
             const applied = await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversal: { kind: 'capture' } } });
             const firstReceipt = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(applied);
             expect(firstReceipt).toEqual({
-                anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversal: { beforeVersion: 5, appliedVersion: 6,
+                anchor: 'sourceControl.showLineNumbersInDiffs', value: false, settingsVersion: 6, reversal: { beforeVersion: 5, appliedVersion: 6,
                     scope: { serverId: home.id, accountId: 'settings-account' },
                     before: { unset: true }, applied: { value: false } },
             });
@@ -352,7 +352,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 expect(raw.showLineNumbers).toBe(false);
             }
             expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: false });
-            const restore = () => action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: 'forged restore',
+            const restore = () => action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false,
                 reversal: { kind: 'restore', ...firstReceipt.reversal } } });
             expect(await restore()).toMatchObject({ anchor: 'sourceControl.showLineNumbersInDiffs', value: true });
             expect(raw).toEqual({ futureSibling: { retained: 'winner' } });
@@ -366,15 +366,18 @@ describe('scoped Account workflow Artifact operations', () => {
                 .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
             expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: false });
             expect(await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversal: { kind: 'capture' } } }))
-                .toEqual({ anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversalUnavailableReason: 'no_change' });
+                .toEqual({ anchor: 'sourceControl.showLineNumbersInDiffs', value: false, settingsVersion: 8, reversalUnavailableReason: 'no_change' });
             const secondApply = await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: true, reversal: { kind: 'capture' } } });
             const secondReceipt = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(secondApply);
             expect(secondApply).toMatchObject({ reversal: { beforeVersion: 8, appliedVersion: 9, before: { value: false }, applied: { value: true } } });
-            race = true;
+            // An unrelated CAS winner is safe to rebase over. To test refusal,
+            // the intervening writer must actually change the captured setting.
+            raw = { ...raw, showLineNumbers: false };
+            version += 1;
             expect(await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false,
                 reversal: { kind: 'restore', ...secondReceipt.reversal } } }))
                 .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
-            expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: true });
+            expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: false });
             expect.soft(await action({ actionId: 'settings.get', input: { anchor: 'usage.coachPreferences', includeVersion: true } }))
                 .toEqual({ anchor: 'usage.coachPreferences', value: { v: 1, suppressions: [], disabledChecks: [], modelSuggestion: 'suggest_with_estimates' }, settingsVersion: 10 });
                 return;
