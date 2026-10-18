@@ -36,6 +36,12 @@ describe('PressableSurface web tooltip', () => {
             expect(control?.getAttribute('aria-checked')).toBe('false');
             await act(async () => control?.click());
             expect(control?.getAttribute('aria-checked')).toBe('true');
+            await act(async () => {
+                control?.focus();
+                control?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+                control?.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true, cancelable: true }));
+            });
+            expect(control?.getAttribute('aria-checked')).toBe('false');
         } finally {
             await act(async () => root.unmount());
             container.remove();
