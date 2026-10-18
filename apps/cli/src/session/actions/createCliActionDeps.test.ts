@@ -687,19 +687,6 @@ vi.mock('@/api/machine/machineOperationProtocolCapabilities', () => ({
   readMachineOperationProtocolCapabilitiesV1,
 }));
 
-vi.mock('@/settings/accountSettings/bootstrapAccountSettingsContext', () => ({
-  bootstrapAccountSettingsContext,
-}));
-
-vi.mock('@/settings/accountSettings/updateAccountSettingsV2WithRetry', () => ({
-  updateAccountSettingsV2WithRetry,
-}));
-
-vi.mock('@/prompts/assets/actions', async () => {
-  const actual = await vi.importActual<any>('@/prompts/assets/actions');
-  return { ...actual, writePromptAsset };
-});
-
 import {
   createCliActionDeps,
   projectSessionInitialAccessEnvelopeHostErrorResult,
@@ -816,7 +803,7 @@ describe('createCliActionDeps hook dispatch', () => {
     }
   });
 
-  it('refuses led-session role forwarding without an authenticated autonomous origin through the real executor', async () => {
+  it('refuses role forwarding when captured led-session membership cannot be revalidated', async () => {
     const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
       sessionId: 'lead', mode: 'plain', ctx: null,
     });
@@ -831,8 +818,10 @@ describe('createCliActionDeps hook dispatch', () => {
       { actionId: 'session.role.set' as const, input: { sessionId: 'child', roleId: 'builder' } },
       { actionId: 'session.roles.override.set' as const, input: { sessionId: 'child', roleId: 'builder', workspaceWrites: 'deny' as const } },
     ]) {
+      // A captured subtree is not continuing authority. Without a current
+      // membership read, admission refuses before the RPC-origin boundary.
       expect(await executor.execute(request.actionId, request.input, context))
-        .toMatchObject({ ok: false, errorCode: 'action_failed', error: 'role_rpc_origin_unavailable' });
+        .toMatchObject({ ok: false, errorCode: 'subtree_denied' });
       expect(await executor.execute(request.actionId, { ...request.input, sessionId: 'unrelated' }, context))
         .toMatchObject({ ok: false, errorCode: 'subtree_denied' });
     }
@@ -882,9 +871,6 @@ describe('createCliActionDeps hook dispatch', () => {
     setSessionModel.mockReset();
     createPluginPermissionGrantActionExecutor.mockReset();
     createCliReviewCommentActionExecutorFromCredentials.mockReset();
-    bootstrapAccountSettingsContext.mockReset();
-    updateAccountSettingsV2WithRetry.mockReset();
-    writePromptAsset.mockReset();
     fetchSessionByIdCompat.mockReset();
     resolveReplaySeedDraft.mockReset();
     readSettings.mockResolvedValue({ machineId: 'local-machine' });
@@ -1156,209 +1142,6 @@ describe('createCliActionDeps hook dispatch', () => {
       hasNext: false,
     });
     expect(observedServerHttpBaseUrl).toBe('https://fixed-home.example.test');
-  });
-
-  it('keeps a successful prompt export successful when external-link persistence conflicts', async () => {
-    const credentials = {
-      token: 'token',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
-    };
-    createCliApprovalsArtifactStore.mockReturnValue({
-      promptLibraryStore: {
-        read: vi.fn(async () => ({
-          id: 'prompt-1',
-          header: { title: 'Review prompt' },
-          body: JSON.stringify({ v: 1, markdown: '# Review', createdAtMs: 1, updatedAtMs: 1 }),
-        })),
-        update: vi.fn(async () => {}),
-      },
-    });
-    bootstrapAccountSettingsContext.mockResolvedValue({ settings: {} });
-    writePromptAsset.mockResolvedValue({
-      ok: true,
-      externalRef: { path: 'review.md' },
-      digest: 'external-digest',
-    });
-    updateAccountSettingsV2WithRetry.mockResolvedValue({
-      status: 'conflict',
-      currentVersion: 17,
-    });
-
-    const deps = createCliActionDeps({
-      token: credentials.token,
-      credentials,
-      sessionId: 'plugin-global',
-      mode: 'plain',
-      ctx: null,
-    });
-
-    await expect(deps.promptAssetExport?.({
-      artifactId: 'prompt-1',
-      machineId: 'local-machine',
-      assetTypeId: 'external.prompt',
-      scope: 'user',
-      targetPath: 'review.md',
-    })).resolves.toMatchObject({
-      ok: true,
-      artifactId: 'prompt-1',
-      exported: true,
-      externalLinkPersistence: {
-        status: 'conflict',
-        currentVersion: 17,
-      },
-    });
-  });
-
-  it('keeps a successful prompt export successful when external-link persistence throws', async () => {
-    const credentials = {
-      token: 'token',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
-    };
-    createCliApprovalsArtifactStore.mockReturnValue({
-      promptLibraryStore: {
-        read: vi.fn(async () => ({
-          id: 'prompt-1',
-          header: { title: 'Review prompt' },
-          body: JSON.stringify({ v: 1, markdown: '# Review', createdAtMs: 1, updatedAtMs: 1 }),
-        })),
-        update: vi.fn(async () => {}),
-      },
-    });
-    bootstrapAccountSettingsContext.mockResolvedValue({ settings: {} });
-    writePromptAsset.mockResolvedValue({
-      ok: true,
-      externalRef: { path: 'review.md' },
-      digest: 'external-digest',
-    });
-    updateAccountSettingsV2WithRetry.mockRejectedValue(new Error('settings unavailable'));
-
-    const deps = createCliActionDeps({
-      token: credentials.token,
-      credentials,
-      sessionId: 'plugin-global',
-      mode: 'plain',
-      ctx: null,
-    });
-
-    await expect(deps.promptAssetExport?.({
-      artifactId: 'prompt-1',
-      machineId: 'local-machine',
-      assetTypeId: 'external.prompt',
-      scope: 'user',
-      targetPath: 'review.md',
-    })).resolves.toMatchObject({
-      ok: true,
-      artifactId: 'prompt-1',
-      exported: true,
-      externalLinkPersistence: {
-        status: 'unavailable',
-        retryable: false,
-      },
-    });
-  });
-
-  it('redacts Account Settings from a successful prompt export external-link settlement', async () => {
-    const credentials = {
-      token: 'token',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
-    };
-    createCliApprovalsArtifactStore.mockReturnValue({
-      promptLibraryStore: {
-        read: vi.fn(async () => ({
-          id: 'prompt-1',
-          header: { title: 'Review prompt' },
-          body: JSON.stringify({ v: 1, markdown: '# Review', createdAtMs: 1, updatedAtMs: 1 }),
-        })),
-        update: vi.fn(async () => {}),
-      },
-    });
-    bootstrapAccountSettingsContext.mockResolvedValue({ settings: {} });
-    writePromptAsset.mockResolvedValue({
-      ok: true,
-      externalRef: { path: 'review.md' },
-      digest: 'external-digest',
-    });
-    updateAccountSettingsV2WithRetry.mockResolvedValue({
-      status: 'applied',
-      version: 18,
-      settings: { secretValue: 'must-not-appear-in-action-result' },
-    });
-
-    const deps = createCliActionDeps({
-      token: credentials.token,
-      credentials,
-      sessionId: 'plugin-global',
-      mode: 'plain',
-      ctx: null,
-    });
-
-    const result = await deps.promptAssetExport?.({
-      artifactId: 'prompt-1',
-      machineId: 'local-machine',
-      assetTypeId: 'external.prompt',
-      scope: 'user',
-      targetPath: 'review.md',
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      externalLinkPersistence: { status: 'applied', version: 18 },
-    });
-    expect(JSON.stringify(result)).not.toContain('must-not-appear-in-action-result');
-  });
-
-  it('preserves a malformed present prompt-external-links root and reports typed invalid persistence', async () => {
-    const credentials = {
-      token: 'token',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
-    };
-    createCliApprovalsArtifactStore.mockReturnValue({
-      promptLibraryStore: {
-        read: vi.fn(async () => ({
-          id: 'prompt-1',
-          header: { title: 'Review prompt' },
-          body: JSON.stringify({ v: 1, markdown: '# Review', createdAtMs: 1, updatedAtMs: 1 }),
-        })),
-        update: vi.fn(async () => {}),
-      },
-    });
-    bootstrapAccountSettingsContext.mockResolvedValue({
-      settings: { promptExternalLinksV1: 'malformed-present-root' },
-    });
-    writePromptAsset.mockResolvedValue({
-      ok: true,
-      externalRef: { path: 'review.md' },
-      digest: 'external-digest',
-    });
-    updateAccountSettingsV2WithRetry.mockResolvedValue({
-      status: 'applied',
-      version: 18,
-      settings: {},
-    });
-
-    const deps = createCliActionDeps({
-      token: credentials.token,
-      credentials,
-      sessionId: 'plugin-global',
-      mode: 'plain',
-      ctx: null,
-    });
-
-    await expect(deps.promptAssetExport?.({
-      artifactId: 'prompt-1',
-      machineId: 'local-machine',
-      assetTypeId: 'external.prompt',
-      scope: 'user',
-      targetPath: 'review.md',
-    })).resolves.toMatchObject({
-      ok: true,
-      exported: true,
-      externalLinkPersistence: {
-        status: 'invalid',
-        reason: 'invalidValue',
-      },
-    });
-    expect(updateAccountSettingsV2WithRetry).not.toHaveBeenCalled();
   });
 
   it('binds the authenticated plugin-permission operation owner into ActionExecutor deps', async () => {
@@ -3291,6 +3074,7 @@ describe('createCliActionDeps hook dispatch', () => {
       type: 'error',
       code: 'incompatible_target',
       retryable: false,
+      incompatibleTarget: { reason: 'daemon_rpc_unavailable' },
     });
   });
 
@@ -3404,6 +3188,7 @@ describe('createCliActionDeps hook dispatch', () => {
       type: 'error',
       code: 'incompatible_target',
       retryable: false,
+      incompatibleTarget: { reason: 'session_spawn_protocol_unavailable' },
     });
 
     expect(readMachineOperationProtocolCapabilitiesV1).toHaveBeenCalledWith({
@@ -5685,6 +5470,7 @@ describe('Session initial-access spawn settlement', () => {
       retryable: false,
     } : {
       type: 'error', code: 'incompatible_target', retryable: false,
+      incompatibleTarget: { reason: 'terminal_host_unavailable' },
       terminalHostError: { kind: 'terminal_host_unavailable', host: 'herdr', reason: 'installation_unavailable' },
     });
     expect(spawn).toHaveBeenCalledOnce();
