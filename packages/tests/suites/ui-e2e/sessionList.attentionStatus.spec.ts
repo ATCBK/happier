@@ -434,58 +434,44 @@ function collectPlacementSocketUpdates(page: Page, sessionIds: ReadonlySet<strin
   return () => updates;
 }
 
-async function expectRowInSection(params: Readonly<{
+async function readRowInSection(params: Readonly<{
   page: Page;
   headerTestId: string;
   sessionId: string;
-}>): Promise<void> {
+}>): Promise<boolean | null> {
   const rowTestId = sessionListTestIds.row(params.sessionId);
-  await expect
-    .poll(
-      async () => params.page.evaluate(({ headerTestId, rowTestId }) => {
-        const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'));
-        const headerIndex = elements.findIndex((element) => element.dataset.testid === headerTestId);
-        const rowIndex = elements.findIndex((element) => element.dataset.testid === rowTestId);
-        if (headerIndex < 0 || rowIndex < 0 || rowIndex <= headerIndex) return false;
-        const nextHeaderIndex = elements.findIndex((element, index) => {
-          const testId = element.dataset.testid ?? '';
-          return index > headerIndex && testId.startsWith('session-list-header:');
-        });
-        return nextHeaderIndex < 0 || rowIndex < nextHeaderIndex;
-      }, {
-        headerTestId: params.headerTestId,
-        rowTestId,
-      }),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
+  return params.page.evaluate(({ headerTestId, rowTestId }) => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'));
+    const row = elements.find((element) => element.dataset.testid === rowTestId);
+    if (!row) return null;
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.width <= 0 || rowRect.height <= 0) return null;
+
+    // Virtualized cells retain DOM order when recycled. Section membership follows
+    // their rendered positions, read together so a live move cannot split the sample.
+    let precedingHeader: { testId: string; top: number } | null = null;
+    for (const element of elements) {
+      const testId = element.dataset.testid ?? '';
+      if (!testId.startsWith('session-list-header:')) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || rect.top > rowRect.top) continue;
+      if (!precedingHeader || rect.top > precedingHeader.top) {
+        precedingHeader = { testId, top: rect.top };
+      }
+    }
+    return precedingHeader?.testId === headerTestId;
+  }, {
+    headerTestId: params.headerTestId,
+    rowTestId,
+  });
 }
 
-async function expectRowNotInSection(params: Readonly<{
-  page: Page;
-  headerTestId: string;
-  sessionId: string;
-}>): Promise<void> {
-  const rowTestId = sessionListTestIds.row(params.sessionId);
-  await expect
-    .poll(
-      async () => params.page.evaluate(({ headerTestId, rowTestId }) => {
-        const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'));
-        const headerIndex = elements.findIndex((element) => element.dataset.testid === headerTestId);
-        const rowIndex = elements.findIndex((element) => element.dataset.testid === rowTestId);
-        if (headerIndex < 0 || rowIndex < 0 || rowIndex <= headerIndex) return true;
-        const nextHeaderIndex = elements.findIndex((element, index) => {
-          const testId = element.dataset.testid ?? '';
-          return index > headerIndex && testId.startsWith('session-list-header:');
-        });
-        return nextHeaderIndex >= 0 && rowIndex > nextHeaderIndex;
-      }, {
-        headerTestId: params.headerTestId,
-        rowTestId,
-      }),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
+async function expectRowInSection(params: Parameters<typeof readRowInSection>[0]): Promise<void> {
+  await expect.poll(() => readRowInSection(params), { timeout: 60_000 }).toBe(true);
+}
+
+async function expectRowNotInSection(params: Parameters<typeof readRowInSection>[0]): Promise<void> {
+  await expect.poll(() => readRowInSection(params), { timeout: 60_000 }).toBe(false);
 }
 
 test.describe('ui e2e: session list attention', () => {

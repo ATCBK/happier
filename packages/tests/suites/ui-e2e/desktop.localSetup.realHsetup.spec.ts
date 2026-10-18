@@ -158,8 +158,10 @@ function readSetupMachineId(task: DesktopSystemTaskRecord): string {
 }
 
 async function confirmRelayMove(page: Page): Promise<void> {
-    // The consent owner keeps Move/Switch last; optional Connect too precedes it.
-    const move = page.locator('[data-testid^="web-modal-button-"]').last();
+    // Move/Switch is the last configured action. The three-button modal renders 0, 2, 1,
+    // so DOM order would select Connect too instead of the final configured action.
+    const buttons = page.locator('[data-testid^="web-modal-button-"]');
+    const move = page.getByTestId(`web-modal-button-${await buttons.count() - 1}`);
     await expect(move).toBeEnabled();
     await move.click();
 }
