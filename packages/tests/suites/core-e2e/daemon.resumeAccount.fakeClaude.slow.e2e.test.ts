@@ -4,14 +4,12 @@ import { resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 
 import { createRunDirs } from '../../src/testkit/runDir';
-import { repoRootDir } from '../../src/testkit/paths';
 import { startServerLight } from '../../src/testkit/process/serverLight';
 import { spawnLoggedProcess, type SpawnedProcess } from '../../src/testkit/process/spawnProcess';
-import { resolveTsxImportHookSpecifier } from '../../src/testkit/process/tsxImportHook';
-import { sanitizeCliTestEnv } from '../../src/testkit/process/cliTestEnv';
+import { resolveCliTestLaunchSpec } from '../../src/testkit/process/cliLaunchSpec';
 import { createTestAuth } from '../../src/testkit/auth';
 import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
-import { readDaemonState } from '../../src/testkit/daemon/daemon';
+import { sanitizeDaemonEnvForSpawn, startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { daemonControlPostJson } from '../../src/testkit/daemon/controlServerClient';
 import { fakeClaudeFixturePath, waitForFakeClaudeInvocation } from '../../src/testkit/fakeClaude';
 import { enqueueSessionPromptForScenario, waitForAssistantMessageContaining } from '../../src/testkit/providers/scenarios/sessionRuntime';
@@ -21,10 +19,13 @@ import { waitFor } from '../../src/testkit/timing';
 const run = createRunDirs({ runLabel: 'core' });
 const processes: SpawnedProcess[] = [];
 let server: Awaited<ReturnType<typeof startServerLight>> | undefined;
+let daemon: StartedDaemon | undefined;
 
 afterEach(async () => {
     for (const child of processes.reverse()) await child.stop();
     processes.length = 0;
+    await daemon?.stop();
+    daemon = undefined;
     await server?.stop();
     server = undefined;
 });
@@ -33,8 +34,6 @@ it('preserves a terminal-selected Claude account and refuses a second entry for 
     const testDir = run.testDir(`resume-account-${randomUUID()}`);
     server = await startServerLight({ testDir, dbProvider: 'sqlite' });
     const auth = await createTestAuth(server.baseUrl);
-    const root = repoRootDir();
-    const cliRoot = resolve(root, 'apps/cli');
     const home = resolve(testDir, 'home');
     const workspace = resolve(testDir, 'workspace');
     const accountA = resolve(testDir, 'account-a');
@@ -43,34 +42,27 @@ it('preserves a terminal-selected Claude account and refuses a second entry for 
     const secret = Uint8Array.from(randomBytes(32));
     await seedCliAuthForServer({ cliHome: home, serverUrl: server.baseUrl, token: auth.token, secret });
     const log = resolve(testDir, 'fake-claude.jsonl');
-    const env = sanitizeCliTestEnv({
+    const env = sanitizeDaemonEnvForSpawn({
         ...process.env,
         CI: '1', HAPPIER_VARIANT: 'dev', HAPPIER_DISABLE_CAFFEINATE: '1',
         HAPPIER_HOME_DIR: home, HAPPIER_SERVER_URL: server.baseUrl, HAPPIER_WEBAPP_URL: server.baseUrl,
         HAPPIER_CLAUDE_PATH: fakeClaudeFixturePath(), HAPPIER_E2E_FAKE_CLAUDE_LOG: log,
-        HAPPIER_CLI_SUBPROCESS_PREFER_TSX: '1', TSX_TSCONFIG_PATH: resolve(cliRoot, 'tsconfig.json'),
         CLAUDE_CONFIG_DIR: accountA,
     });
     delete env.HAPPIER_CLI_SUBPROCESS_ENTRYPOINT;
-    const hook = resolveTsxImportHookSpecifier();
-    if (!hook) throw new Error('Source probe requires the installed tsx import hook');
+    const snapshotDir = resolve(testDir, 'cli-dist');
+    const cliLaunchSpec = await resolveCliTestLaunchSpec({ testDir, env }, { snapshotDir });
+    daemon = await startTestDaemon({ testDir, happyHomeDir: home, env, snapshotDir });
     const launch = (label: string, args: string[], childEnv = env) => {
         const child = spawnLoggedProcess({
-            command: process.execPath, args: ['--import', hook, resolve(cliRoot, 'src/index.ts'), ...args],
-            cwd: workspace, env: childEnv,
+            command: cliLaunchSpec.command, args: [...cliLaunchSpec.args, ...args],
+            cwd: workspace, env: { ...childEnv, ...cliLaunchSpec.env },
             stdoutPath: resolve(testDir, `${label}.stdout.log`), stderrPath: resolve(testDir, `${label}.stderr.log`),
         });
         processes.push(child);
         return child;
     };
-    launch('daemon', ['daemon', 'start-sync']);
-    await waitFor(async () => {
-        const state = await readDaemonState(home);
-        if (!state) throw new Error(`Waiting for source daemon; logs: ${testDir}`);
-        return true;
-    }, { timeoutMs: 60_000 });
-    const state = await readDaemonState(home);
-    if (!state) throw new Error('Source daemon exited before the probe');
+    const state = daemon.state;
     const control = <T>(path: string, body?: Record<string, unknown>) => daemonControlPostJson<T>({
         port: state.httpPort, controlToken: state.controlToken, path, body,
     });
