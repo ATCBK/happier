@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createSign, generateKeyPairSync } from "node:crypto";
+import * as privacyKit from "privacy-kit";
 
 type OidcCodeRecord = { nonce: string };
 
@@ -7,6 +8,7 @@ type StartOidcStubServerOptions = {
     includeRefreshToken?: boolean;
     includeUserInfoEndpoint?: boolean;
     userInfoClaims?: Record<string, unknown>;
+    onUserInfoRequest?: () => void;
 };
 
 export type OidcStubServer = {
@@ -23,8 +25,8 @@ export type OidcStubServer = {
 
 const CODE_FLOW_ACCESS_TOKEN = "at_1";
 
-function base64Url(input: Buffer): string {
-    return input.toString("base64url");
+function base64Url(input: Uint8Array): string {
+    return privacyKit.encodeBase64(Uint8Array.from(input), "base64url").replace(/=+$/, "");
 }
 
 function signJwtRs256(params: {
@@ -32,8 +34,8 @@ function signJwtRs256(params: {
     payload: Record<string, unknown>;
     privateKeyPem: string;
 }): string {
-    const encodedHeader = base64Url(Buffer.from(JSON.stringify(params.header), "utf8"));
-    const encodedPayload = base64Url(Buffer.from(JSON.stringify(params.payload), "utf8"));
+    const encodedHeader = base64Url(new TextEncoder().encode(JSON.stringify(params.header)));
+    const encodedPayload = base64Url(new TextEncoder().encode(JSON.stringify(params.payload)));
     const data = `${encodedHeader}.${encodedPayload}`;
     const signer = createSign("RSA-SHA256");
     signer.update(data);
@@ -151,6 +153,7 @@ export async function startOidcStubServer(options: StartOidcStubServerOptions = 
         }
 
         if (options.includeUserInfoEndpoint && (req.method === "POST" || req.method === "GET") && url.pathname === "/userinfo") {
+            options.onUserInfoRequest?.();
             const authorization = req.headers.authorization ?? "";
             const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
             const issuedClaims = issuedAccessTokens.get(bearer);

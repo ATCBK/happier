@@ -196,6 +196,8 @@ Turn it on per provider by listing the clients whose tokens may be exchanged:
 - `clientIdClaim` (optional): the access-token claim naming the client. When unset, Happier reads `client_id` (RFC 9068), then `azp`. For Okta JWT access tokens with a `cid` client claim, set `clientIdClaim` to `cid`.
 - `subjectClaim` (default `sub`): the access-token claim that must equal the `sub` returned by `/userinfo`. For Okta JWT access tokens whose `sub` is the login and whose `uid` matches the `/userinfo` subject, set `subjectClaim` to `uid`.
 
+Allowlisting a client trusts anyone who obtains one of its accepted bearer tokens to sign in to the user's linked Happier account. This includes APIs that receive those tokens: the client claim identifies who requested the token, not who presents it, and this exchange does not restrict `aud`. The Happier token can remain valid after the IdP token expires. Use a dedicated client and token flow where every token recipient is trusted with that access; a dedicated client alone does not prevent replay by its token recipients.
+
 Verify these claim names against tokens from your configured issuer. [Okta treats org authorization server access-token contents as opaque](https://developer.okta.com/docs/guides/validate-access-tokens/main/) and may change their format. This exchange requires a readable JWT with the configured client and subject claims; an org token format change can therefore disable exchange even while browser login still works. The token is validated by Okta's own `/userinfo` endpoint, rather than by local signature validation.
 
 The machine then calls:

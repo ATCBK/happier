@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
+import * as privacyKit from "privacy-kit";
 
 import { db } from "@/storage/db";
 import { auth } from "@/app/auth/auth";
@@ -25,6 +26,7 @@ function createTestApp() {
 describe("connectRoutes (OIDC token exchange) (integration)", () => {
     let harness: LightSqliteHarness;
     let oidcStub: OidcStubServer;
+    let userInfoRequests = 0;
 
     function providerEnv(tokenExchange?: Record<string, unknown>): NodeJS.ProcessEnv {
         return {
@@ -83,13 +85,14 @@ describe("connectRoutes (OIDC token exchange) (integration)", () => {
             initAuth: true,
             initEncrypt: true,
         });
-        oidcStub = await startOidcStubServer({ includeUserInfoEndpoint: true });
+        oidcStub = await startOidcStubServer({ includeUserInfoEndpoint: true, onUserInfoRequest: () => { userInfoRequests += 1; } });
     }, 120_000);
 
     afterEach(async () => {
         await closeTrackedApps();
         harness.resetEnv();
         oidcStub.reset();
+        userInfoRequests = 0;
         await db.repeatKey.deleteMany();
         await db.accountIdentity.deleteMany();
         await db.account.deleteMany();
@@ -98,6 +101,21 @@ describe("connectRoutes (OIDC token exchange) (integration)", () => {
     afterAll(async () => {
         await harness.close();
         await oidcStub.close();
+    });
+
+    it("refuses exchange before UserInfo when build policy denies keyless accounts", async () => {
+        harness.resetEnv({
+            ...providerEnv({ allowedClientIds: [DEVBOX_CLIENT_ID] }),
+            HAPPIER_BUILD_FEATURES_DENY: "e2ee.keylessAccounts",
+        });
+        await seedLinkedAccount({ providerUserId: "user_1" });
+        const accessToken = oidcStub.issueAccessToken({ sub: "user_1", client_id: DEVBOX_CLIENT_ID }, { sub: "user_1" });
+
+        const res = await exchange(accessToken);
+
+        expect(res.statusCode).toBe(403);
+        expect(res.json()).toEqual({ error: "token-exchange-disabled" });
+        expect(userInfoRequests).toBe(0);
     });
 
     it("returns a token for the linked account when the access token was issued to an allowed client", async () => {
@@ -145,8 +163,8 @@ describe("connectRoutes (OIDC token exchange) (integration)", () => {
         await seedLinkedAccount({ providerUserId: "user_1" });
         const issued = oidcStub.issueAccessToken({ sub: "user_1", client_id: "some_other_app" }, { sub: "user_1" });
         const [header, payload, signature] = issued.split(".");
-        const claims = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8")) as Record<string, unknown>;
-        const forgedPayload = Buffer.from(JSON.stringify({ ...claims, client_id: DEVBOX_CLIENT_ID }), "utf8").toString("base64url");
+        const claims = JSON.parse(new TextDecoder().decode(privacyKit.decodeBase64(payload!, "base64url"))) as Record<string, unknown>;
+        const forgedPayload = privacyKit.encodeBase64(new TextEncoder().encode(JSON.stringify({ ...claims, client_id: DEVBOX_CLIENT_ID })), "base64url").replace(/=+$/, "");
 
         const res = await exchange(`${header}.${forgedPayload}.${signature}`);
 
