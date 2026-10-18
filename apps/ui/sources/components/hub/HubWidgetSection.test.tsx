@@ -16,6 +16,7 @@ import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard } from '@/
 import { HubWidgetSection } from './HubWidgetSection';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { storage } from '@/sync/domains/state/storage';
+import { widgetExecutionOrigin, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 
 const boundary = vi.hoisted(() => ({ projection: null as PluginUiProjectionModel | null, pushed: [] as unknown[], stage: null as ((open: { pageId: string; subPath: string; input: { selection: string } }) => boolean) | null, moments: {} as Record<string, boolean> }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -49,8 +50,11 @@ function projection(availability: 'available' | 'disabled' = 'available', phase:
         if (!binding) throw new Error('admitted page binding required');
         return { id: `surfacePlacement:acme.notes:${localId}`, pluginId: 'acme.notes', occurrenceId: 'acme.notes#1', contributionKind: 'surfacePlacement', descriptorId: localId, binding, target: binding.target, renderer: { kind: 'declarative', contributionId: 'notes-native' }, display: { title: 'Notes' }, availability: { state: availability, reason: availability === 'available' ? 'available' : 'plugin_disabled', diagnostics: [] } };
     });
-    const normalized = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(entries.map((entry) => [entry.id, entry])) } } }));
-    return unionPluginUiProjections([{ machineId: 'machine-a', serverId: 'home-a', projection: normalized, phase, interactionEnabled: phase === 'current' }], new Map()).pluginUiProjection;
+    const executionOrigin = widgetExecutionOrigin('acme.notes', 'machine-a');
+    const normalized = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+        installedPackagesById: { 'acme.notes': { ...widgetInstalledPackage('acme.notes', 'Notes'), occurrenceId: 'acme.notes#1', executionOrigin } },
+        familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(entries.map((entry) => [entry.id, entry])) } } }));
+    return unionPluginUiProjections([{ machineId: 'machine-a', serverId: 'home-a', projection: normalized, phase, interactionEnabled: phase === 'current' }], new Map([['acme.notes', executionOrigin]])).pluginUiProjection;
 }
 const widget = { sizeDeclaration: { sizes: [...WIDGET_SIZE_POLICY_V1.home.sizes], defaultSize: WIDGET_SIZE_POLICY_V1.home.defaultSize }, key: 'acme.notes/status', surface: { pluginId: 'acme.notes', localId: 'status' }, title: 'Notes status', pluginName: 'Notes', sharedPluginName: false, icon: 'note' as const, homeDefault: 'shown' as const, target: 'app' as const };
 const instance = { v: 1 as const, id: 'notes-copy', definition: { kind: 'installed' as const, surface: widget.surface }, bindings: {} };
