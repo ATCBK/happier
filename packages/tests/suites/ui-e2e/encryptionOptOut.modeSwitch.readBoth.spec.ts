@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { createRunDirs } from '../../src/testkit/runDir';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
@@ -264,13 +264,8 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
       expect(sessionADraft.envelope).toBe('encrypted');
 
       const migrateDraftsToPlain = await toggleAccountEncryptionMode({ page, uiBaseUrl, expectedMode: 'plain' });
-      await mkdir(join(testDir, 'daemon-after-plain'), { recursive: true });
-      await daemon.stop();
-      daemon = await startTestDaemon({
-        testDir: join(testDir, 'daemon-after-plain'),
-        happyHomeDir: cliHomeDir,
-        env: daemonEnv,
-      });
+      // Converting Machine content retires its previous daemon encryption context.
+      daemon = await daemon.restart();
       expectCompleteDraftMigration({
         request: migrateDraftsToPlain,
         draftIds: [draftAId, draftBId],
@@ -323,13 +318,7 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
       await expect(page.getByText(msgB, { exact: true }).first()).toBeVisible({ timeout: 120_000 });
 
       const migrateDraftsToE2ee = await toggleAccountEncryptionMode({ page, uiBaseUrl, expectedMode: 'e2ee' });
-      await mkdir(join(testDir, 'daemon-after-e2ee'), { recursive: true });
-      await daemon.stop();
-      daemon = await startTestDaemon({
-        testDir: join(testDir, 'daemon-after-e2ee'),
-        happyHomeDir: cliHomeDir,
-        env: daemonEnv,
-      });
+      daemon = await daemon.restart();
       expectCompleteDraftMigration({
         request: migrateDraftsToE2ee,
         draftIds: [draftAId, draftBId],

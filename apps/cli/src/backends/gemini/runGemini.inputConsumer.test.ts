@@ -15,6 +15,9 @@ import { FakePermissionSession } from '@/testkit/backends/permissionHandler';
 
 import type { GeminiMode } from './types';
 
+type PermissionHandlerFactory = typeof import('@/agent/permissions/createProviderEnforcedPermissionHandler').createProviderEnforcedPermissionHandler;
+type PermissionHandlerFixture = Pick<ReturnType<PermissionHandlerFactory>, 'updateSession' | 'abortPendingRequestsAndFlush' | 'setPermissionMode' | 'reset'>;
+
 type GeminiInputConsumer = {
   waitForNextInput: (opts: { abortSignal: AbortSignal }) => Promise<MessageBatch<GeminiMode, string> | null>;
   drainPending: (opts?: DrainPendingOptions) => Promise<DrainPendingResult>;
@@ -100,7 +103,7 @@ const {
       updateDisplayedModel: vi.fn(),
       getDisplayedModel: vi.fn(() => 'gemini-2.5-pro'),
     })),
-    createProviderEnforcedPermissionHandlerMock: vi.fn((_opts: Parameters<typeof import('@/agent/permissions/createProviderEnforcedPermissionHandler').createProviderEnforcedPermissionHandler>[0]): Pick<ReturnType<typeof import('@/agent/permissions/createProviderEnforcedPermissionHandler').createProviderEnforcedPermissionHandler>, 'updateSession' | 'abortPendingRequestsAndFlush' | 'setPermissionMode' | 'reset'> => ({
+    createProviderEnforcedPermissionHandlerMock: vi.fn<(...params: Parameters<PermissionHandlerFactory>) => PermissionHandlerFixture>(() => ({
       updateSession: vi.fn(),
       abortPendingRequestsAndFlush: vi.fn(async () => undefined),
       setPermissionMode: vi.fn(),
@@ -864,6 +867,43 @@ describe('runGemini input consumer migration', () => {
       localId: 'local-runtime-unavailable',
       reason: 'runtime_disposed_before_delivery',
     });
+  });
+
+  it('stops the active Gemini provider and controller when cancellation journal admission fails', async () => {
+    let state: import('@/api/types').AgentState = { requests: {}, completedRequests: {} };
+    const session = Object.assign(createFakeSession(), {
+      getAgentStateSnapshot: () => state,
+      updateAgentState: async (updater: (current: import('@/api/types').AgentState) => import('@/api/types').AgentState) => { state = updater(state); },
+      updateAgentStateRequestSettlement: async () => { throw Object.assign(new Error('journal disk full'), { code: 'ENOSPC' }); },
+    });
+    setFakeSession(session);
+    const actualFactory = await vi.importActual<{ createProviderEnforcedPermissionHandler: PermissionHandlerFactory }>('@/agent/permissions/createProviderEnforcedPermissionHandler');
+    let handler: ReturnType<PermissionHandlerFactory> | undefined;
+    createProviderEnforcedPermissionHandlerMock.mockImplementationOnce((params) => {
+      handler = actualFactory.createProviderEnforcedPermissionHandler(params);
+      return handler;
+    });
+    let stoppedSignal: AbortSignal | undefined;
+    sendGeminiPromptWithRetryMock.mockImplementationOnce(async () => {
+      if (!handler) throw new Error('Expected real Gemini permission handler');
+      const consumer = createSessionProviderInputConsumerMock.mock.results[0]!.value;
+      stoppedSignal = vi.mocked(consumer.runProviderInputDispatch).mock.calls.at(-1)?.[0].abortSignal;
+      const pending = handler.handleToolCall('gemini-stop', 'AskUserQuestion', {
+        questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }],
+      });
+      const rejected = expect(pending).rejects.toThrow('Aborted by user');
+      const abort = session.rpcHandlerManager.registerHandler.mock.calls.find(([name]) => name === 'abort')?.[1] as (() => Promise<void>) | undefined;
+      if (!abort) throw new Error('Expected Gemini Stop RPC');
+      await abort();
+      await rejected;
+      return { kind: 'aborted', stopReason: 'cancelled' };
+    });
+    const { runGemini } = await import('./runGemini');
+    await runGemini({ credentials });
+    expect(stoppedSignal?.aborted).toBe(true);
+    expect(fakeBackend.cancel).toHaveBeenCalledWith('gemini-acp-session-1');
+    expect(state.requests?.['gemini-stop']).toBeDefined();
+    expect(state.completedRequests?.['gemini-stop']).toBeUndefined();
   });
 
   it.each([

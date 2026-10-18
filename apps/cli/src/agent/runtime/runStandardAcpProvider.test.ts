@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AgentState } from '@/api/types';
+import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/createProviderEnforcedPermissionHandler';
 import { buildBackendTargetKey } from '@happier-dev/protocol';
 import { createTestAcpRuntime } from '@/testkit/backends/acpRuntime';
 import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBackend';
@@ -1054,6 +1056,31 @@ describe('runStandardAcpProvider', () => {
     await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
 
     expect(harness.session.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the ACP provider and aborts its controller when cancellation journal admission fails', async () => {
+    const harness = createHarness();
+    let state: AgentState = { requests: {}, completedRequests: {} };
+    Object.assign(harness.session, {
+      getAgentStateSnapshot: () => state,
+      updateAgentState: async (updater: (current: AgentState) => AgentState) => { state = updater(state); },
+      updateAgentStateRequestSettlement: async () => { throw Object.assign(new Error('journal disk full'), { code: 'ENOSPC' }); },
+    });
+    const handler = createProviderEnforcedPermissionHandler({ session: harness.session, logPrefix: '[AcpStopTest]' });
+    harness.deps.createProviderEnforcedPermissionHandlerFn = () => handler;
+    let stoppedSignal: AbortSignal | undefined;
+    harness.deps.runPermissionModePromptLoopFn = async (params: { getAbortSignal: () => AbortSignal }) => {
+      stoppedSignal = params.getAbortSignal();
+      const pending = handler.handleToolCall('acp-stop', 'Bash', { command: ['echo pending'] });
+      const rejected = expect(pending).rejects.toThrow('Aborted by user');
+      await harness.handlers.get('abort')?.();
+      await rejected;
+    };
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+    expect(stoppedSignal?.aborted).toBe(true);
+    expect(harness.runtime.cancel).toHaveBeenCalledTimes(1);
+    expect(state.requests?.['acp-stop']).toBeDefined();
+    expect(state.completedRequests?.['acp-stop']).toBeUndefined();
   });
 
   it('invokes abort handler lifecycle when abort RPC fires', async () => {

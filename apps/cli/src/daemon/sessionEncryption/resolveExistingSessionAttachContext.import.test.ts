@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/configuration', async (importOriginal) => ({
-  configuration: {
-    ...(await importOriginal<typeof import('@/configuration')>()).configuration,
-    get daemonReattachCatchUpConcurrency(): number {
-      throw new Error('Existing-session lookup configuration is unavailable during import');
-    },
-  },
-}));
+vi.mock('@/configuration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configuration')>();
+  return {
+    ...actual,
+    configuration: new Proxy(actual.configuration, {
+      get(target, property, receiver) {
+        if (property === 'daemonReattachCatchUpConcurrency') {
+          throw new Error('Existing-session lookup configuration was accessed during module import');
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    }),
+  };
+});
 
 import { resolveExistingSessionAttachContext } from './resolveExistingSessionAttachContext';
 

@@ -102,6 +102,7 @@ const setServerContractMock = vi.fn(async (_result: unknown) => {});
 
 vi.mock('./mutations/createSessionMutationOutbox', () => ({
   createSessionMutationOutbox: (): SessionMutationOutbox => ({
+    enqueueAgentStateRequestSettlement: async () => ({ persisted: true, delivered: true }),
     enqueueSessionTurn: (mutation: { action?: unknown }) => enqueueSessionTurnMock(mutation),
     enqueueTranscriptMessage: (mutation: unknown) => enqueueTranscriptMessageMock(mutation),
     enqueueRuntimeActivitySnapshot: async () => ({ persisted: true, delivered: true }),
@@ -194,7 +195,9 @@ async function createClient(
         if (options.serverContractMode === 'released') return {};
         return { v: 1 };
       }
-      return customEmitWithAck?.(event, payload, socket) ?? resolveApiSessionSocketDefaultAck(event, payload);
+      const customAck = customEmitWithAck?.(event, payload, socket);
+      if (customAck !== undefined) return customAck;
+      return resolveApiSessionSocketDefaultAck(event, payload);
     },
   });
   userSocketStub = createApiSessionSocketStub({ id: 'user-socket', connected: false });
@@ -1841,7 +1844,7 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
         }),
       }),
     );
-    expect(infoFileSpy).toHaveBeenCalledTimes(1);
+    expect(infoFileSpy.mock.calls.filter(([event]) => event === '[pendingQueue] materialize request failed')).toHaveLength(1);
     expect((client as unknown as { pendingMaterializeRetryWakeTimer?: unknown }).pendingMaterializeRetryWakeTimer)
       .toBeUndefined();
 
@@ -2575,7 +2578,7 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
         }),
       }),
     );
-    expect(infoFileSpy).toHaveBeenCalledOnce();
+    expect(infoFileSpy.mock.calls.filter(([event]) => event === '[pendingQueue] accepted provider delivery remains unresolved')).toHaveLength(1);
     expect(infoFileSpy).toHaveBeenCalledWith(
       '[pendingQueue] accepted provider delivery remains unresolved',
       expect.objectContaining({
@@ -2625,9 +2628,9 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     });
 
     confirmProviderInputAccepted(client, 'crashed-settlement-local');
-    await waitUntil(() => infoFileSpy.mock.calls.length > 0);
+    await waitUntil(() => infoFileSpy.mock.calls.some(([event]) => event === '[pendingQueue] accepted provider delivery resolution crashed'));
 
-    expect(infoFileSpy).toHaveBeenCalledOnce();
+    expect(infoFileSpy.mock.calls.filter(([event]) => event === '[pendingQueue] accepted provider delivery resolution crashed')).toHaveLength(1);
     expect(infoFileSpy).toHaveBeenCalledWith(
       '[pendingQueue] accepted provider delivery resolution crashed',
       expect.objectContaining({
@@ -3799,7 +3802,7 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect((client as any).canonicalPendingDeliveryByLocalId.has('provider-noop')).toBe(true);
-    expect(infoFileSpy).toHaveBeenCalledOnce();
+    expect(infoFileSpy.mock.calls.filter(([event]) => event === '[pendingQueue] accepted provider delivery remains unresolved')).toHaveLength(1);
     expect(infoFileSpy).toHaveBeenCalledWith(
       '[pendingQueue] accepted provider delivery remains unresolved',
       expect.objectContaining({
@@ -4213,7 +4216,7 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     expect(resolveAcceptedPendingDeliveryMock).toHaveBeenCalledTimes(1);
     expect(materializeNextMock).toHaveBeenCalledTimes(2);
     expect((client as any).canonicalPendingDeliveryByLocalId.has('stale-accepted-provider-m1')).toBe(false);
-    expect(infoFileSpy).toHaveBeenCalledOnce();
+    expect(infoFileSpy.mock.calls.filter(([event]) => event === '[pendingQueue] accepted provider delivery remains unresolved')).toHaveLength(1);
     expect(infoFileSpy).toHaveBeenCalledWith(
       '[pendingQueue] accepted provider delivery remains unresolved',
       expect.objectContaining({
