@@ -162,8 +162,8 @@ const TOKEN_FIELD = {
 };
 
 /**
- * Every provider read reaches the deployment and the exact account, so both network grants and the
- * purpose grant travel together.
+ * Triage reads and writes reach the deployment through the exact Connected Account origin. The
+ * repository-scoped SCM origin belongs to the SCM adapter and is unavailable to these global Actions.
  *
  * Every role after discovery declares the exact account path its configured instance carries, so
  * the host cross-checks the credential-ref leaf at declaration time. `scan`'s published input is a
@@ -173,7 +173,6 @@ const TOKEN_FIELD = {
  * account references is what it performs.
  */
 const READ_HOST_ACCESS = [
-  AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID,
   AZURE_DEVOPS_ACCOUNT_NETWORK_HOST_ACCESS_ID,
   AZURE_DEVOPS_TRIAGE_PURPOSE,
 ];
@@ -309,7 +308,8 @@ export const AZURE_DEVOPS_PLUGIN = definePlugin({
       dangerLevel: sources.operations.listInstances.declaration.dangerLevel,
       inputSchema: sources.operations.listInstances.declaration.input.schema.jsonSchema,
       resultSchema: sources.operations.listInstances.declaration.resultSchema.jsonSchema,
-      hostAccess: READ_HOST_ACCESS,
+      // Discovery reads account metadata only; it neither calls Azure nor needs a network binding.
+      hostAccess: [AZURE_DEVOPS_TRIAGE_PURPOSE],
       run: listAzureDevOpsInstancesAction,
     },
     [AZURE_DEVOPS_TRIAGE_ACTION_IDS.scan]: {

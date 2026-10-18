@@ -10,8 +10,16 @@ import {
 } from './triage/descriptor.js';
 import { AZURE_DEVOPS_TRIAGE_MUTATION_ACTION_IDS } from './triage/mutationActions.js';
 import { AZURE_DEVOPS_TRIAGE_DETAIL_ACTION_IDS } from './triage/detailActions.js';
+import { AZURE_DEVOPS_TRIAGE_ACTION_IDS } from './triage/actions.js';
 
 describe('Azure DevOps network authority', () => {
+  it('discovers configured deployments using only account metadata and routes triage through their account origin', () => {
+    const discovery = PLUGIN_MANIFEST.contributes.actions.find(action => action.id === AZURE_DEVOPS_TRIAGE_ACTION_IDS.listInstances);
+    expect(discovery?.hostAccess).toEqual([AZURE_DEVOPS_TRIAGE_PURPOSE]);
+    for (const action of PLUGIN_MANIFEST.contributes.actions) {
+      expect(action.hostAccess, action.id).not.toContain(AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID);
+    }
+  });
   it('grants exactly the verbs its declared Actions consume, and no others', () => {
     const network = PLUGIN_MANIFEST.hostAccess.required.filter((entry): entry is Extract<
       (typeof PLUGIN_MANIFEST.hostAccess.required)[number],
@@ -99,7 +107,7 @@ describe('Azure DevOps pull-request write declarations', () => {
 
   it('binds every write to the network grant and to the exact configured account', () => {
     for (const declaration of declarations) {
-      expect(declaration.hostAccess).toContain(AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID);
+      expect(declaration.hostAccess).not.toContain(AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID);
       expect(declaration.hostAccess).toContain(AZURE_DEVOPS_ACCOUNT_NETWORK_HOST_ACCESS_ID);
       expect(declaration.connectedAccountPurposeBindings)
         .toEqual([{ path: 'instance.binding.account', purpose: AZURE_DEVOPS_TRIAGE_PURPOSE }]);
