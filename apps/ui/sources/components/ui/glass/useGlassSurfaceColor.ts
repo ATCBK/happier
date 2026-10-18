@@ -38,9 +38,9 @@ export function useGlassSurfaceColor(color: string, group: GlassSurfaceGroup, ne
     const available = tintAvailable ?? (Platform.OS === 'web' || Platform.OS === 'android' || capability === 'tint'
         || (capability === 'blur' && getBlurViewComponent() !== null)
         || (capability === 'liquidGlass' && getGlassViewComponent() !== null));
-    const tint = nested || !available ? color : glassSurfaceTintColor({ color, ink: colors.text.primary, dark: theme.dark, settings, group, environment, page: colors.surface.base });
+    const tint = nested || !available ? color : glassSurfaceTintColor({ color, ink: colors.text.primary, controlFill: colors.surface.selected, dark: theme.dark, settings, group, environment, page: colors.surface.base });
     const coatOpacity = !nested && available && Platform.OS === 'web'
-        ? resolveGlassBackdropMap(settings, group, theme.dark, environment, { page: colors.surface.base, solid: color })?.opacity
+        ? resolveGlassBackdropMap(settings, group, theme.dark, environment, { page: colors.surface.base, solid: color, ink: colors.text.primary, controlFill: colors.surface.selected })?.opacity
         : undefined;
     // A CSS token's spelling stays the same when its live theme value changes.
     return React.useMemo(() => resolveGlassSurfaceColor(tint, group, settings, environment, available, nested, undefined, plane, coatOpacity), [colors, tint, group, settings, environment, nested, available, plane, coatOpacity]);
@@ -51,7 +51,7 @@ export function useGlassSurfaceBackdropTone(group: GlassSurfaceGroup, solid: str
     const { theme } = useUnistyles();
     const settings = useGlassMaterialSettings();
     const environment = useGlassRuntimeEnvironment();
-    return resolveGlassBackdropTone(settings, group, theme.dark, environment, { page: theme.colors.surface.base, solid });
+    return resolveGlassBackdropTone(settings, group, theme.dark, environment, { page: theme.colors.surface.base, solid, ink: theme.colors.text.primary, controlFill: theme.colors.surface.selected });
 }
 
 /** Native controls share their containing material; SDK adapters need its concrete paint. */

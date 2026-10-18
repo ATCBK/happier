@@ -50,6 +50,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
     const playbackRef = React.useRef(playback); playbackRef.current = playback;
     const ref = React.useRef<HTMLCanvasElement>(null);
     const ready = React.useRef(props.onReady); ready.current = props.onReady;
+    const rendered = React.useRef(props.onRendered); rendered.current = props.onRendered;
     const failed = React.useRef(props.onError); failed.current = props.onError;
     // What this canvas shows, and the last idle resettle it played (plan UD-4).
     const shown = React.useRef<{ localId: string | null; w: number; h: number } | null>(null);
@@ -85,6 +86,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
             const context = canvas.getContext('2d');
             if (!context) throw new Error('Atmosphere canvas is unavailable');
             const target = new ImageData(new Uint8ClampedArray(pixels.rgba), pixels.w, pixels.h);
+            rendered.current?.(pixels);
             if (!settle) {
                 // Set the backing store only when its new render is ready: no blank frame on resize.
                 canvas.width = pixels.w; canvas.height = pixels.h;

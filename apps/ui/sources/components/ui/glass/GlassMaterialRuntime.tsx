@@ -7,10 +7,10 @@ import { isDesktopOverlayWindowContext } from '@/desktop/window/isDesktopOverlay
 import { applyDesktopGlassMaterial, subscribeDesktopGlassState, type DesktopGlassState } from '@/utils/platform/desktopGlassMaterial';
 import { useWebRootCanvasPresentation } from '@/theme/useWebRootCanvasPresentation';
 
-import { GLASS_SURFACE_GROUPS, readGlassMaterials, type GlassMaterialEnvironment } from './glassMaterial';
+import { GLASS_SURFACE_GROUPS, readGlassMaterials, type GlassAtmosphereTone, type GlassMaterialEnvironment } from './glassMaterial';
 import { useGlassMaterialSettings } from './useGlassMaterialSettings';
 import { applyGlassDocumentPresentation, shouldRevealNativeGlassCanvas } from './glassDocumentPresentation';
-import { GlassRuntimeEnvironmentProvider, GlassAtmosphereBehindSetterProvider } from './glassRuntimeEnvironment';
+import { GlassRuntimeEnvironmentProvider, GlassAtmosphereBehindSetterProvider, GlassAtmosphereToneSetterProvider } from './glassRuntimeEnvironment';
 export { useGlassRuntimeEnvironment } from './glassRuntimeEnvironment';
 
 /** One narrow settings subscriber owns desktop application and web presentation variables. */
@@ -20,14 +20,18 @@ export function GlassMaterialRuntime(props: Readonly<{ children: React.ReactNode
     const desktopWindow = Platform.OS === 'web' && isDesktopHost() && !isDesktopOverlayWindowContext();
     const [nativeState, setNativeState] = React.useState<DesktopGlassState | null>(null);
     const [atmosphereBehind, setAtmosphereBehind] = React.useState<NonNullable<GlassMaterialEnvironment['atmosphereBehind']>>('none');
+    const [measuredTone, setAtmosphereTone] = React.useState<GlassAtmosphereTone | undefined>(undefined);
+    // A tone only describes a picture that is covering an area.
+    const atmosphereTone = atmosphereBehind === 'none' ? undefined : measuredTone;
     const environment = React.useMemo(() => ({
         desktopWindow,
         nativeWindowMaterialLive: nativeState?.materialLive === true,
         reduceTransparency: reduceTransparency || nativeState?.reduceTransparency === true,
         windowActive: nativeState?.windowActive ?? true,
         atmosphereBehind,
+        atmosphereTone,
         nativeRenderer: Platform.OS !== 'web',
-    }), [desktopWindow, nativeState?.materialLive, nativeState?.reduceTransparency, nativeState?.windowActive, reduceTransparency, atmosphereBehind]);
+    }), [desktopWindow, nativeState?.materialLive, nativeState?.reduceTransparency, nativeState?.windowActive, reduceTransparency, atmosphereBehind, atmosphereTone]);
     useWebRootCanvasPresentation(shouldRevealNativeGlassCanvas(environment));
 
     React.useEffect(() => {
@@ -60,6 +64,8 @@ export function GlassMaterialRuntime(props: Readonly<{ children: React.ReactNode
     }, [environment, settings]);
 
     return <GlassAtmosphereBehindSetterProvider value={setAtmosphereBehind}>
-        <GlassRuntimeEnvironmentProvider value={environment}>{props.children}</GlassRuntimeEnvironmentProvider>
+        <GlassAtmosphereToneSetterProvider value={setAtmosphereTone}>
+            <GlassRuntimeEnvironmentProvider value={environment}>{props.children}</GlassRuntimeEnvironmentProvider>
+        </GlassAtmosphereToneSetterProvider>
     </GlassAtmosphereBehindSetterProvider>;
 }

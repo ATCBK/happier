@@ -8,7 +8,7 @@ import { useCanvasRenderState } from './useCanvasRenderState';
 import { WALLPAPER_HAZE_LAYERS } from './wallpaperHaze';
 
 /** Two blurred picture copies masked at the content column, prepared once off the UI thread. */
-export function WallpaperHaze(props: Readonly<{ source: BackdropCanvasProps['source']; size: BackdropCanvasProps['size']; job: Omit<BackdropCanvasProps, 'source' | 'size'>; focus: { x: number; y: number } }>) {
+export function WallpaperHaze(props: Readonly<{ source: BackdropCanvasProps['source']; size: BackdropCanvasProps['size']; job: Omit<BackdropCanvasProps, 'source' | 'size'>; focus: { x: number; y: number }; onRendered?: BackdropCanvasProps['onRendered'] }>) {
     const quarter = { width: Math.max(2, Math.round(props.size.width / 4)), height: Math.max(2, Math.round(props.size.height / 4)) };
     const request = backdropRenderRequest({ source: props.source, size: quarter, ...props.job }, 1);
     const key = backdropRequestKey(request);

@@ -273,7 +273,7 @@ describe('web glass material', () => {
             standardCleanup();
         }
     });
-    it('steps the tertiary meta inside a card up on glass with a picture behind it, below the secondary step, and leaves unbacked glass alone', async () => {
+    it('steps the tertiary meta inside a card up to the secondary faint ink on glass with a picture behind it, and leaves unbacked glass alone', async () => {
         const { Text } = await import('@/components/ui/text/Text');
         const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
@@ -299,12 +299,93 @@ describe('web glass material', () => {
             } else {
                 const secondary = Color(inkOf(screen, 'Secondary line') as string);
                 const tertiary = Color(inkOf(screen, 'Meta line') as string);
-                // The theme's own tertiary is one quiet step; here it is primary ink, still fainter than the secondary step.
+                // Over a picture the theme's own tertiary cannot hold its contrast: it takes the faint-ink step, the secondary's own.
                 expect(rgba(tertiary)).not.toBe(rgba(darkTheme.colors.text.tertiary));
                 expect(tertiary.alpha()).toBeGreaterThan(0.4);
-                expect(tertiary.alpha()).toBeLessThan(secondary.alpha());
+                expect(tertiary.alpha()).toBe(secondary.alpha());
                 expect(tertiary.rgb().array().slice(0, 3)).toEqual(Color(darkTheme.colors.text.primary).rgb().array().slice(0, 3));
             }
+            standardCleanup();
+        }
+    });
+    it('derives default glass from the measured picture: the theme ink keeps its contrast over a picture that runs against the theme, and custom glass applies as set', async () => {
+        const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials, GLASS_SURFACE_GROUPS, resolveGlassSurfaceMaterial } = await import('./glassMaterial');
+        const { GLASS_BACKED_FAINT_INK_SHARE } = await import('./glassBackedInk');
+        const { darkTheme, lightTheme } = await import('@/theme');
+        const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
+        const toneOf = (backdrop: [number, number, number]) => { const l = Color.rgb(backdrop).luminosity(); return { dark: l, light: l, focus: l }; };
+        // Ship by Moonlight under the light theme; the bright band of Dune grass under the dark theme.
+        for (const [theme, backdrop] of [[lightTheme, [22, 28, 44]], [darkTheme, [200, 145, 153]]] as const) {
+            themeMode.dark = theme.dark;
+            const paintOver = async (settings: Record<string, unknown>, tone: ReturnType<typeof toneOf> | undefined, group: 'card' | 'floating') => {
+                const screen = await renderScreen(<GlassMaterialSettingsProvider value={settings}>
+                    <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper', atmosphereTone: tone }}>
+                        <GlassSurface surfaceGroup={group} finishRole={null} solidColor={group === 'card' ? theme.colors.edge.cardFill : theme.colors.edge.floatingFill}><DraftInput /></GlassSurface>
+                    </GlassRuntimeEnvironmentProvider>
+                </GlassMaterialSettingsProvider>);
+                const style = flattenTestStyle(screen.findAll(hasBackdrop)[0]!.props.style) as Record<string, string>;
+                standardCleanup();
+                return style;
+            };
+            const glassOf = (style: Record<string, string>, over: readonly number[], group: 'card' | 'floating') => {
+                const coat = rgb(/color-mix\(in srgb, (rgba?\([^)]*\)|#[0-9a-f]+) /i.exec(style.backgroundColor!)![1]!);
+                // Feasibility can raise the painted coat above its stored alpha: read the paint the browser gets.
+                const painted = /color-mix\(in srgb, (?:rgba?\([^)]*\)|#[0-9a-f]+) ([\d.]+)%/i.exec(style.backgroundColor!)?.[1];
+                const opacity = painted === undefined
+                    ? resolveGlassSurfaceMaterial({ glassSurfaceMaterials: glassPresetMaterials('auto') }, group, { atmosphereBehind: 'wallpaper' }).material.opacity
+                    : Number(painted) / 100;
+                return renderGlassOver({ filter: style.backdropFilter!, coat, opacity, backdrop: over as [number, number, number] });
+            };
+            for (const group of ['card', 'floating'] as const) {
+                // The default look: Auto at the default tint.
+                const style = await paintOver({ glassSurfaceMaterials: glassPresetMaterials('auto') }, toneOf([...backdrop]), group);
+                const glass = glassOf(style, backdrop, group);
+                const ink = rgb(theme.colors.text.primary);
+                const faint = ink.map((value, channel) => value * GLASS_BACKED_FAINT_INK_SHARE + glass[channel]! * (1 - GLASS_BACKED_FAINT_INK_SHARE)) as [number, number, number];
+                expect(glassContrastRatio(ink, glass)).toBeGreaterThanOrEqual(4.5);
+                expect(glassContrastRatio(faint, glass)).toBeGreaterThanOrEqual(3);
+                // Over the plain page the same glass still lands on its solid paint.
+                const solid = group === 'card' ? theme.colors.edge.cardFill : theme.colors.edge.floatingFill;
+                glassOf(style, rgb(theme.colors.surface.base), group).forEach((value, channel) => expect(Math.abs(value - Color(solid).rgb().array()[channel]!)).toBeLessThanOrEqual(2));
+            }
+            // A person's own glass applies exactly as set: the measured picture changes nothing.
+            const custom = { glassSurfaceMaterials: Object.fromEntries(GLASS_SURFACE_GROUPS.map(group => [group, { blur: 'regular', opacity: 0.1 }])) };
+            expect(await paintOver(custom, toneOf([...backdrop]), 'card')).toEqual(await paintOver(custom, undefined, 'card'));
+        }
+    });
+    it('reads every ink on the Wallpaper plane in the page colour where the measured picture runs against the theme, and keeps the theme ink where it agrees', async () => {
+        const { Text } = await import('@/components/ui/text/Text');
+        const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
+        const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials } = await import('./glassMaterial');
+        const { lightTheme } = await import('@/theme');
+        const rgba = (value: unknown) => Color(String(value)).rgb().string();
+        const colorOf = (screen: Awaited<ReturnType<typeof renderScreen>>, text: string) => rgba((flattenTestStyle(
+            screen.findAll(node => String(node.type) === 'Text' && node.props.children === text)[0]?.props.style) as Record<string, unknown> | null)?.color);
+        // A night sky flips the plane to the page colour; a bright sky, and a mid-tone that defeats both inks, keep the theme's.
+        for (const [focus, ink] of [[0.012, lightTheme.colors.surface.base], [0.8, lightTheme.colors.text.primary], [0.2, lightTheme.colors.text.primary]] as const) {
+            const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
+                <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper', atmosphereTone: { dark: focus, light: focus, focus } }}>
+                    <GlassSurface testID="plane" plane surfaceGroup="content" finishRole={null}>
+                        <Text style={{ color: lightTheme.colors.text.primary }}>Needs your attention</Text>
+                        <Text style={{ color: lightTheme.colors.text.tertiary }}>4 needs you</Text>
+                        <RoundButton display="secondary" size="small" title="Brief me" onPress={() => {}} />
+                        <GlassSurface surfaceGroup="card" finishRole={null}>
+                            <Text style={{ color: lightTheme.colors.text.primary }}>On a card</Text>
+                        </GlassSurface>
+                    </GlassSurface>
+                </GlassRuntimeEnvironmentProvider>
+            </GlassMaterialSettingsProvider>);
+            expect(colorOf(screen, 'Needs your attention')).toBe(rgba(ink));
+            expect(colorOf(screen, '4 needs you')).toBe(rgba(ink));
+            // A card and a filled button are their own ground: they keep the theme ink.
+            expect(colorOf(screen, 'On a card')).toBe(rgba(lightTheme.colors.text.primary));
+            expect(colorOf(screen, 'Brief me')).toBe(rgba(lightTheme.colors.text.primary));
+            const planeStyle = flattenTestStyle(screen.findHostByTestId('plane')?.props.style) as Record<string, string>;
+            expect(rgba(planeStyle['--colors-text-primary'])).toBe(rgba(ink));
             standardCleanup();
         }
     });

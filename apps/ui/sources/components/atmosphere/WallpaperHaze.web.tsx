@@ -15,6 +15,8 @@ export function WallpaperHaze(
     size: { width: number; height: number };
     job: ReturnType<typeof pictureBackdropProps>;
     focus: { x: number; y: number };
+    /** The haze's render: head lines stand on it, so the atmosphere measures its tone too. */
+    onRendered?: React.ComponentProps<typeof BackdropCanvas>['onRendered'];
   }>,
 ) {
   const quarter = {
@@ -47,6 +49,7 @@ export function WallpaperHaze(
             size={quarter}
             dpr={1}
             {...props.job}
+            onRendered={props.onRendered}
           />
         </View>
       </View>

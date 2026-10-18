@@ -1,5 +1,6 @@
 import Color from 'color';
 import { parseThemeColor } from '@/theme/parseThemeColor';
+import { GLASS_BACKED_FAINT_INK_SHARE } from './glassBackedInk';
 export { readThemeDocumentColor as readGlassDocumentColor } from '@/theme/parseThemeColor';
 import { readGlassMaterials, readGlassPreset, readGlassTintedMaterials } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
 import type { GlassMaterialSettings, GlassSurfaceGroup, GlassSurfaceMaterial } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
@@ -13,12 +14,22 @@ export type GlassMaterialEnvironment = Readonly<{
     highContrast?: boolean;
     windowActive?: boolean;
     atmosphereBehind?: 'none' | 'band' | 'wallpaper';
+    /** The measured tone of the picture behind content, published by the atmosphere while it covers an area. */
+    atmosphereTone?: GlassAtmosphereTone;
     /**
      * Native renderers have no web backdrop tone, and in-flow Elements there are a coat without blur:
      * they keep the stored (Medium) coats instead of the tint's, so a Subtle hair never leaves a card bare.
      */
     nativeRenderer?: boolean;
 }>;
+
+/**
+ * Relative luminance (0–1) of the picture where content sits: the near-darkest and near-lightest of the
+ * content column (where cards can stand), and the middle around the column's centre (where head lines stand on the
+ * picture itself). Default glass and ink derive from it, so they stay legible over pictures that run
+ * against the theme.
+ */
+export type GlassAtmosphereTone = Readonly<{ dark: number; light: number; focus: number }>;
 
 export type GlassSurfaceResolution = Readonly<{
     material: GlassSurfaceMaterial;
@@ -59,7 +70,7 @@ export const GLASS_BACKDROP_COMPRESSION = {
 } as const;
 
 /** The plain page a surface stands on and the solid paint it shows there. Theme variables are resolved live. */
-export type GlassBackdropGround = Readonly<{ page: string; solid: string }>;
+export type GlassBackdropGround = Readonly<{ page: string; solid: string; ink?: string }>;
 
 /**
  * Glass composites the filtered backdrop and coat C at opacity α. Before filter clipping, brightness
@@ -145,6 +156,53 @@ function solveGlassFixedPoint(compression: number, alpha: number, ground: GlassB
 }
 
 /**
+ * Body ink keeps 4.5:1 and the faint step 3:1 over default glass (DESIGN.md). The solve below ignores the
+ * filter's saturation and rounding, so it aims a few percent above both.
+ */
+const LEGIBLE_BODY_CONTRAST = 4.5 * 1.03;
+const LEGIBLE_FAINT_CONTRAST = 3 * 1.03;
+const relativeLuminance = (rgb: readonly number[]) => {
+    const linear = rgb.map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+};
+const contrast = (a: readonly number[], b: readonly number[]) => {
+    const [high, low] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
+    return (high! + 0.05) / (low! + 0.05);
+};
+/** The sRGB grey with relative luminance `luminance`. */
+const greyOf = (luminance: number) => {
+    const linear = Math.min(1, Math.max(0, luminance));
+    return linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1 / 2.4) - 0.055;
+};
+
+/**
+ * The most backdrop a named material lets through over the measured picture. The glass is the surface's
+ * solid paint plus `compression` × (picture − page), so where the picture runs against the theme (its darkest
+ * under light ink, its lightest under dark ink) the compression drops just far enough for the
+ * theme's ink to keep its contrast. Pictures that agree with the theme, and the plain page, change nothing.
+ */
+function legibleCompression(compression: number, dark: boolean, tone: GlassAtmosphereTone | undefined, ground: GlassBackdropGround | null): number {
+    const page = ground ? parseRgb(ground.page) : null;
+    const solid = ground ? parseRgb(ground.solid) ?? page : null;
+    const ink = ground?.ink ? parseRgb(ground.ink) : null;
+    if (!tone || !page || !solid || !ink) return compression;
+    const picture = greyOf(dark ? tone.light : tone.dark);
+    const holds = (k: number) => {
+        const glass = solid.map((value, channel) => Math.min(1, Math.max(0, value + k * (picture - page[channel]!))));
+        const faint = ink.map((value, channel) => value * GLASS_BACKED_FAINT_INK_SHARE + glass[channel]! * (1 - GLASS_BACKED_FAINT_INK_SHARE));
+        return contrast(ink, glass) >= LEGIBLE_BODY_CONTRAST && contrast(faint, glass) >= LEGIBLE_FAINT_CONTRAST;
+    };
+    if (holds(compression)) return compression;
+    let low = 0;
+    let high = compression;
+    for (let step = 0; step < 20; step++) {
+        const middle = (low + high) / 2;
+        if (holds(middle)) low = middle; else high = middle;
+    }
+    return low;
+}
+
+/**
  * The one owner of a glass surface's backdrop treatment. Named-preset Elements and floating surfaces
  * use the fixed-point model; picture-backed shell planes keep a dimming tone under their heavy coat.
  * Custom, Solid, Reduce Transparency and unbacked surfaces return null and paint exactly as set.
@@ -160,12 +218,12 @@ export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: 
         if (group === 'floating' && panel) {
             // The heavy coat carries the panel: the backdrop passes at most at 1 − α, never brightened.
             const alpha = GLASS_PANEL_COATS[tint];
-            const compression = Math.min(1 - alpha, dark ? 1 : GLASS_BACKDROP_COMPRESSION[tint].plain.floating.light);
+            const compression = legibleCompression(Math.min(1 - alpha, dark ? 1 : GLASS_BACKDROP_COMPRESSION[tint].plain.floating.light), dark, picture ? environment.atmosphereTone : undefined, ground);
             return { opacity: alpha, ...solveGlassFixedPoint(compression, alpha, ground) };
         }
         // Every tint lands on the surface's own solid paint over the plain page, its warm hue included;
         // Subtle only carries that paint in a thinner coat, so the picture shows through more.
-        return solveGlassFixedPoint(GLASS_BACKDROP_COMPRESSION[tint][picture ? 'picture' : 'plain'][group][dark ? 'dark' : 'light'],
+        return solveGlassFixedPoint(legibleCompression(GLASS_BACKDROP_COMPRESSION[tint][picture ? 'picture' : 'plain'][group][dark ? 'dark' : 'light'], dark, picture ? environment.atmosphereTone : undefined, ground),
             opacity, ground);
     }
     // Shell planes over a wallpaper carry most of their own paint; the tone only tames highlights.

@@ -17,7 +17,7 @@ import { useGlassRuntimeEnvironment } from './glassRuntimeEnvironment';
 import { glassElementsCoatColor, glassSurfaceBackgroundColor, glassSurfaceTintColor, resolveGlassSurfacePlaneMaterial, glassSurfacePlaneBackdropStyle, type AtmosphereContentCoat } from './glassSurfacePaint';
 import { useGlassMaterialColorResolver } from './useGlassSurfaceColor';
 import { parseThemeColor } from '@/theme/parseThemeColor';
-import { GLASS_BACKED_SECONDARY_INK_SHARE, GLASS_BACKED_TERTIARY_INK_SHARE, GlassBackedInkContext, resolveGlassBackedInk, resolveGlassPictureInk } from './glassBackedInk';
+import { GLASS_BACKED_FAINT_INK_SHARE, GlassBackedInkContext, glassThemeInkWebStyle, resolveGlassBackedInk, resolveGlassPictureInk } from './glassBackedInk';
 
 const retainSolidColor = (input: Readonly<{ color: string }>) => input.color;
 const withMaterialOpacity = (color: string, opacity: number) => parseThemeColor(color)?.alpha(opacity).rgb().string() ?? color;
@@ -145,7 +145,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
         const toneEnvironment = { ...environment, reduceTransparency: toneReduceTransparency };
         // The solid paint this surface shows over the plain page: the glass resolves to it there.
         const groundSolid = group === 'card' ? glassElementsCoatColor(solidColor, theme.colors.surface.base) : solidColor;
-        const map = resolveGlassBackdropMap(settings, group, theme.dark, toneEnvironment, { page: theme.colors.surface.base, solid: groundSolid }, panel);
+        const map = resolveGlassBackdropMap(settings, group, theme.dark, toneEnvironment, { page: theme.colors.surface.base, solid: groundSolid, ink: theme.colors.text.primary }, panel);
         return [
             glassSurfaceTintColor({ color: groundSolid, ink: theme.colors.text.primary, dark: theme.dark, settings, group, page: theme.colors.surface.base, environment: toneEnvironment, panel }),
             map?.tone ?? '',
@@ -209,10 +209,12 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     // A surface on the picture plane is its own ground: it takes its own material's ink, never the plane's.
     const inheritedInk = containingInk?.picture ? null : containingInk;
     // The quiet inks a head line uses: tertiary meta and a plain control's glyph (secondary is the role's own).
+    const pictureLuminance = onPicture ? environment.atmosphereTone?.focus : undefined;
     const ownInk = React.useMemo(() => onPicture
-        ? resolveGlassPictureInk(theme.colors.text.primary, theme.colors.text.secondary, [theme.colors.text.tertiary, theme.colors.button.secondary.tint])
+        ? resolveGlassPictureInk({ primary: theme.colors.text.primary, page: theme.colors.surface.base, themeSecondary: theme.colors.text.secondary,
+            themeQuietInks: [theme.colors.text.tertiary, theme.colors.button.secondary.tint], pictureLuminance })
         : backed ? resolveGlassBackedInk(theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary) : null,
-        [onPicture, backed, theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary, theme.colors.button.secondary.tint]);
+        [onPicture, backed, pictureLuminance, theme.colors.text.primary, theme.colors.surface.base, theme.colors.text.secondary, theme.colors.text.tertiary, theme.colors.button.secondary.tint]);
     // Text and icons that receive the faint tokens from JavaScript take them from this scope. Like the
     // web stylesheet tokens, they inherit through nested surfaces; the provider stays mounted so a tier
     // change never remounts the content.
@@ -240,13 +242,14 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
         </View>;
     }
 
-    // On web the theme's faint ink tokens are redefined for this subtree too, so stylesheet consumers
-    // follow; a surface on the picture plane restores the tokens the plane redefined.
-    const backedInkStyle = onPicture
-        ? { '--colors-text-secondary': theme.colors.text.primary, '--colors-text-tertiary': theme.colors.text.primary } as unknown as ViewStyle
+    // On web the theme's ink tokens are redefined for this subtree too, so stylesheet consumers follow;
+    // a surface on the picture plane restores the tokens the plane redefined.
+    const backedInkStyle = onPicture && ownInk
+        ? { '--colors-text-primary': ownInk.secondary, '--colors-text-secondary': ownInk.secondary, '--colors-text-tertiary': ownInk.secondary } as unknown as ViewStyle
         : backed || inheritedInk !== containingInk
-        ? { '--colors-text-secondary': backed ? `color-mix(in srgb, ${theme.colors.text.primary} ${GLASS_BACKED_SECONDARY_INK_SHARE * 100}%, transparent)` : theme.colors.text.secondary,
-            '--colors-text-tertiary': backed ? `color-mix(in srgb, ${theme.colors.text.primary} ${GLASS_BACKED_TERTIARY_INK_SHARE * 100}%, transparent)` : theme.colors.text.tertiary } as unknown as ViewStyle : null;
+        ? { ...glassThemeInkWebStyle(theme.colors.text), ...(backed ? {
+            '--colors-text-secondary': `color-mix(in srgb, ${theme.colors.text.primary} ${GLASS_BACKED_FAINT_INK_SHARE * 100}%, transparent)`,
+            '--colors-text-tertiary': `color-mix(in srgb, ${theme.colors.text.primary} ${GLASS_BACKED_FAINT_INK_SHARE * 100}%, transparent)` } : null) } as unknown as ViewStyle : null;
     // Web paints the material on its own layer beneath the content, in every tier, so a tier change
     // never moves the content to another parent. A CSS `backdrop-filter` makes its element a backdrop
     // root: on the surface itself it would cut everything inside (a menu, tooltip or popover opened

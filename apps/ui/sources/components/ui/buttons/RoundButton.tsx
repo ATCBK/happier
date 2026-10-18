@@ -1,6 +1,6 @@
 import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HAPPIER_TYPE_SCALE, HappierPressable, happierRaisedEdgeStyle, type HappierPressableProps, type HappierTypeRole } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { Platform, StyleProp, TextStyle, View } from 'react-native';
+import { Platform, StyleProp, TextStyle, View, type ViewStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Typography } from '@/constants/Typography';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -15,6 +15,7 @@ import { resolveMinimumInteractiveTargetSize, resolveTouchTargetFloorPx } from '
 import { happierMaterialGradient, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
 import { parseThemeColor } from '@/theme/parseThemeColor';
+import { GlassBackedInkContext, glassThemeInkWebStyle, useGlassOwnFillOnPicture } from '@/components/ui/glass/glassBackedInk';
 
 
 /** How much of the primary shows while it cannot act (unified-work lab `.uwr-dis`, opacity .38). */
@@ -313,6 +314,9 @@ export const RoundButton = React.memo((props: {
         : baseDisplay;
     const textColor = (props.display ?? 'default') === 'default' && !disabledPrimary ? paintColor(display.textColor, theme.colors.text.primary, 'solidControl') : display.textColor;
     const pillBackgroundColor = callerBackgroundColor ?? display.backgroundColor;
+    // A pill with its own fill on the Wallpaper picture keeps the theme's ink for its label and mark.
+    const ownFillOnPicture = useGlassOwnFillOnPicture(pillBackgroundColor !== 'transparent');
+    const inkScope = React.useContext(GlassBackedInkContext);
     const paintRole = (props.display ?? 'default') === 'default' || callerBackgroundColor !== undefined ? 'solidControl' : 'surface';
     const titleLines = props.titleNumberOfLines ?? 1;
     // `undefined` is React Native's "as many lines as it takes"; `0` is not portable
@@ -361,9 +365,11 @@ export const RoundButton = React.memo((props: {
                         focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
                         happierRaisedEdgeStyle(resolveRoundButtonEdge(theme, props.display ?? 'default', { pressed: state.pressed, focused: state.focused, disabled: state.disabled })),
                         Platform.OS === 'web' && !display.gradient ? happierSurfaceGradientWebStyle(resolveThemeSurfaceFinish(theme, (props.display ?? 'default') === 'default' ? 'primaryButton' : 'secondaryButton', { pressed: state.pressed, focused: state.focused, disabled: state.disabled || props.display === 'inverted' }), !theme.dark) : null,
+                        ownFillOnPicture && Platform.OS === 'web' ? glassThemeInkWebStyle(theme.colors.text) as ViewStyle : null,
                         pressFeedback.animatedStyle,
                     ]}
                 >
+                    <GlassBackedInkContext.Provider value={ownFillOnPicture ? null : inkScope}>
                     {/* The fill's gloss belongs to the pill, not to its content: when a touch floor or a
                         caller's layout makes the pill taller than its label, a gloss sized by the
                         content would draw a second, smaller pill inside the fill. */}
@@ -425,6 +431,7 @@ export const RoundButton = React.memo((props: {
                             </View>
                         ) : null}
                     </View>
+                    </GlassBackedInkContext.Provider>
                 </Animated.View>
             )}
         </HappierPressable>
