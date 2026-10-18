@@ -104,6 +104,10 @@ export const PressableSurface = React.memo((props: PressableSurfaceProps) => {
             accessibilityLabel={props.accessibilityLabel}
             accessibilityHint={props.accessibilityHint}
             accessibilityState={{ ...props.accessibilityState, disabled }}
+            aria-checked={props.accessibilityState?.checked}
+            aria-expanded={props.accessibilityState?.expanded}
+            aria-selected={props.accessibilityState?.selected}
+            aria-busy={props.accessibilityState?.busy}
             style={resolveStyle}
         >
             {props.children}
