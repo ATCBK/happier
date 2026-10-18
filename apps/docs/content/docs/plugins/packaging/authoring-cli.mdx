@@ -49,6 +49,10 @@ roots, phases, current occurrences, UI digests, and bounded diagnostics.
 
 ## Check the author package
 
+The scaffold's package scripts are aliases for these managed commands:
+`npm run typecheck`, `npm run build`, `npm test`, and `npm run pack:plugin`.
+They use the CLI invoker selected when the package was created.
+
 ```bash
 hdev plugins dev typecheck .
 hdev plugins dev build .
