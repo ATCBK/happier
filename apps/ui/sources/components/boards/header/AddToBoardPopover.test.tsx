@@ -14,6 +14,12 @@ import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarne
 import { ARTIFACT_LIST_PATH, RUN_STORAGE_PATH, boardDefinitionArtifact, boardRunStoragePage, installBoardLibraryTestHarness } from '../boardLibraryTestHarness';
 
 const harness = installBoardLibraryTestHarness();
+// Portal/window measurement is the boundary. Each rendered node is not the opener's rectangle;
+// a fixed measured desktop frame keeps these Add-flow tests independent of asynchronous layout.
+vi.mock('@/components/ui/popover', async importOriginal =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal, {
+        maxHeight: 624, maxWidth: 960, placement: 'bottom',
+    }));
 const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { SelectionList } = await import('@/components/ui/selectionList');
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -40,12 +46,6 @@ function picker(open = true) {
         onOpenChange={() => {}}
     />;
 }
-
-// The renderer has no browser/native layout engine. Supply the physical anchor measurement only.
-const layout = { createNodeMock: () => ({
-    getBoundingClientRect: () => ({ x: 100, y: 50, left: 100, top: 50, right: 180, bottom: 82, width: 80, height: 32 }),
-    measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(100, 50, 80, 32),
-}) };
 
 function options(screen: Awaited<ReturnType<typeof renderScreen>>): readonly SelectionListOption[] {
     return screen.findByType(SelectionList).props.rootStep.sections.flatMap(
@@ -76,7 +76,7 @@ describe('AddToBoardButton library recovery', () => {
         storage.setState({ machineListByServerId: { [serverId]: [machine] } });
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]) });
-        const screen = await renderScreen(picker(), layout);
+        const screen = await renderScreen(picker());
         const id = JSON.stringify(['machine', serverId, machine.id]);
         await waitForHomeGovernance(() => expect(options(screen).find(option => option.id === id)?.subtitle)
             .toBe(describeMachinePresenceLine(machine, undefined, undefined, { serverId, accountId: 'account-a' }).label));
@@ -104,7 +104,7 @@ describe('AddToBoardButton library recovery', () => {
                 interactionEnabled: true, machineId: 'machine', serverId, platform: 'web',
                 accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
                 <QuickWidgetPicker />
-            </AppShellPluginUiProjectionValueProvider>, layout,
+            </AppShellPluginUiProjectionValueProvider>,
         );
         await flushHookEffects({ cycles: 4 });
         expect(options(screen)).toContainEqual(expect.objectContaining({ id: 'widget:plugin-acme.widgets/counter' }));
@@ -142,7 +142,7 @@ describe('AddToBoardButton library recovery', () => {
                 interactionEnabled: true, machineId: 'machine', serverId, platform: 'web',
                 accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
                 <QuickWidgetPicker />
-            </AppShellPluginUiProjectionValueProvider>, layout,
+            </AppShellPluginUiProjectionValueProvider>,
         );
         await act(async () => { screen.findByType(SelectionList).props[place ? 'onCommandSelect' : 'onSelect']('widget:plugin-acme.widgets/filtered'); });
         await flushHookEffects({ cycles: 4 });
@@ -162,7 +162,7 @@ describe('AddToBoardButton library recovery', () => {
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { dispatchThenFail: true });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { dispatchThenFail: true });
         const before = harness.home.requests.length;
-        const screen = await renderScreen(picker(false), layout);
+        const screen = await renderScreen(picker(false));
         expect(harness.home.requests.slice(before).filter(request => request.path === ARTIFACT_LIST_PATH || request.path === RUN_STORAGE_PATH)).toEqual([]);
         await screen.update(picker());
         await waitForHomeGovernance(() => {
@@ -185,13 +185,13 @@ describe('AddToBoardButton library recovery', () => {
     it('keeps hydrated definition and run choices selectable when refresh and Retry are unavailable', async () => {
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [boardDefinitionArtifact('known', 'Workflow known')] });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { body: runPage });
-        const initial = await renderScreen(picker(), layout);
+        const initial = await renderScreen(picker());
         await waitForHomeGovernance(() => expect(options(initial).filter(option => option.label === 'Workflow known' || option.id.includes('run-picker'))).toHaveLength(2));
         await initial.unmount();
 
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { dispatchThenFail: true });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { dispatchThenFail: true });
-        const screen = await renderScreen(picker(), layout);
+        const screen = await renderScreen(picker());
         await waitForHomeGovernance(() => {
             expect(screen.findHostByTestId('board-add.workflows-failure')).not.toBeNull();
             expect(screen.findHostByTestId('board-add.runs-failure')).not.toBeNull();
