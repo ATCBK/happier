@@ -28,6 +28,7 @@ import type { WorkspaceNavigationContextValue } from '@/components/appShell/work
 import { resolveWorkspaceEntityDrop, WORKSPACE_ENTITY_KINDS } from '@/components/appShell/workspace/workspaceEntityDrop';
 import { presentPaneDropAdmission } from '@/components/appShell/splitCanvas/presentation/paneDropPresentation';
 import { t } from '@/text';
+import { useSessionListRowMoveActionHandlers } from './useSessionListRowMoveActionHandlers';
 
 vi.mock('react-native', async () => await vi.importActual('react-native-web'));
 vi.mock('react-native-unistyles', async () => {
@@ -86,19 +87,26 @@ describe('SessionListRow real web gesture', () => {
             workspace: { t: 'workspaceRef', serverId: 'server_a', workspaceRefId: 'workspace_a' },
             workspaceScopeHint: { serverId: 'server_a', machineId: 'machine_a', rootPath: '/repo' },
         };
-        container = document.createElement('div'); document.body.append(container); root = createRoot(container);
-        await act(async () => root?.render(<InjectedAuthProvider credentials={{ token: 'test-token' }}>
+        function MovementHeader() {
+            const getRowMoveActionHandlers = useSessionListRowMoveActionHandlers({
+                openMoveSheetForTreeRow: async () => {},
+                moveTreeRowToWorkspaceRoot: () => {},
+                moveTreeRowByKeyboard: (rowId, _label, direction) => { writes.push({ direction, key: rowId }); },
+            });
+            return (
             <SessionListHeaderItem item={item} collapsedKeys={{}} projectHeaderViewModelByGroupKey={new Map()}
                 hasMultipleMachines={false} onOpenProject={() => {}} onCreateSessionFromWorkspaceScope={() => {}}
                 onAddFolderToWorkspace={() => {}} onRenameWorkspace={() => {}} onResetWorkspaceName={() => {}} onToggleCollapse={() => {}}
-                onMoveFolderUp={folder => { writes.push({ direction: 'up', key: folder.groupKey ?? '' }); }}
-                onMoveFolderDown={folder => { writes.push({ direction: 'down', key: folder.groupKey ?? '' }); }}
-                onMoveWorkspaceUp={rowId => { writes.push({ direction: 'up', key: rowId }); }}
-                onMoveWorkspaceDown={rowId => { writes.push({ direction: 'down', key: rowId }); }}
+                getRowMoveActionHandlers={getRowMoveActionHandlers}
                 overlayShared={{ overlayVisible: makeMutable(0), overlayKind: makeMutable(0), overlayTop: makeMutable(0),
                     overlayHeight: makeMutable(0), overlayLeft: makeMutable(0), overlayRight: makeMutable(0), overlayDepth: makeMutable(0) }}
                 onFolderDragStart={() => null} onFolderDropResult={() => {}}
                 resolveDropResult={() => ({ result: { instruction: { kind: 'idle' }, visual: { kind: 'none' } }, geometry: { kind: 'none' } })} />
+            );
+        }
+        container = document.createElement('div'); document.body.append(container); root = createRoot(container);
+        await act(async () => root?.render(<InjectedAuthProvider credentials={{ token: 'test-token' }}>
+            <MovementHeader />
         </InjectedAuthProvider>));
         const click = async (node: Element) => act(async () => {
             node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
@@ -112,7 +120,7 @@ describe('SessionListRow real web gesture', () => {
             await click(document.querySelector(`[data-testid="dropdown-option-${optionId}"]`)!);
             await vi.waitFor(() => expect(writes.at(-1)?.direction).toBe(direction));
         }
-        const key = headerKind === 'folder' ? item.groupKey : treeRowId.workspaceRoot(item.groupKey!);
+        const key = headerKind === 'folder' ? treeRowId.folder(item.serverId!, item.folderId!) : treeRowId.workspaceRoot(item.groupKey!);
         expect(writes).toEqual([{ direction: 'up', key }, { direction: 'down', key }]);
     });
 

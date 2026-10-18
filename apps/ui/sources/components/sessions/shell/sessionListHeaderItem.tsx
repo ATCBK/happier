@@ -7,6 +7,7 @@ import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionLis
 import { t } from '@/text';
 import type { TreeDropOverlaySharedValues } from '@/components/ui/treeDragDrop';
 
+import type { useSessionListRowMoveActionHandlers } from './useSessionListRowMoveActionHandlers';
 import type { SessionListProjectHeaderViewModel } from './sessionListProjectHeaderViewModels';
 import { CollapsibleSectionHeader, FolderGroupHeader, ProjectGroupHeader } from './sessionListChrome';
 import type { RegisterSessionFolderDropTarget } from './useSessionListViewState';
@@ -61,12 +62,7 @@ type SessionListHeaderItemProps = Readonly<{
     onAddSubfolder?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void | Promise<void>;
     onRenameFolder?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void | Promise<void>;
     onDeleteFolder?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void | Promise<void>;
-    onMoveFolder?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void;
-    onMoveFolderToWorkspaceRoot?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void;
-    onMoveFolderUp?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void;
-    onMoveFolderDown?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void;
-    onMoveWorkspaceUp?: (rowId: string, title: string) => void;
-    onMoveWorkspaceDown?: (rowId: string, title: string) => void;
+    getRowMoveActionHandlers?: ReturnType<typeof useSessionListRowMoveActionHandlers>;
     onRegisterSessionFolderDropTarget?: RegisterSessionFolderDropTarget;
     workspaceFaviconsEnabled?: boolean;
     workspaceMachineSubtitlesEnabled?: boolean;
@@ -98,6 +94,9 @@ export const SessionListHeaderItem = React.memo((props: SessionListHeaderItemPro
         const rowId = props.item.folderId && folderServerId
             ? treeRowId.folder(folderServerId, props.item.folderId)
             : null;
+        const moveActionHandlers = rowId ? props.getRowMoveActionHandlers?.({
+            sourceRowId: rowId, sourceLabel: props.item.title,
+        }) : undefined;
         const folderHeader = (
             <FolderGroupHeader
                 title={props.item.title}
@@ -109,10 +108,10 @@ export const SessionListHeaderItem = React.memo((props: SessionListHeaderItemPro
                 onAddSubfolder={() => props.onAddSubfolder?.(props.item)}
                 onRename={() => props.onRenameFolder?.(props.item)}
                 onDelete={() => props.onDeleteFolder?.(props.item)}
-                onMove={() => props.onMoveFolder?.(props.item)}
-                onMoveToWorkspaceRoot={() => props.onMoveFolderToWorkspaceRoot?.(props.item)}
-                onMoveUp={() => props.onMoveFolderUp?.(props.item)}
-                onMoveDown={() => props.onMoveFolderDown?.(props.item)}
+                onMove={moveActionHandlers?.onMoveToFolder}
+                onMoveToWorkspaceRoot={moveActionHandlers?.onMoveToWorkspaceRoot}
+                onMoveUp={moveActionHandlers?.onMoveUp}
+                onMoveDown={moveActionHandlers?.onMoveDown}
                 item={props.item}
                 onRegisterDropTarget={props.onRegisterSessionFolderDropTarget}
             />
@@ -169,6 +168,9 @@ export const SessionListHeaderItem = React.memo((props: SessionListHeaderItemPro
 
     if (headerViewState.kind === 'project') {
         const rowId = resolveWorkspaceRootTreeRowId(props.item, headerViewState.displayTitle);
+        const moveActionHandlers = props.getRowMoveActionHandlers?.({
+            sourceRowId: rowId, sourceLabel: headerViewState.displayTitle,
+        });
         const projectHeader = (
             <ProjectGroupHeader
                 item={props.item}
@@ -185,8 +187,8 @@ export const SessionListHeaderItem = React.memo((props: SessionListHeaderItemPro
                 onAddFolder={() => props.onAddFolderToWorkspace(props.item)}
                 onRename={headerActionHandlers.onRename}
                 onReset={headerActionHandlers.onReset}
-                onMoveUp={props.onMoveWorkspaceUp ? () => props.onMoveWorkspaceUp?.(rowId, headerViewState.displayTitle) : undefined}
-                onMoveDown={props.onMoveWorkspaceDown ? () => props.onMoveWorkspaceDown?.(rowId, headerViewState.displayTitle) : undefined}
+                onMoveUp={moveActionHandlers?.onMoveUp}
+                onMoveDown={moveActionHandlers?.onMoveDown}
                 collapsed={headerViewState.collapsed}
                 onToggleCollapse={headerActionHandlers.onToggleCollapse}
                 onRegisterDropTarget={props.onRegisterSessionFolderDropTarget}

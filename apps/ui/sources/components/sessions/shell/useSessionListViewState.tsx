@@ -1616,12 +1616,6 @@ export function useSessionListViewStateFromPaneState(
             result: move.result,
         });
     }, [resolveDropResultDestinationLabel, rowInteractions.applyKeyboardMove, sessionListA11y]);
-    const moveWorkspaceUp = React.useCallback((rowId: string, title: string) => {
-        moveTreeRowByKeyboard(rowId, title, 'up');
-    }, [moveTreeRowByKeyboard]);
-    const moveWorkspaceDown = React.useCallback((rowId: string, title: string) => {
-        moveTreeRowByKeyboard(rowId, title, 'down');
-    }, [moveTreeRowByKeyboard]);
     const getRowMoveActionHandlers = useSessionListRowMoveActionHandlers({
         openMoveSheetForTreeRow,
         moveTreeRowToWorkspaceRoot,
@@ -1933,41 +1927,12 @@ export function useSessionListViewStateFromPaneState(
             onRenameWorkspace={handleRenameWorkspace}
             onResetWorkspaceName={handleResetWorkspaceName}
             onToggleCollapse={handleToggleCollapse}
-            onMoveWorkspaceUp={moveWorkspaceUp}
-            onMoveWorkspaceDown={moveWorkspaceDown}
+            getRowMoveActionHandlers={getRowMoveActionHandlers}
             onFocusFolder={handleFocusSessionFolder}
             onCreateSessionFromFolder={handleCreateSessionFromFolder}
             onAddSubfolder={handleAddSubfolder}
             onRenameFolder={handleRenameFolder}
             onDeleteFolder={handleDeleteFolder}
-            onMoveFolder={(folderItem) => {
-                if (!folderItem.folderId) return;
-                const serverId = folderItem.serverId ?? folderItem.workspace?.serverId;
-                if (!serverId) return;
-                const rowId = treeRowId.folder(serverId, folderItem.folderId);
-                void openMoveSheetForTreeRow(rowId, rowLabelByTreeRowId.get(rowId) ?? folderItem.title);
-            }}
-            onMoveFolderToWorkspaceRoot={(folderItem) => {
-                if (!folderItem.folderId) return;
-                const serverId = folderItem.serverId ?? folderItem.workspace?.serverId;
-                if (!serverId) return;
-                const rowId = treeRowId.folder(serverId, folderItem.folderId);
-                moveTreeRowToWorkspaceRoot(rowId, rowLabelByTreeRowId.get(rowId) ?? folderItem.title);
-            }}
-            onMoveFolderUp={(folderItem) => {
-                if (!folderItem.folderId) return;
-                const serverId = folderItem.serverId ?? folderItem.workspace?.serverId;
-                if (!serverId) return;
-                const rowId = treeRowId.folder(serverId, folderItem.folderId);
-                moveTreeRowByKeyboard(rowId, rowLabelByTreeRowId.get(rowId) ?? folderItem.title, 'up');
-            }}
-            onMoveFolderDown={(folderItem) => {
-                if (!folderItem.folderId) return;
-                const serverId = folderItem.serverId ?? folderItem.workspace?.serverId;
-                if (!serverId) return;
-                const rowId = treeRowId.folder(serverId, folderItem.folderId);
-                moveTreeRowByKeyboard(rowId, rowLabelByTreeRowId.get(rowId) ?? folderItem.title, 'down');
-            }}
             workspaceFaviconsEnabled={workspaceFaviconsEnabled}
             workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
             newSessionEnabled={newSessionEnabled}
@@ -1982,6 +1947,7 @@ export function useSessionListViewStateFromPaneState(
         />
     ), [
         collapsedKeys,
+        getRowMoveActionHandlers,
         handleAddSubfolder,
         handleOpenProject,
         handleCreateSessionFromWorkspaceScope,
@@ -1993,11 +1959,6 @@ export function useSessionListViewStateFromPaneState(
         handleRenameWorkspace,
         handleResetWorkspaceName,
         handleToggleCollapse,
-        moveTreeRowByKeyboard,
-        moveWorkspaceUp,
-        moveWorkspaceDown,
-        moveTreeRowToWorkspaceRoot,
-        openMoveSheetForTreeRow,
         projectHeaderViewModelByGroupKey,
         homeObservations,
         renderModels.audience,
@@ -2010,7 +1971,6 @@ export function useSessionListViewStateFromPaneState(
         rowInteractions.resolveTreeDropResult,
         rowInteractions.unregisterTreeRowBounds,
         newSessionEnabled,
-        rowLabelByTreeRowId,
         workspaceFaviconsEnabled,
         workspaceMachineSubtitlesEnabled,
     ]);
