@@ -20,12 +20,19 @@ describe('requestSessionStop machine transport', () => {
     calls = [];
     // Only the network adapters are replaced; resolution, encryption, request disposition,
     // and Stop outcome classification all execute through their production owners.
-    vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { session: {
-      id: sessionId, seq: 0, createdAt: 0, updatedAt: 0, active: false, activeAt: 0,
-      metadata: encodeBase64(encrypt(secret, 'legacy', { machineId: 'owning-machine' })),
-      metadataVersion: 0, agentState: null, agentStateVersion: 0, dataEncryptionKey: null,
-      machineId: 'owning-machine',
-    } } });
+    vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/v1/machines/owning-machine') {
+        return { status: 200, data: { machine: { id: 'owning-machine', dataEncryptionKey: null } } };
+      }
+      if (pathname !== `/v2/sessions/${sessionId}`) throw new Error(`Unexpected HTTP route: ${pathname}`);
+      return { status: 200, data: { session: {
+        id: sessionId, seq: 0, createdAt: 0, updatedAt: 0, active: false, activeAt: 0,
+        metadata: encodeBase64(encrypt(secret, 'legacy', { machineId: 'owning-machine' })),
+        metadataVersion: 0, agentState: null, agentStateVersion: 0, dataEncryptionKey: null,
+        machineId: 'owning-machine',
+      } } };
+    });
     const events = new EventEmitter();
     boundary.socket = {
       on: events.on.bind(events), off: events.off.bind(events),
