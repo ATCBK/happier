@@ -274,9 +274,21 @@ function validateDirectRouteGrantV2MintInput(input: MintDirectRouteGrantV2Input)
     const envelope = validateDirectRouteGrantMintEnvelope({ ...input, ttlMs: input.ttlMs });
     if (!envelope.ok) return envelope;
     if (scope.data.kind === "machine_rpc") {
-        const methods = validateMachineRpcGrantAllowedMethods(scope.data.allowedMethods);
-        if (!methods.ok) {
-            return rejectMint(methods.reasonCode);
+        // workspace.sync labels the native Mutagen stream, not a dispatchable
+        // Machine RPC. Admit only its existing single-operation machine/1
+        // envelope; ordinary RPC grants still use the canonical RPC policy.
+        const workspaceCarrier = input.routeKind === "iroh_peer"
+            && input.iroh?.operationKind === "workspace_sync"
+            && input.iroh.initiator.kind === "machine"
+            && scope.data.allowedMethods.length === 1
+            && scope.data.allowedMethods[0] === "workspace.sync"
+            && scope.data.maxCalls === 1
+            && scope.data.sessionId === undefined
+            && scope.data.highRiskSingleUseMethods?.length === 1
+            && scope.data.highRiskSingleUseMethods[0] === "workspace.sync";
+        if (!workspaceCarrier) {
+            const methods = validateMachineRpcGrantAllowedMethods(scope.data.allowedMethods);
+            if (!methods.ok) return rejectMint(methods.reasonCode);
         }
     }
     return { ok: true, scope: scope.data, grantExpiresAt: envelope.grantExpiresAt };

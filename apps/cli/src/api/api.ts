@@ -257,6 +257,13 @@ function normalizeLocalMachineId(value: string | null | undefined): string | nul
   return trimmed.length > 0 ? trimmed : null;
 }
 
+// Only a structured refusal code is exposed; response bodies and Axios
+// configuration can contain private material and must not enter broker errors.
+const PeerMediationRouteGrantRefusalSchema = z.object({
+  ok: z.literal(false),
+  reasonCode: z.string().check(z.regex(/^[a-z][a-z0-9_]*$/u)),
+});
+
 export class ApiClient {
 
   static async create(credential: StoredCredentials) {
@@ -1097,9 +1104,20 @@ export class ApiClient {
         headers: { Authorization: `Bearer ${this.credential.token}`, 'Content-Type': 'application/json' },
         ...(options?.signal ? { signal: options.signal } : {}),
       },
-    );
+    ).catch((error: unknown) => {
+      if (axios.isAxiosError(error) && error.response
+        && PeerMediationRouteGrantRefusalSchema.safeParse(error.response.data).success) {
+        return error.response;
+      }
+      throw error;
+    });
     if (response.data?.ok !== true || response.data.grant === undefined) {
-      throw new Error('Peer mediation route grant is unavailable');
+      const refusal = PeerMediationRouteGrantRefusalSchema.safeParse(response.data);
+      const reasonCode = refusal.success ? refusal.data.reasonCode : undefined;
+      throw Object.assign(new Error(`Peer mediation route grant is unavailable${reasonCode ? `: ${reasonCode}` : ''}`), {
+        code: 'peer_unavailable' as const,
+        ...(reasonCode ? { reasonCode } : {}),
+      });
     }
     return response.data.grant;
   }

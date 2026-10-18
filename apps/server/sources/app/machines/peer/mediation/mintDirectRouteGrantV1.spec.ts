@@ -21,6 +21,29 @@ const seed = new Uint8Array(32).fill(4);
 const keyPair = tweetnacl.sign.keyPair.fromSeed(seed);
 
 describe("mintDirectRouteGrantV1", () => {
+    it.each([
+        { name: 'exact workspace carrier', routeKind: 'iroh_peer' as const, methods: ['workspace.sync'], maxCalls: 1, expected: true },
+        { name: 'ordinary RPC route', routeKind: 'loopback_direct' as const, methods: ['workspace.sync'], maxCalls: 1, expected: false },
+        { name: 'mixed RPC methods', routeKind: 'iroh_peer' as const, methods: ['workspace.sync', 'spawn-happy-session'], maxCalls: 1, expected: false },
+        { name: 'multiple calls', routeKind: 'iroh_peer' as const, methods: ['workspace.sync'], maxCalls: 2, expected: false },
+    ])('admits only the per-operation machine/1 carrier scope ($name)', ({ routeKind, methods, maxCalls, expected }) => {
+        const minted = mintDirectRouteGrantV2({
+            accountId: 'account_1', machineId: 'machine_target', flowKind: 'machine_rpc', routeKind,
+            scope: { kind: 'machine_rpc', rpcScopeId: 'sync-operation', allowedMethods: methods,
+                maxCalls, maxIdleMs: 60_000, highRiskSingleUseMethods: ['workspace.sync'] },
+            endpointFingerprint: 'b'.repeat(64),
+            ...(routeKind === 'iroh_peer' ? { iroh: {
+                initiator: { kind: 'machine' as const, machineId: 'machine_source', endpointId: 'a'.repeat(64) },
+                target: { machineId: 'machine_target', endpointId: 'b'.repeat(64) }, operationKind: 'workspace_sync' as const,
+            } } : {}),
+            ephemeralPublicKeyBase64Url: toBase64Url(tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8)).publicKey),
+            nowMs: 1_000, ttlMs: 60_000, serverGateEnabled: true,
+            signingKey: { keyId: 'key_1', secretKey: keyPair.secretKey },
+        });
+        expect(minted.ok).toBe(expected);
+        if (!expected) expect(minted).toMatchObject({ reasonCode: 'machine_rpc_requires_pms5_classification' });
+    });
+
     it("mints a strict V2 grant binding the caller ephemeral public key", () => {
         const ephemeralKeyPair = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8));
         const minted = mintDirectRouteGrantV2({

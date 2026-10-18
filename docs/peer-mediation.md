@@ -205,6 +205,19 @@ minting and before dialing, not the diagnostic daemon-state endpoint. A withdraw
 or replaced target is refused; current hints may be refreshed without changing
 the EndpointId already bound into the signed grant.
 
+Workspace Sync's native Mutagen stream uses a V2 `iroh_peer` grant with the
+`workspace_sync` operation binding and the existing single-operation
+`machine_rpc` scope. Its sole `workspace.sync` method label identifies that
+carrier; it is not a dispatchable Machine RPC. In 0.3 development,
+`mintDirectRouteGrantV1.ts#validateDirectRouteGrantV2MintInput` admits only that
+exact carrier scope (Machine initiator, one call, no Session binding, and the
+matching single-use method). Ordinary RPC grants retain the canonical RPC
+classification checks. The signed scope id must match the handshake operation
+id, and the server still checks both Machines and their current endpoint
+authority before issuance. CLI grant refusals retain the existing
+`peer_unavailable` error with the server's structured `reasonCode`; raw HTTP
+responses and credential-bearing request configuration are not projected.
+
 ### Workspace inspection and reviewed resolution
 
 The 0.3 development Workspace Sync extension uses the existing authenticated Machine RPC
