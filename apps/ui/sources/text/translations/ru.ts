@@ -4437,6 +4437,13 @@ export const ru: TranslationStructure = {
       "Показывать номера строк в представлениях инструментов",
     showLineNumbersInToolViewsDescription:
       "Отображать номера строк в различиях представлений инструментов",
+    chatCodeBlocks: {
+        title: 'Блоки кода в чате',
+        showWrapControls: 'Показывать переключатели переноса строк',
+        showWrapControlsDescription: 'Показывать переключатель переноса строк в каждом блоке кода в чате',
+        wrapByDefault: 'Переносить строки кода по умолчанию',
+        wrapByDefaultDescription: 'Переносить длинные строки в блоках кода в чате, если для блока не выбран другой режим',
+    },
     wrapLinesInDiffs: "Перенос строк в представлениях кода",
     wrapLinesInDiffsDescription:
       "Переносить длинные строки в предпросмотрах кода и редакторах вместо горизонтальной прокрутки",
@@ -9295,6 +9302,20 @@ settingsSession: {
             subtitle: "Управляйте скачанными файлами Kokoro на этом устройстве.",
           },
         },
+      },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} из ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
+        progressAccessibilityLabel: "Ход загрузки",
+        failedDetail: "Ошибка",
+        failedSubtitle: "Не удалось подготовить модель. Нажмите, чтобы повторить.",
+        failedResumableSubtitle: ({ size }: { size: string }) => `Загрузка не завершилась. ${size} сохранено — нажмите, чтобы продолжить.`,
+        incompleteDetail: "Не завершено",
+        incompleteSubtitle: ({ size }: { size: string }) => `Загружено ${size}. Нажмите, чтобы продолжить.`,
+        discardSubtitle: "Удалите незавершённую загрузку, чтобы освободить место.",
+        discardConfirmTitle: "Удалить незавершённую загрузку?",
+        discardConfirmBody: ({ size }: { size: string }) => `Будут удалены уже загруженные ${size}. Модель можно будет загрузить снова позже.`,
       },
       localNeuralStt: {
         modelPack: {

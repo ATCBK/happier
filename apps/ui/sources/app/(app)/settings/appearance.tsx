@@ -96,6 +96,8 @@ export default React.memo(function AppearanceSettingsScreen() {
     const panelsSupported = Platform.OS === 'web' || deviceType === 'tablet';
     const [avatarStyle, setAvatarStyle] = useSettingMutable('avatarStyle');
     const [showFlavorIcons, setShowFlavorIcons] = useSettingMutable('showFlavorIcons');
+    const [showChatCodeBlockWrapControls, setShowChatCodeBlockWrapControls] = useSettingMutable('showChatCodeBlockWrapControls');
+    const [wrapChatCodeBlocks, setWrapChatCodeBlocks] = useSettingMutable('wrapChatCodeBlocks');
     const [themePreference, setThemePreference] = useLocalSettingMutable('themePreference');
     const [themeProfiles, setThemeProfiles] = useLocalSettingMutable('themeProfiles');
     const [uiFontScale, setUiFontScale] = useLocalSettingMutable('uiFontScale');
@@ -431,6 +433,35 @@ export default React.memo(function AppearanceSettingsScreen() {
                         if (!isUiItemDensity(itemId)) return;
                         setUiItemDensity(itemId);
                     }}
+                />
+            </ItemGroup>
+
+            <ItemGroup title={t('settingsAppearance.chatCodeBlocks.title')}>
+                <Item
+                    title={t('settingsAppearance.chatCodeBlocks.showWrapControls')}
+                    subtitle={t('settingsAppearance.chatCodeBlocks.showWrapControlsDescription')}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-showChatCodeBlockWrapControls-switch"
+                            accessibilityLabel={t('settingsAppearance.chatCodeBlocks.showWrapControls')}
+                            value={showChatCodeBlockWrapControls}
+                            onValueChange={setShowChatCodeBlockWrapControls}
+                        />
+                    }
+                    showChevron={false}
+                />
+                <Item
+                    title={t('settingsAppearance.chatCodeBlocks.wrapByDefault')}
+                    subtitle={t('settingsAppearance.chatCodeBlocks.wrapByDefaultDescription')}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-wrapChatCodeBlocks-switch"
+                            accessibilityLabel={t('settingsAppearance.chatCodeBlocks.wrapByDefault')}
+                            value={wrapChatCodeBlocks}
+                            onValueChange={setWrapChatCodeBlocks}
+                        />
+                    }
+                    showChevron={false}
                 />
             </ItemGroup>
 

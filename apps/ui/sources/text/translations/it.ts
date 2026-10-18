@@ -4829,6 +4829,13 @@ export const it: TranslationStructure = {
     showLineNumbersInToolViews: "Mostra numeri di riga nelle viste strumenti",
     showLineNumbersInToolViewsDescription:
       "Mostra i numeri di riga nei diff delle viste strumenti",
+    chatCodeBlocks: {
+        title: 'Blocchi di codice della chat',
+        showWrapControls: 'Mostra i controlli di a capo',
+        showWrapControlsDescription: 'Mostra un pulsante di a capo su ogni blocco di codice della chat',
+        wrapByDefault: 'A capo automatico predefinito',
+        wrapByDefaultDescription: 'Manda a capo le righe lunghe nei blocchi di codice della chat, salvo scelta diversa per un blocco',
+    },
     wrapLinesInDiffs: "A capo nelle viste del codice",
     wrapLinesInDiffsDescription:
       "Manda a capo le righe lunghe nelle anteprime del codice e negli editor invece di scorrere orizzontalmente",
@@ -9644,6 +9651,20 @@ settingsSession: {
             subtitle: "Gestisci i file Kokoro scaricati su questo dispositivo.",
           },
         },
+      },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} di ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} di ${total} · ${filesDone} di ${filesTotal} file`,
+        progressAccessibilityLabel: "Avanzamento del download",
+        failedDetail: "Non riuscito",
+        failedSubtitle: "Impossibile preparare il modello. Tocca per riprovare.",
+        failedResumableSubtitle: ({ size }: { size: string }) => `Il download non è stato completato. ${size} sono stati conservati: tocca per riprendere.`,
+        incompleteDetail: "Incompleto",
+        incompleteSubtitle: ({ size }: { size: string }) => `${size} scaricati finora. Tocca per continuare.`,
+        discardSubtitle: "Elimina il download incompleto per liberare spazio.",
+        discardConfirmTitle: "Scartare il download incompleto?",
+        discardConfirmBody: ({ size }: { size: string }) => `Verranno eliminati i ${size} scaricati finora. Potrai scaricare di nuovo il modello in seguito.`,
       },
       localNeuralStt: {
         modelPack: {

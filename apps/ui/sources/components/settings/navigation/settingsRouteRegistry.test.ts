@@ -9,4 +9,15 @@ describe('settingsRouteRegistry', () => {
 
         expect(routeNames).toContain('actions/[actionId]');
     });
+
+    it('gives native login import the shared settings header and back navigation', () => {
+        const definition = getSettingsStackScreenDefinitions((key) => key)
+            .find((entry) => entry.name === 'connected-services/import');
+
+        expect(definition?.options).toMatchObject({
+            headerTitle: 'connectedServices.importAccounts.title',
+            headerBackTitle: 'common.back',
+            headerShown: true,
+        });
+    });
 });

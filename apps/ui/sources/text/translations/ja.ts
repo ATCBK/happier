@@ -4771,6 +4771,13 @@ localTailscale: {
     showLineNumbersInDiffsDescription: "コード差分に行番号を表示",
     showLineNumbersInToolViews: "ツールビューに行番号を表示",
     showLineNumbersInToolViewsDescription: "ツールビューの差分に行番号を表示",
+    chatCodeBlocks: {
+        title: 'チャットのコードブロック',
+        showWrapControls: '折り返しボタンを表示',
+        showWrapControlsDescription: 'チャットの各コードブロックに折り返しボタンを表示します',
+        wrapByDefault: 'コードを既定で折り返す',
+        wrapByDefaultDescription: '個別に変更しない限り、チャットのコードブロックの長い行を折り返します',
+    },
     wrapLinesInDiffs: "コードビューで行を折り返す",
     wrapLinesInDiffsDescription:
       "コードのプレビューやエディターで、水平スクロールの代わりに長い行を折り返す",
@@ -9551,6 +9558,20 @@ settingsSession: {
               "このデバイスの Kokoro ダウンロードファイルを管理します。",
           },
         },
+      },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} / ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} / ${total} · ${filesDone} / ${filesTotal} ファイル`,
+        progressAccessibilityLabel: "ダウンロードの進行状況",
+        failedDetail: "失敗",
+        failedSubtitle: "モデルを準備できませんでした。タップしてもう一度お試しください。",
+        failedResumableSubtitle: ({ size }: { size: string }) => `ダウンロードが完了しませんでした。${size} は保存されています。タップして再開できます。`,
+        incompleteDetail: "未完了",
+        incompleteSubtitle: ({ size }: { size: string }) => `これまでに ${size} をダウンロードしました。タップして続行します。`,
+        discardSubtitle: "未完了のダウンロードを削除して空き容量を増やします。",
+        discardConfirmTitle: "未完了のダウンロードを破棄しますか？",
+        discardConfirmBody: ({ size }: { size: string }) => `これまでにダウンロードした ${size} を削除します。モデルは後でもう一度ダウンロードできます。`,
       },
       localNeuralStt: {
         modelPack: {

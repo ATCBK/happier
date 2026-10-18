@@ -21,10 +21,11 @@ describe('requestSessionStop machine transport', () => {
     // Only the network adapters are replaced; resolution, encryption, request disposition,
     // and Stop outcome classification all execute through their production owners.
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
-      if (String(url).endsWith('/v1/machines/owning-machine')) {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/v1/machines/owning-machine') {
         return { status: 200, data: { machine: { id: 'owning-machine', dataEncryptionKey: null } } };
       }
-      if (String(url).endsWith('/v1/machines')) return { status: 200, data: [] };
+      if (pathname !== `/v2/sessions/${sessionId}`) throw new Error(`Unexpected HTTP route: ${pathname}`);
       return { status: 200, data: { session: {
         id: sessionId, seq: 0, createdAt: 0, updatedAt: 0, active: false, activeAt: 0,
         metadata: encodeBase64(encrypt(secret, 'legacy', { machineId: 'owning-machine' })),

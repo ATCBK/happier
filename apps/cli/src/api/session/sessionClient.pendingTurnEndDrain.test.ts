@@ -10,6 +10,7 @@ import { createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
 import {
   type ApiSessionSocketStub,
   createApiSessionSocketStub,
+  resolveApiSessionSocketDefaultAck,
 } from '@/testkit/backends/apiSessionSocketHarness';
 import { encodeBase64, encrypt } from '../encryption';
 import { accountSettingsParse } from '@happier-dev/protocol';
@@ -196,11 +197,7 @@ async function createClient(
       }
       const customAck = customEmitWithAck?.(event, payload, socket);
       if (customAck !== undefined) return customAck;
-      if (event === 'update-state') {
-        const update = payload as { expectedVersion: number; agentState: string };
-        return { result: 'success', version: update.expectedVersion + 1, agentState: update.agentState };
-      }
-      return { ok: true };
+      return resolveApiSessionSocketDefaultAck(event, payload);
     },
   });
   userSocketStub = createApiSessionSocketStub({ id: 'user-socket', connected: false });

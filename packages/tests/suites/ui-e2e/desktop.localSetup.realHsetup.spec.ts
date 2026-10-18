@@ -157,6 +157,13 @@ function readSetupMachineId(task: DesktopSystemTaskRecord): string {
     return machineId;
 }
 
+async function confirmRelayMove(page: Page): Promise<void> {
+    // The consent owner keeps Move/Switch last; optional Connect too precedes it.
+    const move = page.locator('[data-testid^="web-modal-button-"]').last();
+    await expect(move).toBeEnabled();
+    await move.click();
+}
+
 async function waitForActiveMachine(params: Readonly<{ baseUrl: string; token: string; machineId: string; timeoutMs: number }>): Promise<MachineIdentityRow> {
     let row: MachineIdentityRow | undefined;
     await expect.poll(async () => {
@@ -485,7 +492,7 @@ test.describe('ui e2e: desktop local setup through the real hsetup (hermetic com
                 await expect(body).toContainText(relayHost(otherRelayUrl));
                 await expect(body).toContainText(relayHost(server.baseUrl));
                 await expect(body).toContainText(accountIdHint(otherAccount.accountId));
-                await app.page.getByTestId('web-modal-button-1').click();
+                await confirmRelayMove(app.page);
                 const converged = await expectConvergedOnAppRelay(app, computer, server.baseUrl);
                 expect(converged.daemonAccountId).toBe(converged.appAccountId);
             } catch (error) {
@@ -509,7 +516,7 @@ test.describe('ui e2e: desktop local setup through the real hsetup (hermetic com
             const body = app.page.getByText(/^This computer’s background service is connected to /);
             await expect(body).toContainText(relayHost(otherRelayUrl));
             await expect(body).toContainText(relayHost(server.baseUrl));
-            await app.page.getByTestId('web-modal-button-2').click();
+            await confirmRelayMove(app.page);
             await expectConvergedOnAppRelay(app, computer, server.baseUrl);
         } catch (error) {
             throw appendBrowserDiagnostics(error, app.diagnostics());
@@ -729,7 +736,7 @@ test.describe('ui e2e: desktop local setup through the real hsetup (hermetic com
             try {
                 await ensureAccountReadyForConnect({ page: app.page, timeoutMs: 180_000 });
                 await expect(app.page.getByText(/^Switch this computer to .+\?$/)).toBeVisible({ timeout: 240_000 });
-                await app.page.getByTestId('web-modal-button-1').click();
+                await confirmRelayMove(app.page);
                 // Placement first (the executor's contract), then the readiness proof.
                 const converged = await expectConvergedOnAppRelay(app, computer, server.baseUrl, { proveReady: false });
                 expect(converged.daemonAccountId).toBe(converged.appAccountId);

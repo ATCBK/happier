@@ -8,9 +8,9 @@ import {
   type AccountScopedOpenResult,
 } from '../crypto/accountScopedCipher.js';
 import { encodeBase64 } from '../crypto/base64.js';
-import { ProviderAccountSubscriptionV1Schema, SealedProviderAccountSubscriptionV1Schema } from './accountSubscription.js';
+import { ProviderAccountSubscriptionV1Schema } from './accountSubscription.js';
 import {
-  ConnectedServiceCredentialFormatSchema,
+  SealedConnectedServiceQuotaSnapshotV1Schema,
   ConnectedServiceQuotaConfidenceV1Schema,
   ConnectedServiceQuotaMeterV1Schema,
   ConnectedServiceQuotaRecoveryCreditsV1Schema,
@@ -249,12 +249,7 @@ export function splitProviderAccountUsageSupplementalFacets(snapshot: ProviderAc
   return { snapshot: base, subscription, recoveryCreditDetails };
 }
 
-export const SealedProviderAccountUsageSnapshotV1Schema = z.object({
-  format: ConnectedServiceCredentialFormatSchema,
-  ciphertext: z.string().min(1),
-  subscription: SealedProviderAccountSubscriptionV1Schema.optional(),
-  recoveryCreditDetails: z.object({ ciphertext: z.string().min(1) }).strict().optional(),
-});
+export const SealedProviderAccountUsageSnapshotV1Schema = SealedConnectedServiceQuotaSnapshotV1Schema;
 export type SealedProviderAccountUsageSnapshotV1 = z.infer<typeof SealedProviderAccountUsageSnapshotV1Schema>;
 
 function canonicalRecordKeyJson(key: ProviderAccountUsageRecordKeyV1): string {
