@@ -19,6 +19,16 @@ A plugin settings or detail page uses the same anatomy as Happier's own settings
 
 Load `.agents/skills/happier-ui-craft` for the method: hierarchy, control choice, copy, states and the side-by-side check.
 
+In 0.3 development source, declare an app page's optional `description` beside
+its `title` (`ui.views` with `container: 'appPage'`, or the surface helper with
+`placement: 'appPage'`). It accepts a literal or `{ key, fallback }`. The host
+localizes this declaration for its identity header while the executable surface
+loads; use the same purpose in the loaded `PageHeader`. Other View containers do
+not gain this field, and old declarations may omit it. Check the generated API
+and toolchain compatibility facts before targeting a published host: an older
+strict parser refuses unsupported declarations through existing compatibility
+admission; do not add a field shim.
+
 For a few operations, use public `SelectionTiles variant="action"` with `onPress`: the shared owner turns a narrow page section into rows of one sheet; footer-bearing actions retain their cards. Public `CountedDisclosureItem` folds quiet aggregate details behind a title and optional count or subtitle; use public `List` controlled expansion for a collection item's own details. Import author adapters from `@happier-dev/plugin-ui/components`; `presentation` is host-internal, not an author renderer/metrics API. Public `Collection presentation="grid"` already owns compact tiles: return `null` for absent descriptions and omit unused footer slots. Check these development-source exports in the package API inventory before using them from a published toolchain.
 
 For a Collection toolbar, supply `refine.render()` for the wide controls and
@@ -33,6 +43,17 @@ name. These are 0.3 development-source contracts: check the generated plugin-ui
 API declarations and the [maintained example](../../../packages/plugin-ui/README.md#collection-filters-and-long-titles-03-development-source).
 
 ## Cross-plugin integrations
+
+In 0.3 development source, Run-on auto-picks by default after the Home's Machine
+list settles, preferring the rendered release, last use on this device, this
+device's own Machine when known, then recent activity. Declare optional
+`executionTarget: { autoPick: false }` in `definePlugin(...)` only when the work
+depends on choosing a particular Machine; a sole eligible candidate still
+auto-selects and several ask. The existing optional `default: 'installation'`
+hint can share this object. Explicit pins never fall back, and
+`plugins.execution_origin.list` reports `selectionSource: 'auto' | 'pinned' | null`.
+This is a strict manifest routing declaration: use the existing engine/toolchain
+compatibility admission for an older host, never a stripping shim.
 
 For broader public composition patterns, use the maintained repository examples linked from the [public quickstart](https://docs.happier.dev/plugins/quickstart), including public-authoring and advanced-package-root. Installed copies at `node_modules/@happier-dev/plugin-sdk/examples/public-authoring/` and `node_modules/@happier-dev/plugin-sdk/examples/advanced-package-root/` are release-owned snapshots. Use only contribution and service families marked available in the capability matrix; an example demonstrates public package boundaries but does not create product availability. This beginner scaffold does not declare a feature integration.
 

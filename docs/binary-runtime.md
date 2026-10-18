@@ -331,16 +331,33 @@ through the existing project-local staging and final-output owner. This source
 path does not prepare workspace dist or public declarations. In 0.3 development,
 ordinary Expo uses that same source plugin-UI compiler and inventory generator
 without the finite-export input capture. Each consumer publishes its own inventory
-atomically, referencing retained inputs beside that inventory. Managed Expo uses
+atomically, referencing verified content-addressed assets beside that inventory. Managed Expo uses
 its existing isolated state directory; standalone Expo uses `apps/ui/.expo/hstack`.
 Other source preparations and exports never rewrite that consumer's inventory.
 While serving source, Metro's existing batched file-map changes trigger that
 same producer for bundled-plugin and compiler inputs. The workspace input
 owner supplies source/dependency membership, including added source files;
 generated inventory assets do not trigger another preparation. Pending edits
-share serialized preparation, unchanged entries reuse their retained bytes,
-and atomic inventory publication reaches Metro's existing watched directory.
-The listener ends with Metro. An already-running Expo must first load this
+share serialized preparation. The inventory producer materializes each distinct
+plugin byte graph once, using the canonical file-set digest, and does not rewrite
+unchanged assets. Completed or failed compiler invocations remove their own
+`.happier-plugin-ui-stage-*` scratch, including bundled tooling and temporary
+manifests. That existing staging prefix is excluded from Metro's crawl, so
+retiring it cannot race Metro's fallback directory watcher.
+Live refresh waits on Metro's existing file-map change events until every
+candidate asset is indexed before atomically replacing the serving inventory.
+Bundle and artifact-asset requests also use that readiness check for inventories
+published by warm-start or explicit one-shot preparation, including Expo's
+`/assets?unstable_path=...` route. Ordinary image requests do not read the plugin
+inventory. There is no polling or new deadline.
+Older browser/native bundles can request their asset URLs later: Metro 0.83 reads
+those files on request, and an inventory swap does not acknowledge that every
+client has retired its previous graph. Distinct served graphs therefore remain
+with the consumer's state, whose lifecycle owner decides when it can be retired;
+they are not reclaimed by a guessed age or generation count. This does not retain
+compiler scratch or duplicate identical graphs. The listener and any pending
+indexing wait end with Metro.
+An already-running Expo must first load this
 configuration at its owner's chosen restart; merely restarting a borrowing
 server or daemon does not update the Expo configuration or its inventory.
 To explicitly refresh an existing consumer without restarting Expo, run

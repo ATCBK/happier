@@ -466,6 +466,7 @@ export const mainSurface = defineUiSurfaceDefinition({
   id: 'main',
   placement: 'appPage',
   title: 'My plugin',
+  description: { key: 'main.purpose', fallback: 'Review incoming work.' },
   renderer: {
     kind: 'reactNative',
     requiredHostMethods: ['context', 'executeAction'],

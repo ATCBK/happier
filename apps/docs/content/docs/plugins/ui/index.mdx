@@ -259,6 +259,15 @@ remains trusted executable code.
 Declare the view's `container`, `target`, and `renderer` in
 `definePlugin(...)`; the host registry decides whether that exact pair can be
 mounted. The generated `appPage` + `app` view is the portable starting point.
+In 0.3 development source, an `appPage` may also declare an optional `description`,
+either a literal or `{ key, fallback }`, just like its title. The host resolves it
+from the declaration for the identity header while the executable surface loads.
+Use the same purpose in the loaded page's `PageHeader` so the content stays stable.
+Omitting it remains valid; it is presentation metadata and grants no authority.
+Published plugins use the existing toolchain-stamped `engines.happier` compatibility
+contract when targeting hosts whose strict declaration parser predates a field;
+the host does not strip unknown declaration fields or execute a bundle to infer them.
+
 From an admitted surface, request another declared view through the one host
 dispatcher rather than a local router:
 

@@ -127,10 +127,23 @@ its current address. Only the answering device's choice changes.
 
 An explicit unavailable Machine remains named and its operations stay blocked.
 Clear it or choose an available Machine to change where effects run. Without an
-explicit choice, an operation may use the sole admitted candidate in the local
-Home. The remembered choice does not pin a source directory or code version:
+explicit choice, Happier automatically picks an online admitted Machine in the local
+Home after its Machine list completes. It prefers the rendered release's version,
+then the Machine last used for this plugin on this device, this device's own
+Machine when known, and the most recently active eligible Machine. If an automatic
+pick becomes unavailable, Happier picks again. List results report
+`selectionSource` as `auto`, `pinned`, or `null` when no Machine is selected.
+The remembered choice does not pin a source directory or code version:
 each operation resolves the Machine's current admitted source. Session panels
 retain their separate mounted contextual choice.
+
+If your plugin's work depends on choosing a particular Machine, declare
+`executionTarget: { autoPick: false }` in `definePlugin(...)`. This optional
+manifest field defaults to automatic selection when omitted. With `false`, a
+sole eligible candidate is still automatic, and several candidates ask the user.
+The existing `default: 'installation'` hint may share the same object. Target a
+host that admits this declaration through the SDK's engine compatibility contract;
+older strict manifest parsers reject it rather than ignoring placement policy.
 
 ## Keep a long daemon Action visible in Activity
 

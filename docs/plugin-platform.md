@@ -87,6 +87,16 @@ applies to bundled and installed plugins in 0.3 development source.
 
 The canonical manifest schema and normalizer remain Protocol/platform-owned. [`manifest/v2.ts`](../packages/protocol/src/plugins/manifest/v2.ts) admits runtime API version 1 and an **optional** non-wildcard `engines.happier` range. Host/runtime ABI admission and package SemVer are separate contracts; do not infer a host compatibility range from a package version or source build identity. See [protocol evolution](compatibility.md#sdk-protocol-evolution).
 
+In 0.3 development source, an `appPage` View may declare `description` as a literal
+or `{ key, fallback }`. Protocol admits it only on that container, and the SDK
+surface helper retains it in the manifest. The shared declaration projection
+carries it in `display.description`; the app-page catalog localizes it before
+passing it to the existing identity header during surface loading. Omission stays
+valid. It is presentation data, not execution or routing authority. Published
+declarations targeting an older strict parser use the existing SDK/toolchain
+engine-compatibility admission; no undeployed 0.3 shape gets a stripping adapter.
+The loaded plugin page should use the same purpose in its own header.
+
 In 0.3 development source, `registrySources` is a descriptor-only manifest
 family. `definePlugin.registrySources` projects plugin-local declarations;
 the admitted lazy catalog supplies them without activation or a new runtime
@@ -576,9 +586,10 @@ source, app UI visibility is the Account union of proven installed declarations,
 independent of execution selection. Availability owns the installation census;
 the UI projection union retains each supplying installation. Execution conflicts
 compare current supplies with execution authority, excluding retained offline,
-establishing, disabled or untrusted copies. Differing selectable versions, content
-or renderer compatibility remain an explicit origin choice without appointing an
-arbitrary producer. While that choice is unresolved, an otherwise available page
+establishing, disabled or untrusted copies. The execution owner prefers supplies
+matching the rendered release; differing versions require a choice when none is
+compatible. Content and renderer compatibility admission remain enforced before
+automatic selection. While a required choice is unresolved, an otherwise available page
 has host-derived resolving availability and uses the shared loading presentation;
 it is not a terminal installation-conflict denial. This host state is not a daemon
 wire availability value.
@@ -695,9 +706,23 @@ neither an older-schema writer nor a compatibility shim for unreleased intermedi
 App-scoped plugin UI does not use `plugins.home` as catalog authority. That named
 Administration target remains responsible for install, installation settings,
 Secrets and Browse operations. Machine-bound plugin effects use Administration's
-per-plugin execution selector: a device-local, Account/Home-scoped Machine preference, then an admitted
-`executionTarget: { default: 'installation' }` declaration, then a sole eligible
-compatible installation, otherwise a selector. An unavailable saved choice stays
+per-plugin execution selector: an explicit device-local, Account/Home-scoped Machine pin,
+then automatic selection among admitted compatible installations on this Home.
+In current 0.3 development source, a scoped row whose content has opened may be
+selected while unrelated Machine hydration continues. Fleet consumes the inventory
+owner's row qualification; presence alone does not admit execution. With no qualified
+compatible candidate, incomplete coverage (including an online row still opening
+after list settlement) stays pending rather than reporting no
+installation or a version conflict. An unopened explicit pin stays pending without
+falling back. Auto-pick prefers the rendered release's version,
+then the Machine last used for this plugin on this device, this device's own
+Machine when known, and the most recently active eligible Machine (stable identity
+breaks ties). An unpinned operation re-picks when its Machine becomes ineligible.
+`executionTarget: { autoPick: false }` opts a Machine-dependent plugin into asking
+when several candidates remain; a sole candidate still works automatically.
+The existing optional `default: 'installation'` hint breaks otherwise equal
+source preferences; it cannot override a pin, version compatibility or this ranking.
+An unavailable saved choice stays
 visible and is never silently substituted on those uncontextual App surfaces.
 In 0.3 development, the selected surface member's readable daemon
 Resource declaration requires that execution origin even when the renderer's
@@ -730,8 +755,11 @@ preference, including Agent, MCP and CLI requests. They do not use Account CAS.
 The existing local Administration target owner stores only the Home-qualified
 Machine. A source root or materialization id belongs to the freshly dispatched
 operation, never the preference. An unavailable explicit Machine keeps its name
-and blocks effects rather than silently running elsewhere; an unpinned operation
-may use the sole admitted local-Home candidate. Retired
+and blocks effects rather than silently running elsewhere. The same local
+Administration target map retains the last-used hint separately from explicit
+pins; it is never sent as Account state. `plugins.execution_origin.list` reports
+`selectionSource: 'auto' | 'pinned' | null`, also available in the chip's selection
+data. Retired
 `machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId` values
 remain inert stored data: no migration ledger, pruning or dual writer.
 A source-backed occurrence carries its

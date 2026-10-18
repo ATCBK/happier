@@ -2186,14 +2186,25 @@ methods retain their existing plain transport and inner-envelope contracts.
   `callMachineRpc` retains its existing replacement behavior.
 - In 0.3 development, the normal Machine census can publish pending display shells
   before fresh keys open. Activity-ordered hydration uses the existing concurrency
-  owner and releases the JavaScript thread between cohorts; exact reads still await
-  key admission. Retained opened content is re-admitted before reuse. Pending
+  owner and releases the JavaScript thread between cohorts. After publishing
+  shells, the same admission and hydration owner finishes currently online
+  content before offline background cohorts, so those cohorts cannot hold its
+  key or content batch; exact reads still await key admission.
+  Retained opened content is re-admitted before reuse. Pending
   shells grant no decrypted-content or RPC authority. The
   Account encryption owner shares overlapping uncancellable envelope opens within
   one captured Home/Account generation, retaining no completed or failed result.
   Each caller's currentness is rechecked before returning its result; signal-bearing
   calls retain the native queue's cancellation custody. Machine key, access and
   creator-trust admission still precede decrypted publication.
+  A current scoped row with admitted content can qualify for exact execution while
+  unrelated rows are still hydrating; whole-list settlement still joins all jobs.
+  Retained display content awaiting newer versions does not carry that readiness.
+  When the socket opens newer content under the same key/access context, list
+  hydration can finish the other field and preserves each newer opened version.
+  A newer key-basis hint keeps execution pending until its versions open; current
+  opened display fields may finish independently. Content-only socket patches
+  retain the unchanged capability projection rather than replacing its identity.
 - Successful opening and the expected-mode check do not authenticate the provenance
   of a published scoped key, so scoped Machine-content keys for a Temporary computer
   carry their own signed binding. In current development source the creator seals the

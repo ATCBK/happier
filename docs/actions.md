@@ -62,6 +62,14 @@ Both reads are discoverable through Action search. Their
 approval-control admission remains separate from deciding or executing an
 approval; listing pending work grants no decision authority.
 
+In 0.3 development source, an `approval_stale` failure retains the failed
+authority or custody fact as `execution.details.reason` on its approval Artifact.
+The [closed reason schema](../packages/protocol/src/approvals/approvalStaleReason.ts)
+admits diagnostic codes only, without Account, Home, Machine or credential values.
+Decision observations and Action Operation errors preserve that same typed fact;
+the existing new-session error code includes it. These diagnostics do not change
+approval policy, origin verification or execution authority.
+
 In 0.3 development, open Action approval cards remain available in an inactive,
 resumable Session. The Artifact owns the decision; the approving app replays it
 or the daemon retains custody. `deriveTranscriptInteraction` preserves the access
@@ -174,6 +182,10 @@ that folder is direct by default for the present user's UI invocation and its
 authenticated RPC hop. Agent callers retain the directory-creation approval
 default, and per-Action Ask settings and waivers still apply. A waiver carries
 the directory proof without changing the caller's execution authority.
+In 0.3 development, UI and CLI approval producers both read target preparation
+before creating the Artifact and retain that proof with the request. Replay
+rechecks it at the target daemon; missing or changed proof fails with the typed
+stale reason before spawning.
 
 Creating a checkpoint or a private prompt document, editing an Account role,
 creating a workspace directory, and changing future worker or service placement
