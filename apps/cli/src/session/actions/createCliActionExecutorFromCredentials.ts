@@ -14,6 +14,7 @@ import type { SessionTranscriptActionItem } from '@/api/session/sessionTranscrip
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { configuration } from '@/configuration';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 import { getDaemonMachineAdmissionTransport, getDaemonClientActionExecutor, getDaemonConfidentialSecretFillExecutor, MachineAdmissionTransportUnavailableError } from '@/daemon/machineAdmissionTransport';
 import { resolveCliApiTokenForSdk } from '@/auth/cliApiToken';
 import {
@@ -306,16 +307,23 @@ function combineInvocationSignals(
 }
 
 async function resolveServiceRelocationSource(params: Readonly<{
-  credentials: StoredCredentials; input: unknown; serverId: string; serverApiUrl: string; signal?: AbortSignal;
+  credentials: StoredCredentials; input: unknown; serverId: string; serverIdentityId?: string;
+  serverApiUrl: string; signal?: AbortSignal;
 }>): Promise<CliActionMachineTarget> {
   const parsed = ProjectServiceRelocateInputV1Schema.safeParse(params.input);
   if (!parsed.success) return { ok: false, code: 'invalid_parameters' };
-  if (parsed.data.workspace.serverId !== params.serverId) return { ok: false, code: 'server_target_mismatch' };
+  const workspaceServerId = params.serverIdentityId
+    ?? await resolveServerProfileHomeIdentityId(params.serverId)
+    ?? params.serverId;
+  if (parsed.data.workspace.serverId !== params.serverIdentityId
+    && !await isServerProfileHomeIdentity(params.serverId, parsed.data.workspace.serverId)) {
+    return { ok: false, code: 'server_target_mismatch' };
+  }
   try {
     const rows = await runWithServerHttpBaseUrl(params.serverApiUrl, async () => await readProjectAccountRows({
-      credentials: params.credentials, serverId: params.serverId, ...(params.signal ? { signal: params.signal } : {}),
+      credentials: params.credentials, serverId: workspaceServerId, ...(params.signal ? { signal: params.signal } : {}),
     }));
-    const ref = resolveWorkspaceRefById(rows.workspaceRefs, parsed.data.workspace.refId, params.serverId);
+    const ref = resolveWorkspaceRefById(rows.workspaceRefs, parsed.data.workspace.refId, workspaceServerId);
     return ref ? { ok: true, machineId: ref.machineId } : { ok: false, code: 'workspace_ref_unavailable' };
   } catch {
     return { ok: false, code: params.signal?.aborted ? 'cancelled' : 'workspace_ref_unavailable' };
@@ -329,6 +337,7 @@ async function resolvePatActionTransportPlan(params: Readonly<{
   context: ActionExecutorContext | undefined;
   machineId?: string;
   invocationSignal?: AbortSignal;
+  serverIdentityId?: string;
   serverId: string;
   serverApiUrl: string;
   allowConfiguredMachineTarget: boolean;
@@ -556,6 +565,7 @@ async function executePatPublicAction(params: Readonly<{
   context: ActionExecutorContext | undefined;
   machineId?: string;
   invocationSignal?: AbortSignal;
+  serverIdentityId?: string;
   serverId: string;
   serverApiUrl: string;
   allowConfiguredMachineTarget: boolean;
@@ -1222,6 +1232,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           target = { kind: 'machine', machineId: pairedSessionCreation.data.executionTarget.machineId };
         }
         if (parsedActionId.data === 'projects.service.relocate') {
+            ...(context.serverIdentityId ?? params.serverIdentityId
+              ? { serverIdentityId: context.serverIdentityId ?? params.serverIdentityId } : {}),
           const source = await resolveServiceRelocationSource({ credentials, input, serverId: approvalServerId,
             serverApiUrl: resolveActionServerApiUrl(), ...(signal ? { signal } : {}) });
           if (!source.ok) return { context: originalContext, invocation: createOneShotPatInvocation(async () => actionResolutionFailure(source)) };
@@ -1322,6 +1334,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             credentials,
             ...(params.machineId !== undefined ? { machineId: params.machineId } : {}),
             ...(invocationSignal ? { invocationSignal } : {}),
+            ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
             serverId: approvalServerId,
             serverApiUrl: resolveActionServerApiUrl(),
             allowConfiguredMachineTarget: fixedServerId === null,
@@ -1380,6 +1393,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             input,
             context: rawContext,
             credentials,
+            ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
             ...(params.machineId !== undefined ? { machineId: params.machineId } : {}),
             ...(invocationSignal ? { invocationSignal } : {}),
             serverId: approvalServerId,

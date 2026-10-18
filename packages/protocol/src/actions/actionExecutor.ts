@@ -7807,6 +7807,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const res = await deps.workspaceSyncRelationshipCreate({
             input: WorkspaceSyncRelationshipCreateActionInputV1Schema.parse(parsed.data),
             operationId,
+            ...(normalizeId(ctx.serverIdentityId) ? { serverIdentityId: normalizeId(ctx.serverIdentityId) } : {}),
             ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}),
             ...(ctx.handoffTargetReplacementApproval && ctx.handoffTargetReplacementApprovalReceiptId
               ? {

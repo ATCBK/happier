@@ -2229,7 +2229,7 @@ describe('production workflow coordinator', () => {
       rootPath: '/old-root', createdAtMs: 1,
     };
     const currentRef: import('@happier-dev/protocol').WorkspaceRefV1 = {
-      id: 'workspace-1', serverId: 'server-1', machineId,
+      id: 'workspace-1', serverId: 'srv_home', machineId,
       rootPath: '/current-root', createdAtMs: 2,
     };
     let currentWorkspaceRefs: readonly import('@happier-dev/protocol').WorkspaceRefV1[] = [oldRef];
@@ -2239,7 +2239,7 @@ describe('production workflow coordinator', () => {
       token: 'token', accountId, machineId,
       resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
       isAcceptedAuthorizationCurrent: async () => true,
-      execution: productionExecution(),
+      execution: { ...productionExecution(), serverId: 'local-profile', serverIdentityId: 'srv_home' },
       resolveCurrentWorkspaceRefs: async () => currentWorkspaceRefs,
       prepareAcceptedWorkspaceTarget: async ({ projectTarget, resolveWorkspaceRef }) => {
         expect(projectTarget).toEqual({ machineId, directory: '/old-root', workspaceRefId: 'workspace-1' });

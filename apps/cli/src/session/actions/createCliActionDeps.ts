@@ -2091,16 +2091,17 @@ export function createCliActionDeps(params: Readonly<{
           prepareWorkspace: async ({ projectTarget, definition }) => {
             if (!projectTarget.workspaceRefId) {
               return await prepareWorkflowAcceptedWorkspaceTarget({ projectTarget, definition });
+            const workspaceServerId = params.serverIdentityId ?? projectHomeId;
             }
             const rows = await readProjectRows();
             return await prepareWorkflowAcceptedWorkspaceTarget({
               projectTarget,
               definition,
-              currentServerId: params.serverId ?? configuration.activeServerId,
+              currentServerId: workspaceServerId,
               resolveWorkspaceRef: (workspaceRefId) => resolveWorkspaceRefById(
                 rows.workspaceRefs,
                 workspaceRefId,
-                params.serverId ?? configuration.activeServerId,
+                workspaceServerId,
               ),
             });
           },
@@ -5047,6 +5048,7 @@ export function createCliActionDeps(params: Readonly<{
       }
     },
     workspaceSyncRelationshipCreate: async ({
+      serverIdentityId,
       input,
       operationId,
       serverId,
@@ -5065,7 +5067,7 @@ export function createCliActionDeps(params: Readonly<{
       // Action contexts carry a device-local profile in `serverId`, while
       // WorkspaceRefs are keyed by the stable Home identity when available.
       // Admission accepts either identifier; domain lookup must use the Home.
-      const currentServerId = actionHomeId;
+      const currentServerId = normalizeStringValue(serverIdentityId) ?? actionHomeId;
       const source = resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId, currentServerId)
         ?? (serverId === undefined && params.serverIdentityId === undefined
           ? resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId) : null);

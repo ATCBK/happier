@@ -1419,6 +1419,9 @@ export type ActionExecutorDeps = Readonly<{
   workspaceSyncRelationshipCreate?: (args: Readonly<{
     input: WorkspaceSyncRelationshipCreateActionInputV1;
     operationId: string;
+    /** Stable Home identity for Account-scoped WorkspaceRef resolution. */
+    serverIdentityId?: string | null;
+    /** Device-local profile/routing key for transport selection. */
     serverId?: string | null;
     targetReplacementApproval?: HandoffTargetReplacementApprovalV1 | null;
     targetReplacementApprovalReceiptId?: string | null;

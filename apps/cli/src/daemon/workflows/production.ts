@@ -1186,6 +1186,9 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
 
 export type WorkflowProductionExecutionDeps = Readonly<{
   credentials: StoredCredentials;
+  /** Stable Home identity used by Account-scoped domain rows. */
+  serverIdentityId?: string;
+  /** Device-local profile/routing key used by Session and Action transports. */
   serverId: string;
   machineAdmissionTransport: NonNullable<Parameters<typeof sendSessionMessage>[0]['machineAdmissionTransport']>;
   resolveTeamCredentialResourceCatalog?: Parameters<typeof createProductionFreshWorkflowSessionConversation>[0]['resolveTeamCredentialResourceCatalog'];
@@ -1360,11 +1363,12 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
             return { ok: false, code: 'workspace_unavailable' } as const;
           }
         }
+        const workspaceServerId = params.execution.serverIdentityId ?? params.execution.serverId;
         return (params.prepareAcceptedWorkspaceTarget ?? prepareWorkflowAcceptedWorkspaceTarget)({
           projectTarget: { machineId: params.machineId, ...storedDefinition.data.workspace },
           definition: source.definition,
-          currentServerId: params.execution.serverId,
-          resolveWorkspaceRef: (workspaceRefId) => resolveWorkspaceRefById(workspaceRefs, workspaceRefId, params.execution.serverId),
+          currentServerId: workspaceServerId,
+          resolveWorkspaceRef: (workspaceRefId) => resolveWorkspaceRefById(workspaceRefs, workspaceRefId, workspaceServerId),
         });
       };
       // The signed project may use a home alias. Fingerprint the same canonical

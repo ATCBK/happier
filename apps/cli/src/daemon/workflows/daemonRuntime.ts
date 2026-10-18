@@ -373,6 +373,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
       machineAdmissionTransport: MachineAdmissionTransport;
       machineActionDirectTargetTransport: import('@/session/actions/createCliActionDeps').MachineActionDirectTargetTransport;
       managedMachineAction?: import('@happier-dev/protocol').ActionExecutorDeps['managedMachineAction'];
+      serverIdentityId?: string;
     }>) {
       const parsedStamp = RequesterWorkAttributionV1Schema.safeParse(input.requesterWorkAttributionV1);
       const stamp = parsedStamp.success ? Object.freeze(parsedStamp.data) : undefined;
@@ -390,6 +391,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         machineId: input.machineId,
         machineAdmissionTransport: input.machineAdmissionTransport,
         machineActionDirectTargetTransport: input.machineActionDirectTargetTransport,
+        ...(input.serverIdentityId ? { serverIdentityId: input.serverIdentityId } : {}),
         ...(input.managedMachineAction ? { managedMachineAction: input.managedMachineAction } : {}),
         workflowAcceptedAuthorizationCurrentness: isAcceptedAuthorizationCurrent,
         pluginActionExecutionOwner: 'current_process',
@@ -540,6 +542,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           },
           credentials: params.credentials,
           serverId,
+          ...(input.serverIdentityId ? { serverIdentityId: input.serverIdentityId } : {}),
           machineAdmissionTransport: input.machineAdmissionTransport,
           ...(resolveTeamCredentialResourceCatalog ? { resolveTeamCredentialResourceCatalog } : {}),
           resolveExistingSessionConversation: resolveConversation,

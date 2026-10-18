@@ -111,6 +111,7 @@ describe('workspace.sync.relationship.create Action', () => {
       input,
       operationId: 'link-request-1',
       serverId: 'home-profile',
+      serverIdentityId: 'home-1',
       context,
     }));
   });

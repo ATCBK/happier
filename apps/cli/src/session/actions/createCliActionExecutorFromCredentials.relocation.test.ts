@@ -92,6 +92,17 @@ describe('CLI relocation source routing', () => {
     await expect(executor.execute('projects.service.relocate', input, { surface })).resolves.toMatchObject({ ok: true });
     expect(boundary.actions).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'source-coordinator' } })]);
   });
+  it('resolves portable SOURCE rows with the stable Home identity while routing through the local profile', async () => {
+    const boundary = await network([{ ...sourceRef, serverId: 'srv_source_home' }]);
+    const portableInput = { ...input, workspace: { ...input.workspace, serverId: 'srv_source_home' },
+      desiredPlacement: { ...input.desiredPlacement,
+        workspace: { ...input.desiredPlacement.workspace, serverId: 'srv_source_home' } } };
+    const executor = createCliActionExecutorFromCredentials({ credentials, serverId: 'source-profile',
+      serverIdentityId: 'srv_source_home', serverApiUrl: boundary.endpoint });
+    await expect(executor.execute('projects.service.relocate', portableInput, { surface: 'cli' }))
+      .resolves.toMatchObject({ ok: true });
+    expect(boundary.actions).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'source-coordinator' } })]);
+  });
   it('refuses captured source target conflicts before PAT dispatch rather than widening their authority', async () => {
     const boundary = await network();
     const executor = createCliActionExecutorFromCredentials({ credentials, serverId: 'source-home', serverApiUrl: boundary.endpoint });
