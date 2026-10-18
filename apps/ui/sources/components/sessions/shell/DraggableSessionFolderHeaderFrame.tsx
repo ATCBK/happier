@@ -1,7 +1,7 @@
 import React from 'react';
 import { Platform, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import type { GestureType, ComposedGesture } from 'react-native-gesture-handler';
+import { GestureDetector } from 'react-native-gesture-handler';
 
 import { type UseSessionInlineDragResult } from './useSessionInlineDrag';
 
@@ -59,14 +59,12 @@ export const DraggableSessionFolderHeaderFrame = React.memo(function DraggableSe
         resolveDropResult: props.resolveDropResult,
         dataIndex: props.dataIndex,
         overlayShared: props.overlayShared,
-        // Native keeps hold-to-drag so taps on the header itself stay cheap;
-        // web no longer relies on activation timing at all — the gesture only
-        // lives on the drag handle, so header buttons are outside the gesture
-        // view entirely (see the component docblock for the WKWebView chain).
+        // Native retains whole-header hold-to-drag. Web attaches only to the
+        // grip so pointer capture cannot swallow clicks on header buttons.
         activateAfterLongPressMs: Platform.OS === 'web' ? undefined : 350,
     });
 
-    return (
+    const content = (
         <Animated.View
             ref={wrapperRef}
             collapsable={false}
@@ -74,7 +72,11 @@ export const DraggableSessionFolderHeaderFrame = React.memo(function DraggableSe
             style={animatedStyle}
             onLayout={() => props.onRegisterTreeRowBounds(props.treeRowId, wrapperRef.current)}
         >
-            {props.children(gesture)}
+            {props.children(Platform.OS === 'web' ? gesture : undefined)}
         </Animated.View>
     );
+
+    return Platform.OS !== 'web' && gesture
+        ? <GestureDetector gesture={gesture}>{content}</GestureDetector>
+        : content;
 });

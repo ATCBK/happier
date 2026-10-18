@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, Pressable, View, type ViewStyle } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { GestureDetector } from 'react-native-gesture-handler';
 import type { UseSessionInlineDragResult } from './useSessionInlineDrag';
@@ -14,6 +14,8 @@ import { Icon } from '@/components/ui/icons/Icon';
 const FOLDER_ROOT_INDENT = 20;
 const FOLDER_NESTED_INDENT_STEP = 12;
 const FOLDER_INDENT_CAP = 3;
+
+const webReorderHandleStyle = { width: 24, height: 24 };
 
 const stylesheet = StyleSheet.create((theme) => ({
     section: {
@@ -50,12 +52,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 999,
-    },
-    dragHandle: {
-        opacity: 0,
-    },
-    dragHandleActive: {
-        opacity: 1,
     },
     hidden: {
         opacity: 0,
@@ -111,6 +107,8 @@ export function FolderGroupHeader(props: Readonly<{
             icon: <Icon name="pencil" size={16} color={iconColor} />,
             disabled: props.disabled,
         },
+        ...(props.onMoveUp ? [{ id: 'move-up', title: t('common.moveUp'), disabled: props.disabled }] : []),
+        ...(props.onMoveDown ? [{ id: 'move-down', title: t('common.moveDown'), disabled: props.disabled }] : []),
         {
             id: 'move',
             title: t('sessionsList.moveFolder'),
@@ -123,7 +121,7 @@ export function FolderGroupHeader(props: Readonly<{
             icon: <Icon name="trash" size={16} color={iconColor} />,
             disabled: props.disabled,
         },
-    ], [iconColor, props.disabled, props.onMove]);
+    ], [iconColor, props.disabled, props.onMove, props.onMoveUp, props.onMoveDown]);
 
     const handleMenuSelect = React.useCallback(async (itemId: string) => {
         if (props.disabled) return;
@@ -133,6 +131,10 @@ export function FolderGroupHeader(props: Readonly<{
             await props.onAddSubfolder();
         } else if (itemId === 'rename') {
             await props.onRename();
+        } else if (itemId === 'move-up') {
+            props.onMoveUp?.();
+        } else if (itemId === 'move-down') {
+            props.onMoveDown?.();
         } else if (itemId === 'move') {
             props.onMove?.();
         } else if (itemId === 'delete') {
@@ -205,23 +207,20 @@ export function FolderGroupHeader(props: Readonly<{
                 {props.dragHandleGesture ? (
                     <GestureDetector gesture={props.dragHandleGesture}>
                         <View
-                            style={[styles.actionButton, showActions ? styles.visible : styles.hidden, isWeb && ({ cursor: 'move' } as unknown as ViewStyle)]}
+                            style={[styles.actionButton, webReorderHandleStyle]}
                             testID={`session-folder-reorder-handle-${props.item.folderId}`}
+                            accessible={false}
                         >
-                            <Icon
-                                name="list"
-                                size={14}
-                                color={iconColor}
-                            />
+                            <Icon name="list" size={14} color={iconColor} />
                         </View>
                     </GestureDetector>
                 ) : (
                     <View
-                        style={[styles.actionButton, styles.hidden]}
+                        style={[styles.actionButton, showActions ? styles.visible : styles.hidden]}
                         testID={`session-folder-reorder-handle-${props.item.folderId}`}
                         pointerEvents="none"
                     >
-                        <Icon name="list" size={14} color={theme.colors.text.tertiary} />
+                        <Icon name="list" size={14} color={iconColor} />
                     </View>
                 )}
                 <View
@@ -242,7 +241,7 @@ export function FolderGroupHeader(props: Readonly<{
                         trigger={({ toggle }) => (
                             <Pressable
                                 testID={`session-folder-menu-trigger-${props.item.folderId}`}
-                                style={[styles.actionButton, showActions ? styles.visible : styles.hidden]}
+                                style={[styles.actionButton, props.dragHandleGesture || showActions ? styles.visible : styles.hidden]}
                                 onPress={(event) => {
                                     event?.stopPropagation?.();
                                     toggle();

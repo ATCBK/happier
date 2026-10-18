@@ -1949,6 +1949,8 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                         workspaceLabelsV1={workspaceLabelsV1}
                         workspaceFaviconsEnabled={workspaceFaviconsEnabled}
                         workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
+                        onMoveUp={() => moveTreeRowByKeyboard(treeRow, item.title, 'up')}
+                        onMoveDown={() => moveTreeRowByKeyboard(treeRow, item.title, 'down')}
                         onRenameWorkspace={handleRenameWorkspace}
                         onResetWorkspaceName={handleResetWorkspaceName}
                         onCreateSession={() => handleCreateSessionFromProject(item)}
@@ -2009,6 +2011,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         handleToggleCollapse,
         headerControlsAnchorKey,
         hasMultipleMachines,
+        moveTreeRowByKeyboard,
         registerTreeRowBounds,
         renderHeaderControls,
         resolveDropResult,
