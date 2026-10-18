@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 
@@ -9,6 +9,21 @@ const HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY =
     'HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_V1_JSON';
 
 describe('createSessionMetadata', () => {
+    it('captures only the non-secret native account directories for later resume', () => {
+        vi.stubEnv('CLAUDE_CONFIG_DIR', '/accounts/claude-b');
+        vi.stubEnv('CODEX_HOME', '/accounts/codex-b');
+        vi.stubEnv('ANTHROPIC_API_KEY', 'must-not-be-persisted');
+        try {
+            const { metadata } = createSessionMetadata({ flavor: 'claude', machineId: 'machine-1', startedBy: 'terminal' });
+            expect(metadata).toMatchObject({ nativeAgentEnvironmentV1: {
+                CLAUDE_CONFIG_DIR: '/accounts/claude-b', CODEX_HOME: '/accounts/codex-b',
+            } });
+            expect(Reflect.get(metadata, 'nativeAgentEnvironmentV1')).not.toHaveProperty('ANTHROPIC_API_KEY');
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
     it('publishes the creating process generation alongside its PID for safe startup association', () => {
         const fingerprint = readProcessInstanceFingerprintSync(process.pid);
         expect(fingerprint).not.toBeNull();

@@ -3380,6 +3380,32 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 effectiveResume = typeof resume === 'string' ? resume.trim() : '';
               }
 
+              // A terminal restart can give one vendor conversation a new Happier
+              // identity. Per-Happier-id admission above cannot see that sibling.
+              if (effectiveResume) {
+                for (const tracked of pidToTrackedSession.values()) {
+                  if (tracked.happySessionId === normalizedExistingSessionId) continue;
+                  const trackedResume = tracked.vendorResumeId ?? tracked.spawnOptions?.resume;
+                  if (trackedResume !== effectiveResume) continue;
+                  const trackedTarget = tracked.spawnOptions?.backendTarget;
+                  const sameTarget = backendTarget?.kind === 'configuredAcpBackend'
+                    ? trackedTarget?.kind === 'configuredAcpBackend' && trackedTarget.backendId === backendTarget.backendId
+                    : trackedTarget?.kind !== 'configuredAcpBackend' && resolveTrackedSessionCatalogAgentId(tracked) === catalogAgentId;
+                  if (!sameTarget) continue;
+                  const presence = await classifyTrackedSessionRunnerPresence({ tracked });
+                  if (presence === 'absent') continue;
+                  logger.warn('[DAEMON RUN] Refusing a second entry for an existing provider conversation', {
+                    sessionId: normalizedExistingSessionId || null,
+                    existingSessionId: tracked.happySessionId,
+                    presence,
+                  });
+                  return {
+                    type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+                    errorMessage: 'This conversation already has another session runner. Open its existing session, or stop that runner before resuming.',
+                  };
+                }
+              }
+
               const nativeSpawnSelection = resolveAgentNativeSpawnDefinitiveRejection({
                 agentId: catalogAgentId,
                 selection: {
