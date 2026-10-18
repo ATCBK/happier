@@ -2,6 +2,9 @@ import { deepEqual } from '@/utils/deterministicJson';
 import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import type {
     AgentStateOutstandingRequest,
+    AgentStateRequestCompletion,
+    AgentStateRequestApplication,
+    AppliedRequestCompletion,
     AgentStateRequestResponseTarget,
     AgentStateResponseTargetDispatch,
     PermissionResponseClaim,
@@ -87,6 +90,9 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         permissionSuggestions?: readonly unknown[] | null;
         owner?: PermissionRequestOwner | null;
     }>): void;
+    captureRequestApplication?(requestId: string): AgentStateRequestApplication | null;
+    readAppliedCompletion?(params: AgentStateRequestCompletion): AppliedRequestCompletion | null;
+    recoverAppliedCompletions?(): Promise<void>;
     completeRequest(params: Readonly<{
         requestId: string;
         status: string;
@@ -97,6 +103,7 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         updatedPermissions?: unknown;
         extraCompletedFields?: Readonly<Record<string, unknown>> | null;
         isCurrent?: () => boolean;
+        applicationAcknowledged?: AgentStateRequestApplication;
         fallback?: Readonly<{
             toolName: string;
             toolInput: unknown;
@@ -469,12 +476,23 @@ export class PermissionRequestCoordinator<TResult> {
             const completionPersistence = precedingPersistence.then(async () => {
                 // Application belongs to the same settlement admission as persistence.
                 // A stale app row must not apply a decision after cancellation has begun.
+                const retained = this.store.readAppliedCompletion?.({ requestId: entry.requestId,
+                    ...completion.completedRequest });
+                if (retained) {
+                    if (!retained.matches) return false;
+                    await this.store.recoverAppliedCompletions?.();
+                    return await retained.acknowledgement;
+                }
+                const application = params.acknowledgeDecisionApplication
+                    ? this.store.captureRequestApplication?.(entry.requestId) : null;
+                if (params.acknowledgeDecisionApplication && this.store.captureRequestApplication && !application) return false;
                 if (params.acknowledgeDecisionApplication) {
                     await params.acknowledgeDecisionApplication(completion.result);
                 }
-                const persisted = await this.store.completeRequest({
+                const persistence = this.store.completeRequest({
                     requestId: entry.requestId,
                     ...completion.completedRequest,
+                    ...(application ? { applicationAcknowledged: application } : {}),
                     fallback: {
                         toolName: entry.toolName,
                         toolInput: entry.toolInput,
@@ -491,6 +509,18 @@ export class PermissionRequestCoordinator<TResult> {
                         ...(entry.owner ? { owner: entry.owner } : {}),
                     },
                 });
+                const applied = this.store.readAppliedCompletion?.({ requestId: entry.requestId,
+                    ...completion.completedRequest });
+                if (applied) void applied.acknowledgement.then((saved) => {
+                    if (this.pendingRequests.get(entry.requestId) !== entry) return;
+                    if (saved && !entry.cancelReason) {
+                        this.settleCompletedEntry(entry, completion.result);
+                    } else {
+                        this.retireAppliedEntry(entry);
+                    }
+                });
+                const persisted = await persistence;
+                if (application && persisted === false) this.retireAppliedEntry(entry);
                 if (persisted !== false) return true;
                 // Response targets arrive after the store's terminal write. Rejoin
                 // that exact completed subject rather than persisting it again.
@@ -528,27 +558,8 @@ export class PermissionRequestCoordinator<TResult> {
 
             if (!didComplete || entry.cancelReason) return false;
 
-            const waiters = [...entry.waiters.values()];
-            const hasLiveWaiters = waiters.some((waiter) => !waiter.aborted);
-            entry.waiters.clear();
-            this.pendingRequests.delete(entry.requestId);
-            if (!hasLiveWaiters && !entry.owner) {
-                this.cachedDecisions.set(entry.requestId, {
-                    result: completion.result,
-                    toolName: entry.toolName,
-                    toolInput: entry.toolInput,
-                    lifetime: entry.lifetime,
-                    ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
-                    ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
-                    ...(entry.responseTarget ? { responseTarget: entry.responseTarget } : {}),
-                    ...(entry.owner ? { owner: entry.owner } : {}),
-                });
-            }
-
-            for (const waiter of waiters) {
-                if (waiter.aborted) continue;
-                detachWaiter(waiter);
-                waiter.resolve(completion.result);
+            if (this.pendingRequests.get(entry.requestId) === entry) {
+                this.settleCompletedEntry(entry, completion.result);
             }
 
             return true;
@@ -556,15 +567,62 @@ export class PermissionRequestCoordinator<TResult> {
 
         if (!this.store.hasOutstandingRequest(context.requestId)) return false;
 
+        const retained = this.store.readAppliedCompletion?.({ requestId: context.requestId,
+            ...completion.completedRequest });
+        if (retained) {
+            if (!retained.matches) return false;
+            await this.store.recoverAppliedCompletions?.();
+            return await retained.acknowledgement;
+        }
+        const application = params.acknowledgeDecisionApplication
+            ? this.store.captureRequestApplication?.(context.requestId) : null;
+        if (params.acknowledgeDecisionApplication && this.store.captureRequestApplication && !application) return false;
         if (params.acknowledgeDecisionApplication) {
             await params.acknowledgeDecisionApplication(completion.result);
         }
         const persisted = await this.store.completeRequest({
             requestId: context.requestId,
             ...completion.completedRequest,
+            ...(application ? { applicationAcknowledged: application } : {}),
         });
         return persisted !== false;
     }
+
+    private retireAppliedEntry(entry: PendingPermissionRequest<TResult>): void {
+        if (this.pendingRequests.get(entry.requestId) !== entry) return;
+        this.pendingRequests.delete(entry.requestId);
+        for (const waiter of entry.waiters.values()) {
+            rejectWaiter(waiter, createPermissionRequestAbortError('Applied request retired'));
+        }
+        entry.waiters.clear();
+    }
+
+    private settleCompletedEntry(entry: PendingPermissionRequest<TResult>, result: TResult): void {
+        const waiters = [...entry.waiters.values()];
+        const hasLiveWaiters = waiters.some((waiter) => !waiter.aborted);
+        entry.waiters.clear();
+        this.pendingRequests.delete(entry.requestId);
+        if (!hasLiveWaiters && !entry.owner) {
+            this.cachedDecisions.set(entry.requestId, {
+                result: result,
+                toolName: entry.toolName,
+                toolInput: entry.toolInput,
+                lifetime: entry.lifetime,
+                ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
+                ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
+                ...(entry.responseTarget ? { responseTarget: entry.responseTarget } : {}),
+                ...(entry.owner ? { owner: entry.owner } : {}),
+            });
+        }
+
+        for (const waiter of waiters) {
+            if (waiter.aborted) continue;
+            detachWaiter(waiter);
+            waiter.resolve(result);
+        }
+
+    }
+
 
     cancelRequest(requestId: string, reason: string): void {
         this.cachedDecisions.delete(requestId);

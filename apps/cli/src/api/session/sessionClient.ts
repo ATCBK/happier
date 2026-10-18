@@ -643,6 +643,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     bindAgentStateRequestStore(store: AgentStateRequestStore): void {
+        if (this.agentStateRequestStore) store.adoptAppliedCompletions(this.agentStateRequestStore);
         this.agentStateRequestStore = store;
     }
 
@@ -1763,6 +1764,9 @@ export class ApiSessionClient extends EventEmitter {
             },
             flushQueuedSessionMessagesOnReconnect: () => this.commitQueueRuntime.flushQueuedSessionMessagesOnReconnect(),
             flushDurableSessionMutationsOnReconnect: () => this.durableMutationOutbox.flush('connect'),
+            recoverAppliedPermissionCompletions: async () => {
+                await this.agentStateRequestStore?.recoverAppliedCompletions();
+            },
             reofferAcceptedProviderInputSettlementsAfterConnection: () => {
                 this.reofferAcceptedProviderInputSettlementsAfterConnection();
             },
@@ -3564,7 +3568,10 @@ export class ApiSessionClient extends EventEmitter {
                     ),
                 mutation: {
                     kind: 'agentState',
-                    update: handler,
+                    update: (state) => {
+                        const next = handler(state);
+                        return this.agentStateRequestStore?.applyAppliedCompletions(next) ?? next;
+                    },
                 },
                 mutateLegacy: async (request) =>
                     await this.mutateLegacySessionTuple(request),
@@ -3581,6 +3588,7 @@ export class ApiSessionClient extends EventEmitter {
             if (updated.metadataLayoutVersion === 1) {
                 this.applyMetadataEnvelopeTupleSnapshot(updated);
             }
+            this.agentStateRequestStore?.confirmAppliedCompletions();
         });
     }
 
@@ -3986,6 +3994,7 @@ export class ApiSessionClient extends EventEmitter {
         // Withdraw native controls before asynchronous disposal so startup
         // observers can produce their terminal unsupported response while the
         // reply transport is still available.
+        this.agentStateRequestStore?.retireAppliedCompletions();
         applySessionRuntimeControls(this.sessionRuntimeControls, null);
         this.sessionRuntimeControlsSettled = true;
         this.emit(SESSION_RUNTIME_CONTROLS_EVENT);

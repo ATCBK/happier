@@ -690,6 +690,133 @@ describe('PermissionRequestCoordinator', () => {
         await expect(pending).resolves.toEqual(approve());
     });
 
+    it('retains an applied native choice after failed persistence and never applies a competing answer', async () => {
+        const session = new RejectingUpdateSession();
+        const { coordinator } = createHarness(session);
+        const request = { ...bashRequest, toolName: 'AskUserQuestion', toolInput: { questions: [] } };
+        const pending = coordinator.requestDecision(request);
+        const context = coordinator.getResponseContext(request.requestId)!;
+        const apply = vi.fn(async () => undefined);
+        const chosen = { result: { decision: 'approved', answers: { choice: 'Continue' } },
+            completedRequest: { status: 'approved', decision: 'approved',
+                extraCompletedFields: { answers: { choice: 'Continue' } } } };
+        session.rejectNextUpdate();
+        await expect(coordinator.completeResponse({ context, completion: chosen,
+            acknowledgeDecisionApplication: apply })).rejects.toThrow('agent state persistence failed');
+        expect(await settledState(pending)).toBe('pending');
+        expect(session.agentState.requests![request.requestId]).toBeDefined();
+        await expect(coordinator.completeResponse({ context,
+            completion: { result: { decision: 'approved', answers: { choice: 'Restart' } },
+                completedRequest: { status: 'approved', decision: 'approved',
+                    extraCompletedFields: { answers: { choice: 'Restart' } } } },
+            acknowledgeDecisionApplication: apply })).resolves.toBe(false);
+        expect(apply).toHaveBeenCalledTimes(1);
+        await expect(coordinator.completeResponse({ context, completion: chosen,
+            acknowledgeDecisionApplication: apply })).resolves.toBe(true);
+        await expect(pending).resolves.toEqual(chosen.result);
+        expect(apply).toHaveBeenCalledTimes(1);
+        expect(session.agentState.requests![request.requestId]).toBeUndefined();
+        expect(session.agentState.completedRequests![request.requestId]).toMatchObject({
+            status: 'approved', answers: { choice: 'Continue' } });
+    });
+
+    it.each(['replacement', 'claim'] as const)('does not adopt a newer %s arriving during native application', async (change) => {
+        const session = new FakeSession();
+        const { coordinator } = createHarness(session);
+        const pending = coordinator.requestDecision(bashRequest);
+        void pending.catch(() => undefined);
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        const apply = vi.fn(async () => {
+            const original = session.agentState.requests![bashRequest.requestId]!;
+            session.agentState.requests![bashRequest.requestId] = change === 'replacement'
+                ? { ...original, createdAt: 200 }
+                : { ...original, permissionResponseClaimV1: { version: 1, origin: 'automaticPolicy' } };
+        });
+        await expect(coordinator.completeResponse({ context,
+            completion: { result: approve(), completedRequest: { status: 'approved', decision: 'approved' } },
+            acknowledgeDecisionApplication: apply })).resolves.toBe(false);
+        await expect(pending).rejects.toThrow('Applied request retired');
+        expect(session.agentState.completedRequests![bashRequest.requestId]).toBeUndefined();
+        if (change === 'replacement') expect(session.agentState.requests![bashRequest.requestId]?.createdAt).toBe(200);
+        else expect(session.agentState.requests![bashRequest.requestId]).toHaveProperty('permissionResponseClaimV1');
+        expect(apply).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['terminal', 'replacement'] as const)('does not report the applied choice saved when the first ACK observes a newer %s', async (change) => {
+        const session = new DeferredUpdateSession();
+        const { coordinator } = createHarness(session);
+        const pending = coordinator.requestDecision(bashRequest);
+        void pending.catch(() => undefined);
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        const apply = vi.fn(async () => undefined);
+        session.deferNextUpdate();
+        const response = coordinator.completeResponse({ context,
+            completion: { result: approve(), completedRequest: { status: 'approved', decision: 'approved' } },
+            acknowledgeDecisionApplication: apply });
+        await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+        const original = session.agentState.requests![bashRequest.requestId]!;
+        session.agentState = change === 'terminal'
+            ? { requests: {}, completedRequests: { [bashRequest.requestId]: {
+                ...original, completedAt: 200, status: 'canceled', decision: 'abort' } } }
+            : { requests: { [bashRequest.requestId]: { ...original, createdAt: 200 } }, completedRequests: {} };
+        session.resolveDeferredUpdate();
+        await expect(response).resolves.toBe(false);
+        await expect(pending).rejects.toThrow('Applied request retired');
+        expect(apply).toHaveBeenCalledTimes(1);
+    });
+
+    it('settles the original waiter after recovery through a replacement Session request store', async () => {
+        const session = new RejectingUpdateSession();
+        const { coordinator, store } = createHarness(session);
+        const pending = coordinator.requestDecision(bashRequest);
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        const apply = vi.fn(async () => undefined);
+        const completion = { result: approve(), completedRequest: { status: 'approved', decision: 'approved' } };
+        session.rejectNextUpdate();
+        await expect(coordinator.completeResponse({ context, completion,
+            acknowledgeDecisionApplication: apply })).rejects.toThrow('agent state persistence failed');
+        const replacement = new AgentStateRequestStore({ session, logPrefix: '[Replacement]' });
+        replacement.adoptAppliedCompletions(store);
+        store.dispose();
+        await replacement.recoverAppliedCompletions();
+        await expect(pending).resolves.toEqual(approve());
+        expect(coordinator.getResponseContext(bashRequest.requestId)).toBeNull();
+        expect(apply).toHaveBeenCalledTimes(1);
+        expect(session.agentState.requests![bashRequest.requestId]).toBeUndefined();
+        expect(session.agentState.completedRequests![bashRequest.requestId]).toMatchObject({ status: 'approved' });
+    });
+
+    it.each(['replacement', 'claim', 'terminal', 'cancel', 'dispose'] as const)(
+        'retires an applied fact without reviving it after %s', async (change) => {
+        const session = new RejectingUpdateSession();
+        const { coordinator, store } = createHarness(session);
+        const pending = coordinator.requestDecision(bashRequest);
+        void pending.catch(() => undefined);
+        const context = coordinator.getResponseContext(bashRequest.requestId)!;
+        const apply = vi.fn(async () => undefined);
+        session.rejectNextUpdate();
+        await expect(coordinator.completeResponse({ context,
+            completion: { result: approve(), completedRequest: { status: 'approved', decision: 'approved' } },
+            acknowledgeDecisionApplication: apply })).rejects.toThrow('agent state persistence failed');
+        const original = session.agentState.requests![bashRequest.requestId]!;
+        if (change === 'replacement') session.agentState.requests![bashRequest.requestId] = { ...original, createdAt: 200 };
+        if (change === 'claim') session.agentState.requests![bashRequest.requestId] = {
+            ...original, permissionResponseClaimV1: { version: 1, origin: 'automaticPolicy' } };
+        if (change === 'terminal' || change === 'cancel') {
+            const state: AgentState = { ...session.agentState, requests: {}, completedRequests: {
+                [bashRequest.requestId]: { ...original, completedAt: 300, status: 'canceled', decision: 'abort' } } };
+            session.agentState = store.applyAppliedCompletions(state);
+        }
+        if (change === 'dispose') store.dispose();
+        else await store.recoverAppliedCompletions();
+        await expect(pending).rejects.toThrow('Applied request retired');
+        expect(apply).toHaveBeenCalledTimes(1);
+        expect(store.readAppliedCompletion({ requestId: bashRequest.requestId, status: 'approved', decision: 'approved' })).toBeNull();
+        if (change === 'replacement') expect(session.agentState.requests![bashRequest.requestId]?.createdAt).toBe(200);
+        if (change === 'claim') expect(session.agentState.requests![bashRequest.requestId]).toHaveProperty('permissionResponseClaimV1');
+        if (change === 'terminal' || change === 'cancel') expect(session.agentState.completedRequests![bashRequest.requestId]?.decision).toBe('abort');
+    });
+
     it('keeps lifecycle cancellation retriable until its AgentState terminal update succeeds', async () => {
         const session = new RejectingUpdateSession();
         const { coordinator } = createHarness(session);

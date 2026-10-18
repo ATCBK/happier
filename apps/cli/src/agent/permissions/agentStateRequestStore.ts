@@ -261,7 +261,67 @@ function createSessionPersistenceTarget(session: SessionLike): AgentStateRequest
     });
 }
 
+export type AgentStateRequestApplication = Readonly<{ pending: AgentStateRequestEntry }>;
+
+export type AgentStateRequestCompletion = Readonly<{
+    requestId: string;
+    status: string;
+    decision?: string;
+    reason?: string;
+    mode?: string;
+    allowedTools?: readonly string[] | undefined;
+    updatedPermissions?: unknown;
+    extraCompletedFields?: Readonly<Record<string, unknown>> | null;
+    /**
+     * Evaluated inside the AgentState terminal write so an asynchronous
+     * automatic decision cannot commit after its policy has changed.
+     */
+    isCurrent?: () => boolean;
+    fallback?: Readonly<{
+        toolName: string;
+        toolInput: unknown;
+        createdAt: number;
+        turnId?: string;
+        kind?: string;
+        source?: string;
+        responseTarget?: AgentStateRequestResponseTarget | null;
+        subagentRef?: unknown;
+        sidechainId?: string | null;
+        permissionSuggestions?: readonly unknown[] | null;
+        owner?: PermissionRequestOwner | null;
+    }> | null;
+    updateState?: (state: AgentState) => AgentState;
+    /** The external native choice has already been applied successfully. */
+    applicationAcknowledged?: AgentStateRequestApplication;
+}>;
+
+export type AppliedRequestCompletion = Readonly<{
+    matches: boolean;
+    acknowledgement: Promise<boolean>;
+}>;
+
+type RetainedAppliedCompletion = Readonly<{
+    completion: Readonly<Record<string, unknown>>;
+    rows: readonly Readonly<{ requestId: string; pending: AgentStateRequestEntry; completed: AgentStateCompletedEntry }>[];
+    acknowledgement: Promise<boolean>;
+    settle: (saved: boolean) => void;
+}>;
+
+function completionIdentity(params: AgentStateRequestCompletion): Readonly<Record<string, unknown>> {
+    const { fallback: _fallback, isCurrent: _isCurrent, updateState: _updateState,
+        applicationAcknowledged: _applicationAcknowledged, ...completion } = params;
+    return completion;
+}
+
+function pendingIdentity(entry: unknown): unknown {
+    const record = clonePlainObjectToNullProto(entry);
+    if (record) delete record.pushNotifiedAt;
+    return record;
+}
+
 export class AgentStateRequestStore {
+    private appliedCompletionOwner: AgentStateRequestStore = this;
+    private appliedCompletions = new Map<string, RetainedAppliedCompletion>();
     private target: AgentStateRequestPersistenceTarget;
     private session: SessionLike | null;
     private readonly logPrefix: string;
@@ -310,6 +370,10 @@ export class AgentStateRequestStore {
 
     updateSession(session: SessionLike): void {
         const nextTarget = createSessionPersistenceTarget(session);
+        if (nextTarget.scopeId !== this.target.scopeId) {
+            this.retireAppliedCompletions();
+            this.appliedCompletions = new Map();
+        }
         const nextDispatcher = nextTarget.getResponseTargetDispatcher?.();
         if (nextDispatcher) {
             this.responseTargetDispatcher = nextDispatcher;
@@ -329,6 +393,75 @@ export class AgentStateRequestStore {
         for (const kind of [...this.responseTargetDispatcher.kinds()]) {
             this.replayCompletedResponseTargetsForHandler(kind);
         }
+    }
+
+    /** A replacement view of the same live Session keeps one applied-fact owner. */
+    adoptAppliedCompletions(previous: AgentStateRequestStore): void {
+        if (previous.target.scopeId !== this.target.scopeId || previous === this) return;
+        this.appliedCompletions = previous.appliedCompletions;
+        previous.appliedCompletionOwner = this;
+    }
+
+    captureRequestApplication(requestId: string): AgentStateRequestApplication | null {
+        const pending = this.target.readState()?.requests?.[requestId];
+        return pending ? { pending: structuredClone(pending) } : null;
+    }
+
+    readAppliedCompletion(params: AgentStateRequestCompletion): AppliedRequestCompletion | null {
+        const retained = this.appliedCompletions.get(params.requestId);
+        return retained ? { matches: deepEqual(retained.completion, completionIdentity(params)),
+            acknowledgement: retained.acknowledgement } : null;
+    }
+
+    /** Merge after the caller's mutation: newer terminal/claim/request identity wins. */
+    applyAppliedCompletions(state: AgentState): AgentState {
+        let next = state;
+        for (const [requestId, fact] of this.appliedCompletions) {
+            const primary = fact.rows.find((row) => row.requestId === requestId);
+            if (!primary || state.completedRequests?.[requestId]
+                || !deepEqual(pendingIdentity(state.requests?.[requestId]), pendingIdentity(primary.pending))) continue;
+            const requests = cloneStringKeyedRecordToNullProto(next.requests);
+            const completedRequests = cloneStringKeyedRecordToNullProto(next.completedRequests);
+            for (const row of fact.rows) {
+                if (completedRequests[row.requestId]
+                    || !deepEqual(pendingIdentity(requests[row.requestId]), pendingIdentity(row.pending))) continue;
+                delete requests[row.requestId];
+                completedRequests[row.requestId] = row.completed;
+            }
+            next = { ...next, requests, completedRequests };
+        }
+        return next;
+    }
+
+    /** Called only after an acknowledged write, including a newer cancellation. */
+    confirmAppliedCompletions(): void {
+        const state = this.target.readState();
+        if (!state) return;
+        for (const [requestId, fact] of this.appliedCompletions) {
+            const primary = fact.rows.find((row) => row.requestId === requestId);
+            if (!primary) continue;
+            const completed = state.completedRequests?.[requestId];
+            const saved = deepEqual(completed, primary.completed);
+            if (!saved && !completed
+                && deepEqual(pendingIdentity(state.requests?.[requestId]), pendingIdentity(primary.pending))) continue;
+            this.appliedCompletions.delete(requestId);
+            fact.settle(saved);
+            if (saved) for (const row of fact.rows) {
+                this.markPermissionRequestCompletedBestEffort(row.requestId);
+                this.dispatchResponseTargetBestEffort(this.readCompletedResponseTarget(row.requestId));
+            }
+        }
+    }
+
+    async recoverAppliedCompletions(): Promise<void> {
+        if (this.appliedCompletions.size === 0) return;
+        await Promise.resolve(this.target.updateState((state) => this.applyAppliedCompletions(state)));
+        this.confirmAppliedCompletions();
+    }
+
+    retireAppliedCompletions(): void {
+        for (const fact of this.appliedCompletions.values()) fact.settle(false);
+        this.appliedCompletions.clear();
     }
 
     hasOutstandingRequest(requestId: string): boolean {
@@ -651,133 +784,142 @@ export class AgentStateRequestStore {
         publication.notify();
     }
 
-    async completeRequest(params: Readonly<{
-        requestId: string;
-        status: string;
-        decision?: string;
-        reason?: string;
-        mode?: string;
-        allowedTools?: readonly string[] | undefined;
-        updatedPermissions?: unknown;
-        extraCompletedFields?: Readonly<Record<string, unknown>> | null;
-        /**
-         * Evaluated inside the AgentState terminal write so an asynchronous
-         * automatic decision cannot commit after its policy has changed.
-         */
-        isCurrent?: () => boolean;
-        fallback?: Readonly<{
-            toolName: string;
-            toolInput: unknown;
-            createdAt: number;
-            turnId?: string;
-            kind?: string;
-            source?: string;
-            responseTarget?: AgentStateRequestResponseTarget | null;
-            subagentRef?: unknown;
-            sidechainId?: string | null;
-            permissionSuggestions?: readonly unknown[] | null;
-            owner?: PermissionRequestOwner | null;
-        }> | null;
-        updateState?: (state: AgentState) => AgentState;
-    }>): Promise<boolean> {
+    async completeRequest(params: AgentStateRequestCompletion): Promise<boolean> {
+        if (params.applicationAcknowledged && !deepEqual(
+            pendingIdentity(this.target.readState()?.requests?.[params.requestId]),
+            pendingIdentity(params.applicationAcknowledged.pending),
+        )) return false;
         const completedRequestIds = new Set<string>();
         let didCompleteRequest = false;
-        await this.updateAgentStateWithResponseDispatch(
-            (currentState) => {
-                const requests = cloneStringKeyedRecordToNullProto(currentState.requests);
-                const existing = requests[params.requestId] as unknown;
-                const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
-                if (!existing && (!params.fallback || completedRequests[params.requestId])) {
-                    return { state: currentState };
+        if (this.session && params.applicationAcknowledged && !this.appliedCompletions.has(params.requestId)) {
+            const currentState = this.target.readState();
+            if (currentState) {
+                const preview = this.buildRequestCompletion(currentState, params, new Set());
+                if (preview.didCompleteRequest && currentState.requests?.[params.requestId]) {
+                    let settle!: (saved: boolean) => void;
+                    const acknowledgement = new Promise<boolean>((resolve) => { settle = resolve; });
+                    const rows = Object.entries(preview.state.completedRequests ?? {}).flatMap(([requestId, completed]) => {
+                        const pending = currentState.requests?.[requestId];
+                        return pending && !preview.state.requests?.[requestId] ? [{ requestId, pending, completed }] : [];
+                    });
+                    this.appliedCompletions.set(params.requestId, {
+                        completion: completionIdentity(params), rows, acknowledgement, settle,
+                    });
                 }
-                const existingEntry = clonePlainObjectToNullProto(existing);
-                if (params.isCurrent && !params.isCurrent()) {
-                    return { state: currentState };
-                }
-                if (
-                    params.status === 'canceled'
-                    && existingEntry
-                    && hasOpaquePermissionResponseClaim(existingEntry)
-                ) {
-                    // A persisted first-answer claim is an active terminal owner.
-                    // Cancellation cannot turn it into a different terminal state
-                    // while its owner may still be linearizing the response.
-                    return { state: currentState };
-                }
-                didCompleteRequest = true;
-                delete requests[params.requestId];
+            }
+        }
+        const appliedCompletion = params.applicationAcknowledged
+            ? this.appliedCompletions.get(params.requestId) : undefined;
+        await this.updateAgentStateWithResponseDispatch((currentState) => {
+            if (params.applicationAcknowledged && this.appliedCompletions.has(params.requestId)) {
+                const state = this.applyAppliedCompletions(currentState);
+                didCompleteRequest = !!state.completedRequests?.[params.requestId] && !state.requests?.[params.requestId];
+                return { state };
+            }
+            const next = this.buildRequestCompletion(currentState, params, completedRequestIds);
+            didCompleteRequest = next.didCompleteRequest === true;
+            return next;
+        });
+        this.confirmAppliedCompletions();
 
-                const completedEntry = existingEntry ?? Object.create(null);
-
-                if (!existing && params.fallback) {
-                    completedEntry.tool = params.fallback.toolName;
-                    completedEntry.arguments = params.fallback.toolInput;
-                    completedEntry.createdAt = params.fallback.createdAt;
-                    if (typeof params.fallback.kind === 'string') completedEntry.kind = params.fallback.kind;
-                    if (typeof params.fallback.source === 'string') completedEntry.source = params.fallback.source;
-                    applyAgentStateRequestMetadata(completedEntry, params.fallback);
-                }
-
-                if (typeof completedEntry.kind !== 'string') {
-                    const toolName =
-                        typeof completedEntry.tool === 'string'
-                            ? completedEntry.tool
-                            : params.fallback?.toolName;
-                    if (toolName) {
-                        completedEntry.kind = resolveAgentRequestKind(toolName);
-                    }
-                }
-
-                completedEntry.completedAt = Date.now();
-                completedEntry.status = params.status;
-                if (typeof params.decision === 'string') completedEntry.decision = params.decision;
-                if (typeof params.reason === 'string' && params.reason.length > 0) completedEntry.reason = params.reason;
-                if (typeof params.mode === 'string') completedEntry.mode = params.mode;
-                if (Array.isArray(params.allowedTools) && params.allowedTools.length > 0) {
-                    completedEntry.allowedTools = [...params.allowedTools];
-                }
-                if (typeof params.updatedPermissions !== 'undefined') {
-                    completedEntry.updatedPermissions = params.updatedPermissions;
-                }
-                if (params.extraCompletedFields && typeof params.extraCompletedFields === 'object' && !Array.isArray(params.extraCompletedFields)) {
-                    const extra = clonePlainObjectToNullProto(params.extraCompletedFields) ?? Object.create(null);
-                    for (const [key, value] of Object.entries(extra)) {
-                        if (!key) continue;
-                        completedEntry[key] = value;
-                    }
-                }
-
-                removePermissionResponseClaim(completedEntry);
-
-                completedRequests[params.requestId] = completedEntry as AgentStateCompletedEntry;
-                removeRequestsCoveredByCompletedEntry({
-                    completedRequestId: params.requestId,
-                    completedEntry: completedEntry as AgentStateCompletedEntry,
-                    requests,
-                    completedRequests,
-                    markCompleted: (requestId) => completedRequestIds.add(requestId),
-                });
-                const nextState: AgentState = {
-                    ...currentState,
-                    requests,
-                    completedRequests,
-                };
-                const finalState = typeof params.updateState === 'function' ? params.updateState(nextState) : nextState;
-                const finalCompletedEntry = finalState.completedRequests?.[params.requestId] as unknown;
-
-                return {
-                    state: finalState,
-                    responseDispatch: createResponseTargetDispatchFromUnknown(params.requestId, finalCompletedEntry),
-                };
-            },
-        );
-
+        if (appliedCompletion) return await appliedCompletion.acknowledgement;
         if (!didCompleteRequest) return false;
         completedRequestIds.add(params.requestId);
         for (const requestId of completedRequestIds) {
             this.markPermissionRequestCompletedBestEffort(requestId);
         }
         return true;
+    }
+
+    private buildRequestCompletion(currentState: AgentState, params: AgentStateRequestCompletion,
+        completedRequestIds: Set<string>): AgentStateUpdateWithResponseDispatch & { didCompleteRequest?: boolean } {
+        let didCompleteRequest = false;
+        const requests = cloneStringKeyedRecordToNullProto(currentState.requests);
+        const existing = requests[params.requestId] as unknown;
+        const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
+        if (!existing && (!params.fallback || completedRequests[params.requestId])) {
+            return { state: currentState };
+        }
+        const existingEntry = clonePlainObjectToNullProto(existing);
+        if (params.isCurrent && !params.isCurrent()) {
+            return { state: currentState };
+        }
+        if (
+            params.status === 'canceled'
+            && existingEntry
+            && hasOpaquePermissionResponseClaim(existingEntry)
+        ) {
+            // A persisted first-answer claim is an active terminal owner.
+            // Cancellation cannot turn it into a different terminal state
+            // while its owner may still be linearizing the response.
+            return { state: currentState };
+        }
+        didCompleteRequest = true;
+        delete requests[params.requestId];
+
+        const completedEntry = existingEntry ?? Object.create(null);
+
+        if (!existing && params.fallback) {
+            completedEntry.tool = params.fallback.toolName;
+            completedEntry.arguments = params.fallback.toolInput;
+            completedEntry.createdAt = params.fallback.createdAt;
+            if (typeof params.fallback.kind === 'string') completedEntry.kind = params.fallback.kind;
+            if (typeof params.fallback.source === 'string') completedEntry.source = params.fallback.source;
+            applyAgentStateRequestMetadata(completedEntry, params.fallback);
+        }
+
+        if (typeof completedEntry.kind !== 'string') {
+            const toolName =
+                typeof completedEntry.tool === 'string'
+                    ? completedEntry.tool
+                    : params.fallback?.toolName;
+            if (toolName) {
+                completedEntry.kind = resolveAgentRequestKind(toolName);
+            }
+        }
+
+        completedEntry.completedAt = Date.now();
+        completedEntry.status = params.status;
+        if (typeof params.decision === 'string') completedEntry.decision = params.decision;
+        if (typeof params.reason === 'string' && params.reason.length > 0) completedEntry.reason = params.reason;
+        if (typeof params.mode === 'string') completedEntry.mode = params.mode;
+        if (Array.isArray(params.allowedTools) && params.allowedTools.length > 0) {
+            completedEntry.allowedTools = [...params.allowedTools];
+        }
+        if (typeof params.updatedPermissions !== 'undefined') {
+            completedEntry.updatedPermissions = params.updatedPermissions;
+        }
+        if (params.extraCompletedFields && typeof params.extraCompletedFields === 'object' && !Array.isArray(params.extraCompletedFields)) {
+            const extra = clonePlainObjectToNullProto(params.extraCompletedFields) ?? Object.create(null);
+            for (const [key, value] of Object.entries(extra)) {
+                if (!key) continue;
+                completedEntry[key] = value;
+            }
+        }
+
+        removePermissionResponseClaim(completedEntry);
+
+        completedRequests[params.requestId] = completedEntry as AgentStateCompletedEntry;
+        removeRequestsCoveredByCompletedEntry({
+            completedRequestId: params.requestId,
+            completedEntry: completedEntry as AgentStateCompletedEntry,
+            requests,
+            completedRequests,
+            markCompleted: (requestId) => completedRequestIds.add(requestId),
+        });
+        const nextState: AgentState = {
+            ...currentState,
+            requests,
+            completedRequests,
+        };
+        const finalState = typeof params.updateState === 'function' ? params.updateState(nextState) : nextState;
+        const finalCompletedEntry = finalState.completedRequests?.[params.requestId] as unknown;
+
+        return {
+            didCompleteRequest,
+            state: finalState,
+            responseDispatch: createResponseTargetDispatchFromUnknown(params.requestId, finalCompletedEntry),
+        };
     }
 
     async retireCompletedRequestsForTurn(turnId: string): Promise<void> {
@@ -1028,6 +1170,7 @@ export class AgentStateRequestStore {
     }
 
     dispose(): void {
+        if (this.appliedCompletionOwner === this) this.retireAppliedCompletions();
         this.permissionRequestPushNotifier?.dispose();
         this.permissionRequestPushNotifier = null;
         if (this.ownsResponseTargetDispatcher) this.responseTargetDispatcher.dispose();
@@ -1122,6 +1265,7 @@ export class AgentStateRequestStore {
         updater: (state: AgentState) => AgentState,
     ): Promise<void> {
         await Promise.resolve(this.target.updateState(updater));
+        this.confirmAppliedCompletions();
     }
 
     private dispatchResponseTargetBestEffort(dispatch: AgentStateResponseTargetDispatch | null): void {
