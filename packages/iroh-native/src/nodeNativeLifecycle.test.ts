@@ -376,6 +376,12 @@ describeWhenNative('Iroh Node lifecycle binding over the shared native runtime',
     expect(status?.connectionActive).toBe(true);
     expect(status?.observedPath).toBe('direct');
 
+    // Beyond the pinned transport's 30-second dead-peer window, healthy
+    // application-idle connections must survive on Iroh's own keepalives.
+    await new Promise((resolveIdle) => setTimeout(resolveIdle, 35_000));
+    expect((await addon.getTunnelStatus(second.tunnelId))?.connectionActive).toBe(true);
+    await echoOverRuntimeOrigin(second.runtimeOrigin, 'same-idle-tunnel-still-serves-bytes');
+
     await addon.releaseHomeTunnel(first.tunnelId);
     expect(await expectOriginDown(first.runtimeOrigin)).toBe(true);
     const sibling = await addon.getTunnelStatus(second.tunnelId);

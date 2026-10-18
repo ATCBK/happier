@@ -23,19 +23,18 @@ impl IrohCapProfile {
     /// different Home-interactive and machine-bulk windows is the condition for
     /// making their transport configuration diverge.
     ///
-    /// Builds the QUIC transport config with only the two justified deviations
-    /// from the pinned defaults: a finite connection receive-memory window and
-    /// no transport idle timeout. Home Socket.IO and Machine/workspace streams
-    /// own application liveness, so an arbitrary transport idle cutoff would
-    /// terminate otherwise valid idle work.
+    /// Bounds connection receive memory while retaining Iroh's transport
+    /// liveness defaults. Its keepalives preserve healthy application-idle
+    /// streams; its idle timeout closes dead peers even when a process exits
+    /// without sending a QUIC close. Disabling it leaves raw workspace streams
+    /// and their engine flushes waiting forever after peer retirement.
     pub fn transport_config(self) -> Result<iroh::endpoint::QuicTransportConfig> {
-        let mut builder = iroh::endpoint::QuicTransportConfig::builder().receive_window(
+        let builder = iroh::endpoint::QuicTransportConfig::builder().receive_window(
             iroh::endpoint::VarInt::from(
                 u32::try_from(FINITE_CONNECTION_RECEIVE_WINDOW)
                     .map_err(|_| IrohError::ResourceLimit)?,
             ),
         );
-        builder = builder.max_idle_timeout(None);
         Ok(builder.build())
     }
 }
@@ -94,8 +93,7 @@ mod tests {
     }
 
     /// Both profiles bound the upstream effectively-unbounded receive window,
-    /// leave finite upstream stream/fan-out defaults alone, and avoid imposing
-    /// an arbitrary transport liveness policy.
+    /// leave upstream stream/fan-out and transport liveness defaults alone.
     #[test]
     fn profiles_bound_only_real_per_connection_resources() {
         let pinned = format!("{:?}", iroh::endpoint::QuicTransportConfig::default());
@@ -143,13 +141,18 @@ mod tests {
                 "{} must keep the pinned upstream per-stream window",
                 profile.id(),
             );
-            // Application liveness owns idle connections on both profiles.
-            assert_eq!(
-                transport_field(&rendered, "max_idle_timeout"),
-                "None",
-                "{} must not impose a transport idle timeout",
-                profile.id(),
-            );
+            // QUIC keepalives preserve healthy application-idle streams while
+            // the dependency's idle timeout detects a dead peer/path.
+            for field in ["max_idle_timeout", "keep_alive_interval"] {
+                let upstream = transport_field(&pinned, field);
+                assert_ne!(upstream, "None", "the pinned transport must own liveness");
+                assert_eq!(
+                    transport_field(&rendered, field),
+                    upstream,
+                    "{} must retain upstream {field}",
+                    profile.id(),
+                );
+            }
         }
     }
 

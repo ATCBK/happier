@@ -39,6 +39,12 @@ workers available for daemon logging, heartbeat persistence and request admissio
 Existing processes need the rebuilt addon and a runtime restart to consume this
 correction; changing TypeScript source alone does not replace a loaded addon.
 
+The development transport also retains Iroh's default keepalives and dead-peer
+idle timeout, so an abruptly retired peer cannot leave native streams waiting
+forever. Healthy application-idle connections remain usable. See the
+[carrier lifetime contract](../../docs/peer-mediation.md) for the distinction
+between transport liveness and application deadlines.
+
 ```ts
 import { loadIrohNodeNative } from '@happier-dev/iroh-native/node';
 

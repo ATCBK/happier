@@ -218,6 +218,15 @@ authority before issuance. CLI grant refusals retain the existing
 `peer_unavailable` error with the server's structured `reasonCode`; raw HTTP
 responses and credential-bearing request configuration are not projected.
 
+In 0.3 development, the native Home and Machine carriers retain the pinned
+Iroh transport's keepalives and 30-second connection idle timeout. Keepalives
+preserve healthy connections without application traffic; a peer that disappears
+without sending a QUIC close is detected by the transport. Workspace Sync then
+uses its existing carrier-close and engine-reconnection path. This is transport
+liveness, not a deadline on a Script, Move, copy, or otherwise healthy idle stream.
+Existing native consumers require an addon rebuild and process restart to load
+the correction.
+
 ### Workspace inspection and reviewed resolution
 
 The 0.3 development Workspace Sync extension uses the existing authenticated Machine RPC
