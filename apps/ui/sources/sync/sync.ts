@@ -1668,8 +1668,9 @@ class Sync {
                   ? createApiSessionDraftsTransport({ credentials })
                   : undefined,
               cipher: createSessionDraftCipher({
-                  accountMode,
-                  accountCryptoMaterial: resolveAccountScopedCryptoMaterialFromCredentials(credentials),
+                  ...(accountMode === 'plain'
+                      ? { accountMode, accountCryptoMaterial: null }
+                      : { accountMode, accountCryptoMaterial: resolveAccountScopedCryptoMaterialFromCredentials(credentials) }),
                   getSessionContext: (sessionId) => {
                       const session = storage.getState().sessions[sessionId] ?? null;
                       if (!session) return null;
