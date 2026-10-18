@@ -164,10 +164,10 @@ export class ClaudeLocalPermissionBridge {
     }
 
     private retireStaleSourceOwnedRequests(): void {
-        this.requestStore.cancelAllRequests({
+        void this.requestStore.cancelAllRequests({
             reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
             shouldCancel: isClaudeLocalPermissionBridgeAgentStateRequest,
-        });
+        }).catch(() => undefined); // The store reports admission failures on the default file log.
     }
 
     dispose(): void {
@@ -191,11 +191,11 @@ export class ClaudeLocalPermissionBridge {
             this.permissionCoordinator.getResponseContext(requestId)?.correlation === 'agent_state'
         ));
         if (stateOnlyRequestIds.length > 0) {
-            this.requestStore.cancelAllRequests({
+            void this.requestStore.cancelAllRequests({
                 reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
                 requestIds: stateOnlyRequestIds,
                 shouldCancel: isClaudeLocalPermissionBridgeAgentStateRequest,
-            });
+            }).catch(() => undefined); // The store reports admission failures on the default file log.
         }
         const settlements = [...this.pendingRequests.values()].map(async (pending) => {
             const context = this.permissionCoordinator.getResponseContext(pending.id);

@@ -5,6 +5,7 @@
  * Handles tool permission requests, responses, and state management.
  */
 
+import { isExecutionRunPermissionRequestId } from '@/agent/executionRuns/runtime/runScopedExecutionPermissionHandler';
 import { isDeepStrictEqual } from 'node:util';
 import { logger } from "@/lib";
 import type { SDKAssistantMessage, SDKMessage, SDKUserMessage } from "../sdk";
@@ -390,6 +391,7 @@ export class PermissionHandler {
 
     private readOutstandingRemoteRequest(id: string): AgentStateOutstandingRequest | null {
         try {
+            if (isExecutionRunPermissionRequestId(id)) return null;
             const outstanding = this.agentStateRequestStore.readOutstandingRequest(id);
             if (!outstanding) return null;
             const snapshot = (this.session.client as any).getAgentStateSnapshot?.() ?? null;
@@ -952,12 +954,12 @@ export class PermissionHandler {
             this.permissionCoordinator.getResponseContext(requestId)?.correlation === 'agent_state'
         ));
         if (stateOnlyRequestIds.length > 0) {
-            this.agentStateRequestStore.cancelAllRequests({
+            void this.agentStateRequestStore.cancelAllRequests({
                 reason: _opts?.completedReason ?? reason,
                 decision: _opts?.decision ?? 'abort',
                 requestIds: stateOnlyRequestIds,
                 shouldCancel: (request) => !isRequestOwnedOutsideRemotePermissionHandler(request),
-            });
+            }).catch(() => undefined); // The store reports admission failures on the default file log.
         }
         void this.permissionCoordinator.cancelAll(reason).then(() => {
             for (const [requestId, pending] of pendingSnapshot) {

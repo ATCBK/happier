@@ -1031,6 +1031,7 @@ export class ApiSessionClient extends EventEmitter {
         this.executionRunPermissionHandler = new CodexLikePermissionHandler({
             session: this,
             logPrefix: '[ExecutionRun]',
+            requestScope: 'execution_run',
             pushSender: permissionNotifications?.permissionRequestPushSender ?? null,
             getAccountSettings: () => getActiveAccountSettingsSnapshot()?.settings ?? null,
             getAccountSettingsSecretsReadKeys: () =>

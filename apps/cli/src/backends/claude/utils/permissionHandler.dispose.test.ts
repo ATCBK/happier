@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE, CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/agents';
 
 import { PermissionHandler } from './permissionHandler';
+import { CodexLikePermissionHandler } from '@/agent/permissions/CodexLikePermissionHandler';
+import { createRunScopedExecutionPermissionHandler } from '@/agent/executionRuns/runtime/runScopedExecutionPermissionHandler';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createPermissionHandlerSessionStub } from './permissionHandler.testkit';
 
 describe('PermissionHandler (dispose)', () => {
@@ -57,6 +60,27 @@ describe('PermissionHandler (dispose)', () => {
         expect(client.agentState.requests).toEqual({ local, dialog, claimed });
         expect(Object.keys(client.agentState.completedRequests)).toEqual(['remote']);
         if (action !== 'dispose') handler.dispose();
+    });
+
+    it('preserves an independent execution-run prompt during foreground retirement and responses', async () => {
+        const { session, client } = createPermissionHandlerSessionStub('claude-execution-owner');
+        const executionOwner = new CodexLikePermissionHandler({
+            session: client as unknown as ApiSessionClient, logPrefix: '[ExecutionRun]', requestScope: 'execution_run',
+        });
+        const run = createRunScopedExecutionPermissionHandler({ runId: 'claude-background', handler: executionOwner });
+        const pending = run.handler.handleToolCall('call_1', 'Write', { path: '/tmp/background' });
+        const requestId = Object.keys(client.agentState.requests)[0]!;
+        const request = client.agentState.requests[requestId];
+        const foreground = new PermissionHandler(session);
+
+        await foreground.abortPendingRequestsAndFlush();
+        await client.rpcHandlerManager.getHandler('permission')!({ id: requestId, approved: true });
+
+        expect(client.agentState.requests[requestId]).toEqual(request);
+        expect(client.agentState.completedRequests[requestId]).toBeUndefined();
+        run.dispose('Test cleanup');
+        await expect(pending).resolves.toMatchObject({ decision: 'abort' });
+        foreground.dispose();
     });
 
     it('cancels outstanding permission requests when disposed', async () => {

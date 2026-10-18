@@ -8,6 +8,7 @@
  */
 
 import { logger } from "@/ui/logger";
+import { isExecutionRunPermissionRequestId } from '@/agent/executionRuns/runtime/runScopedExecutionPermissionHandler';
 import type { ApiSessionClient } from "@/api/session/sessionClient";
 import { AgentState } from "@/api/types";
 import { updateAgentStateBestEffort as updateAgentStateBestEffortShared } from "@/api/session/sessionWritesBestEffort";
@@ -98,6 +99,7 @@ export abstract class BasePermissionHandler {
     protected pendingRequests = new Map<string, PendingRequest>();
     protected session: ApiSessionClient;
     private isResetting = false;
+    private readonly requestScope: 'foreground' | 'execution_run';
     private allowedToolIdentifiers = new Set<string>();
     private readonly requestStore: AgentStateRequestStore;
     private readonly requestCoordinator: PermissionRequestCoordinator<PermissionResult>;
@@ -126,9 +128,11 @@ export abstract class BasePermissionHandler {
             onAbortRequested?: (() => void | Promise<void>) | null;
             toolTrace?: { protocol: ToolTraceProtocol; provider: string } | null;
             triggerAbortCallbackOnAbortDecision?: boolean;
+            requestScope?: 'foreground' | 'execution_run';
         }
     ) {
         this.session = session;
+        this.requestScope = opts?.requestScope ?? 'foreground';
         this.getAccountSettingsSnapshotFn = typeof opts?.getAccountSettings === 'function' ? opts.getAccountSettings : (() => null);
         this.requestStore = new AgentStateRequestStore({
             session,
@@ -357,6 +361,7 @@ export abstract class BasePermissionHandler {
     private async tryHandlePermissionRpc(response: SessionPermissionRpcPayload, requireLocalPending: boolean = false): Promise<boolean> {
         const localPending = this.pendingRequests.get(response.id);
         if (requireLocalPending && !localPending) return false;
+        if (!localPending && !this.ownsPersistedRequest(response.id)) return false;
         const hasStructuredAnswers = response.answers !== undefined || response.structuredAnswersV1 !== undefined;
         const candidateContext = hasStructuredAnswers
             ? null
@@ -611,10 +616,14 @@ export abstract class BasePermissionHandler {
         return completed;
     }
 
+    private ownsPersistedRequest(requestId: string): boolean {
+        return isExecutionRunPermissionRequestId(requestId) === (this.requestScope === 'execution_run');
+    }
+
     cancelPendingRequest(requestId: string, reason: string): boolean {
         if (this.isPermissionRequestClaimed(requestId)) return false;
         const context = this.requestCoordinator.getResponseContext(requestId);
-        if (!context) return false;
+        if (!context || (context.correlation === 'agent_state' && !this.ownsPersistedRequest(requestId))) return false;
         return this.completePendingPermissionRequest(
             requestId,
             context,
@@ -629,7 +638,17 @@ export abstract class BasePermissionHandler {
      */
     private async cancelPendingRequests(params: Readonly<{ reason: string }>): Promise<void> {
         const pendingSnapshot = Array.from(this.pendingRequests.entries());
-        await this.requestCoordinator.cancelAll(params.reason);
+        const requests = this.session.getAgentStateSnapshot?.()?.requests ?? {};
+        const stateOnlyRequestIds = Object.keys(requests).filter((requestId) => (
+            this.ownsPersistedRequest(requestId)
+            && this.requestCoordinator.getResponseContext(requestId)?.correlation === 'agent_state'
+        ));
+        await Promise.all([
+            this.requestCoordinator.cancelAll(params.reason),
+            ...(stateOnlyRequestIds.length > 0 ? [this.requestStore.cancelAllRequests({
+                reason: params.reason, decision: 'abort', requestIds: stateOnlyRequestIds,
+            })] : []),
+        ]);
         for (const [requestId, pending] of pendingSnapshot) {
             if (this.pendingRequests.get(requestId) === pending) {
                 this.pendingRequests.delete(requestId);

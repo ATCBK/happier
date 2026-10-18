@@ -1730,6 +1730,12 @@ Metadata and Agent-state retries use the current managed socket on every attempt
 Reconnection can therefore finish the same operation within its existing retry
 budget.
 
+Foreground reset also retires saved requests without a local coordinator record through
+the same exact-occurrence settlement store. Execution-run request IDs retain the existing
+run/controller namespace: foreground handlers exclude those persisted requests, while the
+Session's execution-run handler excludes foreground requests. Claude's persisted-request
+adoption follows the same separation. Opaque response claims remain owned by their claimant.
+
 An observed Claude PostToolUse completion and lifecycle cancellation use the Session's
 existing durable mutation journal. PostToolUse is the explicit evidence that a native
 tool already ran; the journal never replays an unapplied UI or provider approval.

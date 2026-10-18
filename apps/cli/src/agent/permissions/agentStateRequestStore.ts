@@ -392,11 +392,11 @@ export class AgentStateRequestStore {
     cancelAllRequests(params: Readonly<{
         reason: string; decision?: string; requestIds?: readonly string[];
         shouldCancel?: (request: AgentStateRequestEntry) => boolean;
-    }>): void {
+    }>): Promise<void> {
         const selected = new Map(Object.entries(this.session.getAgentStateSnapshot?.()?.requests ?? {})
             .filter(([id, request]) => (!params.requestIds || params.requestIds.includes(id))
                 && (!params.shouldCancel || params.shouldCancel(request))));
-        void this.settleRequests(
+        return this.settleRequests(
             (currentState) => {
                 const pendingRequests = cloneStringKeyedRecordToNullProto(currentState.requests);
                 const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
@@ -424,7 +424,7 @@ export class AgentStateRequestStore {
                     completedRequests,
                 };
             },
-        ).catch(() => undefined); // settleRequests reports admission failures on the default file log.
+        );
     }
 
     private settleRequests(updater: (state: AgentState) => AgentState): Promise<void> {
