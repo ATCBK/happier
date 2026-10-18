@@ -163,6 +163,9 @@ describe('buildLocalServiceRows', () => {
     });
     it.each([
         { serviceState: 'running', status: 'running', section: 'running', canStart: false },
+        { serviceState: 'healthy', status: 'running', section: 'running', canStart: false },
+        { serviceState: 'unhealthy', status: 'running', section: 'running', canStart: false },
+        { serviceState: 'detecting', status: 'running', section: 'running', canStart: false },
         { serviceState: 'stopped', status: 'stopped', section: 'ready', canStart: true },
         { serviceState: 'failed', status: 'failed', section: 'ready', canStart: true },
         { serviceState: 'stopping', status: 'stopping', section: 'running', canStart: false },

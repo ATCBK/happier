@@ -160,6 +160,23 @@ export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z.strictObje
   })));
 export type LocalServiceLaunchTargetV1 = z.infer<typeof LocalServiceLaunchTargetV1Schema>;
 
+/** A live managed lifetime, independently of HTTP readiness. Starting/stopping are transitions.
+ * Native custody must still be qualified separately before an executable action.
+ */
+export function isLocalServiceStateRunningV1(state: LocalServiceLaunchTargetV1['serviceState']): boolean {
+  return state === 'running' || state === 'detecting' || state === 'healthy' || state === 'unhealthy';
+}
+
+/** An unhealthy observation can instead mean native custody has not settled. */
+export function hasUncertainLocalServiceNativeCustodyV1(
+  target: Pick<LocalServiceLaunchTargetV1, 'source' | 'unavailableReason'>,
+): boolean {
+  return target.source === 'managed_service' && (
+    target.unavailableReason === 'managed_service_native_state_unknown'
+    || target.unavailableReason === 'managed_service_native_cleanup_unconfirmed'
+  );
+}
+
 export const LocalServiceLauncherSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
