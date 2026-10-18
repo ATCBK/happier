@@ -4,7 +4,6 @@ import { copyFile, lstat, mkdir, mkdtemp, open, rename, rm, stat, writeFile } fr
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import type { ZodType } from 'zod';
 
 import { HARD_OPENABLE_CONTENT_MAX_BYTES_V1 } from '@happier-dev/protocol/plugins/openableContent';
 import type { WorkspaceStatFileRequestV1 } from '@happier-dev/protocol';
@@ -146,7 +145,7 @@ type FilesystemLocalMutationInput = Readonly<{ rootPath?: string }> & (
   | Omit<FilesystemLocalCopyInput, 'rootPath'>
 );
 
-function mutationSchema(actionId: FilesystemMutationActionId, incumbentPolicyScope = false): ZodType<FilesystemLocalMutationInput> {
+function mutationSchema(actionId: FilesystemMutationActionId, incumbentPolicyScope = false): zMini.ZodMiniType<FilesystemLocalMutationInput> {
   switch (actionId) {
     case 'daemon.filesystem.createDirectory': return incumbentPolicyScope ? zMini.omit(FilesystemCreateDirectoryInputSchema, { rootPath: true }) : FilesystemCreateDirectoryInputSchema;
     case 'daemon.filesystem.rename': return incumbentPolicyScope ? zMini.omit(FilesystemRenameInputSchema, { rootPath: true }) : FilesystemRenameInputSchema;

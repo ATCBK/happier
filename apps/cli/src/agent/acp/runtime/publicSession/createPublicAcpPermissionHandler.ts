@@ -173,7 +173,7 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
         return Object.freeze({ action: 'cancel' as const });
       }
       const toolCallId =
-        typeof request.toolCallId === 'string' && request.toolCallId.trim().length > 0
+        'toolCallId' in request && typeof request.toolCallId === 'string' && request.toolCallId.trim().length > 0
           ? request.toolCallId.trim()
           : `elicitation:${randomUUID()}`;
       const custody = resolveTurnCustody(toolCallId, context);

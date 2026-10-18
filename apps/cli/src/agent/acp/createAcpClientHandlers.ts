@@ -91,7 +91,7 @@ export function createAcpClientHandlers(params: Readonly<{
             context?: Readonly<{ signal: AbortSignal }>,
           ): Promise<CreateElicitationResponse> => {
             const requestSessionId =
-              request.mode === 'form' && typeof request.sessionId === 'string'
+              request.mode === 'form' && 'sessionId' in request && typeof request.sessionId === 'string'
                 ? request.sessionId
                 : (params.getActiveSessionId() ?? '');
             const permissionRequest = params.capturePermissionRequest(requestSessionId);
