@@ -7,6 +7,7 @@ import { SessionAccessCandidatesInspectRequestV1Schema, SessionAccessCandidatesI
 import { UsersSearchQueryV1Schema, UsersSearchResponseSchema } from '@happier-dev/protocol/social/friends';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createAccountServerActionDeps } from './accountServerActionDeps';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 describe('Session access discovery HTTP adapter', () => {
   let app = fastify();
