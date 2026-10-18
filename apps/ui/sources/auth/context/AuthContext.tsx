@@ -51,7 +51,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         setCredentials(newCredentials);
         setIsAuthenticated(true);
         setAuthenticatedThisRun(true);
-        fireAndForget(syncSwitchServer(newCredentials), { tag: 'AuthContext.login.syncSwitchServer' });
+        await syncSwitchServer(newCredentials);
     }, [applyLocalSettings]);
 
     const login = React.useCallback(

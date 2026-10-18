@@ -4895,6 +4895,8 @@ export const pt: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "Não foi possível descriptografar os dados desta máquina. Entre com a chave de conta correspondente e tente novamente.",
+    machineRpcContextUnavailable: "A conexão com esta máquina está indisponível. Atualize suas máquinas e tente novamente.",
     networkError: "Ocorreu um erro de rede",
     serverError: "Ocorreu um erro do servidor",
     unknownError: "Ocorreu um erro desconhecido",
@@ -9430,6 +9432,20 @@ settingsSession: {
             subtitle: "Gerencie os arquivos do Kokoro baixados neste dispositivo.",
           },
         },
+      },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} de ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'arquivo' : 'arquivos'}`,
+        progressAccessibilityLabel: "Progresso do download",
+        failedDetail: "Falhou",
+        failedSubtitle: "Não foi possível preparar o modelo. Toque para tentar novamente.",
+        failedResumableSubtitle: ({ size }: { size: string }) => `O download não terminou. ${size} foram mantidos; toque para retomar.`,
+        incompleteDetail: "Incompleto",
+        incompleteSubtitle: ({ size }: { size: string }) => `${size} baixados até agora. Toque para continuar.`,
+        discardSubtitle: "Exclua o download incompleto para liberar espaço.",
+        discardConfirmTitle: "Descartar o download incompleto?",
+        discardConfirmBody: ({ size }: { size: string }) => `Isso exclui os ${size} baixados até agora. Você pode baixar o modelo novamente mais tarde.`,
       },
       localNeuralStt: {
         modelPack: {

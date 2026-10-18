@@ -4771,6 +4771,8 @@ export const es: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "No se pueden descifrar los datos de esta máquina. Inicia sesión con la clave de cuenta correspondiente e inténtalo de nuevo.",
+    machineRpcContextUnavailable: "La conexión con esta máquina no está disponible. Actualiza tus máquinas e inténtalo de nuevo.",
     networkError: "Error de conexión",
     serverError: "Error del servidor",
     unknownError: "Error desconocido",
@@ -9321,6 +9323,20 @@ settingsSession: {
             subtitle: "Gestiona los archivos descargados de Kokoro en este dispositivo.",
           },
         },
+      },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} de ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'archivo' : 'archivos'}`,
+        progressAccessibilityLabel: "Progreso de la descarga",
+        failedDetail: "Falló",
+        failedSubtitle: "No se pudo preparar el modelo. Toca para volver a intentarlo.",
+        failedResumableSubtitle: ({ size }: { size: string }) => `La descarga no terminó. Se conservan ${size}; toca para reanudarla.`,
+        incompleteDetail: "Incompleta",
+        incompleteSubtitle: ({ size }: { size: string }) => `${size} descargados hasta ahora. Toca para continuar.`,
+        discardSubtitle: "Elimina la descarga sin terminar para liberar espacio.",
+        discardConfirmTitle: "¿Descartar la descarga sin terminar?",
+        discardConfirmBody: ({ size }: { size: string }) => `Se eliminarán los ${size} descargados hasta ahora. Podrás volver a descargar el modelo más adelante.`,
       },
       localNeuralStt: {
         modelPack: {

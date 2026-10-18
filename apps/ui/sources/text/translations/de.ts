@@ -4445,6 +4445,8 @@ export const de: TranslationStructure = {
     },
 
     errors: {
+        machineRpcDecryptionFailed: "Die Daten dieses Rechners können nicht entschlüsselt werden. Melde dich mit dem passenden Kontoschlüssel an und versuche es erneut.",
+        machineRpcContextUnavailable: "Die Verbindung zu diesem Rechner ist nicht verfügbar. Aktualisiere deine Rechner und versuche es erneut.",
         networkError: 'Netzwerkfehler aufgetreten',
         serverError: 'Serverfehler aufgetreten',
         unknownError: 'Ein unbekannter Fehler ist aufgetreten',
@@ -8838,6 +8840,20 @@ settingsSession: {
                         subtitle: 'Heruntergeladene Kokoro-Dateien auf diesem Gerät verwalten.',
                     },
                 },
+            },
+            modelPackDownload: {
+                progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} von ${total}`,
+                progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `${loaded} von ${total} · ${filesDone} von ${filesTotal} ${filesTotal === 1 ? 'Datei' : 'Dateien'}`,
+                progressAccessibilityLabel: "Download-Fortschritt",
+                failedDetail: "Fehlgeschlagen",
+                failedSubtitle: "Das Modell konnte nicht vorbereitet werden. Tippe, um es erneut zu versuchen.",
+                failedResumableSubtitle: ({ size }: { size: string }) => `Der Download wurde nicht abgeschlossen. ${size} bleiben erhalten – tippe zum Fortsetzen.`,
+                incompleteDetail: "Unvollständig",
+                incompleteSubtitle: ({ size }: { size: string }) => `Bisher ${size} heruntergeladen. Tippe zum Fortsetzen.`,
+                discardSubtitle: "Lösche den unvollständigen Download, um Speicher freizugeben.",
+                discardConfirmTitle: "Unvollständigen Download verwerfen?",
+                discardConfirmBody: ({ size }: { size: string }) => `Dadurch werden die bisher heruntergeladenen ${size} gelöscht. Du kannst das Modell später erneut herunterladen.`,
             },
             localNeuralStt: {
                 modelPack: {

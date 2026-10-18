@@ -4629,6 +4629,8 @@ export const zhHans: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "无法解密此机器的数据。请使用匹配的账户密钥登录后重试。",
+    machineRpcContextUnavailable: "此机器的连接不可用。请刷新机器列表后重试。",
     networkError: "发生网络错误",
     serverError: "发生服务器错误",
     unknownError: "发生未知错误",
@@ -9016,6 +9018,20 @@ settingsSession: {
             subtitle: "管理本设备上已下载的 Kokoro 文件。",
           },
         },
+      },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} / ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} / ${total} · ${filesDone} / ${filesTotal} 个文件`,
+        progressAccessibilityLabel: "下载进度",
+        failedDetail: "失败",
+        failedSubtitle: "无法准备模型。轻点以重试。",
+        failedResumableSubtitle: ({ size }: { size: string }) => `下载未完成。已保留 ${size}，轻点即可继续。`,
+        incompleteDetail: "未完成",
+        incompleteSubtitle: ({ size }: { size: string }) => `目前已下载 ${size}。轻点以继续。`,
+        discardSubtitle: "删除未完成的下载以释放空间。",
+        discardConfirmTitle: "放弃未完成的下载？",
+        discardConfirmBody: ({ size }: { size: string }) => `这将删除目前已下载的 ${size}。之后可以重新下载模型。`,
       },
       localNeuralStt: {
         modelPack: {

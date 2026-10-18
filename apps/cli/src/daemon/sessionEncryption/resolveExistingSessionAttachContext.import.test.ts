@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/configuration', () => ({
-  configuration: {},
+vi.mock('@/configuration', async (importOriginal) => ({
+  configuration: {
+    ...(await importOriginal<typeof import('@/configuration')>()).configuration,
+    get daemonReattachCatchUpConcurrency(): number {
+      throw new Error('Existing-session lookup configuration is unavailable during import');
+    },
+  },
 }));
 
 import { resolveExistingSessionAttachContext } from './resolveExistingSessionAttachContext';

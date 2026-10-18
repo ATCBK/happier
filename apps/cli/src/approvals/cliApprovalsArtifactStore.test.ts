@@ -20,8 +20,9 @@ vi.mock('axios', () => ({
   },
 }));
 
-vi.mock('@/configuration', () => ({
+vi.mock('@/configuration', async (importOriginal) => ({
   configuration: {
+    ...(await importOriginal<typeof import('@/configuration')>()).configuration,
     apiServerUrl: 'http://127.0.0.1:24599',
   },
 }));

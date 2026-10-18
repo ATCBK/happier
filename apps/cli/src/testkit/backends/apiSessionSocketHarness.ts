@@ -24,12 +24,20 @@ export type ApiSessionSocketStub = {
 
 export function resolveApiSessionSocketDefaultAck(event: string, payload: unknown): unknown {
     if (event === 'ping') return { v: 1 };
-    if (event === 'update-state' || event === 'update-metadata') {
-        const request = payload as Readonly<{ expectedVersion: number; agentState?: unknown; metadata?: unknown }>;
+    if (event === 'update-state') {
+        const request = payload as Readonly<{ expectedVersion: number; agentState: string | null }>;
         return {
             result: 'success',
             version: request.expectedVersion + 1,
-            ...(event === 'update-state' ? { agentState: request.agentState } : { metadata: request.metadata }),
+            agentState: request.agentState,
+        };
+    }
+    if (event === 'update-metadata') {
+        const request = payload as Readonly<{ expectedVersion: number; metadata: string | null }>;
+        return {
+            result: 'success',
+            version: request.expectedVersion + 1,
+            metadata: request.metadata,
         };
     }
     if (event === 'session-runtime-activity-snapshot') {
