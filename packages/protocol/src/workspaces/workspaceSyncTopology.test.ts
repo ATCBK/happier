@@ -5,6 +5,7 @@ import { DevcontainerChildProjectionV1Schema } from '../machines/managed/devcont
 import { ManagedMachineV1Schema } from '../machines/managed/managedMachineV1.js';
 import {
   deriveWorkspaceSyncTopology,
+  resolveWorkspaceSyncReadControllerV1,
   resolveWorkspaceSyncEndpoint,
   resolveWorkspaceSyncTransportAddress,
   resolveWorkspaceSyncTransferRoute,
@@ -40,6 +41,18 @@ const relationship = (
 });
 
 describe('workspaceSyncTopology', () => {
+  it('routes reads of an unlinked workspace to its owning Machine without accepting invalid linked topology', () => {
+    const input = { serverId: 'server', workspaceRefs: refs, relationships: [] };
+    expect(resolveWorkspaceSyncReadControllerV1({ ...input, workspaceRefId: 'a' })).toBe('machine-a');
+    expect(() => resolveWorkspaceSyncReadControllerV1({ ...input, workspaceRefId: 'a', controllerMachineId: 'machine-b' }))
+      .toThrowError(expect.objectContaining({ code: 'relationship_changed' }));
+    expect(() => resolveWorkspaceSyncReadControllerV1({ ...input, workspaceRefId: 'absent' }))
+      .toThrowError(expect.objectContaining({ code: 'workspace_ref_not_ready' }));
+    expect(() => resolveWorkspaceSyncReadControllerV1({ ...input, workspaceRefId: 'a',
+      relationships: [relationship('broken', 'a', 'b', 'machine-c', 'keep_synced')] }))
+      .toThrowError(expect.objectContaining({ code: 'workspace_sync_topology_invalid' }));
+  });
+
   it('maps an admitted native bind namespace to its owned physical ref without a logical child row', () => {
     const physical = { id: 'physical-source', serverId: 'home', machineId: 'parent', rootPath: '/host/source', createdAtMs: 1 };
     const admittedNamespace = { serverId: 'home', machineId: 'child', rootPath: '/workspace/source' };
