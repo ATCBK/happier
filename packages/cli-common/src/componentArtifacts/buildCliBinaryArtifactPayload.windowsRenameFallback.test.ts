@@ -79,6 +79,7 @@ describe('buildCliBinaryArtifactPayload Windows rename fallback', () => {
                 '@huggingface/transformers': '0.0.0',
                 'node-pty': '0.0.0',
                 '@homebridge/node-pty-prebuilt-multiarch': '0.0.0',
+                sharp: '0.0.0',
             },
         }, null, 2)}\n`, older);
         await writeRepoFile(join(cliDir, 'src', 'index.ts'), 'export default "cli-source";\n', older);
@@ -126,6 +127,8 @@ module.exports = { unpackTools };
             '@huggingface/transformers',
             'node-pty',
             '@homebridge/node-pty-prebuilt-multiarch',
+            'sharp',
+            '@img/sharp-win32-x64',
         ]) {
             await writeRepoFile(
                 join(repoRoot, 'node_modules', ...packageName.split('/'), 'package.json'),
@@ -162,6 +165,10 @@ module.exports = { unpackTools };
         await expect(readFile(join(payloadDir, 'package-dist', 'index.mjs'), 'utf8')).resolves.toBe('export const cli = "fresh";\n');
         await expect(readFile(join(cliDistDir, 'index.mjs'), 'utf8')).resolves.toBe('export const cli = "fresh";\n');
         expect(existsSync(join(payloadDir, 'happier.exe'))).toBe(true);
+        await expect(readFile(join(payloadDir, 'node_modules', 'sharp', 'index.js'), 'utf8'))
+            .resolves.toBe('module.exports = {};\n');
+        await expect(readFile(join(payloadDir, 'node_modules', '@img', 'sharp-win32-x64', 'index.js'), 'utf8'))
+            .resolves.toBe('module.exports = {};\n');
         await expect(readFile(join(payloadDir, 'scripts', 'process_tree.cjs'), 'utf8')).resolves.toBe('placeholder\n');
         expect(existsSync(join(payloadDir, 'tools', 'unpacked', 'rg.exe'))).toBe(true);
         expect(existsSync(join(payloadDir, 'tools', 'unpacked', 'ripgrep.node'))).toBe(false);
