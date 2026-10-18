@@ -456,6 +456,12 @@ describe('resolveTriageListShellState', () => {
 });
 
 describe('readTriageSourcesUnreachableNotice', () => {
+  it.each(['unavailable', 'plugin_action_failed', 'plugin.mounted-caller:unavailable'])('localizes a diagnostic token instead of presenting %s as the explanation', (message) => {
+    const notice = readTriageSourcesUnreachableNotice({ kind: 'sourcesUnreachable', message, retryable: true },
+      (key, fallback) => key === 'plugins.triage.surface.sourcesUnreachable.description' ? 'Localized recovery explanation' : fallback);
+    expect(notice.description).toBe('Localized recovery explanation');
+  });
+
   it('says the host\'s own reason, which names the machine and the next step, instead of a vaguer stand-in', () => {
     // D1: when this device's Run-on Machine cannot answer, the page stays and only its Machine data
     // is unavailable. The host's reason is the one sentence that names that Machine; the generic
