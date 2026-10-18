@@ -173,7 +173,7 @@ describe('original CLI Account finite Project admission', () => {
     let credentialCurrent = true;
     let retireDuringInventory = false;
     const machine = { id: input.workspace.machineId, kind: 'persistent', active: false,
-      installationId: 'guest-installation', revokedAt: null, replacedByMachineId: null,
+      installationId: 'guest-installation', installationPublicKey: encodeBase64(nacl.sign.keyPair().publicKey), revokedAt: null, replacedByMachineId: null,
       dataEncryptionKey: null, runnerContentKeyBinding: null,
       access: { custodian: { accountId: 'terminal-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
     vi.spyOn(axios, 'get').mockImplementation(async url => {
@@ -228,7 +228,8 @@ describe('original CLI Account finite Project admission', () => {
     const input = { workspace: { serverId: 'home-a', workspaceId: 'checkout', machineId: 'guest', rootPath: '/private-repo' }, phase: 'setup' };
     const binding = { serverIdentityId: 'srv_finite_home', accountId: 'encrypted-owner', authentication: { kind: 'account' as const, tokenEpoch: 3 },
       actionId: 'projects.prepare' as const, requestId: 'encrypted-request', target: { kind: 'machine' as const, machineId: 'guest' } };
-    const machine = { id: 'guest', kind: 'persistent', active: false, installationId: 'installation', revokedAt: null,
+    const machine = { id: 'guest', kind: 'persistent', active: false, installationId: 'installation',
+      installationPublicKey: encodeBase64(nacl.sign.keyPair().publicKey), revokedAt: null,
       replacedByMachineId: null, dataEncryptionKey: 'sealed-key', runnerContentKeyBinding: null,
       access: { custodian: { accountId: 'encrypted-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' } };
     vi.spyOn(axios, 'get').mockImplementation(async url => {
@@ -284,7 +285,7 @@ describe('original CLI Account finite Project admission', () => {
       const rawGuest = vi.spyOn(machineTransport, 'callExactMachineRpc').mockRejectedValue(new Error('guest_offline'));
       const requests: unknown[] = [];
       const machine = { id: workspace.machineId, kind: 'persistent', active: false,
-        installationId: 'guest-installation', revokedAt: null, replacedByMachineId: null,
+        installationId: 'guest-installation', installationPublicKey: encodeBase64(nacl.sign.keyPair().publicKey), revokedAt: null, replacedByMachineId: null,
         dataEncryptionKey: null, runnerContentKeyBinding: null,
         access: { custodian: { accountId: 'finite-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
       vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
