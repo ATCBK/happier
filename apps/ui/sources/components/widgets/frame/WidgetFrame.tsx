@@ -84,7 +84,9 @@ export type WidgetFrameBody =
 export type WidgetFrameFooter =
     | Readonly<{ kind: 'open'; label: string; onPress: () => void;
         secondary?: Readonly<{ label: string; onPress: () => void }> }>
-    | Readonly<{ kind: 'refreshFailed'; reason: string; onRetry?: () => void | Promise<unknown> }>;
+    | Readonly<{ kind: 'refreshFailed'; reason: string; onRetry?: () => void | Promise<unknown> }>
+    /** A change to this card waits for someone's approval. */
+    | Readonly<{ kind: 'pending'; reason: string }>;
 
 export type WidgetFrameProps = Readonly<{
     testID: string;
@@ -362,6 +364,10 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                 tone="warning"
                 {...(footer.onRetry ? { action: { label: t('common.retry'), onPress: footer.onRetry } } : {})}
             />
+        </View>
+    ) : footer?.kind === 'pending' ? (
+        <View style={styles.footerFill}>
+            <SurfaceFreshnessLine testID={`${props.testID}.pending`} reason={footer.reason} busy />
         </View>
     ) : null;
 

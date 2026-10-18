@@ -230,7 +230,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
     const layoutWrite = layout.write;
     const write = React.useCallback(async (operation: Parameters<WidgetAreaWrite>[0]): Promise<WidgetAreaWriteOutcome> => {
         const outcome = await layoutWrite(operation);
-        setNotice(outcome.kind === 'approvalPending' ? { kind: 'pending' }
+        setNotice(outcome.kind === 'approvalPending' ? { kind: 'pending', ...('instanceId' in operation ? { instanceId: operation.instanceId } : {}) }
             : outcome.kind === 'refused' && 'instanceId' in operation
                 ? { kind: 'failed', instanceId: operation.instanceId, errorCode: outcome.errorCode, retry: () => write(operation) }
                 : null);
@@ -324,7 +324,8 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     isReadPending={ready.isReadPending}
                     current={current} organizing={organizing && canOrganize} admitWidgetMovement={movement.admit} write={write}
                     movementSourceItem={movement.sourceItem}
-                    failed={notice?.kind === 'failed' ? notice : null} />
+                    failed={notice?.kind === 'failed' ? notice : null}
+                    pendingInstanceId={notice?.kind === 'pending' ? notice.instanceId ?? null : null} />
             ) : null}
             {props.display !== 'widgets' && props.dashboard && canAdd ? (
                 <View style={styles.header}>
@@ -392,11 +393,13 @@ function WidgetAreaHeader(props: Readonly<{ title: string; meta?: string | undef
 }
 
 type AreaNotice =
-    | Readonly<{ kind: 'pending' }>
+    | Readonly<{ kind: 'pending'; /** The card the write changes, when it is one (a remove, a resize). */ instanceId?: string }>
     | Readonly<{ kind: 'failed'; instanceId: string; errorCode: string; retry: () => Promise<WidgetAreaWriteOutcome> }>;
 
 type PlacementsProps = WidgetAreaProps & Readonly<{
     failed: Extract<AreaNotice, { kind: 'failed' }> | null;
+    /** The card whose change waits for someone's approval: it says so until the area re-reads. */
+    pendingInstanceId: string | null;
     surface: WidgetSurfaceRefV1;
     area?: 'main' | 'aside';
     placements: readonly WidgetPlacementV1[];
@@ -458,6 +461,7 @@ function WidgetAreaPlacements(props: PlacementsProps): React.ReactElement {
                 key={instanceId}
                 {...props}
                 failed={props.failed?.instanceId === instanceId ? props.failed : null}
+                pending={props.pendingInstanceId === instanceId}
                 placement={parent ? { ...entry.placement, frameStyle: 'plain' } : entry.placement}
                 descriptor={entry.descriptor}
                 size={entry.size}
@@ -627,6 +631,8 @@ function WidgetAreaGroup(props: PlacementsProps & Readonly<{
 }
 
 const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps & Readonly<{
+    /** This card's own change is waiting for approval. */
+    pending: boolean;
     placement: WidgetPlacementV1;
     descriptor: WidgetCandidate | null;
     size: WidgetSizeV1 | undefined;
@@ -908,7 +914,9 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                 body={body}
                 // A change to this card that was refused stays on it, with Retry, until one succeeds.
                 // The reason is the one failure presenter's (the same copy an Add refusal gets); a code it does not map keeps the static line.
-                footer={props.failed ? { kind: 'refreshFailed', reason: resolveActionExecutionErrorMessage({ errorCode: props.failed.errorCode }, t('widgetAdd.areaWriteFailed')), onRetry: props.failed.retry } : null}
+                // A change that waits for someone's approval says so on the card it changes, as an add says Adding….
+                footer={props.failed ? { kind: 'refreshFailed', reason: resolveActionExecutionErrorMessage({ errorCode: props.failed.errorCode }, t('widgetAdd.areaWriteFailed')), onRetry: props.failed.retry }
+                    : props.pending ? { kind: 'pending', reason: t('widgetAdd.areaApprovalPending') } : null}
             />
             {edit.popover}
             {definition.panel}

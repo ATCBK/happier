@@ -969,6 +969,27 @@ describe('a plugin page widget area', () => {
         expect(widgetPlacements(await area.store.read())).toEqual([{ instance: pin, size: 'medium' }]);
     });
 
+    it('says on the card that its remove waits for approval, as an add says Adding… (FA19 P8)', async () => {
+        const area = createArea();
+        await area.store.apply({ kind: 'add', instance: pin });
+        await area.store.apply({ kind: 'add', instance: follow, size: 'small' });
+        const hostApi: PluginUiHostApi = { ...area.hostApi, widgetArea: async (raw, options) => {
+            const request = PluginUiWidgetAreaRequestV1Schema.parse(raw);
+            if (request.operation.actionId === 'widgets.item.remove') return PluginUiWidgetAreaResultV1Schema.parse({
+                ok: true, result: { kind: 'approval_request_created', artifactId: 'approval-remove', actionId: 'widgets.item.remove' } });
+            return area.hostApi.widgetArea(raw, options);
+        } };
+        const screen = await renderScreen(page(hostApi, 'happier'));
+        await flushHookEffects({ cycles: 4 });
+        expect(screen.findByTestId('prs.pinned.widget.pin.frame.pending')).toBeNull();
+        await runAction(screen, 'pin', 'remove');
+        // The card that is being removed says so; its neighbour does not, and the card stays until the approval executes.
+        expect(screen.findByTestId('prs.pinned.widget.pin.frame.pending')).not.toBeNull();
+        expect(screen.findByTestId('prs.pinned.widget.follow.frame.pending')).toBeNull();
+        expect(screen.getTextContent()).toContain('widgetAdd.areaApprovalPending');
+        expect(widgetPlacements(await area.store.read()).map(entry => entry.instance.id)).toContain(pin.id);
+    });
+
     it('adds a contributed widget from the shared Add surface that follows the page from its pane', async () => {
         const area = createArea();
         const screen = await renderScreen(page(area.hostApi, 'happier'));
