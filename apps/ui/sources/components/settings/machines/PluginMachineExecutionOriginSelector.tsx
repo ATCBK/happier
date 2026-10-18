@@ -207,7 +207,7 @@ export type PluginMachineExecutionOriginPresentation = Readonly<{
 /** The one presentation for remembered Machine intent and current operation custody. */
 export function resolvePluginMachineExecutionOriginPresentation(
     selection: PluginMachineExecutionOriginSelectionV1,
-    machineCandidates: readonly MachineAdministrationCandidateV1[] = [],
+    machineCandidates: readonly MachineAdministrationCandidateV1[] = selection.machineCandidates ?? EMPTY_MACHINE_CANDIDATES,
 ): PluginMachineExecutionOriginPresentation {
     const selectedOrigin = selection.selectedOrigin
         ?? (selection.state.kind === 'selected' ? selection.state.origin : null);

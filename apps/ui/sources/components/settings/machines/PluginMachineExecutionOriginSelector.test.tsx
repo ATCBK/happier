@@ -154,7 +154,10 @@ describe('PluginMachineExecutionOriginSelector', () => {
         const machineCandidates = [{ target: storedTarget, displayName: 'Studio', serverLabel: 'Home',
             availability: 'offline' as const, observation: 'stale' as const, observedAt: 1 }];
         const value = { ...fixture.value, storedTarget, machineCandidates };
-        expect(resolvePluginMachineExecutionOriginPresentation(value, machineCandidates)).toMatchObject({ title: 'Studio', selected: true });
+        expect(resolvePluginMachineExecutionOriginPresentation(value)).toMatchObject({
+            title: 'Studio', subtitle: 'Home', selected: true,
+        });
+        expect(resolvePluginMachineExecutionOriginPresentation(fixture.value).subtitle).not.toContain(storedTarget.machineId);
         const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={value} testIDPrefix="offline-origin" />);
         await screen.pressByTestIdAsync('offline-origin.clear');
         expect(fixture.clearOrigin).toHaveBeenCalledOnce();
