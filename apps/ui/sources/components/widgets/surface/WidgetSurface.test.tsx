@@ -3,7 +3,7 @@ import * as Unistyles from 'react-native-unistyles';
 import { expect, it, vi } from 'vitest';
 import { WidgetDefinitionV1Schema, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
-import { renderScreen, renderHook, flushHookEffects } from '@/dev/testkit';
+import { createDeferred, renderScreen, renderHook, flushHookEffects } from '@/dev/testkit';
 import { useConfiguredWidgetTarget } from '@/sync/domains/widgets/useConfiguredWidgetTarget';
 import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/widgetBinding';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -12,11 +12,13 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { SessionSystemRecordStoredPageResponseSchema, SessionSystemRecordStoredReadResponseSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { buildWidgetDefinitionArtifactHeaderV1 } from '@happier-dev/protocol/widgets/widgetDefinitionArtifactV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { decryptSocketNewArtifactUpdate, type ArtifactDataKeyCache } from '@/sync/engine/artifacts/syncArtifacts';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { ProjectBuiltinWidgetBody } from '@/components/projects/widgets/ProjectBuiltinWidgetBody';
 import { WidgetSurface } from './WidgetSurface';
-import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { describeAuthoredWidgetDefinitionV1, readWidgetDescriptor, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { Text } from '@/components/ui/text/Text';
 import { HostedHtmlSurfaceAdapter } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
@@ -88,6 +90,147 @@ it('mounts the exact installed app widget from a multi-machine Home union and re
         expect(screen.tree.root.findAllByProps({ testID: 'latest-admitted-reference' })).toHaveLength(0);
         expect(http.writes).toEqual([]);
     } finally { await screen.unmount(); if (!disconnected) await connection.dispose(); }
+});
+
+it('renders an exact saved definition while unrelated layout reads remain pending', async () => {
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'literal-table', name: 'Orders',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+        inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Exact saved data' } } } });
+    const http = createLayoutArtifactHttpBoundary('viewer', { artifactId: definition.id, kind: 'widget-definition.v1',
+        defaultLayout: definition, parseLayout: value => WidgetDefinitionV1Schema.parse(value), buildHeader: buildWidgetDefinitionArtifactHeaderV1 });
+    http.seed(definition);
+    let finishLayout!: (response: Response) => void;
+    const pendingLayout = new Promise<Response>(resolve => { finishLayout = resolve; });
+    let deleted = false;
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-exact-read.test', accountId: 'viewer', request: (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/') && !path.startsWith(`/v1/artifacts/${definition.id}`)) return pendingLayout;
+        if (deleted && path === `/v1/artifacts/${definition.id}`) return Promise.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        return http.request(url, init);
+    } });
+    const viewer = getActiveServerAccountScope()!;
+    const reference = { kind: 'artifact' as const, artifactId: definition.id };
+    const runtime = { phase: 'establishing' as const, interactionEnabled: false, machineId: null, serverId: null,
+        pluginUiProjection: null, pluginBrowserProjection: null, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime() };
+    const screen = await renderScreen(<WidgetSurface scope={{ ...viewer, owner: { kind: 'home' } }}
+        instance={{ v: 1, id: 'literal-instance', definition: reference, bindings: {} }}
+        descriptor={describeAuthoredWidgetDefinitionV1(definition, reference, null)} providedContext={{}}
+        recordRevision="literal" appRuntime={runtime} presentation="content" testID="exact-saved" />);
+    try {
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Exact saved data'));
+        deleted = true;
+        await React.act(async () => { storage.getState().deleteArtifact(definition.id); });
+        await vi.waitFor(() => expect(screen.getTextContent()).not.toContain('Exact saved data'));
+    } finally {
+        finishLayout(Response.json({ error: 'not_found' }, { status: 404 }));
+        await screen.unmount();
+        await connection.dispose();
+    }
+});
+
+it('renews a pending exact saved definition read when the same Account lifetime is restored', async () => {
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'renewed-definition', name: 'Renewed',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+        inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Renewed saved data' } } } });
+    const http = createLayoutArtifactHttpBoundary('viewer', { artifactId: definition.id, kind: 'widget-definition.v1',
+        defaultLayout: definition, parseLayout: value => WidgetDefinitionV1Schema.parse(value), buildHeader: buildWidgetDefinitionArtifactHeaderV1 });
+    http.seed(definition);
+    const inventory = createDeferred<Response>();
+    const firstRead = createDeferred<Response>();
+    let firstReadSignal: AbortSignal | null | undefined;
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-lifetime-read.test', accountId: 'viewer', request: (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/') && path !== `/v1/artifacts/${definition.id}`) return inventory.promise;
+        if (path === `/v1/artifacts/${definition.id}` && firstReadSignal === undefined) {
+            firstReadSignal = init?.signal;
+            firstReadSignal?.addEventListener('abort', () => firstRead.reject(firstReadSignal?.reason), { once: true });
+            return firstRead.promise;
+        }
+        return http.request(url, init);
+    } });
+    const viewer = getActiveServerAccountScope()!;
+    const lifetime = captureActiveServerAccountScopeLifetime()!;
+    const reference = { kind: 'artifact' as const, artifactId: definition.id };
+    const runtime = { phase: 'establishing' as const, interactionEnabled: false, machineId: null, serverId: null,
+        pluginUiProjection: null, pluginBrowserProjection: null, platform: 'web' as const, accountLifetime: lifetime };
+    const surface = <WidgetSurface scope={{ ...viewer, owner: { kind: 'home' } }}
+        instance={{ v: 1, id: 'renewed-instance', definition: reference, bindings: {} }}
+        descriptor={describeAuthoredWidgetDefinitionV1(definition, reference, null)} providedContext={{}}
+        recordRevision="renewed" appRuntime={runtime} presentation="content" testID="renewed-saved" />;
+    const screen = await renderScreen(surface);
+    try {
+        await vi.waitFor(() => expect(firstReadSignal).toBeInstanceOf(AbortSignal));
+        await React.act(async () => {
+            // The canonical owner renews even a restored connection to the same Home and Account.
+            retireActiveServerAccountScopeLifetime();
+            const restored = captureActiveServerAccountScopeLifetime()!;
+            expect(restored).not.toBe(lifetime);
+            expect(restored.scope).toEqual(viewer);
+            await screen.update(React.cloneElement(surface, { appRuntime: { ...runtime, accountLifetime: restored } }));
+        });
+        expect(firstReadSignal?.aborted).toBe(true);
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Renewed saved data'));
+    } finally {
+        inventory.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        firstRead.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        await screen.unmount();
+        await connection.dispose();
+    }
+});
+
+it('opens a socket-only saved definition through exact HTTP authority before rendering it', async () => {
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'socket-definition', name: 'Socket definition',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+        inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Authenticated saved data' } } } });
+    const http = createLayoutArtifactHttpBoundary('viewer', { artifactId: definition.id, kind: 'widget-definition.v1',
+        defaultLayout: definition, parseLayout: value => WidgetDefinitionV1Schema.parse(value), buildHeader: buildWidgetDefinitionArtifactHeaderV1 });
+    http.seed(definition);
+    const inventory = createDeferred<Response>();
+    const exactRead = createDeferred<void>();
+    let exactReadEntered = false;
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-socket-authority.test', accountId: 'viewer', request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/') && path !== `/v1/artifacts/${definition.id}`) return inventory.promise;
+        if (path === `/v1/artifacts/${definition.id}`) {
+            exactReadEntered = true;
+            await exactRead.promise;
+        }
+        return http.request(url, init);
+    } });
+    const artifactDataKeys: ArtifactDataKeyCache = new Map();
+    // Content-only Socket.IO messages carry bytes and revisions, never HTTP owner/grant facts.
+    const socketRow = await decryptSocketNewArtifactUpdate({ artifactId: definition.id,
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent(buildWidgetDefinitionArtifactHeaderV1(definition)),
+        body: encodePlainArtifactStoredContent({ body: JSON.stringify(definition) }),
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, encryption: null, artifactDataKeys });
+    expect(socketRow).toMatchObject({ isDecrypted: true, body: JSON.stringify(definition) });
+    expect(socketRow?.ownerAccountId).toBeUndefined();
+    expect(socketRow?.access).toBeUndefined();
+    if (!socketRow) throw new Error('Expected a readable socket Artifact');
+    await React.act(async () => { storage.getState().addArtifact(socketRow); });
+    const viewer = getActiveServerAccountScope()!;
+    const reference = { kind: 'artifact' as const, artifactId: definition.id };
+    const runtime = { phase: 'establishing' as const, interactionEnabled: false, machineId: null, serverId: null,
+        pluginUiProjection: null, pluginBrowserProjection: null, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime() };
+    const screen = await renderScreen(<WidgetSurface scope={{ ...viewer, owner: { kind: 'home' } }}
+        instance={{ v: 1, id: 'socket-instance', definition: reference, bindings: {} }}
+        descriptor={describeAuthoredWidgetDefinitionV1(definition, reference, null)} providedContext={{}}
+        recordRevision="socket" appRuntime={runtime} presentation="content" testID="socket-saved" />);
+    try {
+        await vi.waitFor(() => expect(exactReadEntered).toBe(true));
+        expect(screen.getTextContent()).not.toContain('Authenticated saved data');
+        await React.act(async () => { exactRead.resolve(); });
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Authenticated saved data'));
+        expect(storage.getState().artifacts[definition.id]).toMatchObject({ ownerAccountId: 'viewer', access: 'owner' });
+    } finally {
+        exactRead.resolve();
+        inventory.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        await screen.unmount();
+        await connection.dispose();
+    }
 });
 
 it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard']] as const)('renders a saved builtin daily widget through %s on %s with viewer admission and retires its Resource on authority loss', async (kind, owner) => {

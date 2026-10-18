@@ -3,29 +3,35 @@ import { Platform } from 'react-native';
 import { isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
-import { storage } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import type { ArtifactViewRead } from '@/sync/engine/artifacts/syncArtifacts';
 
 export type ArtifactBodyState = 'ready' | 'loading' | 'failed';
 
 /** A preview's opened row and content come from one finite authenticated operation, not the global store. */
-export function useArtifactBody(artifactId: string, artifact: DecryptedArtifact | null): Readonly<{
+export function useArtifactBody(artifactId: string, artifact: DecryptedArtifact | null, options?: Readonly<{ readMissing?: boolean }>): Readonly<{
     state: ArtifactBodyState; result: ArtifactViewRead | null; retry: () => void;
 }> {
-    const needsBody = artifact !== null && artifact.isDecrypted !== false && artifact.body === undefined;
+    const lifetime = useActiveServerAccountScopeLifetime();
+    // Exact references (for example saved widgets) need not wait for Account inventory.
+    const needsBody = artifact === null ? options?.readMissing === true : artifact.isDecrypted !== false && artifact.body === undefined;
+    // A content-only socket row has no HTTP owner/grant authority. Complete bytes
+    // still need that exact authenticated projection before a consumer admits them.
+    const needsAuthority = artifact !== null && artifact.isDecrypted !== false
+        && (!artifact.ownerAccountId || artifact.access === undefined);
     const requiresPreview = artifact !== null && artifact.isDecrypted !== false
         && (isArtifactHtmlHeaderV1(artifact.rawHeader ?? artifact.header)
             || (artifact.body !== null && typeof artifact.body === 'object'
                 && (artifact.body.mime.startsWith('image/') || (Platform.OS === 'web' && artifact.body.mime === 'application/pdf'))));
-    const requiresRead = needsBody || requiresPreview;
+    const requiresRead = needsBody || needsAuthority || requiresPreview;
     const [read, setRead] = React.useState<Readonly<{ state: ArtifactBodyState; result: ArtifactViewRead | null }>>({
         state: requiresRead ? 'loading' : 'ready', result: null,
     });
     const [attempt, setAttempt] = React.useState(0);
-    const completed = React.useRef<Readonly<{ publishedArtifact: DecryptedArtifact; attempt: number }> | null>(null);
+    const completed = React.useRef<Readonly<{ publishedArtifact: DecryptedArtifact; attempt: number; lifetime: typeof lifetime }> | null>(null);
     React.useEffect(() => {
-        if (completed.current?.publishedArtifact === artifact && completed.current.attempt === attempt) return;
+        if (completed.current?.publishedArtifact === artifact && completed.current.attempt === attempt && completed.current.lifetime === lifetime) return;
         completed.current = null;
         if (!requiresRead) { setRead({ state: 'ready', result: null }); return; }
         const controller = new AbortController();
@@ -36,13 +42,13 @@ export function useArtifactBody(artifactId: string, artifact: DecryptedArtifact 
                 storage.getState().updateArtifact(full.artifact);
                 // Store reconciliation may retain an equal incumbent row. This acknowledges only
                 // our just-completed publication; it never supplies a row to a new read authority.
-                completed.current = { publishedArtifact: storage.getState().artifacts[artifactId] ?? full.artifact, attempt };
+                completed.current = { publishedArtifact: storage.getState().artifacts[artifactId] ?? full.artifact, attempt, lifetime };
             }
             setRead({ state: full ? 'ready' : 'failed', result: full });
         }, () => { if (!controller.signal.aborted) setRead({ state: 'failed', result: null }); });
         return () => controller.abort();
-    }, [artifactId, artifact, requiresRead, attempt]);
-    const current = completed.current?.publishedArtifact === artifact && completed.current.attempt === attempt;
+    }, [artifactId, artifact, requiresRead, attempt, lifetime]);
+    const current = completed.current?.publishedArtifact === artifact && completed.current.attempt === attempt && completed.current.lifetime === lifetime;
     return { state: requiresRead && !current && read.state === 'ready' ? 'loading' : read.state,
         result: current ? read.result : null, retry: React.useCallback(() => setAttempt((value) => value + 1), []) };
 }
