@@ -53,7 +53,8 @@ const V3_REQUIRED_ERROR =
   'Authenticated terminal pairing v3 is required. Update the Happier mobile app and scan a new QR code.';
 
 class AuthWaitError extends Error {
-  constructor(readonly code: 'AUTH_REQUEST_EXPIRED' | 'AUTH_RESPONSE_HOME_MISMATCH' | 'AUTH_RESPONSE_INVALID' | 'AUTH_PAIRING_V3_REQUIRED', message: string) {
+  constructor(readonly code: 'AUTH_WAIT_INVALID_ARGUMENT' | 'AUTH_WAIT_INVALID_STATE' | 'AUTH_WAIT_TRANSPORT_UNAVAILABLE'
+    | 'AUTH_REQUEST_EXPIRED' | 'AUTH_RESPONSE_HOME_MISMATCH' | 'AUTH_RESPONSE_INVALID' | 'AUTH_PAIRING_V3_REQUIRED', message: string) {
     super(message);
     this.name = 'AuthWaitError';
   }
@@ -75,7 +76,7 @@ function pendingAuthStatePath(publicKey: Uint8Array): string {
 
 function decodePublicKey(value: string): Uint8Array {
   const raw = String(value ?? '').trim();
-  if (!raw) throw new Error('Missing --public-key');
+  if (!raw) throw new AuthWaitError('AUTH_WAIT_INVALID_ARGUMENT', 'Missing --public-key');
   const tryBase64 = (enc: BufferEncoding): Uint8Array | null => {
     try {
       const buf = Buffer.from(raw, enc);
@@ -86,7 +87,7 @@ function decodePublicKey(value: string): Uint8Array {
     }
   };
   return tryBase64('base64') ?? tryBase64('base64url') ?? (() => {
-    throw new Error('Invalid --public-key (expected base64 or base64url encoded 32-byte key)');
+    throw new AuthWaitError('AUTH_WAIT_INVALID_ARGUMENT', 'Invalid --public-key (expected base64 or base64url encoded 32-byte key)');
   })();
 }
 
@@ -227,26 +228,25 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
 
   const json = args.includes('--json');
   if (!json) {
-    console.error('Missing required flag: --json');
-    process.exit(2);
+    throw new AuthWaitError('AUTH_WAIT_INVALID_ARGUMENT', 'Missing required flag: --json');
   }
 
   const keyIndex = args.findIndex((a) => a === '--public-key');
   const publicKeyRaw = keyIndex >= 0 ? (args[keyIndex + 1] ?? '') : '';
   if (!publicKeyRaw || String(publicKeyRaw).startsWith('--')) {
-    console.error('Missing required flag: --public-key <base64>');
-    process.exit(2);
+    throw new AuthWaitError('AUTH_WAIT_INVALID_ARGUMENT', 'Missing required flag: --public-key <base64>');
   }
 
   const publicKeyBytes = decodePublicKey(String(publicKeyRaw));
   const statePath = pendingAuthStatePath(publicKeyBytes);
-  const state = parsePendingAuthState(await readProtectedLocalStateFile(
-    statePath,
-    PENDING_AUTH_STATE_PROTECTION,
-  ));
+  const rawState = await readProtectedLocalStateFile(statePath, PENDING_AUTH_STATE_PROTECTION);
+  let state: PendingAuthState;
+  try { state = parsePendingAuthState(rawState); } catch {
+    throw new AuthWaitError('AUTH_WAIT_INVALID_STATE', 'Invalid pending authentication state. Request fresh approval.');
+  }
   const remoteEnrollment = args.includes('--remote-enrollment');
   if (remoteEnrollment && (!state.remoteProfileId || state.remoteProfileId !== configuration.activeServerId)) {
-    throw new Error('Remote enrollment requires its exact prepared Home profile.');
+    throw new AuthWaitError('AUTH_WAIT_INVALID_STATE', 'Remote enrollment requires its exact prepared Home profile.');
   }
   const pairing = {
     secret: decodeBase64(state.pairingSecret, 'base64url'),
@@ -266,7 +266,7 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
   const acquired = await acquireTerminalAuthEnrollmentRuntime(
     target.descriptor ?? target, target.preferredTransport, signal,
   );
-  if (!acquired.ok) throw new Error('Unable to acquire the selected Home enrollment carrier');
+  if (!acquired.ok) throw new AuthWaitError('AUTH_WAIT_TRANSPORT_UNAVAILABLE', 'Unable to acquire the selected Home enrollment carrier');
   const pollIntervalMsRaw = Number(process.env.HAPPIER_AUTH_POLL_INTERVAL_MS ?? '');
   const pollIntervalMs = Number.isFinite(pollIntervalMsRaw) && pollIntervalMsRaw > 0 ? pollIntervalMsRaw : 1000;
 
@@ -277,10 +277,16 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
     }
     while (true) {
     signal?.throwIfAborted();
+    if (Date.now() >= state.pairingExpiresAtMs) {
+      throw new AuthWaitError('AUTH_REQUEST_EXPIRED', 'Authentication request expired. Run `happier auth request --json` again.');
+    }
     const statusData = await readTerminalAuthRequestStatus({ runtime: acquired.runtime, publicKey: state.publicKey, ...(signal ? { signal } : {}) });
     const status = isRecord(statusData) ? statusData.status : undefined;
     if (status === 'not_found') {
       throw new AuthWaitError('AUTH_REQUEST_EXPIRED', 'Authentication request expired. Run `happier auth request --json` again.');
+    }
+    if (status !== 'pending' && status !== 'authorized') {
+      throw new AuthWaitError('AUTH_RESPONSE_INVALID', 'Unexpected authentication request status from server.');
     }
 
     if (status === 'authorized') {
@@ -291,6 +297,9 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
         ...(signal ? { signal } : {}),
       });
       if (!isRecord(claimData) || claimData.state !== 'authorized') {
+        if (!isRecord(claimData) || claimData.state !== 'requested') {
+          throw new AuthWaitError('AUTH_RESPONSE_INVALID', 'Unexpected authentication claim response from server.');
+        }
         await waitForPollInterval(pollIntervalMs, signal);
         continue;
       }
@@ -317,6 +326,9 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
       }
 
       const terminalSecretKey = decodeBase64(state.secretKey);
+      if (Date.now() >= state.pairingExpiresAtMs) {
+        throw new AuthWaitError('AUTH_REQUEST_EXPIRED', 'Authentication request expired. Run `happier auth request --json` again.');
+      }
       const opened = openTerminalProvisioningResponse({
         payload: decodeBase64(responseB64),
         terminalSecretKey,

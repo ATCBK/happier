@@ -17,6 +17,38 @@ type RemoteEnrollmentExecutorParams = Parameters<
 >[0];
 
 describe('native transport through the remote bootstrap task', () => {
+  it.each([60_000, 15 * 60_000])('settles unanswered pairing at the earlier Home/operation deadline (%i ms) with a Retry outcome', async lifetimeMs => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now();
+      const runner = createSystemTasksRunner({ kinds: {} });
+      let approved = false;
+      const task = createRemoteNativeBootstrapMachineTaskKind({
+        configuration: { relay: { relayUrl: HOME_TARGET.canonicalAuthUrl }, homeTarget: HOME_TARGET, serviceMode: 'none' },
+        assertCurrent: async () => {}, installRemoteCli: async () => {},
+        approveLocalAuthRequest: async () => { approved = true; },
+        executor: {
+          runHappierJson: async () => ({ ok: true, data: { authenticated: false, machineId: null } }),
+          runHappierText: async () => ({ status: 0, stderr: '', stdout: JSON.stringify({
+            kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+            publicKey: Buffer.alloc(32, 1).toString('base64'), homeServerIdentityId: HOME_TARGET.homeServerIdentityId,
+            pairing: { secretB64Url: Buffer.alloc(32, 2).toString('base64url'), createdAtMs: now, expiresAtMs: now + lifetimeMs },
+            supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'guest-home',
+          }) }),
+        },
+      });
+      await runner.startAdmitted({ taskId: 'expiring-consent', kind: 'remote.ssh.bootstrapMachine.v1', params: {} }, task);
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await runner.poll({ taskId: 'expiring-consent', cursor: 0 })).pendingPrompt?.kind).toBe('auth.approveRemoteProvisioning');
+      await vi.advanceTimersByTimeAsync(Math.min(lifetimeMs, 10 * 60_000) + 1);
+      expect(await runner.poll({ taskId: 'expiring-consent', cursor: 0 })).toMatchObject({
+        pendingPrompt: null, result: { ok: false, error: { code: lifetimeMs < 10 * 60_000 ? 'auth_request_expired' : 'auth_enrollment_timeout', message: expect.stringContaining('Retry') } },
+      });
+      await expect(runner.respond({ taskId: 'expiring-consent', answer: { approved: true } })).rejects.toThrow();
+      expect(approved).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('preserves the released guest update requirement through the composed native task runner', async () => {
     const stdout = await readFile(new URL('../recipes/fixtures/authRequest.cli-v0.2.16.json', import.meta.url), 'utf8');
     const approveLocalAuthRequest = vi.fn(async () => {});
@@ -70,7 +102,7 @@ describe('native transport through the remote bootstrap task', () => {
           if (args[1] === 'request') {
             expect(args).toEqual(['auth', 'request', '--json', '--remote-enrollment', '--home-target-stdin', '--managed-enrollment-stdin']);
             guestInput = JSON.parse(options!.input!);
-            const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1, publicKey: Buffer.alloc(32, 1).toString('base64'), homeServerIdentityId: correlation.homeId, pairing: { secretB64Url: Buffer.alloc(32, 2).toString('base64url'), createdAtMs: 10, expiresAtMs: 20 }, supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'guest-home' };
+            const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1, publicKey: Buffer.alloc(32, 1).toString('base64'), homeServerIdentityId: correlation.homeId, pairing: { secretB64Url: Buffer.alloc(32, 2).toString('base64url'), createdAtMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 }, supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'guest-home' };
             return { status: 0, stdout: `${JSON.stringify(request)}\n`, stderr: '' };
           }
           expect(args).toEqual(['auth', 'wait', '--json', '--remote-enrollment', '--server', 'guest-home', '--no-persist', '--public-key', Buffer.alloc(32, 1).toString('base64')]);
@@ -184,8 +216,8 @@ const HOME_TARGET = {
 
 const V3_PAIRING = {
   secretB64Url: 'pairing-secret-b64url',
-  createdAtMs: 123,
-  expiresAtMs: 456,
+  createdAtMs: Date.now(),
+  expiresAtMs: Date.now() + 15 * 60_000,
 };
 
 function createV3AuthRequestData(overrides: Record<string, unknown> = {}) {
@@ -302,7 +334,7 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
             protocolVersion: 1,
             publicKey: Buffer.alloc(32, 1).toString('base64'),
             homeServerIdentityId: target.homeServerIdentityId,
-            pairing: { secretB64Url: Buffer.alloc(32, 2).toString('base64url'), createdAtMs: 10, expiresAtMs: 20 },
+            pairing: { secretB64Url: Buffer.alloc(32, 2).toString('base64url'), createdAtMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 },
             supportsTokenOnly: true,
             pairingRequirement: 'v3',
           });
@@ -1096,7 +1128,7 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
     let remoteEnrollmentSignal: AbortSignal | undefined;
     let approvalInput: unknown;
     const forwarded: Array<Record<string, unknown>> = [];
-    const pairing = { secretB64Url: 'pairing-secret-b64url', createdAtMs: 123, expiresAtMs: 456 };
+    const pairing = V3_PAIRING;
     const kind = createRemoteSshBootstrapMachineTaskKind({
       resolveHostTrust: async () => ({ status: 'trusted' }),
       installRemoteCli: async () => {

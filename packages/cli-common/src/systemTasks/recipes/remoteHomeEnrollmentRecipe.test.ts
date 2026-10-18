@@ -19,6 +19,7 @@ const descriptor = {
 };
 const PUBLIC_KEY = Buffer.alloc(32, 1).toString('base64');
 const PAIRING_SECRET = Buffer.alloc(32, 2).toString('base64url');
+const pairing = { secretB64Url: PAIRING_SECRET, createdAtMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 };
 
 // Ordinary stdout from cli-v0.2.16 (b8d1c449c46ab4dfa8637db36b66f643d149e66d),
 // apps/cli/src/cli/commands/auth/request.ts#handleAuthRequest; values redacted.
@@ -53,10 +54,38 @@ function createExecutor(params: Readonly<{
 }
 
 describe('runRemoteHomeEnrollmentRecipe', () => {
+  it('accepts four-minute consent within the recipe budget and gives wait only the remainder', async () => {
+    vi.useFakeTimers();
+    try {
+      const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+        publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
+        pairing: { ...pairing, createdAtMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 },
+        supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'remote-home-profile' };
+      const budgets: number[] = [];
+      const completed = runRemoteHomeEnrollmentRecipe({ processIO: 'buffered',
+        homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+        executor: { runHappierJson: async () => { throw new Error('not used'); },
+          runHappierText: async (args, options) => {
+            budgets.push(options!.timeoutMs!);
+            return { status: 0, stderr: '', stdout: JSON.stringify(args[1] === 'request' ? request : {
+              kind: 'remote_home_enrollment_result', protocolVersion: 1, success: true,
+              homeServerIdentityId: descriptor.homeServerIdentityId, machineId: 'joined',
+              encryptionType: 'tokenOnly', pairingAuthentication: 'v3', remoteProfileId: 'remote-home-profile',
+            }) };
+          } },
+        approvePairingRequest: async () => { await new Promise(resolve => setTimeout(resolve, 4 * 60_000)); },
+        timeoutMs: 10 * 60_000,
+      });
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await expect(completed).resolves.toMatchObject({ machineId: 'joined' });
+      expect(budgets).toEqual([10 * 60_000, 6 * 60_000]);
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each(['request', 'wait'] as const)('retains the typed %s failure and exit phase without subprocess secrets', async phase => {
     const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
       publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
-      pairing: { secretB64Url: PAIRING_SECRET, createdAtMs: 10, expiresAtMs: 20 },
+      pairing,
       supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'remote-home-profile' };
     const failure = await runRemoteHomeEnrollmentRecipe({ processIO: 'buffered',
       homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
@@ -85,6 +114,23 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
     expect(failure).toMatchObject({ code: 'remote_command_failed',
       message: 'Remote Home enrollment failed during auth request (exit 1).' });
     expect(JSON.stringify(failure)).not.toMatch(/private-|UNTRUSTED_CODE|http_error|409/);
+  });
+
+  it('names missing wait diagnostics without inventing an auth cause or exposing native output', async () => {
+    const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+      publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
+      pairing, supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'remote-home-profile' };
+    const failure = await runRemoteHomeEnrollmentRecipe({ processIO: 'buffered',
+      homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+      executor: { runHappierJson: async () => { throw new Error('not used'); },
+        runHappierText: async args => args[1] === 'request'
+          ? { status: 0, stdout: JSON.stringify(request), stderr: '' }
+          : { status: 1, stdout: '', stderr: 'private-native-error' } },
+      approvePairingRequest: async () => {}, timeoutMs: 5_000,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: 'remote_command_failed',
+      message: 'Remote Home enrollment failed during auth wait (exit 1; code AUTH_WAIT_DIAGNOSTIC_UNAVAILABLE).' });
+    expect(JSON.stringify(failure)).not.toContain('private-native-error');
   });
 
   it('requires a remote CLI update for released ordinary auth request stdout without disclosing it', async () => {
@@ -153,7 +199,7 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
     let approved = false;
     const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
       publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
-      pairing: { secretB64Url: PAIRING_SECRET, createdAtMs: 10, expiresAtMs: 20 },
+      pairing,
       supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'remote-home-profile' };
     const completion = { kind: 'remote_home_enrollment_result', protocolVersion: 1, success: true,
       homeServerIdentityId: descriptor.homeServerIdentityId, machineId: 'remote-machine',
@@ -226,7 +272,7 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
             protocolVersion: 1,
             publicKey: PUBLIC_KEY,
             homeServerIdentityId: descriptor.homeServerIdentityId,
-            pairing: { secretB64Url: PAIRING_SECRET, createdAtMs: 10, expiresAtMs: 20 },
+            pairing,
             supportsTokenOnly: true,
             pairingRequirement: 'v3',
           },
@@ -279,7 +325,7 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
           protocolVersion: 1,
           publicKey: PUBLIC_KEY,
           homeServerIdentityId: descriptor.homeServerIdentityId,
-          pairing: { secretB64Url: PAIRING_SECRET, createdAtMs: 10, expiresAtMs: 20 },
+          pairing,
           supportsTokenOnly: true,
           pairingRequirement: 'v3',
         })}\n`);
@@ -318,7 +364,7 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
             protocolVersion: 1,
             publicKey: PUBLIC_KEY,
             homeServerIdentityId: descriptor.homeServerIdentityId,
-            pairing: { secretB64Url: PAIRING_SECRET, createdAtMs: 10, expiresAtMs: 20 },
+            pairing,
             supportsTokenOnly: true,
             pairingRequirement: 'v3',
           },
@@ -352,7 +398,7 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
             protocolVersion: 1,
             publicKey: PUBLIC_KEY,
             homeServerIdentityId: 'srv_other_home',
-            pairing: { secretB64Url: PAIRING_SECRET, createdAtMs: 10, expiresAtMs: 20 },
+            pairing,
             supportsTokenOnly: true,
             pairingRequirement: 'v3',
           },

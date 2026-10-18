@@ -191,6 +191,43 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
   signal?: AbortSignal;
   timeoutMs: number;
 }>): Promise<RemoteHomeEnrollmentResult> {
+  const deadlineMs = Date.now() + params.timeoutMs;
+  const timedOut = () => new SystemTaskExecutionError('auth_enrollment_timeout',
+    'Remote Home enrollment timed out. Retry setup to request fresh approval.');
+  const remainingMs = (): number => {
+    params.signal?.throwIfAborted();
+    const remaining = deadlineMs - Date.now();
+    if (remaining <= 0) throw timedOut();
+    return remaining;
+  };
+  const approvePairingRequest = async (request: RemoteHomeEnrollmentPairingRequest): Promise<void> => {
+    // One recipe budget contains request, human consent and claim. The Home's
+    // security expiry may end consent earlier; neither phase gets a new budget.
+    const approvalDeadlineMs = Math.min(deadlineMs, request.pairing.expiresAtMs);
+    const expired = () => approvalDeadlineMs === deadlineMs ? timedOut()
+      : new SystemTaskExecutionError('auth_request_expired',
+        'Remote machine pairing approval expired. Retry setup to request fresh approval.');
+    params.signal?.throwIfAborted();
+    if (Date.now() >= approvalDeadlineMs) throw expired();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    try {
+      await Promise.race([
+        params.approvePairingRequest(request),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(expired()), approvalDeadlineMs - Date.now());
+          onAbort = () => reject(params.signal?.reason);
+          params.signal?.addEventListener('abort', onAbort, { once: true });
+          if (params.signal?.aborted) onAbort();
+        }),
+      ]);
+      params.signal?.throwIfAborted();
+      if (Date.now() >= approvalDeadlineMs) throw expired();
+    } finally {
+      clearTimeout(timer);
+      if (onAbort) params.signal?.removeEventListener('abort', onAbort);
+    }
+  };
   const homeTargetInput = parseHomeTargetInput(params.homeTargetInput);
   const managedEnrollment = params.managedEnrollment === undefined ? undefined
     : ManagedEnrollmentCorrelationV1Schema.parse(params.managedEnrollment);
@@ -203,7 +240,7 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
       params.signal?.throwIfAborted();
       const result = await params.executor.runHappierText(args, {
         ...(input === undefined ? {} : { input }), signal: params.signal,
-        timeoutMs: params.timeoutMs, includeStdoutInError: false,
+        timeoutMs: remainingMs(), includeStdoutInError: false,
       });
       params.signal?.throwIfAborted();
       if (Buffer.byteLength(result.stdout, 'utf8') > MAX_PROTOCOL_LINE_BYTES) {
@@ -221,6 +258,11 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
           fields.push(`code ${redactBugReportSensitiveText(diagnostic.code)}`);
         } else if (typeof diagnostic?.code === 'number' && Number.isSafeInteger(diagnostic.code)) {
           fields.push(`code ${diagnostic.code}`);
+        }
+        if (args[1] === 'wait' && fields.length === 1) {
+          // Native termination/startup can prevent the CLI envelope entirely.
+          // Name the missing evidence, never infer expiry or reveal stderr.
+          fields.push('code AUTH_WAIT_DIAGNOSTIC_UNAVAILABLE');
         }
         if (diagnostic && ['http_error', 'auth_error'].includes(String(diagnostic.category))) {
           fields.push(`category ${diagnostic.category}`);
@@ -243,7 +285,7 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
     if (homeTargetInput.kind === 'descriptor' && request.homeServerIdentityId !== homeTargetInput.descriptor.homeServerIdentityId) {
       throw new SystemTaskExecutionError('home_identity_mismatch', 'Remote enrollment request does not match the selected Home identity.');
     }
-    await params.approvePairingRequest(request);
+    await approvePairingRequest(request);
     params.signal?.throwIfAborted();
     const result = parseResult(await capture(['auth', 'wait', '--json', '--remote-enrollment', '--server', request.remoteProfileId, '--no-persist', '--public-key', request.publicKey]));
     if (!result) throw new SystemTaskExecutionError('invalid_cli_response', 'Remote enrollment did not return a valid completion result.');
@@ -304,7 +346,7 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
         return;
       }
       state.pairingRequest = request;
-      approvalPromise = params.approvePairingRequest(request).catch((error: unknown) => {
+      approvalPromise = approvePairingRequest(request).catch((error: unknown) => {
         approvalError = error;
         linked.controller.abort();
       });
@@ -332,7 +374,7 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
         {
           input: JSON.stringify(managedEnrollment ? { homeTarget: homeTargetInput, managedEnrollment } : homeTargetInput),
           signal: linked.controller.signal,
-          timeoutMs: params.timeoutMs,
+          timeoutMs: remainingMs(),
           includeStdoutInError: false,
           onStdoutChunk: (chunk) => {
             lineBuffer += chunk;

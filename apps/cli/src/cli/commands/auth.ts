@@ -83,15 +83,16 @@ export async function handleAuthCliCommand(context: CommandContext): Promise<voi
     const { errorFrame } = await import('@happier-dev/cli-common/output');
     const diagnostic = projectSafeAuthError(error);
     const phase = context.args[1];
+    const exitCode = phase === 'wait' && diagnostic.code === 'AUTH_WAIT_INVALID_ARGUMENT' ? 2 : 1;
     if ((phase === 'request' || phase === 'wait') && wantsJson(context.args)) {
       // Auth errors may carry HTTP bodies and pairing secrets. Finite remote
       // enrollment consumes only this credential-free diagnostic projection.
       await writeJsonStdout({ v: 1, ok: false, kind: `auth_${phase}`, error: {
-        ...(diagnostic.code !== undefined ? { code: diagnostic.code } : {}),
+        code: diagnostic.code ?? (phase === 'wait' ? 'AUTH_WAIT_FAILED' : 'AUTH_REQUEST_FAILED'),
         category: diagnostic.status !== undefined ? 'http_error' : 'auth_error',
         ...(diagnostic.status !== undefined ? { status: diagnostic.status } : {}),
       } });
-      process.exit(1);
+      process.exit(exitCode);
     }
     console.error(errorFrame('Error:', [diagnostic.message]));
     if (process.env.DEBUG) {
@@ -100,6 +101,6 @@ export async function handleAuthCliCommand(context: CommandContext): Promise<voi
       // boundary so pairing and credential material cannot reach diagnostics.
       console.error(diagnostic);
     }
-    process.exit(1);
+    process.exit(exitCode);
   }
 }
