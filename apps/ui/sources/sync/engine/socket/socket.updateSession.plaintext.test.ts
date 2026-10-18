@@ -9,11 +9,14 @@ import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { voiceSessionBindingStore } from '@/voice/sessionBinding/voiceSessionBindingStore';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { buildSessionListIndexFromViewData } from '@/sync/domains/session/listing/sessionListIndex';
+import { computeVisibleSessionListIndex } from '@/sync/domains/session/listing/computeVisibleSessionListIndex';
 import { fetchAndApplySessionById } from '@/sync/engine/sessions/sessionById';
 import {
     flushActivityUpdates,
     handleUpdateContainer,
     resetSocketSessionProjectionStateForServerScope,
+    parseUpdateContainer,
 } from './socket';
 
 const initialStorageState = storage.getInitialState();
@@ -187,6 +190,65 @@ describe('socket update handling: plaintext update-session', () => {
             expect(renderable.pendingRequestObservedAt).toBe(200);
         }
         expect(deriveSessionRuntimePresentationState(renderable, 10_000).working).toBe(false);
+    });
+
+    it('promotes an inactive cache-only row when a live turn mutation starts working', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        const session = { ...buildSession('s_live_turn_placement'), active: false, presence: 1 };
+        storage.setState((state) => ({
+            settings: {
+                ...state.settings,
+                sessionListAttentionPromotionModeV1: 'global',
+                sessionListWorkingPlacementModeV1: 'global',
+            },
+        }));
+        storage.getState().replaceSessionListRenderables([session]);
+        const updateData = parseUpdateContainer({
+            id: 'u_live_turn_placement',
+            seq: 10,
+            createdAt: Date.now(),
+            body: {
+                t: 'update-session',
+                id: session.id,
+                sid: session.id,
+                latestTurnId: 'turn-live-placement',
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: Date.now(),
+                lastRuntimeIssue: null,
+                rollbackEligibleTurnStarts: [],
+            },
+        });
+        expect(updateData).not.toBeNull();
+        if (!updateData) throw new Error('Invalid turn projection fixture');
+
+        await handleUpdateContainer({ ...buildBaseParams(), updateData });
+        await vi.runAllTimersAsync();
+
+        const source = storage.getState().sessionListViewData;
+        const sourceIndex = buildSessionListIndexFromViewData(source);
+        const visibleIndex = computeVisibleSessionListIndex({
+            source: sourceIndex,
+            resolveSessionRow: (_serverId, sessionId) => {
+                const item = source?.find((entry) => entry.type === 'session' && entry.session.id === sessionId);
+                return item?.type === 'session' ? item.session : null;
+            },
+            hideInactiveSessions: false,
+            pinnedSessionKeysV1: [],
+            sessionListGroupOrderV1: {},
+            sessionListOrderingModeV1: 'custom',
+            presentation: { enabled: false, presentation: 'grouped', selectedServerIds: [] },
+            attentionPromotion: { mode: 'global' },
+            workingPlacement: { mode: 'global' },
+            nowMs: Date.now(),
+        });
+        expect(source?.find((item) => item.type === 'session' && item.session.id === session.id)).toMatchObject({
+            session: { latestTurnStatus: 'in_progress' },
+        });
+        expect(visibleIndex).toEqual(expect.arrayContaining([
+            expect.objectContaining({ type: 'header', headerKind: 'working' }),
+            expect.objectContaining({ type: 'session', sessionId: session.id, workingPlacementReason: 'working' }),
+        ]));
     });
 
     it('applies working-to-online activity even when a newer durable projection advanced updatedAt', () => {
