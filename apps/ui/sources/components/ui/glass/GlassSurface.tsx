@@ -145,13 +145,15 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
         const toneEnvironment = { ...environment, reduceTransparency: toneReduceTransparency };
         // The solid paint this surface shows over the plain page: the glass resolves to it there.
         const groundSolid = group === 'card' ? glassElementsCoatColor(solidColor, theme.colors.surface.base) : solidColor;
-        const map = resolveGlassBackdropMap(settings, group, theme.dark, toneEnvironment, { page: theme.colors.surface.base, solid: groundSolid, ink: theme.colors.text.primary }, panel);
+        // Controls nested in this glass paint its translucent inner fill; their labels stand on it too.
+        const controlFill = props.translucentColor ?? theme.colors.surface.selected;
+        const map = resolveGlassBackdropMap(settings, group, theme.dark, toneEnvironment, { page: theme.colors.surface.base, solid: groundSolid, ink: theme.colors.text.primary, controlFill }, panel);
         return [
-            glassSurfaceTintColor({ color: groundSolid, ink: theme.colors.text.primary, dark: theme.dark, settings, group, page: theme.colors.surface.base, environment: toneEnvironment, panel }),
+            glassSurfaceTintColor({ color: groundSolid, ink: theme.colors.text.primary, controlFill, dark: theme.dark, settings, group, page: theme.colors.surface.base, environment: toneEnvironment, panel }),
             map?.tone ?? '',
             map?.opacity,
         ] as const;
-    }, [solidColor, theme, settings, group, environment, toneReduceTransparency, panel]);
+    }, [solidColor, theme, settings, group, environment, toneReduceTransparency, panel, props.translucentColor]);
 
     const capability = props.enabled === false || props.atmosphereCoat === 'opaque' || (transparentPlane && Platform.OS !== 'web')
         ? 'solid'

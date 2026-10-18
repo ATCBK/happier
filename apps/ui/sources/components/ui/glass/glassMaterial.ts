@@ -78,8 +78,12 @@ export const GLASS_BACKDROP_COMPRESSION = {
         picture: { card: { dark: 0.35, light: 0.3 }, floating: { dark: 0.35, light: 0.3 } } },
 } as const;
 
-/** The plain page a surface stands on and the solid paint it shows there. Theme variables are resolved live. */
-export type GlassBackdropGround = Readonly<{ page: string; solid: string; ink?: string }>;
+/**
+ * The plain page a surface stands on and the solid paint it shows there. Theme variables are resolved live.
+ * `ink` is the theme's primary ink: with a measured picture tone, default glass keeps it legible, also under
+ * `controlFill`, the translucent fill a control nested in the glass paints over it (a bordered pill).
+ */
+export type GlassBackdropGround = Readonly<{ page: string; solid: string; ink?: string; controlFill?: string }>;
 
 /**
  * Glass composites the filtered backdrop and coat C at opacity α. Before filter clipping, brightness
@@ -196,10 +200,16 @@ function legibleCompression(compression: number, dark: boolean, tone: GlassAtmos
     const ink = ground?.ink ? parseRgb(ground.ink) : null;
     if (!tone || !page || !solid || !ink) return compression;
     const picture = greyOf(dark ? tone.light : tone.dark);
+    const fill = ground?.controlFill ? parseThemeColor(ground.controlFill) : null;
+    const fillRgb = fill ? fill.rgb().array().map(value => value / 255) : null;
+    const fillAlpha = fill ? fill.alpha() : 0;
     const holds = (k: number) => {
         const glass = solid.map((value, channel) => Math.min(1, Math.max(0, value + k * (picture - page[channel]!))));
         const faint = ink.map((value, channel) => value * GLASS_BACKED_FAINT_INK_SHARE + glass[channel]! * (1 - GLASS_BACKED_FAINT_INK_SHARE));
-        return contrast(ink, glass) >= LEGIBLE_BODY_CONTRAST && contrast(faint, glass) >= LEGIBLE_FAINT_CONTRAST;
+        // A nested control's translucent fill lies over the glass, so its label stands on both.
+        const control = fillRgb ? glass.map((value, channel) => fillRgb[channel]! * fillAlpha + value * (1 - fillAlpha)) : glass;
+        return contrast(ink, glass) >= LEGIBLE_BODY_CONTRAST && contrast(faint, glass) >= LEGIBLE_FAINT_CONTRAST
+            && contrast(ink, control) >= LEGIBLE_BODY_CONTRAST;
     };
     if (holds(compression)) return compression;
     let low = 0;

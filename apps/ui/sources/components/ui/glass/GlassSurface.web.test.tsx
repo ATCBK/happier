@@ -355,6 +355,36 @@ describe('web glass material', () => {
             expect(await paintOver(custom, toneOf([...backdrop]), 'card')).toEqual(await paintOver(custom, undefined, 'card'));
         }
     });
+    it('keeps the label of a control nested in default glass legible over the measured picture: the coat accounts for the control\'s own translucent fill', async () => {
+        const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials, resolveGlassSurfaceMaterial } = await import('./glassMaterial');
+        const { darkTheme } = await import('@/theme');
+        themeMode.dark = true;
+        const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
+        // The bright sky of Orange dune under the dark theme: a bordered "Review" pill on a card.
+        const backdrop: [number, number, number] = [236, 162, 92];
+        const l = Color.rgb(backdrop).luminosity();
+        const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
+            <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper', atmosphereTone: { dark: l, light: l, focus: l } }}>
+                <GlassSurface surfaceGroup="card" finishRole={null} solidColor={darkTheme.colors.edge.cardFill}><DraftInput /></GlassSurface>
+            </GlassRuntimeEnvironmentProvider>
+        </GlassMaterialSettingsProvider>);
+        const style = flattenTestStyle(screen.findAll(hasBackdrop)[0]!.props.style) as Record<string, string>;
+        standardCleanup();
+        const coat = rgb(/color-mix\(in srgb, (rgba?\([^)]*\)|#[0-9a-f]+) /i.exec(style.backgroundColor!)![1]!);
+        const painted = /color-mix\(in srgb, (?:rgba?\([^)]*\)|#[0-9a-f]+) ([\d.]+)%/i.exec(style.backgroundColor!)?.[1];
+        const opacity = painted === undefined
+            ? resolveGlassSurfaceMaterial({ glassSurfaceMaterials: glassPresetMaterials('auto') }, 'card', { atmosphereBehind: 'wallpaper' }).material.opacity
+            : Number(painted) / 100;
+        const glass = renderGlassOver({ filter: style.backdropFilter!, coat, opacity, backdrop });
+        // The control's fill on glass is the material's translucent inner fill.
+        const fill = Color(darkTheme.colors.surface.selected);
+        const control = glass.map((value, channel) => fill.rgb().array()[channel]! * fill.alpha() + value * (1 - fill.alpha())) as [number, number, number];
+        const ink = rgb(darkTheme.colors.text.primary);
+        expect(glassContrastRatio(ink, glass)).toBeGreaterThanOrEqual(4.5);
+        expect(glassContrastRatio(ink, control)).toBeGreaterThanOrEqual(4.5);
+    });
     it('reads every ink on the Wallpaper plane in the page colour where the atmosphere chose it, and keeps the theme ink otherwise', async () => {
         const { Text } = await import('@/components/ui/text/Text');
         const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
