@@ -61,6 +61,8 @@ describe("sharpRuntime", () => {
         await mkdir(unrelatedWorkingDirectory);
         await writeFile(join(unrelatedWorkingDirectory, "package.json"), JSON.stringify({ name: "untrusted-cwd", type: "module" }));
         if (role === "cli") await writeFile(join(unrelatedWorkingDirectory, ".env"), "HAPPIER_SHARP_AMBIENT_TRAP=1\n");
+        await writeFile(join(unrelatedWorkingDirectory, "bunfig.toml"), 'preload = ["./preload.cjs"]\n');
+        await writeFile(join(unrelatedWorkingDirectory, "preload.cjs"), "throw new Error('Project bunfig preload was executed');\n");
         const platform = target.os === "windows" ? "win32" : target.os;
         for (const packageName of ["sharp", `@img/sharp-${platform}-${target.arch}`]) {
             const packageDir = join(unrelatedWorkingDirectory, "node_modules", ...packageName.split("/"));

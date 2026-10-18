@@ -278,7 +278,7 @@ export async function buildCliBinaryArtifactPayload({
         cwd: repoRoot,
         externals: mergedExternals,
         bunCommand,
-        // The standalone CLI must not inherit project-local dotenv files from
+        // The standalone CLI must not inherit project-local dotenv or bunfig files from
         // the directory where the user invokes it. Configuration is loaded by
         // the host runtime, and Bun's compiled-executable autoloader can abort
         // startup before the CLI installs its error reporting.
