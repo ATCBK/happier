@@ -1,3 +1,4 @@
+import { getServerFetchUrl } from '@/dev/testkit/mocks/serverFetch';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
@@ -45,7 +46,7 @@ describe('apiPush endpoint supervision', () => {
 
         getCredentialsForServerUrlMock.mockResolvedValue({ token: 'token-1', secret: 'secret' });
         runtimeFetchMock.mockImplementation(async (url: unknown) => {
-            const asString = String(url ?? '');
+            const asString = getServerFetchUrl(url).pathname;
             if (asString.endsWith('/v1/push-tokens')) {
                 return new Response(JSON.stringify({ success: true }), { status: 200, headers: new Headers() });
             }
@@ -69,7 +70,7 @@ describe('apiPush endpoint supervision', () => {
     it('uses the provided serverId when supervising an explicit apiEndpoint', async () => {
         getCredentialsForServerUrlMock.mockResolvedValue({ token: 'token-1', secret: 'secret' });
         runtimeFetchMock.mockImplementation(async (url: unknown) => {
-            const asString = String(url ?? '');
+            const asString = getServerFetchUrl(url).pathname;
             if (asString.endsWith('/v1/push-tokens')) {
                 return new Response(JSON.stringify({ success: true }), { status: 200, headers: new Headers() });
             }

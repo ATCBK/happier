@@ -143,6 +143,12 @@ function notify(key: string): void {
 }
 
 function publish(key: string, entry: InternalEntry): void {
+    if (
+        entry.view.snapshot === entry.snapshot
+        && entry.view.loading === entry.loading
+        && entry.view.error === entry.error
+        && entry.view.refreshing === entry.refreshing
+    ) return;
     entry.view = { snapshot: entry.snapshot, loading: entry.loading, error: entry.error, refreshing: entry.refreshing };
     notify(key);
 }

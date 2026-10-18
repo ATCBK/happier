@@ -514,6 +514,7 @@ export const SealedConnectedServiceQuotaSnapshotV1Schema = z.object({
     format: ConnectedServiceCredentialFormatSchema,
     ciphertext: z.string().min(1),
     subscription: SealedProviderAccountSubscriptionV1Schema.optional(),
+    recoveryCreditDetails: z.object({ ciphertext: z.string().min(1) }).strict().optional(),
 });
 
 export type SealedConnectedServiceQuotaSnapshotV1 = z.infer<typeof SealedConnectedServiceQuotaSnapshotV1Schema>;
