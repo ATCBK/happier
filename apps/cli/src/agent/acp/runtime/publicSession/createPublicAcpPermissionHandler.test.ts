@@ -249,7 +249,11 @@ describe('createPublicAcpPermissionHandler', () => {
     await expect(pending).resolves.toEqual(expect.objectContaining({ decision: 'abort' }));
   });
 
-  async function elicitationFixture(permissionMode: 'default' | 'yolo' | 'plan' = 'default') {
+  async function elicitationFixture(
+    permissionMode: 'default' | 'yolo' | 'plan' = 'default',
+    custody?: Pick<Parameters<typeof createPublicAcpPermissionHandler>[0],
+      'resolveRequestId' | 'resolveTurnId' | 'resolveCausalPermissionAuthority'>,
+  ) {
     const [{ ProviderEnforcedPermissionHandler }, { createNativeAgentCurrentSessionUiServices }] = await Promise.all([
       import('@/agent/permissions/providerEnforced/handler'),
       import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'),
@@ -281,6 +285,7 @@ describe('createPublicAcpPermissionHandler', () => {
         kind: 'admittedSessionInputV1',
         admittedPermissionCeiling: permissionMode,
       }),
+      ...custody,
     });
     async function publishedRequest() {
       await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
@@ -300,6 +305,38 @@ describe('createPublicAcpPermissionHandler', () => {
     }
     return { session, permissionHandler, handler, publishedRequest, answer };
   }
+
+  it('preserves an opaque elicitation tool call identity through turn custody and the real permission interaction', async () => {
+    const toolCallId = ' \tcall/工具+=\n ';
+    const turnCustody = new Map([[toolCallId, {
+      requestId: `acp:${JSON.stringify(['turn-1', toolCallId])}`,
+      turnId: 'turn-1',
+      causalPermissionAuthority: {
+        kind: 'admittedSessionInputV1' as const,
+        admittedPermissionCeiling: 'default' as const,
+      },
+    }]]);
+    const fixture = await elicitationFixture('default', {
+      resolveRequestId: id => turnCustody.get(id)?.requestId ?? null,
+      resolveTurnId: id => turnCustody.get(id)?.turnId ?? null,
+      resolveCausalPermissionAuthority: id => turnCustody.get(id)?.causalPermissionAuthority ?? null,
+    });
+    try {
+      const pending = fixture.handler.handleElicitation!({
+        mode: 'form', sessionId: 'session-1', toolCallId, message: 'Which implementation?',
+        requestedSchema: {
+          type: 'object', properties: { value: { type: 'string' } }, required: ['value'],
+        },
+      });
+      const request = await fixture.publishedRequest();
+      expect(request.input).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action', turnId: 'turn-1' });
+      await fixture.answer(request.id, true, { value: ['keep the identity'] });
+      await expect(pending).resolves.toEqual({ action: 'accept', content: { value: 'keep the identity' } });
+      expect(Object.keys(fixture.session.agentState.requests)).toEqual([]);
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
+  });
 
   it('keeps plan questions pending for an explicit refine answer through the real permission owner', async () => {
     const fixture = await elicitationFixture('plan');

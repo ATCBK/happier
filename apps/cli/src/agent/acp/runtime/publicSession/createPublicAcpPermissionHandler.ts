@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/protocol';
 import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import type { HostCurrentSessionInteractionsService as PluginCurrentSessionInteractionsService } from '@/agent/runtime/state/currentSessionUiTypes';
 import { isWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 import { logger } from '@/ui/logger';
@@ -172,10 +173,8 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
         logger.warn('[ACP] Form elicitation schema could not be presented');
         return Object.freeze({ action: 'cancel' as const });
       }
-      const toolCallId =
-        'toolCallId' in request && typeof request.toolCallId === 'string' && request.toolCallId.trim().length > 0
-          ? request.toolCallId.trim()
-          : `elicitation:${randomUUID()}`;
+      const toolCallId = readNonBlankOpaqueIdentifier('toolCallId' in request ? request.toolCallId : null)
+        ?? `elicitation:${randomUUID()}`;
       const custody = resolveTurnCustody(toolCallId, context);
       if (!custody.ok) {
         return Object.freeze({ action: 'cancel' as const });
