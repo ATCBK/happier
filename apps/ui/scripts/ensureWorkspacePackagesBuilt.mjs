@@ -1,6 +1,6 @@
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { WORKSPACE_BUILD_MODE_ENV, resolveWorkspaceBuildMode } from '../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
 
 import {
@@ -14,11 +14,31 @@ import {
   generateBundledPluginUiArtifacts as generateBundledPluginUiArtifactsDefault,
   resolveBundledPluginUiArtifactsOutputPath,
   resolveBundledPluginUiArtifactsInputPaths,
+  retainBundledPluginUiArtifactsInventory,
 } from './generateBundledPluginUiArtifacts.mjs';
 
 const uiDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
-export async function prepareUiSourcePluginInventory({ uiPackageDir = uiDir, env = process.env, signal } = {}) {
+async function waitForMetroPluginUiInventory({ metroServer, inventoryPath, signal }) {
+  const paths = resolveBundledPluginUiArtifactsInputPaths(inventoryPath)?.slice(1);
+  if (!paths) throw new Error(`Invalid source Plugin UI inventory: ${inventoryPath}`);
+  const graph = await metroServer.getBundler().getBundler().getDependencyGraph();
+  signal?.throwIfAborted();
+  await new Promise((resolveReady, reject) => {
+    const finish = error => {
+      graph.off('change', check);
+      signal?.removeEventListener('abort', abort);
+      if (error) reject(error); else resolveReady();
+    };
+    const check = () => { if (paths.every(path => graph.doesFileExist(path))) finish(); };
+    const abort = () => finish(signal.reason);
+    graph.on('change', check);
+    signal?.addEventListener('abort', abort, { once: true });
+    check();
+  });
+}
+
+export async function prepareUiSourcePluginInventory({ uiPackageDir = uiDir, env = process.env, signal, metroServer } = {}) {
   const repoRoot = resolve(uiPackageDir, '../..');
   const { prepareSourcePluginUiInventory } = await import('../../stack/scripts/build/build_source_web_ui.mjs');
   const requestedInventory = String(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY ?? '').trim();
@@ -27,18 +47,34 @@ export async function prepareUiSourcePluginInventory({ uiPackageDir = uiDir, env
   }
   const parent = requestedInventory ? dirname(requestedInventory) : resolve(uiPackageDir, '.expo/hstack/plugin-ui-inputs');
   await mkdir(parent, { recursive: true });
-  // Startup, source edits and explicit preparation publish through one owner.
-  // Retain prior inputs for requests still consuming the previous inventory.
-  const outputDir = await mkdtemp(resolve(parent, 'preparation-'));
-  const outputPath = requestedInventory || resolve(outputDir, 'inputs/inventory.js');
-  await prepareSourcePluginUiInventory({ repoDir: repoRoot, outputDir, inventoryPath: outputPath, env, signal });
-  return { ok: true, built: [], skipped: [], outputPath };
+  // Compiler scratch has no serving consumer. Only verified content-addressed
+  // assets outlive this call; older browser/native asset URLs still need them.
+  // Metro already excludes this canonical staging prefix at its crawl boundary;
+  // otherwise deleting finished scratch races the fallback watcher's descent.
+  const outputDir = await mkdtemp(resolve(parent, '.happier-plugin-ui-stage-'));
+  const outputPath = requestedInventory || resolve(parent, 'inventory.js');
+  const candidatePath = resolve(outputDir, 'inputs/inventory.js');
+  try {
+    await prepareSourcePluginUiInventory({ repoDir: repoRoot, outputDir, inventoryPath: candidatePath,
+      retainedInventoryPath: outputPath, artifactStoreDir: resolve(parent, 'artifacts'), env, signal });
+    if (metroServer) await waitForMetroPluginUiInventory({ metroServer, inventoryPath: candidatePath, signal });
+    signal?.throwIfAborted();
+    const candidate = await readFile(candidatePath, 'utf8');
+    const current = await readFile(outputPath, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+    if (candidate !== current && !await retainBundledPluginUiArtifactsInventory({ inventoryPath: candidatePath, outputPath })) {
+      throw new Error('Source Plugin UI preparation produced an invalid inventory');
+    }
+    return { ok: true, built: [], skipped: [], outputPath };
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
 }
 
 /** Consume Metro's already-batched changes; do not create another file watcher
  * or debounce clock. The canonical compiler reuses unchanged plugin entries. */
 export function watchUiSourcePluginInventory({ metroServer, uiPackageDir = uiDir, env = process.env, logger = console }) {
   env = { ...env };
+  const inventoryPath = String(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY ?? '').trim();
   const repoRoot = resolve(uiPackageDir, '../..');
   const watcher = metroServer.getBundler().getBundler().getWatcher();
   const cancellation = new AbortController();
@@ -78,14 +114,19 @@ export function watchUiSourcePluginInventory({ metroServer, uiPackageDir = uiDir
       pending = pending.then(async () => {
         queued = false;
         if (closed) return;
-        await prepareUiSourcePluginInventory({ uiPackageDir, env, signal: cancellation.signal });
+        await prepareUiSourcePluginInventory({ uiPackageDir, env, signal: cancellation.signal, metroServer });
         inputsPromise = null;
       }).catch(report);
     }).catch(report);
   };
   watcher.on('change', onChange);
   void inputs().catch(report);
-  return { async close() {
+  return { async ready() {
+    // A one-shot preparer or warm-start parent can publish outside this process.
+    // Bundle/asset admission consumes the same file-map readiness as live refresh.
+    await waitForMetroPluginUiInventory({ metroServer,
+      inventoryPath, signal: cancellation.signal });
+  }, async close() {
     closed = true;
     watcher.off('change', onChange);
     cancellation.abort();

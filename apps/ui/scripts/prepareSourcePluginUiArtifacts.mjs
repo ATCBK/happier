@@ -16,7 +16,7 @@ import { resolveDependencyRefreshMarkerPath } from '../../stack/scripts/utils/pr
 /** Reuse the universal UI artifact compiler and inventory owner without publishing
  * package dist or compiler projections. Callers publish a consumer-owned inventory
  * beside retained input roots, never the shared source-tree projection. */
-export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plugins, resolveSourceImport, sourceImportConditions = [], artifactOutputDirs = {}, outputPath = join(outputDir, 'inventory.js'), retainedInventoryPath = outputPath }) {
+export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plugins, resolveSourceImport, sourceImportConditions = [], artifactOutputDirs = {}, artifactStoreDir, outputPath = join(outputDir, 'inventory.js'), retainedInventoryPath = outputPath }) {
   const artifactRoots = {};
   const pluginManifests = {};
   const compilationFailures = [];
@@ -72,7 +72,7 @@ export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plug
     }
   }
   const result = await generateBundledPluginUiArtifacts({
-    repoRoot, outputPath, artifactRoots, artifactOutputDirs,
+    repoRoot, outputPath, artifactRoots, artifactOutputDirs, artifactStoreDir,
     pluginManifests, compilationFailures, publicationMode: 'source',
   });
   for (const [directory, input] of successfulInputs) {
@@ -81,7 +81,7 @@ export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plug
     // graph unusable, but it cannot certify unchanged-input reuse next time.
     const files = await readSourcePluginUiBuildInputs({ repoDir: repoRoot, pluginDirectory: directory, packages });
     if (await readBuildInputIdentity({ sourceDir: repoRoot, files, options: input.options }) !== input.inputFingerprint) continue;
-    const root = artifactOutputDirs[directory] ?? artifactRoots[directory];
+    const root = result.artifactRoots[directory] ?? artifactOutputDirs[directory] ?? artifactRoots[directory];
     // Cache admission borrows producer-owned retained roots. Only a new
     // compilation or a freshly materialized native destination gets a stamp.
     if (input.reusedRoot && resolve(root) === input.reusedRoot) continue;

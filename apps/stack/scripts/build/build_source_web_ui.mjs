@@ -296,13 +296,13 @@ async function prepareSourceWebUiInputsInWorker({ repoDir, outputDir, env, signa
 
 /** Live Metro and finite exports share source artifact construction. Only a
  * finite export captures inputs; interactive Expo intentionally reads live source. */
-export async function prepareSourcePluginUiInventory({ repoDir, inputRepoDir = repoDir, outputDir, inventoryPath, env = process.env, signal,
+export async function prepareSourcePluginUiInventory({ repoDir, inputRepoDir = repoDir, outputDir, inventoryPath, retainedInventoryPath, artifactStoreDir, env = process.env, signal,
   stdoutStream = process.stdout }) {
   await runSourceBuildCommand({ repoDir, scriptPath: fileURLToPath(import.meta.url),
-    args: [JSON.stringify({ repoDir: inputRepoDir, outputDir, inventoryPath })], env, signal, captureStdout: false, captureStderr: true, stdoutStream });
+    args: [JSON.stringify({ repoDir: inputRepoDir, outputDir, inventoryPath, retainedInventoryPath, artifactStoreDir })], env, signal, captureStdout: false, captureStderr: true, stdoutStream });
 }
 
-async function prepareSourceWebUiInputs({ repoDir, outputDir, inventoryPath }) {
+async function prepareSourceWebUiInputs({ repoDir, outputDir, inventoryPath, retainedInventoryPath, artifactStoreDir }) {
   const uiProjectDir = join(repoDir, 'apps/ui');
   const requireFromUi = createRequire(join(uiProjectDir, 'package.json'));
   const { build, transform, stop } = requireFromUi('esbuild');
@@ -327,7 +327,7 @@ async function prepareSourceWebUiInputs({ repoDir, outputDir, inventoryPath }) {
     `import { readWorkspacePackages, resolveWorkspaceSource } from ${JSON.stringify(join(repoDir, 'packages/cli-common/sourceRuntimeEntries.mjs'))};`,
     ...plugins.map(([name], index) => `import { PLUGIN_MANIFEST as manifest${index} } from ${JSON.stringify(`${name}/manifest`)};`),
     `const workspaces = await readWorkspacePackages(${JSON.stringify(repoDir)});`,
-    `await prepareSourcePluginUiArtifacts({repoRoot:${JSON.stringify(repoDir)},outputDir:${JSON.stringify(inputsDir)},outputPath:${JSON.stringify(inventoryPath)},resolveSourceImport(specifier) { const name = specifier.split('/').slice(0,specifier.startsWith('@') ? 2 : 1).join('/'); if (workspaces.has(name) || specifier.startsWith('@happier-dev/')) return resolveWorkspaceSource(workspaces,specifier); },plugins:[${plugins.map(([name], index) => (
+    `await prepareSourcePluginUiArtifacts({repoRoot:${JSON.stringify(repoDir)},outputDir:${JSON.stringify(inputsDir)},outputPath:${JSON.stringify(inventoryPath)},retainedInventoryPath:${JSON.stringify(retainedInventoryPath)},artifactStoreDir:${JSON.stringify(artifactStoreDir)},resolveSourceImport(specifier) { const name = specifier.split('/').slice(0,specifier.startsWith('@') ? 2 : 1).join('/'); if (workspaces.has(name) || specifier.startsWith('@happier-dev/')) return resolveWorkspaceSource(workspaces,specifier); },plugins:[${plugins.map(([name], index) => (
       `{directory:${JSON.stringify(name.slice('@happier-dev/plugins-'.length))},manifest:manifest${index},uiArtifacts:${Boolean(uiPackage.dependencies?.[name] && listBundledPluginUiArtifactExports(packages.get(name).manifest).length > 0)}}`
     )).join(',')}]});`,
   ].join('\n');

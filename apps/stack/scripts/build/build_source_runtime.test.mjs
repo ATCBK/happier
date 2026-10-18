@@ -7,6 +7,7 @@ import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
+import { createServer } from 'node:http';
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -63,7 +64,7 @@ test('source edits refresh the inventory module consumed by a running Metro', as
     HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: null,
     npm_lifecycle_event: null,
   });
-  const { ensureUiWorkspacePackagesBuilt } = await import(pathToFileURL(join(uiPackageDir, 'scripts/ensureWorkspacePackagesBuilt.mjs')));
+  const { ensureUiWorkspacePackagesBuilt, prepareUiSourcePluginInventory } = await import(pathToFileURL(join(uiPackageDir, 'scripts/ensureWorkspacePackagesBuilt.mjs')));
   await ensureUiWorkspacePackagesBuilt({ uiPackageDir, source: true });
   const consumeInventory = () => {
     const module = { exports: {} };
@@ -80,11 +81,59 @@ test('source edits refresh the inventory module consumed by a running Metro', as
   config.fileMapCacheDirectory = fixture.path('cache');
   await mkdir(config.fileMapCacheDirectory);
   config.reporter = { update() {} };
+  // Delay only the OS watch adapter's asset notifications. The real file map,
+  // resolver, compiler and publication run unchanged. This models a watcher
+  // discovering a freshly populated directory after its parent inventory.
+  const publicationFailures = [];
+  const incumbentInventory = await readFile(inventoryPath, 'utf8');
+  const { Watcher } = require('metro-file-map/private/Watcher');
+  const watchChanges = Watcher.prototype.watch;
+  let holdingAssets = true;
+  const heldAssets = [];
+  let sawCandidate = false;
+  let explicitPublication = false;
+  t.mock.method(Watcher.prototype, 'watch', function(onChange) {
+    return watchChanges.call(this, change => {
+      const path = resolve(change.root, change.relativePath);
+      const consumer = path.startsWith(`${dirname(inventoryPath)}${sep}`);
+      if (holdingAssets && consumer && /\.(bundle|map)$/.test(path)) {
+        heldAssets.push(() => onChange(change));
+        return;
+      }
+      onChange(change);
+    });
+  });
   metro = await require('metro').createConnectMiddleware(config, { watch: true, waitForBundler: true });
   const graph = await metro.metroServer.getBundler().getBundler().getDependencyGraph();
   const indexedAsset = (asset, platform) => graph.resolveDependency(inventoryPath, {
     name: asset, data: { key: asset, asyncType: null, isESMImport: false, locs: [] },
   }, platform, { dev: true }).filePath;
+  // Observe the producer through the OS as well: compiler scratch is correctly
+  // excluded from Metro, while its candidate still determines when to release
+  // the delayed asset notifications into the real file map.
+  const inventoryObserver = watch(dirname(inventoryPath), { recursive: true }, (_event, filename) => {
+    try {
+      const path = resolve(dirname(inventoryPath), String(filename ?? ''));
+      if (holdingAssets && !explicitPublication && path.endsWith(`${sep}inventory.js`) && existsSync(path)) {
+        const candidate = readFileSync(path, 'utf8');
+        if (!candidate.includes(before.artifactGraph.digest)) {
+          sawCandidate = true;
+          if (readFileSync(inventoryPath, 'utf8') !== incumbentInventory) {
+            publicationFailures.push('inventory changed before delayed asset notifications entered the file map');
+          }
+          holdingAssets = false;
+          for (const release of heldAssets.splice(0)) release();
+        }
+      }
+      const source = readFileSync(inventoryPath, 'utf8');
+      if (source.includes(before.artifactGraph.digest)) return;
+      for (const [, encoded] of source.matchAll(/require\(("(?:[^"\\]|\\.)*")\)/g)) {
+        const asset = JSON.parse(encoded);
+        for (const platform of ['web', 'android']) assert.equal(indexedAsset(asset, platform), asset);
+      }
+    } catch (error) { publicationFailures.push(error.message.split('\n')[0]); }
+  });
+  t.after(() => inventoryObserver.close());
   await writeFile(source, 'export function renderSurface() { return "live-after"; }\n');
   await t.waitFor(() => {
     const entries = consumeInventory();
@@ -105,6 +154,72 @@ test('source edits refresh the inventory module consumed by a running Metro', as
     assert.equal(contract.id, 'channel-state');
     assert.equal(contract.schemaVersion, 9, 'the refreshed Channels consumer must carry the current writer contract');
   }, { timeout: 120_000, interval: 100 });
+  await t.test('published inventory is immediately resolvable by Metro', () => {
+    assert.equal(sawCandidate, true, 'the real watcher must observe the replacement candidate');
+    assert.deepEqual(publicationFailures, [], 'an inventory must never reference assets absent from the serving file map');
+  });
+  await t.test('Metro asset requests wait for externally published inventory assets to enter the real file map', async () => {
+    await import('../../../../packages/cli-common/registerSourceRuntime.mjs');
+    const { generateBundledPluginUiArtifacts, resolveBundledPluginUiArtifactsRetainedRoots, retainBundledPluginUiArtifactsInventory } = await import(
+      pathToFileURL(join(uiPackageDir, 'scripts/generateBundledPluginUiArtifacts.mjs')));
+    const servingInventoryPath = fixture.path('incumbent-inventory.js');
+    await writeFile(servingInventoryPath, await readFile(inventoryPath));
+    const roots = resolveBundledPluginUiArtifactsRetainedRoots(inventoryPath);
+    const pluginManifests = {};
+    for (const directory of ['channels', 'inspector']) {
+      pluginManifests[directory] = (await import(pathToFileURL(join(repoRoot, 'packages/plugins', directory, 'src/manifest.ts')))).PLUGIN_MANIFEST;
+    }
+    holdingAssets = true;
+    explicitPublication = true;
+    heldAssets.length = 0;
+    await generateBundledPluginUiArtifacts({ repoRoot, outputPath: inventoryPath, publicationMode: 'source', pluginManifests,
+      artifactRoots: { channels: roots.get('happier.channels'), inspector: roots.get('happier.inspector') },
+      artifactOutputDirs: { channels: fixture.path('consumer/explicit/channels'), inspector: fixture.path('consumer/explicit/inspector') } });
+    await t.waitFor(() => assert.ok(heldAssets.length > 0), { timeout: 120_000, interval: 100 });
+    const baseline = graph.listenerCount('change');
+    const server = createServer((req, res) => metro.middleware(req, res, error => {
+      res.statusCode = error ? 500 : 404;
+      res.end(error?.message ?? 'not found');
+    }));
+    await new Promise(resolveListening => server.listen(0, '127.0.0.1', resolveListening));
+    let response;
+    const assetUrl = path => `http://127.0.0.1:${server.address().port}/assets/?${new URLSearchParams({
+      unstable_path: relative(uiPackageDir, path).split(sep).join('/'), platform: 'web',
+    })}`;
+    const request = fetch(assetUrl(fixture.path('consumer/explicit/inspector/react-native/inspector-app-native/entry.cjs.bundle')))
+      .then(value => { response = value; return value; });
+    try {
+      // A waiting request binds to the real graph. Without admission it instead
+      // reaches HTTP completion; no guessed sleep determines which occurred.
+      await t.waitFor(() => assert.ok(response || graph.listenerCount('change') > baseline), { timeout: 120_000, interval: 100 });
+      assert.equal(response, undefined, 'the HTTP asset request must stay pending while its inventory assets are unindexed');
+      holdingAssets = false;
+      for (const release of heldAssets.splice(0)) release();
+      const completed = await request;
+      const body = await completed.text();
+      assert.equal(completed.status, 200, body);
+      assert.match(body, /live-after/);
+      const originalPath = [...incumbentInventory.matchAll(/require\(("(?:[^"\\]|\\.)*")\)/g)]
+        .map(match => JSON.parse(match[1])).find(path => path.includes('inspector-app-native'));
+      const original = await fetch(assetUrl(originalPath));
+      assert.equal(original.status, 200);
+      assert.match(await original.text(), /live-before/, 'a delayed old asset URL must still serve its original bytes');
+    } finally {
+      holdingAssets = false;
+      for (const release of heldAssets.splice(0)) release();
+      await request.catch(() => {});
+      await new Promise(resolveClosed => server.close(resolveClosed));
+      await retainBundledPluginUiArtifactsInventory({ inventoryPath: servingInventoryPath, outputPath: inventoryPath });
+    }
+  });
+  await t.test('completed preparations do not retain compiler scratch or duplicate unchanged assets', async () => {
+    const preparations = async () => (await readdir(dirname(inventoryPath)))
+      .filter(name => name.startsWith('preparation-') || name.startsWith('.happier-plugin-ui-stage-'));
+    const before = await readFile(inventoryPath, 'utf8');
+    await prepareUiSourcePluginInventory({ uiPackageDir });
+    assert.ok(await readFile(inventoryPath, 'utf8') === before, 'unchanged source keeps exactly the same asset paths');
+    assert.deepEqual(await preparations(), [], 'completed compiler scratch must not accumulate beside served assets');
+  });
 });
 
 test('development server starts the retained coherent graph while source and workspace publication advance', { timeout: 30000 }, async t => {
@@ -307,8 +422,9 @@ test('source plugin UI preparation reuses unchanged plugins and rebuilds only ch
   }
   await writeFile(join(repoRoot, 'packages/plugins/beta/src/value.ts'), 'export {value} from "@fixture/ui-helper";');
   const outputPath = fixture.path('consumer/inventory.js');
+  const artifactStoreDir = fixture.path('consumer/artifacts');
   let preparation = 0;
-  const prepare = () => prepareSourcePluginUiArtifacts({ repoRoot, plugins, outputPath,
+  const prepare = () => prepareSourcePluginUiArtifacts({ repoRoot, plugins, outputPath, artifactStoreDir,
     outputDir: fixture.path(`preparation-${preparation++}`), resolveSourceImport(specifier) {
       if (specifier === '@fixture/ui-helper') return join(helperRoot, 'src/value.ts');
       if (!specifier.startsWith('fixture-ui-')) return undefined;
@@ -321,17 +437,32 @@ test('source plugin UI preparation reuses unchanged plugins and rebuilds only ch
   await prepare();
   assert.deepEqual(compiled, ['alpha', 'beta']);
   const firstPaths = resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1);
+  assert.ok(firstPaths.every(path => path.startsWith(`${artifactStoreDir}${sep}`)),
+    'published source assets must be independent of disposable preparation paths');
+  const firstStats = await Promise.all(firstPaths.map(path => stat(path)));
   for (const path of firstPaths) await setBundleReadOnly(join(dirname(path), '../..'), true);
   compiled.length = 0;
   await prepare();
   assert.deepEqual(compiled, [], 'unchanged plugins must not enter the compiler');
   assert.deepEqual(resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1), firstPaths);
+  assert.deepEqual((await Promise.all(firstPaths.map(path => stat(path)))).map(value => value.mtimeMs), firstStats.map(value => value.mtimeMs),
+    'reusing identical content must not rewrite served files or invalidate Metro');
   await mkdir(join(repoRoot, 'apps/cli/src'), { recursive: true });
   await writeFile(join(repoRoot, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli', version: '0.0.0',
     dependencies: { '@happier-dev/plugins-alpha': '0.0.0', '@happier-dev/plugins-beta': '0.0.0' } }));
   await writeFile(join(repoRoot, 'apps/cli/src/host.ts'), 'export const changedCliOnly = true;');
   await prepare();
   assert.deepEqual(compiled, [], 'a CLI-only edit is not a plugin UI input');
+  for (const path of firstPaths.filter(path => path.includes(`${sep}alpha${sep}`))) {
+    await setBundleReadOnly(join(dirname(path), '../..'), false);
+  }
+  await writeFile(join(repoRoot, 'packages/plugins/alpha/src/notImported.ts'), 'export const unused = true;');
+  await prepare();
+  assert.deepEqual(compiled, ['alpha'], 'a changed declared input still enters the canonical compiler');
+  assert.deepEqual(resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1), firstPaths,
+    'recompiled identical byte graphs must reuse their content paths');
+  assert.deepEqual((await Promise.all(firstPaths.map(path => stat(path)))).map(value => value.mtimeMs), firstStats.map(value => value.mtimeMs));
+  compiled.length = 0;
   await writeFile(join(repoRoot, 'packages/plugins/alpha/src/value.ts'), 'export const value = "v2";');
   await prepare();
   assert.deepEqual(compiled, ['alpha']);
