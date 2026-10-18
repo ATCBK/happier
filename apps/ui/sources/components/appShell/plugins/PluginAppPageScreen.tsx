@@ -329,7 +329,7 @@ export function PluginAppPageScreen(props: Readonly<{
                 <DetailsPaneSlotHost testID="plugin-app-page-details">
                 <View testID="plugin-app-page-host" style={pageContentFrameStyle}>
                     <PluginPageBackStepProvider owner={locationOwner}>
-                    <PluginPageIdentityHeaderProvider pluginId={props.pluginId} title={headerTitle}>
+                    <PluginPageIdentityHeaderProvider pluginId={props.pluginId} title={headerTitle} description={page.description}>
                     <PluginSurfacePlacementHost
                         placement={page.placement}
                         pluginUiProjection={projection.pluginUiProjection}

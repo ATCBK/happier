@@ -8,7 +8,7 @@ import {
     type PluginSurfaceDestination,
 } from '@/components/plugins/surfaces/pluginSurfaceDestinations';
 import type { PluginUiPolicyEvaluationContext } from '@/sync/domains/plugins/ui/policy';
-import type { PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
+import { resolvePluginLocalizedText, type PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import type {
     PluginUiProjectionModel,
     PluginUiSurfacePlacementProjection,
@@ -39,6 +39,8 @@ export const PLUGIN_APP_PAGE_BINDING_SLOT = Object.freeze({
 export const PLUGIN_APP_PAGE_ROUTE_PREFIX = '/plugins';
 
 export type PluginAppPage = PluginSurfaceDestination & Readonly<{
+    /** Declaration-owned purpose, resolved before the executable page loads. */
+    description?: string;
     /** The page's plugin-local id — the second segment of its generated route. */
     localId: string;
     /** The generated route of the page ROOT (no sub-path). */
@@ -163,8 +165,14 @@ export function resolvePluginAppPages(input: Readonly<{
 
     return Object.freeze(destinations.map((destination) => {
         const columnPlacement = resolvePluginAppPageColumnPlacement(destination.placement);
+        const declaredDescription = destination.placement.display.description;
+        const description = declaredDescription === undefined ? undefined
+            : input.localize
+                ? input.localize(destination.pluginId, declaredDescription)
+                : resolvePluginLocalizedText({ projection: null, pluginId: destination.pluginId, value: declaredDescription });
         return Object.freeze({
             ...destination,
+            ...(description === undefined ? {} : { description }),
             localId: destination.placement.binding.destination.localId,
             routePath: buildPluginAppPageRoutePath({
                 pluginId: destination.pluginId,

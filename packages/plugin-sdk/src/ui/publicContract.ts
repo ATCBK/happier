@@ -722,6 +722,8 @@ export type PluginUiViewDestinationBindingInputV2 =
     | {
         container: 'appPage';
         target: { kind: 'app' };
+        /** Page purpose available to the host before the executable surface loads. */
+        description?: PluginLocalizedStringV2;
         instancePolicy?: 'singleton';
         headerActions?: PluginUiPageHeaderActionV1[];
         placement?: PluginUiDestinationPlacementV1;

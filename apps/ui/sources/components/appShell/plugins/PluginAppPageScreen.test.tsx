@@ -164,6 +164,9 @@ const routeRemoval = vi.hoisted(() => {
 
 const pluginSurfaceAccountLifetime: { value: ActiveServerAccountScopeLifetime | null } = { value: null };
 let pageConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 // Only external RPC replies are replaced. Parsing, cached target admission,
@@ -339,6 +342,7 @@ const pageCacheIdentity = {
 } as const;
 
 function daemonProjection(input: Readonly<{
+    description?: string | Readonly<{ key: string; fallback: string }>;
     availability?: Readonly<{ state: string; reason: string; diagnostics: readonly string[] }>;
     headerActions?: readonly unknown[];
     secondPlugin?: boolean;
@@ -387,7 +391,8 @@ function daemonProjection(input: Readonly<{
             binding,
             target: binding.target,
             renderer: { kind: 'reactNative', contributionId: 'notes-renderer' },
-            display: { titleKey: 'notes', developerFallback: pluginId === NOTES_PLUGIN_ID ? 'Notes' : 'Journal' },
+            display: { titleKey: 'notes', developerFallback: pluginId === NOTES_PLUGIN_ID ? 'Notes' : 'Journal',
+                ...(input.description === undefined ? {} : { description: input.description }) },
             actions: [],
             ...(input.headerActions === undefined ? {} : { headerActions: input.headerActions }),
             availability: input.availability
@@ -808,6 +813,16 @@ describe('plugin app page host route (EU-5b)', () => {
         expect(reactNativeSurfaceInstanceRefs.at(-1)).toBe(instance);
         expect(readRenderContext().signal).toBe(context.signal);
         expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(true);
+    });
+
+    it('supplies the declaration description to the identity header while the surface is loading', async () => {
+        targetedContributionsReadMock.mockImplementation(() => new Promise(() => {}));
+        const screen = await renderPage({ projection: daemonProjection({
+            description: { key: 'notes.purpose', fallback: 'Review incoming work.' },
+        }) });
+        const { PageHeader } = await import('@/components/ui/layout/PageHeader');
+        expect(screen.findByType(PageHeader).props.description).toBe('Review incoming work.');
+        expect(reactNativeSurfaceProps).toHaveLength(0);
     });
 
     it('keeps a described page loading while its execution origin is unresolved', async () => {

@@ -485,7 +485,7 @@ function createPluginUiViewBindingSchemaV2() {
         ? { placement: z.optional(PluginUiDestinationPlacementV1Schema) }
         : {}),
       ...(slot.container === 'appPage'
-        ? { column: z.optional(PluginUiAppPageColumnV1Schema), widgetAreas: zMini.optional(PluginUiWidgetAreaDeclarationsV1Schema) }
+        ? { description: zMini.optional(PluginLocalizedStringV2Schema), column: z.optional(PluginUiAppPageColumnV1Schema), widgetAreas: zMini.optional(PluginUiWidgetAreaDeclarationsV1Schema) }
         : {}),
       container: z.literal(slot.container),
       target: PluginUiViewTargetSchemaByKindV1[slot.targetKind],
@@ -589,6 +589,7 @@ export type PluginUiViewDestinationBindingInputV2 = {
     column?: TSlot['container'] extends 'appPage'
       ? PluginUiAppPageColumnV1
       : never;
+    description?: TSlot['container'] extends 'appPage' ? PluginLocalizedStringV2 : never;
     widgetAreas?: TSlot['container'] extends 'appPage' ? PluginUiWidgetAreaDeclarationV1[] : never;
   }>;
 }[keyof {
@@ -627,6 +628,7 @@ export type PluginUiViewDestinationBindingV2 = z.output<typeof PluginUiViewV2Sch
     headerActions: TSlot['container'] extends 'appPage'
       ? PluginUiPageHeaderActionV1[]
       : [];
+    description?: TSlot['container'] extends 'appPage' ? PluginLocalizedStringV2 : never;
     placement?: TSlot['targetKind'] extends 'app'
       ? TSlot['container'] extends 'appPage' | 'rightSidebarTab'
         ? PluginUiDestinationPlacementV1

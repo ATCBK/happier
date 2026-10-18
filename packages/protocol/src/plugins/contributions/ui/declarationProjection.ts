@@ -305,6 +305,9 @@ function generatedViewDisplay(view: ResolvedUiViewV2Contribution): Readonly<Reco
                 ...(badge.tone === undefined ? {} : { tone: badge.tone }),
             });
     const presentationDefaults = {
+        ...(destinationDefinition?.container === 'appPage' && destinationDefinition.description !== undefined
+            ? { description: destinationDefinition.description }
+            : {}),
         ...(definition.icon === undefined ? {} : { iconToken: definition.icon }),
         ...(projectedBadge === undefined ? {} : { badge: projectedBadge }),
         ...(destinationDefinition && 'placement' in destinationDefinition && destinationDefinition.placement !== undefined

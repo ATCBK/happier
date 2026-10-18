@@ -2,7 +2,7 @@ import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/ar
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { definePlugin } from '../definePlugin.js';
-import { defineUiSurfaceDefinition } from './surface.js';
+import { defineUiSurfaceDefinition, type UiSurfaceReactNativeDefinition } from './surface.js';
 
 describe('defineUiSurfaceDefinition', () => {
     it('publishes widget sizes from the public author definition into the canonical manifest', () => {
@@ -18,8 +18,9 @@ describe('defineUiSurfaceDefinition', () => {
             id: 'home',
             placement: 'appPage',
             title: 'Home',
+            description: { key: 'home.purpose', fallback: 'Review incoming work.' },
             renderer: { kind: 'reactNative', requiredHostMethods: ['context'] },
-        });
+        } satisfies UiSurfaceReactNativeDefinition);
         expectTypeOf(surface.renderer.kind).toEqualTypeOf<'reactNative'>();
         const plugin = definePlugin({
             id: 'com.acme.surface',
@@ -27,7 +28,8 @@ describe('defineUiSurfaceDefinition', () => {
             ui: { surfaces: [surface] },
         });
         expect(plugin.manifest.contributes.ui).toMatchObject({
-            views: [{ id: 'home', container: 'appPage', renderer: 'home-renderer' }],
+            views: [{ id: 'home', container: 'appPage', renderer: 'home-renderer',
+                description: { key: 'home.purpose', fallback: 'Review incoming work.' } }],
             renderers: [{
                 id: 'home-renderer',
                 kind: 'reactNative',

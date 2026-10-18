@@ -77,6 +77,10 @@ export const INSPECTOR_UI = {
       key: 'plugins.inspector.title',
       fallback: 'Plugin Inspector',
     },
+    description: {
+      key: 'plugins.inspector.description',
+      fallback: 'Inspect installed plugins, diagnostics, and reload state.',
+    },
     placement: { kind: 'rail' as const },
   }, {
     id: INSPECTOR_BROWSER_PANEL_SURFACE_ID,

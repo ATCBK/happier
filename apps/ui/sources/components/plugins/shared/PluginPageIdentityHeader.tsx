@@ -14,6 +14,7 @@ import { PluginSurfacePageHeaderContext } from './pluginSurfaceInteractionAvaila
 export function PluginPageIdentityHeaderProvider(props: Readonly<{
     pluginId: string;
     title: string;
+    description?: string;
     children: React.ReactNode;
 }>): React.ReactElement {
     const app = useAppShellPluginUiProjection();
@@ -22,9 +23,10 @@ export function PluginPageIdentityHeaderProvider(props: Readonly<{
         <PageHeader
             testID={`plugin-page-identity-header:${props.pluginId}`}
             title={props.title}
+            description={props.description}
             leading={<PluginMark title={props.title} pluginId={props.pluginId} size="page"
                 installedPackage={installedPackage} machineId={app.machineId} serverId={app.serverId} />}
         />
-    ), [app.machineId, app.serverId, installedPackage, props.pluginId, props.title]);
+    ), [app.machineId, app.serverId, installedPackage, props.description, props.pluginId, props.title]);
     return <PluginSurfacePageHeaderContext.Provider value={header}>{props.children}</PluginSurfacePageHeaderContext.Provider>;
 }
