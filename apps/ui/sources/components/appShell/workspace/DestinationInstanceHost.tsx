@@ -26,6 +26,8 @@ const DestinationHeaderOptionsContext = React.createContext<((options: NativeSta
 
 export type DestinationNavigation = Pick<ReturnType<typeof useRouter>, 'push' | 'replace' | 'back'>
     & Partial<ReturnType<typeof useRouter>> & {
+        /** Automatic route selection, distinct from an explicit replacement chosen by the user. */
+        redirect?: ReturnType<typeof useRouter>['replace'];
         /** Open another destination without retiring the caller's mounted draft. */
         pushRetainingCurrent?: ReturnType<typeof useRouter>['push'];
         /** Retain this pane before acquiring work that outlives its preview. */
@@ -33,6 +35,7 @@ export type DestinationNavigation = Pick<ReturnType<typeof useRouter>, 'push' | 
     };
 
 type DestinationRouter = ReturnType<typeof useRouter> & {
+    redirect: ReturnType<typeof useRouter>['replace'];
     pushRetainingCurrent: ReturnType<typeof useRouter>['push'];
     retainCurrent: () => void;
 };
@@ -289,6 +292,7 @@ export function useDestinationRouter(): DestinationRouter {
             reload: unsupported,
             prefetch: () => {},
             ...navigation,
+            redirect: navigation.redirect ?? navigation.replace,
             pushRetainingCurrent: navigation.pushRetainingCurrent ?? unsupported,
             retainCurrent: navigation.retainCurrent ?? unsupported,
         };
@@ -299,7 +303,7 @@ function useWorkspaceOrExpoRouter() {
     const workspace = useOptionalWorkspaceNavigation();
     const router = useRouter();
     return React.useMemo(() => {
-        if (!workspace) return { ...router, pushRetainingCurrent: router.push, retainCurrent: () => {} };
+        if (!workspace) return { ...router, redirect: router.replace, pushRetainingCurrent: router.push, retainCurrent: () => {} };
         const navigate: typeof router.push = (href, options) => {
             if (!workspace.openHref(resolveHref(href))) router.push(href, options);
         };
@@ -320,7 +324,7 @@ function useWorkspaceOrExpoRouter() {
             if (!navigation.retainCurrent) throw new Error('The workspace navigation owner did not supply pane retention');
             navigation.retainCurrent();
         };
-        return { ...router, push: navigate, navigate, replace, pushRetainingCurrent, retainCurrent,
+        return { ...router, push: navigate, navigate, replace, redirect: replace, pushRetainingCurrent, retainCurrent,
             back: workspace.active ? workspace.back : router.back,
             canGoBack: workspace.active ? () => workspace.canGoBack : router.canGoBack };
     }, [router, workspace]);

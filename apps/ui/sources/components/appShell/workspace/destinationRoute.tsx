@@ -1,5 +1,6 @@
 import * as React from 'react';
 import * as ExpoRouter from 'expo-router';
+import type { LinkProps, RedirectProps } from 'expo-router';
 import { WorkspaceRouteOutlet } from './WorkspaceRouteOutlet';
 
 import {
@@ -49,10 +50,11 @@ export function Slot(props: React.ComponentProps<typeof ExpoRouter.Slot>) {
     return hosted ? <>{outlet}</> : <ExpoRouter.Slot {...props} />;
 }
 
-export function Redirect(props: React.ComponentProps<typeof ExpoRouter.Redirect>) {
+export function Redirect(props: RedirectProps) {
     const hosted = useDestinationInstanceKey() !== null;
-    const router = useDestinationRouter();
-    React.useEffect(() => { if (hosted) router.replace(props.href); }, [hosted, props.href, router]);
+    const redirect = useDestinationRouter().redirect;
+    React.useEffect(() => { if (hosted) redirect(props.href); },
+        [hosted, props.href, redirect] satisfies readonly [boolean, RedirectProps['href'], typeof redirect]);
     return hosted ? null : <ExpoRouter.Redirect {...props} />;
 }
 
@@ -66,7 +68,7 @@ export function useNavigation() {
     return navigation;
 }
 
-export function Link(props: React.ComponentProps<typeof ExpoRouter.Link>) {
+export function Link(props: LinkProps) {
     const hosted = useDestinationInstanceKey() !== null;
     const router = useDestinationRouter();
     return <ExpoRouter.Link {...props} onPress={(event) => {

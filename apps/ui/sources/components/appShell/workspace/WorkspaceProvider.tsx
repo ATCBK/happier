@@ -141,8 +141,13 @@ export function WorkspaceProvider(props: Readonly<{
         // The body may finish an effect after navigation. Its old identity must
         // never name the new destination retained under the same tab key.
         if (latest.current.scopeKey !== scopeKey || latest.current.owner.getState().tabs[tabId]?.target !== ref) return () => {};
-        setPublishedTitles(current => current.scopeKey === scopeKey && current.titles[tabId]?.ref === ref && current.titles[tabId]?.title === title
-            ? current : { scopeKey, titles: { ...(current.scopeKey === scopeKey ? current.titles : {}), [tabId]: { ref, title } } });
+        setPublishedTitles(current => {
+            const previous = current.scopeKey === scopeKey ? current.titles[tabId] : undefined;
+            if (previous?.ref === ref && previous.title === title) return current;
+            return { scopeKey, titles: { ...(current.scopeKey === scopeKey ? current.titles : {}), [tabId]: {
+                ref, title, ...(previous?.ref === ref && previous.redirectSource ? { redirectSource: previous.redirectSource } : {}),
+            } } };
+        });
         return () => setPublishedTitles(current => {
             if (current.scopeKey !== scopeKey || current.titles[tabId]?.ref !== ref || current.titles[tabId]?.title !== title) return current;
             const state = latest.current.owner.getState();
@@ -355,10 +360,20 @@ export function WorkspaceProvider(props: Readonly<{
     const navigationForTab = React.useCallback((tabId: string): DestinationNavigation => {
         const existing = tabNavigations.get(tabId);
         if (existing) return existing;
-        const navigate = (href: Parameters<typeof router.push>[0], replace: boolean) => {
+        const navigate = (href: Parameters<typeof router.push>[0], replace: boolean, automatic = false) => {
             if (!isCurrentUiOwner()) return;
             const resolved = resolveHref(href);
-            if (!openHref(resolved, { tabId, replace })) {
+            const source = latest.current.owner.getState().tabs[tabId]?.target;
+            const published = latest.current.destinationTitles[tabId];
+            const redirectSource = published && published.ref === source ? published.redirectSource ?? source : source;
+            if (!openHref(resolved, { tabId, replace, ...(automatic && redirectSource ? { onOpened: () => {
+                const ref = latest.current.owner.getState().tabs[tabId]?.target;
+                if (!ref || !isCurrentUiOwner()) return;
+                setPublishedTitles(current => ({ scopeKey, titles: {
+                    ...(current.scopeKey === scopeKey ? current.titles : {}),
+                    [tabId]: { ref, title: null, redirectSource },
+                } }));
+            } } : {}) })) {
                 runUiNavigation(() => replace ? latest.current.router.replace(href) : latest.current.router.push(href));
             }
         };
@@ -382,6 +397,7 @@ export function WorkspaceProvider(props: Readonly<{
                 runtime.adapter.openHref(resolved, { mode: 'newTab', groupId: group.id });
             },
             replace: (href) => navigate(href, true),
+            redirect: (href) => navigate(href, true, true),
             back: () => {
                 if (!isCurrentUiOwner()) return;
                 if (runtime.browser) runtime.adapter.step(-1);

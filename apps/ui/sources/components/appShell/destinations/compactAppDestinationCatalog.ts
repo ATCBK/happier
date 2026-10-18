@@ -926,6 +926,12 @@ function resolveProjectInstanceTitle(ref: DestinationRef, workspaceRefs: readonl
 function resolvePublishedOrStaticInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef, options?: DestinationInstanceTitleOptions, storedTitle?: string | null): string | null {
     const href = hrefForDestinationRef(catalog, ref);
     const pathname = href?.split(/[?#]/, 1)[0];
+    const redirectSource = options?.publishedTitle?.ref === ref ? options.publishedTitle.redirectSource : undefined;
+    if (ref.kind === 'settings' && redirectSource?.kind === 'settings') {
+        const sourcePath = hrefForDestinationRef(catalog, redirectSource)?.split(/[?#]/, 1)[0];
+        const collectionTitle = resolveStaticInstanceTitle(catalog, redirectSource);
+        if (sourcePath && pathname?.startsWith(`${sourcePath}/`) && collectionTitle) return collectionTitle;
+    }
     // Home's greeting is content, while the shell catalog calls its rail Sessions.
     if (ref.kind === SESSIONS_DESTINATION_ID && pathname === '/') return t('common.home');
     const staticTitle = resolveStaticInstanceTitle(catalog, ref);

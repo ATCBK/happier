@@ -8,7 +8,12 @@ import type { WorkspaceTabSyncStatus } from './useWorkspaceTabSync';
 import type { WorkspaceTabsHandoffSource } from './workspaceTabsHandoff';
 import type { CompactAppDestination, DestinationRef } from '../destinations/compactAppDestinationCatalog';
 
-export type WorkspaceDestinationTitle = Readonly<{ ref: DestinationRef; title: string | null }>;
+export type WorkspaceDestinationTitle = Readonly<{
+    ref: DestinationRef;
+    title: string | null;
+    /** An automatic collection landing keeps the collection's chrome identity until explicit navigation. */
+    redirectSource?: DestinationRef;
+}>;
 
 /**
  * The phone's controls over the same owner. The phone keeps its own stack navigation: these move the

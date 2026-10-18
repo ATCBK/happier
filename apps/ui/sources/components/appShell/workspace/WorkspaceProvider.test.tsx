@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createSessionFixture, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { WORKSPACE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
-import { hrefForDestinationRef, resolveCompactAppDestinations, useActivateAppDestination, useDestinationInstanceTitles, type CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef, readDestinationInstanceTitle, resolveCompactAppDestinations, resolveDestinationRefFromHref, useActivateAppDestination, useDestinationInstanceTitles, type CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
 import { useHydrateSessionForRoute, useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
 import { AppPaneProvider } from '../panes/AppPaneProvider';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
@@ -26,7 +26,7 @@ import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPan
 import { AppShellTitleStrip } from '@/components/navigation/shell/appRail/AppShellTitleStrip';
 import { reconcileWorkspaceSyncedTabs } from './workspaceSyncedTabs';
 import { registerWorkspaceRouteContext } from './workspaceRouteContext';
-import { Stack } from './destinationRoute';
+import { Redirect, Stack } from './destinationRoute';
 import { WorkspaceRouteEntry } from './createWorkspaceRouteEntry';
 import { WorkspaceRootStack } from './WorkspaceRootStack';
 import { openInWorkspace } from './useWorkspaceOpenActions';
@@ -188,6 +188,56 @@ function installBrowserBoundary(input: Record<string, unknown> & { history: obje
 }
 
 describe('consumed workspace navigation owner', () => {
+    it.each([
+        ['/settings/agents', '/settings/agents/claude', 'Claude', '/settings/agents/codex', 'Codex'],
+        ['/settings/profiles', '/settings/profiles/first', 'First profile', '/settings/profiles/second', 'Second profile'],
+        ['/settings/providers', '/settings/providers/first', 'First connection', '/settings/providers/second', 'Second connection'],
+    ] as const)('keeps %s as the tab identity after its automatic detail landing, until explicit navigation', async (rootHref, landingHref, landingTitle, explicitHref, explicitTitle) => {
+        boundary.platform = 'web';
+        boundary.pathname = rootHref;
+        boundary.params = {};
+        const location = { pathname: rootHref as string, search: '', hash: '' };
+        const history = { state: null as unknown,
+            replaceState: (state: unknown, _unused: string, href?: string | URL | null) => {
+                history.state = state;
+                if (!href) return;
+                const url = new URL(href, 'https://workspace.test');
+                location.pathname = url.pathname; location.search = url.search;
+            },
+            pushState: (state: unknown, unused: string, href: string) => history.replaceState(state, unused, href), go: () => {},
+        };
+        installBrowserBoundary({ location, history, sessionStorage: { getItem: () => 'main' } });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false,
+        } });
+        const collectionTitle = readDestinationInstanceTitle(catalog, resolveDestinationRefFromHref(catalog, rootHref)!);
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            const tab = navigation.state.tabs[group.activeTabId];
+            const href = hrefForDestinationRef(catalog, tab.target)!;
+            return <>
+                {React.createElement('WorkspaceOwner', { navigation })}
+                <DestinationTitlesProbe navigation={navigation} catalog={catalog} />
+                <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname={href} focused visible
+                    navigation={navigation.navigationForTab(tab.id)}>
+                    {href === rootHref ? <Redirect href={landingHref as never} />
+                        : <PageHeader alwaysShowTitle title={href === landingHref ? landingTitle : explicitTitle} />}
+                </DestinationInstanceHost>
+            </>;
+        }}</WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const tabId = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
+        const title = () => (screen.root.findByType('DestinationTitles').props.titles as ReadonlyMap<string, string>).get(tabId);
+        expect(hrefForDestinationRef(catalog, navigation().state.tabs[tabId].target)).toBe(landingHref);
+        expect(title()).toBe(collectionTitle);
+        expect(document.title).toBe(collectionTitle);
+        await act(async () => { navigation().navigationForTab(tabId).push(explicitHref as never); });
+        expect(title()).toBe(explicitTitle);
+        expect(document.title).toBe(explicitTitle);
+        await act(async () => { navigation().navigationForTab(tabId).replace(landingHref as never); });
+        expect(title()).toBe(landingTitle);
+        expect(document.title).toBe(landingTitle);
+    });
     it.each([
         ['/', 'Home', 'Welcome back'],
         ['/boards', 'Boards', 'Launch week'],
