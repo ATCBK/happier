@@ -13,6 +13,7 @@ import {
 } from "@/app/session/follow/sessionFollowEdgeService";
 import { type Fastify } from "../../types";
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
+import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 
 const destinationParamsSchema = z.object({
     destinationSessionId: z.string().min(1),
@@ -42,7 +43,7 @@ const FAILURE_STATUS: Readonly<Record<SessionFollowSourceFailure, 400 | 403 | 40
 
 const errorResponses = {
     400: SessionFollowSourcesErrorResponseSchema,
-    403: SessionFollowSourcesErrorResponseSchema,
+    403: z.union([SessionFollowSourcesErrorResponseSchema, AccountRouteAuthenticationForbiddenResponseSchema]),
     404: SessionFollowSourcesErrorResponseSchema,
     409: SessionFollowSourcesErrorResponseSchema,
 } as const;

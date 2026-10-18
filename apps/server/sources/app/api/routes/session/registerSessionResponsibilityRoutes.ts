@@ -9,6 +9,7 @@ import { type Fastify } from "../../types";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { NotFoundSchema as FeatureUnavailableSchema } from "../../schemas/notFoundSchema";
+import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 
 const ForbiddenSchema = z.object({ error: z.literal("session_access_forbidden") });
 const AuthenticationRequiredSchema = z.object({ error: z.literal("session_access_authentication_required") });
@@ -41,7 +42,7 @@ export function registerSessionResponsibilityRoutes(app: Fastify) {
             body: SetSessionResponsibilityRequestSchema,
             response: {
                 200: SetSessionResponsibilityResponseSchema,
-                403: z.union([ForbiddenSchema, AuthenticationRequiredSchema]),
+                403: z.union([ForbiddenSchema, AuthenticationRequiredSchema, AccountRouteAuthenticationForbiddenResponseSchema]),
                 404: NotFoundSchema,
                 409: AssigneeUnavailableSchema,
                 503: AuthenticationUnavailableSchema,
@@ -84,7 +85,7 @@ export function registerSessionResponsibilityRoutes(app: Fastify) {
             response: {
                 200: SessionResponsibilityCandidatesResponseSchema,
                 400: InvalidCursorSchema,
-                403: z.union([ForbiddenSchema, AuthenticationRequiredSchema]),
+                403: z.union([ForbiddenSchema, AuthenticationRequiredSchema, AccountRouteAuthenticationForbiddenResponseSchema]),
                 404: NotFoundSchema,
                 503: AuthenticationUnavailableSchema,
             },

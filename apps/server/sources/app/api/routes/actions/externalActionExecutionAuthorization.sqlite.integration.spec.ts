@@ -64,6 +64,7 @@ import { deriveBoxPublicKeyFromEd25519PublicKey, deriveBoxPublicKeyFromSeed, der
     openBoxBundleWithSecretKey, sealBoxBundle } from '@happier-dev/protocol/crypto/boxBundle';
 
 import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
+import { enableErrorHandlers } from "@/app/api/utils/enableErrorHandlers";
 import { requirePresentUser } from "@/app/api/utils/requirePresentUser";
 import { registerAccountEncryptionRoutes } from "@/app/api/routes/account/registerAccountEncryptionRoutes";
 import { registerAccountSettingsRoutes } from "@/app/api/routes/account/registerAccountSettingsRoutes";
@@ -153,6 +154,7 @@ import { registerSessionSubagentCustodyRoutes } from '@/app/api/routes/session/r
 import { registerSessionFollowRoutes } from '@/app/api/routes/session/registerSessionFollowRoutes';
 import { registerSessionDeleteRoute } from '@/app/api/routes/session/registerSessionDeleteRoute';
 import { registerSessionReadStateRoutes } from '@/app/api/routes/session/registerSessionReadStateRoutes';
+import { registerStoredContentPublicShareRoutes } from '@/app/api/routes/share/registerStoredContentPublicShareRoutes';
 import { SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER, SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
 import { initializeSessionSystemRecordsProtocolV1Activation, resetSessionSystemRecordsProtocolV1ActivationForTests } from '@/app/session/systemRecords/sessionSystemRecordProtocolContract';
@@ -2008,6 +2010,121 @@ describe("external Action execution authorization", () => {
             expect(admitted.statusCode, admitted.body).toBe(200);
             const denied = await read(outside.id);
             expect(denied.statusCode, denied.body).toBe(401);
+        } finally { await app.close(); }
+    });
+
+    it('preserves direct PAT reports-to scope denials and the existing relation', async () => {
+        const fixture = await createFixture({ qualifiedPat: true });
+        const [child, lead, outside] = await Promise.all(['child', 'lead', 'outside'].map(tag => db.session.create({ data: {
+            accountId: fixture.account.id, tag: `${tag}-${crypto.randomUUID()}`, encryptionMode: 'plain', metadata: '{}',
+        } })));
+        await db.accountApiToken.update({ where: { id: fixture.pat.tokenId }, data: { accessGrant: {
+            ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['session.reports_to.set', 'session.message.send'] },
+            targets: { sessions: [child.id, lead.id], machines: [fixture.machine.id] },
+        } } });
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, false, routes => {
+            enableErrorHandlers(routes);
+            registerSessionReportsToRoutes(routes);
+        });
+        try {
+            const write = (sessionId: string, leadSessionId: string | null, expectedLeadSessionId: string | null) => app.inject({
+                method: 'POST', url: `/v1/sessions/${sessionId}/reports-to`,
+                headers: { authorization: `Bearer ${fixture.pat.token}` }, payload: { leadSessionId, expectedLeadSessionId },
+            });
+            const attached = await write(child.id, lead.id, null);
+            expect(attached.statusCode, attached.body).toBe(200);
+            const relation = await db.sessionReportsTo.findUnique({ where: { sessionId: child.id } });
+            expect(relation).toMatchObject({ leadSessionId: lead.id });
+            for (const [sessionId, leadSessionId, expectedLeadSessionId] of [
+                [outside.id, lead.id, null], [child.id, outside.id, lead.id], [child.id, null, outside.id],
+            ] as const) {
+                const denied = await write(sessionId, leadSessionId, expectedLeadSessionId);
+                expect({ status: denied.statusCode, body: denied.json() }).toEqual({
+                    status: 403, body: { error: 'credential_scope_denied' },
+                });
+                expect(await db.sessionReportsTo.findUnique({ where: { sessionId: child.id } })).toEqual(relation);
+                expect(await db.sessionReportsTo.findUnique({ where: { sessionId: outside.id } })).toBeNull();
+            }
+            const detached = await write(child.id, null, lead.id);
+            expect(detached.statusCode, detached.body).toBe(200);
+            expect(await db.sessionReportsTo.findUnique({ where: { sessionId: child.id } })).toBeNull();
+        } finally { await app.close(); }
+    });
+
+    it.each([
+        ['DELETE', '/v1/sessions/:id', undefined],
+        ['GET', '/v2/sessions/:id/data-key/envelopes?limit=1&state=all', undefined],
+        ['GET', '/v2/sessions/:id/subagents/custody/capability', undefined],
+        ['GET', '/v2/sessions/:id/subagents/custody', undefined],
+        ['GET', '/v2/sessions/:id/follow', undefined],
+        ['PUT', '/v2/sessions/:id/follow', { notificationLevel: 'none', includeInVoice: false }],
+        ['DELETE', '/v2/sessions/:id/follow', undefined],
+        ['GET', '/v2/sessions/:id/follows/sessions', undefined],
+        ['PUT', '/v2/sessions/:id/follows/sessions/:id', { mode: 'next_turn' }],
+        ['DELETE', '/v2/sessions/:id/follows/sessions/:id', undefined],
+        ['POST', '/v2/sessions/access-candidates/inspect', { v: 1, subjects: [] }],
+        ['POST', '/v2/sessions/access-grants/list', {}],
+        ['POST', '/v2/sessions/access-grants/set', { subject: { kind: 'account', accountId: 'recipient' }, accessLevel: 'view', canApprovePermissions: false }],
+        ['POST', '/v2/sessions/access-grants/remove', { subject: { kind: 'account', accountId: 'recipient' } }],
+        ['POST', '/v2/sessions/access-context/set', { primaryTeamId: null }],
+        ['POST', '/v2/sessions/responsibility/set', { responsibleAccountId: null }],
+        ['POST', '/v2/sessions/responsibility/candidates', { purpose: 'assignment' }],
+        ['POST', '/v2/sessions/:id/read-state', { state: 'read' }],
+        ['GET', '/v1/sessions/:id/public-share', undefined],
+        ['POST', '/v1/sessions/:id/public-share', {}],
+        ['DELETE', '/v1/sessions/:id/public-share', undefined],
+        ['POST', '/v1/public-shares', { subject: { kind: 'session', id: ':id' }, lookupId: 'scope-denial-test', keyDerivation: 'fragment_v1', encryptedDataKey: null }],
+        ['PUT', '/v2/session-organization/pins/:id', { pinned: false }],
+        ['PUT', '/v2/session-organization/attention-standings/:id', { standing: null }],
+        ['PUT', '/v2/session-organization/folder-assignments/:id', { folderId: null }],
+        ['PUT', '/v2/session-organization/tag-assignments/:id', { tagIds: [] }],
+    ] as const)('preserves authentication errors on declared Session route %s %s', async (method, path, body) => {
+        const fixture = await createFixture({ qualifiedPat: true });
+        const outside = await db.session.create({ data: { accountId: fixture.account.id,
+            tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.accountApiToken.update({ where: { id: fixture.pat.tokenId }, data: { accessGrant: {
+            ...API_TOKEN_FULL_GRANT_V1, targets: { sessions: [], machines: [fixture.machine.id] },
+        } } });
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, false, routes => {
+            enableErrorHandlers(routes);
+            registerSessionDeleteRoute(routes);
+            registerSessionDataKeyEnvelopeRoutes(routes);
+            registerSessionSubagentCustodyRoutes(routes);
+            registerSessionFollowRoutes(routes);
+            registerSessionAccessGrantRoutes(routes);
+            registerSessionResponsibilityRoutes(routes);
+            registerSessionReadStateRoutes(routes);
+            registerPublicShareOwnerRoutes(routes);
+            registerStoredContentPublicShareRoutes(routes);
+            registerSessionOrganizationRoutes(routes);
+        });
+        try {
+            const url = path.replaceAll(':id', outside.id);
+            const needsBodySession = path.startsWith('/v2/sessions/') && !path.includes(':id');
+            const payload = body === undefined ? undefined : {
+                ...body, ...(needsBodySession ? { sessionId: outside.id } : {}),
+                ...(path === '/v1/public-shares' ? { subject: { kind: 'session', id: outside.id } } : {}),
+            };
+            // Custody's query is schema-validated before authentication. Use the real key producer.
+            const scope = { pluginId: 'acme.agent', contributionId: 'assistant', sourceCustody: {
+                kind: 'managed', immutableGenerationId: 'l68c-custody', installSource: 'npm',
+            } } as const;
+            const query = path.endsWith('/subagents/custody') ? `?${new URLSearchParams({
+                pluginId: scope.pluginId, contributionId: scope.contributionId,
+                sourceCustody: JSON.stringify(scope.sourceCustody),
+                custodyKey: createSessionSubagentCustodyKeyV1({ ...scope, sessionId: outside.id }),
+            })}` : '';
+            for (const token of ['invalid-token', fixture.pat.token]) {
+                const result = await app.inject({ method, url: `${url}${query}`,
+                    ...(payload === undefined ? {} : { payload }), headers: { authorization: `Bearer ${token}` } });
+                const unscopedRead = path.includes('/data-key/') || path.includes('/subagents/');
+                expect({ status: result.statusCode, body: result.json() }, `${method} ${path}`).toEqual({
+                    status: token === 'invalid-token' ? 401 : 403,
+                    body: { error: token === 'invalid-token' ? 'invalid_token'
+                        : unscopedRead ? 'present_user_required' : 'credential_scope_denied' },
+                });
+            }
+            expect(await db.session.findUnique({ where: { id: outside.id } })).toMatchObject({ id: outside.id });
         } finally { await app.close(); }
     });
 

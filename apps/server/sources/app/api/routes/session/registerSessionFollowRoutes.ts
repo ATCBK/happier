@@ -11,13 +11,15 @@ import {
     type AccountFollowFailure,
 } from "@/app/session/follow/accountFollowService";
 import type { Fastify } from "../../types";
+import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 
 const paramsSchema = z.object({ sessionId: z.string().min(1) }).strict();
 const FAILURE_STATUS: Readonly<Record<AccountFollowFailure, 400 | 403 | 404 | 409>> = {
     invalid_parameters: 400, account_inactive: 403, session_not_found: 404, session_archived: 409,
 };
 const errorResponses = {
-    400: SessionFollowErrorResponseSchema, 403: SessionFollowErrorResponseSchema,
+    400: SessionFollowErrorResponseSchema,
+    403: z.union([SessionFollowErrorResponseSchema, AccountRouteAuthenticationForbiddenResponseSchema]),
     404: SessionFollowErrorResponseSchema, 409: SessionFollowErrorResponseSchema,
 };
 

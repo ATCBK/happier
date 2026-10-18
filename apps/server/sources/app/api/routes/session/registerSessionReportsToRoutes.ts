@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { SessionReportsToSetRequestV1Schema, SessionReportsToSetResultV1Schema, SessionReportsToOptionsRequestV1Schema, SessionReportsToOptionsV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
 import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 import { setSessionReportsTo, readSessionReportsToOptions } from '@/app/session/relations/sessionReportsToService';
+import { AccountRouteAuthenticationForbiddenResponseSchema } from '@/app/api/utils/enableAuthentication';
 import type { Fastify } from '../../types';
 
 const paramsSchema = z.object({ sessionId: z.string().min(1) }).strict();
@@ -27,7 +28,8 @@ export function registerSessionReportsToRoutes(app: Fastify): void {
             params: paramsSchema,
             body: SessionReportsToSetRequestV1Schema,
             response: { 200: SessionReportsToSetResultV1Schema, 400: SessionReportsToSetResultV1Schema,
-                403: SessionReportsToSetResultV1Schema, 409: SessionReportsToSetResultV1Schema },
+                403: z.union([SessionReportsToSetResultV1Schema, AccountRouteAuthenticationForbiddenResponseSchema]),
+                409: SessionReportsToSetResultV1Schema },
         },
     }, async (request, reply) => {
         const result = await setSessionReportsTo({

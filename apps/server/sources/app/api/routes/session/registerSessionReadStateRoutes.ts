@@ -7,7 +7,7 @@ import { loadSessionViewerProjection } from "@/app/session/personal/projection";
 import { type Fastify } from "../../types";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { requireRouteActionAuthority } from "@/app/api/utils/requireRouteActionAuthority";
-import { PresentUserRequiredResponseSchema } from "@/app/api/utils/requirePresentUser";
+import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 
 export function registerSessionReadStateRoutes(app: Fastify) {
     app.post(SESSION_READ_STATE_HTTP_PATHS_V1.set, {
@@ -20,7 +20,7 @@ export function registerSessionReadStateRoutes(app: Fastify) {
             response: {
                 200: SessionReadStateRouteSuccessResponseV1Schema,
                 400: SessionReadStateRouteInvalidRequestResponseV1Schema,
-                403: z.union([SessionReadStateRouteForbiddenResponseV1Schema, PresentUserRequiredResponseSchema]),
+                403: z.union([SessionReadStateRouteForbiddenResponseV1Schema, AccountRouteAuthenticationForbiddenResponseSchema]),
                 409: SessionReadStateRouteNotTrackedResponseV1Schema,
                 404: SessionReadStateRouteNotFoundResponseV1Schema,
                 500: SessionReadStateRouteFailureResponseV1Schema,

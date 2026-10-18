@@ -36,12 +36,13 @@ import {
     verifyExternalActionExecutionAuthorizationCurrentness,
 } from "@/app/auth/externalActionExecutionAuthorization";
 
-/** Ordinary Account routes without Session-purpose or custom restricted-error configuration. */
+/** Account and declared Session-purpose routes without custom restricted-error configuration. */
 export const AccountRouteAuthenticationForbiddenResponseSchema = z.union([
     PresentUserRequiredResponseSchema,
     z.object({ error: z.literal("provider-required"), provider: z.string() }).strict(),
     z.object({ error: z.literal("not-eligible") }).strict(),
     z.object({ error: z.literal("credential_origin_denied") }).strict(),
+    z.object({ error: z.literal("credential_scope_denied") }).strict(),
 ]);
 
 function readScalarHeader(value: unknown): string | null {
