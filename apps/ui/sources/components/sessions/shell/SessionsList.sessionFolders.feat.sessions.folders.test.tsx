@@ -461,6 +461,23 @@ describe('SessionsList session folders shell', () => {
         expect(screen.getTextContent()).not.toContain('47');
     });
 
+    it('retains header menu projections across equivalent session-list refreshes', async () => {
+        const screen = await renderSessionsList();
+        const menuItemsFor = (actionId: string) => screen.findAllByType('DropdownMenu' as React.ElementType)
+            .find((node) => node.props.items.some((item: { id: string }) => item.id === actionId))?.props.items;
+        const workspaceItems = menuItemsFor('add-folder');
+        const folderItems = menuItemsFor('add-subfolder');
+        expect(workspaceItems).toBeTruthy();
+        expect(folderItems).toBeTruthy();
+
+        mockVisibleSessionListViewData = mockVisibleSessionListViewData.map((item) => ({ ...item }));
+        const { SessionsList } = await import('./SessionsList');
+        await act(async () => { await screen.update(<SessionsList />); });
+
+        expect(menuItemsFor('add-folder')).toBe(workspaceItems);
+        expect(menuItemsFor('add-subfolder')).toBe(folderItems);
+    });
+
     it('starts a folder-scoped session with a fresh explicit draft identity', async () => {
         const screen = await renderSessionsList();
         const folderMenu = screen.findAllByType('DropdownMenu' as React.ElementType)

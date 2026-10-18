@@ -1887,6 +1887,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             const collapseKey = folderHeader.groupKey ?? `folder:${folderHeader.folderId}`;
             const treeRow = treeRowId.folder(folderHeader.folderId);
             const folderLabel = rowLabelByTreeRowId.get(treeRow) ?? folderHeader.title;
+            const moveActionHandlers = getRowMoveActionHandlers({ sourceRowId: treeRow, sourceLabel: folderLabel });
             return (
                 <DraggableSessionFolderHeaderFrame
                     folderId={folderHeader.folderId}
@@ -1912,12 +1913,10 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                         onAddSubfolder={() => handleAddSessionSubfolder(folderHeader)}
                         onRename={() => handleRenameSessionFolder(folderHeader)}
                         onDelete={() => handleDeleteSessionFolder(folderHeader)}
-                        onMove={() => {
-                            void openMoveSheetForTreeRow(treeRow, folderLabel);
-                        }}
-                        onMoveToWorkspaceRoot={() => moveTreeRowToWorkspaceRoot(treeRow, folderLabel)}
-                        onMoveUp={() => moveTreeRowByKeyboard(treeRow, folderLabel, 'up')}
-                        onMoveDown={() => moveTreeRowByKeyboard(treeRow, folderLabel, 'down')}
+                        onMove={moveActionHandlers.onMoveToFolder}
+                        onMoveToWorkspaceRoot={moveActionHandlers.onMoveToWorkspaceRoot}
+                        onMoveUp={moveActionHandlers.onMoveUp}
+                        onMoveDown={moveActionHandlers.onMoveDown}
                         disabled={!folderActionsEnabled}
                     />
                     )}
@@ -1927,6 +1926,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         if (item.title && item.headerKind === 'project') {
             const collapseKey = item.groupKey ?? '';
             const treeRow = treeRowId.workspaceRoot(item.groupKey ?? item.title);
+            const moveActionHandlers = getRowMoveActionHandlers({ sourceRowId: treeRow, sourceLabel: item.title });
             return (
                 <DraggableSessionFolderHeaderFrame
                     dragKey={treeRow}
@@ -1949,8 +1949,8 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                         workspaceLabelsV1={workspaceLabelsV1}
                         workspaceFaviconsEnabled={workspaceFaviconsEnabled}
                         workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
-                        onMoveUp={() => moveTreeRowByKeyboard(treeRow, item.title, 'up')}
-                        onMoveDown={() => moveTreeRowByKeyboard(treeRow, item.title, 'down')}
+                        onMoveUp={moveActionHandlers.onMoveUp}
+                        onMoveDown={moveActionHandlers.onMoveDown}
                         onRenameWorkspace={handleRenameWorkspace}
                         onResetWorkspaceName={handleResetWorkspaceName}
                         onCreateSession={() => handleCreateSessionFromProject(item)}
@@ -2011,7 +2011,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         handleToggleCollapse,
         headerControlsAnchorKey,
         hasMultipleMachines,
-        moveTreeRowByKeyboard,
+        getRowMoveActionHandlers,
         registerTreeRowBounds,
         renderHeaderControls,
         resolveDropResult,
