@@ -5,6 +5,7 @@ import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import type { StoredCredentials } from '@/persistence';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { fetchAccountProfile } from '@/api/accountProfile';
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -26,6 +27,7 @@ import { ApprovalExecutionOriginV1Schema } from '@happier-dev/protocol/approvals
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { ApprovalStaleReason } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 
 import type { ResolveExternalActionTarget } from './executeExternalAction';
 
@@ -35,14 +37,7 @@ type CurrentMachineExecutionOrigin = Readonly<{
 }>;
 
 /** Closed diagnostic codes only; never log origin, policy, or credential content. */
-export type DaemonApprovalExecutionOriginStaleReason =
-  | 'origin_not_current'
-  | 'requester_account_unavailable'
-  | 'workflow_authorization_unavailable'
-  | 'workflow_authorization_changed'
-  | 'spawn_policy_unavailable'
-  | 'spawn_policy_changed'
-  | 'currentness_read_failed';
+export type DaemonApprovalExecutionOriginStaleReason = ApprovalStaleReason;
 
 export type DaemonApprovalExecutionOriginCurrentness = (args: Readonly<{
   origin: ApprovalExecutionOriginV1;
@@ -71,6 +66,8 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
     signal?: AbortSignal,
   ) => Promise<CurrentMachineExecutionOrigin | null>;
   resolveTarget: ResolveExternalActionTarget;
+  /** Authenticated Account eligibility, independent of API-token management. */
+  isAccountCurrent: (signal?: AbortSignal) => Promise<boolean>;
   listAccountApiTokens: (
     signal?: AbortSignal,
   ) => Promise<AccountApiTokensListActionOutputV1>;
@@ -128,15 +125,13 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
         origin.surface === 'api'
         && origin.credentialId !== undefined
         && !origin.externalActionExecutionAuthorization
-      ) return false;
+      ) return stale('credential_changed');
       const currentMachineOrigin = await input.resolveCurrentMachineExecutionOriginContext(signal);
-      if (
-        !currentMachineOrigin
-        || currentMachineOrigin.machineId !== input.machineId
-        || (origin.serverIdentityId !== undefined
+      if (!currentMachineOrigin) return stale('home_unavailable');
+      if (currentMachineOrigin.machineId !== input.machineId) return stale('machine_changed');
+      if (origin.serverIdentityId !== undefined
           ? currentMachineOrigin.serverIdentityId !== origin.serverIdentityId
-          : origin.serverId !== input.serverId)
-      ) return false;
+          : origin.serverId !== input.serverId) return stale('home_changed');
       const externalAuthorization = origin.externalActionExecutionAuthorization;
       let hasVerifiedManagedGuestSource = false;
       if (externalAuthorization) {
@@ -176,13 +171,13 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
             publicKey: input.externalActionMachinePublicKey,
             signature: origin.externalActionInputSignature,
           })
-        ) return false;
+        ) return stale('credential_changed');
         if (!await input.verifyExternalExecutionAuthorization({
           authorization: externalAuthorization,
           effectActionId: origin.actionId,
           target: origin.target,
           ...(signal ? { signal } : {}),
-        })) return false;
+        })) return stale('credential_changed');
         // The managed child is executed on a new guest, while its accepted
         // Session source remains on the controller. Home's current verifier
         // rechecks that exact source installation/Session/publisher together
@@ -200,19 +195,15 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
             ?? readCurrentPluginSourceCustody
           )(origin.caller.pluginId);
           return sourceCustody !== null
-            && pluginSourceCustodyV1Equal(origin.caller.sourceCustody, sourceCustody);
+            && pluginSourceCustodyV1Equal(origin.caller.sourceCustody, sourceCustody) || stale('plugin_source_changed');
         }
         // Home admitted the exact original turn. Accepted Session work still
         // passes the ordinary current Session/permission/Account checks below;
         // naturally ending the old turn is not itself a revocation.
         if (!acceptedSession) return true;
       }
-      if (
-        (origin.accountId !== undefined && origin.accountId !== input.accountId)
-        || (origin.machineId !== undefined && origin.machineId !== input.machineId)
-      ) {
-        return false;
-      }
+      if (origin.accountId !== undefined && origin.accountId !== input.accountId) return stale('account_changed');
+      if (origin.machineId !== undefined && origin.machineId !== input.machineId) return stale('machine_changed');
 
       const target = origin.target
         ?? (origin.sessionId
@@ -222,14 +213,14 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
             : undefined);
       if (target) {
         const signedRootActionId = SignedRootActionIdSchema.safeParse(origin.actionId);
-        if (!signedRootActionId.success) return false;
+        if (!signedRootActionId.success) return stale('origin_action_changed');
         const currentTarget = await input.resolveTarget({
           actionId: signedRootActionId.data,
           target,
           currentMachineId: input.machineId,
           ...(signal ? { signal } : {}),
         });
-        if (!currentTarget) return false;
+        if (!currentTarget) return stale('target_unavailable');
       }
 
       if (origin.caller.kind === 'plugin') {
@@ -237,21 +228,21 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
           input.resolveCurrentPluginSourceCustody
           ?? readCurrentPluginSourceCustody
         )(origin.caller.pluginId);
-        if (!sourceCustody) return false;
+        if (!sourceCustody) return stale('plugin_source_changed');
         if (!pluginSourceCustodyV1Equal(origin.caller.sourceCustody, sourceCustody)) {
-          return false;
+          return stale('plugin_source_changed');
         }
       }
 
       if (origin.caller.kind === 'automationRun') {
-        if (!input.isAutomationRunCurrent) return false;
-        if (!await input.isAutomationRunCurrent(origin.caller)) return false;
+        if (!input.isAutomationRunCurrent) return stale('automation_run_changed');
+        if (!await input.isAutomationRunCurrent(origin.caller)) return stale('automation_run_changed');
       }
 
       if (origin.caller.kind === 'session' && !hasVerifiedManagedGuestSource) {
-        if (!input.isSessionCallerCurrent) return false;
+        if (!input.isSessionCallerCurrent) return stale('session_changed');
         if (!await input.isSessionCallerCurrent({ caller: origin.caller,
-          ...(signal ? { signal } : {}) })) return false;
+          ...(signal ? { signal } : {}) })) return stale('session_changed');
       }
 
       // A Workflow Run's durable origin carries the exact accepted
@@ -268,9 +259,9 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
       }
 
       if (origin.callerPermissionMode !== undefined || origin.causalPermissionAuthority !== undefined) {
-        if (origin.causalPermissionAuthority && !origin.callerPermissionMode) return false;
+        if (origin.causalPermissionAuthority && !origin.callerPermissionMode) return stale('permission_changed');
         if (origin.callerPermissionMode !== undefined) {
-          if (origin.callerPermissionMode === null) return false;
+          if (origin.callerPermissionMode === null) return stale('permission_changed');
           // A Workflow Run has no Session whose mode can change: its current
           // permission is the immutable ceiling of the accepted authorization
           // that the Workflow owner has just rechecked above, exactly the mode
@@ -280,7 +271,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
             : input.resolveCurrentPermissionMode
               ? await input.resolveCurrentPermissionMode(origin, signal)
               : null;
-          if (!currentPermissionMode) return false;
+          if (!currentPermissionMode) return stale('permission_changed');
           if (origin.causalPermissionAuthority) {
             const admittedPermissionCeiling = origin.causalPermissionAuthority.admittedPermissionCeiling;
             const approved = resolveEffectivePermissionMode({
@@ -294,11 +285,11 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
             if (!approved.ok || !current.ok || !assertNonEscalatingPermissionMode({
               requestedMode: approved.effectiveMode,
               callerMode: current.effectiveMode,
-            }).ok) return false;
+            }).ok) return stale('permission_changed');
           } else if (!assertNonEscalatingPermissionMode({
             requestedMode: origin.callerPermissionMode,
             callerMode: currentPermissionMode,
-          }).ok) return false;
+          }).ok) return stale('permission_changed');
         }
       }
 
@@ -306,7 +297,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
         origin.surface === 'agent'
         && origin.actionId === 'session.spawn_new'
         && origin.sessionAgentSpawnPolicyV1 === undefined
-      ) return false;
+      ) return stale('spawn_policy_unavailable');
       if (origin.sessionAgentSpawnPolicyV1 !== undefined) {
         if (!input.resolveCurrentSessionAgentSpawnPolicyV1) return stale('spawn_policy_unavailable');
         const currentPolicy = await input.resolveCurrentSessionAgentSpawnPolicyV1(origin, signal);
@@ -317,19 +308,23 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
         })) return stale('spawn_policy_changed');
       }
 
-      // This authenticated Account-owned read is also the current Account
-      // eligibility proof for host/plugin callers that have no PAT id.
+      // An unsigned UI/host origin has no API token to recheck. Token-list
+      // availability (including its separate rate limit) is not Account
+      // eligibility; the authenticated Account owner must prove that instead.
+      if (origin.credentialId === undefined) {
+        try { return await input.isAccountCurrent(signal) || stale('account_changed'); }
+        catch { return stale('account_unavailable'); }
+      }
       const tokenList = await input.listAccountApiTokens(signal);
-      if (origin.credentialId === undefined) return true;
       if (
         origin.accountId !== input.accountId
         || origin.principalId !== input.accountId
       ) {
-        return false;
+        return stale('account_changed');
       }
       const token = tokenList.tokens.find((candidate) => candidate.tokenId === origin.credentialId);
-      if (!token) return false;
-      if (token.expiresAt !== null && Date.parse(token.expiresAt) <= now()) return false;
+      if (!token) return stale('credential_changed');
+      if (token.expiresAt !== null && Date.parse(token.expiresAt) <= now()) return stale('credential_expired');
       return true;
     } catch {
       return stale('currentness_read_failed');
@@ -375,6 +370,8 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
   machineId: string;
   serverId: string;
   serverApiUrl: string;
+  /** Invocation requester custody is distinct from the original approval origin. */
+  isRequesterCurrent?: () => Promise<boolean>;
   resolveCurrentMachineExecutionOriginContext?: Parameters<typeof createDaemonApprovalExecutionOriginCurrentness>[0]['resolveCurrentMachineExecutionOriginContext'];
   currentMachineHost?: string | null;
   currentMachineHomeDir?: string | null;
@@ -432,6 +429,9 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
         ? { resolveServerFeaturesSnapshot: input.resolveServerFeaturesSnapshot }
         : {}),
     }),
+    isAccountCurrent: async signal => (await fetchAccountProfile({
+      token: input.credentials.token, ...(signal ? { signal } : {}),
+    })).id === accountId,
     listAccountApiTokens: async (signal) => {
       const result = await listAccountApiTokensAction({
         input: {},
@@ -476,7 +476,13 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
       return settings?.sessionAgentSpawnPolicyV1 ?? null;
     }),
   });
-  return (args) => runWithServerHttpBaseUrl(input.serverApiUrl, () => checker(args));
+  return (args) => runWithServerHttpBaseUrl(input.serverApiUrl, async () => {
+    if (input.isRequesterCurrent && !await input.isRequesterCurrent().catch(() => false)) {
+      args.reportStale?.('requester_account_unavailable');
+      return false;
+    }
+    return checker(args);
+  });
 }
 
 /**

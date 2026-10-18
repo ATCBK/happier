@@ -34,6 +34,8 @@ import { ComputerSecretFillRequestV1Schema, SecretFillSettlementV1Schema } from 
 import { BrowserAutomationSecretFillRequestV1Schema } from '../browser/automation/v1.js';
 import { sameStrictJsonValue, StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { MachineStorageTrashMoveInputV1Schema, PileApplyResultStoredV1Schema, PileApplyResultV1Schema } from '../storage/storageV1.js';
+import { ApprovalStaleFailureDetailsSchema } from './approvalStaleReason.js';
+export { ApprovalStaleReasonSchema, ApprovalStaleFailureDetailsSchema, type ApprovalStaleReason } from './approvalStaleReason.js';
 
 export const ApprovalRequestStatusSchema = lazyZodSchema(() => z.enum(['open', 'approved', 'rejected', 'executed', 'failed', 'canceled']));
 export type ApprovalRequestStatus = z.infer<typeof ApprovalRequestStatusSchema>;
@@ -405,7 +407,8 @@ function validateConfidentialApprovalRequest(value: Readonly<Record<string, unkn
     const record = execution.data;
     if (record.result !== undefined && !SecretFillSettlementV1Schema.safeParse(record.result).success) issue(['execution', 'result']);
     if (record.ok && record.result === undefined) issue(['execution', 'result']);
-    if (record.details !== undefined) issue(['execution', 'details']);
+    if (record.details !== undefined && (record.ok || record.errorCode !== 'approval_stale'
+      || !ApprovalStaleFailureDetailsSchema.safeParse(record.details).success)) issue(['execution', 'details']);
     if (!record.ok && (!ConfidentialApprovalFailureCodeSchema.safeParse(record.errorCode).success || record.error !== record.errorCode)) issue(['execution', 'error']);
     if (record.ok && (record.error !== undefined || record.errorCode !== undefined)) issue(['execution', 'error']);
   }

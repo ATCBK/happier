@@ -37,7 +37,7 @@ import { authorizeTrackedRunnerAgentDaemonServiceOperation } from '../agentRunti
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { readOrCreateInstallationIdentity } from '../identity/store';
 import type { TrackedSession } from '../types';
-import { AccountSettingsSchema } from '@happier-dev/protocol';
+import { AccountProfileSchema, AccountSettingsSchema } from '@happier-dev/protocol';
 import { buildApprovalExecutionOriginV1 } from '@happier-dev/protocol/actions/actionExecutor';
 import { signExternalActionApprovalInputV1, verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -199,7 +199,7 @@ describe('daemon managed Machine Action factory', () => {
         });
         const currentness = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account', machineId: 'controller', serverId: configuration.activeServerId,
             resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({ serverUrl, resolveCurrentMachineId: () => 'controller' }),
-            resolveTarget: createDaemonExternalActionTargetResolver({ credentials: ownCredentials }), listAccountApiTokens: async () => ({ tokens: [] }) });
+            resolveTarget: createDaemonExternalActionTargetResolver({ credentials: ownCredentials }), isAccountCurrent: async () => true, listAccountApiTokens: async () => ({ tokens: [] }) });
         const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'account', generateOperationId: () => 'cleanup-operation' });
         const executorParams = { sessionId: 'cleanup', token, credentials: ownCredentials, serverId: configuration.activeServerId,
             serverIdentityId: 'srv_home', serverHttpBaseUrl: serverUrl, mode: 'plain' as const, ctx: null,
@@ -478,7 +478,9 @@ describe('daemon managed Machine Action factory', () => {
         let homeCurrent = true;
         // Network and the marker filesystem are substituted; lifecycle,
         // retained-source admission, permission/causal policy and proof verification stay real.
-        vi.spyOn(axios, 'get').mockImplementation(async url => String(url).endsWith('/encryption/currentness')
+        vi.spyOn(axios, 'get').mockImplementation(async url => String(url).endsWith('/v1/account/profile')
+            ? { status: 200, data: AccountProfileSchema.parse({ id: 'account' }) }
+            : String(url).endsWith('/encryption/currentness')
             ? { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } }
             : { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', share: null,
                 metadata: JSON.stringify({ machineId: 'controller', path: '/repo', permissionMode: currentPermission }) }) } });
@@ -835,7 +837,7 @@ describe('daemon managed Machine Action factory', () => {
         });
         const currentness = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account', machineId: 'controller', serverId: configuration.activeServerId,
             resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({ serverUrl, resolveCurrentMachineId: () => 'controller' }),
-            resolveTarget: createDaemonExternalActionTargetResolver({ credentials: ownCredentials }), listAccountApiTokens: unavailable,
+            resolveTarget: createDaemonExternalActionTargetResolver({ credentials: ownCredentials }), isAccountCurrent: async () => true, listAccountApiTokens: unavailable,
             externalActionMachinePublicKey: signing.publicKey,
             verifyExternalExecutionAuthorization: args => verifyExternalActionExecutionAuthorizationCurrent({ ...args,
                 privateKey: signing.secretKey, installationId: 'installation', serverHttpBaseUrl: serverUrl }) });
@@ -1119,6 +1121,7 @@ describe('daemon managed Machine Action factory', () => {
                 serverId: configuration.activeServerId,
                 resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'srv_home', machineId: 'actual-guest' }),
                 resolveTarget: createDaemonExternalActionTargetResolver({ credentials: sourceCredentials }),
+                isAccountCurrent: async () => true,
                 listAccountApiTokens: async () => AccountApiTokensListActionOutputV1Schema.parse({ tokens: [] }),
                 externalActionMachinePublicKey: guestKeys.publicKey,
                 verifyExternalExecutionAuthorization: args => verifyExternalActionExecutionAuthorizationCurrent({ ...args,

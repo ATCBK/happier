@@ -107,6 +107,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
       accountId: 'owner', machineId: 'machine-local', serverId: 'home', resolveTarget,
       // Authenticated Home identity and Account token-list reads are remote boundaries.
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'identity', machineId: 'machine-local' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       resolveCurrentSessionAgentSpawnPolicyV1: async () => (
         await resolveAvailableAccountSettings({ credentials: TOKEN_ONLY_CREDENTIALS })
@@ -150,6 +151,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
       accountId: 'owner', machineId: 'machine-local', serverId: 'home', resolveTarget,
       // Raw Home/Machine identity and authenticated token-list transport leaves, never the currentness predicate.
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'identity', machineId: 'machine-local' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       // Use the credential-bound current Account settings owner, as the production composition does.
       resolveCurrentSessionAgentSpawnPolicyV1: async () => (
@@ -270,6 +272,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
     const isCurrent = createDaemonApprovalExecutionOriginCurrentness({
       accountId: 'account-1', machineId: 'machine-local', serverId: 'home-1', resolveTarget,
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-1', machineId: 'machine-local' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       isSessionCallerCurrent: async ({ caller }) => caller.sessionId === 'local-caller',
       resolveCurrentPermissionMode: async () => 'default',
@@ -331,6 +334,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
       accountId: 'account-1', machineId: 'guest', serverId: 'home-profile',
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'srv_home', machineId: 'guest' }),
       resolveTarget: createDaemonExternalActionTargetResolver({ credentials: TOKEN_ONLY_CREDENTIALS }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }), externalActionMachinePublicKey: keys.publicKey,
       verifyExternalExecutionAuthorization: args => verifyExternalActionExecutionAuthorizationCurrent({ ...args,
         privateKey: keys.secretKey, installationId: 'guest-installation', serverHttpBaseUrl: 'https://home.example' }),

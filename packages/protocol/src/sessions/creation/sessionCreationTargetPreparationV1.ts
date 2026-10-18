@@ -5,6 +5,8 @@ import { SessionAuthoringCheckoutCreationDraftV1Schema } from '../authoring/crea
 import { SessionExecutionTargetV1Schema } from './sessionExecutionTargetV1.js';
 import { SessionDirectoryIntentV1Schema, refineSessionDirectoryIntentCheckoutV1 } from './sessionDirectoryIntentV1.js';
 import { SessionCreationTagV1Schema } from './sessionCreationIdentityV1.js';
+import type { SessionSpawnNewInputV2 } from './sessionSpawnNewInputV2.js';
+import type { SessionExecutionTargetV1 } from './sessionExecutionTargetV1.js';
 
 /**
  * Host-only evidence that a user approved creation of this exact canonical
@@ -67,3 +69,20 @@ export const SessionCreationTargetPreparationResultV1Schema = lazyZodSchema(() =
 export type SessionCreationTargetPreparationResultV1 = z.infer<
   typeof SessionCreationTargetPreparationResultV1Schema
 >;
+
+/** Worktrees and managed directories retain their separate materialization owner. */
+export function needsSessionCreationDirectoryApprovalPreflightV1(
+  input: Pick<SessionSpawnNewInputV2, 'directory' | 'checkoutCreationDraft'>,
+): boolean {
+  return input.directory.kind === 'path' && !input.checkoutCreationDraft;
+}
+
+/** UI and CLI retain the same target-produced proof before asking for consent. */
+export function projectSessionCreationDirectoryApprovalV1(
+  executionTarget: SessionExecutionTargetV1,
+  preparedTarget: Extract<SessionCreationTargetPreparationResultV1, { ok: true }>,
+): SessionCreationDirectoryApprovalV1 | null {
+  return preparedTarget.directoryCreationRequired
+    ? { v: 1, executionTarget, directory: preparedTarget.directory }
+    : null;
+}

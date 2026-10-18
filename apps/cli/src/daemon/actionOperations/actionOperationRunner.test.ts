@@ -134,7 +134,12 @@ describe('action operation canonical execution observer', () => {
     expect(store.get(scope, 'review-cancel')).not.toHaveProperty('setupReview');
   });
 
-  it('retains typed setup review failure facts across scoped get and exact request replay without leaking arbitrary details', async () => {
+  it.each([
+    { ok: false, errorCode: 'project_setup_consent_required', error: 'project_setup_consent_required',
+      details: { kind: 'pendingApproval', code: 'project_setup_consent_required',
+        reviewedEffect: { commands: ['install'] }, reviewedEffectDigest: 'reviewed-effect' } },
+    { ok: false, errorCode: 'approval_stale', error: 'approval_stale', details: { reason: 'home_changed' } },
+  ] as const)('retains typed $errorCode failure facts across scoped get and exact request replay without leaking arbitrary details', async failure => {
     const store = createActionOperationStore();
     let executions = 0;
     let operationIndex = 0;
@@ -143,9 +148,6 @@ describe('action operation canonical execution observer', () => {
         version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' },
       } }),
     });
-    const failure = { ok: false, errorCode: 'project_setup_consent_required', error: 'project_setup_consent_required',
-      details: { kind: 'pendingApproval', code: 'project_setup_consent_required',
-        reviewedEffect: { commands: ['install'] }, reviewedEffectDigest: 'reviewed-effect' } } as const;
     const request = { actionId: 'projects.prepare', scope, requestId: 'prepare-request', execute: async () => {
       executions++;
       return failure;

@@ -14967,6 +14967,7 @@ export async function startDaemonSessionControlRuntime(
         ? createDaemonApprovalExecutionOriginCurrentnessFromCredentials({
             credentials, machineId: params.machineId, serverId: params.serverId,
             serverApiUrl: requesterAccountContext.serverHttpBaseUrl, isSessionCallerCurrent,
+            isRequesterCurrent: () => requesterAccountContext.isCurrent(),
             ...(params.workflowAcceptedAuthorizationCurrentness
               ? { isWorkflowRunAuthorizationCurrent: params.workflowAcceptedAuthorizationCurrentness } : {}),
             ...(params.resolveServerFeaturesSnapshot
@@ -14975,17 +14976,12 @@ export async function startDaemonSessionControlRuntime(
         : externalActionApprovalExecutionOriginCurrentness;
       const invocationContributedApprovalReplay = requesterAccountContext
         ? createDaemonExternalActionContributedApprovalReplay({ credentials,
-            isApprovalExecutionOriginCurrent: async args => {
-              if (!await requesterAccountContext.isCurrent()) {
-                args.reportStale?.('requester_account_unavailable');
-                return false;
-              }
-              return (await invocationApprovalCurrentness?.(args)) === true;
-            } })
+            isApprovalExecutionOriginCurrent: invocationApprovalCurrentness })
         : externalActionContributedApprovalReplay;
       const executor: ReturnType<
         typeof createCliActionExecutorFromCredentials
-      > = createCliActionExecutorFromCredentials({
+      > = await trace('daemon.cli_factory', () => createCliActionExecutorFromCredentials({
+        ...(sessionStopEffect ? { sessionStop: sessionStopEffect } : {}),
         credentials,
         clientActionExecute: createClientActionReverseDispatcher(() => params.getApiMachineForSessions()),
         ...(apiMachineForSessions ? { runActionOperation: request => {
@@ -15314,10 +15310,7 @@ export async function startDaemonSessionControlRuntime(
           : {}),
         invokeContributedAction: externalActionContributedInvoker!,
         targetActionApprovalReplay: invocationContributedApprovalReplay!,
-        isApprovalExecutionOriginCurrent: requesterAccountContext
-          ? async args => await requesterAccountContext.isCurrent()
-            && (await invocationApprovalCurrentness?.(args)) === true
-          : externalActionApprovalExecutionOriginCurrentness!,
+        isApprovalExecutionOriginCurrent: invocationApprovalCurrentness,
         prepareApprovalExecutionAuthorization: async ({ authorization, signal }) => {
           if ('credentialId' in authorization.binding) {
             // Artifact decoding drops private ports. Rebuild the same signed

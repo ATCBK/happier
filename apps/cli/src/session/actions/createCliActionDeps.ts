@@ -178,7 +178,9 @@ import { SessionAccessErrorCodeV1Schema } from '@happier-dev/protocol/sessions/a
 import { normalizeSessionCreationOrganizationPlacementV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { buildSessionCreationCorrespondence } from '@/session/shared/sessionCreationCorrespondence';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { SessionCreationTargetPreparationResultV1Schema, SessionCreationDirectoryApprovalV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
+import { SessionCreationTargetPreparationResultV1Schema, SessionCreationDirectoryApprovalV1Schema,
+  needsSessionCreationDirectoryApprovalPreflightV1, projectSessionCreationDirectoryApprovalV1,
+} from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
 import { SessionModelSelectionV1Schema, SessionModelSelectionResolutionError, isNativeAutomaticModelSelectionInputV1, resolveSessionModelSelectionInputRefV1 } from '@happier-dev/protocol/providers/model-selection';
 import { HandoffTargetReplacementPreflightResultV1Schema, WorkspaceSyncRelationshipsListRpcResultV1Schema, WorkspaceSyncConflictPageV1Schema, WorkspaceSyncConflictInspectRpcResultV1Schema, WorkspaceSyncConflictResolutionResultV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { resolveWorkspaceSyncReadControllerV1 } from '@happier-dev/protocol/workspaces/workspaceSyncTopology';
@@ -5216,7 +5218,7 @@ export function createCliActionDeps(params: Readonly<{
           result: { type: 'error' as const, code: 'target_unavailable' as const, retryable: false },
         };
       }
-      if (input.directory.kind === 'managed' || input.checkoutCreationDraft) {
+      if (!needsSessionCreationDirectoryApprovalPreflightV1(input)) {
         // A worktree is materialized by the SCM owner, not by the raw
         // directory-creation authorization path.
         return { type: 'not_required' as const };
@@ -5230,15 +5232,8 @@ export function createCliActionDeps(params: Readonly<{
       if (!preparation.ok) {
         return { type: 'error' as const, result: preparation.result };
       }
-      if (!preparation.preparedTarget.directoryCreationRequired) {
-        return { type: 'not_required' as const };
-      }
-      const approval: SessionCreationDirectoryApprovalV1 = {
-        v: 1,
-        executionTarget: input.executionTarget,
-        directory: preparation.preparedTarget.directory,
-      };
-      return { type: 'approval_required' as const, approval };
+      const approval = projectSessionCreationDirectoryApprovalV1(input.executionTarget, preparation.preparedTarget);
+      return approval ? { type: 'approval_required' as const, approval } : { type: 'not_required' as const };
     },
     sessionSpawnNew: async ({
       context,

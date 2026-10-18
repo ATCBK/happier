@@ -1,4 +1,5 @@
 import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
+import type { ApprovalStaleReason } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { inspectSessionContinuationOnMachine } from '@/sync/ops/sessionContinuationInspection';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
@@ -272,7 +273,7 @@ import {
   projectServerScopedSessionSendMessageResult,
 } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import { dispatchSessionSpawnNewWithReportsToPreparation } from './sessionSpawnNewAction';
+import { createUiSessionSpawnNewDirectoryApprovalPreflight, dispatchSessionSpawnNewWithReportsToPreparation } from './sessionSpawnNewAction';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import {
   authorizeMemorySessionRange,
@@ -444,16 +445,18 @@ export function isApprovalExecutionOriginCurrentForAccountContext(input: Readonl
   }>;
   accountServerId: string;
   accountId: string;
+  reportStale?: (reason: ApprovalStaleReason) => void;
 }>): boolean {
-  if (input.origin.accountId && input.origin.accountId !== input.accountId) return false;
+  const stale = (reason: 'account_changed' | 'home_changed') => { input.reportStale?.(reason); return false; };
+  if (input.origin.accountId && input.origin.accountId !== input.accountId) return stale('account_changed');
   const serverIdentityId = input.origin.serverIdentityId?.trim() ?? '';
   if (serverIdentityId) {
     const resolution = resolveServerProfileForPortableIdentity(serverIdentityId);
     return resolution.kind === 'resolved'
       && resolution.profile.serverIdentityId?.trim() === serverIdentityId
-      && areServerProfileIdentifiersEquivalent(resolution.profile.id, input.accountServerId);
+      && areServerProfileIdentifiersEquivalent(resolution.profile.id, input.accountServerId) || stale('home_changed');
   }
-  return areServerProfileIdentifiersEquivalent(input.origin.serverId, input.accountServerId);
+  return areServerProfileIdentifiersEquivalent(input.origin.serverId, input.accountServerId) || stale('home_changed');
 }
 
 /**
@@ -1200,13 +1203,15 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         // The acquisition hydrated the admitted rows; resolve on the store after it.
       }, options ? { state: storage.getState(), options } : null);
     }),
-    isApprovalExecutionOriginCurrent: async ({ origin, request, signal }) => {
-      if (!accountContext) return false;
-      accountContext.assertCurrent();
+    isApprovalExecutionOriginCurrent: async ({ origin, request, signal, reportStale }) => {
+      const stale = (reason: ApprovalStaleReason) => { reportStale?.(reason); return false; };
+      if (!accountContext) return stale('account_unavailable');
+      try { accountContext.assertCurrent(); } catch { return stale('requester_account_unavailable'); }
       if (!isApprovalExecutionOriginCurrentForAccountContext({
         origin,
         accountServerId: accountContext.serverId,
         accountId: accountContext.accountId,
+        reportStale,
       })) return false;
       if (isMountedPluginBlockingApprovalEligibleForLiveClient(request) && origin.caller.kind === 'plugin' && origin.machineId) {
         // Reuse the exact daemon's current source producer. A retained app
@@ -1217,7 +1222,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         });
         accountContext.assertCurrent();
         return !signal?.aborted && current.supported
-          && pluginSourceCustodyV1Equal(origin.caller.sourceCustody, current.targetedContributions.target.sourceCustody);
+          && pluginSourceCustodyV1Equal(origin.caller.sourceCustody, current.targetedContributions.target.sourceCustody) || stale('plugin_source_changed');
       }
       // Exact-daemon families verify their signed input at that daemon. For an
       // app-owned Account proposal, verify against the fresh Home installation
@@ -1229,14 +1234,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         // Public creation authenticates proposal authoring. Its installed producer
         // signs the reviewed target/input below; the carrier never authorizes the effect.
         || (authorization.binding.actionId !== request.actionId && authorization.binding.actionId !== 'approval.request.create')
-        || origin.caller.kind !== 'session' || request.createdBy.sessionId !== origin.caller.sessionId) return false;
+        || origin.caller.kind !== 'session' || request.createdBy.sessionId !== origin.caller.sessionId) return stale('credential_changed');
       const source = await readOriginalAccountActionMachine(accountContext, origin.machineId, signal);
       accountContext.assertCurrent();
       return Boolean(source && source.revokedAt === null && source.replacedByMachineId === null
         && source.installationId === authorization.binding.installationId && source.installationPublicKey
         && verifyExternalActionApprovalInputV1({ authorizationToken: authorization.token,
           actionId: request.actionId, input: request.actionArgs, target: origin.target,
-          signature: origin.externalActionInputSignature, publicKey: source.installationPublicKey }));
+          signature: origin.externalActionInputSignature, publicKey: source.installationPublicKey })) || stale('credential_changed');
     },
     sessionFollowAction: async (args) => {
       const result = await sessionFollowAction(args);
@@ -2142,6 +2147,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       });
     },
 
+    sessionSpawnNewDirectoryApprovalPreflight: createUiSessionSpawnNewDirectoryApprovalPreflight(accountContext ?? null),
     sessionSpawnNew: async ({
       context,
       sessionCreationTag: _sessionCreationTag,

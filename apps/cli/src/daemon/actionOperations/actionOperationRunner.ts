@@ -289,9 +289,9 @@ export function createActionOperationRunner(deps: Readonly<{
             }
           } else {
             const failure = { errorCode: executionResult.errorCode, error: executionResult.error };
-            // Only named finite Project consent/refusal producers carry public
-            // redacted facts. Arbitrary executor details remain private.
-            const reviewedFailure = isFiniteProjectCommand(action.actionId)
+            // Only named Project and managed-controller producers carry these
+            // validated public facts. Arbitrary executor details remain private.
+            const reviewedFailure = isFiniteProjectCommand(action.actionId) || action.actionId.startsWith('machines.managed.')
               ? ActionOperationFailureV1Schema.safeParse({ ...failure, details: executionResult.details }) : null;
             deps.store.fail(operationId, reviewedFailure?.success ? reviewedFailure.data : failure);
           }

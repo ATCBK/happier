@@ -363,6 +363,17 @@ describe('Action operation v1 contract', () => {
     }).success).toBe(false);
   });
 
+  it('retains only code-bound content-free stale facts in terminal operation observations', () => {
+    const snapshot = { ...baseSnapshot, state: 'failed', startedAt: 110, settledAt: 120,
+      error: { errorCode: 'approval_stale', error: 'approval_stale', details: { reason: 'directory_approval_missing' } } };
+    expect(ActionOperationSnapshotV1Schema.parse(snapshot).error).toEqual(snapshot.error);
+    for (const error of [
+      { ...snapshot.error, errorCode: 'spawn_failed' },
+      { ...snapshot.error, details: { reason: 'unknown' } },
+      { ...snapshot.error, details: { reason: 'directory_approval_missing', credential: 'private-fixture' } },
+    ]) expect(ActionOperationSnapshotV1Schema.safeParse({ ...snapshot, error }).success).toBe(false);
+  });
+
   it('enforces the remote-dev predecessor common snapshot bounds', () => {
     const predecessorBoundarySnapshot = {
       ...baseSnapshot,

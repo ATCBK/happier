@@ -26,16 +26,23 @@ import { ManagedMachineActionIdV1Schema, ManagedMachineActionOutputSchemasV1 } f
 import { MachinePoolResolveResultV1Schema } from '../machines/pools/v1.js';
 import { ProjectWorkerActionOutputSchemasV1 } from '../actions/specs/projectWorkers.js';
 import { ActionOperationCancelV1ResponseSchema } from '../actions/operations/v1.js';
+import { ApprovalStaleFailureDetailsSchema } from './approvalStaleReason.js';
 import type {
   ApprovalExecutionV2,
   ApprovalRequest,
   ApprovalRequestV2,
 } from './approvalRequestV1.js';
+export { ApprovalStaleReasonSchema, ApprovalStaleFailureDetailsSchema, type ApprovalStaleReason } from './approvalStaleReason.js';
 
 function parseStrictApprovalFailure(input: Readonly<{
   request: ApprovalRequestV2;
   failure: ActionExecuteFailure;
 }>, storedRead = false): ActionExecuteFailure | null {
+  if (input.failure.errorCode === 'approval_stale') {
+    const details = (storedRead ? createStoredReadSchema(ApprovalStaleFailureDetailsSchema)
+      : ApprovalStaleFailureDetailsSchema).safeParse(input.failure.details);
+    return details.success ? { ...input.failure, details: details.data } : null;
+  }
   if (input.request.actionId === 'settings.set') {
     if (input.failure.errorCode !== 'account_settings_invalid') return null;
     const schema = SettingsDeclarationActionInputSchemasV1['settings.set'];

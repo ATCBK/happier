@@ -250,6 +250,22 @@ describe('ApprovalRequestV1Schema', () => {
       execution: { ...request.execution!, result: { kind: 'not_found' } } })).toBeNull();
   });
 
+  it('retains only a typed content-free approval staleness fact', () => {
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'system' }, actionId: 'session.open', actionArgs: { sessionId: 's1' }, summary: 'Open',
+      executionOriginV1: { v: 1, authority: 'present_user', surface: 'ui', caller: { kind: 'host' },
+        serverId: 'home', accountId: 'account', machineId: 'machine', actionId: 'session.open', requestId: 'request' } });
+    const failure = { ok: false as const, errorCode: 'approval_stale', error: 'approval_stale', details: { reason: 'home_changed' } };
+    const execution = projectApprovalExecutionFailureV2({ request, failure, executedAtMs: 3 });
+    expect(execution).toMatchObject({ details: failure.details });
+    const stored = StoredApprovalRequestSchema.parse({ ...request, status: 'failed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution });
+    expect(readApprovalExecutionFailure(stored)).toMatchObject({ details: failure.details });
+    for (const details of [{ reason: 'unknown' }, { reason: 'home_changed', token: 'private-fixture' }]) {
+      expect(projectApprovalExecutionFailureV2({ request, failure: { ...failure, details }, executedAtMs: 3 }))
+        .not.toHaveProperty('details');
+    }
+  });
   it('retains the bounded Account Settings validator reason without persisting opaque details', () => {
     const actionId = 'settings.set';
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
@@ -402,6 +418,14 @@ describe('ApprovalRequestV1Schema', () => {
       execution: { executedAtMs: 3, ok: false, error: 'recognizable-private-value' } }).success).toBe(false);
     expect(ApprovalRequestV2Schema.safeParse({ ...executed, status: 'failed',
       execution: { executedAtMs: 3, ok: false, errorCode: 'approval_stale', error: 'approval_stale' } }).success).toBe(true);
+    const staleExecution = { executedAtMs: 3, ok: false, errorCode: 'approval_stale', error: 'approval_stale',
+      details: { reason: 'home_changed' } };
+    expect(ApprovalRequestV2Schema.parse({ ...executed, status: 'failed', execution: staleExecution }).execution)
+      .toEqual(staleExecution);
+    for (const details of [{ reason: 'unknown' }, { reason: 'home_changed', credential: 'private-fixture' }]) {
+      expect(ApprovalRequestV2Schema.safeParse({ ...executed, status: 'failed',
+        execution: { ...staleExecution, details } }).success).toBe(false);
+    }
     const nativeArgs = {
       serverId: 'home-1', sessionId: 'session-1', machineId: 'machine-1', purpose: 'Sign in',
       sourceId: 'source-1', target: { kind: 'window', displayId: 'display-1', pid: 1, windowId: 2 }, captureId: 'capture-1',
