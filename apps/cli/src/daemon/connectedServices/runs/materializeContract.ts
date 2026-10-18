@@ -104,7 +104,7 @@ export type ConnectedServiceRunRuntimeFailureRecoveryHandler = (
 export const ConnectedServiceRunGenerationCurrentRequestSchema = z.object({
     runId: z.string().trim().min(1),
     runnerPid: z.number().int().positive(),
-    registration: ExecutionRunConnectedServicesRegistrationV1Schema.optional(),
+    registration: z.optional(ExecutionRunConnectedServicesRegistrationV1Schema),
 });
 export type ConnectedServiceRunGenerationCurrentRequest = z.infer<
     typeof ConnectedServiceRunGenerationCurrentRequestSchema

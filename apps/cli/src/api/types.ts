@@ -468,7 +468,7 @@ export const MessageMetaSchema = z.object({
    * Forward-compatible: unknown strings are allowed.
    */
   source: z.union([z.enum(['cli', 'ui']), z.string()]).optional(),
-  permissionMode: createSessionPermissionModeSchema(z).optional(), // Permission mode for this message
+  permissionMode: z.optional(createSessionPermissionModeSchema(z)), // Permission mode for this message
   model: z.string().nullable().optional(), // Model name for this message (null = reset)
   fallbackModel: z.string().nullable().optional(), // Fallback model for this message (null = reset)
   customSystemPrompt: z.string().nullable().optional(), // Custom system prompt for this message (null = reset)

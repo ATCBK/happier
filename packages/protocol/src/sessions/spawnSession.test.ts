@@ -5,6 +5,7 @@ import {
   SPAWN_SESSION_ERROR_DETAIL_KINDS,
   SpawnSessionErrorCodeSchema,
   SpawnSessionExecutionAuthorizationSchema,
+  SpawnSessionTerminalSchema,
   SessionCreationTerminalSpawnErrorDetailSchema,
   isSessionCreationTerminalSpawnErrorDetail,
   isSessionCreationCorrespondenceConflictSpawnErrorDetail,
@@ -17,6 +18,18 @@ import {
 } from './spawnSession.js';
 
 describe('spawn-session execution authorization', () => {
+  it('preserves daemon terminal modes and strips authoring-only fields', () => {
+    expect(SpawnSessionTerminalSchema.parse({
+      mode: 'tmux',
+      tmux: { sessionName: 'work', isolated: true, ignored: 'authoring' },
+      herdr: { sessionName: 'other', ignored: 'authoring' },
+      windows: { console: 'visible' },
+      ignored: 'authoring',
+    })).toEqual({
+      mode: 'tmux', tmux: { sessionName: 'work', isolated: true }, herdr: { sessionName: 'other' },
+    });
+    expect(SpawnSessionTerminalSchema.safeParse({ mode: 'integrated' }).success).toBe(false);
+  });
   it('preserves bounded terminal-host setup recovery from the daemon', () => {
     const detail = { kind: 'terminal_host_unavailable', host: 'herdr', reason: 'server_version_unsupported' };
     expect(normalizeSpawnSessionErrorDetail(detail)).toEqual(detail);

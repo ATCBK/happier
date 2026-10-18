@@ -1,10 +1,11 @@
+import * as zMini from 'zod/mini';
 import {
   SessionMessageV1Schema,
   SessionMessagesPageV1Schema,
 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 
-const MessageFixtureInputSchema = SessionMessageV1Schema.extend({
-  id: SessionMessageV1Schema.shape.id.optional(),
+const MessageFixtureInputSchema = zMini.extend(SessionMessageV1Schema, {
+  id: zMini.optional(SessionMessageV1Schema.shape.id),
 });
 
 /** Build HTTP boundary fixtures with the same schemas the real page reader consumes. */

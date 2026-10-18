@@ -237,7 +237,7 @@ export const AgentRuntimeDaemonServiceRequestV1Schema = z.object({
        * or a Run that selected nothing, is bound by its tracked Session.
        */
       teamId: OpaqueIdSchema.optional(),
-      deliveryMode: TeamCredentialRouteV1Schema.optional(),
+      deliveryMode: z.optional(TeamCredentialRouteV1Schema),
       /**
        * The Agent an `execution_run` consumer runs, which need not be its
        * parent Session's; required for every Run and refused for a Session,

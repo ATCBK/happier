@@ -1,3 +1,4 @@
+import { z as zClassic } from 'zod';
 import { readFile, readdir, unlink } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { join } from 'node:path';
@@ -677,7 +678,7 @@ function parseRegisteredSessionStateFieldValue(
     }
     if (fieldId === 'intent.memoryEnabled') return typeof value === 'boolean' ? { ok: true, value } : { ok: false };
     if (fieldId === 'intent.voicePreference') {
-        const parsed = StoredSessionVoicePreferenceV1Schema.nullable().safeParse(value);
+        const parsed = zClassic.nullable(StoredSessionVoicePreferenceV1Schema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'identity.runtimeDescriptor') {

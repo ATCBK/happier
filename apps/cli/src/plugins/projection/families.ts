@@ -73,11 +73,11 @@ function freezeProjectedFamilyV2<Family extends PluginProjectedFamilyV2>(
     occurrenceIdsByPluginId: ResolvedContributionRegistry['occurrenceIdsByPluginId'],
     onInvalidEntry: PluginProjectionFamilyContextV2['onInvalidEntry'],
 ): Family {
-    const familySchema = PluginProjectedFamilyV2Schema.options.find((schema) => (
-        schema.shape.family.value === projected.family
+    const familySchema = PluginProjectedFamilyV2Schema._zod.def.options.find((schema) => (
+        schema.shape.family._zod.def.values.some(value => value === projected.family)
     ));
     if (!familySchema) throw new Error(`Missing canonical schema for projection family '${projected.family}'`);
-    const entrySchema = familySchema.shape.entriesById.unwrap().valueType;
+    const entrySchema = familySchema.shape.entriesById._zod.def.innerType._zod.def.valueType;
     const entriesById = Object.fromEntries(Object.entries(projected.entriesById).flatMap(([entryId, entry]) => {
         const pluginId = typeof entry.pluginId === 'string' ? entry.pluginId : null;
         const occurrenceId = pluginId ? occurrenceIdsByPluginId?.[pluginId] : undefined;

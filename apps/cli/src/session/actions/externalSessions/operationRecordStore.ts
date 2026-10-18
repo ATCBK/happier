@@ -347,7 +347,7 @@ const ExternalSessionOperationTerminalReceiptV1Schema = z.object({
     'Terminal receipt idempotency keys must be trim-equal.',
   ),
   idempotencyIntentDigest: z.string().regex(/^[a-f0-9]{64}$/u),
-  authorIntent: ExternalSessionOperationAuthorIntentV1Schema.optional(),
+  authorIntent: z.optional(ExternalSessionOperationAuthorIntentV1Schema),
   terminalAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   expiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 }).strict().superRefine((receipt, context) => {

@@ -18,7 +18,7 @@ function roots(context: StorageCategoryContext) {
 }
 const OwnerData = z.object({ v: z.literal(1), repositoryRoot: z.string().min(1), worktreePath: z.string().min(1),
     retentionSupported: z.boolean(), retentionKind: z.enum(['main', 'common', 'orphan']).optional(),
-    referenceOwnerData: StrictJsonValueSchema.optional() }).strict();
+    referenceOwnerData: z.optional(StrictJsonValueSchema) }).strict();
 const StoredOwnerData = createStoredReadSchema(OwnerData);
 function adapter(raw: unknown, deps: StorageCategoryCatalogDeps): StorageCategoryAdapter {
     const parsed = StoredOwnerData.safeParse(raw);

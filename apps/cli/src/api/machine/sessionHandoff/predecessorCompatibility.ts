@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { randomUUID } from 'node:crypto';
 
 import { ConnectedServiceBindingsV1Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -467,7 +468,7 @@ const PredecessorTargetResumeRequestV2Schema = z.object({
   handoffId: z.string().min(1).max(256),
   sessionId: z.string().min(1).max(256),
   attemptId: z.string().min(1).max(256),
-  connectedServices: ConnectedServiceBindingsV1Schema.optional(),
+  connectedServices: z.optional(ConnectedServiceBindingsV1Schema),
 }).strict();
 
 const PredecessorTargetConfirmRequestV2Schema = z.object({
@@ -476,16 +477,16 @@ const PredecessorTargetConfirmRequestV2Schema = z.object({
   attemptId: z.string().min(1).max(256),
 }).strict();
 
-const PredecessorCommitRequestV2Schema = SessionHandoffCommitRequestSchema.extend({
+const PredecessorCommitRequestV2Schema = zMini.extend(SessionHandoffCommitRequestSchema, {
   sessionId: z.string().min(1).max(256),
   attemptId: z.string().min(1).max(256),
   workspaceReplicationReverseSourceRootPath: z.string().min(1).max(RELEASED_PATH_MAX).optional(),
   workspaceReplicationReverseTargetRootPath: z.string().min(1).max(RELEASED_PATH_MAX).optional(),
-}).strict();
+});
 
-const PredecessorAbortRequestV2Schema = SessionHandoffAbortRequestSchema.extend({
+const PredecessorAbortRequestV2Schema = zMini.extend(SessionHandoffAbortRequestSchema, {
   sessionId: z.string().min(1).max(256),
-}).strict();
+});
 
 function invalidRequest() {
   return { ok: false, errorCode: 'invalid_request' } as const;

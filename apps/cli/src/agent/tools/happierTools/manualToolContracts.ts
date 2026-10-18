@@ -23,7 +23,7 @@ export const actionExecuteToolInputSchema = z.object({
 export const executionRunStartToolInputSchema = z.object({
   sessionId: z.string().min(1).optional(),
   intent: ExecutionRunIntentSchema,
-  backendTarget: BackendTargetRefV2InputSchema.optional(),
+  backendTarget: z.optional(BackendTargetRefV2InputSchema),
   backendId: z.string().min(1).optional(),
   instructions: z.string().optional(),
   display: z.unknown().optional(),
@@ -37,7 +37,7 @@ export const executionRunStartToolInputSchema = z.object({
   ioMode: z.enum(['request_response', 'streaming']).optional(),
   connectedServices: z.unknown().optional(),
   modelId: z.string().min(1).optional(),
-  sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema.optional(),
+  sessionConfigOptionOverrides: z.optional(AcpConfigOptionOverridesV1Schema),
   configOptions: z.record(z.string(), SpawnConfigOptionValueSchema).optional(),
 }).passthrough().superRefine((value, ctx) => {
   const hasBackendTarget = typeof value.backendTarget !== 'undefined';

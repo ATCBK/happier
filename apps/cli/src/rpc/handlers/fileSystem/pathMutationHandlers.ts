@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { realpathSync } from 'node:fs';
 import { copyFile, lstat, mkdir, mkdtemp, open, rename, rm, stat, writeFile } from 'fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'path';
@@ -147,9 +148,9 @@ type FilesystemLocalMutationInput = Readonly<{ rootPath?: string }> & (
 
 function mutationSchema(actionId: FilesystemMutationActionId, incumbentPolicyScope = false): ZodType<FilesystemLocalMutationInput> {
   switch (actionId) {
-    case 'daemon.filesystem.createDirectory': return incumbentPolicyScope ? FilesystemCreateDirectoryInputSchema.omit({ rootPath: true }) : FilesystemCreateDirectoryInputSchema;
-    case 'daemon.filesystem.rename': return incumbentPolicyScope ? FilesystemRenameInputSchema.omit({ rootPath: true }) : FilesystemRenameInputSchema;
-    case 'daemon.filesystem.delete': return incumbentPolicyScope ? FilesystemDeleteInputSchema.omit({ rootPath: true }) : FilesystemDeleteInputSchema;
+    case 'daemon.filesystem.createDirectory': return incumbentPolicyScope ? zMini.omit(FilesystemCreateDirectoryInputSchema, { rootPath: true }) : FilesystemCreateDirectoryInputSchema;
+    case 'daemon.filesystem.rename': return incumbentPolicyScope ? zMini.omit(FilesystemRenameInputSchema, { rootPath: true }) : FilesystemRenameInputSchema;
+    case 'daemon.filesystem.delete': return incumbentPolicyScope ? zMini.omit(FilesystemDeleteInputSchema, { rootPath: true }) : FilesystemDeleteInputSchema;
     case 'daemon.filesystem.copy': return FilesystemLocalCopyInputSchema;
   }
 }
