@@ -58,7 +58,7 @@ describe("connectRoutes (external auth finalize keyless) (integration)", () => {
             HAPPIER_BUILD_FEATURES_DENY: "e2ee.keylessAccounts",
         });
         const app = createTestApp();
-        connectRoutes(app as any);
+        connectRoutes(app);
         await app.ready();
         const res = await app.inject({
             method: "POST",
