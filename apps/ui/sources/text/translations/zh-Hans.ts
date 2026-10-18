@@ -14555,6 +14555,7 @@ settingsSession: {
             coverageFailed: ({ sources }: { sources: string | number }) => `无法读取${sources}。显示已到达的内容。`,
             coveragePending: ({ sources }: { sources: string | number }) => `仍在读取${sources}`,
             coveragePartial: ({ sources }: { sources: string | number }) => `${sources}不完整：缺少部分历史`,
+            oldestSourceUpdate: ({ time }: { time: string }) => `最早的来源更新：${time}`,
             queryInvalidTitle: "无法读取此小组件的设置",
             queryInvalidReason: "编辑其输入或重置视图。",
             readFailedTitle: "无法读取用量",

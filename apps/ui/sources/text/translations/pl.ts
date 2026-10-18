@@ -14719,6 +14719,7 @@ settingsSession: {
 
   usage: {
     board: { page: {
+      oldestSourceUpdate: ({ time }: { time: string }) => `Najstarsza aktualizacja źródła: ${time}`,
       sourceClaudeResponses: "Odpowiedzi Claude",
       sourceClaudeSessionSummaries: "Podsumowania sesji Claude",
     }, coach: {

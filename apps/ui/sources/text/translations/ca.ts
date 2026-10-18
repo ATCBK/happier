@@ -13709,6 +13709,7 @@ settingsSession: {
 
     usage: {
         board: { page: {
+            oldestSourceUpdate: ({ time }: { time: string }) => `Actualització de font més antiga: ${time}`,
             sourceClaudeResponses: "Respostes de Claude",
             sourceClaudeSessionSummaries: "Resums de sessió de Claude",
         }, coach: {

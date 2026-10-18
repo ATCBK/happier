@@ -457,6 +457,40 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(detail).toContain(t('usage.board.page.coverageReason_incomplete_history'));
         expect(detail).toContain(t('usage.board.sources.unsupported'));
     });
+    it('dates incomplete source observations explicitly and advances only when that source changes', async () => {
+        const query = normalizeUsageQuery({ period: { startMs: 0 } });
+        const observedAt = Date.UTC(2026, 9, 9, 15, 55);
+        const later = Date.UTC(2026, 9, 18, 12);
+        const sliceFor = (sourceAt: number) => resolveUsagePageAggregation({ queries: [query], accounting: [{
+            query, status: 'available', value: { ...usageQaAccountingFixture(), coverage: {
+                status: 'partial', reasons: ['incomplete_history'], missingDimensions: [], ranked: [], range: { complete: false },
+                sources: [
+                    { source: 'native:claude', path: 'native', status: 'partial', eventCount: 1, asOfMs: sourceAt },
+                    { source: 'runtime:codex', path: 'runtime', status: 'available', eventCount: 1, asOfMs: later },
+                ],
+            } },
+        }] }).results[0]!;
+        const render = (sourceAt: number) => <UsageCoverageLine slice={sliceFor(sourceAt)} sources={['accounting']} testID="source-date" />;
+        const screen = await renderScreen(render(observedAt));
+        const expected = (at: number) => `Oldest source update ${formatUsageObservedAt(at)}`;
+        expect(screen.getTextContent()).toContain(expected(observedAt));
+        // A successful reread of identical producer evidence cannot invent a newer observation.
+        await screen.update(render(observedAt));
+        expect(screen.getTextContent()).toContain(expected(observedAt));
+        await screen.update(render(later));
+        expect(screen.getTextContent()).toContain(expected(later));
+        expect(screen.getTextContent()).not.toContain(formatUsageObservedAt(observedAt));
+        // An available source can be older than the incomplete source. The aggregate
+        // accounting observation remains the oldest source update in that case too.
+        const olderAvailable = sliceFor(later);
+        const accounting = olderAvailable.accounting!;
+        const oldest = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: {
+            ...accounting, coverage: { ...accounting.coverage!, sources: accounting.coverage!.sources.map(source =>
+                source.status === 'available' ? { ...source, asOfMs: observedAt } : source) },
+        } }] }).results[0]!;
+        await screen.update(<UsageCoverageLine slice={oldest} sources={['accounting']} testID="source-date" />);
+        expect(screen.getTextContent()).toContain(expected(observedAt));
+    });
     it('does not treat an available transport without coverage metadata as complete history', () => {
         const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } });
         const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: {

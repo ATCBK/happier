@@ -12223,6 +12223,7 @@ settingsSession: {
 
     usage: {
         board: { page: {
+            oldestSourceUpdate: ({ time }: { time: string }) => `最早的來源更新：${time}`,
             sourceClaudeResponses: "Claude 回覆",
             sourceClaudeSessionSummaries: "Claude 工作階段摘要",
         }, coach: {

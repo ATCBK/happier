@@ -14864,6 +14864,7 @@ settingsSession: {
             coverageFailed: ({ sources }: { sources: string | number }) => `Не удалось прочитать: ${sources}. Показано то, что пришло.`,
             coveragePending: ({ sources }: { sources: string | number }) => `Ещё читается: ${sources}`,
             coveragePartial: ({ sources }: { sources: string | number }) => `${sources} неполные: часть истории отсутствует`,
+            oldestSourceUpdate: ({ time }: { time: string }) => `Самое давнее обновление источника: ${time}`,
             queryInvalidTitle: "Не удаётся прочитать настройки виджета",
             queryInvalidReason: "Измените входные данные или сбросьте вид.",
             readFailedTitle: "Не удалось прочитать использование",

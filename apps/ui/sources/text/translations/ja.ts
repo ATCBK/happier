@@ -15207,6 +15207,7 @@ settingsSession: {
             coverageFailed: ({ sources }: { sources: string | number }) => `${sources}を読み込めませんでした。届いた分を表示しています。`,
             coveragePending: ({ sources }: { sources: string | number }) => `${sources}を読み込み中`,
             coveragePartial: ({ sources }: { sources: string | number }) => `${sources}が一部のみ: 履歴の一部がありません`,
+            oldestSourceUpdate: ({ time }: { time: string }) => `最も古いソース更新: ${time}`,
             queryInvalidTitle: "このウィジェットの設定を読み取れません",
             queryInvalidReason: "入力を編集するか、ビューをリセットしてください。",
             readFailedTitle: "使用量を読み込めませんでした",

@@ -14806,6 +14806,7 @@ settingsSession: {
             coverageFailed: ({ sources }: { sources: string | number }) => `Impossible de lire ${sources}. Affichage de ce qui est arrivé.`,
             coveragePending: ({ sources }: { sources: string | number }) => `Lecture de ${sources} en cours`,
             coveragePartial: ({ sources }: { sources: string | number }) => `${sources} partiel : une partie de l'historique manque`,
+            oldestSourceUpdate: ({ time }: { time: string }) => `Mise à jour de source la plus ancienne : ${time}`,
             queryInvalidTitle: "Les réglages de ce widget sont illisibles",
             queryInvalidReason: "Modifie ses entrées ou réinitialise la vue.",
             readFailedTitle: "Impossible de lire l'utilisation",

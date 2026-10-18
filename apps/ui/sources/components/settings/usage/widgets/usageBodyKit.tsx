@@ -397,7 +397,9 @@ export function readUsageCoverageGaps(
   }
   if (accounting && (accounting.status !== 'complete' || accounting.range.complete !== true || accounting.reasons.length > 0)
     && !gaps.some(source => source.source === 'accounting')) {
-    gaps.unshift({ source: 'accounting', status: accounting.status === 'complete' ? 'partial' : accounting.status });
+    const asOfMs = slice.sources.find(source => source.source === 'accounting')?.asOfMs;
+    gaps.unshift({ source: 'accounting', status: accounting.status === 'complete' ? 'partial' : accounting.status,
+      ...(asOfMs === undefined ? {} : { asOfMs }) });
   }
   const unique = new Map<string, UsageQuerySourceState>();
   const severity = { available: 0, unsupported: 1, unknown: 2, stale: 3, partial: 4, not_loaded: 5, pending: 6, error: 7 };
@@ -539,7 +541,7 @@ export function UsageCoverageLine(
       testID={props.testID}
       busy={pending}
       tone={failed ? 'warning' : 'neutral'}
-      reason={[...(asOf === null ? [] : [t('surfaceState.asOf', { time: formatUsageObservedAt(asOf) })]), usageCoverageSummary(props.slice, props.sources)].join(' · ')}
+      reason={[...(asOf === null ? [] : [t('usage.board.page.oldestSourceUpdate', { time: formatUsageObservedAt(asOf) })]), usageCoverageSummary(props.slice, props.sources)].join(' · ')}
       {...(failed && props.onRetry
         ? { action: { label: t('common.retry'), onPress: props.onRetry } }
         : {})}

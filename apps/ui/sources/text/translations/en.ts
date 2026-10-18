@@ -18483,6 +18483,7 @@ const enUsage = {
       coverageFailed: ({ sources }: { sources: string | number }) => `Couldn't read ${sources}. Showing what arrived.`,
       coveragePending: ({ sources }: { sources: string | number }) => `Still reading ${sources}`,
       coveragePartial: ({ sources }: { sources: string | number }) => `Partial ${sources}: some history is missing`,
+      oldestSourceUpdate: ({ time }: { time: string }) => `Oldest source update ${time}`,
       coverageReason_missing_baseline: 'Earlier counter history is missing',
       coverageReason_counter_discontinuity: 'A usage counter reset or changed',
       coverageReason_ambiguous_overlap: 'Some source records overlap ambiguously',

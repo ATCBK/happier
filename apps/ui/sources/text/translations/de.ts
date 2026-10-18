@@ -15053,6 +15053,7 @@ settingsSession: {
             coverageFailed: ({ sources }: { sources: string | number }) => `${sources} konnte nicht gelesen werden. Angezeigt wird, was angekommen ist.`,
             coveragePending: ({ sources }: { sources: string | number }) => `${sources} wird noch gelesen`,
             coveragePartial: ({ sources }: { sources: string | number }) => `${sources} unvollständig: Ein Teil des Verlaufs fehlt`,
+            oldestSourceUpdate: ({ time }: { time: string }) => `Älteste Quellenaktualisierung ${time}`,
             coverageReason_missing_baseline: 'Frühere Zählerstände fehlen',
             coverageReason_counter_discontinuity: 'Ein Nutzungszähler wurde zurückgesetzt oder geändert',
             coverageReason_ambiguous_overlap: 'Einige Quelldatensätze überschneiden sich uneindeutig',
