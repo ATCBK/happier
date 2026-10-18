@@ -18,6 +18,7 @@ import { useEntityDropSettledNotices } from './EntityDropSettledFeedback';
 import { useEntityDragFeel } from './entityDragFeel';
 import { useEntityDropOutcome } from './entityDropOutcome';
 import { EntityReleasePreviewCard } from './EntityReleasePreview';
+import { keepCarriedPreviewClear } from './carriedPreviewClearance';
 
 /**
  * The carried card (DnD lab E1): rides the pointer below and to the right, names what is carried and,
@@ -80,7 +81,10 @@ function CarriedCardPosition(props: EntityDragCarriedPreviewProps): React.ReactE
     const point = pointer ?? { x: 0, y: 0 };
     const placement = touch
         ? { left: TOUCH_CARD_INSET_PX, top: Math.max(0, point.y - TOUCH_CARD_LIFT_PX), side: 'right' as const }
-        : resolveHappierCarriedPreviewPlacement({ pointer: point, size, viewport });
+        : keepCarriedPreviewClear({
+            placement: resolveHappierCarriedPreviewPlacement({ pointer: point, size, viewport }), size, viewport,
+            clear: pointer && snapshot.targetId ? props.runtime.getTargetClearBounds(snapshot.targetId) : null,
+        });
     const placementRef = React.useRef(placement);
     placementRef.current = placement;
     const returnX = useSharedValue(0);

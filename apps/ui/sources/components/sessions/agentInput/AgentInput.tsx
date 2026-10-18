@@ -1801,6 +1801,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         entityDropDomRef(node);
     }, [entityDropDomRef]);
     const composerDropBounds = React.useCallback(() => readWindowBounds(composerDropMeasurable()) ?? composerDropNativeBounds.current, [composerDropMeasurable]);
+    // The composer's whole block (status row, attachments and panel): a carried card keeps clear of it.
+    const composerBlockBounds = React.useCallback((): WindowBounds | null => {
+        const element = stageSpotlightRef.current as unknown as { getBoundingClientRect?: () => DOMRect } | null;
+        return element?.getBoundingClientRect ? readWindowBounds({ getBoundingClientRectFn: () => element.getBoundingClientRect!() }) : null;
+    }, []);
     const measureComposerDrop = React.useCallback(() => {
         const node = composerDropHost.current;
         void measureWindowBounds(composerDropMeasurable()).then(bounds => {
@@ -3978,7 +3983,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 {/* After the panel, so its drop outline paints over the panel's own fill (it is the target's one visible mark). */}
                 {composerRef && composerDropScope ? <ComposerEntityDropTarget
                     id={composerDropTargetId} scope={composerDropScope} refValue={composerRef}
-                    bounds={composerDropBounds} presented={props.surfacePresented !== false}
+                    bounds={composerDropBounds} clearBounds={composerBlockBounds} presented={props.surfacePresented !== false}
                     editable={dictationEditable && !controlsOnly} kinds={props.autocompleteKinds}
                     referenceHost={props.composerReferenceHost} fileScope={props.composerFileScope}
                     /> : null}

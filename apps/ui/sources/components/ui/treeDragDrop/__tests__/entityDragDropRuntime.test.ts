@@ -471,3 +471,14 @@ describe('mounted entity drag owner', () => {
         expect(f.runtime.getSnapshot().item).toBeNull();
     });
 });
+
+describe('a target that keeps the carried card clear of its region', () => {
+    it('publishes that region for the selected target only', () => {
+        const f = fixture();
+        const clear = { x: 0, y: 0, width: 400, height: 300 };
+        f.retireTarget();
+        f.runtime.registerTarget({ ...f.target, getClearBounds: () => clear });
+        expect(f.runtime.getTargetClearBounds('target')).toEqual(clear);
+        expect(f.runtime.getTargetClearBounds('other')).toBeNull();
+    });
+});

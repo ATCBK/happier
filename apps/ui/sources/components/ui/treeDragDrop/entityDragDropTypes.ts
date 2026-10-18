@@ -41,6 +41,8 @@ export type EntityDropTarget = Readonly<{
     captureKinds?: readonly EntityDragKindV1[];
     parentId?: string;
     getBounds: () => WindowBounds | null;
+    /** A region the carried card keeps clear of while this target is selected (the composer's block). */
+    getClearBounds?: () => WindowBounds | null;
     /** Native/hosted measurement at pointer release, before final hit testing and dispatch. */
     measureBounds?: () => Promise<void>;
     /** Shape strategies may reject points within an enclosing rectangle. */
@@ -78,6 +80,8 @@ export type EntityDragDropRuntime = Readonly<{
     registerSource: (source: EntityDragSource) => () => void;
     describeSource: (sourceId: string) => EntityDragSourceDescription | null;
     getSourceBounds: (sourceId: string) => WindowBounds | null;
+    /** The region a registered target asked the carried card to keep clear of, when it did. */
+    getTargetClearBounds: (targetId: string) => WindowBounds | null;
     registerTarget: (target: EntityDropTarget) => () => void;
     begin: (sourceId: string, input?: 'pointer' | 'keyboard') => EntityDragCarry | null;
     move: (pointer: WindowPointer | null) => void;
