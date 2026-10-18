@@ -9390,6 +9390,31 @@ describe('Channels page (the one owner of linked conversations)', () => {
   );
   const opened = (calls: readonly (readonly [string, string])[]) => calls.map(([view, subPath]) => `${view}:${subPath}`);
 
+  it('reports the failed bots read before offering a conversation selection', async () => {
+    let refuseConnections = true;
+    const page = await mountPage({
+      subPath: '',
+      readResource: async (request) => {
+        if (resourceFixtureLocalId(request.resource) === CONNECTIONS_RESOURCE.localId && refuseConnections) {
+          throw new PluginError({ code: 'unavailable', message: 'unavailable', retryable: false });
+        }
+        return readerFor(bindingsResource)(request);
+      },
+      surfaceContext: { ...createChannelsPageSurfaceContext(), page: { columnVisible: true } },
+    });
+    try {
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="channels-bindings-error"]')).not.toBeNull());
+      expect(document.querySelector('[data-testid="channels-page-no-selection"]')).toBeNull();
+      expect(document.querySelector('[data-testid="channels-bindings-loading"]')).toBeNull();
+      refuseConnections = false;
+      await page.fixture.press(await page.fixture.getByRole('button', { name: 'Try again' }));
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="channels-page-no-selection"]')).not.toBeNull());
+      expect(document.querySelector('[data-testid="channels-bindings-error"]')).toBeNull();
+    } finally {
+      await page.fixture.dispose();
+    }
+  });
+
   it('shows a selection prompt beside its column and the list when the column is hidden', async () => {
     const visible = await mountPage({
       subPath: '',
@@ -9450,6 +9475,7 @@ describe('Channels page (the one owner of linked conversations)', () => {
     connections?: ResourceContent;
     /** Holds the bots' read until it settles, so the bindings arrive first. */
     connectionsGate?: Promise<void>;
+    readResource?: NonNullable<PluginUiTestkitHostHandlers['readResource']>;
     executeAction?: (request: PluginUiTestkitExecuteActionInput) => Promise<JsonValue>;
     surfaceContext?: ReturnType<typeof createChannelsSurfaceContext>;
   }>) {
@@ -9466,12 +9492,12 @@ describe('Channels page (the one owner of linked conversations)', () => {
         executeAction: input.executeAction ?? (async ({ action }) => {
           throw new Error(`Unexpected mounted Action: ${String(action)}`);
         }),
-        readResource: input.connectionsGate === undefined
+        readResource: input.readResource ?? (input.connectionsGate === undefined
           ? readerFor(input.bindings ?? bindingsResource, input.connections)
           : async (request) => {
             if (resourceFixtureLocalId(request.resource) === CONNECTIONS_RESOURCE.localId) await input.connectionsGate;
             return readerFor(input.bindings ?? bindingsResource, input.connections)(request);
-          },
+          }),
         openSurface: ({ view, subPath }) => {
           openedSurfaces.push([typeof view === 'string' ? view : view.localId, subPath ?? '']);
         },

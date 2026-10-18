@@ -198,6 +198,7 @@ import {
   useReplacedAccountCollectionScope,
   buildChannelsConversationIndex,
   readChannelsPageLocation,
+  resolveChannelsConversationReadState,
 } from './conversationRows.js';
 import {
   bindingPermissionIntentLabel,
@@ -7372,7 +7373,13 @@ function BindingsContent(props: BindingsContentProps): React.ReactElement {
     'waitingForExistingRead' | 'waitingForRequestedRead' | undefined
   >();
   const sawOutcomeUnknownReconciliationRefresh = React.useRef(false);
-  const sectionState = props.sectionState ?? BINDINGS_SECTION_READY;
+  const bindingsState = props.sectionState ?? BINDINGS_SECTION_READY;
+  const readState = resolveChannelsConversationReadState(bindingsState.kind, props.connectionsState);
+  const sectionState: BindingsSectionState = bindingsState.kind === 'error' ? bindingsState
+    : readState === 'error' ? { kind: 'error', description: props.t(
+      'plugins.channels.surface.errorDescription',
+      'Refresh to try reading the current Account connection policy again.',
+    ) } : readState === 'loading' ? { kind: 'loading' } : BINDINGS_SECTION_READY;
   const sectionAvailable = sectionState.kind === 'ready';
   // A notice about one conversation speaks on that conversation's page; the
   // page-level copy is for a conversation the reader is not looking at.
@@ -7580,10 +7587,6 @@ function BindingsContent(props: BindingsContentProps): React.ReactElement {
           t={props.t}
         />
       );
-    }
-    // Conversations are listed under their bots: until the bots are known no row has its place yet.
-    if (props.connectionsState === 'loading') {
-      return <LoadingState testID="channels-bindings-loading" title={props.t('plugins.channels.page.loadingTitle', 'Loading conversations')} />;
     }
     if (props.presentations.length === 0) {
       return (
@@ -8439,6 +8442,11 @@ function AccountLocalChannelsPageSurface(props: Readonly<{
   const channels = useAccountLocalChannels(props.signal, t);
   const { collection, deliveriesCollection } = channels;
   const { bindings, resource, refresh } = channels.bindingsRead;
+  const refreshConnections = channels.connectionsRead.refresh;
+  const refreshPage = React.useCallback(() => {
+    refresh();
+    refreshConnections();
+  }, [refresh, refreshConnections]);
   const location = React.useMemo(() => readChannelsPageLocation(props.subPath), [props.subPath]);
   const editor = usePageBindingEditor(location);
   const [savedPendingMachineReconciliation, setSavedPendingMachineReconciliation] = React.useState(false);
@@ -8478,7 +8486,7 @@ function AccountLocalChannelsPageSurface(props: Readonly<{
     <BindingsContent
       presentations={channels.presentations}
       resource={resource}
-      onRefresh={refresh}
+      onRefresh={refreshPage}
       operation={operation}
       location={location}
       connections={channels.sortedConnections}
@@ -12686,13 +12694,19 @@ function DaemonChannelsPageSurface(props: Readonly<{
 }>): React.ReactElement {
   const t = usePluginTranslation();
   const channels = useDaemonChannelsResources(t);
+  const refreshBindings = channels.refreshBindings;
+  const refreshConnections = channels.refreshConnections;
+  const refreshPage = React.useCallback(() => {
+    refreshBindings();
+    refreshConnections();
+  }, [refreshBindings, refreshConnections]);
   const location = React.useMemo(() => readChannelsPageLocation(props.subPath), [props.subPath]);
   return (
     <OnlineBindingsContent
       presentations={channels.presentations}
       resource={channels.bindingsResource}
       sectionState={channels.bindingsSectionState}
-      onRefresh={channels.refreshBindings}
+      onRefresh={refreshPage}
       location={location}
       connections={channels.connections}
       connectionsState={channels.connectionState}
