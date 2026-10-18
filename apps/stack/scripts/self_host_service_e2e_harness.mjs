@@ -31,9 +31,15 @@ export function run(cmd, args, { label, cwd, env, timeoutMs = 0, deadlineAtMs, a
   if (label) {
     console.log(`${prefix}starting: ${cmd} ${args.join(' ')}`);
   }
+  const commandEnv = env ?? process.env;
+  // Isolated application settings must not erase Windows' native executable
+  // extension contract. Preserve caller overrides, including empty/mixed-case keys.
+  const inheritWindowsPathExt = process.platform === 'win32'
+    && !Object.keys(commandEnv).some((key) => key.toUpperCase() === 'PATHEXT')
+    && process.env.PATHEXT !== undefined;
   const result = spawnSync(cmd, args, {
     cwd,
-    env: env ?? process.env,
+    env: inheritWindowsPathExt ? { ...commandEnv, PATHEXT: process.env.PATHEXT } : commandEnv,
     encoding: 'utf-8',
     stdio,
     timeout: commandTimeoutMs || undefined,
