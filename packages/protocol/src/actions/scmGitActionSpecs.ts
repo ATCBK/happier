@@ -759,7 +759,32 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
 ] as const;
 
-const SCM_GIT_ACTION_SPECS_SUFFIX = [
+const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
+  ScmActionSpecDefinition<'scm.remote.push', typeof scm.ScmRemoteRequestSchema, typeof scm.ScmRemoteResponseSchema>,
+  ScmActionSpecDefinition<'scm.remote.publish', typeof branches.ScmRemotePublishRequestSchema, typeof branches.ScmRemotePublishResponseSchema>,
+  ScmActionSpecDefinition<'scm.stash.list', typeof stash.ScmStashListRequestSchema, typeof stash.ScmStashListResponseSchema>,
+  ScmActionSpecDefinition<'scm.stash.show', typeof stash.ScmStashShowRequestSchema, typeof stash.ScmStashShowResponseSchema>,
+  ScmActionSpecDefinition<'scm.stash.create', typeof stash.ScmStashCreateRequestSchema, typeof stash.ScmStashCreateResponseSchema>,
+  ScmActionSpecDefinition<'scm.stash.apply', typeof stash.ScmStashApplyRequestSchema, typeof stash.ScmStashApplyResponseSchema>,
+  ScmActionSpecDefinition<'scm.stash.pop', typeof stash.ScmStashPopRequestSchema, typeof stash.ScmStashPopResponseSchema>,
+  ScmActionSpecDefinition<'scm.stash.drop', typeof stash.ScmStashDropRequestSchema, typeof stash.ScmStashDropResponseSchema>,
+  ScmActionSpecDefinition<'scm.pullRequest.list', typeof ScmPullRequestListRequestSchema, typeof ScmPullRequestListResponseSchema>,
+  ScmActionSpecDefinition<'scm.pullRequest.get', typeof ScmPullRequestGetRequestSchema, typeof ScmPullRequestGetResponseSchema>,
+  ScmActionSpecDefinition<'scm.pullRequest.openOrReuse', typeof ScmPullRequestOpenOrReuseRequestSchema, typeof ScmPullRequestOpenOrReuseResponseSchema>,
+  ScmActionSpecDefinition<'scm.pullRequest.openCompose', typeof ScmPullRequestOpenComposeRequestSchema, typeof ScmPullRequestOpenComposeResponseSchema>,
+  ScmActionSpecDefinition<'scm.pullRequest.checkout', typeof ScmPullRequestCheckoutRequestSchema, typeof ScmPullRequestCheckoutResponseSchema>,
+  ScmActionSpecDefinition<'scm.pullRequest.prepareWorktree', typeof ScmPullRequestPrepareWorktreeRequestSchema, typeof ScmPullRequestPrepareWorktreeResponseSchema>,
+  ScmActionSpecDefinition<'scm.reviewWorkspace.materializePrepared', typeof ScmReviewWorkspaceMaterializePreparedRequestSchema, typeof ScmReviewWorkspaceMaterializePreparedResponseSchema>,
+  ScmActionSpecDefinition<'scm.pullRequest.runStacked', typeof ScmPullRequestRunStackedRequestSchema, typeof ScmPullRequestRunStackedResponseSchema>,
+  ScmActionSpecDefinition<'scm.repository.clone', typeof ScmRepositoryCloneInputSchema, typeof ScmRepositoryCloneOutputSchema>,
+  ScmActionSpecDefinition<'scm.repository.init', typeof ScmRepositoryInitRequestSchema, typeof ScmRepositoryInitResponseSchema>,
+  ScmActionSpecDefinition<'scm.repository.removeIndexLock', typeof ScmRepositoryRemoveIndexLockRequestSchema, typeof ScmRepositoryRemoveIndexLockResponseSchema>,
+  ScmActionSpecDefinition<'scm.hostingRepository.resolveAddress', typeof ScmHostingRepositoryResolveAddressRequestV1Schema, typeof ScmHostingRepositoryResolveAddressResponseV1Schema>,
+  ScmActionSpecDefinition<'scm.hostingRepository.describePublishTargets', typeof ScmHostingRepositoryDescribePublishTargetsRequestSchema, typeof ScmHostingRepositoryDescribePublishTargetsResponseSchema>,
+  ScmActionSpecDefinition<'scm.hostingRepository.publish', typeof ScmHostingRepositoryPublishRequestSchema, typeof ScmHostingRepositoryPublishResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.capture', typeof ScmComparisonCaptureInputSchema, typeof ScmComparisonCaptureOutputSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.generate', typeof ScmDiffSummaryGenerateInputSchema, typeof ScmDiffSummaryGenerateOutputSchema>,
+] = [
   defineScmActionSpec({
     id: 'scm.remote.push', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","remote":"origin"}' } },

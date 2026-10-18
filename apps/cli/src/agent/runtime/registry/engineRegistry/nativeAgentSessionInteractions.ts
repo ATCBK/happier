@@ -119,41 +119,49 @@ function normalizeQuestionAnswers(
     return Object.freeze(output);
 }
 
+function interactionQuestions(
+    request: Exclude<InteractionTransientRequestV1, { kind: 'approval' }>,
+): readonly InteractionTransientQuestionV1[] {
+    return request.kind === 'questions' ? request.questions : [{
+        id: 'confirmation',
+        prompt: request.message,
+        type: 'singleChoice',
+        required: true,
+        allowCustom: false,
+        choices: [{ id: 'confirm', label: 'Confirm' }, { id: 'decline', label: 'Cancel' }],
+    }];
+}
+
 function toPermissionInput(request: InteractionTransientRequestV1): unknown {
     if (request.kind === 'approval') {
         // Native tool policy and presentation consume the actual operands. The
         // transient owner retains the approval envelope and persistence ceiling.
         return request.subject.input;
     }
-    if (request.kind === 'questions') {
-        return Object.freeze({
-            ...(request.title ? { title: request.title } : {}),
-            questions: request.questions.map((question) => Object.freeze({
-                id: question.id,
-                question: question.prompt,
-                ...(question.required ? { required: true } : {}),
-                ...(question.type === 'text'
-                    ? {
-                        selection: 'text' as const,
-                        ...(question.initialValue === undefined
-                            ? {}
-                            : { presentation: { initialValue: question.initialValue } }),
-                    }
-                    : {
-                        selection: question.type === 'singleChoice' ? 'single' as const : 'multiple' as const,
-                        options: question.choices.map((choice) => Object.freeze({
-                            id: choice.id,
-                            label: choice.label,
-                            ...(choice.description ? { description: choice.description } : {}),
-                        })),
-                        ...(question.allowCustom ? { allowCustom: true } : {}),
-                    }),
-            })),
-        });
-    }
     return Object.freeze({
-        title: request.title === 'Confirmation' ? undefined : request.title,
-        message: request.message,
+        ...(request.title && (request.kind !== 'confirmation' || request.title !== 'Confirmation')
+            ? { title: request.title } : {}),
+        questions: interactionQuestions(request).map((question) => Object.freeze({
+            id: question.id,
+            question: question.prompt,
+            ...(question.required ? { required: true } : {}),
+            ...(question.type === 'text'
+                ? {
+                    selection: 'text' as const,
+                    ...(question.initialValue === undefined
+                        ? {}
+                        : { presentation: { initialValue: question.initialValue } }),
+                }
+                : {
+                    selection: question.type === 'singleChoice' ? 'single' as const : 'multiple' as const,
+                    options: question.choices.map((choice) => Object.freeze({
+                        id: choice.id,
+                        label: choice.label,
+                        ...(choice.description ? { description: choice.description } : {}),
+                    })),
+                    ...(question.allowCustom ? { allowCustom: true } : {}),
+                }),
+        })),
     });
 }
 
@@ -274,7 +282,7 @@ async function presentBoundPermissionRequest(
         && Object.hasOwn(permissionContext, 'turnId');
     const toolName = request.kind === 'approval'
         ? request.subject.name
-        : request.kind === 'questions' ? 'AskUserQuestion' : 'AgentConfirmation';
+        : 'AskUserQuestion';
     let result: Awaited<ReturnType<ProviderEnforcedPermissionHandler['handleToolCall']>>;
     try {
         result = await params.permissionHandler.handleToolCall(
@@ -330,42 +338,43 @@ async function presentBoundPermissionRequest(
             persistence: canPersistSession ? 'session' : 'once',
         });
     }
-    if (request.kind === 'questions') {
-        if (decision === 'abort' || decision === 'denied') {
-            return Object.freeze({ requestId: request.requestId, kind: 'questions', status: 'userCancelled' });
-        }
-        if (
-            decision !== 'approved'
-            || !result.answers
-            || typeof result.answers !== 'object'
-            || Array.isArray(result.answers)
-        ) {
-            return unavailable(request, request.requestId);
-        }
-        const answerEntries = Object.entries(result.answers);
-        const allLegacyScalars = answerEntries.every((entry) => typeof entry[1] === 'string');
-        const allStructuredArrays = answerEntries.every((entry) => (
-            Array.isArray(entry[1]) && entry[1].every((value) => typeof value === 'string')
-        ));
-        if (!allLegacyScalars && !allStructuredArrays) {
-            return unavailable(request, request.requestId);
-        }
-        const answers = normalizeQuestionAnswers(
-            request.questions,
-            Object.fromEntries(answerEntries) as Record<string, QuestionAnswerWireValue>,
-        );
-        return answers
-            ? Object.freeze({ requestId: request.requestId, kind: 'questions', status: 'answered', answers })
-            : unavailable(request, request.requestId);
+    if (decision === 'abort' || decision === 'denied') {
+        return request.kind === 'confirmation'
+            ? Object.freeze({ requestId: request.requestId, kind: 'confirmation', status: decision === 'denied' ? 'declined' : 'userCancelled' })
+            : Object.freeze({ requestId: request.requestId, kind: 'questions', status: 'userCancelled' });
     }
-    if (decision === 'abort') return Object.freeze({ requestId: request.requestId, kind: 'confirmation', status: 'userCancelled' });
-    if (decision !== 'approved' && decision !== 'denied') {
+    if (
+        decision !== 'approved'
+        || !result.answers
+        || typeof result.answers !== 'object'
+        || Array.isArray(result.answers)
+    ) {
+        return unavailable(request, request.requestId);
+    }
+    const answerEntries = Object.entries(result.answers);
+    const allLegacyScalars = answerEntries.every((entry) => typeof entry[1] === 'string');
+    const allStructuredArrays = answerEntries.every((entry) => (
+        Array.isArray(entry[1]) && entry[1].every((value) => typeof value === 'string')
+    ));
+    if (!allLegacyScalars && !allStructuredArrays) {
+        return unavailable(request, request.requestId);
+    }
+    const answers = normalizeQuestionAnswers(
+        interactionQuestions(request),
+        Object.fromEntries(answerEntries) as Record<string, QuestionAnswerWireValue>,
+    );
+    if (!answers) return unavailable(request, request.requestId);
+    if (request.kind === 'questions') {
+        return Object.freeze({ requestId: request.requestId, kind: 'questions', status: 'answered', answers });
+    }
+    const answer = answers.confirmation;
+    if (answer?.kind !== 'singleChoice' || answer.answer.kind !== 'choice') {
         return unavailable(request, request.requestId);
     }
     return Object.freeze({
         requestId: request.requestId,
         kind: 'confirmation',
-        status: decision === 'approved' ? 'approved' : 'declined',
+        status: answer.answer.choiceId === 'confirm' ? 'approved' : 'declined',
     });
 }
 

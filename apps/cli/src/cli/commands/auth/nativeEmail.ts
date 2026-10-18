@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import axios from 'axios';
 import { randomBytes } from 'node:crypto';
 import tweetnacl from 'tweetnacl';
@@ -237,7 +238,7 @@ async function redeemNativePasswordChallenge(input: Readonly<{
   }
   // /v1/auth includes `success: true`; the native-email finalizer's response
   // schema is strict and only describes its own { token } endpoint.
-  return NativeEmailPasswordLoginResponseV1Schema.passthrough().parse(response.data).token;
+  return zMini.catchall(NativeEmailPasswordLoginResponseV1Schema, zMini.unknown()).parse(response.data).token;
 }
 
 /** Verified existing-Account sign-in shared by explicit recovery and retained-secret repair. */

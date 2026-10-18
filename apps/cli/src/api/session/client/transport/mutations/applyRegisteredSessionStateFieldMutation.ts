@@ -55,7 +55,7 @@ export function applyRegisteredSessionStateFieldMutationToMetadata(
     let value = mutation.op.value;
     if (mutation.fieldId === 'intent.context') value = SessionContextIntentV1Schema.parse(value);
     if (mutation.fieldId === 'intent.memoryEnabled') value = z.boolean().parse(value);
-    if (mutation.fieldId === 'intent.voicePreference') value = SessionVoicePreferenceV1Schema.nullable().parse(value);
+    if (mutation.fieldId === 'intent.voicePreference') value = z.nullable(SessionVoicePreferenceV1Schema).parse(value);
 
     if (mutation.fieldId === 'intent.role') {
         value = SessionRoleIdV1Schema.parse(value);

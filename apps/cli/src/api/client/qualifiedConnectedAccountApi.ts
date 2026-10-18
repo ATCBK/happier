@@ -753,7 +753,7 @@ export async function deleteQualifiedConnectedAccountCredentialV4(
     });
     if (deletion.reviewOnly !== undefined) query.set('reviewOnly', String(deletion.reviewOnly));
     if (deletion.emergencyRevoke !== undefined) query.set('emergencyRevoke', String(deletion.emergencyRevoke));
-    if (deletion.managedResourceDispositions !== undefined) query.set('managedResourceDispositions', encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountCredentialDeleteV4Schema.shape.managedResourceDispositions.unwrap(), deletion.managedResourceDispositions));
+    if (deletion.managedResourceDispositions !== undefined) query.set('managedResourceDispositions', encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountCredentialDeleteV4Schema.shape.managedResourceDispositions._zod.def.innerType, deletion.managedResourceDispositions));
     const response = await axios.delete(
         `${resolveServerHttpBaseUrl()}/v4/connect/qualified/credential?${query.toString()}`,
         {

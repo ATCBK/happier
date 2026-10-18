@@ -2520,7 +2520,28 @@ export const PluginProjectedDropTargetEntryV1Schema = lazyZodSchema(() => z.stri
 })));
 export type PluginProjectedDropTargetEntryV1 = z.infer<typeof PluginProjectedDropTargetEntryV1Schema>;
 
-export const PluginProjectedFamilyEntryV2Schema = lazyZodSchema(() => z.union([
+export const PluginProjectedFamilyEntryV2Schema: z.ZodMiniUnion<readonly [
+  typeof PluginProjectedMachineProvisionerEntryV1Schema,
+  typeof PluginProjectedDragSourceEntryV1Schema,
+  typeof PluginProjectedDropTargetEntryV1Schema,
+  typeof PluginProjectedInputTypeEntryV1Schema,
+  typeof PluginProjectedAtmospherePictureEntryV1Schema,
+  typeof PluginProjectedRegistrySourceEntryV1Schema,
+  typeof PluginProjectedDefinitionEntryV2Schema,
+  typeof PluginProjectedWorkflowEntryV1Schema,
+  typeof PluginProjectedVoiceProviderEntryV2Schema,
+  typeof PluginProjectedComposerAttachmentEntryV1Schema,
+  typeof PluginProjectedComposerControlEntryV1Schema,
+  typeof PluginProjectedComposerRegionEntryV1Schema,
+  typeof ConnectedAccountUiProjectionEntryV1Schema,
+  typeof PluginProjectedScmHostingProviderEntryV2Schema,
+  typeof PluginProjectedScmBackendEntryV2Schema,
+  typeof PluginProjectedManagedDependencyEntryV2Schema,
+  typeof PluginProjectedMcpEntryV2Schema,
+  typeof PluginProjectedAccountCollectionEntryV1Schema,
+  typeof PluginProjectedBrowserEntryV2Schema,
+  typeof PluginProjectedUiEntryV2Schema,
+]> = lazyZodSchema(() => z.union([
   PluginProjectedMachineProvisionerEntryV1Schema,
   PluginProjectedDragSourceEntryV1Schema,
   PluginProjectedDropTargetEntryV1Schema,
@@ -2580,7 +2601,30 @@ const PluginProjectedComposerAttachmentsFamilyV1Schema = lazyZodSchema(() => pro
 const PluginProjectedComposerControlsFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('composerControls', PluginProjectedComposerControlEntryV1Schema));
 const PluginProjectedComposerRegionsFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('composerRegions', PluginProjectedComposerRegionEntryV1Schema));
 
-const PluginProjectedFamiliesByIdV2Schema = lazyZodSchema(() => z._default(z.strictObject({
+const PluginProjectedFamiliesByIdV2Schema: z.ZodMiniDefault<z.ZodMiniObject<{
+  providers: z.ZodMiniOptional<typeof PluginProjectedProvidersFamilyV2Schema>;
+  connectedAccounts: z.ZodMiniOptional<typeof PluginProjectedConnectedAccountsFamilyV2Schema>;
+  scmHostingProviders: z.ZodMiniOptional<typeof PluginProjectedScmHostingProvidersFamilyV2Schema>;
+  scmBackends: z.ZodMiniOptional<typeof PluginProjectedScmBackendsFamilyV2Schema>;
+  managedDependencies: z.ZodMiniOptional<typeof PluginProjectedManagedDependenciesFamilyV2Schema>;
+  mcp: z.ZodMiniOptional<typeof PluginProjectedMcpFamilyV2Schema>;
+  accountCollections: z.ZodMiniOptional<typeof PluginProjectedAccountCollectionsFamilyV2Schema>;
+  pluginUi: z.ZodMiniOptional<typeof PluginProjectedUiFamilyV2Schema>;
+  pluginBrowser: z.ZodMiniOptional<typeof PluginProjectedBrowserFamilyV2Schema>;
+  voiceModelPacks: z.ZodMiniOptional<typeof PluginProjectedVoiceModelPacksFamilyV2Schema>;
+  roles: z.ZodMiniOptional<typeof PluginProjectedRolesFamilyV1Schema>;
+  workflows: z.ZodMiniOptional<typeof PluginProjectedWorkflowsFamilyV1Schema>;
+  inputTypes: z.ZodMiniOptional<typeof PluginProjectedInputTypesFamilyV1Schema>;
+  atmospherePictures: z.ZodMiniOptional<typeof PluginProjectedAtmospherePicturesFamilyV1Schema>;
+  registrySources: z.ZodMiniOptional<typeof PluginProjectedRegistrySourcesFamilyV1Schema>;
+  machineProvisioners: z.ZodMiniOptional<typeof PluginProjectedMachineProvisionersFamilyV1Schema>;
+  dragSources: z.ZodMiniOptional<typeof PluginProjectedDragSourcesFamilyV1Schema>;
+  dropTargets: z.ZodMiniOptional<typeof PluginProjectedDropTargetsFamilyV1Schema>;
+  voiceProviders: z.ZodMiniOptional<typeof PluginProjectedVoiceProvidersFamilyV2Schema>;
+  composerAttachments: z.ZodMiniOptional<typeof PluginProjectedComposerAttachmentsFamilyV1Schema>;
+  composerControls: z.ZodMiniOptional<typeof PluginProjectedComposerControlsFamilyV1Schema>;
+  composerRegions: z.ZodMiniOptional<typeof PluginProjectedComposerRegionsFamilyV1Schema>;
+}, z.core.$strict>> = lazyZodSchema(() => z._default(z.strictObject({
   providers: z.optional(PluginProjectedProvidersFamilyV2Schema),
   connectedAccounts: z.optional(PluginProjectedConnectedAccountsFamilyV2Schema),
   scmHostingProviders: z.optional(PluginProjectedScmHostingProvidersFamilyV2Schema),
@@ -2606,7 +2650,30 @@ const PluginProjectedFamiliesByIdV2Schema = lazyZodSchema(() => z._default(z.str
 }), {}));
 assertPluginProjectionFamilyIdsV2(Object.keys(PluginProjectedFamiliesByIdV2Schema._zod.def.innerType.shape));
 
-export const PluginProjectedFamilyV2Schema = lazyZodSchema(() => z.union([
+export const PluginProjectedFamilyV2Schema: z.ZodMiniUnion<readonly [
+  typeof PluginProjectedProvidersFamilyV2Schema,
+  typeof PluginProjectedConnectedAccountsFamilyV2Schema,
+  typeof PluginProjectedScmHostingProvidersFamilyV2Schema,
+  typeof PluginProjectedScmBackendsFamilyV2Schema,
+  typeof PluginProjectedManagedDependenciesFamilyV2Schema,
+  typeof PluginProjectedMcpFamilyV2Schema,
+  typeof PluginProjectedAccountCollectionsFamilyV2Schema,
+  typeof PluginProjectedUiFamilyV2Schema,
+  typeof PluginProjectedBrowserFamilyV2Schema,
+  typeof PluginProjectedVoiceModelPacksFamilyV2Schema,
+  typeof PluginProjectedRolesFamilyV1Schema,
+  typeof PluginProjectedWorkflowsFamilyV1Schema,
+  typeof PluginProjectedInputTypesFamilyV1Schema,
+  typeof PluginProjectedAtmospherePicturesFamilyV1Schema,
+  typeof PluginProjectedRegistrySourcesFamilyV1Schema,
+  typeof PluginProjectedMachineProvisionersFamilyV1Schema,
+  typeof PluginProjectedDragSourcesFamilyV1Schema,
+  typeof PluginProjectedDropTargetsFamilyV1Schema,
+  typeof PluginProjectedVoiceProvidersFamilyV2Schema,
+  typeof PluginProjectedComposerAttachmentsFamilyV1Schema,
+  typeof PluginProjectedComposerControlsFamilyV1Schema,
+  typeof PluginProjectedComposerRegionsFamilyV1Schema,
+]> = lazyZodSchema(() => z.union([
   PluginProjectedProvidersFamilyV2Schema,
   PluginProjectedConnectedAccountsFamilyV2Schema,
   PluginProjectedScmHostingProvidersFamilyV2Schema,

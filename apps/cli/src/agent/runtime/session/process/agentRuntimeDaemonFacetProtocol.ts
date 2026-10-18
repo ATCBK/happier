@@ -47,7 +47,7 @@ const HostPluginContributionIdentityV1Schema = lazyZodSchema(() => asHostProtoco
  * never re-canonicalizes the bytes.
  */
 const ExternalSessionRemoteIdSchema =
-  lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.max(2_000));
+  lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(z.maxLength(2_000)));
 const ExternalSessionJsonObjectSchema = lazyZodSchema(() => z.record(
   z.string(),
   AgentRuntimeJsonValueV1Schema,
@@ -63,10 +63,10 @@ export const RunnerAgentDaemonExternalSessionRefV1Schema = lazyZodSchema(() => z
 
 const ExternalSessionTranscriptItemSchema = lazyZodSchema(() => z.object({
   id: ExternalSessionTranscriptItemIdV1Schema,
-  localId: ExternalSessionTranscriptItemIdV1Schema.optional(),
-  sidechainId: SidechainIdSchema.nullable().optional(),
-  userProjection: ExternalSessionUserProjectionSchema.optional(),
-  timestampMs: ExternalSessionTranscriptSourceTimestampV1Schema.optional(),
+  localId: z.optional(ExternalSessionTranscriptItemIdV1Schema),
+  sidechainId: z.nullable(SidechainIdSchema).optional(),
+  userProjection: z.optional(ExternalSessionUserProjectionSchema),
+  timestampMs: z.optional(ExternalSessionTranscriptSourceTimestampV1Schema),
   kind: z.enum(['user', 'agent', 'system', 'event']),
   data: AgentExternalSessionTranscriptRawRecordSchema,
 }).strict().superRefine((item, context) => {
@@ -99,15 +99,16 @@ const ExternalSessionTerminalObservationSchema = lazyZodSchema(() => z.object({
 }).strict());
 
 const AgentSessionRealtimeVoiceDeclarationV1Schema =
-  lazyZodSchema(() => VoiceProviderContributionSchema.transform(
-    (declaration, context) => {
+  lazyZodSchema(() => z.pipe(VoiceProviderContributionSchema, z.transform(
+    (declaration: z.infer<typeof VoiceProviderContributionSchema>, context) => {
       if (
         declaration.kind !== 'conversation'
         || declaration.execution?.kind
           !== 'experimental_agent_session_realtime'
       ) {
-        context.addIssue({
+        context.issues.push({
           code: 'custom',
+          input: declaration,
           message:
             'Only Agent-session realtime Voice declarations are allowed',
         });
@@ -115,14 +116,14 @@ const AgentSessionRealtimeVoiceDeclarationV1Schema =
       }
       return declaration;
     },
-  ));
+  )));
 
 export const AgentRuntimeDaemonExternalSessionFollowEventV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
     z.object({
       kind: z.literal('data'),
       phase: z.literal('initial_replay').optional(),
-      providerSessionId: ExternalSessionRemoteIdSchema.optional(),
+      providerSessionId: z.optional(ExternalSessionRemoteIdSchema),
       items: z.array(z.union([ExternalSessionTranscriptItemSchema, ExternalSessionTerminalObservationSchema])).max(200),
       fromCursor:
         RunnerAgentDaemonExternalSessionCursorV1Schema.nullable(),
@@ -173,7 +174,7 @@ const FollowTargetSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('providerSession'),
     agentId: AgentIdV1Schema,
-    providerSessionId: NonBlankOpaqueIdentifierSchema.max(2_000),
+    providerSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2_000)),
   }).strict(),
 ]));
 
@@ -285,7 +286,7 @@ const ExternalSessionLinkIdentitySchema = lazyZodSchema(() => z.object({
   remoteSessionId: ExternalSessionRemoteIdSchema,
   source: ExternalSessionsSourceSchema,
   transcriptMediaReadRoots: ExternalSessionTranscriptMediaReadRootsSchema,
-  runtimeDescriptor: RuntimeDescriptorV1Schema.nullable().optional(),
+  runtimeDescriptor: z.nullable(RuntimeDescriptorV1Schema).optional(),
   vendorMetadata: ExternalSessionJsonObjectSchema.optional(),
   externalSessionMetadata: ExternalSessionJsonObjectSchema.optional(),
   sessionStateUpdates:
@@ -336,7 +337,7 @@ export const RunnerAgentDaemonExternalSessionFollowProviderRequestV1Schema =
       kind: z.literal('resolveLinkIdentity'),
       source: ExternalSessionsSourceSchema,
       remoteSessionId: ExternalSessionRemoteIdSchema,
-      runtimeDescriptor: RuntimeDescriptorV1Schema.nullable().optional(),
+      runtimeDescriptor: z.nullable(RuntimeDescriptorV1Schema).optional(),
       metadata: ExternalSessionJsonObjectSchema.optional(),
     }).strict(),
     z.object({

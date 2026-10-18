@@ -4,6 +4,14 @@ import { describe, expect, it } from 'vitest';
 import { createAcpClientConnection } from '../createAcpClientConnection';
 import { AcpAgentPeer } from '../AcpAgentPeer';
 import { defineAcpExtensionNotification, defineAcpExtensionRequest } from '../types';
+import { createAcpClientHandlers } from '../../createAcpClientHandlers';
+import { createLegacyHandlerContextFixture } from '../../__tests__/legacyToolRuntimeFixture';
+import { createPublicAcpPermissionHandler } from '../../runtime/publicSession/createPublicAcpPermissionHandler';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { createNativeAgentCurrentSessionUiServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
+import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
+import type { AgentState } from '@/api/types';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
 
 const stringValueParams = {
   parse(value: unknown): { value: string } {
@@ -17,6 +25,103 @@ const stringValueParams = {
 };
 
 describe('createAcpClientConnection', () => {
+  it('withdraws cancellation and returns explicit decline without cancelling the active turn', async () => {
+    let resolvePresented!: () => void;
+    const presented = new Promise<void>((resolve) => { resolvePresented = resolve; });
+    // The Session state/RPC transport is external; all permission and interaction owners stay real.
+    const session = {
+      sessionId: 'elicitation-cancellation',
+      rpcHandlerManager: new ServerBoundPermissionRpcHandlerManager('elicitation-cancellation'),
+      state: { requests: {}, completedRequests: {} } as AgentState,
+      getAgentStateSnapshot() { return this.state; },
+      getMetadataSnapshot() { return null; },
+      updateAgentState(update: (state: AgentState) => AgentState) {
+        this.state = update(this.state);
+        if (Object.keys(this.state.requests ?? {}).length > 0) resolvePresented();
+        return this.state;
+      },
+    };
+    const hostPermissionHandler = new ProviderEnforcedPermissionHandler(
+      session as unknown as ApiSessionClient,
+      { logPrefix: '[ACP cancellation test]', getWorkspaceWrites: () => 'allow' },
+    );
+    const lifetime = new AbortController();
+    const currentSession = createNativeAgentCurrentSessionUiServices({
+      permissionHandler: hostPermissionHandler,
+      pluginId: 'happier.agent.test', contributionId: 'test', runtimeId: 'test',
+      sessionId: session.sessionId, occurrenceId: 'occurrence-1',
+      isCurrent: () => true, signal: lifetime.signal,
+    });
+    const permissionHandler = createPublicAcpPermissionHandler({
+      interactions: currentSession.interactions,
+      signal: lifetime.signal,
+      resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
+      resolveTurnId: () => 'turn-1',
+      resolveCausalPermissionAuthority: () => ({
+        kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default',
+      }),
+    });
+    const handlerContext = createLegacyHandlerContextFixture();
+    const handlers = createAcpClientHandlers({
+      onSessionUpdate() {}, transport: handlerContext.transport, emit() {},
+      permissionHandler, createHandlerContext: () => handlerContext,
+      getToolNameContext: () => ({ recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }),
+      getActiveSessionId: () => session.sessionId,
+      capturePermissionRequest: () => ({
+        scope: 'turn', isCurrent: () => true,
+        cancel: async () => { throw new Error('Individual cancellation must preserve the turn'); },
+      }),
+      emitPermissionResponse: async () => undefined, clearTrackedToolCall() {},
+      incrementToolCallCountSincePrompt() {}, toolCalls: handlerContext.toolCalls,
+      lastSelectedPermissionOptionIdByToolCallId: new Map(),
+    });
+    const testAgent = agent({ name: 'elicitation-cancellation-agent' })
+      .onRequest('test/elicit', (params) => params, async (context) => {
+        const response = context.client.request(methods.client.elicitation.create, {
+          mode: 'form', sessionId: session.sessionId, message: 'Continue?',
+          requestedSchema: { type: 'object', properties: {} },
+        });
+        try {
+          await presented;
+          await context.client.notify(methods.protocol.cancelRequest, { requestId: 0 });
+          await expect.poll(() => Object.keys(session.state.requests ?? {})).toEqual([]);
+          await expect(response).resolves.toEqual({ action: 'cancel' });
+          expect(lifetime.signal.aborted).toBe(false);
+
+          for (const choice of ['decline', 'confirm'] as const) {
+            const nextResponse = context.client.request(methods.client.elicitation.create, {
+              mode: 'form', sessionId: session.sessionId, message: 'Try again?',
+              requestedSchema: { type: 'object', properties: {} },
+            });
+            await expect.poll(() => Object.keys(session.state.requests ?? {}).length).toBe(1);
+            const [id] = Object.keys(session.state.requests ?? {});
+            const respond = session.rpcHandlerManager.handlers.get('session.user_action.answer');
+            expect(respond).toBeDefined();
+            expect(await respond?.({ id, approved: true, answers: { confirmation: [choice] } })).toBeUndefined();
+            await expect(nextResponse).resolves.toEqual(choice === 'confirm'
+              ? { action: 'accept', content: {} }
+              : { action: 'decline' });
+            expect(lifetime.signal.aborted).toBe(false);
+            expect(Object.keys(session.state.requests ?? {})).toHaveLength(0);
+          }
+          return {};
+        } finally {
+          await permissionHandler.abortPendingRequestsAndFlush?.('test cleanup');
+          await response.catch(() => undefined);
+        }
+      });
+    const connection = createAcpClientConnection({
+      name: 'elicitation-cancellation-client', transport: testAgent, handlers,
+    });
+    try {
+      await expect(connection.peer.requestExtension('test/elicit', {})).resolves.toEqual({});
+    } finally {
+      lifetime.abort();
+      connection.close();
+      await connection.closed;
+    }
+  });
+
   it('preserves non-extensible SDK transport errors without a provider classifier', async () => {
     const failure = Object.preventExtensions(new Error('SDK transport unavailable'));
     const context = { request: async () => { throw failure; } } satisfies Pick<ClientContext, 'request'>;

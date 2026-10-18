@@ -1,3 +1,4 @@
+import { z as zClassic } from 'zod';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { readStoredCredentials } from '@/persistence';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -907,7 +908,7 @@ async function invokePluginMarketplaceAction(
 
     let managedResourceDispositions: readonly ManagedResourceDispositionV1[] | undefined;
     if ((action === 'disable' || action === 'uninstall') && params?.managedResourceDispositions !== undefined) {
-        const parsed = ManagedResourceDispositionV1Schema.array().safeParse(params.managedResourceDispositions);
+        const parsed = zClassic.array(ManagedResourceDispositionV1Schema).safeParse(params.managedResourceDispositions);
         if (!parsed.success) {
             return { ok: false, error: { code: 'invalid-request', message: 'Invalid reviewed managed-resource dispositions' } };
         }

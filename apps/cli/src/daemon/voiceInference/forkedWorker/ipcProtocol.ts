@@ -288,7 +288,7 @@ const ManifestObjectSchema: z.ZodType<ModelPackManifest> = z
   .passthrough() as unknown as z.ZodType<ModelPackManifest>;
 
 const VoiceInferenceWorkerPackContractSchemaShape = {
-  runtimeDescriptor: VoiceModelPackRuntimeV1Schema.nullable().optional(),
+  runtimeDescriptor: z.nullable(VoiceModelPackRuntimeV1Schema).optional(),
   supportArtifacts: z.array(VoiceModelPackSupportArtifactV1Schema).max(32).optional(),
 } as const;
 

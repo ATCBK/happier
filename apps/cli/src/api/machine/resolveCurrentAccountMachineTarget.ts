@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import axios from 'axios';
 import { z } from 'zod';
 import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -18,10 +19,8 @@ import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/clie
 // bootstrap projection; this parser extends it only with the legacy/full-account
 // `metadata` blob it genuinely needs. Labels and decoded platform facts remain
 // CLI projections of that metadata and never alter machine identity.
-const ACCOUNT_MACHINE_ROW_SCHEMA = ExternalActionMachineBootstrapV1Schema
-  .extend({ metadata: z.string().optional(), activeAt: z.number().nullable().optional(), access: AccessibleMachineAccessV1Schema.optional(),
-    devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)) })
-  .passthrough();
+const ACCOUNT_MACHINE_ROW_SCHEMA = zMini.catchall(zMini.extend(ExternalActionMachineBootstrapV1Schema, { metadata: z.string().optional(), activeAt: z.number().nullable().optional(), access: z.optional(AccessibleMachineAccessV1Schema),
+    devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)) }), z.unknown());
 
 const ACCOUNT_MACHINE_INVENTORY_SCHEMA = z.array(ACCOUNT_MACHINE_ROW_SCHEMA);
 

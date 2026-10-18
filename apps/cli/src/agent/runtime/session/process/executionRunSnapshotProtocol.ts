@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { z } from 'zod';
 import { BackendTargetRefV2Schema } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { PluginExecutionRunProfileContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/executionRunProfiles';
@@ -10,7 +11,7 @@ import { AgentRuntimeDaemonSessionDescriptorV1Schema } from './agentRuntimeRunne
 // that refusal cannot be interpreted as an empty executable snapshot.
 export const RUNNER_EXECUTION_RUN_SNAPSHOT_OPERATIONS = [
   z.object({ kind: z.literal('execution_run.snapshot.acquire_v1'),
-    backendTarget: asHostProtocolZod(BackendTargetRefV2Schema.strict()).optional() }).strict(),
+    backendTarget: asHostProtocolZod(zMini.core.clone(BackendTargetRefV2Schema, { ...BackendTargetRefV2Schema._zod.def, catchall: zMini.never() })).optional() }).strict(),
   z.object({ kind: z.literal('execution_run.snapshot.release_v1'), snapshotId: z.uuid() }).strict(),
 ] as const;
 

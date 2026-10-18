@@ -202,13 +202,13 @@ const AgentRuntimeDaemonCompositionToolBindingV1Schema = lazyZodSchema(() => z.o
     title: z.string().trim().min(1).max(4_096),
     description: z.string().trim().min(1).max(4_096),
     inputSchema: PluginJsonSchemaV2Schema,
-    outputSchema: PluginJsonSchemaV2Schema.optional(),
-    inputHints: ActionInputHintsSchema.optional(),
-    safety: ActionSafetySchema.optional(),
-    examples: PluginActionDefinitionExamplesV1Schema.optional(),
+    outputSchema: z.optional(PluginJsonSchemaV2Schema),
+    inputHints: z.optional(ActionInputHintsSchema),
+    safety: z.optional(ActionSafetySchema),
+    examples: z.optional(PluginActionDefinitionExamplesV1Schema),
     promptSnippet: z.string().trim().min(1).optional(),
     promptGuidelines: z.array(z.string().trim().min(1)).max(256).optional(),
-    availability: PluginActionAvailabilityV2Schema.optional(),
+    availability: z.optional(PluginActionAvailabilityV2Schema),
     surfaces: z.array(z.enum(['agent', 'mcp', 'cli'])).min(1).max(3),
   }).strict(),
   expectedContributorOccurrenceId: z.string().trim().min(1).max(512),
@@ -468,35 +468,35 @@ const AgentSessionOpenBaseSchema = lazyZodSchema(() => z.object({
   sessionId: asHostProtocolZod(SessionIdSchema),
   cwd: BoundedPathSchema,
   sessionDirectoryKind: z.enum(['path', 'managed']).optional(),
-  launchEnvironment: AgentLaunchEnvironmentV1Schema.optional(),
-  runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
-  configuration: AgentSessionConfigurationSnapshotV1Schema.optional(),
+  launchEnvironment: z.optional(AgentLaunchEnvironmentV1Schema),
+  runtimeDescriptorV1: z.optional(RuntimeDescriptorV1Schema),
+  configuration: z.optional(AgentSessionConfigurationSnapshotV1Schema),
   connectedAccounts: z.array(ConnectedAccountSchema).max(256).optional(),
   mcpServers:
     z.record(BoundedIdSchema, McpLaunchConfigSchema).optional(),
-  mcpToolPolicy: McpToolLaunchPoliciesV1Schema.optional(),
+  mcpToolPolicy: z.optional(McpToolLaunchPoliciesV1Schema),
   mcpServersStrictMode: z.boolean().optional(),
-  providerBinding: AgentSessionProviderBindingV1Schema.optional(),
-  stateSharing: ConnectedServicesProviderStateSharingPolicyV1Schema.optional(),
+  providerBinding: z.optional(AgentSessionProviderBindingV1Schema),
+  stateSharing: z.optional(ConnectedServicesProviderStateSharingPolicyV1Schema),
 }));
 
 export const AgentRuntimeDaemonSessionOpenRequestV1Schema =
   lazyZodSchema(() => {
     const requestBase = AgentSessionOpenBaseSchema.extend({
-      skills: AgentSessionSkillDeliveryV1Schema.optional(),
+      skills: z.optional(AgentSessionSkillDeliveryV1Schema),
     });
     return z.discriminatedUnion('kind', [
       requestBase.extend({
         kind: z.literal('create'),
         startupInstructions:
-          AgentSessionStartupInstructionsV1Schema.optional(),
+          z.optional(AgentSessionStartupInstructionsV1Schema),
       }).strict(),
       requestBase.extend({
         kind: z.literal('resume'),
         providerSessionId: BoundedIdSchema,
         strictNativeResumeIdentity: z.literal(true).optional(),
         startupInstructions:
-          AgentSessionStartupInstructionsV1Schema.optional(),
+          z.optional(AgentSessionStartupInstructionsV1Schema),
       }).strict(),
       requestBase.extend({
         kind: z.literal('fork'),

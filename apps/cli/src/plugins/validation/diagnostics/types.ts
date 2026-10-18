@@ -137,11 +137,11 @@ export const PluginCompatibilityDiagnosticSchema = z.object({
   code: PluginDiagnosticCodeSchema,
   message: PluginDiagnosticTextV1Schema,
   contribution: HostPluginContributionIdentityV1Schema.optional(),
-  details: PluginJsonValueV2Schema.optional(),
-  stage: PluginDiagnosticStageV1Schema.optional(),
+  details: z.optional(PluginJsonValueV2Schema),
+  stage: z.optional(PluginDiagnosticStageV1Schema),
   /** Local-development realm only; see `PluginDiagnosticSourceLocationSchema`. */
   source: PluginDiagnosticSourceLocationSchema.optional(),
   /** Local-development realm only: root-rebased, credential- and path-redacted. */
-  stack: PluginDiagnosticTextV1Schema.optional(),
+  stack: z.optional(PluginDiagnosticTextV1Schema),
 }).strict();
 export type PluginCompatibilityDiagnostic = z.infer<typeof PluginCompatibilityDiagnosticSchema>;

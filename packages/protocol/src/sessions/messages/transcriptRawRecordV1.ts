@@ -15,7 +15,7 @@ import {
   SESSION_AGENT_TRANSITION_DIVIDER_SIDECAR_KEY,
   readSessionAgentTransitionDividerV1,
 } from '../agentTransitionDivider.js';
-import { createSessionMessageMetaSchema } from './sessionMessageMeta.js';
+import { SessionMessageMetaSchema } from './sessionMessageMeta.js';
 import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from './sessionCapabilityNoticeV1.js';
 import type { SessionMessageMeta } from './sessionMessageMeta.js';
 import { AgentIdV1Schema } from '../../agents/agentIdV1.js';
@@ -302,7 +302,7 @@ const ContextCompactionShape = {
   backendId: z.string().trim().min(1).optional(),
   agentId: z.string().trim().min(1).optional(),
   trigger: z.enum(['manual', 'auto', 'threshold', 'overflow', 'unknown']).optional(),
-  source: ContextCompactionSourceSchema.optional(),
+  source: z.optional(ContextCompactionSourceSchema),
   agentEventId: z.string().optional(),
   agentSessionId: z.string().optional(),
   turnId: z.string().optional(),
@@ -644,9 +644,9 @@ const RuntimeConfigOutcomeScalarV1Schema = lazyZodSchema(() => z.union([
 const RuntimeConfigOutcomeChangeV1Schema = lazyZodSchema(() => z
   .object({
     key: RuntimeConfigOutcomeChangeKeyV1Schema,
-    requested: RuntimeConfigOutcomeScalarV1Schema.optional(),
-    previous: RuntimeConfigOutcomeScalarV1Schema.optional(),
-    effective: RuntimeConfigOutcomeScalarV1Schema.optional(),
+    requested: z.optional(RuntimeConfigOutcomeScalarV1Schema),
+    previous: z.optional(RuntimeConfigOutcomeScalarV1Schema),
+    effective: z.optional(RuntimeConfigOutcomeScalarV1Schema),
     reason: z.string().trim().min(1).max(512).optional(),
   })
   .strict());
@@ -666,10 +666,10 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('runtime-config-outcome'),
-      agentId: AgentIdV1Schema.optional(),
+      agentId: z.optional(AgentIdV1Schema),
       runtime: z.string().trim().min(1).max(128),
       status: RuntimeConfigOutcomeStatusV1Schema,
-      timing: RuntimeConfigOutcomeTimingV1Schema.optional(),
+      timing: z.optional(RuntimeConfigOutcomeTimingV1Schema),
       reason: z.string().trim().min(1).max(256).optional(),
       message: z.string().trim().min(1).max(2_000),
       changes: z.array(RuntimeConfigOutcomeChangeV1Schema).max(20).optional(),
@@ -724,10 +724,10 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
     .object({
       type: z.literal('connected-service-account-switch'),
       serviceId: ConnectedAccountServiceKeyIngressSchema,
-      groupId: ConnectedServiceAuthGroupIdSchema.nullable(),
+      groupId: z.nullable(ConnectedServiceAuthGroupIdSchema),
       groupLabel: z.string().trim().min(1).nullable().optional(),
-      fromProfileId: ConnectedServiceProfileIdSchema.nullable(),
-      toProfileId: ConnectedServiceProfileIdSchema.nullable(),
+      fromProfileId: z.nullable(ConnectedServiceProfileIdSchema),
+      toProfileId: z.nullable(ConnectedServiceProfileIdSchema),
       // Optional human-readable profile labels resolved at emission time, so the UI can render
       // identity display even before profile-label settings hydrate on the consuming client.
       fromProfileLabel: z.string().trim().min(1).nullable().optional(),
@@ -743,8 +743,8 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
       serviceId: ConnectedAccountServiceKeyIngressSchema,
       resetAtMs: z.number(),
       reason: z.string(),
-      profileId: ConnectedServiceProfileIdSchema.nullable().optional(),
-      groupId: ConnectedServiceAuthGroupIdSchema.nullable().optional(),
+      profileId: z.nullable(ConnectedServiceProfileIdSchema).optional(),
+      groupId: z.nullable(ConnectedServiceAuthGroupIdSchema).optional(),
     })
     .passthrough(),
   z
@@ -752,8 +752,8 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
       type: z.literal('agent-quota-recovered'),
       serviceId: ConnectedAccountServiceKeyIngressSchema,
       reason: z.string(),
-      profileId: ConnectedServiceProfileIdSchema.nullable().optional(),
-      groupId: ConnectedServiceAuthGroupIdSchema.nullable().optional(),
+      profileId: z.nullable(ConnectedServiceProfileIdSchema).optional(),
+      groupId: z.nullable(ConnectedServiceAuthGroupIdSchema).optional(),
     })
     .passthrough(),
   // O1: connected-service switch lifecycle events (committed by the daemon switch FSM)
@@ -762,19 +762,19 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
       type: z.literal('connected-service-account-switch-attempt'),
       ok: z.boolean(),
       action: z.enum(['restart_requested', 'hot_applied', 'metadata_updated']),
-      attemptedContinuityMode: ConnectedServiceSwitchAttemptedContinuityModeV1Schema.optional(),
-      outcome: ConnectedServiceSwitchAttemptOutcomeV1Schema.optional(),
-      outcomeAction: ConnectedServiceSwitchAttemptOutcomeActionV1Schema.optional(),
+      attemptedContinuityMode: z.optional(ConnectedServiceSwitchAttemptedContinuityModeV1Schema),
+      outcome: z.optional(ConnectedServiceSwitchAttemptOutcomeV1Schema),
+      outcomeAction: z.optional(ConnectedServiceSwitchAttemptOutcomeActionV1Schema),
       errorCode: z.string().nullable().optional(),
-      diagnostic: ConnectedServiceUxDiagnosticV1Schema.optional(),
+      diagnostic: z.optional(ConnectedServiceUxDiagnosticV1Schema),
       groupGeneration: z.number().int().nonnegative().optional(),
-      sessionAdoption: ConnectedServiceSwitchAttemptSessionAdoptionV1Schema.optional(),
+      sessionAdoption: z.optional(ConnectedServiceSwitchAttemptSessionAdoptionV1Schema),
       sessionAdoptedGeneration: z.number().int().nonnegative().optional(),
       partialState: z
         .enum(['metadata_may_reference_new_binding', 'runtime_auth_applied', 'runtime_auth_partially_applied'])
         .nullable()
         .optional(),
-      verificationByServiceId: ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema.optional(),
+      verificationByServiceId: z.optional(ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema),
     })
     .passthrough(),
   z
@@ -782,12 +782,12 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
       type: z.literal('connected-service-runtime-auth-recovery'),
       status: ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema,
       serviceId: ConnectedAccountServiceKeyIngressSchema,
-      profileId: ConnectedServiceProfileIdSchema.optional(),
-      groupId: ConnectedServiceAuthGroupIdSchema.optional(),
+      profileId: z.optional(ConnectedServiceProfileIdSchema),
+      groupId: z.optional(ConnectedServiceAuthGroupIdSchema),
       attempt: z.number().int().positive().optional(),
       nextRetryAtMs: z.number().int().nonnegative().nullable().optional(),
       terminal: z.boolean().optional(),
-      diagnostic: ConnectedServiceUxDiagnosticV1Schema.optional(),
+      diagnostic: z.optional(ConnectedServiceUxDiagnosticV1Schema),
       reason: z.string().trim().min(1).optional(),
     })
     .passthrough(),
@@ -1040,19 +1040,19 @@ export type TranscriptRawRecordV1WithMeta<Meta> =
 export function createTranscriptRawRecordV1Schema(
   zod: typeof z,
 ): z.ZodType<TranscriptRawRecordV1WithMeta<SessionMessageMeta>>;
-export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodTypeAny>(
+export function createTranscriptRawRecordV1Schema<MetaSchema extends z.core.$ZodType>(
   zod: typeof z,
   options: Readonly<{
     metaSchema: MetaSchema;
   }>,
 ) : z.ZodType<TranscriptRawRecordV1WithMeta<z.infer<MetaSchema>>>;
-export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodTypeAny>(
+export function createTranscriptRawRecordV1Schema<MetaSchema extends z.core.$ZodType>(
   zod: typeof z,
   options?: Readonly<{
     metaSchema?: MetaSchema;
   }>,
 ) {
-  const metaSchema = options?.metaSchema ?? createStoredReadSchema(createSessionMessageMetaSchema(zod));
+  const metaSchema = options?.metaSchema ?? createStoredReadSchema(SessionMessageMetaSchema);
 
   return zod.preprocess(
     preprocessMessageContent,

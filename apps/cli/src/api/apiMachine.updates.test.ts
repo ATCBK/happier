@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import tweetnacl from 'tweetnacl';
@@ -188,7 +189,7 @@ describe('ApiMachineClient updates', () => {
     });
     vi.spyOn(axios, 'patch').mockImplementation(async (url: string, body: unknown) => {
       expect(url).toBe('https://holder-home.test/v1/machines/alice-machine/data-key-envelopes');
-      const input = MachineRecipientKeyEnvelopeCommitInputV1Schema.parse({ machineId: 'alice-machine', ...MachineRecipientKeyEnvelopeCommitInputV1Schema.omit({ machineId: true }).parse(body) });
+      const input = MachineRecipientKeyEnvelopeCommitInputV1Schema.parse({ machineId: 'alice-machine', ...zMini.omit(MachineRecipientKeyEnvelopeCommitInputV1Schema, { machineId: true }).parse(body) });
       delivered = openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(input.recipientKeyEnvelopes[0]!.encryptedDataKey), recipientSecretKeyOrSeed: recipient.secretKey });
       return { status: 200, data: { appliedRecipientAccountIds: ['later-team-member'], skippedRecipientAccountIds: [] } };
     });

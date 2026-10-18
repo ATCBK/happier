@@ -1,3 +1,4 @@
+import { z as zClassic } from 'zod';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { ProjectWorkerActionInputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import type { ProjectWorkerStatusResultV1 } from '@happier-dev/protocol';
@@ -135,7 +136,7 @@ export function createProjectWorkerAction(options: Readonly<{
       const definitionRetired = typeof error === 'object' && error !== null
         && 'definitionRetired' in error && error.definitionRetired === true;
       const dependencies = error instanceof Error && 'dependencies' in error
-        ? ProjectWorkerDependencyV1Schema.array().safeParse(error.dependencies) : null;
+        ? zClassic.array(ProjectWorkerDependencyV1Schema).safeParse(error.dependencies) : null;
       if (definitionRetired || code === 'indeterminate' || code === 'workspace_copy_removal_unknown' || code === 'project_account_row_outcome_unknown') {
         return failure(code, { kind: 'outcomeUnknown', ...(dependencies?.success ? { dependencies: dependencies.data } : {}) });
       }

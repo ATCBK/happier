@@ -128,6 +128,70 @@ describe('connected-service credential exact 0.2.1 response boundary', () => {
     }
   });
 
+  it('does not let an unregistered token borrow another authenticated holder\'s Account fact', async () => {
+    const channel = await createRequesterCurrentnessSocketHarness();
+    const payload = Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url');
+    const token = `header.${payload}.authenticated`;
+    const forged = `header.${payload}.forged`;
+    const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null };
+    vi.mocked(axios.get).mockImplementation(async (_url, config) => (
+      config?.headers?.Authorization === `Bearer ${token}`
+        ? { status: 200, data: fact }
+        : { status: 401, data: { error: 'unauthorized' } }
+    ));
+    const observation = acquireRequesterAccountEncryptionCurrentness({
+      accountId: 'bob', token, serverBaseUrl: 'https://server.example',
+    });
+    try {
+      await observation.read();
+      await expect(new ConnectedServiceCredentialHttpClient({ token }).getAccountEncryptionMode()).resolves.toBe('plain');
+      await expect(new ConnectedServiceCredentialHttpClient({ token: forged }).getAccountEncryptionMode()).resolves.toBe('unknown');
+      expect(axios.get).toHaveBeenCalledWith('https://server.example/v1/account/encryption',
+        expect.objectContaining({ headers: expect.objectContaining({ Authorization: `Bearer ${forged}` }) }));
+      expect(observation.isCurrent(fact)).toBe(true);
+    } finally {
+      await observation.dispose();
+      await channel.close();
+    }
+  });
+
+  it('borrows only for live authenticated credential holders while retaining their shared Account fact', async () => {
+    const channel = await createRequesterCurrentnessSocketHarness();
+    const payload = Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url');
+    const firstToken = `header.${payload}.first`;
+    const secondToken = `header.${payload}.second`;
+    const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: fact });
+    const scope = { accountId: 'bob', serverBaseUrl: 'https://server.example' };
+    const first = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: firstToken });
+    const repeated = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: firstToken });
+    const second = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: secondToken });
+    const firstApi = new ConnectedServiceCredentialHttpClient({ token: firstToken });
+    const secondApi = new ConnectedServiceCredentialHttpClient({ token: secondToken });
+    try {
+      await first.read();
+      // The retired credential is unavailable; the remaining holder can still
+      // establish its own subscription fact after credential handover.
+      vi.mocked(axios.get).mockImplementation(async (_url, config) =>
+        config?.headers?.Authorization === `Bearer ${secondToken}`
+          ? { status: 200, data: fact } : { status: 503, data: {} });
+      await first.dispose();
+      await expect(firstApi.getAccountEncryptionMode()).resolves.toBe('plain');
+      await expect(secondApi.getAccountEncryptionMode()).resolves.toBe('plain');
+      await repeated.dispose();
+      await expect(firstApi.getAccountEncryptionMode()).resolves.toBe('unknown');
+      await expect(secondApi.getAccountEncryptionMode()).resolves.toBe('plain');
+      expect(second.isCurrent(fact)).toBe(true);
+    } finally {
+      await first.dispose();
+      await repeated.dispose();
+      await second.dispose();
+      await channel.close();
+    }
+  });
+
   it('rejects malformed Account encryption currentness without inferring a mode', async () => {
     vi.mocked(axios.get).mockResolvedValue({
       status: 200,

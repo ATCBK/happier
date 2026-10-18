@@ -1,10 +1,11 @@
 import { AccountEncryptionCurrentnessResponseSchema, type AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
-import { createManagedConnectionSupervisor, DEFAULT_MANAGED_CONNECTION_POLICY, type ManagedConnectionSupervisor } from '@happier-dev/connection-supervisor';
+import { createManagedConnectionSupervisor, DEFAULT_MANAGED_CONNECTION_POLICY, type ManagedConnectionSupervisor, type ManagedConnectionTransport } from '@happier-dev/connection-supervisor';
 import { fetchAccountEncryptionCurrentnessFromServer, AccountEncryptionCurrentnessUnavailableError } from '@/api/client/connectedServiceCredentialApi';
 import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { classifyTransportErrorToProbeResult } from '@/api/connection/classifyTransportErrorToProbeResult';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { logger } from '@/ui/logger';
 
 type Scope = Readonly<{ accountId: string; token: string; serverBaseUrl: string; signal?: AbortSignal }>;
 export type RequesterAccountSettingsObservation = Readonly<
@@ -17,19 +18,24 @@ type Observation = Readonly<{
     subscribeAccountSettings(listener: (event: RequesterAccountSettingsObservation) => void): () => void;
     dispose(): Promise<void>;
 }>;
-type SharedObservation = Observation & { references: number };
+type SharedObservation = Observation & {
+    references: Map<string, { count: number }>;
+    releaseCredential(token: string): Promise<void>;
+};
 
 // Only lifetimes with an authenticated Account/Home populate this map.
 // It stores a fact, never credentials selected by Account id or invocation authorization.
 const observations = new Map<string, SharedObservation>();
 const scopeKey = (scope: Scope) => JSON.stringify([normalizeServerHttpBaseUrl(scope.serverBaseUrl), scope.accountId]);
 
-/** Borrow a fact, never authentication or another holder's credentials. No holder means fresh HTTP. */
+/** Only an authenticated live holder's exact credential can borrow the shared fact. */
 export function readObservedAccountEncryptionCurrentness(scope: Readonly<{
     token: string; serverBaseUrl: string; signal?: AbortSignal;
 }>): Promise<AccountEncryptionCurrentnessResponse> | null {
     const accountId = readAccountIdFromToken(scope.token);
-    return accountId ? observations.get(scopeKey({ ...scope, accountId }))?.read(scope.signal) ?? null : null;
+    const observed = accountId ? observations.get(scopeKey({ ...scope, accountId })) : undefined;
+    // A decoded subject locates a candidate; the admitted credential grants borrowing.
+    return observed?.references.has(scope.token) ? observed.read(scope.signal) : null;
 }
 
 export function sameRequesterAccountEncryptionCurrentness(a: AccountEncryptionCurrentnessResponse, b: AccountEncryptionCurrentnessResponse): boolean {
@@ -67,7 +73,9 @@ export function acquireRequesterAccountEncryptionCurrentness(scope: Scope): Obse
         shared = createObservation(scope);
         observations.set(key, shared);
     }
-    shared.references++;
+    const credentialReferences = shared.references.get(scope.token) ?? { count: 0 };
+    shared.references.set(scope.token, credentialReferences);
+    credentialReferences.count++;
     const owned = shared;
     const retirement = new AbortController();
     let released = false;
@@ -88,7 +96,11 @@ export function acquireRequesterAccountEncryptionCurrentness(scope: Scope): Obse
             retirement.abort();
             for (const release of subscriptions) release();
             subscriptions.clear();
-            if (--owned.references !== 0) return;
+            if (--credentialReferences.count === 0) owned.references.delete(scope.token);
+            if (owned.references.size !== 0) {
+                await owned.releaseCredential(scope.token);
+                return;
+            }
             observations.delete(key);
             await owned.dispose();
         },
@@ -96,6 +108,11 @@ export function acquireRequesterAccountEncryptionCurrentness(scope: Scope): Obse
 }
 
 function createObservation(scope: Scope): SharedObservation {
+    const references = new Map<string, { count: number }>();
+    let activeToken = scope.token;
+    let activeTransport: ManagedConnectionTransport | undefined;
+    let connectionReady: Promise<void> | null = null;
+    let stopping: Promise<void> | null = null;
     let fact: AccountEncryptionCurrentnessResponse | null = null;
     let lifetime = new AbortController();
     const retirement = new AbortController();
@@ -115,22 +132,44 @@ function createObservation(scope: Scope): SharedObservation {
     const refresh = () => {
         if (!connected || disposed || fact || pending) return;
         const captured = lifetime;
-        pending = waitForObservation(fetchAccountEncryptionCurrentnessFromServer({ token: scope.token, serverBaseUrl: scope.serverBaseUrl,
+        pending = waitForObservation(fetchAccountEncryptionCurrentnessFromServer({ token: activeToken, serverBaseUrl: scope.serverBaseUrl,
             signal: captured.signal }), captured.signal)
             .then(next => { if (connected && !disposed && lifetime === captured) fact = next; })
             .catch(error => { if (lifetime === captured) readError = error; })
             .finally(() => { if (lifetime === captured) pending = null; });
+    };
+    // Stop settles the socket adapter's in-flight connect; never queue retirement
+    // behind a connect or HTTP read that may still be waiting on the network.
+    const stopConnection = () => {
+        if (!stopping) {
+            stopping = (supervisor?.stop() ?? Promise.resolve()).finally(() => { stopping = null; });
+        }
+        return stopping;
+    };
+    const startConnection = () => {
+        const starting = supervisor!.start();
+        connectionReady = starting;
+        void starting.catch(error => {
+            if (connectionReady === starting && !disposed) readError = error;
+        });
+        return starting;
     };
     // The existing socket/managed-connection owners supply reconnection policy;
     // this observer adds no timer, freshness TTL or retry budget.
     const initial = (async () => {
         const { createUserScopedSocketConnection } = await import('@/api/session/sockets');
         if (disposed) return;
+        let createdTransport = false;
         const createTransport = () => {
-            const { socket, transport } = createUserScopedSocketConnection({ token: scope.token, serverUrl: scope.serverBaseUrl,
+            const token = activeToken;
+            const { socket, transport } = createUserScopedSocketConnection({ token, serverUrl: scope.serverBaseUrl,
                 authorityCeiling: 'account_automation' });
+            createdTransport = true;
+            activeTransport = transport;
+            const isActive = () => !disposed && activeTransport === transport
+                && activeToken === token && references.has(token);
             socket.on('update', (raw: unknown) => {
-                if (!connected || disposed || !transport.isConnected()) return;
+                if (!isActive() || !connected || !transport.isConnected()) return;
                 const parsed = UpdateContainerSchema.safeParse(raw);
                 // The authenticated user channel owns Account routing. Preserve malformed
                 // Settings publications for the Settings owner to withdraw admission.
@@ -159,29 +198,49 @@ function createObservation(scope: Scope): SharedObservation {
                 fact = next.success ? next.data : null;
                 pending = null;
             });
-            transport.onConnected(() => { connected = true; invalidate(); refresh(); publishSettings({ kind: 'reconnected' }); });
-            transport.onDisconnected(() => { connected = false; invalidate(); pending = null; publishSettings({ kind: 'disconnected' }); });
+            transport.onConnected(() => { if (isActive()) { connected = true; invalidate(); refresh(); publishSettings({ kind: 'reconnected' }); } });
+            transport.onDisconnected(() => { if (isActive()) { connected = false; invalidate(); publishSettings({ kind: 'disconnected' }); } });
             return transport;
         };
-        // A runtime without this transport keeps the incumbent fresh HTTP path.
-        // Once a channel exists, connection failure is unknown, never fallback.
-        let first: ReturnType<typeof createTransport>;
-        try { first = createTransport(); } catch { unsupported = true; return; }
-        let initialTransport = true;
         supervisor = createManagedConnectionSupervisor({ ...DEFAULT_MANAGED_CONNECTION_POLICY,
-            createTransport: () => { if (initialTransport) { initialTransport = false; return first; } return createTransport(); },
+            createTransport,
             probeReadiness: async () => ({ status: 'ready' }), classifyTransportErrorToProbeResult,
             onAuthFailed: () => { connected = false; invalidate(); },
         });
-        if (disposed) { await first.destroy(); return; }
-        await supervisor.start();
+        // A runtime without this transport keeps the incumbent fresh HTTP path.
+        // Once a channel exists, connection failure is unknown, never fallback.
+        try { await startConnection(); } catch (error) {
+            if (createdTransport) throw error;
+            logger.warn('Account encryption observation transport unavailable; using fresh HTTP reads.');
+            unsupported = true;
+        }
     })();
     return {
-        references: 0,
+        references,
         subscribeAccountSettings(listener) {
             settingsListeners.add(listener);
             if (settingsEvent) listener(settingsEvent);
             return () => { settingsListeners.delete(listener); };
+        },
+        async releaseCredential(token) {
+            if (disposed || token !== activeToken || references.has(token)) return;
+            const nextToken = references.keys().next().value;
+            if (nextToken === undefined) return;
+            activeToken = nextToken;
+            activeTransport = undefined;
+            connected = false;
+            invalidate();
+            // Settings holders lose the retired credential's channel like any disconnect.
+            publishSettings({ kind: 'disconnected' });
+            // Before the async import completes, its first factory uses the new token.
+            if (!supervisor || unsupported) return;
+            await stopConnection();
+            if (disposed || unsupported || activeToken !== nextToken || !references.has(nextToken)) return;
+            void startConnection().catch(() => {
+                if (!disposed && activeToken === nextToken) {
+                    logger.warn('Account encryption observation transport restart failed.');
+                }
+            });
         },
         isCurrent: expected => !disposed && (unsupported || connected && fact !== null && sameRequesterAccountEncryptionCurrentness(fact, expected)),
         async read(signal) {
@@ -189,8 +248,17 @@ function createObservation(scope: Scope): SharedObservation {
             const readerSignal = signal ? AbortSignal.any([signal, retirement.signal]) : retirement.signal;
             await waitForObservation(initial, readerSignal);
             if (disposed) throw new AccountEncryptionCurrentnessUnavailableError();
-            if (unsupported) return await fetchAccountEncryptionCurrentnessFromServer({ token: scope.token, serverBaseUrl: scope.serverBaseUrl,
-                signal: readerSignal });
+            if (unsupported) {
+                const fallbackSignal = AbortSignal.any([readerSignal, lifetime.signal]);
+                return await waitForObservation(fetchAccountEncryptionCurrentnessFromServer({ token: activeToken,
+                    serverBaseUrl: scope.serverBaseUrl, signal: fallbackSignal }), fallbackSignal);
+            }
+            // A credential may retire while its previous connection is still starting.
+            while (connectionReady) {
+                const starting = connectionReady;
+                await waitForObservation(starting, readerSignal);
+                if (connectionReady === starting) break;
+            }
             if (connected && !fact) refresh();
             if (pending) await waitForObservation(pending, readerSignal);
             signal?.throwIfAborted();
@@ -199,11 +267,11 @@ function createObservation(scope: Scope): SharedObservation {
             return fact;
         },
         async dispose() {
-            disposed = true; connected = false; retirement.abort(); invalidate();
+            disposed = true; activeTransport = undefined; connected = false; retirement.abort(); invalidate();
             publishSettings({ kind: 'disconnected' });
             settingsListeners.clear();
             settingsEvent = null;
-            await supervisor?.stop();
+            await stopConnection();
             await initial;
         },
     };

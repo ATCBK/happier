@@ -21,7 +21,7 @@ export const ConnectedServiceTurnLifecycleRequestBodySchema =
       .min(1)
       .max(64 * 1024)
       .optional(),
-    requestedAction: PendingRequestedActionV1Schema.optional(),
+    requestedAction: z.optional(PendingRequestedActionV1Schema),
     activeTurnId: z.string()
       .trim()
       .min(1)

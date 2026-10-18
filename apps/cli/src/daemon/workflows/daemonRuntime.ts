@@ -175,7 +175,7 @@ export async function resolveWorkflowSessionConversation(params: Readonly<{
     if (parsed.success) selection[field] = parsed.data;
   }
   if (agentTarget) selection.agentTarget = agentTarget;
-  const stateFields = SessionOwnerMetadataV1Schema.shape.runtime.unwrap().shape;
+  const stateFields = SessionOwnerMetadataV1Schema.shape.runtime._zod.def.innerType.shape;
   const modes = readSessionModesMetadata(metadata);
   if (modes?.currentModeId && modes.agentId === backend?.backendId) {
     selection.acpSessionModeId = modes.currentModeId;

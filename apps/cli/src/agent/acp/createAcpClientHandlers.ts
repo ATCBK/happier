@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  CreateElicitationRequest,
+  CreateElicitationResponse,
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionNotification,
@@ -72,11 +74,53 @@ export function createAcpClientHandlers(params: Readonly<{
   incrementToolCallCountSincePrompt: () => void;
   toolCalls: LegacyAcpToolRuntime;
   lastSelectedPermissionOptionIdByToolCallId: Map<string, string>;
-}>): Pick<AcpClientConnectionHandlers, 'sessionUpdate' | 'requestPermission'> {
+}>): Pick<
+  AcpClientConnectionHandlers,
+  'sessionUpdate' | 'requestPermission' | 'createElicitation'
+> {
+  const handleElicitation = params.permissionHandler?.handleElicitation?.bind(params.permissionHandler);
+
   return {
     sessionUpdate: async (notification: SessionNotification) => {
       await params.onSessionUpdate(notification);
     },
+    ...(handleElicitation
+      ? {
+          createElicitation: async (
+            request: CreateElicitationRequest,
+            context?: Readonly<{ signal: AbortSignal }>,
+          ): Promise<CreateElicitationResponse> => {
+            const requestSessionId =
+              request.mode === 'form' && 'sessionId' in request && typeof request.sessionId === 'string'
+                ? request.sessionId
+                : (params.getActiveSessionId() ?? '');
+            const permissionRequest = params.capturePermissionRequest(requestSessionId);
+            if (context?.signal.aborted || !permissionRequest.isCurrent()) {
+              return { action: 'cancel' };
+            }
+
+            try {
+              const response = await (context
+                ? handleElicitation(request, { signal: context.signal })
+                : handleElicitation(request));
+              if (context?.signal.aborted || !permissionRequest.isCurrent()) {
+                return { action: 'cancel' };
+              }
+              return response;
+            } catch (error) {
+              logger.debug('[AcpBackend] Error in elicitation handler:', error);
+              if (!context?.signal.aborted && permissionRequest.isCurrent() && isWorkflowInteractionCapacityError(error)) {
+                await permissionRequest.cancel(error).catch((cancelError: unknown) => {
+                  logger.warn('[AcpBackend] Elicitation capacity cancellation failed', {
+                    errorType: cancelError instanceof Error ? 'Error' : typeof cancelError,
+                  });
+                });
+              }
+              return { action: 'cancel' };
+            }
+          },
+        }
+      : {}),
     requestPermission: async (request: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
       const extendedParams = request as ExtendedRequestPermissionRequest;
       const toolCall = extendedParams.toolCall;

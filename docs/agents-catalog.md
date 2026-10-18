@@ -1426,6 +1426,25 @@ Instead:
 - ACP capability probing is reserved for opt-in diagnostics, not day-to-day UX
 - the development provider harness `acp_probe_capabilities` scenario validates the negotiated runtime capabilities published by the active session
 
+In 0.3 development source, the host advertises ACP form elicitation only when its
+permission handler implements it. The ACP SDK 1.2.1 `elicitation/create` contract
+is experimental. Native requests retain their active-turn custody and flow
+through the existing Session interaction owner; cancelling a single request
+withdraws its prompt without cancelling the turn. URL elicitation remains
+unsupported.
+
+ACP forms, declared MCP servers, and Session-scoped MCP forms share
+`mcpElicitationForm.ts` for question, confirmation, and answer conversion. The ACP
+boundary translates nullable optional schema fields before strict MCP parsing.
+Optional `__other` companion fields can supply custom answers; required companion
+fields remain independently answerable, and a custom answer retains an existing
+choice ID only when its label or ID unambiguously matches the companion title. Message presentation uses the
+existing interaction limits and marks truncation while retaining the actual
+question. Empty forms request a confirmation through the existing Session
+interaction owner. Native confirmations use the existing single-choice question
+presentation and require an explicit confirm or cancel answer, including in
+full-access permission modes.
+
 After an ACP connection initializes, runtime-only list, fork, close, and delete operations fail closed
 against the capabilities negotiated on that exact connection. Two of them have product consumers.
 Disposing a Session's ACP runtime cancels the active turn and then, when that handshake negotiated

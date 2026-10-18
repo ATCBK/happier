@@ -46,8 +46,8 @@ const PluginChangeRequestSchema = z.union([
     packageName: NonEmptyStringSchema,
     selector: NonEmptyStringSchema.optional(),
     registryOrigin: NonEmptyStringSchema.optional(),
-    registryProfileId: NpmRegistryProfileIdV1Schema.optional(),
-    expectedMarketplaceListing: ExpectedMarketplaceListingV1Schema.optional(),
+    registryProfileId: z.optional(NpmRegistryProfileIdV1Schema),
+    expectedMarketplaceListing: z.optional(ExpectedMarketplaceListingV1Schema),
   }).strict(),
   z.object({
     kind: z.literal('update'),
@@ -129,7 +129,7 @@ const PluginActionExecuteRequestSchema = z.object({
   requiredDangerLevel: z.literal('safe').optional(),
   surface: z.enum(['cli', 'mcp', 'agent']),
   defaultSessionId: NonEmptyStringSchema.optional(),
-  startedBy: WorkflowRunStartedByV1Schema.optional(),
+  startedBy: z.optional(WorkflowRunStartedByV1Schema),
   expectedContributorOccurrenceId: PluginRuntimeOccurrenceIdSchema.optional(),
 }).strict();
 

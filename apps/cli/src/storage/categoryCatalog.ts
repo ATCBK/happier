@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { canonicalAbsolutePathsEqual } from '@/utils/path/expandHomeDirPath';
 import { getHappierTempRoot } from '@happier-dev/cli-common/tempDirs';
 import { MachineStoragePolicyV1Schema, StorageItemV1Schema, type StorageItemV1, type StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
@@ -29,7 +30,7 @@ const UNAVAILABLE_PROJECT_FACTS: StorageProjectFacts = { status: 'unavailable' }
 
 /** Private custody/fingerprint facts never become Machine RPC presentation fields. */
 export function publicStorageItem(item: StorageItemV1): StorageItemV1 {
-    return StorageItemV1Schema.strip().parse(item);
+    return zMini.core.clone(StorageItemV1Schema, { ...StorageItemV1Schema._zod.def, catchall: undefined }).parse(item);
 }
 
 /** Containers inherit their owned descendants' facts through the same catalog decision. */

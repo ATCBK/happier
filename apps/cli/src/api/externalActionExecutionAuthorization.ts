@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import axios from 'axios';
 import { randomBytes } from 'node:crypto';
 
@@ -53,9 +54,9 @@ export async function readExternalActionInstalledMachine(input: Readonly<{
   });
   const raw = publication.data && typeof publication.data === 'object' && 'machine' in publication.data
     ? publication.data.machine : null;
-  const installed = ExternalActionMachineBootstrapV1Schema.extend({
+  const installed = zMini.catchall(zMini.extend(ExternalActionMachineBootstrapV1Schema, {
     installationPublicKey: z.string().base64().nullish(),
-  }).passthrough().safeParse(raw);
+  }), z.unknown()).safeParse(raw);
   return publication.status >= 200 && publication.status < 300 && installed.success
     && installed.data.id === input.machineId && installed.data.installationId
     && installed.data.kind === 'persistent' && installed.data.revokedAt === null
