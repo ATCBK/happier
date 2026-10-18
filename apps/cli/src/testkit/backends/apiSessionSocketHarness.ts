@@ -32,6 +32,14 @@ export function resolveApiSessionSocketDefaultAck(event: string, payload: unknow
             agentState: request.agentState,
         };
     }
+    if (event === 'update-metadata') {
+        const request = payload as Readonly<{ expectedVersion: number; metadata: string | null }>;
+        return {
+            result: 'success',
+            version: request.expectedVersion + 1,
+            metadata: request.metadata,
+        };
+    }
     if (event === 'session-runtime-activity-snapshot') {
         const request = payload as Readonly<{
             sessionId?: unknown;
