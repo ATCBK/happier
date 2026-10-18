@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, win32 as win32Path } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_PRISMA_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 export const DEFAULT_SERVER_LIGHT_SQLITE_CONNECTION_LIMIT = 1;
@@ -195,18 +194,13 @@ export type PrismaSqliteDatabaseUrlOptions = Readonly<{
 
 function renderPrismaCompatibleSqliteFileUrl(params: Readonly<{
     dbPath: string;
-    platform: string;
 }>): string {
-    if (params.platform !== 'win32') {
-        return pathToFileURL(params.dbPath).href;
+    // Prisma passes the file: payload to SQLite as a native path, without URI decoding.
+    // Encoding spaces therefore selects a different (usually nonexistent) directory.
+    if (/[?#]/.test(params.dbPath)) {
+        throw new Error("SQLite database path cannot contain '?' or '#' because Prisma reserves them for connection parameters");
     }
-
-    const fileUrl = pathToFileURL(params.dbPath, { windows: true });
-    if (fileUrl.hostname) {
-        return `file://${fileUrl.hostname}${fileUrl.pathname}`;
-    }
-
-    return `file:${fileUrl.pathname.replace(/^\/(?=[A-Za-z]:\/)/, '')}`;
+    return `file:${params.dbPath}`;
 }
 
 function resolvePrismaSqliteSocketTimeoutSeconds(busyTimeoutMs: number): number | null {
@@ -333,7 +327,6 @@ export function renderPrismaCompatibleSqliteDatabaseUrl(params: Readonly<{
 }>): string {
     const fileUrl = renderPrismaCompatibleSqliteFileUrl({
         dbPath: params.dbPath,
-        platform: params.platform,
     });
     return appendPrismaSqliteConnectionParams({
         databaseUrl: fileUrl,

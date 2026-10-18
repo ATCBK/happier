@@ -63,8 +63,8 @@ describe("storage/prisma sqlite pragmas", () => {
         }).journalSizeLimitBytes).toBe(0);
     });
 
-    it("observes consistent synchronous mode when sqlite connection_limit is explicit", async () => {
-        const baseDir = await mkdtemp(join(tmpdir(), "happier-sqlite-pragmas-single-connection-"));
+    it("opens the native database path with spaces and preserves an explicit sqlite connection_limit", async () => {
+        const baseDir = await mkdtemp(join(tmpdir(), "happier sqlite pragmas-single-connection-"));
         const originalDatabaseUrl = process.env.DATABASE_URL;
         const databaseUrl = renderPrismaCompatibleSqliteDatabaseUrl({
             dbPath: join(baseDir, "test.sqlite"),
