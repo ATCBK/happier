@@ -93,7 +93,7 @@ import {
     resolvePluginSurfaceDestinationIcon,
     resolvePluginSurfaceDestinationLabel,
 } from './pluginSurfaceDestinations';
-import { projectPluginUiHostPalette, projectPluginUiTheme, readPluginUiHostTypography } from './pluginUiThemeProjection';
+import { projectPluginUiHostPalette, projectPluginUiTheme, readPluginUiHostTypography, usePluginUiThemeOnGlass } from './pluginUiThemeProjection';
 import { getPreferredLanguage, t } from '@/text';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -645,7 +645,7 @@ export function DeclarativePluginSurface(props: Readonly<{
     const hostActivelyViewed = useHostActivelyViewed();
     const widgetPresentation = useWidgetPresentation();
     const activeServer = useActiveServerSnapshot();
-    const projectedPresentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const projectedPresentationTheme = usePluginUiThemeOnGlass(React.useMemo(() => projectPluginUiTheme(theme), [theme]));
     const presentationTheme = React.useMemo(
         () => resolveHappierUiPresentationTheme(projectedPresentationTheme, props.contrast ?? 'normal'),
         [projectedPresentationTheme, props.contrast],

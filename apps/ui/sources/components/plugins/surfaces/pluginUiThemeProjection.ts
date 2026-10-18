@@ -1,3 +1,4 @@
+import * as React from 'react';
 import type { PluginUiThemeV1 } from '@happier-dev/plugin-sdk/ui';
 import type {
     HappierFontFace,
@@ -11,6 +12,7 @@ import type { TextStyle } from 'react-native';
 import { HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT } from '@happier-dev/plugin-ui/presentation';
 import { getMonoFont, Typography } from '@/constants/Typography';
 import { resolveThemeControlEdge, resolveThemeGloss, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
+import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 import { shadowLevelStyle } from '@/shadowElevation';
 import type { Theme } from '@/theme';
 import type { ThemeColorTokenId } from '@/theme/tokens/themeColorTokenDefinitions';
@@ -142,6 +144,23 @@ export function readPluginUiHostTypography(): HappierUiTypography {
         }),
     });
     return hostTypography;
+}
+
+/**
+ * A plugin surface's theme on the material it is drawn on. Plugin text reads its faint inks from this snapshot
+ * rather than through core `Text`, so on glass with a picture behind it (a Home widget card) the snapshot carries the
+ * containing material's stronger faint ink (DESIGN.md → Materials): the same step core text takes there. Elsewhere
+ * the snapshot is returned as is.
+ */
+export function usePluginUiThemeOnGlass(theme: PluginUiThemeV1): PluginUiThemeV1 {
+    const faintInk = useGlassBackedInk();
+    return React.useMemo(() => {
+        const secondaryText = faintInk(theme.colors.secondaryText) ?? theme.colors.secondaryText;
+        const mutedText = faintInk(theme.colors.mutedText) ?? theme.colors.mutedText;
+        return secondaryText === theme.colors.secondaryText && mutedText === theme.colors.mutedText
+            ? theme
+            : Object.freeze({ ...theme, colors: Object.freeze({ ...theme.colors, secondaryText, mutedText }) });
+    }, [faintInk, theme]);
 }
 
 /**

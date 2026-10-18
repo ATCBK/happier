@@ -1,4 +1,8 @@
+import * as React from 'react';
 import { describe, expect, it } from 'vitest';
+
+import { renderHook } from '@/dev/testkit';
+import { GlassBackedInkContext, resolveGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 
 import { BUILT_IN_THEME_PROFILES } from '@/theme/profiles/builtInThemeProfiles';
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
@@ -10,6 +14,7 @@ import {
     PLUGIN_UI_THEME_COLOR_TOKEN_IDS,
     projectPluginUiTheme,
     readPluginUiHostTypography,
+    usePluginUiThemeOnGlass,
 } from './pluginUiThemeProjection';
 
 function themeFor(profile: ThemeProfileV1 | null, mode: ThemeProfileMode = 'light') {
@@ -23,6 +28,21 @@ function builtInProfile(index: number): ThemeProfileV1 {
 }
 
 describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
+    it('gives a plugin surface on backed glass the material\'s stronger faint ink, and keeps the theme\'s ink elsewhere', async () => {
+        const theme = themeFor(null, 'light');
+        const projected = projectPluginUiTheme(theme);
+        const backed = resolveGlassBackedInk(theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary);
+        const onGlass = await renderHook(() => usePluginUiThemeOnGlass(projected), {
+            wrapper: ({ children }) => React.createElement(GlassBackedInkContext.Provider, { value: backed }, children),
+        });
+        const stepped = onGlass.getCurrent();
+        expect(stepped.colors.secondaryText).toBe(backed.secondary);
+        expect(stepped.colors.mutedText).toBe(backed.tertiary?.ink);
+        expect(stepped.colors.text).toBe(projected.colors.text);
+        const plain = await renderHook(() => usePluginUiThemeOnGlass(projected));
+        expect(plain.getCurrent()).toBe(projected);
+    });
+
     it('projects the host-selected spinner style and timing without replacing its semantic theme', () => {
         const theme = themeFor(null, 'dark');
         const spinner = { style: 'hWave', speed: 'slow', pause: 'long' };
