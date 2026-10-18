@@ -381,6 +381,63 @@ describe('ApiSessionClient durable mutation outbox', () => {
     }
   });
 
+  it('preserves an observed completion before later Stop when credential reads finish out of order', async () => {
+    const { writeCredentialsLegacy } = await import('@/persistence');
+    await writeCredentialsLegacy({ secret: new Uint8Array(32).fill(7), token: 'tok' });
+    const { configuration } = await import('@/configuration');
+    const credentialBytes = await readFile(configuration.privateKeyFile, 'utf8');
+    const request = { tool: 'Write', arguments: { path: '/tmp/observed' }, createdAt: 1 };
+    let serverState: AgentState = { requests: { request } };
+    let version = 0;
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+      if (event !== 'update-state') return { ok: true };
+      const value = payload as { expectedVersion: number; agentState: string };
+      if (value.expectedVersion !== version) return { result: 'version-mismatch', version, agentState: JSON.stringify(serverState) };
+      serverState = JSON.parse(value.agentState);
+      return { result: 'success', version: ++version, agentState: value.agentState };
+    } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const { AgentStateRequestStore } = await import('@/agent/permissions/agentStateRequestStore');
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's-settlement-seal-order', agentState: serverState }));
+    const store = new AgentStateRequestStore({ session: client, logPrefix: '[Test]' });
+    await client.flush();
+    const firstReadEntered = createDeferred<void>();
+    const releaseFirstRead = createDeferred<void>();
+    const actualReadFile = fsBoundary.readFile;
+    let held = false;
+    // Credential-file I/O is the genuine boundary: preserve real sealing, journal and CAS delivery.
+    const disk = vi.spyOn(fsBoundary, 'readFile').mockImplementation(((...args: Parameters<typeof fsBoundary.readFile>) => {
+      if (String(args[0]) === configuration.privateKeyFile) {
+        if (!held) {
+          held = true;
+          firstReadEntered.resolve();
+          return releaseFirstRead.promise.then(() => credentialBytes);
+        }
+        return Promise.resolve(credentialBytes);
+      }
+      return actualReadFile(...args);
+    }) as typeof fsBoundary.readFile);
+    const observed = store.completeRequest({ requestId: 'request', status: 'approved', observedCompletion: true });
+    let canceled: Promise<void> | undefined;
+    try {
+      await firstReadEntered.promise;
+      canceled = store.cancelAllRequests({ reason: 'Stopped after tool completion', decision: 'abort' });
+      // This FIFO ACK write runs after both snapshots were captured, without waiting for sealing.
+      await client.updateAgentState((state) => state);
+      releaseFirstRead.resolve();
+      await Promise.all([observed, canceled]);
+      await client.flush();
+      expect(serverState.requests?.request).toBeUndefined();
+      expect(serverState.completedRequests?.request).toMatchObject({ ...request, status: 'approved' });
+    } finally {
+      releaseFirstRead.resolve();
+      await Promise.allSettled([observed, ...(canceled ? [canceled] : [])]);
+      disk.mockRestore();
+      await client.close();
+    }
+  });
+
   it('finishes client close cleanup while returning a concurrent settlement admission failure to its caller', async () => {
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });

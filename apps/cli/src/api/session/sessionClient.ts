@@ -606,6 +606,7 @@ export class ApiSessionClient extends EventEmitter {
     private executionRunPermissionHandler: CodexLikePermissionHandler | null = null;
     private readonly rpcLifecycleRegistrations: RpcLifecycleRegistration[] = [];
     private agentStateLock = new AsyncLock();
+    private requestSettlementAdmissionLock = new AsyncLock();
     private metadataLock = new AsyncLock();
     private encryptionKey: Uint8Array;
     private encryptionVariant: 'legacy' | 'dataKey';
@@ -5834,24 +5835,28 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private async admitAgentStateRequestSettlement(handler: (state: AgentState) => AgentState): Promise<void> {
-        const settlement = await this.agentStateLock.inLock(async () => {
+        const { admission } = await this.agentStateLock.inLock(() => {
             const state = this.agentState ?? {};
-            return buildAgentStateRequestSettlement(state, handler(state));
+            const settlement = buildAgentStateRequestSettlement(state, handler(state));
+            // Reserve admission in capture order without holding the state lock over disk I/O.
+            return { admission: this.enqueueAgentStateRequestSettlement(settlement) };
         });
-        await this.enqueueAgentStateRequestSettlement(settlement);
+        await admission;
     }
 
     private async enqueueAgentStateRequestSettlement(
         settlement: ReturnType<typeof buildAgentStateRequestSettlement>,
     ): Promise<void> {
         if (settlement.entries.length === 0) return;
-        const content = await sealAgentStateRequestSettlement(this.requestSettlementEncryptionScope, settlement);
-        const result = await this.sessionMutationOutbox.enqueueAgentStateRequestSettlement({
-            v: 1, source: 'agent_state_request_settlement', sessionId: this.sessionId,
-            mutationId: randomUUID(),
-            content,
+        await this.requestSettlementAdmissionLock.inLock(async () => {
+            const content = await sealAgentStateRequestSettlement(this.requestSettlementEncryptionScope, settlement);
+            const result = await this.sessionMutationOutbox.enqueueAgentStateRequestSettlement({
+                v: 1, source: 'agent_state_request_settlement', sessionId: this.sessionId,
+                mutationId: randomUUID(),
+                content,
+            });
+            if (!result.persisted) throw new Error('Request settlement was not durably admitted');
         });
-        if (!result.persisted) throw new Error('Request settlement was not durably admitted');
     }
 
     private trackSessionTurnWrite(

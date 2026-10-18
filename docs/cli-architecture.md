@@ -1737,8 +1737,11 @@ Session's execution-run handler excludes foreground requests. Claude's persisted
 adoption follows the same separation. Opaque response claims remain owned by their claimant.
 
 An observed Claude PostToolUse completion and lifecycle cancellation use the Session's
-existing durable mutation journal. PostToolUse is the explicit evidence that a native
-tool already ran; the journal never replays an unapplied UI or provider approval.
+existing durable mutation journal. Runtime-captured settlements retain their order through
+credential reads, sealing and journal admission, so a later Stop cannot overtake an
+already observed tool completion. Observed-completion and cancellation capture releases
+the Agent-state lock before disk admission, leaving ordinary acknowledged writes usable.
+PostToolUse is the explicit evidence that a native tool already ran; the journal never replays an unapplied UI or provider approval.
 Cancellation rejects local waiters even if admission fails, retaining the detached
 occurrence for a retirement retry and reporting the failure. Local bridge disposal
 waits for cancellation admission rather than a server round trip. Single-request
