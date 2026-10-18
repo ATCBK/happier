@@ -368,7 +368,8 @@ test.describe('ui e2e: session list multi-select actions', () => {
 
     const archiveGate = createDeferred();
     let delayedFirstArchive = false;
-    await page.route('**/v2/sessions/*/archive', async (route) => {
+    const archiveUrl = (url: URL) => /^\/v2\/sessions\/[^/]+\/archive$/.test(url.pathname);
+    await page.route(archiveUrl, async (route) => {
       if (!delayedFirstArchive) {
         delayedFirstArchive = true;
         await archiveGate.promise;
@@ -380,13 +381,14 @@ test.describe('ui e2e: session list multi-select actions', () => {
       await clickSelectionAction(page, 'session.archive');
       const progress = page.getByTestId(testIds.selectionProgress);
       await expect(progress).toBeVisible({ timeout: 60_000 });
+      expect(delayedFirstArchive).toBe(true);
 
       archiveGate.resolve();
 
       await expectBulkResult({ page, succeeded: rangeIds.length });
     } finally {
       archiveGate.resolve();
-      await page.unroute('**/v2/sessions/*/archive').catch(() => {});
+      await page.unroute(archiveUrl).catch(() => {});
     }
 
     for (const sessionId of rangeIds) {

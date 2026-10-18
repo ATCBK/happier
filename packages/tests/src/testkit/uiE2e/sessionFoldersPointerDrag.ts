@@ -150,7 +150,9 @@ async function dispatchSessionTreePointerDrag(page: Page, params: Readonly<{
   await page.mouse.move(sourcePoint.x + 2, sourcePoint.y + 10);
   await page.waitForTimeout(35);
 
-  if (params.scrollDuringDrag === 'target-into-view') {
+  // Revealing/hovering the source can scroll a previously visible target out
+  // of the list. Reveal it with the pointer held before sampling drop geometry.
+  if (params.scrollDuringDrag !== 'autoscroll-bottom') {
     await scrollConnectedTestIdIntoView(page, params.targetTestId);
     await page.waitForTimeout(80);
   } else if (params.scrollDuringDrag === 'autoscroll-bottom' && scrollMetricsBefore.rect) {
