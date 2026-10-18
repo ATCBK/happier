@@ -3,9 +3,12 @@ import type { ActionExecuteFailure, ApprovalRequest } from '@happier-dev/protoco
 import { t } from '@/text';
 import { isApprovalDecisionStale, presentApprovalFailure } from './useApprovalDecisionHandler';
 
-/** A stale request was never dispatched, so its headline must not name the action as attempted. */
-function readFailureHeadline(actionId: string, failure: ActionExecuteFailure): string {
-    if (isApprovalDecisionStale(failure)) return t('approvals.failureNotRun');
+/** A request that never reached its effect must not name that effect as attempted. */
+function readFailureHeadline(approval: ApprovalRequest, failure: ActionExecuteFailure): string {
+    if ((approval.v === 2 && approval.execution?.effectAttempted === false) || isApprovalDecisionStale(failure)) {
+        return t('approvals.failureNotRun');
+    }
+    const actionId = approval.actionId;
     switch (actionId) {
         case 'daemon.filesystem.writeFile': return t('approvals.failureFileWrite');
         case 'daemon.filesystem.readFile': return t('approvals.failureFileRead');
@@ -28,7 +31,7 @@ export function presentApprovalFailureOutcome(approval: ApprovalRequest, failure
     const presented = presentApprovalFailure(failure, failure.error);
     const readable = presented.code === null;
     return {
-        headline: readFailureHeadline(approval.actionId, failure),
+        headline: readFailureHeadline(approval, failure),
         reason: readable ? presented.reason : null,
         message: readable || failure.error === failure.errorCode ? null : failure.error,
         code: presented.code,

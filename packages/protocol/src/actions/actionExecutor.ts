@@ -2808,7 +2808,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         status: 'failed',
         updatedAtMs: Math.max(executedAtMs, request.updatedAtMs),
         execution: request.v === 2
-          ? projectApprovalExecutionFailureV2({ request, failure, executedAtMs })
+          ? projectApprovalExecutionFailureV2({ request, failure, executedAtMs, effectAttempted: false })
           : {
               executedAtMs,
               ok: false,
@@ -3207,12 +3207,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       status: exec.ok ? 'executed' : 'failed',
       updatedAtMs: executedAtMs,
       execution: persistedExec.ok
-        ? { executedAtMs, ok: true, result: persistedExec.result }
+        ? { executedAtMs, effectAttempted: true, ok: true, result: persistedExec.result }
         : request.v === 2
           ? projectApprovalExecutionFailureV2({
               request,
               failure: persistedExec,
               executedAtMs,
+              effectAttempted: true,
             })
           : { executedAtMs, ok: false, errorCode: persistedExec.errorCode, error: persistedExec.error },
     };

@@ -127,10 +127,13 @@ export function projectApprovalExecutionFailureV2(input: Readonly<{
   request: ApprovalRequestV2;
   failure: ActionExecuteFailure;
   executedAtMs: number;
+  /** Defaults to true for execution-path callers; pre-execution settlement must opt out explicitly. */
+  effectAttempted?: boolean;
 }>): ApprovalExecutionV2 {
   const strictFailure = parseStrictApprovalFailure(input);
   return {
     executedAtMs: input.executedAtMs,
+    effectAttempted: input.effectAttempted !== false,
     ok: false,
     errorCode: input.failure.errorCode,
     error: input.failure.error,

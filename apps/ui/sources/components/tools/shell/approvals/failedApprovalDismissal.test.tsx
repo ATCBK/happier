@@ -7,7 +7,11 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
 const { storage } = await import('@/sync/domains/state/storage');
-const { useComposerApprovalRequests, useFailedApprovalDismissal } = await import('./failedApprovalDismissal');
+const {
+    selectComposerApprovalRequestsForSurface,
+    useComposerApprovalRequests,
+    useFailedApprovalDismissal,
+} = await import('./failedApprovalDismissal');
 const initialState = storage.getState();
 
 afterEach(() => {
@@ -26,6 +30,18 @@ function request(artifactId: string, settled: 'open' | 'failed'): OpenApprovalAr
 }
 
 describe('failed approval dismissal', () => {
+    it.each([
+        { surface: 'composer', expectedComposerIds: ['open-1', 'failed-1'] },
+        { surface: 'transcript', expectedComposerIds: ['failed-1'] },
+    ] as const)('keeps mixed open and failed approvals on exactly one owned surface for $surface preference', ({ surface, expectedComposerIds }) => {
+        const requests = [request('open-1', 'open'), request('failed-1', 'failed')];
+        const composerIds = selectComposerApprovalRequestsForSurface(requests, surface).map(item => item.artifact.id);
+        const transcriptIds = surface === 'transcript' ? ['open-1'] : [];
+
+        expect(composerIds).toEqual(expectedComposerIds);
+        expect([...composerIds, ...transcriptIds].sort()).toEqual(['failed-1', 'open-1']);
+    });
+
     it('hides only the dismissed settled card from the composer and remembers it on this device', async () => {
         const requests = [request('open-1', 'open'), request('failed-1', 'failed'), request('failed-2', 'failed')];
         const hook = await renderHook(() => ({ shown: useComposerApprovalRequests(requests), dismissal: useFailedApprovalDismissal() }));

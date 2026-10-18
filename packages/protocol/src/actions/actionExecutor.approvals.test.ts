@@ -1901,6 +1901,7 @@ describe('createActionExecutor (approvals)', () => {
     const terminal = persisted.at(-1);
     expect(terminal?.execution).toEqual({
       executedAtMs: expect.any(Number),
+      effectAttempted: true,
       ok: true,
       result: { invitation, joinUrl: null },
     });
@@ -2642,7 +2643,7 @@ describe('createActionExecutor (approvals)', () => {
       artifactId: 'a1',
       request: expect.objectContaining({
         status: 'executed',
-        execution: expect.objectContaining({ ok: true }),
+        execution: expect.objectContaining({ effectAttempted: true, ok: true }),
       }),
     }));
   });
@@ -2968,6 +2969,7 @@ describe('createActionExecutor (approvals)', () => {
     await executor.replayApprovedApprovalRequest({ artifactId: 'a1' });
     expect(storedRequest.execution).toEqual({
       executedAtMs: expect.any(Number),
+      effectAttempted: true,
       ok: false,
       errorCode: 'action_failed',
       error: 'action_failed',

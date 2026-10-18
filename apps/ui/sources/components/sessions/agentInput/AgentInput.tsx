@@ -166,7 +166,10 @@ import type {
 } from '@/sync/domains/sessionControl/configOptionsControl';
 import type { PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
-import { useComposerApprovalRequests } from '@/components/tools/shell/approvals/failedApprovalDismissal';
+import {
+    selectComposerApprovalRequestsForSurface,
+    useComposerApprovalRequests,
+} from '@/components/tools/shell/approvals/failedApprovalDismissal';
 import { Text, TextSelectabilityScope } from '@/components/ui/text/Text';
 import { buildGlassCastShadowStyle } from '@/shadowElevation';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
@@ -1420,13 +1423,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const permissionPromptSurface = useSetting('permissionPromptSurface');
     const resolvedPermissionPromptSurface = resolvePermissionPromptSurface(permissionPromptSurface);
     const showComposerPermissionCards = resolvedPermissionPromptSurface === 'composer';
+    const composerApprovalRequests = React.useMemo(
+        () => selectComposerApprovalRequestsForSurface(pendingApprovalRequests, resolvedPermissionPromptSurface),
+        [pendingApprovalRequests, resolvedPermissionPromptSurface],
+    );
     const composerPermissionRequests = React.useMemo(
         () => pendingPermissionRequests.filter((req) => shouldShowGenericPermissionPromptForRequest({ toolName: req.tool, requestKind: req.kind })),
         [pendingPermissionRequests],
     );
     const hasComposerAttentionRequests =
-        showComposerPermissionCards &&
-        (composerPermissionRequests.length > 0 || pendingApprovalRequests.length > 0);
+        (showComposerPermissionCards && composerPermissionRequests.length > 0)
+        || composerApprovalRequests.length > 0;
     React.useEffect(() => {
         if (!hasComposerAttentionRequests) {
             updateLayoutHeight(setComposerAttentionHeightPx, 0);
@@ -2275,7 +2282,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const sharedProps: Omit<AgentInputPermissionRequestsProps, 'permissionLocationsById'> = {
             sessionId: attentionRequestSessionId,
             permissionRequests: composerPermissionRequests,
-            approvalRequests: pendingApprovalRequests,
+            approvalRequests: composerApprovalRequests,
             metadata: props.metadata || null,
             canApprovePermissions,
             disabledReason: props.permissionDisabledReason,
@@ -2291,7 +2298,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             },
             fadeVisibility: permissionRequestsFades.visibility,
         };
-        if (composerPermissionRequests.length > 0 || pendingApprovalRequests.length > 0) {
+        if (composerPermissionRequests.length > 0 || composerApprovalRequests.length > 0) {
             return <AgentInputAttentionRequestsWithLocations {...sharedProps} />;
         }
         return (
@@ -2303,9 +2310,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         );
     }, [
         canApprovePermissions,
+        composerApprovalRequests,
         composerPermissionRequests,
         hasComposerAttentionRequests,
-        pendingApprovalRequests,
         permissionRequestsFades,
         permissionRequestsMaxHeightPx,
         props.metadata,

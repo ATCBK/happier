@@ -2361,6 +2361,11 @@ Action's material-safe projection. If the
 effect may have happened but terminal persistence cannot be proven, the
 Artifact remains `executing` and later callers receive
 `approval_execution_outcome_unknown`; they do not replay blindly.
+Current V2 terminal receipts also record whether the Action effect was attempted.
+Direct `approved -> failed` settlement records `effectAttempted: false`; terminal
+settlement after the `executing` claim records `true`. Existing development V2
+records without this presentation fact remain readable and do not gain inferred
+execution history.
 
 The Artifact header is an index, not authority. Current readers hydrate the
 body, validate its strict approval-family schema, and require every duplicated

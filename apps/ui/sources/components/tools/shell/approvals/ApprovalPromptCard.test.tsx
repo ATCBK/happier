@@ -354,6 +354,31 @@ describe('ApprovalPromptCard', () => {
         expect(text).toContain('approvals.staleFailure');
     });
 
+    it('heads a non-stale pre-effect failure as not run', async () => {
+        const base = localUiApprovalRequest();
+        const approval = ApprovalRequestSchema.parse({
+            ...base,
+            status: 'failed',
+            updatedAtMs: 3,
+            actionId: 'daemon.filesystem.writeFile',
+            actionArgs: { rootPath: '/workspace', path: 'notes.txt', content: 'hello' },
+            summary: 'Write notes.txt',
+            executionOriginV1: { ...base.executionOriginV1, actionId: 'daemon.filesystem.writeFile' },
+            decision: { kind: 'approve', decidedAtMs: 2 },
+            execution: {
+                executedAtMs: 3,
+                effectAttempted: false,
+                ok: false,
+                errorCode: 'approval_context_unavailable',
+                error: 'approval_context_unavailable',
+            },
+        });
+        const screen = await renderCard(approval, { chrome: 'inline' });
+        const text = screen.getTextContent();
+        expect(text).toContain('approvals.failureNotRun');
+        expect(text).not.toContain('approvals.failureFileWrite');
+    });
+
     it('dismisses a settled failure on this device only, and keeps open approvals undismissable', async () => {
         const screen = await renderCard(failedWriteFile(), { chrome: 'inline' });
         await screen.pressByTestIdAsync('approval-prompt-dismiss');

@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import type { ResolvedPermissionPromptSurface } from '@/utils/sessions/permissions/permissionPromptPolicy';
 
 /**
  * A failed approval stays in the composer until this device dismisses it. Dismissal is presentation only:
@@ -24,4 +25,14 @@ export function useComposerApprovalRequests(
         () => requests.filter(({ artifact, approval }) => approval.status === 'open' || dismissed[artifact.id] === undefined),
         [dismissed, requests],
     );
+}
+
+/** Surface preference moves only open approvals; settled failures remain composer attention. */
+export function selectComposerApprovalRequestsForSurface(
+    requests: readonly OpenApprovalArtifactForSession[],
+    surface: ResolvedPermissionPromptSurface,
+): readonly OpenApprovalArtifactForSession[] {
+    return surface === 'composer'
+        ? requests
+        : requests.filter(({ approval }) => approval.status !== 'open');
 }
