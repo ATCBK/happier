@@ -24,6 +24,14 @@ export type ApiSessionSocketStub = {
 
 export function resolveApiSessionSocketDefaultAck(event: string, payload: unknown): unknown {
     if (event === 'ping') return { v: 1 };
+    if (event === 'update-state' || event === 'update-metadata') {
+        const request = payload as Readonly<{ expectedVersion: number; agentState?: unknown; metadata?: unknown }>;
+        return {
+            result: 'success',
+            version: request.expectedVersion + 1,
+            ...(event === 'update-state' ? { agentState: request.agentState } : { metadata: request.metadata }),
+        };
+    }
     if (event === 'session-runtime-activity-snapshot') {
         const request = payload as Readonly<{
             sessionId?: unknown;
