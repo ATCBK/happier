@@ -117,18 +117,17 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
         exactServerId,
         exactServerId && sessionId ? sessionId : '',
     );
+    const projectCommandRef = operation ? readActionOperationOutputAttachment(operation.snapshot) : null;
     const machine = useServerScopedMachine(
-        exactServerId,
-        exactServerId ? operation?.snapshot.scope.machineId ?? '' : '',
+        projectCommandRef?.serverId ?? exactServerId,
+        projectCommandRef?.machineId ?? (exactServerId ? operation?.snapshot.scope.machineId ?? '' : ''),
     );
     const sessionAddresses = React.useMemo(() => exactServerId && sessionId
         ? [{ serverId: exactServerId, sessionId }]
         : [], [exactServerId, sessionId]);
     const audienceContext = useSessionAudienceContext(sessionAddresses);
     const homeObservations = useSessionListHomeObservations();
-    const projectCommandRef = operation ? readActionOperationOutputAttachment(operation.snapshot) : null;
-    const projectCommandMachine = useServerScopedMachine(projectCommandRef?.serverId ?? null, projectCommandRef?.machineId ?? '');
-    const projectCommandMachineName = projectCommandMachine ? getMachineDisplayName(projectCommandMachine) ?? null : null;
+    const projectCommandMachineName = projectCommandRef && machine ? getMachineDisplayName(machine) ?? null : null;
     const [resumePending, setResumePending] = React.useState(false);
     const [resumeFeedback, setResumeFeedback] = React.useState<string | null>(null);
     const mountedRef = React.useRef(true);
@@ -255,7 +254,7 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
                     mode="info"
                     title={t('inbox.actionOperations.machine')}
                     subtitle={joinHappierFacts(
-                        sourceContext.machineTitle ?? snapshot.scope.machineId,
+                        sourceContext.machineTitle ?? projectCommandRef?.machineId ?? snapshot.scope.machineId,
                         sessionId ? null : sourceContext.contextLine,
                     )}
                 />

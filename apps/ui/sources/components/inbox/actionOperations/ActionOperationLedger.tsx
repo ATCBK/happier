@@ -45,6 +45,7 @@ import {
 import { requestAcceptedActionOperationStop, type ActionOperationStopResponse, type ActionOperationStopContext, type ActionOperationStopTarget } from './requestActionOperationStop';
 import { useActionOperationStopControl } from './useActionOperationStopControl';
 import { projectActionOperationSourceContext } from './actionOperationSourceContext';
+import { readActionOperationOutputAttachment } from './actionOperationDetailPresentation';
 
 const SECTION_ORDER: readonly ActionOperationSection[] = ['inProgress', 'needsAttention', 'recent'];
 
@@ -70,7 +71,9 @@ const ActionOperationRow = React.memo(function ActionOperationRow(props: Readonl
     const sessionId = snapshot.scope.sessionId ?? null;
     const serverId = props.operation.serverId;
     const session = useSessionListRenderableWithServerScope(serverId, serverId && sessionId ? sessionId : '');
-    const machine = useServerScopedMachine(serverId, serverId ? snapshot.scope.machineId : '');
+    const executionTarget = readActionOperationOutputAttachment(snapshot);
+    const machine = useServerScopedMachine(executionTarget?.serverId ?? serverId,
+        executionTarget?.machineId ?? (serverId ? snapshot.scope.machineId : ''));
     // Row-local, like this row's Session and Machine reads, so a Home observation change repaints
     // only the rows bound to that Home rather than the whole ledger.
     const homeObservations = useSessionListHomeObservations();

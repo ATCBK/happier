@@ -96,7 +96,8 @@ vi.mock('@/text', async () => {
   const parameterized = createTextModuleMock();
   return createTextModuleMock({ translate: (key, params) =>
     // Memory summaries disclose the stored amount through the translation parameter.
-    key === 'projects.scripts.editor.needsAbout' ? parameterized.t(key, params) : key,
+    key === 'projects.scripts.editor.needsAbout' || key === 'projects.scripts.setup.lead'
+      ? parameterized.t(key, params) : key,
   });
 });
 
@@ -602,7 +603,7 @@ describe('ProjectScriptsBody runs', () => {
     );
   });
 
-  it('remembers a late setup review on the retained Script without starting a different preparation', async () => {
+  it('names the worker in a late retained Script setup review without starting a different preparation', async () => {
     shared.inspection = {
       definition: presentDefinition({
         ...declared,
@@ -613,6 +614,12 @@ describe('ProjectScriptsBody runs', () => {
     };
     const held: ActionOperationSnapshotV1 = {
       ...operation('accepted', 2),
+      scope: { accountId: 'account-1', machineId: 'worker-machine' },
+      domainRef: {
+        kind: 'projectCommand', purpose: 'script', serverId: workspace.serverId,
+        machineId: 'worker-machine', workspaceRefId: 'worker-checkout', cwd: '/worker/repo',
+        sourceWorkspace: workspace, script: { name: 'test', source: nativeRef('test') },
+      },
       setupReview: {
         kind: 'pendingApproval' as const,
         code: 'project_setup_consent_required',
@@ -639,6 +646,7 @@ describe('ProjectScriptsBody runs', () => {
     expect(
       screen.findByTestId('scripts.setup.review.effect:step:0'),
     ).toBeTruthy();
+    expect(textOf(screen, 'scripts.setup.review')).toContain('worker-machine');
     shared.operationRead
       .mockResolvedValueOnce({ kind: 'found', operation: held })
       .mockResolvedValueOnce({

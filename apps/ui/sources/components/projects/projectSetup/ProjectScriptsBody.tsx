@@ -65,6 +65,7 @@ import {
 } from './projectScriptRuns';
 import { ProjectScriptRow } from './ProjectScriptRow';
 import { ProjectSetupReview } from './ProjectSetupReview';
+import { useProjectSetupMachine } from './useProjectSetupMachine';
 import { ProjectSetupAuthoredLine } from './ProjectSetupReturn';
 import { WorkspaceAdHocCommandsItem } from '@/components/projects/workers/WorkspaceAdHocCommandsItem';
 import { ProjectAgentGuidanceDisclosure } from '@/components/projects/workers/ProjectAgentGuidanceDisclosure';
@@ -438,10 +439,6 @@ function DeclaredScripts(
         <SetupRow
           workspace={props.workspace}
           manifest={props.manifest}
-          machineName={machineName}
-          sharedRunAs={
-            machine?.isShared ? (machine.metadata?.username ?? null) : null
-          }
           controller={props.controller}
           operation={setupRun}
           readiness={setupReadiness}
@@ -616,8 +613,6 @@ function SetupRow(
     testID: string;
     workspace: WorkspaceAddressV1;
     manifest: ProjectManifestV1;
-    machineName: string;
-    sharedRunAs: string | null;
     controller: ScriptsController;
     operation: ReturnType<typeof useProjectSetupRun>;
     readiness: ProjectDefinitionInspection['setupReadiness'];
@@ -628,11 +623,16 @@ function SetupRow(
   const { theme } = useUnistyles();
   const steps = props.manifest.workspace?.setup?.length ?? 0;
   const consent = props.controller.consent;
+  const reviewTarget = consent?.operation?.snapshot.domainRef ?? props.operation?.snapshot.domainRef;
+  const reviewMachine = useProjectSetupMachine(
+    reviewTarget?.kind === 'projectCommand' ? reviewTarget.serverId : props.workspace.serverId,
+    reviewTarget?.kind === 'projectCommand' ? reviewTarget.machineId : props.workspace.machineId,
+  );
   const stop = props.controller.setupStop;
   const output = useProjectCommandOutputOpener();
   const presentation = presentProjectRun(
     props.operation,
-    props.machineName,
+    reviewMachine.machineName,
     t('projects.scripts.setup.steps', { count: steps }),
   );
   const reviewing =
@@ -654,7 +654,7 @@ function SetupRow(
   const attachment = props.operation?.snapshot.domainRef?.kind === 'projectCommand' ? props.operation.snapshot.domainRef : null;
   const openOutput = () => {
     if (props.operation)
-      void output.open(props.operation, { title: `${t('projects.scripts.setup.title')} · ${props.machineName}` });
+      void output.open(props.operation, { title: `${t('projects.scripts.setup.title')} · ${reviewMachine.machineName}` });
   };
   // The review opens from the row or from a preparation that needs consent; it never runs anything.
   const [open, setOpen] = React.useState(false);
@@ -764,8 +764,8 @@ function SetupRow(
           <ProjectSetupReview
             testID={`${props.testID}.review`}
             manifest={props.manifest}
-            machineName={props.machineName}
-            sharedRunAs={props.sharedRunAs}
+            machineName={reviewMachine.machineName}
+            sharedRunAs={reviewMachine.sharedRunAs}
             pending={pending}
             reviewedEffect={consent?.reviewedEffect ?? props.operation?.snapshot.setupReview?.reviewedEffect}
             initialScope={consent?.consentScope ?? props.operation?.snapshot.setupReview?.consentScope}
