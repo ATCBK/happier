@@ -73,7 +73,6 @@ import { adaptTargetActivationFacts } from '@/plugins/projection/introspection/t
 import { mapPluginSourceToDiagnosticSource } from '@/plugins/projection/introspection/source';
 import { resolveEffectiveCodingPromptPlan } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
-import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { createNativeAgentCurrentSessionUiServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
 import { createNativeAgentSessionHostServiceOwners } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionHostServiceOwners';
 import type { HostSessionRuntimeFactoryParams } from '@/agent/runtime/session/loop/runHostSessionRuntime';
@@ -1776,10 +1775,28 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 state: { enabled: true },
             },
         });
-        const handleToolCall = vi.fn(async () => ({
-            decision: 'approved' as const,
-            answers: { confirmation: ['confirm'] },
-        }));
+        // The canonical Session fixture replaces state/transport only; permission policy stays real.
+        const directSession = createMutableApiSessionClientFixture({ sessionId: 'session-1' });
+        const directPermissionHandler = createProviderEnforcedPermissionHandler({
+            session: directSession, logPrefix: '[Direct MCP integration]', getWorkspaceWrites: () => 'allow',
+        });
+        async function confirmPending<T>(
+            session: Pick<typeof directSession, '__getAgentState' | 'rpcHandlerManager'>,
+            pending: Promise<T>,
+        ): Promise<T> {
+            await vi.waitFor(() => expect(Object.keys(session.__getAgentState().requests ?? {})).toHaveLength(1));
+            const [[id, request]] = Object.entries(session.__getAgentState().requests ?? {});
+            expect(request).toMatchObject({
+                tool: 'AskUserQuestion', kind: 'user_action',
+                arguments: { questions: [expect.objectContaining({
+                    id: 'confirmation', question: 'Run the session MCP tool?',
+                })] },
+            });
+            await expect(session.rpcHandlerManager.invokeLocal('session.user_action.answer', {
+                id, approved: true, answers: { confirmation: ['confirm'] },
+            })).resolves.toBeUndefined();
+            return await pending;
+        }
         const cleanupWarning = vi.spyOn(logger, 'warn');
         let projectedUrlAfterRegistryDispose: string | null = null;
 
@@ -1830,7 +1847,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                     throw new Error('Expected admitted MCP plugin runtime identity');
                 }
                 const currentSessionUi = createNativeAgentCurrentSessionUiServices({
-                    permissionHandler: { handleToolCall },
+                    permissionHandler: directPermissionHandler,
                     pluginId: 'acme.mcp.session',
                     contributionId: 'session-agent',
                     runtimeId: 'session-agent',
@@ -1857,7 +1874,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                     { sessionId: 'session-1', elicitation: { mode: 'hostMediated', sessionId: 'session-1' } },
                 );
 
-                await expect(client.callTool('confirm', {})).resolves.toEqual({ confirmed: true });
+                await expect(confirmPending(directSession, client.callTool('confirm', {}))).resolves.toEqual({ confirmed: true });
                 await expect(client.listResources()).resolves.toMatchObject({ items: [{ name: 'guide' }] });
                 await expect(client.listResourceTemplates()).resolves.toMatchObject({ items: [{ name: 'file' }] });
                 await expect(client.readResource('file:///guide.md')).resolves.toMatchObject({
@@ -1873,20 +1890,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 });
                 await vi.waitFor(() => expect(resourceUpdates).toEqual(['file:///guide.md']));
                 await resourceSubscription.dispose();
-                expect(handleToolCall).toHaveBeenCalledWith(
-                    expect.any(String),
-                    'AskUserQuestion',
-                    expect.objectContaining({ questions: [expect.objectContaining({
-                        id: 'confirmation', question: 'Run the session MCP tool?',
-                    })] }),
-                    expect.objectContaining({
-                        owner: {
-                            kind: 'plugin',
-                            pluginId: 'acme.mcp.session',
-                            runtimeId: 'acme.mcp.session/mcp.servers/session-tools',
-                        },
-                    }),
-                );
+                expect(Object.keys(directSession.__getAgentState().completedRequests ?? {})).toHaveLength(1);
                 const agentContribution = runtimeRegistry.contributes.agentDefinitionsById.get('acme.mcp.session/session-agent');
                 if (!agentContribution) throw new Error('Expected session Agent contribution');
                 const backendContribution = {
@@ -1902,20 +1906,13 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                     runtimeKind: 'custom',
                     pluginId: 'acme.mcp.session',
                 } satisfies ResolvedAgentRuntimeContribution;
-                const createHostOwners = async (
-                    permissionHandlerOverride: Readonly<{
-                        handleToolCall: ProviderEnforcedPermissionHandler['handleToolCall'];
-                    }>,
-                ) => {
-                    const session = createMutableApiSessionClientFixture({
-                        overrides: { sessionId: 'session-1' },
-                    });
+                const createHostOwners = async () => {
+                    const session = createMutableApiSessionClientFixture({ sessionId: 'session-1' });
                     const permissionHandler = createProviderEnforcedPermissionHandler({
                         session,
                         logPrefix: '[Session MCP integration]',
+                        getWorkspaceWrites: () => 'allow',
                     });
-                    vi.spyOn(permissionHandler, 'handleToolCall')
-                        .mockImplementation(permissionHandlerOverride.handleToolCall);
                     const hostRuntimeParams = {
                         directory: pluginRoot,
                         metadata: createTestMetadata({ path: pluginRoot }),
@@ -1999,12 +1996,14 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                         directory: pluginRoot,
                         signal,
                     });
-                    return { ...owners, async dispose() {
+                    return { ...owners, permissionSession: session, async dispose() {
+                        await permissionHandler.abortPendingRequestsAndFlush('test cleanup');
                         await owners.dispose();
                         await Promise.all(attachments.map(attachment => attachment.dispose()));
+                        await session.close();
                     } };
                 };
-                const hostOwners = await createHostOwners({ handleToolCall });
+                const hostOwners = await createHostOwners();
                 const projected = await hostOwners.mcp.resolveForSession({
                     sessionId: 'session-1',
                     directory: pluginRoot,
@@ -2048,29 +2047,24 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                         name: 'confirm',
                     }),
                 ]);
-                await expect(projectedClient.callTool({
+                await expect(confirmPending(hostOwners.permissionSession, projectedClient.callTool({
                     name: projectedTools.tools[0]!.name,
                     arguments: {},
-                })).resolves.toEqual({
+                }))).resolves.toEqual({
                     content: [{
                         type: 'text',
                         text: JSON.stringify({ confirmed: true }),
                     }],
                 });
-                expect(handleToolCall).toHaveBeenCalledTimes(2);
+                expect(Object.keys(hostOwners.permissionSession.__getAgentState().completedRequests ?? {})).toHaveLength(1);
+                expect(Object.keys(directSession.__getAgentState().completedRequests ?? {})).toHaveLength(1);
                 await projectedClient.close();
                 await hostOwners.dispose();
                 await expect(fetch(projectedUrl, {
                     signal: AbortSignal.timeout(1_000),
                 })).rejects.toBeInstanceOf(Error);
 
-                const reboundHandleToolCall = vi.fn(async () => ({
-                    decision: 'approved' as const,
-                    answers: { confirmation: ['confirm'] },
-                }));
-                const reboundHostOwners = await createHostOwners({
-                    handleToolCall: reboundHandleToolCall,
-                });
+                const reboundHostOwners = await createHostOwners();
                 const reboundProjected = await reboundHostOwners.mcp.resolveForSession({
                     sessionId: 'session-1',
                     directory: pluginRoot,
@@ -2089,17 +2083,17 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 );
                 await reboundProjectedClient.connect(new StreamableHTTPClientTransport(new URL(reboundProjectedUrl)));
                 const reboundTools = await reboundProjectedClient.listTools();
-                await expect(reboundProjectedClient.callTool({
+                await expect(confirmPending(reboundHostOwners.permissionSession, reboundProjectedClient.callTool({
                     name: reboundTools.tools[0]!.name,
                     arguments: {},
-                })).resolves.toEqual({
+                }))).resolves.toEqual({
                     content: [{
                         type: 'text',
                         text: JSON.stringify({ confirmed: true }),
                     }],
                 });
-                expect(reboundHandleToolCall).toHaveBeenCalledOnce();
-                expect(handleToolCall).toHaveBeenCalledTimes(2);
+                expect(Object.keys(reboundHostOwners.permissionSession.__getAgentState().completedRequests ?? {})).toHaveLength(1);
+                expect(Object.keys(hostOwners.permissionSession.__getAgentState().completedRequests ?? {})).toHaveLength(1);
                 await reboundProjectedClient.close();
 
                 const committedBeforeRevocation = await readPluginRegistryCommitRecord(paths);
@@ -2123,7 +2117,8 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 await expect(client.callTool('confirm', {})).rejects.toMatchObject({
                     code: 'plugin_mcp_generation_retired',
                 });
-                expect(handleToolCall).toHaveBeenCalledTimes(2);
+                expect(Object.keys(directSession.__getAgentState().completedRequests ?? {})).toHaveLength(1);
+                expect(Object.keys(directSession.__getAgentState().requests ?? {})).toHaveLength(0);
                 await client.dispose();
                 await reboundHostOwners.dispose();
             } finally {
@@ -2137,6 +2132,8 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 message === '[PLUGIN RUNTIME] Plugin cleanup step failed during disposal'
             ))).toBe(false);
         } finally {
+            await directPermissionHandler.abortPendingRequestsAndFlush('test cleanup');
+            await directSession.close();
             cleanupWarning.mockRestore();
             await rm(happyHomeDir, { recursive: true, force: true });
             await rm(pluginRoot, { recursive: true, force: true });

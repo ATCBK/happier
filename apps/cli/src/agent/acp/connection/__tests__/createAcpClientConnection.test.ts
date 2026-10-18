@@ -25,7 +25,7 @@ const stringValueParams = {
 };
 
 describe('createAcpClientConnection', () => {
-  it('withdraws a cancelled native elicitation without cancelling its active turn', async () => {
+  it('withdraws cancellation and returns explicit decline without cancelling the active turn', async () => {
     let resolvePresented!: () => void;
     const presented = new Promise<void>((resolve) => { resolvePresented = resolve; });
     // The Session state/RPC transport is external; all permission and interaction owners stay real.
@@ -88,16 +88,22 @@ describe('createAcpClientConnection', () => {
           await expect(response).resolves.toEqual({ action: 'cancel' });
           expect(lifetime.signal.aborted).toBe(false);
 
-          const nextResponse = context.client.request(methods.client.elicitation.create, {
-            mode: 'form', sessionId: session.sessionId, message: 'Try again?',
-            requestedSchema: { type: 'object', properties: {} },
-          });
-          await expect.poll(() => Object.keys(session.state.requests ?? {}).length).toBe(1);
-          const [id] = Object.keys(session.state.requests ?? {});
-          const respond = session.rpcHandlerManager.handlers.get('session.user_action.answer');
-          expect(respond).toBeDefined();
-          expect(await respond?.({ id, approved: true, answers: { confirmation: ['confirm'] } })).toBeUndefined();
-          await expect(nextResponse).resolves.toEqual({ action: 'accept', content: {} });
+          for (const choice of ['decline', 'confirm'] as const) {
+            const nextResponse = context.client.request(methods.client.elicitation.create, {
+              mode: 'form', sessionId: session.sessionId, message: 'Try again?',
+              requestedSchema: { type: 'object', properties: {} },
+            });
+            await expect.poll(() => Object.keys(session.state.requests ?? {}).length).toBe(1);
+            const [id] = Object.keys(session.state.requests ?? {});
+            const respond = session.rpcHandlerManager.handlers.get('session.user_action.answer');
+            expect(respond).toBeDefined();
+            expect(await respond?.({ id, approved: true, answers: { confirmation: [choice] } })).toBeUndefined();
+            await expect(nextResponse).resolves.toEqual(choice === 'confirm'
+              ? { action: 'accept', content: {} }
+              : { action: 'decline' });
+            expect(lifetime.signal.aborted).toBe(false);
+            expect(Object.keys(session.state.requests ?? {})).toHaveLength(0);
+          }
           return {};
         } finally {
           await permissionHandler.abortPendingRequestsAndFlush?.('test cleanup');
