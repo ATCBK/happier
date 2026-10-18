@@ -436,12 +436,12 @@ describe('the mounted PRs & Issues source settings page', () => {
   });
 
   it('says a refused read once, in words, and never shows the bare refusal code', async () => {
-    const refusal = () => Promise.reject(Object.assign(new Error('stale_surface'), { code: 'stale_surface' }));
+    const refusal = () => Promise.reject(Object.assign(new Error('unavailable'), { code: 'unavailable' }));
     const harness = createHarness({ discovery: refusal, configured: refusal });
     const page = await mountSettings(harness);
 
     await expect(page.getByText(`${SOURCE_DISPLAY_NAME} could not be read`)).resolves.toBeDefined();
-    await expect(page.queryByText('stale_surface')).resolves.toBeUndefined();
+    await expect(page.queryByText('unavailable')).resolves.toBeUndefined();
     // Both reads failed for one reason; the page says it once, where the rows would be.
     await expect(page.queryByText('What is already configured could not be read')).resolves.toBeUndefined();
   });

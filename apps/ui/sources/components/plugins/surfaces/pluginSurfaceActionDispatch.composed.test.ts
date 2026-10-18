@@ -48,6 +48,8 @@ import {
 
 import { createPluginHostedWebHostApiBridgeHandler } from '@/components/plugins/hostApi/hostedWebAdapter';
 import { machinePluginStructuredMessageActionExecute, resetMachineProjectionReadsForTests } from '@/sync/ops/machineContributionRegistryProjection';
+import { getMachineContributionRegistryProjectionRevision } from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
 
@@ -2701,7 +2703,7 @@ describe('plugin-surface action branch selection', () => {
         });
     });
 
-    it('keeps a pre-handler daemon retirement as an ordinary unavailable result', async () => {
+    it('keeps a pre-handler daemon retirement pending on a refreshed projection', async () => {
         const contributed = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
             supported: true as const,
             result: { ok: false as const, code: 'plugin_action_generation_retired' },
@@ -2717,9 +2719,25 @@ describe('plugin-surface action branch selection', () => {
             },
         })).resolves.toEqual({
             ok: false,
-            code: 'unavailable',
+            code: 'stale_surface',
             reason: 'plugin_action_generation_retired',
+            message: resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: 'plugin_action_generation_retired' }).body,
         });
+    });
+
+    it('refreshes a stale occurrence refused by the Action schema read before dispatch', async () => {
+        const scope = { serverId: 'schema-home', machineId: 'schema-machine' };
+        const before = getMachineContributionRegistryProjectionRevision(scope);
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: false, code: 'plugin_occurrence_stale' });
+        const result = await dispatchPluginSurfaceAction({
+            callerPluginId: CALLER_PLUGIN_ID,
+            action: 'refresh-index',
+            input: {},
+            contributedAction: scope,
+            resolveContributedAction: identity => ({ ...resolveDaemonTargetAction(identity), confirmationWhen: { presentUserUi: false } }),
+        });
+        expect(result).toMatchObject({ ok: false, code: 'stale_surface', reason: 'plugin_occurrence_stale' });
+        expect(getMachineContributionRegistryProjectionRevision(scope)).toBeGreaterThan(before);
     });
 
     it('projects a post-handler daemon retirement as outcome unknown', async () => {
@@ -3746,6 +3764,8 @@ describe('composed public SDK client to canonical plugin-surface dispatcher', ()
     });
 
     it('rejects a failed contributed action instead of resolving the failure envelope as a result', async () => {
+        const scope = { serverId: 'server-composed', machineId: 'machine-composed' };
+        const before = getMachineContributionRegistryProjectionRevision(scope);
         contributedActionExecute.mockClear();
         contributedActionExecute.mockResolvedValueOnce({
             supported: true as const,
@@ -3758,7 +3778,24 @@ describe('composed public SDK client to canonical plugin-surface dispatcher', ()
         expect(settlement.settled === 'rejected' ? settlement.diagnostics : [])
             .toContain('plugin_action_surface_unavailable');
         expect(settlement).toMatchObject({ message: 'Reconnect the integration account before continuing.' });
+        expect(getMachineContributionRegistryProjectionRevision(scope)).toBe(before);
         await expect(client.executeAction('refresh-index', {})).resolves.toEqual({ refreshed: true });
+    });
+
+    it.each(['plugin_generation_stale', 'plugin_occurrence_stale'])('refreshes the superseded projection for %s without exposing daemon diagnostics', async (code) => {
+        const scope = { serverId: 'server-composed', machineId: 'machine-composed' };
+        const before = getMachineContributionRegistryProjectionRevision(scope);
+        contributedActionExecute.mockResolvedValueOnce({
+            supported: true as const,
+            result: { ok: false as const, code, message: 'Plugin occurrenceId is stale' },
+        });
+        const settlement = await settleComposed(client.executeAction('refresh-index', {}));
+        expect(settlement).toMatchObject({
+            settled: 'rejected', code: 'stale_surface',
+            message: resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: code }).body,
+        });
+        expect(settlement.settled === 'rejected' ? settlement.diagnostics : []).toContain(code);
+        expect(getMachineContributionRegistryProjectionRevision(scope)).toBeGreaterThan(before);
     });
 
     it('preserves canonical contributed-action remediation on the generic dispatch outcome', async () => {

@@ -398,12 +398,36 @@ describe('plugin-ui Action family dispatches through the canonical host API', ()
     } finally { mount.unmount(); }
   });
 
+  it('keeps a superseded mount pending until the current projection rebinds its host, without replaying the Action', async () => {
+    const context = createSurfaceContext({ machineExecutionReady: true });
+    const executeAction = vi.fn(async () => { throw Object.assign(new Error('Plugin occurrenceId is stale'), { code: 'stale_surface' }); });
+    const hostApi = createHostApiStub(context, { executeAction } as unknown as Partial<PluginUiHostApi>);
+    function ExecutionHarness() {
+      const { execution, execute } = useExecutePluginAction('review.refresh');
+      return <><button onClick={() => { void execute(); }}>Run</button><output>{JSON.stringify(execution)}</output></>;
+    }
+    const mount = mountSurface(<ExecutionHarness />, hostApi, context);
+    const execution = () => JSON.parse(mount.container.querySelector('output')!.textContent!);
+    try {
+      await act(async () => { mount.container.querySelector('button')!.click(); });
+      expect(execution()).toEqual({ status: 'pending' });
+      const executeCurrent = vi.fn(async () => ({ read: true }));
+      const currentHost = createHostApiStub(context, { executeAction: executeCurrent } as unknown as Partial<PluginUiHostApi>);
+      await mount.render(<PluginUiProvider hostApi={currentHost} context={context}><ExecutionHarness /></PluginUiProvider>);
+      expect(execution()).toEqual({ status: 'idle' });
+      expect(executeAction).toHaveBeenCalledOnce();
+      expect(executeCurrent).not.toHaveBeenCalled();
+      await act(async () => { mount.container.querySelector('button')!.click(); });
+      expect(execution()).toEqual({ status: 'success', result: { read: true } });
+    } finally { mount.unmount(); }
+  });
+
   it('says what a host refusal means in words and keeps an author sentence as written', async () => {
     // Host API refusals cross the mount as `{ code }` alone, so the client error's
-    // message IS the code (`stale_surface`). A page that prints `execution.message`
+    // message IS the code (`unavailable`). A page that prints `execution.message`
     // must still read as a sentence; an author's own sentence is never replaced.
     const refusals: unknown[] = [
-      Object.assign(new Error('stale_surface'), { code: 'stale_surface' }),
+      Object.assign(new Error('unavailable'), { code: 'unavailable' }),
       Object.assign(new Error('The review service refused.'), { code: 'denied' }),
     ];
     const executeAction = vi.fn(async () => { throw refusals.shift(); });
@@ -417,8 +441,8 @@ describe('plugin-ui Action family dispatches through the canonical host API', ()
     await press(pressableByLabel(mount.container, 'Run review'));
 
     const [hostRefusal, authorRefusal] = onSettled.mock.calls.map((call) => call[0] as { code: string; message: string });
-    expect(hostRefusal).toMatchObject({ status: 'error', code: 'stale_surface' });
-    expect(hostRefusal?.message).not.toContain('stale_surface');
+    expect(hostRefusal).toMatchObject({ status: 'error', code: 'unavailable' });
+    expect(hostRefusal?.message).not.toContain('unavailable');
     expect(hostRefusal?.message).toMatch(/\s/u);
     expect(authorRefusal).toMatchObject({ status: 'error', code: 'denied', message: 'The review service refused.' });
 

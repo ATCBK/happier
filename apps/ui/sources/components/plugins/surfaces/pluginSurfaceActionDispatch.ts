@@ -111,6 +111,12 @@ import { createPluginSurfaceLocalHostHandlers } from './pluginSurfaceLocalHostHa
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { getPluginUiEphemeralSharedScope } from './pluginUiEphemeralSharedScope';
 import { createPluginOpenNewSessionHandler } from './pluginOpenNewSessionHostApi';
+import {
+    getMachineContributionRegistryProjectionRevision,
+    publishMachineContributionRegistryProjectionInvalidation,
+    type MachineContributionRegistryProjectionScope,
+} from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 
 /** Exact producer-owned mounted binding, preserved only until RPC projection. */
 export type PluginSurfaceActionMountedBinding = DaemonPluginStructuredMessageActionMountedBinding;
@@ -228,6 +234,7 @@ export type PluginSurfaceActionDispatchOutcome =
         ok: false;
         code: PluginUiHostApiErrorCodeV1;
         reason: string;
+        message?: string;
         retryable?: boolean;
         remediation?: PluginDiagnosticRemediationV1;
     }>;
@@ -312,6 +319,7 @@ function failure(
     code: PluginUiHostApiErrorCodeV1,
     reason: string,
     author?: Readonly<{
+        message?: string;
         retryable?: boolean;
         remediation?: PluginDiagnosticRemediationV1;
     }>,
@@ -320,9 +328,31 @@ function failure(
         ok: false,
         code,
         reason,
+        ...(author?.message === undefined ? {} : { message: author.message }),
         ...(author?.retryable === undefined ? {} : { retryable: author.retryable }),
         ...(author?.remediation === undefined ? {} : { remediation: author.remediation }),
     };
+}
+
+/** A daemon refusal withdraws the old projection, never replays its Action. */
+function staleDaemonProjectionFailure(
+    code: string,
+    scope: MachineContributionRegistryProjectionScope,
+    revision: number,
+    accountLifetime?: ServerAccountScopeLifetime | null,
+): PluginSurfaceActionDispatchFailure | null {
+    if (code !== 'plugin_generation_stale'
+        && code !== 'plugin_occurrence_stale'
+        && code !== 'plugin_action_generation_retired') return null;
+    // A concurrent refusal or reconnect may already have requested the new
+    // projection. Keep recovery with that existing currentness observation.
+    if ((accountLifetime === undefined || accountLifetime?.isCurrent() === true)
+        && getMachineContributionRegistryProjectionRevision(scope) === revision) {
+        publishMachineContributionRegistryProjectionInvalidation(scope);
+    }
+    return failure('stale_surface', code, {
+        message: resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: code }).body,
+    });
 }
 
 function readString(value: unknown): string | null {
@@ -1337,6 +1367,11 @@ async function executeContributedAction(
         input.onDaemonActionOperationAdmitted?.(admittedOperation);
     }
     const actionInput = settlement.input;
+    const projectionScope = {
+        machineId: binding.machineId,
+        serverId: binding.accountLifetime?.scope.serverId ?? binding.serverId ?? null,
+    };
+    const projectionRevision = getMachineContributionRegistryProjectionRevision(projectionScope);
     const result = await execute(binding.machineId, {
         serverId: binding.serverId ?? null,
         ...(binding.accountLifetime === undefined ? {} : { accountLifetime: binding.accountLifetime }),
@@ -1397,8 +1432,10 @@ async function executeContributedAction(
     }
     const outcomeUnknown = actionOutcomeUnknownFailure(result.result.code);
     if (outcomeUnknown) return outcomeUnknown;
-    return actionDeclinedFailure(result.result.code)
+    return staleDaemonProjectionFailure(result.result.code, projectionScope, projectionRevision, binding.accountLifetime)
+        ?? actionDeclinedFailure(result.result.code)
         ?? failure('unavailable', result.result.code, {
+            ...(result.result.message === undefined ? {} : { message: result.result.message }),
             ...(result.result.retryable === undefined
                 ? {}
                 : { retryable: result.result.retryable }),
@@ -1506,7 +1543,7 @@ export function createPluginSurfaceActionDispatchHandler(
             ...(selectedActionInput ? { selectedActionInput } : {}),
             ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
         }).finally(cancellation.dispose);
-        if (!outcome.ok) return createPluginSurfaceHostApiError(outcome.code, [outcome.reason]);
+        if (!outcome.ok) return createPluginSurfaceHostApiError(outcome.code, [outcome.reason], outcome.message);
         return outcome.result;
     };
 }
