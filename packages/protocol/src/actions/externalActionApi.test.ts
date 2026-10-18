@@ -609,6 +609,14 @@ describe('External Action API envelope v1', () => {
     const scope = projectExternalActionHttpError('credential_scope_denied', 'request-not-disclosed');
     expect(scope).toEqual({ statusCode: 403, payload: { error: 'credential_scope_denied' } });
     expect(ExternalActionHttpErrorSchema.parse(scope.payload)).toEqual(scope.payload);
+    expect(externalActionApi.readActionCredentialScopeDeniedHttpFailureV1(scope.statusCode, scope.payload))
+      .toEqual({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' });
+    for (const payload of [{ ...scope.payload, details: {} }, { error: 'unknown_denial' }, null, []]) {
+      expect(externalActionApi.readActionCredentialScopeDeniedHttpFailureV1(403, payload)).toBeNull();
+    }
+    for (const status of [200, 400, 401, 404, 500]) {
+      expect(externalActionApi.readActionCredentialScopeDeniedHttpFailureV1(status, scope.payload)).toBeNull();
+    }
     expect(ExternalActionHttpErrorSchema.safeParse({
       ...placement.payload,
       details: { target: 'must-not-cross' },

@@ -2190,6 +2190,8 @@ function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCod
     || ArtifactAccessErrorCodeV1Schema.safeParse(value).success
     || SkillUnavailableReasonV1Schema.safeParse(value).success
     || value === 'workspace_sync_update_required'
+    // Host HTTP readers have already validated the strict authentication refusal.
+    || value === 'credential_scope_denied'
     // Transport owners have already decided whether a mutation may have committed.
     || value === 'outcome_unknown'
     || value === 'cancelled'

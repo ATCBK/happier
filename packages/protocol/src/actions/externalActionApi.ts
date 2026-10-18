@@ -151,6 +151,21 @@ const ExternalActionAuthenticationHttpErrorSchema = lazyZodSchema(() => z.strict
 }));
 const ExternalActionCredentialScopeHttpErrorSchema = lazyZodSchema(() => z.strictObject({ error: z.literal('credential_scope_denied') }));
 
+export type ActionCredentialScopeDeniedFailureV1 = Readonly<{
+  ok: false;
+  errorCode: 'credential_scope_denied';
+  error: 'credential_scope_denied';
+}>;
+
+/** Authentication can refuse a domain route before its closed result exists. */
+export function readActionCredentialScopeDeniedHttpFailureV1(
+  status: number,
+  payload: unknown,
+): ActionCredentialScopeDeniedFailureV1 | null {
+  if (status !== 403 || !ExternalActionCredentialScopeHttpErrorSchema.safeParse(payload).success) return null;
+  return { ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' };
+}
+
 /** One strict redacted outer error union shared by both Action HTTP origins. */
 export const ExternalActionHttpErrorSchema = lazyZodSchema(() => z.union([
   ExternalActionInvalidRequestHttpErrorSchema,

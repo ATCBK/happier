@@ -15,6 +15,16 @@ import { SESSION_READ_STATE_HTTP_PATHS_V1 } from '../sessions/readState/api.js';
 import { projectSessionReadStateActionTransportFailure } from '../sessions/readState/actionTransport.js';
 
 describe('Session read-state Action vertical', () => {
+  it('classifies only the exact HTTP scope refusal before domain decoding', () => {
+    expect(projectSessionReadStateActionTransportFailure(403, { error: 'credential_scope_denied' }))
+      .toEqual({ errorCode: 'credential_scope_denied' });
+    expect(projectSessionReadStateActionTransportFailure(403, { error: 'credential_scope_denied', viewer: {} }))
+      .toEqual({ errorCode: 'unavailable' });
+    expect(projectSessionReadStateActionTransportFailure(403, { error: 'unknown_denial' }))
+      .toEqual({ errorCode: 'unavailable' });
+    expect(projectSessionReadStateActionTransportFailure(500, { error: 'credential_scope_denied' }))
+      .toEqual({ errorCode: 'unavailable' });
+  });
   it('declares one automation Action over the existing domain route including Agent/MCP exposure', () => {
     const spec = getActionSpec('session.read_state.set');
 

@@ -1,4 +1,5 @@
 import { getActionSpec } from '../../actions/actionSpecs.js';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '../../actions/externalActionApi.js';
 import {
   SESSION_READ_STATE_ACTION_INPUT_SCHEMAS_V1,
   SESSION_READ_STATE_ACTION_OUTPUT_SCHEMAS_V1,
@@ -17,7 +18,7 @@ import {
 import type { SessionViewerProjectionV1 } from '../personal/viewer.js';
 
 export type SessionReadStateActionTransportFailureV1 = Readonly<{
-  errorCode: SessionReadStateActionErrorCodeV1 | 'present_user_required' | 'unsupported_action' | 'unavailable';
+  errorCode: SessionReadStateActionErrorCodeV1 | 'credential_scope_denied' | 'present_user_required' | 'unsupported_action' | 'unavailable';
   viewer?: SessionViewerProjectionV1;
 }>;
 
@@ -31,6 +32,8 @@ export function projectSessionReadStateActionTransportFailure(
   status: number,
   payload: unknown,
 ): SessionReadStateActionTransportFailureV1 {
+  const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(status, payload);
+  if (scopeDenial) return { errorCode: scopeDenial.errorCode };
   if (status === 400 && SessionReadStateRouteInvalidRequestResponseV1Schema.safeParse(payload).success) {
     return { errorCode: 'invalid_parameters' };
   }
