@@ -221,7 +221,13 @@ describe('machineRpcWithServerScope', () => {
         expect(emitWithAck).not.toHaveBeenCalled();
     });
 
-    it.each(['crypto', 'decoded refusal'] as const)('preserves a target %s failure through handoff preflight before source mutation', async (failure) => {
+    it.each([
+        { failure: 'crypto', reply: null, expectedErrorCode: 'machine_rpc_decryption_failed' },
+        { failure: 'decoded refusal', reply: { error: 'Target denied the capability request', errorCode: RPC_ERROR_CODES.FORBIDDEN }, expectedErrorCode: RPC_ERROR_CODES.FORBIDDEN },
+        { failure: 'decoded refusal without message', reply: { ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN }, expectedErrorCode: RPC_ERROR_CODES.FORBIDDEN },
+        { failure: 'decoded method not found', reply: { ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }, expectedErrorCode: 'UNEXPECTED' },
+        { failure: 'decoded crypto refusal', reply: { ok: false, errorCode: 'rpc_params_decryption_failed' }, expectedErrorCode: 'rpc_params_decryption_failed' },
+    ])('preserves a target $failure failure through handoff preflight before source mutation', async ({ failure, reply, expectedErrorCode }) => {
         const { emitWithAck } = installScopedFallback();
         const { Encryption } = await import('@/sync/encryption/encryption');
         const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
@@ -232,7 +238,7 @@ describe('machineRpcWithServerScope', () => {
             if (failure === 'crypto') return { ok: true, result: 'undecryptable-response' };
             const machine = encryption.getMachineEncryption('machine-1');
             if (!machine) throw new Error('Expected initialized machine encryption');
-            return { ok: true, result: await machine.encodeRpcPayload({ error: 'Target denied the capability request', errorCode: RPC_ERROR_CODES.FORBIDDEN }) };
+            return { ok: true, result: await machine.encodeRpcPayload(reply) };
         });
         getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', generation: 1 });
         listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test' }]);
@@ -248,7 +254,11 @@ describe('machineRpcWithServerScope', () => {
         if (!metadata) throw new Error('Expected session fixture metadata');
         const result = await completeSessionHandoff({ sessionId: 'handoff-session', sourceMachineId: 'machine-source', targetMachineId: 'machine-1',
             serverId: 'server-b', sessionStorageMode: 'direct', preferredTransportStrategies: ['direct_peer'], sourceMetadata: metadata });
-        expect(result).toMatchObject({ ok: false, errorCode: failure === 'crypto' ? 'machine_rpc_decryption_failed' : RPC_ERROR_CODES.FORBIDDEN });
+        expect(result).toMatchObject({ ok: false, errorCode: expectedErrorCode });
+        if (failure === 'crypto' || failure === 'decoded crypto refusal') {
+            const { t } = await import('@/text');
+            expect(result).toMatchObject({ errorMessage: t('errors.machineRpcDecryptionFailed') });
+        }
         expect(emitWithAck.mock.calls.map((call) => (call[1] as { method: string }).method))
             .toEqual(['machine-1:daemon.sessionHandoff.capability.v2.get']);
     });

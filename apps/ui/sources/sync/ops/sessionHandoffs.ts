@@ -31,7 +31,7 @@ import { getServerFeaturesSnapshot } from '../api/capabilities/serverFeaturesCli
 import { sync } from '../sync';
 import { storage } from '../domains/state/storage';
 import { machineRpcWithServerScope } from '../runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import { createRpcCallError, isRpcMethodNotAvailableError, isRpcMethodNotFoundError, readRpcErrorCode } from '../runtime/rpcErrors';
+import { isRpcMethodNotAvailableError, readRpcErrorCode } from '../runtime/rpcErrors';
 import { isSocketIoAckTimeoutError } from '../runtime/socketIoAckTimeout';
 
 import { resumeSession } from './sessions';
@@ -54,6 +54,7 @@ import { resolveMachineTransferAvailability } from '../domains/transfers/runtime
 import { followUpSpawnedSessionWithServerScope } from '../runtime/orchestration/serverScopedRpc/followUpSpawnedSession';
 import { buildSessionHandoffMetadataPatch } from './buildSessionHandoffMetadataPatch';
 import { ConnectedServiceAuthSelectionUnsupportedError, machineRpcWithConnectedServiceAuthAdmission, requireMachineConnectedServiceAuthSelection } from './connectedServiceAuthSupport';
+import { probeSessionHandoffCapability } from '../domains/sessionHandoff/probeSessionHandoffCapability';
 
 type MetadataRecord = Metadata;
 type HandoffErrorResult = Readonly<{
@@ -814,30 +815,13 @@ async function requireSafeSessionHandoffV2Target(params: Readonly<{
     targetMachineId: string;
     serverId?: string | null;
 }>): Promise<Readonly<{ ok: true }> | HandoffErrorResult> {
-    try {
-        const raw = await machineRpcWithServerScope<unknown, unknown>({
-            machineId: params.targetMachineId,
-            method: RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET,
-            payload: {},
-            serverId: normalizeId(params.serverId) || null,
-            timeoutMs: resolveSessionHandoffRuntimeConfig().machineRpcPollTimeoutMs,
-            preferScoped: true,
-        });
-        const failure = readSessionHandoffError(raw);
-        if (failure) throw createRpcCallError({ error: failure.errorMessage, errorCode: failure.errorCode });
-        const capability = raw as { protocolVersion?: unknown; atomicTargetResume?: unknown; targetCleanup?: unknown };
-        if (capability.protocolVersion === 2 && capability.atomicTargetResume === true && capability.targetCleanup === true) {
-            return { ok: true };
-        }
-    } catch (error) {
-        if (!isRpcMethodNotFoundError(error)) {
-            return {
-                ok: false,
-                errorCode: readRpcErrorCode(error) ?? 'UNEXPECTED',
-                errorMessage: error instanceof Error ? error.message : 'Failed to probe target handoff capability',
-            };
-        }
-    }
+    const result = await probeSessionHandoffCapability({
+        machineId: params.targetMachineId,
+        serverId: normalizeId(params.serverId) || null,
+        preferScoped: true,
+    });
+    if (result.status === 'supported') return { ok: true };
+    if (result.status === 'error') return { ok: false, errorCode: result.errorCode, errorMessage: result.errorMessage };
     return unsupportedError('Target daemon does not support safe atomic session handoff v2');
 }
 

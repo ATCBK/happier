@@ -18,8 +18,6 @@ import {
   MACHINE_TRANSFER_SERVER_ROUTED_MAX_BYTES_ENV_KEY,
   type TransferEndpointCandidate,
   SessionHandoffAbortRequestSchema,
-  SessionHandoffCapabilityV2Schema,
-  readSessionHandoffError,
   SessionHandoffTargetResumeRequestV2Schema,
   SessionHandoffTargetResumeResponseV2Schema,
   SessionHandoffPrepareTargetRequestV2Schema,
@@ -38,7 +36,7 @@ import {
   type WorkspaceManifest,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createRpcCallError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
+import { probeSessionHandoffCapability } from '@/session/handoff/orchestration/sessionHandoffCoordinator';
 import type { RpcHandler } from '../rpc/types';
 
 import {
@@ -1387,17 +1385,10 @@ export function registerMachineSessionHandoffRpcHandlers(params: Readonly<{
     if (!existingStateAvailable) {
       return { ok: false, errorCode: 'upgrade_required', error: 'This daemon cannot run existing-state handoff' } as const;
     }
-    const capability = SessionHandoffCapabilityV2Schema.safeParse(
-      await params.probeHandoffCapability?.(peerMachineId).then((raw) => {
-        const failure = readSessionHandoffError(raw);
-        if (failure) throw createRpcCallError({ error: failure.errorMessage, errorCode: failure.errorCode });
-        return raw;
-      }).catch((error: unknown) => {
-        if (isRpcMethodNotFoundError(error)) return null;
-        throw error;
-      }),
+    const capability = await probeSessionHandoffCapability(
+      async () => params.probeHandoffCapability?.(peerMachineId),
     );
-    if (!capability.success || !capability.data.existingState) {
+    if (!capability?.existingState) {
       return { ok: false, errorCode: 'upgrade_required', error: 'Both handoff peers must support existing-state handoff' } as const;
     }
     return null;

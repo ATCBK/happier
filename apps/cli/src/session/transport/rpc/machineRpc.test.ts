@@ -42,7 +42,7 @@ vi.mock('@/configuration', async (importOriginal) => ({
 }));
 
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { readRpcErrorCode, RpcError } from '@happier-dev/protocol/rpcErrors';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { readRpcRequestDisposition } from './rpcRequestDisposition';
 
@@ -236,9 +236,16 @@ describe('callMachineRpc', () => {
     } else if (failure === 'network') {
       axiosGet.mockRejectedValue(Object.assign(new Error('HTTP connection reset'), { code: 'ECONNRESET' }));
     } else if (failure === 'decoded') {
-      socket.emit.mockImplementation((_event, _payload, callback) => callback({ ok: true,
-        result: encodeBase64(encrypt(key, 'dataKey', { error: 'Target denied the capability request', errorCode: RPC_ERROR_CODES.FORBIDDEN })),
-      }));
+      const peer = new RpcHandlerManager({ scopePrefix: peerMachineId, encryptionKey: key,
+        encryptionVariant: 'dataKey', logger: () => {} });
+      peer.registerHandler(RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, async () => {
+        throw new RpcError('Target denied the capability request', RPC_ERROR_CODES.FORBIDDEN);
+      });
+      // Relay delivery is the network boundary; target execution and crypto stay real.
+      socket.emit.mockImplementation(async (_event, payload, callback) => {
+        const result = await peer.handleRequest({ method: payload.method, params: payload.params });
+        callback({ ok: true, result });
+      });
     } else {
       socket.emit.mockImplementation((_event, _payload, callback) => callback({
         ok: false, error: failure === 'unsupported' ? RPC_ERROR_MESSAGES.METHOD_NOT_FOUND : RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,

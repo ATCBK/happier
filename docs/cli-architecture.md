@@ -1647,6 +1647,10 @@ Sessions can be started by:
 
 Daemon session spawning uses `registerCommonHandlers` to expose a controlled RPC surface (shell commands, file operations, search/diff helpers).
 
+In development builds, `createSessionMetadata` captures explicit non-secret native account-directory overrides in `nativeAgentEnvironmentV1`. `resolveSessionRuntimeSnapshot` restores them before spawn environment validation, with explicit incoming overrides taking precedence. `sessionNativeEnvironment` owns the allowlist also consumed by durable respawn descriptors; arbitrary shell variables and credentials are not copied into metadata. Older session metadata without this optional field retains its existing behavior.
+
+Before resuming a provider conversation under another Happier session id, daemon spawn admission checks matching tracked provider targets and resume ids through the existing process-presence classifier. A live or unverified sibling runner blocks the new launch; a positively absent runner does not. This prevents an old entry from starting another runner after a terminal restart creates a replacement entry.
+
 ### Machine state
 
 ```mermaid

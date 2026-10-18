@@ -56,8 +56,16 @@ describe('useNativeModelPackState through device boundaries', () => {
 
   it.each(['prepare', 'update'] as const)('admits only one %s operation from the same rendered callback', async operation => {
     if (operation === 'update') seedInstalledPack(packId, 'stt');
+    const requested = createDeferred<void>();
     const release = createDeferred<void>();
+    const completed = createDeferred<void>();
+    const handleNativeAlert = boundary.alert.getMockImplementation();
+    boundary.alert.mockImplementation((...args) => {
+      handleNativeAlert?.(...args);
+      completed.resolve();
+    });
     boundary.fetch.mockImplementation(async () => {
+      requested.resolve();
       await release.promise;
       return operation === 'update'
         ? Response.json(modelPackManifest(packId, 'stt', 'a'.repeat(64)))
@@ -66,13 +74,20 @@ describe('useNativeModelPackState through device boundaries', () => {
     const hook = await renderHook(useNativeModelPackState, { initialProps: input });
     await act(async () => {
       const invoke = operation === 'prepare' ? hook.getCurrent().prepareModel : hook.getCurrent().checkForUpdates;
-      const operations = [invoke(), invoke()];
+      const first = invoke();
+      await requested.promise;
+      // Reuse the captured callback after native SDK loading, while the first request is pending.
+      const second = invoke();
+      await vi.dynamicImportSettled();
       release.resolve();
-      await Promise.all(operations);
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await Promise.all([first, second]);
+      await completed.promise;
     });
     expect(boundary.fetch).toHaveBeenCalledTimes(1);
     expect(boundary.alert).toHaveBeenCalledTimes(1);
+    if (operation === 'update') {
+      expect(hook.getCurrent().updateCheckedRemote).toMatchObject({ updateAvailable: false });
+    }
   });
 
   it('keeps preparation out of a pending deletion confirmation', async () => {
