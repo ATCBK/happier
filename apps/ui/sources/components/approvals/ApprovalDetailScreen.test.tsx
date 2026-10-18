@@ -1092,6 +1092,28 @@ describe('ApprovalDetailScreen', () => {
     expect(screen.findByTestId('approvals.execution-failure')?.props.subtitle).toBe('approvals.staleFailure');
   });
 
+  it('titles a failure that never reached its effect as not run, and an attempted one by its action', async () => {
+    const artifact = createDaemonRoutedApprovalArtifact();
+    const failedWith = (execution: Record<string, unknown>) => ApprovalRequestV2Schema.parse({
+      ...JSON.parse(artifact.body), status: 'failed', updatedAtMs: 2,
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: { executedAtMs: 2, ok: false, ...execution },
+    });
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const titleOf = async (request: ApprovalRequestV2) => {
+      currentArtifact = { ...artifact, header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+      const screen = await renderScreen(<ApprovalDetailScreen artifactId={currentArtifact.id} />);
+      return screen.findByTestId('approvals.execution-failure')?.props.title;
+    };
+
+    expect(await titleOf(failedWith({
+      errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable', effectAttempted: false,
+    }))).toBe('approvals.failureNotRun');
+    expect(await titleOf(failedWith({
+      errorCode: 'executor_failed', error: 'Executor failed', effectAttempted: true,
+    }))).toBe('approvals.failureGeneric');
+  });
+
   it('presents a durable Provider refusal through the shared Provider error copy', async () => {
     const artifact = createDaemonRoutedApprovalArtifact();
     const request = ApprovalRequestV2Schema.parse({

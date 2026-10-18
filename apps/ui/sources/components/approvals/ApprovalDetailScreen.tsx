@@ -74,6 +74,7 @@ import {
   useApprovalHome,
   useApprovalDecisionHandler,
 } from '@/components/tools/shell/approvals/useApprovalDecisionHandler';
+import { presentApprovalFailureOutcome } from '@/components/tools/shell/approvals/approvalFailureOutcome';
 import { useRetargetNavigationFocusReturnIntent } from '@/keyboard/focusReturn';
 import { useApprovalSessionReading } from './useApprovalSessionReading';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -545,6 +546,10 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     ? presentApprovalFailure(executionFailureResult,
         executionFailureResult.error || executionFailureResult.errorCode || t('approvals.decisionError'))
     : null;
+  // The same outcome headline the composer card reads, so one failed request names itself alike on both.
+  const failureHeadline = parsed.kind === 'built_in' && builtInExecutionFailure
+    ? presentApprovalFailureOutcome(parsed.request, builtInExecutionFailure).headline
+    : t('detailPages.approval.failureTitle');
   // One Technical details disclosure per page: the failure's code joins the arguments' own lines when
   // the Details card is shown, and otherwise sits with the failure.
   const failureCodeInDetails = Boolean(executionFailure?.code && shownActionFields && shownActionFields.rows.length > 0
@@ -616,7 +621,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         {executionFailure ? (
           <Item
             testID="approvals.execution-failure"
-            title={t('detailPages.approval.failureTitle')}
+            title={failureHeadline}
             subtitle={executionFailure.reason}
             subtitleLines={0}
             mode="info"
