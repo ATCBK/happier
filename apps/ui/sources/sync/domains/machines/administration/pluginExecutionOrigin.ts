@@ -3,7 +3,7 @@ import { type PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugi
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 
 import type { ServerMachineInventorySnapshotV1 } from '@/sync/domains/machines/machineInventorySnapshots';
-import { resolveFleetMachineRejection, resolveFleetSupplyAgreement } from './fleetUnion';
+import { resolveFleetSnapshotMachineRejection, resolveFleetSupplyAgreement } from './fleetUnion';
 
 export type PluginMachineOriginRejectionReasonV1 =
     | 'content_conflict'
@@ -64,6 +64,29 @@ export type PluginExecutionOriginCandidateV1 = PluginMachineExecutionOriginCandi
 
 export type PluginExecutionOriginContextualTarget = Readonly<{ serverIdentityId: string; machineId: string }>;
 
+export type PluginExecutionOriginMachineFactReader = (target: PluginExecutionOriginContextualTarget) => Readonly<{
+    activeAt: number;
+    rejection: ReturnType<typeof resolveFleetSnapshotMachineRejection>;
+    eligible: boolean;
+}>;
+
+type MachineFactInputs = Readonly<{
+    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
+    readMachineFact?: PluginExecutionOriginMachineFactReader;
+}>;
+
+function readMachineFact(params: MachineFactInputs, target: PluginExecutionOriginContextualTarget) {
+    if (params.readMachineFact) return params.readMachineFact(target);
+    const entry = params.machineSnapshots.find(entry => entry.kind === 'resolved' && entry.serverIdentityId === target.serverIdentityId);
+    const snapshot = entry?.kind === 'resolved' ? entry : undefined;
+    const machine = snapshot?.machines.find(machine => machine.id === target.machineId);
+    return {
+        activeAt: machine?.activeAt ?? 0,
+        rejection: resolveFleetSnapshotMachineRejection({ snapshot, machine }),
+        eligible: snapshot?.executionEligibleMachineIds?.includes(target.machineId) === true,
+    };
+}
+
 /**
  * A machine-local installation census is not a second executable origin when
  * its real source is present. Keep portable installations and exact source
@@ -92,11 +115,10 @@ export function getPluginExecutionOriginCandidateVersion(candidate: PluginExecut
 }
 
 /** Selection consumes eligibility and activity order, not raw heartbeat timestamps or labels. */
-export function serializePluginMachineExecutionOriginMachineFacts(params: Readonly<{
+export function serializePluginMachineExecutionOriginMachineFacts(params: MachineFactInputs & Readonly<{
     pluginId: string;
     materializations: readonly PluginMachineMaterializationV1[];
     sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
-    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
 }>): string {
     const targets = [
         ...params.materializations.filter((entry) => entry.pluginId === params.pluginId),
@@ -105,15 +127,7 @@ export function serializePluginMachineExecutionOriginMachineFacts(params: Readon
     ];
     // Capture activity once per target. Sorting used to rescan the whole fleet
     // twice per comparison for every mounted plugin during census hydration.
-    const facts = targets.map((target) => {
-        const snapshot = params.machineSnapshots.find((entry) => entry.kind === 'resolved' && entry.serverIdentityId === target.serverIdentityId);
-        return {
-            target,
-            activeAt: snapshot?.machines.find(machine => machine.id === target.machineId)?.activeAt ?? 0,
-            rejection: resolveFleetMachineRejection({ ...target, machineSnapshots: params.machineSnapshots }),
-            eligible: snapshot?.kind === 'resolved' && snapshot.executionEligibleMachineIds?.includes(target.machineId) === true,
-        };
-    });
+    const facts = targets.map(target => ({ target, ...readMachineFact(params, target) }));
     // Activity only ranks executable targets. Moving a refused Machine around
     // an eligible one changes neither admission nor the automatic choice.
     const rankedActivity = (fact: typeof facts[number]) => fact.rejection === null ? fact.activeAt : 0;
@@ -124,17 +138,15 @@ export function serializePluginMachineExecutionOriginMachineFacts(params: Readon
     ]));
 }
 
-export function buildPluginMachineSourceExecutionOriginCandidates(params: Readonly<{
+export function buildPluginMachineSourceExecutionOriginCandidates(params: MachineFactInputs & Readonly<{
     pluginId: string;
     sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
-    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
 }>): readonly PluginMachineSourceExecutionOriginCandidateV1[] {
     return Object.freeze(params.sources.filter((candidate) => candidate.source.origin.sourceRef.pluginId === params.pluginId).map((candidate) => {
         const origin = candidate.source.origin;
-        const reason = resolveFleetMachineRejection({
+        const reason = readMachineFact(params, {
             serverIdentityId: origin.serverIdentityId, machineId: origin.sourceRef.machineId,
-            machineSnapshots: params.machineSnapshots,
-        });
+        }).rejection;
         return reason ? Object.freeze({ ...candidate, validation: { kind: 'rejected' as const, reason } }) : candidate;
     }));
 }
@@ -145,10 +157,9 @@ export function buildPluginMachineSourceExecutionOriginCandidates(params: Readon
  * compatibility decisions remain injected from the Artifact owner; this
  * function never manufactures those facts from version strings or UI assets.
  */
-export function buildPluginMachineExecutionOriginCandidates(params: Readonly<{
+export function buildPluginMachineExecutionOriginCandidates(params: MachineFactInputs & Readonly<{
     pluginId: string;
     materializations: readonly PluginMachineMaterializationV1[];
-    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
     classifyRelease: (materialization: PluginMachineMaterializationV1) => PluginMachineReleaseClassificationV1;
     machineRejections?: readonly PluginMachineExecutionOriginRejectionV1[];
 }>): readonly PluginMachineExecutionOriginCandidateV1[] {
@@ -160,7 +171,7 @@ export function buildPluginMachineExecutionOriginCandidates(params: Readonly<{
                 materialization,
                 releaseContent: release.releaseContent,
                 validation: resolvePluginMachineMaterializationValidation({ materialization, release,
-                    machineRejection: resolveFleetMachineRejection({ ...materialization, machineSnapshots: params.machineSnapshots })
+                    machineRejection: readMachineFact(params, materialization).rejection
                         ?? params.machineRejections?.find(entry => entry.serverIdentityId === materialization.serverIdentityId
                             && entry.machineId === materialization.machineId)?.reason ?? null }),
             });

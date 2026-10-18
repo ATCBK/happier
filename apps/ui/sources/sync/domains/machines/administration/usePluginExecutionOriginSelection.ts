@@ -48,8 +48,9 @@ import {
     type PluginMachineSourceExecutionOriginCandidateV1,
     type PluginExecutionOriginCandidateV1,
     type PluginExecutionOriginContextualTarget,
+    type PluginExecutionOriginMachineFactReader,
 } from './pluginExecutionOrigin';
-import { resolveFleetMachineRejection } from './fleetUnion';
+import { resolveFleetSnapshotMachineRejection } from './fleetUnion';
 import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { readCurrentPluginMachineExecutionTargetPreference, readPluginMachineExecutionTargetPreference,
@@ -88,11 +89,14 @@ type ExecutionOriginMachineSnapshotSelection = Readonly<{
     key: string;
     snapshots: readonly ServerMachineInventorySnapshotV1[];
     nextRefreshAtMs: number | null;
+    readMachineFact: PluginExecutionOriginMachineFactReader;
 }>;
+const EMPTY_MACHINE_FACT = Object.freeze({ activeAt: 0, rejection: 'unknown' as const, eligible: false });
 const DISABLED_EXECUTION_ORIGIN_MACHINE_SNAPSHOT_SELECTION = Object.freeze({
     key: '',
     snapshots: EMPTY_EXECUTION_ORIGIN_MACHINE_SNAPSHOTS,
     nextRefreshAtMs: null,
+    readMachineFact: () => EMPTY_MACHINE_FACT,
 });
 
 type StorageState = ReturnType<typeof storage.getState>;
@@ -125,6 +129,8 @@ let cachedExecutionOriginMachineSnapshots: Readonly<{
     snapshots: readonly ServerMachineInventorySnapshotV1[];
     machineFactsKey: string;
     factsByPluginId: Map<string, ExecutionOriginMachineFacts>;
+    readMachineFact: PluginExecutionOriginMachineFactReader;
+    pendingServerIdentityIds: ReadonlySet<string>;
 }> | null = null;
 
 function readExecutionOriginMachineFacts(
@@ -134,17 +140,18 @@ function readExecutionOriginMachineFacts(
     const previous = producer.factsByPluginId.get(inputs.pluginId);
     // Even a plugin with no candidate has a meaningful pending census. Keep
     // that Home's readiness in the semantic key alongside candidate admission.
-    const inventoryPending = producer.snapshots.some(snapshot => 'serverIdentityId' in snapshot
-        && snapshot.serverIdentityId === inputs.readinessServerIdentityId && isMachineInventoryPending(snapshot));
+    const inventoryPending = producer.pendingServerIdentityIds.has(inputs.readinessServerIdentityId ?? '');
     const key = previous?.materializations === inputs.materializations && previous.sources === inputs.sources
         && previous.readinessServerIdentityId === inputs.readinessServerIdentityId && previous.inventoryPending === inventoryPending
         ? previous.selection.key
         : `${producer.accountScopeKey}\u0000${inputs.readinessServerIdentityId ?? ''}\u0000${inventoryPending}\u0000${serializePluginMachineExecutionOriginMachineFacts({
             pluginId: inputs.pluginId, materializations: inputs.materializations, sources: inputs.sources,
             machineSnapshots: producer.snapshots,
+            readMachineFact: producer.readMachineFact,
         })}`;
     const selection = previous?.selection.key === key && previous.selection.snapshots === producer.snapshots
-        ? previous.selection : Object.freeze({ key, snapshots: producer.snapshots, nextRefreshAtMs: producer.nextRefreshAtMs });
+        ? previous.selection : Object.freeze({ key, snapshots: producer.snapshots, nextRefreshAtMs: producer.nextRefreshAtMs,
+            readMachineFact: producer.readMachineFact });
     producer.factsByPluginId.set(inputs.pluginId, { pluginId: inputs.pluginId,
         materializations: inputs.materializations, sources: inputs.sources,
         readinessServerIdentityId: inputs.readinessServerIdentityId, inventoryPending, selection });
@@ -214,13 +221,32 @@ function readExecutionOriginMachineSnapshots(params: ExecutionOriginMachineFactI
     // Project eligibility once at the inventory producer. Heartbeat timestamps
     // and labels can change without changing a plugin's machine-origin facts.
     // Fleet remains the policy owner; this is only its reusable projection.
-    const machineFactsKey = JSON.stringify(snapshots.flatMap(snapshot => snapshot.kind === 'resolved' ? [[
-        snapshot.serverIdentityId, snapshot.settled === true,
-        [...snapshot.machines].sort((left, right) => right.activeAt - left.activeAt || left.id.localeCompare(right.id)).map(machine => [machine.id, resolveFleetMachineRejection({
-            serverIdentityId: snapshot.serverIdentityId, machineId: machine.id, machineSnapshots: snapshots,
-        }), snapshot.executionEligibleMachineIds?.includes(machine.id) === true,
-        snapshot.executionPendingMachineIds?.includes(machine.id) === true]),
-    ]] : []));
+    const inventoryByHome = new Map<string, Readonly<{
+        snapshot: Extract<ServerMachineInventorySnapshotV1, { kind: 'resolved' }>;
+        factsByMachineId: ReadonlyMap<string, ReturnType<PluginExecutionOriginMachineFactReader>>;
+    }>>();
+    const pendingServerIdentityIds = new Set<string>();
+    const inventoryFacts = snapshots.flatMap(snapshot => {
+        if ('serverIdentityId' in snapshot && isMachineInventoryPending(snapshot)) pendingServerIdentityIds.add(snapshot.serverIdentityId);
+        if (snapshot.kind !== 'resolved') return [];
+        const eligible = new Set(snapshot.executionEligibleMachineIds);
+        const pending = new Set(snapshot.executionPendingMachineIds);
+        const factsByMachineId = new Map(snapshot.machines.map(machine => [machine.id, {
+            activeAt: machine.activeAt,
+            rejection: resolveFleetSnapshotMachineRejection({ snapshot, machine, executionEligible: eligible.has(machine.id) }),
+            eligible: eligible.has(machine.id),
+        }] as const));
+        inventoryByHome.set(snapshot.serverIdentityId, { snapshot, factsByMachineId });
+        return [[snapshot.serverIdentityId, snapshot.settled === true,
+            [...factsByMachineId].sort(([leftId, left], [rightId, right]) => right.activeAt - left.activeAt || leftId.localeCompare(rightId))
+                .map(([machineId, fact]) => [machineId, fact.rejection, fact.eligible, pending.has(machineId)])]];
+    });
+    const machineFactsKey = JSON.stringify(inventoryFacts);
+    const readMachineFact: PluginExecutionOriginMachineFactReader = target => {
+        const home = inventoryByHome.get(target.serverIdentityId);
+        return home?.factsByMachineId.get(target.machineId) ?? { activeAt: 0, eligible: false,
+            rejection: resolveFleetSnapshotMachineRejection({ snapshot: home?.snapshot, machine: undefined }) };
+    };
     cachedExecutionOriginMachineSnapshots = {
         profiles,
         activeServerId: params.activeServerId,
@@ -233,6 +259,8 @@ function readExecutionOriginMachineSnapshots(params: ExecutionOriginMachineFactI
         nextRefreshAtMs,
         snapshots,
         machineFactsKey,
+        readMachineFact,
+        pendingServerIdentityIds,
         // This inventory producer owns reuse across selectors/consumers as
         // well as store updates. Its presence deadline invalidates both facts.
         factsByPluginId: cached?.accountScopeKey === accountScopeKey && cached.machineFactsKey === machineFactsKey
@@ -496,6 +524,7 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
     // resolves its own credential-bound presentation asynchronously; borrowing
     // that snapshot here can memoize a cold refusal after semantic readiness.
     const machineSnapshots = semanticMachineSelection.snapshots;
+    const readMachineFact = semanticMachineSelection.readMachineFact;
     const machineCandidates = React.useMemo(() => enabled && includeMachineCandidates
         ? buildMachineAdministrationCandidatesFromSnapshots({ snapshots: presentationMachineSnapshots })
         : Object.freeze([]), [enabled, includeMachineCandidates, presentationMachineSnapshots]);
@@ -551,16 +580,15 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
             ? materializationAdmission.materializations
             : [],
         machineSnapshots,
+        readMachineFact,
         classifyRelease: params.classifyRelease,
         machineRejections: params.machineRejections,
     }), buildPluginMachineSourceExecutionOriginCandidates({ pluginId: params.pluginId,
-        sources: params.sourceCandidates ?? [], machineSnapshots })) : Object.freeze([]), [enabled, machineFactsKey, materializationAdmission, params.classifyRelease, params.pluginId, params.sourceCandidates, params.machineRejections]);
+        sources: params.sourceCandidates ?? [], machineSnapshots, readMachineFact })) : Object.freeze([]), [enabled, machineFactsKey, materializationAdmission, params.classifyRelease, params.pluginId, params.sourceCandidates, params.machineRejections]);
     const rememberedTarget = storedTarget ?? (storedOrigin ? { serverIdentityId: storedOrigin.serverIdentityId,
         machineId: getPluginMachineExecutionOriginRef(storedOrigin).machineId } : null);
-    const storedOriginMachinePresence = rememberedTarget ? resolveFleetMachineRejection({
-        ...rememberedTarget,
-        machineSnapshots,
-    }) ?? params.machineRejections?.find(entry => entry.serverIdentityId === rememberedTarget.serverIdentityId
+    const storedOriginMachinePresence = rememberedTarget ? readMachineFact(rememberedTarget).rejection
+        ?? params.machineRejections?.find(entry => entry.serverIdentityId === rememberedTarget.serverIdentityId
         && entry.machineId === rememberedTarget.machineId)?.reason ?? null : null;
     const resolvedState = React.useMemo<PluginMachineExecutionOriginStateV1>(() => enabled ? resolvePluginMachineExecutionOriginState({
         pluginId: params.pluginId,

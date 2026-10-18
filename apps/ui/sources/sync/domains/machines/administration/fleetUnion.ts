@@ -37,8 +37,20 @@ export function resolveFleetMachineRejection(params: Readonly<{
 }>): 'unknown' | 'missing' | 'stale' | 'offline' | 'home_unreachable' | 'revoked' | 'replaced' | null {
     const snapshot = params.machineSnapshots.find((candidate) => candidate.kind === 'resolved'
         && candidate.serverIdentityId === params.serverIdentityId);
-    if (!snapshot || snapshot.kind !== 'resolved') return 'unknown';
-    const machine = snapshot.machines.find((candidate) => candidate.id === params.machineId);
+    return resolveFleetSnapshotMachineRejection({
+        snapshot: snapshot?.kind === 'resolved' ? snapshot : undefined,
+        machine: snapshot?.machines.find((candidate) => candidate.id === params.machineId),
+    });
+}
+
+/** The same Fleet policy for inventory producers that already looked up the exact row. */
+export function resolveFleetSnapshotMachineRejection(params: Readonly<{
+    snapshot: Extract<ServerMachineInventorySnapshotV1, { kind: 'resolved' }> | undefined;
+    machine: FleetMachine | undefined;
+    executionEligible?: boolean;
+}>): ReturnType<typeof resolveFleetMachineRejection> {
+    const { snapshot, machine } = params;
+    if (!snapshot) return 'unknown';
     if (!machine) return snapshot.settled === true ? 'missing' : 'unknown';
     if (snapshot.observation === 'stale') return 'stale';
     if (machine.availability?.kind === 'locked') return 'unknown';
@@ -46,7 +58,7 @@ export function resolveFleetMachineRejection(params: Readonly<{
     // Presence shells can look online before their scoped content is opened.
     // Consume the inventory owner's qualification rather than re-deriving it.
     if (presence.status === 'online' && snapshot.executionEligibleMachineIds
-        && !snapshot.executionEligibleMachineIds.includes(params.machineId)) return 'unknown';
+        && !(params.executionEligible ?? snapshot.executionEligibleMachineIds.includes(machine.id))) return 'unknown';
     return presence.status === 'online' ? null : presence.status === 'offline' ? presence.reason : presence.status;
 }
 

@@ -771,6 +771,65 @@ describe('execution-origin plugin identity with real Account and machine owners'
         await hook.unmount();
     });
 
+    it('shares Fleet classification across plugin selectors over one inventory projection', async () => {
+        const { performance } = await import('node:perf_hooks');
+        const serverIdentityId = 'srv_projection_probe';
+        const url = 'https://projection-probe.example.test';
+        await network.addHome(url, FIXTURE_ACCOUNT_ID);
+        const home = await adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: serverIdentityId,
+            canonicalServerUrl: url, revision: 1, endpoints: [{ kind: 'https', url }] }, source: 'manual' });
+        await setActiveServerId(home.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        const scope = { serverId: home.id, accountId: FIXTURE_ACCOUNT_ID };
+        const machines = Array.from({ length: 122 }, (_, index) => createMachineFixture({
+            id: `probe-${index}`, active: true, activeAt: Date.now() + index,
+        }));
+        storage.setState({ profileScope: scope, settingsScope: scope, isDataReady: true, machines: {},
+            machineListByServerId: { [home.id]: machines }, machineListStatusByServerId: { [home.id]: 'idle' } });
+        replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+            availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+        } });
+        const fleet = await import('./fleetUnion');
+        // Instrument real classification, retaining Fleet's policy. Repeating it
+        // per plugin is the measured CPU defect, rather than a render-count contract.
+        const classify = vi.spyOn(fleet, 'resolveFleetMachineRejection');
+        const classifySnapshot = vi.spyOn(fleet, 'resolveFleetSnapshotMachineRejection');
+        const unmounts: Array<() => Promise<void>> = [];
+        const start = performance.now();
+        try {
+            for (let plugin = 0; plugin < 12; plugin += 1) {
+                const pluginId = `external.probe-${plugin}`;
+                const sources = machines.map(machine => ({ source: { origin: { serverIdentityId,
+                    sourceRef: { machineId: machine.id, pluginId, sourceCustody: {
+                        kind: 'development' as const, registeredRootId: machine.id,
+                    } } }, version: '1.0.0', occurrenceId: machine.id, serverId: home.id, generation: 1 },
+                    releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }));
+                const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({
+                    pluginId, sourceCandidates: sources, autoPick: true, renderedVersion: '1.0.0',
+                    includeMachineCandidates: false, classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(),
+                }));
+                unmounts.push(hook.unmount);
+                expect(hook.getCurrent().selectedOrigin).toEqual(sources.at(-1)!.source.origin);
+                expect(hook.getCurrent().canExecute).toBe(true);
+            }
+            const mountMs = performance.now() - start;
+            const classifications = classify.mock.calls.length;
+            const policyClassifications = classifySnapshot.mock.calls.length;
+            const updateStart = performance.now();
+            await act(async () => { storage.setState({ machineListByServerId: { [home.id]: machines.map(machine => ({
+                ...machine, activeAt: machine.activeAt + 1,
+            })) } }); });
+            console.info('execution-origin projection probe', JSON.stringify({ machines: machines.length, plugins: unmounts.length,
+                mountMs, heartbeatMs: performance.now() - updateStart, classifications, policyClassifications }));
+            // All plugin targets belong to the same inventory: target-by-target
+            // snapshot scans must not be repeated for each plugin's candidates/facts.
+            expect(classifications).toBeLessThanOrEqual(machines.length);
+            expect(policyClassifications).toBe(machines.length);
+        } finally {
+            for (const unmount of unmounts) await unmount();
+        }
+    });
+
     it('recomputes candidates and reasons on A-to-B-to-A without refreshing stable inputs', async () => {
         const scope = { serverId: getActiveServerSnapshot().serverId, accountId: FIXTURE_ACCOUNT_ID };
         storage.setState({ profileScope: scope });
