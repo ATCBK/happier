@@ -172,7 +172,11 @@ describe('connected-service credential exact 0.2.1 response boundary', () => {
     const secondApi = new ConnectedServiceCredentialHttpClient({ token: secondToken });
     try {
       await first.read();
-      vi.mocked(axios.get).mockResolvedValue({ status: 503, data: {} });
+      // The retired credential is unavailable; the remaining holder can still
+      // establish its own subscription fact after credential handover.
+      vi.mocked(axios.get).mockImplementation(async (_url, config) =>
+        config?.headers?.Authorization === `Bearer ${secondToken}`
+          ? { status: 200, data: fact } : { status: 503, data: {} });
       await first.dispose();
       await expect(firstApi.getAccountEncryptionMode()).resolves.toBe('plain');
       await expect(secondApi.getAccountEncryptionMode()).resolves.toBe('plain');

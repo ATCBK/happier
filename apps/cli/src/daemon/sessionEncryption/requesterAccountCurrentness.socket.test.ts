@@ -36,16 +36,22 @@ describe('requester Account currentness over the installed socket wiring', () =>
         const first = { mode: 'plain' as const, version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null };
         const second = { ...first, version: 2 };
         vi.spyOn(axios, 'get').mockResolvedValueOnce({ status: 200, data: first }).mockResolvedValueOnce({ status: 200, data: second });
-        const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: 'private-account', token: 'secret-token', serverBaseUrl: 'https://private-home.example' });
+        const scope = { accountId: 'private-account', serverBaseUrl: 'https://private-home.example' };
+        const observation = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'secret-token' });
+        const remaining = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'remaining-secret-token' });
         try {
             await expect(observation.read()).resolves.toEqual(first);
-            await expect(observation.read()).resolves.toEqual(second);
+            await observation.dispose();
+            await expect(remaining.read()).resolves.toEqual(second);
+            expect(axios.get).toHaveBeenLastCalledWith('https://private-home.example/v1/account/encryption/currentness',
+                expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer remaining-secret-token' }) }));
             expect(warnings).toHaveBeenCalled();
             expect(JSON.stringify(warnings.mock.calls)).not.toContain('secret-token');
             expect(JSON.stringify(warnings.mock.calls)).not.toContain('private-account');
             expect(JSON.stringify(warnings.mock.calls)).not.toContain('private-home.example');
         } finally {
             await observation.dispose();
+            await remaining.dispose();
         }
     });
 
@@ -255,6 +261,78 @@ describe('requester Account currentness over the installed socket wiring', () =>
             await first.dispose();
             expect(second.isCurrent(fact)).toBe(true);
         } finally { vi.useRealTimers(); await first.dispose(); await second.dispose(); await channel.close(); }
+    });
+
+    it('keeps the shared observation on a live credential after its original holder retires', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        let retired = false;
+        const reads = vi.spyOn(axios, 'get').mockImplementation(async (_url, config) =>
+            retired && config?.headers?.Authorization === 'Bearer original-token'
+                ? { status: 401, data: {} } : { status: 200, data: fact });
+        const scope = { accountId: 'bob', serverBaseUrl: 'https://home.example' };
+        const first = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'original-token' });
+        const remaining = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'remaining-token' });
+        try {
+            await expect(first.read()).resolves.toEqual(fact);
+            await first.dispose();
+            retired = true;
+            await expect(remaining.read()).resolves.toEqual(fact);
+            await channel.push('bob', null);
+            await expect(remaining.read()).resolves.toEqual(fact);
+            expect(reads).toHaveBeenLastCalledWith('https://home.example/v1/account/encryption/currentness',
+                expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer remaining-token' }) }));
+            const connected = channel.clients.filter(client => client.connected);
+            expect(connected).toHaveLength(1);
+            expect(connected[0]?.auth).toMatchObject({ token: 'remaining-token' });
+        } finally {
+            await first.dispose();
+            await remaining.dispose();
+            await channel.close();
+        }
+    });
+
+    it('does not wait for a retired credential HTTP read or publish its late fact after handover', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const oldFact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const currentFact = { ...oldFact, version: 2, updatedAt: 2 };
+        let entered!: () => void;
+        let release!: () => void;
+        const waiting = new Promise<void>(resolve => { entered = resolve; });
+        const held = new Promise<void>(resolve => { release = resolve; });
+        vi.spyOn(axios, 'get').mockImplementation(async (_url, config) => {
+            if (config?.headers?.Authorization === 'Bearer original-token') {
+                entered();
+                // A network boundary can finish after its AbortSignal; publication must remain fenced.
+                await held;
+                return { status: 200, data: oldFact };
+            }
+            return { status: 200, data: currentFact };
+        });
+        const scope = { accountId: 'bob', serverBaseUrl: 'https://home.example' };
+        const original = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'original-token' });
+        const remaining = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'remaining-token' });
+        const reading = original.read().then(() => 'resolved', () => 'retired');
+        try {
+            await waiting;
+            await original.dispose();
+            await expect(reading).resolves.toBe('retired');
+            await expect(remaining.read()).resolves.toEqual(currentFact);
+            release();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            await expect(remaining.read()).resolves.toEqual(currentFact);
+            expect(remaining.isCurrent(currentFact)).toBe(true);
+            const connected = channel.clients.filter(client => client.connected);
+            expect(connected).toHaveLength(1);
+            expect(connected[0]?.auth).toMatchObject({ token: 'remaining-token' });
+        } finally {
+            release();
+            await original.dispose();
+            await remaining.dispose();
+            await channel.close();
+        }
     });
 
     it('keeps a pushed fact when an earlier HTTP subscription read finishes later', async () => {

@@ -56,6 +56,9 @@ In 0.3 development, the CLI's
 observation shared by requester admission and connected-service mode reads.
 Only exact credentials independently authenticated by a live admitted holder
 can borrow that observation; other credentials use their own fresh HTTP read.
+When the transport credential loses its last holder, the existing observation
+withdraws its fact and reconnects with a remaining admitted credential; stale
+transport events and HTTP responses cannot publish through that handover.
 Readers outside a subscribed lifetime retain fresh HTTP reads. A disconnected
 or invalidated observation grants no currentness; canceling one reader leaves
 other subscription holders active.
