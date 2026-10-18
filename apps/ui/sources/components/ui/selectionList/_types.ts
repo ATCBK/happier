@@ -709,6 +709,11 @@ export type SelectionListFilter = Readonly<{
      * what the filter covers is incomplete (a source still being read). Omitted: no dot.
      */
     presence?: 'online' | 'offline' | 'attention';
+    /**
+     * One quiet word after the value that says how it came to be the value ("Studio Mac  Auto": picked for
+     * the viewer, not chosen by them). Never a count or a state; omit it for a value the viewer chose.
+     */
+    note?: string;
     /** Draw the filter's name, quieter, before its value ("Agents  Claude, Codex"). */
     showLabel?: boolean;
     /** The filter narrows what is shown: the chip takes the accent edge so a narrowed view is never missed. */

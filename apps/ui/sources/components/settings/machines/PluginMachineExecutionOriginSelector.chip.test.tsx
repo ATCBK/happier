@@ -240,6 +240,27 @@ describe('PluginMachineExecutionOriginSelector header chip', () => {
         expect(chip?.props.accessibilityState?.expanded ?? chip?.props['aria-expanded']).toBe(false);
     }));
 
+    it('names a Machine Happier picked with a quiet Auto and offers no Clear; a pin has neither', () => withPopoverWebGlobals(async () => {
+        const fixture = createSelection();
+        const origin = composePluginMachineExecutionOriginV1(fixture.candidates[0]!.materialization);
+        const picked = (selectionSource: 'auto' | 'pinned'): PluginMachineExecutionOriginSelectionV1 => ({ ...fixture.selection, selectedOrigin: origin,
+            state: { kind: 'selected', origin, candidate: fixture.candidates[0]!, selectionSource }, canExecute: true });
+        const auto = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={picked('auto')} presentation="chip" testIDPrefix="auto.execution" />);
+        const autoChip = auto.findHostByTestId('auto.execution.chip');
+        expect(autoChip?.props.accessibilityLabel).toContain('settingsPlugins.surfaces.runOnAuto');
+        expect(autoChip?.props.accessibilityHint).toBe('settingsPlugins.surfaces.runOnAutoHint');
+        await auto.pressByTestIdAsync('auto.execution.chip');
+        expect(auto.findHostByTestId('auto.execution.clear')).toBeNull();
+        await auto.unmount();
+        const pinned = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={picked('pinned')} presentation="chip" testIDPrefix="pin.execution" />);
+        const pinChip = pinned.findHostByTestId('pin.execution.chip');
+        expect(pinChip?.props.accessibilityLabel).not.toContain('settingsPlugins.surfaces.runOnAuto');
+        expect(pinChip?.props.accessibilityHint).toBeUndefined();
+        await pinned.pressByTestIdAsync('pin.execution.chip');
+        expect(pinned.findHostByTestId('pin.execution.clear')).not.toBeNull();
+        await pinned.unmount();
+    }));
+
     it('keeps Clear selection inside the machine list so a long list cannot clip it out of the popover', () => withPopoverWebGlobals(async () => {
         const fixture = createSelection();
         const selection = { ...fixture.selection, selectedOrigin: composePluginMachineExecutionOriginV1(fixture.candidates[0]!.materialization) };

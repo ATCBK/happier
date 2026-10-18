@@ -8108,6 +8108,8 @@ const pluginSettingsPresentationTranslations = { it: {
             allResults: 'Tutti i risultati',
             categoriesLabel: 'Categorie',
             runOnNoneChosen: 'Nessuna macchina scelta',
+            runOnAuto: 'Automatico',
+            runOnAutoHint: 'Scelta per te',
             machineCapabilityUnavailable: ({ machine }: { machine: string }) => `Questa operazione non è disponibile su ${machine}. Riconnettila o scegli un’altra macchina con Esegui su.`,
             runOnNoneAvailable: 'Nessuna macchina può ancora eseguirlo',
             runsEverywhere: 'Su ogni macchina che esegue Happier',

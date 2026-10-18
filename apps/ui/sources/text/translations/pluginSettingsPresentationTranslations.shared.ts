@@ -98,6 +98,8 @@ export const english = {
         allResults: 'All results',
         categoriesLabel: 'Categories',
         runOnNoneChosen: 'No machine chosen',
+        runOnAuto: 'Auto',
+        runOnAutoHint: 'Picked for you',
         machineCapabilityUnavailable: ({ machine }: { machine: string }) => `This operation is unavailable on ${machine}. Reconnect it or choose another machine with Run on.`,
         runOnNoneAvailable: 'No machine can run it yet',
         runsEverywhere: 'On every machine running Happier',

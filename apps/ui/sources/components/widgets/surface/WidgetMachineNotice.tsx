@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { useStore } from 'zustand';
+import { PluginUiSurfaceNoticeContext } from '@happier-dev/plugin-ui/advanced';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
@@ -8,41 +9,55 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 
 /**
- * Says, in place of a widget body, that the Machine the widget runs on cannot be reached — naming it and
- * the way out, with one action — once the mounted body has been refused a Machine-owned call. The mount
+ * Says once that the Machine a widget runs on cannot be reached — naming it and the way out — once the
+ * mounted body has been refused a Machine-owned call, and keeps the rest of the body usable. The mount
  * that refused lends how to word it (`useBoundPluginSurfaceController`); the wording is read again
  * whenever the stores change, so the Machine's name fills in and the notice leaves when the Machine
- * answers. The body stays mounted but hidden while the notice shows (it is what asks the Machine and
- * withdraws the notice), so the cause is stated once whichever plugin the widget is; a plugin's own
- * error never appears for this cause. Retry asks the body afresh.
+ * answers. A plugin's own failure state for that part (plugin-ui `ErrorState`, a failed `SurfaceState`)
+ * claims the sentence and says it in its own place with its own action, so only the part that needed
+ * the Machine changes; while nothing claims it (an optional part failed quietly), the host says it as
+ * one line above the body, with one action, Retry, which asks the body afresh.
  */
 export function WidgetMachineNoticeBoundary(props: Readonly<{ testID: string; children: React.ReactNode }>): React.ReactElement {
     const [source, setSource] = React.useState<WidgetFrameBodyNoticeSource | null>(null);
     const [attempt, setAttempt] = React.useState(0);
+    const [claimants, setClaimants] = React.useState<ReadonlySet<string>>(EMPTY_CLAIMANTS);
     const lend = React.useCallback((next: WidgetFrameBodyNoticeSource | null) => setSource(() => next), []);
     const retry = React.useCallback(() => {
         setSource(null);
         setAttempt((current) => current + 1);
     }, []);
+    const claim = React.useCallback((id: string) => {
+        setClaimants((current) => (current.has(id) ? current : new Set(current).add(id)));
+        return () => setClaimants((current) => {
+            if (!current.has(id)) return current;
+            const next = new Set(current);
+            next.delete(id);
+            return next;
+        });
+    }, []);
     const notice = useStore(storage, () => source?.() ?? null);
+    const surfaceNotice = React.useMemo(() => (notice === null ? null : { sentence: notice, claim }), [notice, claim]);
     return (
         <WidgetFrameBodyNoticeContext.Provider value={lend}>
-            {notice === null ? null : (
+            {notice === null || claimants.size > 0 ? null : (
                 <SurfaceStateCard
                     testID={`${props.testID}-machine-notice`}
                     kind="warning"
-                    replacesContent
+                    size="line"
                     title={notice}
                     action={{ label: t('common.retry'), onPress: retry }}
                     accessibilitySemantics="status"
                 />
             )}
-            <View testID={`${props.testID}-body`} style={notice === null ? bodyShown : bodyHidden}>
-                <React.Fragment key={attempt}>{props.children}</React.Fragment>
-            </View>
+            <PluginUiSurfaceNoticeContext.Provider value={surfaceNotice}>
+                <View testID={`${props.testID}-body`} style={bodyStyle}>
+                    <React.Fragment key={attempt}>{props.children}</React.Fragment>
+                </View>
+            </PluginUiSurfaceNoticeContext.Provider>
         </WidgetFrameBodyNoticeContext.Provider>
     );
 }
 
-const bodyShown = { flexGrow: 1, minWidth: 0 } as const;
-const bodyHidden = { display: 'none' } as const;
+const EMPTY_CLAIMANTS: ReadonlySet<string> = new Set();
+const bodyStyle = { flexGrow: 1, minWidth: 0 } as const;

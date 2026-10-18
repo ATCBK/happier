@@ -8130,6 +8130,8 @@ const pluginSettingsPresentationTranslations = { ru: {
             allResults: 'Все результаты',
             categoriesLabel: 'Категории',
             runOnNoneChosen: 'Машина не выбрана',
+            runOnAuto: 'Авто',
+            runOnAutoHint: 'Выбрана автоматически',
             machineCapabilityUnavailable: ({ machine }: { machine: string }) => `Эта операция недоступна на ${machine}. Подключите машину снова или выберите другую в поле «Запускать на».`,
             runOnNoneAvailable: 'Пока ни одна машина не может его запустить',
             runsEverywhere: 'На каждой машине с Happier',

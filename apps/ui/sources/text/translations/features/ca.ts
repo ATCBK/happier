@@ -8108,6 +8108,8 @@ const pluginSettingsPresentationTranslations = { ca: {
             allResults: 'Tots els resultats',
             categoriesLabel: 'Categories',
             runOnNoneChosen: 'Cap màquina triada',
+            runOnAuto: 'Automàtic',
+            runOnAutoHint: 'Triada per tu',
             machineCapabilityUnavailable: ({ machine }: { machine: string }) => `Aquesta operació no està disponible a ${machine}. Torna-la a connectar o tria una altra màquina amb Executa a.`,
             runOnNoneAvailable: 'Encara cap màquina no el pot executar',
             runsEverywhere: 'A cada màquina que executa Happier',

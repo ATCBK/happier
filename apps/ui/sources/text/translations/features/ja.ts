@@ -8102,6 +8102,8 @@ const pluginSettingsPresentationTranslations = { ja: {
             allResults: 'すべての結果',
             categoriesLabel: 'カテゴリ',
             runOnNoneChosen: 'マシンが選択されていません',
+            runOnAuto: '自動',
+            runOnAutoHint: '自動で選択',
             machineCapabilityUnavailable: ({ machine }: { machine: string }) => `${machine} ではこの操作を利用できません。再接続するか、「実行先」で別のマシンを選んでください。`,
             runOnNoneAvailable: 'まだ実行できるマシンがありません',
             runsEverywhere: 'Happier を実行するすべてのマシン',

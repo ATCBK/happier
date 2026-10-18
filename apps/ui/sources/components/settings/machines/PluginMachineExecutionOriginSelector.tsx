@@ -200,6 +200,8 @@ export type PluginMachineExecutionOriginPresentation = Readonly<{
     selected: boolean;
     /** A chosen Machine that cannot run this plugin's operations now (offline, unreachable, rejected). */
     unavailable?: boolean;
+    /** Happier picked this Machine (nothing is pinned on this device); choosing one pins it. */
+    automatic?: boolean;
 }>;
 
 /** The one presentation for remembered Machine intent and current operation custody. */
@@ -229,6 +231,7 @@ export function resolvePluginMachineExecutionOriginPresentation(
                 ? resolveCandidatePresentationDetail(selectedCandidate)
                 : t('common.unavailable'),
             selected: true,
+            automatic: !selection.storedTarget && selection.state.kind === 'selected' && selection.state.selectionSource === 'auto',
             unavailable: selection.state.kind === 'unavailable'
                 || !selectedCandidate
                 || !isPluginMachineExecutionOriginCandidateSelectable(selectedCandidate),
@@ -309,7 +312,8 @@ export function PluginMachineExecutionOriginSelectorView(props: Readonly<{
     const hasCandidates = props.selection.candidates.length > 0;
     const selectedOrigin = props.selection.selectedOrigin
         ?? (props.selection.state.kind === 'selected' ? props.selection.state.origin : null);
-    const hasChoice = Boolean(props.selection.storedTarget || selectedOrigin);
+    // Only a pin can be cleared: a Machine Happier picked is not a choice the viewer made.
+    const hasChoice = Boolean(props.selection.storedTarget || selectedOrigin) && !current.automatic;
     // A remembered Machine that cannot answer stays the choice: the list marks its row, not a stand-in.
     const storedTarget = props.selection.storedTarget
         ?? (props.selection.state.kind === 'unavailable' ? props.selection.state.storedTarget : null);
@@ -327,6 +331,9 @@ export function PluginMachineExecutionOriginSelectorView(props: Readonly<{
             id: 'plugin-execution',
             label: groupTitle,
             valueLabel: current.title,
+            // Picked for the viewer: named like a choice, with one quiet word that it was picked, so an
+            // explicit pin (no word) and an unavailable pin (the offline dot) each read as themselves.
+            ...(current.automatic ? { note: t('settingsPlugins.surfaces.runOnAuto'), accessibilityHint: t('settingsPlugins.surfaces.runOnAutoHint') } : {}),
             icon: <Icon name="desktop" size={14} color={theme.colors.text.secondary} />,
             muted: !current.selected,
             // The chosen Machine is named either way; when it cannot answer, the chip says so with the
@@ -387,7 +394,7 @@ export function PluginMachineExecutionOriginSelectorView(props: Readonly<{
                 <Item
                     testID={currentTestID}
                     title={current.title}
-                    subtitle={[current.subtitle, current.detail].filter(Boolean).join('\n')}
+                    subtitle={[current.subtitle, current.automatic ? `${t('settingsPlugins.surfaces.runOnAutoHint')} · ${current.detail}` : current.detail].filter(Boolean).join('\n')}
                     subtitleLines={0}
                     detail={hasCandidates ? t('common.change') : undefined}
                     selected={current.selected}

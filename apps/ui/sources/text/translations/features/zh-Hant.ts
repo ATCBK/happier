@@ -8097,6 +8097,8 @@ const pluginSettingsPresentationTranslations = { 'zh-Hant': {
             allResults: '全部結果',
             categoriesLabel: '類別',
             runOnNoneChosen: '未選擇機器',
+            runOnAuto: '自動',
+            runOnAutoHint: '已為你選擇',
             machineCapabilityUnavailable: ({ machine }: { machine: string }) => `此操作在 ${machine} 上無法使用。請重新連線，或透過「執行於」選擇另一台機器。`,
             runOnNoneAvailable: '暫無可執行它的機器',
             runsEverywhere: '在每台執行 Happier 的機器上',

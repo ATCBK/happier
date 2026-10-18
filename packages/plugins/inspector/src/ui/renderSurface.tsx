@@ -774,8 +774,9 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
         value: search,
         onValueChange: setSearch,
       } } : {})}
-      // On the page the page header and sections own the page edge (as the rows below them do); the pane pads its stack.
-      header={<Stack style={{ paddingHorizontal: onPage ? 0 : theme.spacing.medium, paddingTop: theme.spacing.medium }}>{surfaceHeader}</Stack>}
+      // On the page the page header owns the page edge, top included (as the rows below it do), so the loaded
+      // header sits exactly where the host's loading header stood; the pane pads its stack.
+      header={<Stack style={onPage ? undefined : { paddingHorizontal: theme.spacing.medium, paddingTop: theme.spacing.medium }}>{surfaceHeader}</Stack>}
       empty={plugins === null ? null : plugins.length === 0 ? (
         <EmptyState title={text('plugins.inspector.surface.empty', 'No plugins installed.')} />
       ) : (

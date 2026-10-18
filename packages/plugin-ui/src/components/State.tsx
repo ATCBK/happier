@@ -4,6 +4,7 @@ import type { ResourceContent } from '@happier-dev/plugin-sdk/ui';
 import type { PluginUiResourceSnapshot } from '../hostApi/resourceStore.js';
 
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
+import { useClaimedPluginUiSurfaceNotice } from '../presentationHost/surfaceNotice.js';
 import { resolveHappierFreshnessText } from '../presentation/state/asOfTime.js';
 import { usePluginSurfaceActivity } from '../hostApi/context.js';
 import { HappierSkeletonRows } from '../presentation/feedback/Skeleton.js';
@@ -488,7 +489,16 @@ const STATE_DEFAULT_GLYPH: Partial<Record<HappierSurfaceStateKind, IconName>> = 
 const UNSIZED_STATE_GLYPH_PX = 32;
 const UNSIZED_STATE_GLYPH_GAP_PX = 8;
 
-function SurfaceStateAdapter(props: SurfaceStateProps & Readonly<{ actionSlot?: ReactNode }>): ReactElement {
+function SurfaceStateAdapter(authored: SurfaceStateProps & Readonly<{ actionSlot?: ReactNode }>): ReactElement {
+  // While the host has one sentence about a part that cannot run now (its Machine cannot be reached), a
+  // failure state says that sentence in its own place, with its own action, instead of its own copy:
+  // the cause is said once, where it failed, and the host draws nothing of its own beside it.
+  const hostSentence = useClaimedPluginUiSurfaceNotice(authored.kind === 'error' || authored.kind === 'unavailable');
+  const props = hostSentence === null ? authored : {
+    ...authored, kind: 'warning' as const, title: hostSentence, titleKey: undefined,
+    description: undefined, descriptionKey: undefined, note: undefined, noteKey: undefined, details: undefined, icon: undefined,
+    body: undefined, live: undefined, actionCaption: undefined, secondaryAction: undefined, learnMore: undefined,
+  };
   const translate = usePluginTranslation();
   const theme = usePluginTheme();
   const surfaceActivity = usePluginSurfaceActivity();

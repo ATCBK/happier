@@ -8109,6 +8109,8 @@ const pluginSettingsPresentationTranslations = { de: {
             allResults: 'Alle Ergebnisse',
             categoriesLabel: 'Kategorien',
             runOnNoneChosen: 'Kein Rechner gewählt',
+            runOnAuto: 'Automatisch',
+            runOnAutoHint: 'Für dich gewählt',
             machineCapabilityUnavailable: ({ machine }: { machine: string }) => `Dieser Vorgang ist auf ${machine} nicht verfügbar. Verbinde den Rechner erneut oder wähle unter „Ausführen auf“ einen anderen.`,
             runOnNoneAvailable: 'Noch kann kein Rechner es ausführen',
             runsEverywhere: 'Auf jedem Rechner mit Happier',

@@ -9,6 +9,8 @@ import { Text } from '@/components/ui/text/Text';
 import { storage } from '@/sync/domains/state/storageStore';
 import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
 
+import { useClaimedPluginUiSurfaceNotice } from '@happier-dev/plugin-ui/advanced';
+
 import { WidgetMachineNoticeBoundary } from './WidgetMachineNotice';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -68,26 +70,46 @@ describe('WidgetMachineNoticeBoundary', () => {
         expect(screen.findByTestId('widget-machine-notice')).toBeNull();
     });
 
-    it('replaces the body with that one sentence and one action: the body stays mounted but is not shown, and Try again asks it afresh', async () => {
+    it('keeps the body usable and says it once: in the failure state that claims it, or else as one line with one action', async () => {
         let mounts = 0;
-        function RefusedOnce() {
+        function MixedBody(props: Readonly<{ failed: boolean }>) {
             const lend = React.useContext(WidgetFrameBodyNoticeContext);
             const [mount] = React.useState(() => ++mounts);
             React.useEffect(() => {
                 if (mount === 1) lend?.(() => 'This operation is unavailable on Studio Mac.');
                 return () => lend?.(null);
             }, [lend, mount]);
-            return <Text testID="plugin-error">The latest entries could not be read</Text>;
+            return (
+                <>
+                    <Text testID="account-rows">Account rows</Text>
+                    {props.failed ? <FailureState /> : null}
+                </>
+            );
         }
-        const screen = await renderScreen(<WidgetMachineNoticeBoundary testID="widget"><RefusedOnce /></WidgetMachineNoticeBoundary>);
+        // What a plugin's own failure state does (plugin-ui `ErrorState`): says the host sentence in its place.
+        function FailureState() {
+            const sentence = useClaimedPluginUiSurfaceNotice(true);
+            return <Text testID="plugin-error">{sentence ?? 'The latest entries could not be read'}</Text>;
+        }
+        const render = (failed: boolean) => <WidgetMachineNoticeBoundary testID="widget"><MixedBody failed={failed} /></WidgetMachineNoticeBoundary>;
+        const screen = await renderScreen(render(true));
         await flushHookEffects({ cycles: 2 });
-        const body = screen.findByTestId('widget-body');
-        expect(body?.props.style).toMatchObject({ display: 'none' });
+        expect(screen.findByTestId('widget-body')?.props.style).not.toMatchObject({ display: 'none' });
+        expect(screen.getTextContent()).toContain('Account rows');
+        expect(screen.getTextContent().split('This operation is unavailable on Studio Mac.')).toHaveLength(2);
+        expect(screen.getTextContent()).not.toContain('could not be read');
+        expect(screen.findByTestId('widget-machine-notice')).toBeNull();
+
+        // The optional part failed without a failure state of its own: the host says it, once, above the body.
+        await screen.update(render(false));
+        await flushHookEffects({ cycles: 2 });
+        expect(screen.findByTestId('widget-machine-notice')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('Account rows');
+        expect(screen.getTextContent().split('This operation is unavailable on Studio Mac.')).toHaveLength(2);
         expect(screen.findAllByTestId('widget-machine-notice-secondary-action')).toHaveLength(0);
         await act(async () => { screen.findByTestId('widget-machine-notice-action')!.props.onPress(); });
         await flushHookEffects({ cycles: 2 });
         expect(mounts).toBe(2);
         expect(screen.findByTestId('widget-machine-notice')).toBeNull();
-        expect(screen.findByTestId('widget-body')?.props.style).not.toMatchObject({ display: 'none' });
     });
 });

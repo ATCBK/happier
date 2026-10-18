@@ -26,6 +26,12 @@ export {
   type SessionPartClaims,
   type SessionPartKind,
 } from '../presentationHost/sessionPartClaims.js';
+/** The host's one sentence about a part that cannot run now, said by the failure state that claims it. */
+export {
+  PluginUiSurfaceNoticeContext,
+  useClaimedPluginUiSurfaceNotice,
+  type PluginUiSurfaceNotice,
+} from '../presentationHost/surfaceNotice.js';
 /** Private host composition: physical scrollers pass the incumbent activity owner to widgets. */
 export {
   PluginUiScrollActivityProvider,

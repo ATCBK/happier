@@ -178,7 +178,7 @@ describe('PluginMachineExecutionOriginSelector', () => {
         const origin: PluginMachineExecutionOriginV1 = { serverIdentityId: 'srv_one', materializationRef: {
             machineId: 'machine-a', materializationId: 'mat-a', pluginId: 'acme.plugin' } };
         const fixture = selection({ candidates: [machine], selectedOrigin: origin,
-            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'stored' } });
+            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'pinned' } });
         const pending = createDeferred<Awaited<ReturnType<PluginMachineExecutionOriginSelectionV1['clearOrigin']>>>();
         fixture.clearOrigin.mockReturnValueOnce(pending.promise);
         const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={fixture.value} testIDPrefix="origin" />);
@@ -193,7 +193,7 @@ describe('PluginMachineExecutionOriginSelector', () => {
         const origin: PluginMachineExecutionOriginV1 = { serverIdentityId: 'srv_one', materializationRef: {
             machineId: 'machine-a', materializationId: 'mat-a', pluginId: 'acme.plugin' } };
         const fixture = selection({ candidates: [machine], selectedOrigin: origin,
-            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'stored' } });
+            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'pinned' } });
         fixture.clearOrigin.mockResolvedValueOnce({ status: 'approvalPending', scope: { serverId: 'home', accountId: 'account' },
             approval: { kind: 'approval_request_created', artifactId: 'pending-origin', actionId: 'plugins.execution_origin.clear' },
             input: { pluginId: 'acme.plugin', expectedSettingsVersion: 7 } });
@@ -231,7 +231,7 @@ describe('PluginMachineExecutionOriginSelector', () => {
                 kind: 'selected',
                 origin,
                 candidate: machineA,
-                selectionSource: 'soleCandidate',
+                selectionSource: 'auto',
             },
         });
         capturedPickerProps.length = 0;

@@ -8119,6 +8119,8 @@ const pluginSettingsPresentationTranslations = { pl: {
             allResults: 'Wszystkie wyniki',
             categoriesLabel: 'Kategorie',
             runOnNoneChosen: 'Nie wybrano maszyny',
+            runOnAuto: 'Automatycznie',
+            runOnAutoHint: 'Wybrana automatycznie',
             machineCapabilityUnavailable: ({ machine }: { machine: string }) => `Ta operacja jest niedostępna na ${machine}. Połącz maszynę ponownie lub wybierz inną w „Uruchom na”.`,
             runOnNoneAvailable: 'Żadna maszyna nie może go jeszcze uruchomić',
             runsEverywhere: 'Na każdej maszynie z Happier',
