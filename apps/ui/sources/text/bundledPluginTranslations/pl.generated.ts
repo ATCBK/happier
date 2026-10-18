@@ -2384,7 +2384,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "Przywróć {title} do sekcji PR-ów i zgłoszeń",
   "plugins.triage.sourceSettings.control.update": "Zaktualizuj",
   "plugins.triage.sourceSettings.control.updateLabel": "Zaktualizuj {title} na podstawie danych dostawcy",
-  "plugins.triage.sourceSettings.empty.description": "Połącz konto {source}, a następnie odśwież.",
+  "plugins.triage.sourceSettings.empty.description": "Połącz swoje konto {source}, a następnie odśwież.",
   "plugins.triage.sourceSettings.empty.title": "Brak zakresów {source} do dodania",
   "plugins.triage.sourceSettings.failure.authentication": "Połączone konto nie jest już autoryzowane. Połącz je ponownie w sekcji Połączone konta.",
   "plugins.triage.sourceSettings.failure.permission": "Połączone konto nie widzi tego zakresu. Przyznaj mu dostęp u dostawcy.",

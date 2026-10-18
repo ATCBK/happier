@@ -2384,7 +2384,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "將 {title} 還原至 PR 與問題",
   "plugins.triage.sourceSettings.control.update": "更新",
   "plugins.triage.sourceSettings.control.updateLabel": "從提供方更新 {title}",
-  "plugins.triage.sourceSettings.empty.description": "連結一個 {source} 帳戶，然後重新整理。",
+  "plugins.triage.sourceSettings.empty.description": "連結你的 {source} 帳戶，然後重新整理。",
   "plugins.triage.sourceSettings.empty.title": "沒有可新增的 {source} 範圍",
   "plugins.triage.sourceSettings.failure.authentication": "此已連結帳戶不再獲得授權。請在「已連結帳戶」中重新連結。",
   "plugins.triage.sourceSettings.failure.permission": "此已連結帳戶無法存取此範圍。請在提供方為其授予存取權。",

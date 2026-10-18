@@ -2384,7 +2384,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "{title} を PR と課題に復元",
   "plugins.triage.sourceSettings.control.update": "更新",
   "plugins.triage.sourceSettings.control.updateLabel": "プロバイダーの内容で {title} を更新",
-  "plugins.triage.sourceSettings.empty.description": "{source} のアカウントを接続してから更新してください。",
+  "plugins.triage.sourceSettings.empty.description": "ご自身の {source} アカウントを接続してから更新してください。",
   "plugins.triage.sourceSettings.empty.title": "追加できる {source} のスコープがありません",
   "plugins.triage.sourceSettings.failure.authentication": "この接続済みアカウントは認可されていません。「接続済みアカウント」で再接続してください。",
   "plugins.triage.sourceSettings.failure.permission": "この接続済みアカウントはこのスコープを参照できません。プロバイダー側でアクセスを許可してください。",

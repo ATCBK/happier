@@ -2384,7 +2384,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "{title} in PRs & Issues wiederherstellen",
   "plugins.triage.sourceSettings.control.update": "Aktualisieren",
   "plugins.triage.sourceSettings.control.updateLabel": "{title} vom Anbieter aktualisieren",
-  "plugins.triage.sourceSettings.empty.description": "Verbinde ein {source}-Konto und aktualisiere anschließend die Seite.",
+  "plugins.triage.sourceSettings.empty.description": "Verbinde dein {source}-Konto und aktualisiere anschließend die Seite.",
   "plugins.triage.sourceSettings.empty.title": "Keine {source}-Bereiche zum Hinzufügen",
   "plugins.triage.sourceSettings.failure.authentication": "Das verbundene Konto ist nicht mehr autorisiert. Verbinde es unter „Verbundene Konten“ erneut.",
   "plugins.triage.sourceSettings.failure.permission": "Das verbundene Konto hat keinen Zugriff auf diesen Bereich. Gewähre ihm beim Anbieter Zugriff.",

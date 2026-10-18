@@ -2384,7 +2384,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "Restaurar {title} en PR e incidencias",
   "plugins.triage.sourceSettings.control.update": "Actualizar",
   "plugins.triage.sourceSettings.control.updateLabel": "Actualizar {title} desde el proveedor",
-  "plugins.triage.sourceSettings.empty.description": "Conecta una cuenta de {source} y, después, actualiza.",
+  "plugins.triage.sourceSettings.empty.description": "Conecta tu cuenta de {source} y, después, actualiza.",
   "plugins.triage.sourceSettings.empty.title": "No hay ámbitos de {source} que añadir",
   "plugins.triage.sourceSettings.failure.authentication": "La cuenta conectada ya no está autorizada. Vuelve a conectarla en Cuentas conectadas.",
   "plugins.triage.sourceSettings.failure.permission": "La cuenta conectada no puede ver este ámbito. Concédele acceso en el proveedor.",

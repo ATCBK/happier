@@ -2389,7 +2389,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "Restore {title} to PRs & Issues",
   "plugins.triage.sourceSettings.control.update": "Update",
   "plugins.triage.sourceSettings.control.updateLabel": "Update {title} from the provider",
-  "plugins.triage.sourceSettings.empty.description": "Connect a {source} account, then refresh.",
+  "plugins.triage.sourceSettings.empty.description": "Connect your {source} account, then refresh.",
   "plugins.triage.sourceSettings.empty.title": "No {source} scopes to add",
   "plugins.triage.sourceSettings.failure.authentication": "The connected account is no longer authorized. Reconnect it in Connected Accounts.",
   "plugins.triage.sourceSettings.failure.permission": "The connected account cannot see this scope. Grant it access at the provider.",

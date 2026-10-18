@@ -2384,7 +2384,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "Restaurer {title} dans PR et tickets",
   "plugins.triage.sourceSettings.control.update": "Mettre à jour",
   "plugins.triage.sourceSettings.control.updateLabel": "Mettre à jour {title} depuis le fournisseur",
-  "plugins.triage.sourceSettings.empty.description": "Connecte un compte de {source}, puis actualise.",
+  "plugins.triage.sourceSettings.empty.description": "Connecte ton compte {source}, puis actualise.",
   "plugins.triage.sourceSettings.empty.title": "Aucune portée de {source} à ajouter",
   "plugins.triage.sourceSettings.failure.authentication": "Le compte connecté n’est plus autorisé. Reconnecte-le dans Comptes connectés.",
   "plugins.triage.sourceSettings.failure.permission": "Le compte connecté ne voit pas cette portée. Accorde-lui l’accès chez le fournisseur.",

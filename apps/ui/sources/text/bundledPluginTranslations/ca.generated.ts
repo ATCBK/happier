@@ -2384,7 +2384,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "Restaura {title} a PR i incidències",
   "plugins.triage.sourceSettings.control.update": "Actualitza",
   "plugins.triage.sourceSettings.control.updateLabel": "Actualitza {title} des del proveïdor",
-  "plugins.triage.sourceSettings.empty.description": "Connecta un compte de {source} i després actualitza.",
+  "plugins.triage.sourceSettings.empty.description": "Connecta el teu compte de {source} i després actualitza.",
   "plugins.triage.sourceSettings.empty.title": "No hi ha cap àmbit de {source} per afegir",
   "plugins.triage.sourceSettings.failure.authentication": "El compte connectat ja no està autoritzat. Torna’l a connectar a Comptes connectats.",
   "plugins.triage.sourceSettings.failure.permission": "El compte connectat no pot veure aquest àmbit. Concedeix-li accés al proveïdor.",

@@ -493,7 +493,7 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
               <EmptyState
                 layout="line"
                 title={text('plugins.triage.sourceSettings.empty.title', 'No {source} scopes to add', { source: sourceDisplayName })}
-                description={text('plugins.triage.sourceSettings.empty.description', 'Connect a {source} account, then refresh.', { source: sourceDisplayName })}
+                description={text('plugins.triage.sourceSettings.empty.description', 'Connect your {source} account, then refresh.', { source: sourceDisplayName })}
                 action={<Button title={text('plugins.triage.sourceSettings.connectAccount', 'Connect account')} variant="primary" size="small" onPress={() => openConnectedAccounts()} />}
               />
             ) : null}

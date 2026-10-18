@@ -2384,7 +2384,7 @@ export const BUNDLED_PLUGIN_TRANSLATIONS: Readonly<Partial<Record<BundledPluginT
   "plugins.triage.sourceSettings.control.restoreLabel": "Восстановить {title} в разделе PR и задач",
   "plugins.triage.sourceSettings.control.update": "Обновить",
   "plugins.triage.sourceSettings.control.updateLabel": "Обновить {title} из данных провайдера",
-  "plugins.triage.sourceSettings.empty.description": "Подключите аккаунт {source}, затем обновите страницу.",
+  "plugins.triage.sourceSettings.empty.description": "Подключите свой аккаунт {source}, затем обновите страницу.",
   "plugins.triage.sourceSettings.empty.title": "Нет областей {source}, которые можно добавить",
   "plugins.triage.sourceSettings.failure.authentication": "Подключенный аккаунт больше не авторизован. Переподключите его в разделе «Подключенные аккаунты».",
   "plugins.triage.sourceSettings.failure.permission": "Подключенный аккаунт не видит эту область. Предоставьте ему доступ на стороне провайдера.",
