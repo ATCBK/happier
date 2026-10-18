@@ -54,6 +54,7 @@ import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protoc
 import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import { logger } from '@/ui/logger';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { buildRunScopedExecutionPermissionRequestId, createRunScopedExecutionPermissionHandler } from '@/agent/executionRuns/policy/runScopedExecutionPermissionHandler';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
 import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
@@ -2066,6 +2067,14 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       await updateAgentState(updater);
     });
     let pending: Promise<unknown> | undefined;
+    const childScope = createRunScopedExecutionPermissionHandler({
+      runId: 'independent-child', controllerOccurrenceId: 'child-controller', handler: permission,
+    });
+    const childRequestId = buildRunScopedExecutionPermissionRequestId({
+      runId: 'independent-child', controllerOccurrenceId: 'child-controller', providerRequestId: 'child-question',
+    });
+    let childPending: Promise<unknown> | undefined;
+    let childSettled = false;
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
       mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts },
     );
@@ -2136,8 +2145,35 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       const log = await readFile(logger.getLogPath(), 'utf8');
       expect(log).toContain('permission_reset_failed');
       expect(log).not.toContain('private-stop-permission-write-payload');
+
+      failWrites = false;
+      listener?.(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: session.sessionId,
+        emittedAtMs: 3, turnId: 'successor-foreground-turn', startedBy: 'provider' }));
+      // This Run shares the Session permission owner, but its provider continues
+      // independently of foreground Stop and owns its own prompt disposal.
+      childPending = childScope.handler.handleToolCall('child-question', 'AskUserQuestion', {
+        questions: [{ question: 'Continue the independent Run?', options: [{ label: 'Yes' }] }],
+      }, { lifetime: 'occurrence', origin: 'host_occurrence_question' });
+      void childPending.then(() => { childSettled = true; }, () => { childSettled = true; });
+      await vi.waitFor(() => expect(session.getAgentStateSnapshot()?.requests?.[childRequestId]).toBeDefined());
+      // A saved foreground prompt has no local coordinator waiter after restart.
+      await session.updateAgentState(state => ({ ...state, requests: { ...state.requests,
+        'saved-foreground': { tool: 'Write', arguments: { path: '/workspace/saved' }, createdAt: 1, kind: 'permission' },
+      } }));
+      await rpc.invokeLocal('abort', {});
+      expect(cancelProvider).toHaveBeenCalledTimes(2);
+      expect(session.getAgentStateSnapshot()?.requests?.['stop-pending']).toBeUndefined();
+      expect(session.getAgentStateSnapshot()?.requests?.['saved-foreground']).toBeUndefined();
+      expect(session.getAgentStateSnapshot()?.requests?.[childRequestId]).toBeDefined();
+      expect(childSettled).toBe(false);
+      await childScope.dispose('Independent Run stopped');
+      await expect(childPending).rejects.toThrow();
+      expect(session.getAgentStateSnapshot()?.requests?.[childRequestId]).toBeUndefined();
+      expect(session.getAgentStateSnapshot()?.completedRequests?.[childRequestId]).toMatchObject({ status: 'canceled' });
     } finally {
       failWrites = false;
+      await childScope.dispose('Test cleanup');
+      await childPending?.catch(() => undefined);
       await permission.reset();
       terminate?.({ kind: 'killSession' });
       await running;

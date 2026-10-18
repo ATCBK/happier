@@ -1,3 +1,4 @@
+import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import { deepEqual } from '@/utils/deterministicJson';
 import { logger } from '@/ui/logger';
 import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
@@ -125,6 +126,7 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         }> | null;
     }>): boolean | void | Promise<boolean | void>;
     cancelAllRequests?(params: Readonly<{
+        scope?: 'foreground';
         reason: string;
         decision?: string;
         requestIds: readonly string[];
@@ -689,14 +691,17 @@ export class PermissionRequestCoordinator<TResult> {
         }
     }
 
-    async cancelAll(reason: string): Promise<void> {
-        const entries = [...this.pendingRequests.values()];
-        const cachedDecisions = [...this.cachedDecisions.entries()];
+    async cancelAll(reason: string, options?: Readonly<{ scope: 'foreground' }>): Promise<void> {
+        const isSelected = (requestId: string) => options?.scope !== 'foreground'
+            || !readRunScopedExecutionPermissionRequestIdentity(requestId);
+        const entries = [...this.pendingRequests.values()].filter(entry => isSelected(entry.requestId));
+        const cachedDecisions = [...this.cachedDecisions.entries()].filter(([requestId]) => isSelected(requestId));
         // The Session store may hold requests without coordinator-local waiters.
         await this.cancelEntries({
             entries,
             reason,
             persist: async (requestIds) => await this.store.cancelAllRequests?.({
+                ...(options?.scope ? { scope: options.scope } : {}),
                 reason,
                 decision: 'abort',
                 requestIds,

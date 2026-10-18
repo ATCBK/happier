@@ -1,3 +1,4 @@
+import { buildRunScopedExecutionPermissionRequestId } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentState } from '@/api/types';
@@ -146,7 +147,7 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
 }
 
 describe('PermissionRequestCoordinator', () => {
-    it.each(['Session', 'plugin'] as const)('retires the provider waiter for every request the %s store cancels while an older ACK drains', async (scope) => {
+    it.each(['Session', 'plugin', 'foreground'] as const)('retires the provider waiter for every request the %s store cancels while an older ACK drains', async (scope) => {
         const session = new DeferredUpdateSession();
         const { coordinator } = createHarness(session);
         const owner = { kind: 'plugin' as const, pluginId: 'plugin-a' };
@@ -157,14 +158,17 @@ describe('PermissionRequestCoordinator', () => {
             result: approve(), completedRequest: { status: 'approved', decision: 'approved' },
         }) });
         await vi.waitFor(() => expect(session.hasDeferredUpdate()).toBe(true));
-        const cancellation = scope === 'Session' ? coordinator.cancelAll('Session ended')
-            : coordinator.cancelByPlugin('plugin-a', 'Session ended');
+        const cancellation = scope === 'plugin' ? coordinator.cancelByPlugin('plugin-a', 'Session ended')
+            : coordinator.cancelAll('Session ended', scope === 'foreground' ? { scope } : undefined);
         const newcomerId = 'published-during-reset';
         let newcomerOutcome = 'pending';
         const newcomer = coordinator.requestDecision({ ...bashRequest, requestId: newcomerId, createdAt: 200, owner });
         const observed = newcomer.then(() => { newcomerOutcome = 'approved'; }, () => { newcomerOutcome = 'canceled'; });
         const neighborAbort = new AbortController();
-        const neighbor = scope === 'plugin' ? coordinator.requestDecision({ ...bashRequest, requestId: 'neighbor',
+        const neighborId = scope === 'foreground' ? buildRunScopedExecutionPermissionRequestId({
+            runId: 'independent', controllerOccurrenceId: 'controller', providerRequestId: 'neighbor',
+        }) : 'neighbor';
+        const neighbor = scope !== 'Session' ? coordinator.requestDecision({ ...bashRequest, requestId: neighborId,
             owner: { kind: 'plugin', pluginId: 'plugin-b' } }, { signal: neighborAbort.signal }) : null;
         void neighbor?.catch(() => {});
         session.resolveDeferredUpdate();
@@ -177,8 +181,8 @@ describe('PermissionRequestCoordinator', () => {
             expect(newcomerOutcome).toBe('canceled');
             expect(coordinator.getResponseContext(newcomerId)).toBeNull();
             if (neighbor) {
-                expect(session.agentState.requests?.neighbor).toBeDefined();
-                expect(coordinator.getResponseContext('neighbor')).not.toBeNull();
+                expect(session.agentState.requests?.[neighborId]).toBeDefined();
+                expect(coordinator.getResponseContext(neighborId)).not.toBeNull();
             }
         } finally {
             neighborAbort.abort();
@@ -188,7 +192,7 @@ describe('PermissionRequestCoordinator', () => {
         }
     });
 
-    it.each(['all', 'selected'] as const)('keeps a newer cached decision created while %s cancellation persists', async (scope) => {
+    it.each(['all', 'selected', 'foreground'] as const)('keeps a newer cached decision created while %s cancellation persists', async (scope) => {
         const session = new DeferredUpdateSession();
         const { coordinator, store } = createHarness(session);
         const cacheDecision = async (request: typeof bashRequest) => {
@@ -203,11 +207,16 @@ describe('PermissionRequestCoordinator', () => {
             await expect(response).resolves.toBe(true);
         };
         await cacheDecision(bashRequest);
+        const childCachedRequest = { ...bashRequest, requestId: buildRunScopedExecutionPermissionRequestId({
+            runId: 'cached-child', controllerOccurrenceId: 'controller', providerRequestId: 'permission',
+        }) };
+        if (scope === 'foreground') await cacheDecision(childCachedRequest);
         const blocker = coordinator.requestDecision({ ...bashRequest, requestId: 'old-cancel-blocker' });
         const blockerRejected = expect(blocker).rejects.toThrow('old scope stopped');
         session.deferNextUpdate();
-        const cancellation = scope === 'all' ? coordinator.cancelAll('old scope stopped')
-            : coordinator.cancelRequests(['old-cancel-blocker', bashRequest.requestId], 'old scope stopped');
+        const cancellation = scope === 'selected'
+            ? coordinator.cancelRequests(['old-cancel-blocker', bashRequest.requestId], 'old scope stopped')
+            : coordinator.cancelAll('old scope stopped', scope === 'foreground' ? { scope } : undefined);
         await vi.waitFor(() => expect(session.hasDeferredUpdate()).toBe(true));
         const newer = { ...bashRequest, createdAt: 200, toolInput: { command: ['bash', '-lc', 'echo newer'] } };
         await cacheDecision(newer);
@@ -220,6 +229,11 @@ describe('PermissionRequestCoordinator', () => {
         try {
             expect(store.hasOutstandingRequest(newer.requestId)).toBe(false);
             await expect(retry).resolves.toEqual(approve(newer.requestId));
+            if (scope === 'foreground') {
+                const childRetry = coordinator.requestDecision(childCachedRequest, { signal: retryAbort.signal });
+                await expect(childRetry).resolves.toEqual(approve(childCachedRequest.requestId));
+                expect(store.hasOutstandingRequest(childCachedRequest.requestId)).toBe(false);
+            }
         } finally {
             retryAbort.abort();
             await coordinator.dispose();

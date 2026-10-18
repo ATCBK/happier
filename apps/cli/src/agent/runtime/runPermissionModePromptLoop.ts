@@ -111,7 +111,7 @@ export type PromptLoopOverrideSynchronizer = Readonly<{
 
 export type PromptLoopPermissionHandler = Readonly<
   Pick<ProviderEnforcedPermissionHandler, 'setPermissionMode'> & {
-    reset: () => void | Promise<void>;
+    reset: (options?: Parameters<ProviderEnforcedPermissionHandler['reset']>[0]) => void | Promise<void>;
   }
 >;
 

@@ -1,3 +1,4 @@
+import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import type { AgentState } from '@/api/types';
 import { updateAgentStateBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { HAPPIER_ACTION_REQUEST_SOURCE, resolveAgentRequestKind } from '@/agent/permissions/requestKind';
@@ -1085,6 +1086,7 @@ export class AgentStateRequestStore {
     }
 
     async cancelAllRequests(params: Readonly<{
+        scope?: 'foreground';
         reason: string;
         decision?: string;
         requestIds: readonly string[];
@@ -1116,6 +1118,7 @@ export class AgentStateRequestStore {
     }
 
     private async cancelRequests(params: Readonly<{
+        scope?: 'foreground';
         reason: string;
         decision?: string;
         requestIds: readonly string[];
@@ -1139,6 +1142,7 @@ export class AgentStateRequestStore {
                     const now = Date.now();
 
                     for (const [id, request] of Object.entries(pendingRequests)) {
+                        if (params.scope === 'foreground' && readRunScopedExecutionPermissionRequestIdentity(id)) continue;
                         const entry = clonePlainObjectToNullProto(request) ?? Object.create(null);
                         if (params.observedRetirement && this.canJournalRequestRetirement(id, entry) !== durableRetirement) continue;
                         if (params.source !== undefined && entry.source !== params.source) continue;
@@ -1168,6 +1172,7 @@ export class AgentStateRequestStore {
                     // persisted. A cancellation already written above (or by an
                     // earlier repeat) is the sole durable terminal result.
                     for (const id of params.requestIds) {
+                        if (params.scope === 'foreground' && readRunScopedExecutionPermissionRequestIdentity(id)) continue;
                         if (selectedRequests.has(id) || completedRequestsById.has(id)) continue;
                         const completed = completedRequests[id];
                         if (!completed) continue;

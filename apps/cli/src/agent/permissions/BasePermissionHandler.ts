@@ -1,3 +1,4 @@
+import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 /**
  * Base Permission Handler
  *
@@ -4024,12 +4025,14 @@ export abstract class BasePermissionHandler {
         }
     }
 
-    private async cancelPendingRequests(reason: string): Promise<void> {
-        const pendingSnapshot = Array.from(this.pendingRequests.entries());
+    private async cancelPendingRequests(reason: string, scope?: 'foreground'): Promise<void> {
+        const pendingSnapshot = Array.from(this.pendingRequests.entries()).filter(
+            ([requestId]) => scope !== 'foreground' || !readRunScopedExecutionPermissionRequestIdentity(requestId),
+        );
         // Retire preparation before awaiting durable cancellation, so shared
         // hydration cannot advance a cancelled request into publication.
         this.cancelUncoordinatedPendingRequests(pendingSnapshot, reason);
-        await this.requestCoordinator.cancelAll(reason);
+        await this.requestCoordinator.cancelAll(reason, scope ? { scope } : undefined);
         for (const [requestId, pending] of pendingSnapshot) {
             if (this.pendingRequests.get(requestId) === pending) this.pendingRequests.delete(requestId);
         }
@@ -4077,10 +4080,13 @@ export abstract class BasePermissionHandler {
     }
 
     /**
-     * Reset state for new sessions.
-     * This method is idempotent - safe to call multiple times.
+     * Reset state for new sessions. Foreground Stop only withdraws its prompts;
+     * independent Runs retain the shared store and Session permission policy.
+     * Whole-Session reset is idempotent - safe to call multiple times.
      */
-    reset(): Promise<void> {
+    reset(options?: Readonly<{ scope: 'foreground' }>): Promise<void> {
+        // Stop withdraws foreground prompts while shared Run/policy owners stay alive.
+        if (options?.scope === 'foreground') return this.cancelPendingRequests('Foreground turn stopped', options.scope);
         if (this.resetPromise) {
             logger.debug(`${this.getLogPrefix()} Reset already in progress, awaiting active cleanup`);
             return this.resetPromise;

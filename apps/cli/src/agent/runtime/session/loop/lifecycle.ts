@@ -814,7 +814,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     logger.debug(`${params.config.uiLogPrefix} Abort requested`);
     resetAssistantTextSnapshotTurnScope(params.session, 'abort');
     try {
-      await params.permissionHandler.reset();
+      await params.permissionHandler.reset({ scope: 'foreground' });
     } catch {
       logger.infoFile(`${params.config.uiLogPrefix} Permission reset failed during Stop; continuing runtime cancellation`, {
         error: 'permission_reset_failed',
