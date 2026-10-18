@@ -344,6 +344,16 @@ describe('ApprovalPromptCard', () => {
         expect(screen.getTextContent()).toContain('approvals.failureGeneric');
     });
 
+    it('heads a stale failure as not run, not as the action it never attempted', async () => {
+        const approval = ApprovalRequestSchema.parse({ ...failedWriteFile(), status: 'failed',
+            execution: { executedAtMs: 3, ok: false, errorCode: 'approval_stale', error: 'approval_stale' } });
+        const screen = await renderCard(approval, { chrome: 'inline' });
+        const text = screen.getTextContent();
+        expect(text).toContain('approvals.failureNotRun');
+        expect(text).not.toContain('approvals.failureFileWrite');
+        expect(text).toContain('approvals.staleFailure');
+    });
+
     it('dismisses a settled failure on this device only, and keeps open approvals undismissable', async () => {
         const screen = await renderCard(failedWriteFile(), { chrome: 'inline' });
         await screen.pressByTestIdAsync('approval-prompt-dismiss');

@@ -1615,6 +1615,7 @@ const enApprovals = {
     'This sign-in cannot approve requests. Sign in to this Home with your account recovery key, or approve from another device with an account sign-in.',
   staleFailure: "This request is no longer current, so it wasn't executed. Review the latest request in Inbox.",
   failureGeneric: 'The approved action failed',
+  failureNotRun: 'Request not run',
   failureFileWrite: "Couldn't write the file",
   failureFileRead: "Couldn't read the file",
   failureFileOther: "Couldn't finish the file operation",

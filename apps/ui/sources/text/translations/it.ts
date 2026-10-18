@@ -1703,6 +1703,7 @@ const itValues = {
     decisionAuthorityError: "Questo accesso non consente di approvare le richieste. Accedi a questo Home con la chiave di recupero del tuo account oppure approva da un altro dispositivo con un accesso account.",
     staleFailure: "Questa richiesta non è più attuale, quindi non è stata eseguita. Controlla la richiesta più recente nella posta in arrivo.",
     failureGeneric: "L'azione approvata non è riuscita",
+    failureNotRun: 'Richiesta non eseguita',
     failureFileWrite: 'Impossibile scrivere il file',
     failureFileRead: 'Impossibile leggere il file',
     failureFileOther: "Impossibile completare l'operazione sui file",

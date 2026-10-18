@@ -1509,6 +1509,7 @@ export const de: TranslationStructure = {
         decisionAuthorityError: 'Diese Anmeldung kann Anfragen nicht genehmigen. Melde dich mit dem Wiederherstellungsschlüssel deines Kontos bei diesem Home an oder genehmige die Anfrage auf einem anderen Gerät mit einer Kontoanmeldung.',
         staleFailure: "Diese Anfrage ist nicht mehr aktuell und wurde daher nicht ausgeführt. Prüfe die neueste Anfrage im Posteingang.",
         failureGeneric: 'Die freigegebene Aktion ist fehlgeschlagen',
+        failureNotRun: 'Anfrage nicht ausgeführt',
         failureFileWrite: 'Datei konnte nicht geschrieben werden',
         failureFileRead: 'Datei konnte nicht gelesen werden',
         failureFileOther: 'Dateivorgang konnte nicht abgeschlossen werden',

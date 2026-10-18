@@ -1890,6 +1890,7 @@ const esValues = {
     decisionAuthorityError: "Esta sesión no permite aprobar solicitudes. Inicia sesión en este Home con la clave de recuperación de tu cuenta, o aprueba desde otro dispositivo con una sesión de cuenta.",
     staleFailure: "Esta solicitud ya no está vigente, por lo que no se ejecutó. Revisa la solicitud más reciente en la bandeja de entrada.",
     failureGeneric: 'La acción aprobada falló',
+    failureNotRun: 'Solicitud no ejecutada',
     failureFileWrite: 'No se pudo escribir el archivo',
     failureFileRead: 'No se pudo leer el archivo',
     failureFileOther: 'No se pudo completar la operación con archivos',

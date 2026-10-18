@@ -1717,6 +1717,7 @@ const plValues = {
     decisionAuthorityError: "Ten sposób logowania nie pozwala zatwierdzać żądań. Zaloguj się do tego Home kluczem odzyskiwania konta albo zatwierdź żądanie na innym urządzeniu zalogowanym do konta.",
     staleFailure: "Ta prośba nie jest już aktualna, więc nie została wykonana. Sprawdź najnowszą prośbę w skrzynce odbiorczej.",
     failureGeneric: 'Zatwierdzona akcja nie powiodła się',
+    failureNotRun: 'Żądanie nie zostało wykonane',
     failureFileWrite: 'Nie udało się zapisać pliku',
     failureFileRead: 'Nie udało się odczytać pliku',
     failureFileOther: 'Nie udało się zakończyć operacji na plikach',
