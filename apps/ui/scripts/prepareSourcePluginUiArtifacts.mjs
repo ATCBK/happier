@@ -29,17 +29,31 @@ export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plug
   const dependencyInputs = await readJsonIfExists(resolveDependencyRefreshMarkerPath(compilerRepo));
   const packages = await readWorkspacePackages(repoRoot);
   const successfulInputs = new Map();
+  // The successful compiler-input record travels with the retained graph. Its
+  // manifest is needed when evaluating the next declaration itself fails;
+  // the inventory producer still revalidates the complete candidate below.
+  const retainedInputs = new Map();
+  for (const root of new Set([...producerRoots.values(), ...retainedRoots.values()])) {
+    const record = await readJsonIfExists(join(root, WORKSPACE_PACKAGE_BUILD_INPUT_RECORD));
+    if (record?.version === 2 && record.packageName && record.manifest?.id) {
+      retainedInputs.set(record.packageName, { root, manifest: record.manifest });
+    }
+  }
   await mkdir(outputDir, { recursive: true });
-  for (const { directory, manifest, uiArtifacts = true } of plugins) {
-    pluginManifests[directory] = manifest;
-    if (!uiArtifacts) continue;
-    const manifestPath = join(outputDir, `${directory}.json`);
-    await writeFile(manifestPath, JSON.stringify(manifest));
+  for (const { directory, manifest: suppliedManifest, loadManifest, uiArtifacts = true } of plugins) {
+    let manifest;
+    let candidates = [];
+    const packageName = `@happier-dev/plugins-${directory}`;
     const projectRoot = join(repoRoot, 'packages/plugins', directory);
     const artifactOutputDir = artifactOutputDirs[directory] ?? join(outputDir, directory, 'happier-plugin-ui');
-    const candidates = [...new Set([artifactOutputDir, retainedRoots.get(manifest.id),
-      producerRoots.get(manifest.id), join(projectRoot, 'dist/happier-plugin-ui')].filter(Boolean))];
     try {
+      manifest = loadManifest ? await loadManifest() : suppliedManifest;
+      pluginManifests[directory] = manifest;
+      if (!uiArtifacts) continue;
+      const manifestPath = join(outputDir, `${directory}.json`);
+      await writeFile(manifestPath, JSON.stringify(manifest));
+      candidates = [...new Set([artifactOutputDir, retainedRoots.get(manifest.id),
+        producerRoots.get(manifest.id), join(projectRoot, 'dist/happier-plugin-ui')].filter(Boolean))];
       const files = await readSourcePluginUiBuildInputs({ repoDir: repoRoot, pluginDirectory: directory, packages });
       const options = [manifest, compilerIdentity, esbuildVersion, dependencyInputs, sourceImportConditions, 'happier-source', process.version, process.platform, process.arch];
       const inputFingerprint = await readBuildInputIdentity({ sourceDir: repoRoot, files, options });
@@ -60,8 +74,16 @@ export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plug
       artifactRoots[directory] = artifactsRoot;
       successfulInputs.set(directory, { options, inputFingerprint });
     } catch (error) {
+      const retained = retainedInputs.get(packageName);
+      if (retained) {
+        // Retained bytes keep the declaration they were compiled against,
+        // including when a valid new manifest has an uncompilable UI.
+        manifest = retained.manifest;
+        pluginManifests[directory] = manifest;
+        candidates = [retained.root];
+      }
       compilationFailures.push(createBundledPluginPublicationFailure({ repoRoot,
-        packageName: `@happier-dev/plugins-${directory}`, pluginId: manifest.id,
+        packageName, pluginId: manifest?.id,
         code: 'plugin_ui_artifact_invalid', error }));
       // The compiler leaves prior publications intact. The inventory owner
       // selects only a candidate whose manifest and complete graph validate.
@@ -82,12 +104,13 @@ export async function prepareSourcePluginUiArtifacts({ repoRoot, outputDir, plug
     const files = await readSourcePluginUiBuildInputs({ repoDir: repoRoot, pluginDirectory: directory, packages });
     if (await readBuildInputIdentity({ sourceDir: repoRoot, files, options: input.options }) !== input.inputFingerprint) continue;
     const root = result.artifactRoots[directory] ?? artifactOutputDirs[directory] ?? artifactRoots[directory];
-    // Cache admission borrows producer-owned retained roots. Only a new
-    // compilation or a freshly materialized native destination gets a stamp.
-    if (input.reusedRoot && resolve(root) === input.reusedRoot) continue;
+    // Borrowed producer roots stay read-only. Consumer-owned graphs can retain
+    // their admitted manifest even when identical bytes were reused.
+    if (input.reusedRoot && resolve(root) === input.reusedRoot && !artifactStoreDir && !artifactOutputDirs[directory]) continue;
     const record = await readJsonIfExists(join(root, WORKSPACE_PACKAGE_BUILD_INPUT_RECORD));
-    if (record?.version === 2 && record.fingerprint === input.inputFingerprint) continue;
-    await writeJsonAtomic(join(root, WORKSPACE_PACKAGE_BUILD_INPUT_RECORD), { version: 2, fingerprint: input.inputFingerprint });
+    if (record?.version === 2 && record.fingerprint === input.inputFingerprint && record.manifest && record.packageName) continue;
+    await writeJsonAtomic(join(root, WORKSPACE_PACKAGE_BUILD_INPUT_RECORD), { version: 2, fingerprint: input.inputFingerprint,
+      packageName: `@happier-dev/plugins-${directory}`, manifest: pluginManifests[directory] });
   }
   for (const diagnostic of result.diagnostics) {
     const unavailable = result.pluginFailures.some((failure) => failure.pluginId === diagnostic.pluginId);

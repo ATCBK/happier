@@ -341,11 +341,21 @@ generated inventory assets do not trigger another preparation. Pending edits
 share serialized preparation. The inventory producer materializes each distinct
 plugin byte graph once, using the canonical file-set digest, and does not rewrite
 unchanged assets. Completed or failed compiler invocations remove their own
-`.happier-plugin-ui-stage-*` scratch, including bundled tooling and temporary
+`.happier-plugin-ui-stage-*` scratch, including generated tooling and temporary
 manifests. That existing staging prefix is excluded from Metro's crawl, so
 retiring it cannot race Metro's fallback directory watcher.
-Live refresh waits on Metro's existing file-map change events until every
-candidate asset is indexed before atomically replacing the serving inventory.
+Live refresh materializes the candidate's verified assets under the consumer's
+content-addressed `artifacts/` root after Metro's initial watcher is ready. The
+inventory producer assembles each first missing subtree under the excluded
+staging prefix and renames the complete subtree into place. This prevents the
+fallback watcher's directory-listing/watch-attachment gap from losing newly
+created descendants; existing identical files retain their paths and mtimes.
+Admission checks file existence, lexical and real project/watch roots, blocklist
+and indexed extensions before waiting for Metro's file map. An
+unindexable candidate reports `plugin_ui_inventory_unindexable` with its inventory
+and asset path, preserves the serving inventory and releases the refresh queue
+for subsequent source edits. An admitted candidate waits on Metro's existing
+file-map change events until every asset is indexed before atomic publication.
 Bundle and artifact-asset requests also use that readiness check for inventories
 published by warm-start or explicit one-shot preparation, including Expo's
 `/assets?unstable_path=...` route. Ordinary image requests do not read the plugin
@@ -369,13 +379,19 @@ When a new Metro consumer has no private inventory but the producer has usable
 last-green plugin UI, the same inventory producer seeds the private file with
 absolute references to retained artifacts. Metro starts from that file while
 source preparation runs in the background and observes its next atomic green
-publication without a restart. In 0.3 development source, a plugin UI compile
-failure reports that plugin's compiler error and retains its own validated
+publication without a restart. In 0.3 development source, a plugin manifest
+evaluation or UI compile failure reports that plugin's error and retains its own validated
 last-green artifact. Without usable retained bytes, only that UI is unavailable;
 healthy plugins still publish and source preparation continues. The existing
 inventory producer validates retained manifests and complete file digests before
 admission. Native source construction materializes those verified bytes into its
 own retained output graph, or leaves the unavailable plugin's output root empty.
+Source preparation loads each declaration through the existing source loader
+inside that per-plugin boundary, so a malformed declaration cannot abort an
+aggregate tool import. The graph's successful build-input record also retains
+its manifest for this failure path; it does not authorize new source or skip
+graph validation. Source-preparation diagnostics remain in Expo's log; neither
+the app's byte inventory nor `hstack stack info` carries them.
 The source daemon retains that inventory beside its emitted runtime. Its next
 shared build feeds the selected incumbent inventory to the same compiler and
 inventory producer, which revalidates the candidate graphs and copies admitted

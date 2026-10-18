@@ -1140,7 +1140,7 @@ config.server.enhanceMiddleware = (middleware, metroServer) => {
   const enhanced = enhanceMiddleware ? enhanceMiddleware(middleware, metroServer) : middleware;
   if (privatePluginUiInventory) {
     const refresh = import(require('node:url').pathToFileURL(path.join(__dirname, 'scripts/ensureWorkspacePackagesBuilt.mjs')).href)
-      .then(({ watchUiSourcePluginInventory }) => watchUiSourcePluginInventory({ metroServer, uiPackageDir: __dirname }));
+      .then(({ watchUiSourcePluginInventory }) => watchUiSourcePluginInventory({ metroServer, metroConfig: config, uiPackageDir: __dirname }));
     void refresh.catch(error => console.error('[plugin-ui] source inventory watcher failed:', error));
     const end = metroServer.end.bind(metroServer);
     metroServer.end = async () => {

@@ -1,6 +1,6 @@
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { WORKSPACE_BUILD_MODE_ENV, resolveWorkspaceBuildMode } from '../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
 
 import {
@@ -19,9 +19,40 @@ import {
 
 const uiDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
-async function waitForMetroPluginUiInventory({ metroServer, inventoryPath, signal }) {
+function isWithin(root, path) {
+  const suffix = relative(root, path);
+  return suffix !== '..' && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
+}
+
+async function waitForMetroPluginUiInventory({ metroServer, metroConfig, inventoryPath, artifactStoreDir, signal }) {
   const paths = resolveBundledPluginUiArtifactsInputPaths(inventoryPath)?.slice(1);
   if (!paths) throw new Error(`Invalid source Plugin UI inventory: ${inventoryPath}`);
+  const roots = [metroConfig.projectRoot, ...metroServer.getWatchFolders()];
+  const realRoots = await Promise.all(roots.map(root => realpath(root)));
+  const blockList = [metroConfig.resolver.blacklistRE || metroConfig.resolver.blockList].flat().filter(Boolean);
+  const extensions = new Set([...metroConfig.resolver.sourceExts, ...metroConfig.resolver.assetExts,
+    ...metroConfig.watcher.additionalExts]);
+  for (const path of paths) {
+    let reason;
+    if (artifactStoreDir && !isWithin(artifactStoreDir, path)) reason = 'outside the consumer artifact store';
+    else if (!roots.some(root => isWithin(root, path))) reason = 'outside Metro projectRoot/watchFolders';
+    else if (blockList.some(pattern => pattern.test(path))) reason = 'excluded by Metro resolver.blockList';
+    else if (!extensions.has(extname(path).slice(1))) reason = 'extension is not indexed by Metro';
+    if (!reason) {
+      try {
+        const target = await realpath(path);
+        if (!(await stat(target)).isFile()) reason = 'asset is not a regular file';
+        else if (!realRoots.some(root => isWithin(root, target))) reason = `real path is outside Metro projectRoot/watchFolders: ${target}`;
+        else if (blockList.some(pattern => pattern.test(target))) reason = `real path is excluded by Metro resolver.blockList: ${target}`;
+        else if (!extensions.has(extname(target).slice(1))) reason = `real path extension is not indexed by Metro: ${target}`;
+      } catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+        reason = 'asset does not exist';
+      }
+    }
+    if (reason) throw Object.assign(new Error(`Source Plugin UI inventory ${inventoryPath} cannot index ${path}: ${reason}`),
+      { code: 'plugin_ui_inventory_unindexable' });
+  }
   const graph = await metroServer.getBundler().getBundler().getDependencyGraph();
   signal?.throwIfAborted();
   await new Promise((resolveReady, reject) => {
@@ -38,7 +69,7 @@ async function waitForMetroPluginUiInventory({ metroServer, inventoryPath, signa
   });
 }
 
-export async function prepareUiSourcePluginInventory({ uiPackageDir = uiDir, env = process.env, signal, metroServer } = {}) {
+export async function prepareUiSourcePluginInventory({ uiPackageDir = uiDir, env = process.env, signal, metroServer, metroConfig } = {}) {
   const repoRoot = resolve(uiPackageDir, '../..');
   const { prepareSourcePluginUiInventory } = await import('../../stack/scripts/build/build_source_web_ui.mjs');
   const requestedInventory = String(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY ?? '').trim();
@@ -54,10 +85,16 @@ export async function prepareUiSourcePluginInventory({ uiPackageDir = uiDir, env
   const outputDir = await mkdtemp(resolve(parent, '.happier-plugin-ui-stage-'));
   const outputPath = requestedInventory || resolve(parent, 'inventory.js');
   const candidatePath = resolve(outputDir, 'inputs/inventory.js');
+  const artifactStoreDir = resolve(parent, 'artifacts');
   try {
+    // The fallback watcher's initial enumeration registers existing files but
+    // does not emit additions. Do not publish between Metro's crawl and watch.
+    if (metroServer) await metroServer.getBundler().getBundler().getDependencyGraph();
+    signal?.throwIfAborted();
     await prepareSourcePluginUiInventory({ repoDir: repoRoot, outputDir, inventoryPath: candidatePath,
-      retainedInventoryPath: outputPath, artifactStoreDir: resolve(parent, 'artifacts'), env, signal });
-    if (metroServer) await waitForMetroPluginUiInventory({ metroServer, inventoryPath: candidatePath, signal });
+      retainedInventoryPath: outputPath, artifactStoreDir, env, signal });
+    if (metroServer) await waitForMetroPluginUiInventory({ metroServer, metroConfig,
+      inventoryPath: candidatePath, artifactStoreDir, signal });
     signal?.throwIfAborted();
     const candidate = await readFile(candidatePath, 'utf8');
     const current = await readFile(outputPath, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
@@ -72,7 +109,7 @@ export async function prepareUiSourcePluginInventory({ uiPackageDir = uiDir, env
 
 /** Consume Metro's already-batched changes; do not create another file watcher
  * or debounce clock. The canonical compiler reuses unchanged plugin entries. */
-export function watchUiSourcePluginInventory({ metroServer, uiPackageDir = uiDir, env = process.env, logger = console }) {
+export function watchUiSourcePluginInventory({ metroServer, metroConfig, uiPackageDir = uiDir, env = process.env, logger = console }) {
   env = { ...env };
   const inventoryPath = String(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY ?? '').trim();
   const repoRoot = resolve(uiPackageDir, '../..');
@@ -114,7 +151,7 @@ export function watchUiSourcePluginInventory({ metroServer, uiPackageDir = uiDir
       pending = pending.then(async () => {
         queued = false;
         if (closed) return;
-        await prepareUiSourcePluginInventory({ uiPackageDir, env, signal: cancellation.signal, metroServer });
+        await prepareUiSourcePluginInventory({ uiPackageDir, env, signal: cancellation.signal, metroServer, metroConfig });
         inputsPromise = null;
       }).catch(report);
     }).catch(report);
@@ -124,7 +161,7 @@ export function watchUiSourcePluginInventory({ metroServer, uiPackageDir = uiDir
   return { async ready() {
     // A one-shot preparer or warm-start parent can publish outside this process.
     // Bundle/asset admission consumes the same file-map readiness as live refresh.
-    await waitForMetroPluginUiInventory({ metroServer,
+    await waitForMetroPluginUiInventory({ metroServer, metroConfig,
       inventoryPath, signal: cancellation.signal });
   }, async close() {
     closed = true;

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { chmod, cp, mkdtemp, mkdir, writeFile, readFile, realpath, rename, symlink, rm, access, readdir, stat, utimes } from 'node:fs/promises';
-import { existsSync, readFileSync, watch } from 'node:fs';
+import fs, { existsSync, readFileSync, watch } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { createServer } from 'node:http';
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -30,6 +30,110 @@ import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs'
 import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { startDevServer, createDevServerReloadExecutor } from '../utils/dev/server.mjs';
 import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
+
+test('source plugin UI publication admits complete directories to real Metro', {
+  skip: process.platform === 'darwin', // macOS selects Metro's recursive native watcher, not this fallback boundary.
+}, async t => {
+  let metro;
+  t.after(async () => { t.mock.restoreAll(); syncBuiltinESMExports(); await metro?.end(); });
+  await import('../../../../packages/cli-common/registerSourceRuntime.mjs');
+  const { prepareSourcePluginUiArtifacts } = await import('../../../ui/scripts/prepareSourcePluginUiArtifacts.mjs');
+  const { generateBundledPluginUiArtifacts, resolveBundledPluginUiArtifactsInputPaths } = await import('../../../ui/scripts/generateBundledPluginUiArtifacts.mjs');
+  const { fixture, repoRoot, plugins, entry } = await createSourcePluginUiFixture(t, ['alpha']);
+  await writeFile(entry('alpha'), 'export function renderSurface() { return "complete-graph"; }');
+  const compiled = await prepareSourcePluginUiArtifacts({ repoRoot, plugins, outputDir: fixture.path('compiled') });
+  const consumer = fixture.path('consumer');
+  const artifactStoreDir = join(consumer, 'artifacts');
+  await mkdir(artifactStoreDir, { recursive: true });
+  const inventoryPath = join(consumer, 'inventory.js');
+  const require = createRequire(new URL('../../../ui/package.json', import.meta.url));
+  const config = await require('metro-config').getDefaultConfig(repoRoot);
+  config.watchFolders = [repoRoot, consumer];
+  config.resolver.useWatchman = false;
+  config.resolver.assetExts.push('bundle', 'map');
+  config.resolver.blockList = /[\\/]\.happier-plugin-ui-stage-[^\\/]*(?:[\\/]|$)/;
+  config.maxWorkers = 1;
+  config.fileMapCacheDirectory = fixture.path('cache');
+  await mkdir(config.fileMapCacheDirectory);
+  config.reporter = { update() {} };
+  metro = await require('metro').createConnectMiddleware(config, { watch: true, waitForBundler: true });
+  const graph = await metro.metroServer.getBundler().getBundler().getDependencyGraph();
+  // Widen the real OS read-directory → attach-watch gap. No Metro method is
+  // mocked: an empty directory listing is captured, the publisher populates it,
+  // then the fallback watcher receives that earlier listing and attaches late.
+  const originalMkdir = fs.promises.mkdir;
+  const originalReaddir = fs.readdir;
+  let listingObserved;
+  const listing = new Promise(resolveListing => { listingObserved = resolveListing; });
+  let publicationFinished;
+  const published = new Promise(resolvePublication => { publicationFinished = resolvePublication; });
+  const isNewGraph = path => typeof path === 'string' && dirname(path) === join(artifactStoreDir, 'alpha')
+    && /^[a-f0-9]{64}$/.test(basename(path));
+  t.mock.method(fs.promises, 'mkdir', async (path, options) => {
+    const result = await originalMkdir(path, options);
+    if (isNewGraph(path)) await listing;
+    return result;
+  });
+  t.mock.method(fs, 'readdir', (path, ...args) => {
+    const callback = args.pop();
+    return originalReaddir(path, ...args, (error, files) => {
+      if (!error && isNewGraph(path) && files.length === 0) {
+        listingObserved();
+        void published.then(() => callback(error, files));
+      } else callback(error, files);
+    });
+  });
+  syncBuiltinESMExports();
+  t.after(() => { publicationFinished(); t.mock.restoreAll(); syncBuiltinESMExports(); });
+  try {
+    await generateBundledPluginUiArtifacts({ repoRoot, outputPath: inventoryPath, publicationMode: 'source',
+      pluginManifests: { alpha: plugins[0].manifest }, artifactRoots: compiled.artifactRoots, artifactStoreDir });
+  } finally { publicationFinished(); }
+  const paths = resolveBundledPluginUiArtifactsInputPaths(inventoryPath).slice(1);
+  assert.ok(paths.length > 0);
+  await t.waitFor(() => {
+    for (const path of paths) assert.equal(graph.doesFileExist(path), true,
+      `published graph must reach Metro's actual file map: ${path}`);
+  }, { timeout: 10_000, interval: 20 });
+  for (const path of paths) {
+    assert.equal(graph.resolveDependency(inventoryPath, {
+      name: path, data: { key: path, asyncType: null, isESMImport: false, locs: [] },
+    }, 'web', { dev: true }).filePath, path);
+  }
+  await t.test('unchanged graphs keep their mtimes and a removed subtree is repaired', async () => {
+    const publish = () => generateBundledPluginUiArtifacts({ repoRoot, outputPath: inventoryPath, publicationMode: 'source',
+      pluginManifests: { alpha: plugins[0].manifest }, artifactRoots: compiled.artifactRoots, artifactStoreDir });
+    const before = await Promise.all(paths.map(path => stat(path)));
+    await publish();
+    assert.deepEqual((await Promise.all(paths.map(path => stat(path)))).map(info => info.mtimeMs), before.map(info => info.mtimeMs));
+    await rm(dirname(paths[0]), { recursive: true });
+    await t.waitFor(() => assert.equal(graph.doesFileExist(paths[0]), false), { timeout: 10_000, interval: 20 });
+    await publish();
+    await t.waitFor(() => assert.ok(paths.every(path => graph.doesFileExist(path))), { timeout: 10_000, interval: 20 });
+  });
+  await t.test('readiness refuses a missing file and a symlink whose target is unwatched', { timeout: 10_000 }, async t => {
+    const { watchUiSourcePluginInventory } = await import('../../../ui/scripts/ensureWorkspacePackagesBuilt.mjs');
+    await mkdir(join(repoRoot, 'apps/cli'), { recursive: true });
+    await writeFile(join(repoRoot, 'apps/cli/package.json'), JSON.stringify({ bundledDependencies: [] }));
+    const outside = fixture.path('outside/entry.cjs.bundle');
+    await mkdir(dirname(outside), { recursive: true });
+    await writeFile(outside, await readFile(paths[0]));
+    const linked = join(consumer, 'linked.cjs.bundle');
+    await symlink(outside, linked);
+    const inventory = await readFile(inventoryPath, 'utf8');
+    const invalidInventoryPath = join(consumer, 'invalid-inventory.js');
+    const failures = [];
+    const owner = watchUiSourcePluginInventory({ metroServer: metro.metroServer, metroConfig: config,
+      uiPackageDir: join(repoRoot, 'apps/ui'), env: { ...process.env, HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: invalidInventoryPath },
+      logger: { error: (...args) => failures.push(args) } });
+    t.after(() => owner.close());
+    for (const path of [join(consumer, 'missing.cjs.bundle'), linked]) {
+      await writeFile(invalidInventoryPath, inventory.replace(JSON.stringify(paths[0]), JSON.stringify(path)));
+      await assert.rejects(owner.ready(), error => error.code === 'plugin_ui_inventory_unindexable' && error.message.includes(path));
+    }
+    assert.deepEqual(failures, []);
+  });
+});
 
 test('source edits refresh the inventory module consumed by a running Metro', async (t) => {
   const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -65,6 +169,16 @@ test('source edits refresh the inventory module consumed by a running Metro', as
     npm_lifecycle_event: null,
   });
   const { ensureUiWorkspacePackagesBuilt, prepareUiSourcePluginInventory } = await import(pathToFileURL(join(uiPackageDir, 'scripts/ensureWorkspacePackagesBuilt.mjs')));
+  // Compile a real graph whose digest is excluded by the Metro fixture below.
+  // Its next source edit must fail admission, rather than hold the serial queue.
+  const rejectedInventory = fixture.path('rejected/inventory.js');
+  await writeFile(source, 'export function renderSurface() { return "live-rejected"; }\n');
+  await prepareUiSourcePluginInventory({ uiPackageDir, env: { ...process.env,
+    HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: rejectedInventory } });
+  const rejectedAsset = [...(await readFile(rejectedInventory, 'utf8')).matchAll(/require\(("(?:[^"\\]|\\.)*")\)/g)]
+    .map(match => JSON.parse(match[1])).find(path => path.includes(`${sep}inspector${sep}`));
+  const rejectedDigest = rejectedAsset.split(sep)[rejectedAsset.split(sep).indexOf('inspector') + 1];
+  await writeFile(source, 'export function renderSurface() { return "live-before"; }\n');
   await ensureUiWorkspacePackagesBuilt({ uiPackageDir, source: true });
   const consumeInventory = () => {
     const module = { exports: {} };
@@ -77,6 +191,7 @@ test('source edits refresh the inventory module consumed by a running Metro', as
   const config = require(join(uiPackageDir, 'metro.config.js'));
   config.projectRoot = uiPackageDir;
   config.watchFolders = [join(repoRoot, 'packages'), dirname(inventoryPath)];
+  config.resolver.blockList = [...[config.resolver.blockList].flat(), new RegExp(rejectedDigest)];
   config.maxWorkers = 2;
   config.fileMapCacheDirectory = fixture.path('cache');
   await mkdir(config.fileMapCacheDirectory);
@@ -220,6 +335,26 @@ test('source edits refresh the inventory module consumed by a running Metro', as
     assert.ok(await readFile(inventoryPath, 'utf8') === before, 'unchanged source keeps exactly the same asset paths');
     assert.deepEqual(await preparations(), [], 'completed compiler scratch must not accumulate beside served assets');
   });
+  await t.test('an unindexable candidate keeps last-good and releases the refresh queue for the next edit', async () => {
+    const failures = [];
+    const report = console.error;
+    t.mock.method(console, 'error', (...args) => { failures.push(args); report(...args); });
+    const incumbent = await readFile(inventoryPath, 'utf8');
+    await writeFile(source, 'export function renderSurface() { return "live-rejected"; }\n');
+    await t.waitFor(() => assert.ok(failures.some(args => args.some(error =>
+      error?.code === 'plugin_ui_inventory_unindexable' && error.message.includes(rejectedDigest))),
+    'an impossible Metro wait must report its offending candidate path'), { timeout: 120_000, interval: 100 });
+    assert.equal(await readFile(inventoryPath, 'utf8'), incumbent, 'failed admission preserves last-good');
+    await writeFile(source, 'export function renderSurface() { return "live-recovered"; }\n');
+    await t.waitFor(() => assert.ok(consumeInventory().find(entry => entry.artifactId === 'inspector-app-native')
+      .files.some(file => file.asset.includes('live-recovered')),
+    'the next source edit must advance through the same refresh queue'), { timeout: 120_000, interval: 100 });
+    const { resolveBundledPluginUiArtifactsInputPaths } = await import(pathToFileURL(join(uiPackageDir, 'scripts/generateBundledPluginUiArtifacts.mjs')));
+    for (const asset of resolveBundledPluginUiArtifactsInputPaths(inventoryPath).slice(1)) {
+      assert.ok(asset.startsWith(`${fixture.path('consumer/artifacts')}${sep}`));
+      assert.equal(indexedAsset(asset, 'web'), asset);
+    }
+  });
 });
 
 test('development server starts the retained coherent graph while source and workspace publication advance', { timeout: 30000 }, async t => {
@@ -345,6 +480,72 @@ async function createSourcePluginUiFixture(t, directories) {
   const entry = directory => join(repoRoot, 'packages/plugins', directory, 'src/panel.ts');
   return { fixture, repoRoot, plugins, entry };
 }
+
+test('source plugin UI preparation isolates manifest evaluation and syntax failures while refreshing healthy peers', async t => {
+  const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
+  const fixture = await createTempFixture(t, { prefix: 'happier-plugin-manifest-isolation-', registerCleanup: false });
+  t.after(() => fixture.cleanup());
+  const repoRoot = fixture.path('repo');
+  await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoRoot });
+  await cp(join(sourceRepo, 'apps/stack/bin'), join(repoRoot, 'apps/stack/bin'), { recursive: true });
+  const cliPath = join(repoRoot, 'apps/cli/package.json');
+  const cli = JSON.parse(await readFile(cliPath, 'utf8'));
+  await writeFile(cliPath, JSON.stringify({ ...cli, bundledDependencies: ['@happier-dev/plugins-inspector', '@happier-dev/plugins-channels'] }));
+  const inspector = join(repoRoot, 'packages/plugins/inspector/src/ui/renderSurface.tsx');
+  const channels = join(repoRoot, 'packages/plugins/channels/src/ui/renderSurface.tsx');
+  const manifestPath = join(repoRoot, 'packages/plugins/inspector/src/manifest.ts');
+  const originalManifest = await readFile(manifestPath, 'utf8');
+  const diagnostics = [];
+  const writeStderr = process.stderr.write;
+  t.mock.method(process.stderr, 'write', function(chunk, ...args) {
+    diagnostics.push(String(chunk));
+    return Reflect.apply(writeStderr, this, [chunk, ...args]);
+  });
+  const outputPath = fixture.path('consumer/inventory.js');
+  const artifactStoreDir = fixture.path('consumer/artifacts');
+  const { prepareSourcePluginUiInventory } = await import('./build_source_web_ui.mjs');
+  const { resolveBundledPluginUiArtifactsRetainedRoots } = await import('../../../ui/scripts/generateBundledPluginUiArtifacts.mjs');
+  let attempt = 0;
+  const prepare = async () => {
+    const chunks = [];
+    const outputDir = fixture.path(`prepare-${attempt++}`);
+    await mkdir(outputDir);
+    await prepareSourcePluginUiInventory({ repoDir: repoRoot, outputDir,
+      inventoryPath: outputPath, retainedInventoryPath: outputPath, artifactStoreDir,
+      stdoutStream: { write(chunk) { chunks.push(String(chunk)); } } });
+    return chunks.join('');
+  };
+  const content = async pluginId => {
+    const root = resolveBundledPluginUiArtifactsRetainedRoots(outputPath).get(pluginId);
+    if (!root) return undefined;
+    const graph = JSON.parse(await readFile(join(root, 'ui-artifacts.json'), 'utf8'));
+    const renderer = graph.entries.find(entry => entry.executable?.exports.includes('renderSurface'));
+    assert.ok(renderer, 'the retained graph must contain its declared renderer');
+    return await readFile(join(root, renderer.entry), 'utf8');
+  };
+  await writeFile(inspector, 'export function renderSurface() { return "inspector-green"; }');
+  await writeFile(channels, 'export function renderSurface() { return "channels-one"; }');
+  await writeFile(manifestPath, 'throw new Error("fixture manifest evaluation failed");\n' + originalManifest);
+  await prepare();
+  assert.equal(await content('happier.inspector'), undefined, 'a cold broken manifest is isolated');
+  assert.match(await content('happier.channels'), /channels-one/);
+  assert.match(diagnostics.join(''), /\[plugin:happier.inspector\] plugin_ui_artifact_invalid:.*fixture manifest evaluation failed/);
+  await writeFile(manifestPath, originalManifest);
+  await prepare();
+  assert.match(await content('happier.inspector'), /inspector-green/);
+  diagnostics.length = 0;
+  await writeFile(manifestPath, 'export const malformed = ;\n' + originalManifest);
+  await writeFile(channels, 'export function renderSurface() { return "channels-two"; }');
+  await prepare();
+  assert.match(await content('happier.inspector'), /inspector-green/, 'manifest failure retains the complete prior graph and declaration');
+  assert.match(await content('happier.channels'), /channels-two/, 'the healthy peer advances');
+  assert.match(diagnostics.join(''), /\[plugin:happier.inspector\] plugin_ui_artifact_invalid:/);
+  assert.match(diagnostics.join(''), /serving last-green UI/);
+  await writeFile(manifestPath, originalManifest);
+  await writeFile(inspector, 'export function renderSurface() { return "inspector-recovered"; }');
+  await prepare();
+  assert.match(await content('happier.inspector'), /inspector-recovered/);
+});
 
 test('source plugin UI preparation isolates cold failure, retains green bytes and recovers independently', async t => {
   const { runInNewContext } = await import('node:vm');

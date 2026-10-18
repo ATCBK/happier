@@ -535,8 +535,6 @@ test('source web export retains captured UI and workspace inputs across live add
       assert.equal(await readFile(join(inputRepo, workspaceInput), 'utf8'), 'export const value = "captured-workspace";');
       await assert.rejects(access(join(cwd, 'sources/createdDuringExport.ts')), { code: 'ENOENT' });
       assert.equal(createHash('sha256').update(await readFile(join(inputRepo, toolInput))).digest('hex'), toolDigest);
-      const inputs = Object.keys(JSON.parse(await readFile(fixture.path('output/tools/metafile.json'), 'utf8')).inputs);
-      assert.ok(inputs.some(path => path.replaceAll('\\', '/').endsWith(`/workspace/${toolInput}`)));
       const inventory = (await readFile(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'utf8')).replaceAll('export const ', 'const ');
       const artifacts = runInNewContext(`${inventory}\nBUNDLED_PLUGIN_UI_APP_ARTIFACTS`, { require: path => path });
       assert.deepEqual(Array.from(artifacts, artifact => artifact.pluginId), ['happier.admission-fixture']);
@@ -559,7 +557,6 @@ test('source web export uses fresh private source projections and one-shot origi
   const outputDir = join(scratch, 'export');
   let expectedOutputDir = outputDir;
   const exportInputs = [];
-  let expectedManifestInputs;
   const env = { ...process.env, EXPO_PUBLIC_HAPPIER_SERVER_URL: 'https://moving-producer.invalid', EXPO_PUBLIC_DEBUG: '0' };
   delete env.HAPPIER_STACK_EXPO_SHARED_TMPDIR_BASE_DIR;
   delete env.HAPPIER_STACK_EXPO_SHARED_TMPDIR_KEY;
@@ -582,15 +579,6 @@ test('source web export uses fresh private source projections and one-shot origi
     if (args[0] !== 'export') return run(command, args, options);
     exportCalls += 1;
     await access(join(options.cwd, '../cli/scripts/buildPublication.mjs'));
-    if (exportCalls === 1) {
-      const inputRepoDir = resolve(options.cwd, '../..');
-      const packages = await readWorkspacePackages(inputRepoDir);
-      // Preparation imports the CLI's whole bundled plugin census, including
-      // brand-only plugins absent from the UI dependency closure.
-      expectedManifestInputs = packages.get('@happier-dev/cli').manifest.bundledDependencies
-        .filter(name => name.startsWith('@happier-dev/plugins-'))
-        .map(name => relative(inputRepoDir, resolveWorkspaceSource(packages, `${name}/manifest`)).replaceAll('\\', '/'));
-    }
     assert.equal(options.env.CI, '1');
     assert.equal(options.env.EXPO_PUBLIC_HAPPIER_SERVER_URL, '');
     assert.equal(options.env.EXPO_PUBLIC_DEBUG, exportCalls === 1 ? '0' : '1');
@@ -616,13 +604,6 @@ test('source web export uses fresh private source projections and one-shot origi
   assert.equal(result.uiDir, join(outputDir, 'web'));
   assert.equal(result.entrypoint, 'index.html');
   await assert.rejects(access(join(result.uiDir, 'node_modules')), { code: 'ENOENT' });
-  const inputs = Object.keys(JSON.parse(await readFile(join(outputDir, 'tools/metafile.json'), 'utf8')).inputs);
-  assert.equal(inputs.some((input) => /(?:^|\/)packages\/.*\/dist\//.test(input)), false);
-  assert.ok(expectedManifestInputs.length > 0);
-  for (const manifestInput of expectedManifestInputs) {
-    assert.ok(inputs.some(input => input.replaceAll('\\', '/').endsWith(`/workspace/${manifestInput}`)),
-      `preparation must compile the captured bundled manifest: ${manifestInput}`);
-  }
   const firstBytes = await readFile(join(result.uiDir, 'app.js'), 'utf8');
   assert.equal(brotliDecompressSync(await readFile(join(result.uiDir, 'app.js.br'))).toString(), firstBytes);
   assert.equal(gunzipSync(await readFile(join(result.uiDir, 'app.js.gz'))).toString(), firstBytes);
@@ -700,11 +681,6 @@ const owner=token && join(root,'owners',token.replace(':','-'));
 const capturedRepo=resolve(process.cwd(),'../..');
 assert.equal(readFileSync(join(capturedRepo,'apps/ui/sources/app/_layout.tsx'),'utf8'),${JSON.stringify(uiSource)});
 assert.equal(createHash('sha256').update(readFileSync(join(capturedRepo,${JSON.stringify(toolInput)}))).digest('hex'),${JSON.stringify(toolDigest)});
-const inputs=Object.keys(JSON.parse(readFileSync(${JSON.stringify(join(outputDir, 'tools/metafile.json'))},'utf8')).inputs).map(path=>path.replaceAll('\\\\','/'));
-assert.ok(inputs.some(path=>path.endsWith('/workspace/'+${JSON.stringify(toolInput)})));
-const pluginInputs=inputs.filter(path=>path.includes('packages/plugins/'));
-assert.ok(pluginInputs.length>0);
-assert.ok(pluginInputs.every(path=>path.includes('/packages/plugins/admission-fixture/')));
 const inventory=readFileSync(process.env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY,'utf8').replaceAll('export const ','const ');
 const artifacts=runInNewContext(inventory+'\\nBUNDLED_PLUGIN_UI_APP_ARTIFACTS',{require:path=>path});
 assert.deepEqual(Array.from(artifacts,artifact=>artifact.pluginId),['happier.admission-fixture']);
