@@ -53,6 +53,7 @@ import { resolveMachineTransferAvailability } from '../domains/transfers/runtime
 import { followUpSpawnedSessionWithServerScope } from '../runtime/orchestration/serverScopedRpc/followUpSpawnedSession';
 import { buildSessionHandoffMetadataPatch } from './buildSessionHandoffMetadataPatch';
 import { ConnectedServiceAuthSelectionUnsupportedError, machineRpcWithConnectedServiceAuthAdmission, requireMachineConnectedServiceAuthSelection } from './connectedServiceAuthSupport';
+import { probeSessionHandoffCapability } from '../domains/sessionHandoff/probeSessionHandoffCapability';
 
 type MetadataRecord = Metadata;
 type HandoffErrorResult = Readonly<{
@@ -855,22 +856,13 @@ async function requireSafeSessionHandoffV2Target(params: Readonly<{
     targetMachineId: string;
     serverId?: string | null;
 }>): Promise<Readonly<{ ok: true }> | HandoffErrorResult> {
-    try {
-        const raw = await machineRpcWithServerScope<unknown, unknown>({
-            machineId: params.targetMachineId,
-            method: RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET,
-            payload: {},
-            serverId: normalizeId(params.serverId) || null,
-            timeoutMs: resolveSessionHandoffRuntimeConfig().machineRpcPollTimeoutMs,
-            preferScoped: true,
-        });
-        const capability = raw as { protocolVersion?: unknown; atomicTargetResume?: unknown; targetCleanup?: unknown };
-        if (capability.protocolVersion === 2 && capability.atomicTargetResume === true && capability.targetCleanup === true) {
-            return { ok: true };
-        }
-    } catch {
-        // A missing/unreachable v2 peer must fail before source stop.
-    }
+    const result = await probeSessionHandoffCapability({
+        machineId: params.targetMachineId,
+        serverId: normalizeId(params.serverId) || null,
+        preferScoped: true,
+    });
+    if (result.status === 'supported') return { ok: true };
+    if (result.status === 'error') return { ok: false, errorCode: result.errorCode, errorMessage: result.errorMessage };
     return unsupportedError('Target daemon does not support safe atomic session handoff v2');
 }
 
