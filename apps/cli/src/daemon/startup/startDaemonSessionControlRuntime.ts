@@ -14970,7 +14970,6 @@ export async function startDaemonSessionControlRuntime(
         ? createDaemonApprovalExecutionOriginCurrentnessFromCredentials({
             credentials, machineId: params.machineId, serverId: params.serverId,
             serverApiUrl: requesterAccountContext.serverHttpBaseUrl, isSessionCallerCurrent,
-            isRequesterCurrent: () => requesterAccountContext.isCurrent(),
             ...(params.workflowAcceptedAuthorizationCurrentness
               ? { isWorkflowRunAuthorizationCurrent: params.workflowAcceptedAuthorizationCurrentness } : {}),
             ...(params.resolveServerFeaturesSnapshot

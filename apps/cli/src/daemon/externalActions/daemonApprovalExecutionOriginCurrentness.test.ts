@@ -214,6 +214,13 @@ describe('daemon approval execution-origin currentness', () => {
         caller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 }, serverId: 'home-1', accountId: 'account-1', machineId: 'machine-1',
         actionId: 'workflow.trigger.add', requestId: 'private-permission-request', callerPermissionMode: 'default' };
       await expect(check!({ origin: sessionOrigin })).resolves.toBe(true);
+      const retiredDecisionRequesterCheck = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials,
+        serverApiUrl, machineId: 'machine-1', serverId: 'home-1', isSessionCallerCurrent: () => true,
+        ...{ isRequesterCurrent: async () => false },
+      });
+      // The reviewer invocation only supplies decision custody. Its lifetime is
+      // independent of the immutable approval origin being revalidated here.
+      await expect(retiredDecisionRequesterCheck!({ origin: sessionOrigin })).resolves.toBe(true);
       const target = { kind: 'session' as const, sessionId };
       const resolveTarget = createDaemonExternalActionTargetResolver({ credentials, serverApiUrl });
       await expect(resolveTarget({ actionId: 'session.open', target, currentMachineId: 'machine-1' })).resolves.toEqual(target);

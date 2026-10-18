@@ -370,8 +370,6 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
   machineId: string;
   serverId: string;
   serverApiUrl: string;
-  /** Invocation requester custody is distinct from the original approval origin. */
-  isRequesterCurrent?: () => Promise<boolean>;
   resolveCurrentMachineExecutionOriginContext?: Parameters<typeof createDaemonApprovalExecutionOriginCurrentness>[0]['resolveCurrentMachineExecutionOriginContext'];
   currentMachineHost?: string | null;
   currentMachineHomeDir?: string | null;
@@ -476,13 +474,7 @@ export function createDaemonApprovalExecutionOriginCurrentnessFromCredentials(in
       return settings?.sessionAgentSpawnPolicyV1 ?? null;
     }),
   });
-  return (args) => runWithServerHttpBaseUrl(input.serverApiUrl, async () => {
-    if (input.isRequesterCurrent && !await input.isRequesterCurrent().catch(() => false)) {
-      args.reportStale?.('requester_account_unavailable');
-      return false;
-    }
-    return checker(args);
-  });
+  return (args) => runWithServerHttpBaseUrl(input.serverApiUrl, () => checker(args));
 }
 
 /**
