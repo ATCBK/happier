@@ -725,7 +725,8 @@ vi.mock('@/backends/catalog', async (importOriginal) => {
   };
 });
 
-vi.mock('@/persistence', () => ({
+vi.mock('@/persistence', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/persistence')>(),
   writeDaemonState: vi.fn(),
   writeDaemonStateIfLockOwned: vi.fn(() => true),
   writeConnectedServiceBrokerState: vi.fn(),
