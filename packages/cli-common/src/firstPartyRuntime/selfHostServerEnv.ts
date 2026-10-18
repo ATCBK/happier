@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { dirname, join, win32 as win32Path } from 'node:path';
+import { dirname, join, normalize, win32 as win32Path } from 'node:path';
 
 export const DEFAULT_PRISMA_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 export const DEFAULT_SERVER_LIGHT_SQLITE_CONNECTION_LIMIT = 1;
@@ -197,10 +197,24 @@ function renderPrismaCompatibleSqliteFileUrl(params: Readonly<{
 }>): string {
     // Prisma passes the file: payload to SQLite as a native path, without URI decoding.
     // Encoding spaces therefore selects a different (usually nonexistent) directory.
-    if (/[?#]/.test(params.dbPath)) {
-        throw new Error("SQLite database path cannot contain '?' or '#' because Prisma reserves them for connection parameters");
+    if (params.dbPath.includes('?')) {
+        throw new Error("SQLite database path cannot contain '?' because Prisma reserves it for connection parameters");
     }
     return `file:${params.dbPath}`;
+}
+
+export function resolvePrismaSqliteDatabaseFilePath(databaseUrl: string): string {
+    const raw = String(databaseUrl ?? '').trim();
+    if (!raw.startsWith('file:')) return '';
+    // Prisma consumes native file names. Percent escapes and hashes are literal,
+    // while the first question mark starts its connection parameters.
+    const path = raw.slice('file:'.length).split('?')[0];
+    return path ? normalize(path) : '';
+}
+
+export function readPrismaSqliteConnectionParams(databaseUrl: string): URLSearchParams {
+    const queryIndex = databaseUrl.indexOf('?');
+    return new URLSearchParams(queryIndex < 0 ? '' : databaseUrl.slice(queryIndex + 1));
 }
 
 function resolvePrismaSqliteSocketTimeoutSeconds(busyTimeoutMs: number): number | null {
@@ -293,13 +307,9 @@ export function appendPrismaSqliteConnectionParams(params: Readonly<{
     const rawUrl = String(params.databaseUrl ?? '').trim();
     if (!rawUrl) return '';
 
-    const hashIndex = rawUrl.indexOf('#');
-    const beforeHash = hashIndex >= 0 ? rawUrl.slice(0, hashIndex) : rawUrl;
-    const hash = hashIndex >= 0 ? rawUrl.slice(hashIndex) : '';
-    const queryIndex = beforeHash.indexOf('?');
-    const base = queryIndex >= 0 ? beforeHash.slice(0, queryIndex) : beforeHash;
-    const query = queryIndex >= 0 ? beforeHash.slice(queryIndex + 1) : '';
-    const searchParams = new URLSearchParams(query);
+    const queryIndex = rawUrl.indexOf('?');
+    const base = queryIndex >= 0 ? rawUrl.slice(0, queryIndex) : rawUrl;
+    const searchParams = readPrismaSqliteConnectionParams(rawUrl);
 
     const socketTimeoutSeconds = resolvePrismaSqliteSocketTimeoutSeconds(
         params.busyTimeoutMs ?? DEFAULT_PRISMA_SQLITE_BUSY_TIMEOUT_MS,
@@ -317,7 +327,7 @@ export function appendPrismaSqliteConnectionParams(params: Readonly<{
     }
 
     const renderedQuery = searchParams.toString();
-    return `${base}${renderedQuery ? `?${renderedQuery}` : ''}${hash}`;
+    return `${base}${renderedQuery ? `?${renderedQuery}` : ''}`;
 }
 
 export function renderPrismaCompatibleSqliteDatabaseUrl(params: Readonly<{

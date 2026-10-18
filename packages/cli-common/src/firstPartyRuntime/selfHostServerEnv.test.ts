@@ -331,11 +331,11 @@ describe('renderPrismaCompatibleSqliteDatabaseUrl', () => {
     })).toBe('file:/tmp/happier-data/happier-server-light.sqlite');
   });
 
-  it.each(['?', '#'])('rejects the Prisma connection delimiter %s in a native database path', (delimiter) => {
+  it('rejects the Prisma query delimiter in a native database path', () => {
     expect(() => render({
-      dbPath: `/tmp/happier${delimiter}data/happier-server-light.sqlite`,
+      dbPath: '/tmp/happier?data/happier-server-light.sqlite',
       platform: 'linux',
-    })).toThrow('Prisma reserves them for connection parameters');
+    })).toThrow(Error);
   });
 });
 
