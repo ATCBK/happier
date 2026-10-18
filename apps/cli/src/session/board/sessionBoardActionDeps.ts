@@ -159,7 +159,10 @@ export function createSessionBoardActionDeps(options: Readonly<{
     const sessionId = common.sessionId ?? context.defaultSessionId;
     if (!sessionId) return createSessionBoardFailureV1('session_board_invalid');
     const resolveAuthorizationHeaders = (request: Readonly<{ method: 'GET'; path: string }>) => {
-      const authorization = resolveExternalActionServerRequestHeaders({ context, effectActionId: actionId,
+      // A composed read spends its admitted root, not a second Board Action.
+      // Mutation effects remain explicit in put(); these headers only serve GETs.
+      const effectActionId = context.externalActionExecutionAuthorization?.binding.actionId ?? actionId;
+      const authorization = resolveExternalActionServerRequestHeaders({ context, effectActionId,
         method: request.method, path: request.path, daemonToken: options.credentials.token, serverIdentityId: options.serverIdentityId,
         ...(options.externalActionMachineRequestPrivateKey ? { privateKey: options.externalActionMachineRequestPrivateKey } : {}),
         ...(options.externalActionMachineInstallationId ? { installationId: options.externalActionMachineInstallationId } : {}),

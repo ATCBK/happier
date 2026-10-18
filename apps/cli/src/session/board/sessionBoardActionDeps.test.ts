@@ -238,6 +238,55 @@ describe('CLI Board Action family', () => {
     const result = await runWithServerHttpBaseUrl('http://board.test', () => deps.widgetCatalog!.list(surface, { serverId: 'local-profile' }));
     expect(result).toEqual(expect.arrayContaining([expect.objectContaining({ definition: { kind: 'builtin', id: 'session_summary' } })]));
   });
+  it.each(['widgets.catalog.list', 'widgets.item.list'] as const)(
+    'retains the admitted agent %s root through composed Board reads', async actionId => {
+      const serverIdentityId = 'srv_board_identity';
+      const accountId = 'owner';
+      const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+      const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(32));
+      const target = { kind: 'machine' as const, machineId: 'machine-one' };
+      const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'agent-read-proof', binding: {
+        accountId, authentication: { kind: 'account', tokenEpoch: 1 }, accountEncryptionMode: 'plain',
+        serverIdentityId, machineId: target.machineId, custodianAccountId: accountId, installationId: 'installation-one',
+        actionId, requestId: 'agent-read', requestEnvelopeDigest: 'a'.repeat(43), target,
+      } });
+      const signedPaths: string[] = [];
+      app.addHook('preHandler', async (request, reply) => {
+        if (!request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]) return;
+        signedPaths.push(request.url);
+        const valid = request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] === actionId
+          && verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: actionId,
+            target, installationId: 'installation-one', requestId: 'agent-read', method: request.method,
+            path: request.url, publicKey: signingKey.publicKey,
+            signature: String(request.headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]) });
+        if (!valid) return reply.code(401).send({ error: 'not_authenticated' });
+      });
+      app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+      app.get('/v1/artifacts', async () => []);
+      app.get('/v2/sessions', async () => ({ sessions: [rawSession], hasNext: false, nextCursor: null }));
+      app.get('/v2/sessions/archived', async () => ({ sessions: [], hasNext: false, nextCursor: null }));
+      app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+      app.get('/v2/sessions/session-one/system-records', async () => ({ records: [], hasNext: false, nextCursor: null }));
+      const { executor } = createCliActionExecutorHarness({ credentials: { token, encryption: null }, token,
+        sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'local-profile', serverIdentityId,
+        serverHttpBaseUrl: 'http://board.test', externalActionMachineInstallationId: 'installation-one',
+        externalActionMachineRequestPrivateKey: signingKey.secretKey,
+        machineActionDirectTargetTransport: { machineId: target.machineId, invoke: async () => ({ protocolVersion: 1,
+          projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1 }) }) },
+      });
+      const bridge = createActionToolExecutorBridge({ surface: 'agent', executor: {
+        execute: (id, input, context) => executor.execute(id, input, { ...context,
+          externalActionExecutionAuthorization: authorization, externalActionTarget: target }),
+      } });
+      const surface = { serverId: serverIdentityId, accountId, owner: { kind: 'sessionBoard' as const, sessionId: 'session-one' } };
+      const result = await bridge.executeActionByToolName('action_execute', {
+        actionId, input: { surface },
+      }, 'session-one');
+      expect(result, JSON.stringify({ result, signedPaths })).toMatchObject({ ok: true });
+      expect(signedPaths).toContain('/v2/sessions/session-one?accessProjectionVersion=1');
+      expect(signedPaths.some(path => path.startsWith('/v2/sessions/session-one/system-records'))).toBe(true);
+    });
   it('admits the portable Home through the widget Board port while retaining exact HTTP routing', async () => {
     const serverIdentityId = 'srv_board_identity';
     const writes: unknown[] = [];
