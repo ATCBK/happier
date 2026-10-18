@@ -12894,6 +12894,11 @@ describe('installed Session widget through the mounted plugin controller', () =>
         const { storage } = await import('@/sync/domains/state/storage');
         const pluginId = 'com.acme.shared-widget';
         const occurrenceId = 'shared-widget-occurrence';
+        const executionOrigin = {
+            serverIdentityId: 'srv_server_1',
+            sourceRef: { pluginId, machineId: 'machine_1',
+                sourceCustody: { kind: 'development' as const, registeredRootId: '/plugins/shared-widget' } },
+        };
         const scope = { serverId: 'server_1', accountId: 'account-a', owner: { kind: 'home' as const } };
         const previous = storage.getState();
         onTestFinished(() => { storage.setState(previous, true); });
@@ -12908,14 +12913,7 @@ describe('installed Session widget through the mounted plugin controller', () =>
             installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Shared widget', enabled: true,
                 version: '1.0.0', occurrenceId, declaresContributionPoints: false,
                 sourceCustody: { kind: 'development', registeredRootId: '/plugins/shared-widget' },
-                executionOrigin: {
-                    serverIdentityId: 'srv_server_1',
-                    sourceRef: {
-                        pluginId,
-                        machineId: 'machine_1',
-                        sourceCustody: { kind: 'development', registeredRootId: '/plugins/shared-widget' },
-                    },
-                },
+                executionOrigin,
                 source: { kind: 'local', locator: '/plugins/shared-widget' } } },
             familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
                 [placement.id]: { ...placement, renderer: { kind: 'reactNative', contributionId: 'widget-native' } },
@@ -12929,7 +12927,8 @@ describe('installed Session widget through the mounted plugin controller', () =>
             } } },
         }));
         const union = unionPluginUiProjections([{ machineId: 'machine_1', serverId: scope.serverId,
-            serverIdentityId: 'srv_server_1', phase: 'current', interactionEnabled: true, projection: directProjection }]);
+            serverIdentityId: 'srv_server_1', phase: 'current', interactionEnabled: true, projection: directProjection,
+            selectableExecutionOrigins: [executionOrigin] }], new Map([[pluginId, executionOrigin]]));
         const projection = union.pluginUiProjection;
         expect(projection?.surfacePlacementsById[placement.id]?.occurrenceId).toBe(occurrenceId);
         const descriptor = readWidgetDescriptor(projection, { pluginId, localId: 'latest' });
@@ -12959,7 +12958,9 @@ describe('installed Session widget through the mounted plugin controller', () =>
             typeof node.props.testID === 'string').map(node => node.props.testID))).toBeGreaterThan(0));
         await flushHookEffects();
         const firstProps = reactNativeSurfaceProps.at(-1) as MountedProps;
-        expect(firstProps.privateHostBindings?.resourceStoreGeneration).toBe(occurrenceId);
+        // This presentation-only widget shares by its admitted Artifact, not
+        // by borrowing a daemon execution occurrence it does not need.
+        expect(firstProps.renderContext.surface.machineExecutionReady).toBe(false);
         expect(firstProps.privateHostBindings?.ephemeralSharedScope).not.toBeNull();
         expect(first.getTextContent()).toContain('Shared provider ready');
         expect(firstProps.renderContext.surface.mount).toMatchObject({ kind: 'embedded', role: 'widget' });
@@ -13574,7 +13575,7 @@ describe('canonical action dispatch reaches every mounted placement (EU-2)', () 
         return props.renderContext!.hostApi;
     }
 
-    it.each(['originUnavailable', 'reject', 'retire'] as const)('presents a plugin-page blocking approval from its exact Artifact without changing the plugin caller (%s)', async disposition => {
+    it.each(['approve', 'originUnavailable', 'reject', 'retire'] as const)('presents a plugin-page blocking approval from its exact Artifact without changing the plugin caller (%s)', async disposition => {
         const { createHomeGovernanceHarness } = await import('@/dev/testkit/harness/homeGovernanceHarness');
         const homes = createHomeGovernanceHarness();
         onTestFinished(() => homes.reset());
@@ -13589,15 +13590,7 @@ describe('canonical action dispatch reaches every mounted placement (EU-2)', () 
                     access: { custodian: { accountId: 'account-a', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
                 })]);
                 if (path === '/v1/actions/approval.request.decide') {
-                    const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
-                    expect(envelope.target).toEqual({ kind: 'machine', machineId: 'machine_1' });
-                    expect(envelope.input).toMatchObject({ artifactId: approvalId, decision: 'approve' });
-                    // Only the real Machine transport is substituted. Its refusal
-                    // must settle through the existing Artifact CAS owner.
-                    return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
-                        requestId: envelope.requestId, execution: {
-                            ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable',
-                        } }));
+                    throw new Error('A live plugin approval must resume its app waiter');
                 }
                 return homes.request(`https://server-1${path}`, init);
             }, { serverIdentityId, currentAccount: true });
@@ -13677,21 +13670,27 @@ describe('canonical action dispatch reaches every mounted placement (EU-2)', () 
                     && message.startsWith('useInsertionEffect must not schedule updates'))).toBe(false);
                 expect(JSON.parse(homes.artifacts(serverId).readPlainBody(approvalId!)!)).toMatchObject({ status: 'open' });
             } else {
+                if (disposition === 'originUnavailable') {
+                    // Source custody is revalidated at its daemon boundary even
+                    // when consent resumes an existing app-owned invocation.
+                    targetedContributionsReadMock.mockResolvedValue({ supported: false, reason: 'unavailable' });
+                }
                 const decision = await decideApprovalAsInbox(serverId, approvalId!, disposition === 'originUnavailable' ? 'approve' : disposition);
                 expect(decision, JSON.stringify(decision.ok ? { ok: true } : {
                     ok: false, errorCode: decision.errorCode, error: decision.error,
                 })).toMatchObject({ ok: true, result: disposition === 'originUnavailable'
-                    ? { status: 'failed', execution: { ok: false, errorCode: 'approval_origin_unavailable' } }
-                    : { status: 'rejected' } });
-                // The exact daemon refuses replay; approval must settle that
-                // refusal without lending the original plugin UI authority.
-                if (disposition === 'originUnavailable') await expect(operation).rejects.toMatchObject({ code: 'unavailable',
-                    diagnostics: [expect.objectContaining({ code: 'approval_origin_unavailable' })] });
+                    ? { status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } }
+                    : { status: disposition === 'approve' ? 'approved' : 'rejected' } });
+                if (disposition === 'approve') await operation;
+                else if (disposition === 'originUnavailable') await expect(operation).rejects.toMatchObject({ code: 'unavailable',
+                    diagnostics: [expect.objectContaining({ code: 'approval_stale' })] });
                 else await expect(operation).rejects.toMatchObject({ code: 'unavailable' });
                 await vi.waitFor(() => expect(screen.findByTestId('plugin-surface-approval-pending')).toBeNull());
                 await vi.waitFor(async () => expect(await readMountedHostApi().context()).toMatchObject({ pendingApproval: null }));
             }
-            expect(JSON.parse(homes.artifacts(serverId).readPlainBody('page-saved-group')!)).toMatchObject({ name: 'Release checks' });
+            expect(JSON.parse(homes.artifacts(serverId).readPlainBody('page-saved-group')!)).toMatchObject({
+                name: disposition === 'approve' ? 'Ready to ship' : 'Release checks',
+            });
         } finally {
             try {
                 const body = approvalId ? homes.artifacts(serverId).readPlainBody(approvalId) : null;

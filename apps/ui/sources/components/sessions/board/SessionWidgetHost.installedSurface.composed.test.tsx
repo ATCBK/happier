@@ -17,6 +17,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -34,6 +35,7 @@ import type { SessionBoardItemProjection, SessionBoardMountHost } from '@/sync/d
 import { selectWidgetCandidates } from '@/components/widgets/widgetCatalog';
 import { PluginInlineSurfaceHost } from '@/components/plugins/surfaces';
 import { PluginReactNativeSurface } from '@/components/plugins/reactNative/PluginReactNativeSurface';
+import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { encodeBase64 } from '@/encryption/base64';
@@ -85,11 +87,7 @@ const state = vi.hoisted(() => ({
 
 // The daemon RPC is the external boundary; the scoped runtime and target binder remain real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: async (request: { method: string; machineId: string; payload?: { kind?: string; pluginId?: string } }) => {
-        if (request.payload?.kind === 'targeted_action_rpc') return {
-            actionId: null, fieldPath: 'session', optionsSourceId: 'sessions',
-            options: [{ value: { serverId: state.serverId, sessionId: 'session-1' }, label: 'Session' }],
-        };
+    machineRpcWithServerScope: async (request: { method: string; machineId: string; payload?: { pluginId?: string } }) => {
         if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_ARTIFACT_BYTES_READ) return DaemonPluginUiArtifactBytesReadResponseSchema.parse({
             ok: true, artifactFamily: 'reactNative', cacheIdentity: { artifactDigest: nativeArtifactGraph.digest },
             artifact: { artifactKind: 'reactNativeBundle', digest: nativeArtifactGraph.digest, format: 'plainJs', byteSize: nativeBytes.byteLength },
@@ -544,7 +542,10 @@ describe('SessionWidgetHost installed surface placements', () => {
                     state.sessionRequests.push(path);
                 }
                 if (isBoundSessionProjection && state.sessionResponse) return (await state.sessionResponse).clone();
-                return http.request(input, init);
+                if (isBoundSessionProjection && state.session) return Response.json({ session: sessionHttpRecord(state.session) });
+                // Account Availability must settle before the real Artifact
+                // owner admits even daemon-selected development widget bytes.
+                return createEmptyAccountBootstrapHttpResponse(path, init) ?? http.request(input, init);
             } });
         state.serverId = resolveServerProfileScopeId(accountConnection.home);
         storage.setState({ profile: AccountProfileSchema.parse({ id: 'viewer' }),
@@ -763,24 +764,18 @@ describe('SessionWidgetHost installed surface placements', () => {
         expect(reportHeight).toEqual(expect.any(Function));
 
         await act(async () => { reportHeight?.(432); });
-        expect(screen.findByTestId('widget-body')?.props.style).toEqual(expect.arrayContaining([
-            expect.objectContaining({ height: 432 }),
-        ]));
+        expect(screen.findByType(WidgetFrame)?.props.viewportHeight).toBe(432);
 
         await screen.update(renderWidget({ mode: 'fixed', size: 'compact' }));
         await act(async () => { reportHeight?.(500); });
-        expect(screen.findByTestId('widget-body')?.props.style).toEqual(expect.arrayContaining([
-            expect.objectContaining({ height: 160 }),
-        ]));
+        expect(screen.findByType(WidgetFrame)?.props.viewportHeight).toBe(160);
 
         const fitContent = actionsOf(screen).find((action) => action.id === 'height-auto');
         (fitContent?.onPress as (() => void) | undefined)?.();
         expect(onSetHeight).toHaveBeenLastCalledWith({ mode: 'auto', fallback: 'tall' });
 
         await screen.update(renderWidget({ mode: 'auto', fallback: 'tall' }));
-        expect(screen.findByTestId('widget-body')?.props.style).toEqual(expect.arrayContaining([
-            expect.objectContaining({ height: 500 }),
-        ]));
+        expect(screen.findByType(WidgetFrame)?.props.viewportHeight).toBe(500);
     });
 
     it('supplies the existing plugin-management recovery to the incumbent host for late lifecycle refusal', async () => {
