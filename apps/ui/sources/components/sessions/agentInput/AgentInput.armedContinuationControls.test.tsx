@@ -38,13 +38,13 @@ describe('AgentInput armed continuation controls', () => {
             placeholder: '',
             onChangeText: () => {},
             onSend: () => {},
-            agentType: 'codebuddy',
+            agentType: 'codex',
             metadata: {
                 path: '/repo',
                 host: 'host',
-                flavor: 'codebuddy',
+                flavor: 'codex',
                 sessionModeOverrideV1: { v: 1, updatedAt: 2, modeId: 'build' },
-                sessionModesV1: { v: 1, updatedAt: 1, provider: 'codebuddy', currentModeId: 'build', availableModes: [
+                sessionModesV1: { v: 1, updatedAt: 1, provider: 'codex', currentModeId: 'build', availableModes: [
                     { id: 'build', name: 'Build' }, { id: 'plan', name: 'Plan' },
                 ] },
             },

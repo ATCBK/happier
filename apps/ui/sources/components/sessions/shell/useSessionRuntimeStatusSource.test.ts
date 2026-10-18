@@ -14,7 +14,6 @@ function createSession(overrides: Partial<Session> = {}): Session {
         encryptionMode: 'plain',
         createdAt: 1,
         updatedAt: 1,
-        meaningfulActivityAt: 1,
         active: true,
         activeAt: 1,
         thinking: false,
@@ -170,6 +169,7 @@ describe('useSessionRuntimeStatusSource', () => {
         const previousState = storage.getState();
         try {
             const shellSession = createSession({
+                meaningfulActivityAt: 1,
                 latestTurnStatus: 'completed',
                 latestTurnStatusObservedAt: 1_000,
                 runtimeActivityState: 'idle',

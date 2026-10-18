@@ -1,4 +1,4 @@
-import { matchesServerFetchRequest } from '@/dev/testkit';
+import { matchServerFetchUrl } from '@/dev/testkit/mocks/serverFetch';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const appStateAddListener = vi.hoisted(() => vi.fn(() => ({ remove: vi.fn() })));
@@ -1004,7 +1004,7 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
 
         expect(requestMock).not.toHaveBeenCalled();
         const sessionRequest = runtimeFetchMock.mock.calls.find(
-            ([url]) => matchesServerFetchRequest(url, `https://scoped.example/v2/sessions/${sessionId}`),
+            ([url]) => matchServerFetchUrl(`https://scoped.example/v2/sessions/${sessionId}`).asymmetricMatch(url),
         );
         expect(sessionRequest?.[1]).toEqual(expect.objectContaining({ method: 'GET' }));
         expect(new Headers((sessionRequest?.[1] as RequestInit | undefined)?.headers).get('Authorization'))

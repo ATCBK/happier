@@ -1,6 +1,7 @@
+import { matchServerFetchUrl } from '@/dev/testkit/mocks/serverFetch';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import { createSuccessfulServerReachabilityProbeResponse, isServerReachabilityProbeRequest, matchesServerFetchRequest } from '@/dev/testkit';
+import { createSuccessfulServerReachabilityProbeResponse, isServerReachabilityProbeRequest } from '@/dev/testkit';
 import { HappyError } from '@/utils/errors/errors';
 
 vi.mock('@/utils/timing/time', async (importOriginal) => {
@@ -32,7 +33,7 @@ function mockServerConfig() {
 }
 
 function resolveNonHealthCall(fetchMock: ReturnType<typeof vi.fn>, expectedUrl: string): RequestInit {
-    const call = fetchMock.mock.calls.find(([input]) => matchesServerFetchRequest(input, expectedUrl));
+    const call = fetchMock.mock.calls.find(([input]) => matchServerFetchUrl(expectedUrl).asymmetricMatch(input));
     const init = call?.[1];
     if (!init) {
         throw new Error(`Expected fetch call for ${expectedUrl}`);
@@ -56,7 +57,7 @@ describe('setAccountUsername', () => {
         const res = await setAccountUsername(credentials, 'alice');
 
         expect(fetchMock).toHaveBeenCalledWith(
-            expect.toSatisfy((input: unknown) => matchesServerFetchRequest(input, 'https://api.example.test/v1/account/username')),
+            matchServerFetchUrl('https://api.example.test/v1/account/username'),
             expect.objectContaining({
                 method: 'POST',
                 headers: expect.any(Headers),

@@ -4272,6 +4272,13 @@ export const ca: TranslationStructure = {
         showLineNumbersInDiffsDescription: 'Mostra els números de línia a les diferències de codi',
         showLineNumbersInToolViews: 'Mostra els números de línia a les vistes d\'eines',
         showLineNumbersInToolViewsDescription: 'Mostra els números de línia a les diferències de vistes d\'eines',
+        chatCodeBlocks: {
+            title: 'Blocs de codi del xat',
+            showWrapControls: 'Mostra els controls de salt de línia',
+            showWrapControlsDescription: 'Mostra un botó de salt de línia a cada bloc de codi del xat',
+            wrapByDefault: 'Ajusta les línies per defecte',
+            wrapByDefaultDescription: 'Ajusta les línies llargues dels blocs de codi del xat, tret que triïs una altra opció per a un bloc',
+        },
         wrapLinesInDiffs: 'Ajusta les línies a les vistes de codi',
         wrapLinesInDiffsDescription: 'Ajusta les línies llargues a les previsualitzacions de codi i als editors en lloc de desplaçar-te horitzontalment',
         alwaysShowContextSize: 'Mostra sempre la mida del context',

@@ -100,7 +100,7 @@ export function installSessionDetailsPanelCommonModuleMocks(
     vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         const activeOptions = sessionDetailsPanelModuleState.options;
         if (activeOptions.storage) {
-            return withPaneSessionStateFillIns(await activeOptions.storage(importOriginal));
+            return withPaneStorageDefaults(await activeOptions.storage(importOriginal));
         }
 
         const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
@@ -109,12 +109,10 @@ export function installSessionDetailsPanelCommonModuleMocks(
 }
 
 /**
- * Pane shells read a little session state of their own — the right panel resolves the session and
- * its subagent-source messages to badge the Agents tab. Most pane tests hand back a bare object with
- * just the few hooks their own assertions touch, so fill in inert defaults for the rest instead of
- * making every test restate them. Anything the test supplies wins; nothing is overwritten.
+ * Pane tests override the state they exercise while the shared testkit supplies the complete stable
+ * storage surface used by mounted activity and message hooks. Anything the test supplies wins.
  */
-async function withPaneSessionStateFillIns(storageModule: unknown): Promise<unknown> {
+async function withPaneStorageDefaults(storageModule: unknown): Promise<unknown> {
     if (!storageModule || typeof storageModule !== 'object') return storageModule;
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({ useSession: () => null, ...storageModule });

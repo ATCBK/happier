@@ -1,20 +1,21 @@
-/** Match an endpoint's own contract while permitting transport negotiation parameters. */
-export function matchesServerFetchRequest(input: unknown, expectedUrl: string): boolean {
+export function getServerFetchUrl(input: unknown): URL {
+    return new URL(input instanceof Request ? input.url : String(input));
+}
+
+/** Match the endpoint and any query facts the test owns, allowing transport metadata. */
+export function matchServerFetchUrl(expectedUrl: string) {
     const expected = new URL(expectedUrl);
-    let actual: URL;
-    try {
-        actual = new URL(String(input));
-    } catch {
-        return false;
-    }
-    if (actual.origin !== expected.origin || actual.pathname !== expected.pathname) return false;
-    for (const key of new Set(expected.searchParams.keys())) {
-        const expectedValues = expected.searchParams.getAll(key);
-        const actualValues = actual.searchParams.getAll(key);
-        if (expectedValues.length !== actualValues.length
-            || expectedValues.some((value, index) => value !== actualValues[index])) return false;
-    }
-    return true;
+    return {
+        asymmetricMatch(input: unknown): boolean {
+            const actual = getServerFetchUrl(input);
+            return actual.origin === expected.origin && actual.pathname === expected.pathname
+                && [...expected.searchParams.keys()].every((key) => {
+                    const values = expected.searchParams.getAll(key);
+                    const actualValues = actual.searchParams.getAll(key);
+                    return values.length === actualValues.length && values.every((value, index) => value === actualValues[index]);
+                });
+        },
+    };
 }
 
 export function isServerReachabilityProbeRequest(input: RequestInfo | URL | unknown): boolean {

@@ -4771,6 +4771,13 @@ localTailscale: {
     showLineNumbersInDiffsDescription: "コード差分に行番号を表示",
     showLineNumbersInToolViews: "ツールビューに行番号を表示",
     showLineNumbersInToolViewsDescription: "ツールビューの差分に行番号を表示",
+    chatCodeBlocks: {
+        title: 'チャットのコードブロック',
+        showWrapControls: '折り返しボタンを表示',
+        showWrapControlsDescription: 'チャットの各コードブロックに折り返しボタンを表示します',
+        wrapByDefault: 'コードを既定で折り返す',
+        wrapByDefaultDescription: '個別に変更しない限り、チャットのコードブロックの長い行を折り返します',
+    },
     wrapLinesInDiffs: "コードビューで行を折り返す",
     wrapLinesInDiffsDescription:
       "コードのプレビューやエディターで、水平スクロールの代わりに長い行を折り返す",

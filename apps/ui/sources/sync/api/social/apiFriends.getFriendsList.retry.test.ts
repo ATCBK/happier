@@ -1,3 +1,4 @@
+import { getServerFetchUrl } from '@/dev/testkit/mocks/serverFetch';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const runtimeFetchSpy = vi.hoisted(() => vi.fn());
@@ -35,11 +36,11 @@ describe('getFriendsList retry semantics', () => {
         upsertAndActivateServer({ serverUrl: 'https://server.example.test', scope: 'tab' });
 
         runtimeFetchSpy.mockImplementation(async (input: unknown) => {
-            const url = new URL(String(input));
-            if (url.pathname === '/v1/version' || url.pathname === '/health' || url.pathname === '/v1/auth/ping') {
+            const url = getServerFetchUrl(input).pathname;
+            if (url.endsWith('/v1/version') || url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
                 return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
             }
-            if (url.pathname === '/v1/friends') {
+            if (url.endsWith('/v1/friends')) {
                 return new Response('nope', { status: 429 });
             }
             return new Response('nope', { status: 404 });
@@ -53,9 +54,11 @@ describe('getFriendsList retry semantics', () => {
         };
 
         const promise = getFriendsList(credentials, { retry: 'none' });
-        await Promise.all([expect(promise).rejects.toThrow(), vi.runAllTimersAsync()]);
+        const assertion = expect(promise).rejects.toThrow();
+        await vi.runAllTimersAsync();
+        await assertion;
 
-        const friendCalls = runtimeFetchSpy.mock.calls.filter((call) => new URL(String(call[0])).pathname === '/v1/friends').length;
+        const friendCalls = runtimeFetchSpy.mock.calls.filter((call) => getServerFetchUrl(call[0]).pathname === '/v1/friends').length;
         expect(friendCalls).toBe(1);
     });
 });

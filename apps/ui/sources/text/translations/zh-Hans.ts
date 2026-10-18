@@ -4362,6 +4362,13 @@ export const zhHans: TranslationStructure = {
     showLineNumbersInDiffsDescription: "在代码差异中显示行号",
     showLineNumbersInToolViews: "在工具视图中显示行号",
     showLineNumbersInToolViewsDescription: "在工具视图差异中显示行号",
+    chatCodeBlocks: {
+        title: '聊天代码块',
+        showWrapControls: '显示换行开关',
+        showWrapControlsDescription: '在每个聊天代码块上显示自动换行开关',
+        wrapByDefault: '默认自动换行',
+        wrapByDefaultDescription: '自动换行聊天代码块中的长行，除非单独更改该代码块的设置',
+    },
     wrapLinesInDiffs: "在代码视图中自动换行",
     wrapLinesInDiffsDescription: "在代码预览和编辑器中自动换行显示长行，而不是水平滚动",
     alwaysShowContextSize: "始终显示上下文大小",

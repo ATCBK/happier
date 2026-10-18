@@ -60,11 +60,11 @@ export function createAccountFeaturesResponse(
 }
 
 export function isFeaturesRequest(url: string): boolean {
-    return new URL(url).pathname === '/v1/features';
+    return url.endsWith('/v1/features');
 }
 
 export function isUsernameRequest(url: string): boolean {
-    return new URL(url).pathname === '/v1/account/username';
+    return url.endsWith('/v1/account/username');
 }
 
 export function getRequestUrl(input: RequestInfo | URL): string {

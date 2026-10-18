@@ -1,3 +1,4 @@
+import { getServerFetchUrl } from '@/dev/testkit/mocks/serverFetch';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
@@ -121,13 +122,12 @@ describe('Settings → Account (encryption mode toggle)', () => {
         storage.getState().applyProfile({ ...profileDefaults, linkedProviders: [], username: null });
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = getRequestUrl(input);
-            const pathname = new URL(url).pathname;
+            const url = getServerFetchUrl(input).pathname;
             const method = (init?.method ?? 'GET').toUpperCase();
-            if (pathname === '/health' && method === 'GET') {
+            if (url.endsWith('/health') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
-            if (pathname === '/v1/auth/ping' && method === 'GET') {
+            if (url.endsWith('/v1/auth/ping') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
             if (isFeaturesRequest(url)) {
@@ -165,13 +165,12 @@ describe('Settings → Account (encryption mode toggle)', () => {
         storage.getState().replaceSettings({ analyticsOptOut: false } as any, 7);
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = getRequestUrl(input);
-            const pathname = new URL(url).pathname;
+            const url = getServerFetchUrl(input).pathname;
             const method = (init?.method ?? 'GET').toUpperCase();
-            if (pathname === '/health' && method === 'GET') {
+            if (url.endsWith('/health') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
-            if (pathname === '/v1/auth/ping' && method === 'GET') {
+            if (url.endsWith('/v1/auth/ping') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
             if (isFeaturesRequest(url)) {
@@ -180,13 +179,13 @@ describe('Settings → Account (encryption mode toggle)', () => {
                     json: async () => createAccountFeaturesResponse({ encryptionAccountOptOutEnabled: true }),
                 };
             }
-            if (pathname === '/v1/account/encryption' && method === 'GET') {
+            if (url.endsWith('/v1/account/encryption') && method === 'GET') {
                 return {
                     ok: true,
                     json: async () => ({ mode: 'e2ee', updatedAt: 1 }),
                 };
             }
-            if (pathname === '/v1/account/encryption/migrate' && method === 'POST') {
+            if (url.endsWith('/v1/account/encryption/migrate') && method === 'POST') {
                 const body = init?.body ? JSON.parse(String(init.body)) : null;
                 expect(body).toEqual(expect.objectContaining({
                     toMode: 'plain',
@@ -246,14 +245,13 @@ describe('Settings → Account (encryption mode toggle)', () => {
         } as any, 7);
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = getRequestUrl(input);
-            const pathname = new URL(url).pathname;
+            const url = getServerFetchUrl(input).pathname;
             const method = (init?.method ?? 'GET').toUpperCase();
-            if (pathname === '/health' || pathname === '/v1/auth/ping') return createReachabilityProbeResponse();
+            if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) return createReachabilityProbeResponse();
             if (isFeaturesRequest(url)) {
                 return { ok: true, json: async () => createAccountFeaturesResponse({ encryptionAccountOptOutEnabled: true }) };
             }
-            if (pathname === '/v1/account/encryption' && method === 'GET') {
+            if (url.endsWith('/v1/account/encryption') && method === 'GET') {
                 return { ok: true, json: async () => ({ mode: 'e2ee', updatedAt: 1 }) };
             }
             throw new Error(`Unexpected fetch: ${url} (${method})`);
@@ -290,13 +288,12 @@ describe('Settings → Account (encryption mode toggle)', () => {
         storage.getState().replaceSettings({ analyticsOptOut: false } as any, 7);
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = getRequestUrl(input);
-            const pathname = new URL(url).pathname;
+            const url = getServerFetchUrl(input).pathname;
             const method = (init?.method ?? 'GET').toUpperCase();
-            if (pathname === '/health' && method === 'GET') {
+            if (url.endsWith('/health') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
-            if (pathname === '/v1/auth/ping' && method === 'GET') {
+            if (url.endsWith('/v1/auth/ping') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
             if (isFeaturesRequest(url)) {
@@ -305,13 +302,13 @@ describe('Settings → Account (encryption mode toggle)', () => {
                     json: async () => createAccountFeaturesResponse({ encryptionAccountOptOutEnabled: true }),
                 };
             }
-            if (pathname === '/v1/account/encryption' && method === 'GET') {
+            if (url.endsWith('/v1/account/encryption') && method === 'GET') {
                 return {
                     ok: true,
                     json: async () => ({ mode: 'e2ee', updatedAt: 1 }),
                 };
             }
-            if (pathname === '/v1/account/encryption/migrate' && method === 'POST') {
+            if (url.endsWith('/v1/account/encryption/migrate') && method === 'POST') {
                 return {
                     ok: false,
                     status: 404,
@@ -364,13 +361,12 @@ describe('Settings → Account (encryption mode toggle)', () => {
         const alertSpy = vi.spyOn(Modal, 'alertAsync').mockResolvedValue();
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = getRequestUrl(input);
-            const pathname = new URL(url).pathname;
+            const url = getServerFetchUrl(input).pathname;
             const method = (init?.method ?? 'GET').toUpperCase();
-            if (pathname === '/health' && method === 'GET') {
+            if (url.endsWith('/health') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
-            if (pathname === '/v1/auth/ping' && method === 'GET') {
+            if (url.endsWith('/v1/auth/ping') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
             if (isFeaturesRequest(url)) {
@@ -379,13 +375,13 @@ describe('Settings → Account (encryption mode toggle)', () => {
                     json: async () => createAccountFeaturesResponse({ encryptionAccountOptOutEnabled: true }),
                 };
             }
-            if (pathname === '/v1/account/encryption' && method === 'GET') {
+            if (url.endsWith('/v1/account/encryption') && method === 'GET') {
                 return {
                     ok: true,
                     json: async () => ({ mode: 'plain', updatedAt: 1 }),
                 };
             }
-            if (pathname === '/v1/account/encryption/migrate' && method === 'POST') {
+            if (url.endsWith('/v1/account/encryption/migrate') && method === 'POST') {
                 const body = init?.body ? JSON.parse(String(init.body)) : null;
                 expect(body).toEqual(expect.objectContaining({
                     toMode: 'e2ee',
@@ -444,13 +440,12 @@ describe('Settings → Account (encryption mode toggle)', () => {
         const alertSpy = vi.spyOn(Modal, 'alertAsync').mockResolvedValue();
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = getRequestUrl(input);
-            const pathname = new URL(url).pathname;
+            const url = getServerFetchUrl(input).pathname;
             const method = (init?.method ?? 'GET').toUpperCase();
-            if (pathname === '/health' && method === 'GET') {
+            if (url.endsWith('/health') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
-            if (pathname === '/v1/auth/ping' && method === 'GET') {
+            if (url.endsWith('/v1/auth/ping') && method === 'GET') {
                 return createReachabilityProbeResponse();
             }
             if (isFeaturesRequest(url)) {
@@ -459,13 +454,13 @@ describe('Settings → Account (encryption mode toggle)', () => {
                     json: async () => createAccountFeaturesResponse({ encryptionAccountOptOutEnabled: true }),
                 };
             }
-            if (pathname === '/v1/account/encryption' && method === 'GET') {
+            if (url.endsWith('/v1/account/encryption') && method === 'GET') {
                 return {
                     ok: true,
                     json: async () => ({ mode: 'plain', updatedAt: 1 }),
                 };
             }
-            if (pathname === '/v1/account/encryption/migrate' && method === 'POST') {
+            if (url.endsWith('/v1/account/encryption/migrate') && method === 'POST') {
                 return {
                     ok: false,
                     status: 400,

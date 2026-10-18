@@ -4607,6 +4607,13 @@ export const pt: TranslationStructure = {
       "Mostrar números de linha nas visualizações de ferramentas",
     showLineNumbersInToolViewsDescription:
       "Exibir números de linha nos diffs das visualizações de ferramentas",
+    chatCodeBlocks: {
+        title: 'Blocos de código do chat',
+        showWrapControls: 'Mostrar controles de quebra de linha',
+        showWrapControlsDescription: 'Mostrar um botão de quebra de linha em cada bloco de código do chat',
+        wrapByDefault: 'Quebrar linhas por padrão',
+        wrapByDefaultDescription: 'Quebrar linhas longas nos blocos de código do chat, salvo escolha diferente para um bloco',
+    },
     wrapLinesInDiffs: "Quebrar linhas nas visualizações de código",
     wrapLinesInDiffsDescription:
       "Quebrar linhas longas em pré-visualizações de código e editores em vez de rolar horizontalmente",

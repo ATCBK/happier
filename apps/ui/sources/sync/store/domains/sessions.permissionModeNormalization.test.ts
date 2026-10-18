@@ -5,7 +5,6 @@ import { createSessionsDomain } from './sessions';
 function createHarness() {
     let state: any = {
         sessions: {},
-        sessionListRenderables: {},
         sessionsData: null,
         sessionListViewData: null,
         sessionListViewDataByServerId: {},
@@ -24,6 +23,7 @@ function createHarness() {
     };
 
     const domain = createSessionsDomain({ get, set } as any);
+    set(domain);
     return { get, domain };
 }
 

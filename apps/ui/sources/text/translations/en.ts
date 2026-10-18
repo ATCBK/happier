@@ -4203,6 +4203,13 @@ export const en = {
         showLineNumbersInDiffsDescription: 'Display line numbers in code diffs',
         showLineNumbersInToolViews: 'Show Line Numbers in Tool Views',
         showLineNumbersInToolViewsDescription: 'Display line numbers in tool view diffs',
+        chatCodeBlocks: {
+            title: 'Chat code blocks',
+            showWrapControls: 'Show wrap controls',
+            showWrapControlsDescription: 'Show a wrap toggle on each chat code block',
+            wrapByDefault: 'Wrap code blocks by default',
+            wrapByDefaultDescription: 'Wrap long lines in chat code blocks unless you choose otherwise for a block',
+        },
         wrapLinesInDiffs: 'Wrap Lines in Code Views',
         wrapLinesInDiffsDescription: 'Wrap long lines instead of horizontal scrolling in code previews and editors',
         alwaysShowContextSize: 'Always Show Context Size',

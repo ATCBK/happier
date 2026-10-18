@@ -4515,6 +4515,13 @@ export const pl: TranslationStructure = {
     showLineNumbersInToolViews: "Pokaż numery linii w widokach narzędzi",
     showLineNumbersInToolViewsDescription:
       "Wyświetlaj numery linii w różnicach widoków narzędzi",
+    chatCodeBlocks: {
+        title: 'Bloki kodu na czacie',
+        showWrapControls: 'Pokaż przełączniki zawijania',
+        showWrapControlsDescription: 'Pokaż przełącznik zawijania w każdym bloku kodu na czacie',
+        wrapByDefault: 'Domyślnie zawijaj kod',
+        wrapByDefaultDescription: 'Zawijaj długie wiersze w blokach kodu na czacie, chyba że wybierzesz inaczej dla danego bloku',
+    },
     wrapLinesInDiffs: "Zawijanie wierszy w widokach kodu",
     wrapLinesInDiffsDescription:
       "Zawijaj długie wiersze w podglądach kodu i edytorach zamiast przewijać je poziomo",

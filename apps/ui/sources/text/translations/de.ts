@@ -4183,6 +4183,13 @@ export const de: TranslationStructure = {
         showLineNumbersInDiffsDescription: 'Zeilennummern in Code-Diffs anzeigen',
         showLineNumbersInToolViews: 'Zeilennummern in Tool-Ansichten zeigen',
         showLineNumbersInToolViewsDescription: 'Zeilennummern in Diffs von Tool-Ansichten anzeigen',
+        chatCodeBlocks: {
+            title: 'Codeblöcke im Chat',
+            showWrapControls: 'Umbruchsteuerung anzeigen',
+            showWrapControlsDescription: 'In jedem Codeblock im Chat einen Schalter für den Zeilenumbruch anzeigen',
+            wrapByDefault: 'Codeblöcke standardmäßig umbrechen',
+            wrapByDefaultDescription: 'Lange Zeilen in Chat-Codeblöcken umbrechen, sofern für einen Block nichts anderes gewählt wurde',
+        },
         wrapLinesInDiffs: 'Zeilen in Code-Ansichten umbrechen',
         wrapLinesInDiffsDescription: 'Lange Zeilen in Code-Vorschauen und Editoren umbrechen statt horizontal zu scrollen',
         alwaysShowContextSize: 'Kontextgröße immer zeigen',

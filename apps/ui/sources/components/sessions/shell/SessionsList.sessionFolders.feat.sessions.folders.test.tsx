@@ -14,11 +14,6 @@ import type { SessionOrganizationProjection } from '@/sync/domains/session/organ
 import { driveSessionListDragGesture } from './__tests__/driveSessionListDragGesture';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
-vi.mock('@shopify/flash-list', async () => {
-    const { createCapturingFlashListMock } = await import('@/dev/testkit/mocks/flashList');
-    return createCapturingFlashListMock({ renderItems: true }).module;
-});
-
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const setSessionListGroupOrderV1 = vi.fn();
@@ -64,6 +59,17 @@ installSessionShellCommonModuleMocks({
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             Platform: { OS: 'web', select: (value: any) => value.web ?? value.default },
+            FlatList: ({ data, renderItem, keyExtractor, ListHeaderComponent, ListFooterComponent, ...rest }: any) =>
+                React.createElement(
+                    'FlatList',
+                    { ...rest },
+                    ListHeaderComponent ? React.createElement(ListHeaderComponent) : null,
+                    (data ?? []).map((item: any, index: number) => {
+                        const key = keyExtractor ? keyExtractor(item, index) : String(index);
+                        return React.createElement(React.Fragment, { key }, renderItem({ item, index }));
+                    }),
+                    ListFooterComponent ? React.createElement(ListFooterComponent) : null,
+                ),
         });
     },
     router: async () => {
