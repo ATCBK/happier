@@ -1571,7 +1571,7 @@ describe('startDaemonSessionControlRuntime', () => {
         } finally { await runtime.stopControlServer(); }
     });
     async function runPrivateManagedRequesterFixture(finiteWake = false, refreshRequesterPolicy = false,
-        finiteRpc?: 'allow' | 'ask' | 'revoked' | 'changed-root' | 'revoked-after-ask') {
+        finiteRpc?: 'allow' | 'ask' | 'revoked' | 'changed-root' | 'revoked-after-ask' | 'reviewer-retired-after-ask') {
         if (!fetchAccountEncryptionCurrentnessActual.current) throw new Error('Account currentness HTTP owner unavailable');
         fetchAccountEncryptionCurrentnessMock.mockImplementation(fetchAccountEncryptionCurrentnessActual.current);
         const taskDir = await mkdtemp(join(tmpdir(), 'happier-private-managed-child-'));
@@ -1631,7 +1631,7 @@ describe('startDaemonSessionControlRuntime', () => {
         let settingsVersion = 1;
         let settings = prepareAccountSettingsV2Content({ credentials: bob, raw: finiteWake ? {
             actionsSettingsV1: { v: 1, actions: { 'machines.managed.power.set': { enabled: Boolean(finiteRpc) || refreshRequesterPolicy } },
-                ...(finiteRpc && finiteRpc !== 'ask' && finiteRpc !== 'revoked-after-ask'
+                ...(finiteRpc && finiteRpc !== 'ask' && finiteRpc !== 'revoked-after-ask' && finiteRpc !== 'reviewer-retired-after-ask'
                     ? { approvalWaivedSurfaces: { 'machines.managed.power.set': ['cli'] } } : {}) },
         } : {
             actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'machines.managed.acquire': ['ui'] } },
@@ -1643,6 +1643,8 @@ describe('startDaemonSessionControlRuntime', () => {
         let notifyApprovalCreated: (id: string) => void = () => {};
         const approvalCreated = new Promise<string>(resolve => { notifyApprovalCreated = resolve; });
         let requesterCurrent = true;
+        let originAccountCurrent = true;
+        let reviewerCurrent = true;
         const machineSocket = createApiSessionSocketStub({
             emit: (event, args, socket) => {
                 if (event === SOCKET_RPC_EVENTS.REGISTER) socket.trigger(SOCKET_RPC_EVENTS.REGISTERED, args[0]);
@@ -1693,7 +1695,8 @@ describe('startDaemonSessionControlRuntime', () => {
             if (path === '/v1/account/profile') {
                 const bearer = config?.headers?.Authorization;
                 expect([`Bearer ${bob.token}`, `Bearer ${alice.token}`]).toContain(bearer);
-                return { status: 200, data: { id: bearer === `Bearer ${bob.token}` ? 'bob' : 'alice' } };
+                return { status: 200, data: { id: bearer === `Bearer ${bob.token}`
+                    ? originAccountCurrent ? 'bob' : 'bob-switched' : 'alice' } };
             }
             if (path === '/v1/account/security') return { status: 200, data: { v: 1, encryptionMode: requesterMode,
                 terminalPresentUserPolicy: 'allowed', nativeEmail: null, password: { status: 'not_enrolled', revision: null } } };
@@ -1725,7 +1728,8 @@ describe('startDaemonSessionControlRuntime', () => {
             if (finiteRpc && path.startsWith('/v1/machines/managed/controller/')) {
                 expect(config?.headers?.Authorization).toBe(`Bearer ${alice.token}`);
             }
-            if (path.endsWith('/execution-authorization/verify')) return { status: 200, data: { ok: requesterCurrent } };
+            if (path.endsWith('/execution-authorization/verify')) return { status: 200,
+                data: { ok: path.includes('/approval.request.decide/') ? reviewerCurrent : requesterCurrent } };
             if (path.endsWith('/admit')) return { status: 200, data: { machine: enrolled, replayed: true } };
             if (path === '/v1/machines/managed/controller/prepare-policy') {
                 const request = ManagedPolicyAdmissionInputV1Schema.parse(body);
@@ -1773,6 +1777,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 if (!current) return { status: 404, data: {} };
                 const next = { ...current, ...body, headerVersion: Number(current.headerVersion) + 1, bodyVersion: Number(current.bodyVersion) + 1 };
                 artifacts.set(artifactId, next);
+                if (finiteRpc === 'reviewer-retired-after-ask') reviewerCurrent = false;
                 return { status: 200, data: { success: true, headerVersion: next.headerVersion, bodyVersion: next.bodyVersion } };
             }
             if (path === '/v1/actions/session.spawn_new') {
@@ -1844,7 +1849,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 const execution = new Promise<unknown>(resolve => machineSocket.trigger(SOCKET_RPC_EVENTS.REQUEST,
                     { method: `${machineId}:${MANAGED_FINITE_WAKE_RPC_METHOD}`, params: { target: wakeTarget, actionOrigin },
                         authorization: ACTION_API_SERVER_ORIGIN }, resolve)).then(value => { rpcResult = value; return value; });
-                if (finiteRpc === 'ask' || finiteRpc === 'revoked-after-ask') {
+                if (finiteRpc === 'ask' || finiteRpc === 'revoked-after-ask' || finiteRpc === 'reviewer-retired-after-ask') {
                     const first = await Promise.race([approvalCreated.then(artifactId => ({ kind: 'approval' as const, artifactId })),
                         execution.then(result => ({ kind: 'settled' as const, result }))]);
                     expect(first.kind, JSON.stringify({ first, transportPaths, nativeEffects })).toBe('approval');
@@ -1857,8 +1862,19 @@ describe('startDaemonSessionControlRuntime', () => {
                     await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(first.artifactId)).toBe(1));
                     // A durable "approved" body alone cannot authorize a live blocking
                     // continuation. Bob's real interactive ingress supplies that authority.
-                    if (finiteRpc === 'revoked-after-ask') requesterCurrent = false;
-                    const human = createCliActionExecutorHarness({ token: bob.token, credentials: bob, sessionId: '',
+                    if (finiteRpc === 'revoked-after-ask') originAccountCurrent = false;
+                    const reviewer = finiteRpc === 'reviewer-retired-after-ask'
+                        ? await runtime.externalActionIngressOwner?.prepareRequesterAccountContext?.({ authorization:
+                            sealExternalActionRequesterAccountContextV1({ authorization: { v: 1, token: 'reviewer-root', binding: {
+                                accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
+                                accountEncryptionMode: 'plain', serverIdentityId: homeId, machineId,
+                                installationId: installation.installationId, actionId: 'approval.request.decide',
+                                requestId: 'bob-wake-answer', target: { kind: 'machine', machineId }, requestEnvelopeDigest: 'c'.repeat(43),
+                            } }, credentials: encodeStoredCredentials(bob), purpose: { kind: 'external_action' },
+                            installationPublicKey: decodeBase64(installation.publicKey, 'base64url'), randomBytes: tweetnacl.randomBytes }) })
+                        : null;
+                    if (finiteRpc === 'reviewer-retired-after-ask' && !reviewer) throw new Error('Missing admitted reviewer invocation');
+                    const human = reviewer ?? createCliActionExecutorHarness({ token: bob.token, credentials: bob, sessionId: '',
                         serverId: configuration.activeServerId, serverHttpBaseUrl: serverUrl }, {
                         isApprovalExecutionOriginCurrent: createDaemonApprovalExecutionOriginCurrentnessFromCredentials({
                             credentials: bob, machineId, serverId: configuration.activeServerId, serverApiUrl: serverUrl }),
@@ -1873,13 +1889,44 @@ describe('startDaemonSessionControlRuntime', () => {
                         artifact: artifacts.get(first.artifactId) })).toBeDefined());
                     await answer;
                     expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
+                    if (finiteRpc === 'revoked-after-ask') {
+                        await vi.waitFor(() => {
+                            const stored = artifacts.get(first.artifactId);
+                            const content = stored && decodePlainArtifactStoredContent(String(stored.body));
+                            if (!content || typeof content !== 'object' || !('body' in content) || typeof content.body !== 'string') {
+                                throw new Error('Missing stale approval');
+                            }
+                            expect(ApprovalRequestV2Schema.parse(JSON.parse(content.body))).toMatchObject({ status: 'failed',
+                                execution: { ok: false, effectAttempted: false, errorCode: 'approval_stale' } });
+                        });
+                        expect(nativeEffects).toEqual([]);
+                        expect(transportPaths).not.toContain('POST /v1/machines/managed/controller/admit-policy');
+                        return;
+                    }
+                    if (reviewer) {
+                        expect(reviewerCurrent).toBe(false);
+                        expect(requesterCurrent).toBe(true);
+                        await vi.waitFor(() => expect(nativeEffects.filter(role => role === 'power')).toHaveLength(1));
+                        await vi.waitFor(() => {
+                            const stored = artifacts.get(first.artifactId);
+                            const content = stored && decodePlainArtifactStoredContent(String(stored.body));
+                            if (!content || typeof content !== 'object' || !('body' in content) || typeof content.body !== 'string') {
+                                throw new Error('Missing settled approval');
+                            }
+                            expect(ApprovalRequestV2Schema.parse(JSON.parse(content.body)))
+                                .toMatchObject({ status: 'executed', execution: { ok: true } });
+                        });
+                        await reviewer.dispose();
+                        return;
+                    }
                     await vi.waitFor(() => expect(rpcResult, JSON.stringify({ transportPaths, nativeEffects,
                         approvals, waiters: getSharedBlockingApprovalCoordinator().getLiveWaiterCount(first.artifactId) })).toBeDefined());
                 }
                 const result = await execution;
                 if (finiteRpc === 'revoked' || finiteRpc === 'changed-root' || finiteRpc === 'revoked-after-ask') {
                     expect(result).toMatchObject({ ok: false,
-                        ...(finiteRpc === 'revoked-after-ask' ? {} : { errorCode: 'requester_account_context_unavailable' }) });
+                        ...(finiteRpc === 'revoked-after-ask' ? { errorCode: 'approval_stale' }
+                            : { errorCode: 'requester_account_context_unavailable' }) });
                     expect(nativeEffects).toEqual([]);
                     expect(transportPaths).not.toContain('POST /v1/machines/managed/controller/admit-policy');
                 } else {
@@ -1977,7 +2024,7 @@ describe('startDaemonSessionControlRuntime', () => {
     it('refreshes changed Bob policy inside actual admitted controller custody before the later native effect', async () => {
         await runPrivateManagedRequesterFixture(true, true);
     });
-    it.each(['allow', 'ask', 'revoked', 'changed-root', 'revoked-after-ask'] as const)('runs shared finite wake RPC with requester custody (%s)', async scenario => {
+    it.each(['allow', 'ask', 'reviewer-retired-after-ask', 'revoked', 'changed-root', 'revoked-after-ask'] as const)('runs shared finite wake RPC with requester custody (%s)', async scenario => {
         await runPrivateManagedRequesterFixture(true, false, scenario);
     });
     async function runManagedPolicyFixture(policy: 'disabled' | 'approve' | 'reject' | 'cancel' | 'changed-policy' | 'explicit-delete-waiver' | 'event-driven-policy' | 'creation-cleanup' | 'resource-replacement' | 'wake-native-refused' | 'wake-native-unknown' | 'guard-cleanup-ask' | 'deferred-acquire' | 'environment-approved', nativeExecEnvironment = false) {
