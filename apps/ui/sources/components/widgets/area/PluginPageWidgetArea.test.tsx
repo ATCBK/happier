@@ -399,6 +399,10 @@ describe('a plugin page widget area', () => {
         // loaded), and the bar heads a section of the page, not the page (FA18 P1).
         expect(screen.findByType(WidgetAreaLayoutBar).props.layouts.find((entry: { isDefault?: boolean }) => entry.isDefault).name).toBe('widgetAdd.areaPinned');
         expect(screen.findByType(WidgetAreaLayoutBar).props.heading).toBe('section');
+        // FA19 P6: the bar's accessible names follow the area (never Usage's "Usage views").
+        const barLabels = screen.findByType(WidgetAreaLayoutBar).props.labels;
+        expect(barLabels.list).toBe('widgetAdd.areaPinned');
+        expect(barLabels.current('Empty')).toBe('Empty');
         expect(screen.findByTestId('prs.pinned.widget.follow')).not.toBeNull();
         await act(async () => {
             const selected = await executor.execute('widgets.area.layout.select', { surface: { ...surface, owner: { ...surface.owner, layoutId: 'empty' } } }, { surface: 'mcp', bypassApprovals: true });

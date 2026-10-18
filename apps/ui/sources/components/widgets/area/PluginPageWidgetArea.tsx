@@ -196,7 +196,8 @@ export function PluginPageWidgetArea(props: PluginUiWidgetAreaPresentation & Rea
         };
     }, [base, executeLayoutAction, isCurrent, layouts, listed, options, ready?.canEdit, selectedSummary]);
     const labels: WidgetAreaLayoutLabels = {
-        list: t('usage.board.page.viewsLabel'), current: name => `${t('usage.board.page.viewsLabel')}: ${name}`,
+        // The area's own name, never Usage's: the selector's visible name is already the layout's.
+        list: areaTitle, current: name => name,
         create: t('usage.board.page.newView'), createEllipsis: t('usage.board.page.newView'), defaultLayout: t('projects.dashboard.default'),
         actions: name => t('usage.board.page.viewActions', { name }), rename: t('usage.board.page.renameView'),
         moveBefore: name => t('usage.board.page.moveViewBefore', { name }), moveAfter: name => t('usage.board.page.moveViewAfter', { name }),

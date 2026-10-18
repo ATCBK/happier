@@ -296,6 +296,7 @@ const surfaceHostStyles = StyleSheet.create({
         paddingHorizontal: HEADER_BAND_HORIZONTAL_PADDING_PX,
         alignItems: 'flex-start',
     },
+    executionOriginBandInWidget: { paddingHorizontal: 0 },
 });
 
 /**
@@ -2323,6 +2324,8 @@ function PluginSurfaceHostMount(props: Readonly<(
     });
     const showsExecutionOriginSelector = needsMachineExecution && props.descriptor?.contributionKind === 'surfacePlacement'
         && (props.descriptor.binding.kind !== 'destination' || props.descriptor.binding.container !== 'appPage');
+    // Inside a widget frame the body's own inset is the edge: the pane band's inset would push the chip past it.
+    const insideWidgetFrame = useWidgetPresentation() !== undefined;
     const pluginExecution = usePluginSurfaceExecutionOrigin({
         pluginId: mountedPluginId, projection: props.pluginUiProjection, entry: descriptor,
         enabled: needsMachineExecution,
@@ -4281,7 +4284,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             machineId={machineId ?? undefined} serverId={serverId} sessionId={props.sessionId}
             accountLifetime={accountLifetime ?? undefined} isCurrent={controller.isCurrent}
             contextKey={surfaceTargetAuthorityKey ?? undefined}>
-            {showsExecutionOriginSelector ? <View style={surfaceHostStyles.executionOriginBand}>
+            {showsExecutionOriginSelector ? <View style={[surfaceHostStyles.executionOriginBand, insideWidgetFrame ? surfaceHostStyles.executionOriginBandInWidget : null]}>
             <PluginMachineExecutionOriginSelectorView selection={pluginExecution.selection}
                 presentation="chip" groupTitle={t('settingsPlugins.executionOriginTitle')}
                 testIDPrefix="plugin-surface-execution" />
