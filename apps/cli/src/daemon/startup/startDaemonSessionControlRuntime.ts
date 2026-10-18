@@ -1,4 +1,5 @@
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
+import { runTracedExternalActionStage } from '../externalActions/externalActionPhase';
 import { resolveExistingSessionAttachContext } from '../sessionEncryption/resolveExistingSessionAttachContext';
 import { createProcessOwnershipRuntime } from '../processes/ownership/processOwnershipRuntime';
 import { createEndOwnerRemainder } from '../processes/endOwnerRemainder';
@@ -14724,9 +14725,11 @@ export async function startDaemonSessionControlRuntime(
       confidential?: Readonly<{ input: unknown }>,
     ): Promise<ActionExecuteResult> => {
       context?.recordActionStartDiagnostic?.({ phase: 'credentialed_factory', requesterRuntimeBound: Boolean(requesterRuntime) });
+      const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
+        actionId, context?.actionRequestId, stage, operation);
       if (requesterAccountContext) {
-        if (!await requesterAccountContext.isCurrent()
-          || !await requesterAccountContext.refreshAccountSettings(context?.signal ?? replay?.signal)) {
+        if (!await trace('daemon.requester_currentness', () => requesterAccountContext.isCurrent())
+          || !await trace('daemon.requester_settings', () => requesterAccountContext.refreshAccountSettings(context?.signal ?? replay?.signal))) {
           const code = (context?.signal ?? replay?.signal)?.aborted ? 'cancelled' : 'not_authenticated';
           return { ok: false, errorCode: code, error: code };
         }
@@ -15433,7 +15436,7 @@ export async function startDaemonSessionControlRuntime(
           : {}),
         transcriptFollowLeaseRegistry:
           externalActionTranscriptFollowLeaseRegistry!,
-      });
+      }));
       const executeAccepted = async (acceptedContext: ActionExecutorContext | undefined) => {
         const release = requesterAccountContext?.retain();
         try {

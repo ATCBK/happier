@@ -123,6 +123,7 @@ import { isMachineTerminalActionId } from '@happier-dev/protocol/actions/specs/m
 import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { MachineInstallationPublicKeySchema } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 
 type CliActionExecutor = ReturnType<typeof createCliActionExecutor>;
 
@@ -1361,15 +1362,17 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       execute: async (...args) => {
         const listAccessFailure = resolveActionSessionListAccessFailure(args[0], args[2]);
         if (listAccessFailure) return listAccessFailure;
-        const credentials = await readCurrentCredentials();
+        const [actionId, input, rawContext] = args;
+        const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
+          actionId, rawContext?.actionRequestId, stage, operation);
+        const credentials = await trace('cli.credentials', readCurrentCredentials);
         if (!credentials) {
           return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
         }
-        const [actionId, input, rawContext] = args;
         if (params.providerPreparedSavedSecret && shouldUsePatPublicActionTransport(credentials, rawContext)) {
           return actionFailure('private_action_preparation_transport_unsupported');
         }
-        const preferenceFailure = await originationPreferenceFailure(actionId, credentials, rawContext);
+        const preferenceFailure = await trace('cli.origination_preference', () => originationPreferenceFailure(actionId, credentials, rawContext));
         if (preferenceFailure) return preferenceFailure;
         if (shouldUsePatPublicActionTransport(credentials, rawContext)) {
           return await executePatPublicAction({

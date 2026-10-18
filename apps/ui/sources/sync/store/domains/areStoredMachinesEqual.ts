@@ -30,6 +30,10 @@ export function hasMachineContributionRegistryProjectionChanged(
     if (!previous || !hasMachineDaemonStateAdvanced(previous, next)) return false;
     const previousState = readDaemonState(previous.daemonState);
     const nextState = readDaemonState(next.daemonState);
+    // A version-zero socket placeholder has no daemon observation yet.
+    // A positive version still carries the legacy invalidation signal even
+    // when its content is unavailable or predates the explicit revision.
+    if (!previousState && (previous.daemonStateVersion ?? 0) === 0) return false;
     const previousRevision = readContributionRegistryProjectionRevision(previousState);
     const nextRevision = readContributionRegistryProjectionRevision(nextState);
     // Older daemon publications have only the broad version signal. Retain

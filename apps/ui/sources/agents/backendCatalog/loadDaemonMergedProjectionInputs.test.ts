@@ -482,7 +482,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         }
     });
 
-    it('does not reuse a pre-inventory describe after the first daemon state is observed', async () => {
+    it.each(['absent', 'direct', 'display-first'] as const)('reuses a current describe across first %s Machine inventory and revalidates a later daemon replacement', async hydration => {
         const { loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
         const { storage } = await import('@/sync/domains/state/storage');
         const previousMachines = storage.getState().machines;
@@ -492,9 +492,29 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         });
         storage.setState({ machines: Object.fromEntries(Object.entries(previousMachines).filter(([id]) => id !== 'machine-1')) });
         try {
+            if (hydration !== 'absent') {
+                storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', metadata: null,
+                    daemonStateVersion: 0, daemonState: null,
+                })], false, { sourceServerId: 'server-1' });
+            }
             projectionDescribeMock.mockResolvedValue({ supported: true, projection: daemonProjection(7) });
             await expect(read()).resolves.toMatchObject({ kind: 'ready' });
-            storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', daemonStateVersion: 1 })], false, { sourceServerId: 'server-1' });
+            if (hydration === 'display-first') {
+                storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', metadata: null,
+                    daemonStateVersion: 1, daemonState: null,
+                })], false, { sourceServerId: 'server-1' });
+                await expect(read()).resolves.toMatchObject({ kind: 'ready' });
+                expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
+            }
+            storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', daemonStateVersion: 1,
+                daemonState: { runtimeId: 'daemon-a', contributionRegistryProjectionRevision: 1 },
+            })], false, { sourceServerId: 'server-1' });
+            await expect(read()).resolves.toMatchObject({ kind: 'ready' });
+            expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
+
+            storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', daemonStateVersion: 2,
+                daemonState: { runtimeId: 'daemon-b', contributionRegistryProjectionRevision: 1 },
+            })], false, { sourceServerId: 'server-1' });
             await expect(read()).resolves.toMatchObject({ kind: 'ready' });
             expect(projectionDescribeMock).toHaveBeenCalledTimes(2);
         } finally {
