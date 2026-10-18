@@ -13,7 +13,7 @@ vi.mock('socket.io-client', () => ({
 }));
 
 vi.mock('@/persistence', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/persistence')>(),
+    ...await importOriginal<typeof import('@/persistence')>(),
     readCredentials: vi.fn(async () => ({
         token: 'fake-token',
         encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
