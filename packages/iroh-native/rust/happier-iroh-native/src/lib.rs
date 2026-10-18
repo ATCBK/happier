@@ -359,6 +359,13 @@ fn runtime() -> &'static Runtime {
     })
 }
 
+/// Execute a host binding's synchronous lifecycle call without occupying the
+/// host's filesystem/DNS worker pool. The call still enters this same runtime
+/// and state owner through the existing JSON ABI.
+pub fn spawn_lifecycle_operation(operation: impl FnOnce() + Send + 'static) {
+    runtime().spawn_blocking(operation);
+}
+
 fn state() -> &'static NativeRuntime {
     STATE.get_or_init(|| NativeRuntime {
         manager: EndpointManager::new(),
