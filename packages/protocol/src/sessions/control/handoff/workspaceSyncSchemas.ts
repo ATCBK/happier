@@ -101,6 +101,8 @@ export const WorkspaceSyncRelationshipV1Schema = lazyZodSchema(() => z.strictObj
     mode: WorkspaceSyncPersistentModeV1Schema,
     contentPolicy: WorkspaceContentPolicyV1Schema,
     provenance: OptionalWorkspaceSyncWorkerCopyProvenanceV1Schema,
+    // null is new, never-committed intent; absent legacy rows retain possible native custody.
+    committedAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)))),
     enabled: z.boolean(),
     createdAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
     updatedAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),

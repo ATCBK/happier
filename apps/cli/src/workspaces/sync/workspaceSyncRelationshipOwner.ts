@@ -332,7 +332,7 @@ export function createWorkspaceSyncRelationshipOwner(
         controllerMachineId: options.localMachineId,
         alphaWorkspaceRefId: endpoints.source.id,
         betaWorkspaceRefId: endpoints.target.id,
-        ...(input.purpose === 'worker_clean_copy' ? { provenance: {
+        ...(input.purpose === 'worker_clean_copy' ? { committedAtMs: null, provenance: {
           kind: 'worker_clean_copy', sourceWorkspaceRefId: endpoints.source.id, targetWorkspaceRefId: endpoints.target.id,
         } } : {}),
         mode: input.mode,
@@ -439,11 +439,14 @@ export function createWorkspaceSyncRelationshipOwner(
               const result = await mutateProjectSnapshot((settings) => {
                 const relationships = parseRelationships(settings);
                 const winner = resolveEndpointPair(relationships, relationship);
-                if (winner?.enabled) return settings;
+                if (winner?.enabled && (!getWorkspaceSyncWorkerCopyV1(winner) || winner.committedAtMs !== null)) return settings;
                 if (!winner) {
                   throw ownerError('relationship_not_ready', 'Workspace relationship staging intent is unavailable');
                 }
-                const committed = { ...winner, enabled: true, updatedAtMs: nowMs() };
+                const timestamp = nowMs();
+                const committed = { ...winner, enabled: true, updatedAtMs: timestamp,
+                  ...(getWorkspaceSyncWorkerCopyV1(winner) ? { committedAtMs: winner.committedAtMs ?? timestamp } : {}),
+                };
                 return admitProjectSnapshotTransition(settings, {
                   ...settings,
                   relationships: relationships.map((value) => (

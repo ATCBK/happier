@@ -111,6 +111,7 @@ function createHarness(options: Readonly<{
     ensureRelationship,
     terminateRelationshipRuntime,
     commitRelationshipTarget,
+    owner,
     readRelationships: () => snapshot.relationships,
     readRefs: () => snapshot.workspaceRefs,
   };
@@ -144,7 +145,7 @@ describe('createWorkspaceSyncRelationshipForProject', () => {
     const worker = { ...raw, actionInput: { ...raw.actionInput, purpose: 'worker_clean_copy' } };
     let firstBootstrap = true;
     h.ensureRelationship.mockImplementation(async definition => {
-      if (firstBootstrap) expect(h.readRelationships()[0]).toMatchObject({ enabled: false, provenance: {
+      if (firstBootstrap) expect(h.readRelationships()[0]).toMatchObject({ enabled: false, committedAtMs: null, provenance: {
         kind: 'worker_clean_copy', sourceWorkspaceRefId: 'source_ref', targetWorkspaceRefId: 'unexpected_source',
       } });
       firstBootstrap = false;
@@ -154,11 +155,25 @@ describe('createWorkspaceSyncRelationshipForProject', () => {
     expect(h.readRefs().find(ref => ref.id === first.targetWorkspaceRefId)).toMatchObject({
       rootPath: '/target', machineId: 'machine_target', projectKey: 'source_ref',
     });
-    expect(h.readRelationships()[0]).toMatchObject({ enabled: true, provenance: {
+    expect(h.readRelationships()[0]).toMatchObject({ enabled: true, committedAtMs: 100, provenance: {
       kind: 'worker_clean_copy', sourceWorkspaceRefId: 'source_ref', targetWorkspaceRefId: first.targetWorkspaceRefId,
     } });
     await expect(createWorkspaceSyncRelationshipForProject(h.dependencies, worker)).resolves.toMatchObject({ created: false });
     expect(h.readRelationships()).toHaveLength(1);
+    await h.owner.setEnabled(first.relationshipId, false);
+    expect(h.readRelationships()[0]).toMatchObject({ enabled: false, committedAtMs: 100 });
+    await h.owner.setEnabled(first.relationshipId, true);
+    expect(h.readRelationships()[0]).toMatchObject({ enabled: true, committedAtMs: 100 });
+  });
+
+  it('leaves a failed worker copy without commitment in the stored creation intent', async () => {
+    const h = createHarness({ freshTarget: true });
+    const raw = request({ mode: 'keep_synced', destinationIntent: 'materialize_from_source_workspace' });
+    const failure = new Error('Target commit failed');
+    h.commitRelationshipTarget.mockRejectedValueOnce(failure);
+    await expect(createWorkspaceSyncRelationshipForProject(h.dependencies,
+      { ...raw, actionInput: { ...raw.actionInput, purpose: 'worker_clean_copy' } })).rejects.toBe(failure);
+    expect(h.readRelationships()[0]).toMatchObject({ enabled: false, committedAtMs: null });
   });
 
   it('never upgrades an ordinary existing relationship into a worker copy', async () => {
