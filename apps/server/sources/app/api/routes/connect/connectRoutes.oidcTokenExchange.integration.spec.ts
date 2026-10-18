@@ -19,7 +19,7 @@ function createTestApp() {
     const app = Fastify({ logger: false });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
-    const typed = app.withTypeProvider<ZodTypeProvider>() as any;
+    const typed = app.withTypeProvider<ZodTypeProvider>();
     return trackApp(typed);
 }
 
@@ -69,7 +69,7 @@ describe("connectRoutes (OIDC token exchange) (integration)", () => {
 
     async function exchange(accessToken: string) {
         const app = createTestApp();
-        connectRoutes(app as any);
+        connectRoutes(app);
         await app.ready();
         return app.inject({
             method: "POST",
