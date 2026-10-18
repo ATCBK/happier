@@ -667,6 +667,24 @@ describe('createActionExecutor (approvals)', () => {
     expect(sessionOpen).toHaveBeenCalledWith(expect.objectContaining({ approvedNewDirectoryCreation: true }),
       expect.objectContaining({ surface: 'ui', authority: 'present_user' }));
   });
+  it.each(['account_changed', 'home_changed', 'requester_account_unavailable'] as const)(
+    'persists the content-free stale fact and returns it in approval error data (%s)', async reason => {
+    let request = createApprovalRequest('approved', {
+      actionId: 'session.open', actionArgs: { sessionId: 's1', approvedNewDirectoryCreation: true },
+    });
+    const sessionOpen = vi.fn(async () => ({ ok: true, status: 'opened' }));
+    const executor = createExecutor({ sessionOpen,
+      isApprovalExecutionOriginCurrent: async ({ reportStale }) => { reportStale?.(reason); return false; },
+      approvalsGet: async () => request,
+      approvalsUpdate: async ({ request: value }) => { request = ApprovalRequestV2Schema.parse(value); return { ok: true }; },
+    });
+    const result = await executor.replayApprovedApprovalRequest({ artifactId: 'stale-fact', callerAuthority: 'present_user' });
+    expect(request).toMatchObject({ status: 'failed', execution: { errorCode: 'approval_stale', details: { reason } } });
+    expect(result).toMatchObject({ ok: true, result: { status: 'failed', execution: {
+      errorCode: 'approval_stale', details: { reason },
+    } } });
+    expect(sessionOpen).not.toHaveBeenCalled();
+  });
   it('consumes fresh-folder consent only from a current, already approved exact-daemon replay', async () => {
     let request = createApprovalRequest('open', {
       actionId: 'session.open', actionArgs: { sessionId: 's1', approvedNewDirectoryCreation: true },
