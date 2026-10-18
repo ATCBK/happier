@@ -91,6 +91,7 @@ it('preserves a terminal-selected Claude account and refuses a second entry for 
     await waitForAssistantMessageContaining({ baseUrl: server.baseUrl, token: auth.token, sessionId, secret,
         requiredSubstring: 'FAKE_CLAUDE_OK_1', timeoutMs: 60_000 });
     const vendorId = await readFakeClaudeSessionId({ baseUrl: server.baseUrl, token: auth.token, sessionId, secret });
+    if (!vendorId) throw new Error('Fake Claude did not publish the session ID required for resume');
     await terminal.stop();
     const resumed = await control<{ success: boolean; sessionId?: string }>('/spawn-session', {
         directory: workspace, agent: 'claude', resume: vendorId, existingSessionId: sessionId,
