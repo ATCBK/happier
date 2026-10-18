@@ -22,17 +22,17 @@ const { PressableSurface } = await import('./PressableSurface');
 await import('../overlays/AnchoredTooltip');
 
 describe('PressableSurface web tooltip', () => {
-    it('exposes checked state to the browser accessibility tree as a switch changes', async () => {
+    it.each(['switch', 'checkbox'] as const)('exposes checked state and Space activation for a %s', async (role) => {
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);
         function WrapControl() {
             const [checked, setChecked] = React.useState(false);
-            return <PressableSurface accessibilityRole="switch" accessibilityLabel="Wrap" accessibilityState={{ checked }} onPress={() => setChecked(value => !value)} />;
+            return <PressableSurface accessibilityRole={role} accessibilityLabel="Wrap" accessibilityState={{ checked }} onPress={() => setChecked(value => !value)} />;
         }
         try {
             await act(async () => root.render(<WrapControl />));
-            const control = container.querySelector<HTMLElement>('[role="switch"]');
+            const control = container.querySelector<HTMLElement>(`[role="${role}"]`);
             expect(control?.getAttribute('aria-checked')).toBe('false');
             await act(async () => control?.click());
             expect(control?.getAttribute('aria-checked')).toBe('true');

@@ -4829,6 +4829,13 @@ export const it: TranslationStructure = {
     showLineNumbersInToolViews: "Mostra numeri di riga nelle viste strumenti",
     showLineNumbersInToolViewsDescription:
       "Mostra i numeri di riga nei diff delle viste strumenti",
+    chatCodeBlocks: {
+        title: 'Blocchi di codice della chat',
+        showWrapControls: 'Mostra i controlli di a capo',
+        showWrapControlsDescription: 'Mostra un pulsante di a capo su ogni blocco di codice della chat',
+        wrapByDefault: 'A capo automatico predefinito',
+        wrapByDefaultDescription: 'Manda a capo le righe lunghe nei blocchi di codice della chat, salvo scelta diversa per un blocco',
+    },
     wrapLinesInDiffs: "A capo nelle viste del codice",
     wrapLinesInDiffsDescription:
       "Manda a capo le righe lunghe nelle anteprime del codice e negli editor invece di scorrere orizzontalmente",

@@ -4483,6 +4483,13 @@ export const es: TranslationStructure = {
       "Mostrar números de línea en vistas de herramientas",
     showLineNumbersInToolViewsDescription:
       "Mostrar números de línea en diferencias de vistas de herramientas",
+    chatCodeBlocks: {
+        title: 'Bloques de código del chat',
+        showWrapControls: 'Mostrar controles de ajuste de línea',
+        showWrapControlsDescription: 'Mostrar un botón de ajuste de línea en cada bloque de código del chat',
+        wrapByDefault: 'Ajustar líneas de forma predeterminada',
+        wrapByDefaultDescription: 'Ajustar las líneas largas del código del chat, salvo que elijas otra opción para un bloque',
+    },
     wrapLinesInDiffs: "Ajustar líneas en vistas de código",
     wrapLinesInDiffsDescription:
       "Ajustar líneas largas en vistas previas de código y editores en lugar de desplazarse horizontalmente",

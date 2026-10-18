@@ -2,10 +2,12 @@ import * as React from 'react';
 import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
 
+import { useSetting } from '@/sync/domains/state/storage';
 import { useTranscriptRowLayoutMutation } from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
 
 function createWrapStore() {
-    return createStore<ReadonlySet<string>>(() => new Set());
+    // Keep explicit false choices too, so changing the account default only affects untouched blocks.
+    return createStore<ReadonlyMap<string, boolean>>(() => new Map());
 }
 
 const WrapStoreContext = React.createContext<ReturnType<typeof createWrapStore> | null>(null);
@@ -19,22 +21,26 @@ export function MarkdownCodeBlockWrapStateProvider({ children }: Readonly<{ chil
     return <WrapStoreContext.Provider value={store}>{children}</WrapStoreContext.Provider>;
 }
 
+export function useMarkdownCodeBlockWrapKey(): string | null {
+    return React.useContext(WrapKeyContext);
+}
+
 export function useMarkdownCodeBlockWrap(): readonly [boolean, (wrapped: boolean) => void] {
     const retainedStore = React.useContext(WrapStoreContext);
-    const key = React.useContext(WrapKeyContext);
+    const key = useMarkdownCodeBlockWrapKey();
+    const defaultWrapped = useSetting('wrapChatCodeBlocks') === true;
     // Standalone Markdown also supports wrapping, without sharing anonymous blocks' state.
     const [localStore] = React.useState(() => key && retainedStore ? retainedStore : createWrapStore());
     const store = key && retainedStore ? retainedStore : localStore;
     const blockKey = key ?? '';
-    const wrapped = useStore(store, state => state.has(blockKey));
+    const wrapped = useStore(store, state => state.get(blockKey) ?? defaultWrapped);
     const notifyLayoutMutation = useTranscriptRowLayoutMutation();
     const setWrapped = React.useCallback((next: boolean) => {
-        if (store.getState().has(blockKey) === next) return;
+        if (store.getState().get(blockKey) === next) return;
         notifyLayoutMutation({ reason: next ? 'expand' : 'collapse', sourceId: blockKey });
         store.setState((previous) => {
-            const updated = new Set(previous);
-            if (next) updated.add(blockKey);
-            else updated.delete(blockKey);
+            const updated = new Map(previous);
+            updated.set(blockKey, next);
             return updated;
         }, true);
     }, [blockKey, notifyLayoutMutation, store]);

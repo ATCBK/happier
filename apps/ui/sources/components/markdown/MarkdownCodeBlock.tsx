@@ -42,6 +42,7 @@ export const MarkdownCodeBlock = React.memo((props: Readonly<{
 
     const [wrapLines, setWrapLines] = useMarkdownCodeBlockWrap();
     const wrapLinesInDiffs = useSetting('wrapLinesInDiffs');
+    const showWrapControls = useSetting('showChatCodeBlockWrapControls');
     const showLineNumbersInToolViews = useSetting('showLineNumbersInToolViews');
     const fileListVirtualizationMinFilesSetting = useSetting('filesDiffFileListVirtualizationMinFiles');
 
@@ -74,7 +75,9 @@ export const MarkdownCodeBlock = React.memo((props: Readonly<{
         defaultExpanded: files.length <= 1,
     });
 
-    const wrapToggle = <WrapLinesToggleButton wrapLines={wrapLines} onChange={setWrapLines} />;
+    const wrapToggle = showWrapControls !== false
+        ? <WrapLinesToggleButton wrapLines={wrapLines} onChange={setWrapLines} />
+        : null;
 
     const codeView = (
         <CodeBlockView

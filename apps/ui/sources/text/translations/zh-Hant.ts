@@ -4111,6 +4111,13 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         showLineNumbersInDiffsDescription: '在程式碼差異中顯示行號',
         showLineNumbersInToolViews: '在工具檢視中顯示行號',
         showLineNumbersInToolViewsDescription: '在工具檢視差異中顯示行號',
+        chatCodeBlocks: {
+            title: '聊天程式碼區塊',
+            showWrapControls: '顯示換行開關',
+            showWrapControlsDescription: '在每個聊天程式碼區塊上顯示自動換行開關',
+            wrapByDefault: '預設自動換行',
+            wrapByDefaultDescription: '自動換行聊天程式碼區塊中的長行，除非個別更改該區塊的設定',
+        },
         wrapLinesInDiffs: '在程式碼檢視中自動換行',
         wrapLinesInDiffsDescription: '在程式碼預覽和編輯器中自動換行顯示長行，而不是水平捲動',
         alwaysShowContextSize: '始終顯示上下文大小',

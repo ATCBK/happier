@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -6,9 +7,44 @@ import { storage } from '@/sync/domains/state/storage';
 import { MarkdownView } from './MarkdownView';
 import { MarkdownCodeBlockWrapStateProvider } from './MarkdownCodeBlockWrapState';
 
-afterEach(standardCleanup);
+afterEach(() => {
+    standardCleanup();
+    storage.getState().applySettingsLocal({ showChatCodeBlockWrapControls: true, wrapChatCodeBlocks: false });
+});
 
 describe('MarkdownView code block wrapping', () => {
+    it('hides chat wrap controls while honoring the default independently of file/diff wrapping', async () => {
+        storage.getState().applySettingsLocal({ showChatCodeBlockWrapControls: false, wrapChatCodeBlocks: true, wrapLinesInDiffs: false, filesDiffSyntaxHighlightingMode: 'off' });
+        const screen = await renderScreen(<MarkdownView markdown={'```\nlong code line\n```'} />);
+        expect(screen.findAllByTestId('code-wrap-lines-toggle')).toHaveLength(0);
+        expect(screen.findAllByTestId('markdown-code-block-scroll')).toHaveLength(0);
+        await act(async () => { storage.getState().applySettingsLocal({ wrapChatCodeBlocks: false }); });
+        expect(screen.findAllByTestId('code-wrap-lines-toggle')).toHaveLength(0);
+        expect(screen.findAllByTestId('markdown-code-block-scroll').filter(node => typeof node.type === 'string')).toHaveLength(1);
+        expect(storage.getState().settings.wrapLinesInDiffs).toBe(false);
+    });
+
+    it('retains explicit wrapped and unwrapped choices while untouched blocks follow changing defaults', async () => {
+        storage.getState().applySettingsLocal({ showChatCodeBlockWrapControls: true, wrapChatCodeBlocks: false, filesDiffSyntaxHighlightingMode: 'off' });
+        const markdown = ['```', 'first', '```', '', '```', 'second', '```', '', '```', 'untouched', '```'].join('\n');
+        function Transcript({ visible }: Readonly<{ visible: boolean }>) {
+            return <MarkdownCodeBlockWrapStateProvider>{visible ? <MarkdownView markdown={markdown} codeBlockStateKey="session:a/message:a" /> : null}</MarkdownCodeBlockWrapStateProvider>;
+        }
+        const screen = await renderScreen(<Transcript visible />);
+        const switches = () => screen.findAllByProps({ accessibilityRole: 'switch' }).filter(node => typeof node.type === 'string');
+        const checked = () => switches().map(node => node.props.accessibilityState.checked);
+        await pressTestInstanceAsync(switches()[0]!, 'explicitly wrap first');
+        await pressTestInstanceAsync(switches()[1]!, 'wrap second');
+        await pressTestInstanceAsync(switches()[1]!, 'explicitly unwrap second');
+        await act(async () => { storage.getState().applySettingsLocal({ wrapChatCodeBlocks: true }); });
+        expect(checked()).toEqual([true, false, true]);
+        await screen.update(<Transcript visible={false} />);
+        await screen.update(<Transcript visible />);
+        expect(checked()).toEqual([true, false, true]);
+        await act(async () => { storage.getState().applySettingsLocal({ wrapChatCodeBlocks: false }); });
+        expect(checked()).toEqual([true, false, false]);
+    });
+
     it('retains each message/block choice when virtualized rows unmount and remount', async () => {
         storage.getState().applySettingsLocal({ filesDiffSyntaxHighlightingMode: 'off' });
         const markdown = ['```', 'identical content', '```', '', '```', 'identical content', '```'].join('\n');
