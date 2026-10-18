@@ -12,6 +12,10 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
+import { resolvePluginAppPages, selectPluginAppPagePlacements } from '@/components/appShell/plugins/pluginAppPages';
+import { humanizeIdentifier } from '@/components/settings/home/governance/homeFeatureLabels';
+import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { storage, useArtifact } from '@/sync/domains/state/storage';
 import { t } from '@/text';
@@ -58,9 +62,20 @@ export function readWidgetAboutSources(input: Readonly<{
             plugin: projection?.installedPackagesById[resource.pluginId]?.displayName ?? installed?.pluginName ?? resource.pluginId,
             machine: getMachineDisplayName(machine),
             usesViewerConnection: (declaration?.connectedAccountPurposes?.length ?? 0) > 0,
-            read: resource.localId,
+            // The declaration carries no title, so the id is said as words ("count" -> "Count").
+            read: humanizeIdentifier(resource.localId),
         };
     });
+}
+
+/** The plugin page's own title as the viewer's navigation shows it, or `null` while the page is not in this viewer's projection. */
+function readPluginPageName(pluginId: string, pageId: string): string | null {
+    const projection = readCurrentAppShellPluginUiProjection();
+    if (!projection) return null;
+    const page = resolvePluginAppPages({ placements: selectPluginAppPagePlacements(projection),
+        localize: createPluginLocalizedTextResolver({ projection }) })
+        .find(candidate => candidate.pluginId === pluginId && candidate.localId === pageId);
+    return page?.label ?? null;
 }
 
 /** One place a copy is used: its name as the person knows it, led by that place's own mark. */
@@ -89,7 +104,7 @@ export function useWidgetPlacementLabels(summary: PlacementSummary | null): read
                 }
                 case 'project': return { label: t('widgetDefinition.placedInAProject'), icon: 'folder' };
                 case 'corePage': return { label: t('widgetDefinition.placedOnACorePage'), icon: 'layout' };
-                case 'pluginArea': return { label: t('widgetDefinition.placedOnAPluginPage'), icon: 'puzzle-piece' };
+                case 'pluginArea': return { label: readPluginPageName(owner.pluginId, owner.pageId) ?? t('widgetDefinition.placedOnAPluginPage'), icon: 'puzzle-piece' };
             }
         });
         const seen = new Set<string>();
