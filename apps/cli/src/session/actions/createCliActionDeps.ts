@@ -183,7 +183,7 @@ import { SessionCreationTargetPreparationResultV1Schema, SessionCreationDirector
   needsSessionCreationDirectoryApprovalPreflightV1, projectSessionCreationDirectoryApprovalV1,
 } from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
 import { SessionModelSelectionV1Schema, SessionModelSelectionResolutionError, isNativeAutomaticModelSelectionInputV1, resolveSessionModelSelectionInputRefV1 } from '@happier-dev/protocol/providers/model-selection';
-import { HandoffTargetReplacementPreflightResultV1Schema, WorkspaceSyncRelationshipsListRpcResultV1Schema, WorkspaceSyncConflictPageV1Schema, WorkspaceSyncConflictInspectRpcResultV1Schema, WorkspaceSyncConflictResolutionResultV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
+import { HandoffTargetReplacementPreflightResultV1Schema, WorkspaceSyncRelationshipsListRpcResultV1Schema, WorkspaceSyncConflictPageV1Schema, WorkspaceSyncConflictInspectRpcResultV1Schema, WorkspaceSyncConflictResolutionResultV1Schema, WorkspaceSyncRelationshipIdV1Schema, WorkspaceSyncStatusV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { resolveWorkspaceSyncReadControllerV1 } from '@happier-dev/protocol/workspaces/workspaceSyncTopology';
 import { SessionAuthoringTerminalV1Schema } from '@happier-dev/protocol/sessions/authoring/creationFieldsV1';
 import { normalizeSpawnSessionErrorDetail, SPAWN_SESSION_ERROR_DETAIL_KINDS, isSessionCreationCorrespondenceConflictSpawnErrorDetail, isSessionCreationOrganizationInvalidSpawnErrorDetail } from '@happier-dev/protocol/spawnSession';
@@ -5094,6 +5094,66 @@ export function createCliActionDeps(params: Readonly<{
         exactMachine: true,
         ...(signal ? { signal } : {}),
       });
+    },
+    workspaceSyncRelationshipTerminate: async ({ input, serverId, signal }) => {
+      if (!params.credentials) return notSupported();
+      const denied = await projectHomeAdmission(serverId ?? actionHomeId);
+      if (denied) return denied;
+      const response = await callMachineAction({
+        machineId: input.controllerMachineId,
+        serverId: actionHomeId,
+        method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TERMINATE,
+        request: WorkspaceSyncRelationshipIdV1Schema.parse({ relationshipId: input.relationshipId }),
+        exactMachine: true,
+        ...(signal ? { signal } : {}),
+      });
+      if (readRecord(response).ok !== true) throw Object.assign(new Error('Invalid Workspace Sync terminate response'), { code: 'action_failed' });
+      return { v: 1 as const, relationshipId: input.relationshipId, terminated: true as const };
+    },
+    workspaceSyncRelationshipDisable: async ({ input, serverId, signal }) => {
+      if (!params.credentials) return notSupported();
+      const denied = await projectHomeAdmission(serverId ?? actionHomeId);
+      if (denied) return denied;
+      const response = await callMachineAction({
+        machineId: input.controllerMachineId,
+        serverId: actionHomeId,
+        method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_PAUSE,
+        request: WorkspaceSyncRelationshipIdV1Schema.parse({ relationshipId: input.relationshipId }),
+        exactMachine: true,
+        ...(signal ? { signal } : {}),
+      });
+      if (readRecord(response).ok !== true) throw Object.assign(new Error('Invalid Workspace Sync pause response'), { code: 'action_failed' });
+      return { v: 1 as const, relationshipId: input.relationshipId, enabled: false as const };
+    },
+    workspaceSyncRelationshipEnable: async ({ input, serverId, signal }) => {
+      if (!params.credentials) return notSupported();
+      const denied = await projectHomeAdmission(serverId ?? actionHomeId);
+      if (denied) return denied;
+      const response = await callMachineAction({
+        machineId: input.controllerMachineId,
+        serverId: actionHomeId,
+        method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_RESUME,
+        request: WorkspaceSyncRelationshipIdV1Schema.parse({ relationshipId: input.relationshipId }),
+        exactMachine: true,
+        ...(signal ? { signal } : {}),
+      });
+      if (readRecord(response).ok !== true) throw Object.assign(new Error('Invalid Workspace Sync resume response'), { code: 'action_failed' });
+      return { v: 1 as const, relationshipId: input.relationshipId, enabled: true as const };
+    },
+    workspaceSyncRelationshipFlush: async ({ input, serverId, signal }) => {
+      if (!params.credentials) return notSupported();
+      const denied = await projectHomeAdmission(serverId ?? actionHomeId);
+      if (denied) return denied;
+      const response = await callMachineAction({
+        machineId: input.controllerMachineId,
+        serverId: actionHomeId,
+        method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_FLUSH,
+        request: WorkspaceSyncRelationshipIdV1Schema.parse({ relationshipId: input.relationshipId }),
+        exactMachine: true,
+        ...(signal ? { signal } : {}),
+      });
+      return { v: 1 as const, relationshipId: input.relationshipId,
+        status: WorkspaceSyncStatusV1Schema.parse(readRecord(response).status) };
     },
     workspaceSyncConflictResolve: async ({ actionReceiptId, input, signal }) => {
       if (!params.credentials) {
