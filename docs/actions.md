@@ -334,9 +334,27 @@ unavailable at the dispatcher.
 
 The resolved Session transport reads the requester's persisted Account encryption currentness
 under that same signed invocation, without borrowing the daemon's bearer. Session HTTP purposes
-reuse each route's existing Action and Session selector and must match the verified resolved target;
-this grants neither arbitrary Account reads nor access to another Session. Signed Pending admission
-uses its exact socket event (including the existing Execution Run epoch), while ordinary RPC effects
+reuse each route's existing Action and Session selector. Every declared Session operand retains
+the captured PAT resource ceiling and current Machine access relationship, even after the PAT's
+current grant expands. Operand projection applies to native mutations too; it does not itself admit
+an operation. Session access retains the captured PAT grant unless the signed owner has proved all
+declared Session operands. Declaring an operand for a previously closed route preserves its Runner
+exclusion with `allowSessionRuntime: false`. Read roots may compose bodyless GETs on declared Session readers under
+ordinary Session access; mutations require the actual declared effect or an explicit native
+purpose on its admitted target. Unmatched signed purposes fail closed for every credential kind.
+Ordinary PAT roots cannot substitute unrelated effect ids. Existing composite PAT roots
+(`approval.request.create`, `action.invoke`, or a qualified plugin Action) may resolve a native effect,
+which must still match its canonical transport and authority. Explicit native phases retain their
+named child read effects.
+Routes that act on several Sessions declare every operand through the same binding owner; a Follow
+source write proves both source and destination. Reports-to declares the child, new lead and expected
+lead; only an explicitly nullable operand may omit a Session with `null`, so detachment remains valid
+while missing or malformed operands fail closed. Signed requests, direct PATs and Runner binding use
+the same operand projection. Native Account transports (including deletion, organization assignments,
+access grants, responsibility, read state and public links) declare their actual Action and Session
+selector at the route, before handlers run. Session-list collection phases without a named Session require
+captured Account-wide resource access. Specialized native-purpose restrictions still apply before
+shared feature discovery. Signed Pending admission uses its exact socket event (including the existing Execution Run epoch), while ordinary RPC effects
 retain the Machine RPC catalog. This is development-source behavior; loaded-runtime validation is separate.
 
 In 0.3 development, Protocol owns the exact empty `502` acknowledgement-loss

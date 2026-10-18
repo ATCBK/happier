@@ -12,6 +12,8 @@ import { PresentUserRequiredResponseSchema } from "@/app/api/utils/requirePresen
 export function registerSessionReadStateRoutes(app: Fastify) {
     app.post(SESSION_READ_STATE_HTTP_PATHS_V1.set, {
         preHandler: [app.authenticate, requireRouteActionAuthority("session.read_state.set")],
+        config: { apiTokenSessionAction: 'session.read_state.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: z.object({ sessionId: z.string() }),
             body: SessionReadStateRouteRequestBodyV1Schema,

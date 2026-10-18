@@ -18,6 +18,11 @@ export function registerSessionReportsToRoutes(app: Fastify): void {
     }));
     app.post('/v1/sessions/:sessionId/reports-to', {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.reports_to.set', restrictedCredentialBinding: {
+            scope: 'session', session: 'params.sessionId', allowSessionRuntime: false,
+            additionalSessions: [{ field: 'body.leadSessionId', nullable: true },
+                { field: 'body.expectedLeadSessionId', nullable: true }],
+        } },
         schema: {
             params: paramsSchema,
             body: SessionReportsToSetRequestV1Schema,

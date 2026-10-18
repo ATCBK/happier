@@ -4,6 +4,8 @@ import { type Fastify } from "../../types";
 
 export function registerSessionDeleteRoute(app: Fastify) {
     app.delete('/v1/sessions/:sessionId', {
+        config: { apiTokenSessionAction: 'session.delete',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: z.object({
                 sessionId: z.string()

@@ -35,6 +35,8 @@ export function registerSessionResponsibilityRoutes(app: Fastify) {
     const collaborationApp = createServerFeatureGatedRouteApp(app, "sharing.session");
     collaborationApp.post("/v2/sessions/responsibility/set", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.responsibility.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: {
             body: SetSessionResponsibilityRequestSchema,
             response: {
@@ -75,6 +77,8 @@ export function registerSessionResponsibilityRoutes(app: Fastify) {
 
     collaborationApp.post("/v2/sessions/responsibility/candidates", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.responsibility.candidates.list',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: {
             body: SessionResponsibilityCandidatesRequestSchema,
             response: {

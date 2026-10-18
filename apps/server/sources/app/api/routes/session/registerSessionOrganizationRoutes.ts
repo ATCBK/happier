@@ -158,6 +158,8 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
 
     app.put("/v2/session-organization/pins/:sessionId", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.organization.pin.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: sessionIdParamsSchema,
             body: SetSessionPinRequestSchema,
@@ -208,6 +210,8 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
 
     app.put("/v2/session-organization/attention-standings/:sessionId", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.attention.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: sessionIdParamsSchema,
             body: SetSessionAttentionStandingRequestSchema,
@@ -384,6 +388,8 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
 
     folderRoutes.put("/v2/session-organization/folder-assignments/:sessionId", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.folder.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: sessionIdParamsSchema,
             body: SetSessionFolderAssignmentRequestSchema,
@@ -594,6 +600,8 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
 
     app.put("/v2/session-organization/tag-assignments/:sessionId", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.tags.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: sessionIdParamsSchema,
             body: SetSessionTagAssignmentsRequestSchema,

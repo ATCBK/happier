@@ -76,7 +76,10 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
         if (result.type !== 'ok') return reply.code(result.type === 'limited' ? 429 : result.type === 'unavailable' ? 503 : 404).send({ error: 'public_share_unavailable' });
         return reply.send(result.value);
     });
-    app.post("/v1/public-shares", { preHandler: app.authenticate, schema: { body: StoredContentPublicShareCreateRequestV1Schema } }, async (request, reply) => {
+    app.post("/v1/public-shares", { preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.public_link.create',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.subject.id', allowSessionRuntime: false } },
+        schema: { body: StoredContentPublicShareCreateRequestV1Schema } }, async (request, reply) => {
         const { subject, ...material } = request.body;
         const configEnv = await readRequestHomeEnv(request);
         const input = { ...material, encryptedDataKey: material.encryptedDataKey ?? undefined, userId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request), configEnv };

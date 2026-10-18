@@ -3,7 +3,7 @@ import { ExternalActionActionIdV1Schema, bindExternalActionExecutionAuthorizatio
 import { decodeExternalActionResolvedTargetV1, encodeExternalActionResolvedTargetV1, verifyExternalActionMachineRpcRequestV1, verifyExternalActionMachineRequestV1, isExternalActionAuthorizationBoundToEnvelope, type ExternalActionMachineRpcEventV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
-import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { ActionIdSchema, type ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { MachineAccessActionIdSchema } from '@happier-dev/protocol/actions';
 import type { ActionRequiredAuthority } from "@happier-dev/protocol/actions/metadata";
 import { SOCKET_RPC_EVENTS, WorkspaceSyncSourceExecutionV1Schema, type WorkspaceSyncSourceRoutingV1, type WorkspaceSyncSourceWriterTargetRoutingV1,
@@ -63,6 +63,7 @@ import { bindHomeDomainHttpRequestV1 } from '@happier-dev/protocol/actions/homeD
 import { SessionOrganizationPinSetInputSchema } from '@happier-dev/protocol/actions/sessionOrganizationMoveAction';
 import { isSessionStateFieldActionId } from '@happier-dev/protocol/actions/sessionStateFieldActions';
 import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -464,7 +465,8 @@ type ExternalActionExecutionRequestProof = Readonly<{
     /** Validated HTTP route operands, used only to compare with the canonical Action binding. */
     routeInput?: unknown;
     /** Session selected by the HTTP route's incumbent operation/target policy, never by a header. */
-    sessionRouteTarget?: Extract<ExternalActionTargetV1, { kind: 'session' }>;
+    sessionRouteTarget?: Extract<ExternalActionTargetV1, { kind: 'session' }>
+        & Readonly<{ actionId?: ActionId; additionalSessionIds?: readonly string[] }>;
     resolveCurrentSessionMachine?: (input: Readonly<{ accountId: string; sessionId: string }>) => Promise<string | null>;
 }>;
 
@@ -607,9 +609,12 @@ async function verifyCommon(
         selectedMachineId: binding.machineId,
     }) || !await hasCurrentOriginalSessionActionTargetInTx(db, binding, target)) return null;
     if (binding.actionId === 'session.pending.resetStart.set' && !binding.pendingResetStartAdmission) return null;
+    const resolvesPatEffect = !('authentication' in binding)
+        && (binding.actionId === 'approval.request.create' || binding.actionId === 'action.invoke'
+            || parseQualifiedPluginActionId(binding.actionId) !== null);
     if (!hasMatchingExecutionEffectFamily(binding.actionId, effectActionId.data)
         || binding.actionId !== effectActionId.data && (binding.handoffContinuation || binding.handoffPreflight
-            || 'authentication' in binding && !isTeamCredentialUsageExportReadEffect(binding.actionId, effectActionId.data))) return null;
+            || !resolvesPatEffect && !isTeamCredentialUsageExportReadEffect(binding.actionId, effectActionId.data))) return null;
     if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return null;
     const currentnessBody = ExternalActionExecutionAuthorizationVerifyRequestV1Schema.safeParse(proof.body);
     const custodyTarget = currentnessBody.success ? currentnessBody.data.managedFiniteWakeTarget : undefined;
@@ -833,10 +838,14 @@ function isProjectAccountMetadataHttpPurpose(verified: VerifiedExternalActionExe
 }
 
 /** Match the canonical schema and transport rather than a parallel route permission. */
-function isHomeDomainActionHttpOperation(actionId: string,
+function isAccountActionHttpOperation(actionId: string,
     proof: ExternalActionExecutionRequestProof): boolean {
-    if (!isHomeDomainActionIdV1(actionId) && actionId !== 'session.organization.pin.set') return false;
-    const spec = getActionSpec(actionId);
+    if (!isHomeDomainActionIdV1(actionId) && actionId !== 'session.organization.pin.set'
+        && actionId !== 'session.attention.set'
+        && !proof.sessionRouteTarget) return false;
+    const action = ActionIdSchema.safeParse(actionId);
+    if (!action.success) return false;
+    const spec = getActionSpec(action.data);
     const transport = spec.serverTransport;
     if (spec.executionPlacement !== 'account' || !transport
         || proof.method.toUpperCase() !== transport.method.toUpperCase()) return false;
@@ -853,9 +862,9 @@ function isHomeDomainActionHttpOperation(actionId: string,
 }
 
 /** A signed Account root spends its declared operation and required preparation reads. */
-function isHomeDomainActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+function isAccountActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
-    if (verified.effectActionId !== verified.binding.actionId) return false;
+    if (verified.effectActionId !== verified.binding.actionId && 'authentication' in verified.binding) return false;
     if (verified.binding.actionId === 'session.organization.pin.set'
         && proof.method.toUpperCase() === 'GET' && proof.body === undefined) {
         if (isAccountEncryptionCurrentnessHttpRead(proof)) return true;
@@ -870,7 +879,32 @@ function isHomeDomainActionHttpPurpose(verified: VerifiedExternalActionExecution
             } catch { return false; }
         }
     }
-    return isHomeDomainActionHttpOperation(verified.binding.actionId, proof);
+    return isAccountActionHttpOperation(verified.effectActionId, proof);
+}
+
+/** Collection phases have no single Session operand and require captured Account-wide resource access. */
+function isSessionListHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+    proof: ExternalActionExecutionRequestProof): boolean {
+    if (verified.binding.actionId !== 'session.list' || verified.effectActionId !== verified.binding.actionId
+        || verified.target.kind !== 'machine'
+        || !('authentication' in verified.binding) && verified.binding.grant.targets !== null) return false;
+    const url = new URL(proof.path, 'http://home.invalid');
+    if (proof.method.toUpperCase() === 'POST') return url.pathname === '/v2/sessions/query' && url.search === ''
+        && SessionListQueryV1Schema.safeParse(proof.body).success;
+    if (proof.method.toUpperCase() !== 'GET' || proof.body !== undefined) return false;
+    return ['/v1/sessions', '/v2/sessions', '/v2/sessions/active', '/v2/sessions/archived'].includes(url.pathname)
+        || url.search === '' && ['/v1/account/encryption/currentness', '/v1/account/encryption', '/v2/account/settings'].includes(url.pathname);
+}
+
+/** Every admitted Session operand retains the captured grant and current Machine relationship. */
+async function isExternalActionSessionTargetWithinGrant(binding: ExternalActionExecutionAuthorizationBindingV1,
+    sessionId: string): Promise<boolean> {
+    if ('authentication' in binding) return true;
+    if (isApiTokenGrantTargetMemberV1(binding.grant, { kind: 'session', sessionId })) return true;
+    for (const machineId of binding.grant.targets?.machines ?? []) {
+        if (await hasCurrentSessionScopedMachineAccessInTx({ tx: db, accountId: binding.accountId, machineId, sessionId })) return true;
+    }
+    return false;
 }
 
 /** The installed coordinator owns decrypted selection; Home admits only its named, signed phases. */
@@ -892,13 +926,7 @@ async function isSessionAgentTransitionHttpPurpose(verified: VerifiedExternalAct
         // Replay follows existing fork ancestry. Ordinary Account Session access
         // remains handler-owned; a PAT must retain its captured scope for each
         // actual requested ancestor, not borrow the child's resolved Machine.
-        if ('authentication' in verified.binding) return true;
-        const grant = verified.binding.grant;
-        if (isApiTokenGrantTargetMemberV1(grant, { kind: 'session', sessionId })) return true;
-        for (const machineId of grant.targets?.machines ?? []) {
-            if (await hasCurrentSessionScopedMachineAccessInTx({ tx: db, accountId: verified.binding.accountId, machineId, sessionId })) return true;
-        }
-        return false;
+        return isExternalActionSessionTargetWithinGrant(verified.binding, sessionId);
     }
     return verified.binding.actionId === 'session.agent.transition' && verified.target.kind === 'session'
         && method === 'POST' && url.search === ''
@@ -953,6 +981,11 @@ export async function verifyExternalActionDomainExecutionRequest(
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
     const verified = await verifyCommon(proof);
     if (!verified) return null;
+    if (proof.sessionRouteTarget) {
+        for (const sessionId of [proof.sessionRouteTarget.sessionId, ...(proof.sessionRouteTarget.additionalSessionIds ?? [])]) {
+            if (!await isExternalActionSessionTargetWithinGrant(verified.binding, sessionId)) return null;
+        }
+    }
     if (verified.binding.handoffPreflight && (proof.method.toUpperCase() !== 'GET' || proof.body !== undefined
         || proof.path !== `/v1/machines/${encodeURIComponent(verified.binding.machineId)}`)) return null;
     const relay = ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(proof.body);
@@ -979,12 +1012,15 @@ export async function verifyExternalActionDomainExecutionRequest(
         // before delivery. This is not Account read authority or a family grant.
     } else if (isSessionStateFieldActionHttpPurpose(verified, proof)) {
         // The existing Session routes retain actor access, tuple CAS and publisher policy.
-    } else if (rootSpec?.executionPlacement === 'session'
-        && verified.effectActionId === verified.binding.actionId && verified.target.kind === 'session'
+    } else if (isSessionListHttpPurpose(verified, proof)) {
+        // Original-root observations and selected lifecycle operands retain
+        // signature, currentness and ordinary route access; no cross-Action grant.
+    } else if ((rootSpec?.executionPlacement === 'session' || verified.binding.sessionActionOrigin)
+        && verified.effectActionId === verified.binding.actionId
         && isAccountEncryptionCurrentnessHttpRead(proof)) {
         // The Session transport must admit persisted requester Account mode
         // before opening owner metadata. verifyCommon has already rechecked
-        // the signed resolved Session, Machine installation and principal.
+        // the signed placement, Machine installation and principal.
     } else if (isAdmittedRootRelay || verified.binding.handoffPreflight) {
         // Exact root re-entry is not a family grant or a new originator.
     } else if (managedRoot.success) {
@@ -1091,18 +1127,34 @@ export async function verifyExternalActionDomainExecutionRequest(
         // The native signature binds the read bytes; the existing route still
         // owns current actor, Team and resource authorization.
         if (!isTeamCredentialUsageExportReadEffect(verified.binding.actionId, verified.effectActionId)
-            || !isHomeDomainActionHttpOperation(verified.effectActionId, proof)) return null;
-    } else if (isHomeDomainActionHttpPurpose(verified, proof)) {
+            || !isAccountActionHttpOperation(verified.effectActionId, proof)) return null;
+    } else if (isAccountActionHttpPurpose(verified, proof)) {
         // The signature binds these exact bytes; route schemas and the domain
         // still own resource admission, while the credential policy below
         // retains human-only execution floors.
-    } else if (rootSpec?.executionPlacement === 'session'
-        && verified.effectActionId === verified.binding.actionId && verified.target.kind === 'session'
-        && proof.sessionRouteTarget?.sessionId === verified.target.sessionId) {
+    } else if (verified.effectActionId === verified.binding.actionId
+        && proof.method.toUpperCase() === 'GET' && proof.body === undefined && proof.path === '/v1/features/authenticated') {
+        // Shared transport discovery runs only after each specialized native
+        // purpose has enforced its own narrower phase contract.
+    } else if (proof.sessionRouteTarget
+        && (proof.method.toUpperCase() === 'GET' && proof.body === undefined
+            || proof.sessionRouteTarget.actionId !== undefined
+                && (proof.sessionRouteTarget.actionId === verified.effectActionId
+                    || getActionSpec(proof.sessionRouteTarget.actionId).sideEffectClass === 'read'))
+        && (verified.target.kind === 'session'
+            && proof.sessionRouteTarget.sessionId === verified.target.sessionId
+            && (rootSpec?.executionPlacement === 'session' && verified.effectActionId === verified.binding.actionId
+                || !('authentication' in verified.binding))
+            || verified.effectActionId === verified.binding.actionId && (rootSpec?.sideEffectClass === 'read'
+                    || verified.binding.sessionActionOrigin
+                        && proof.sessionRouteTarget.sessionId === verified.binding.sessionActionOrigin.caller.sessionId)
+                && verified.binding.target.kind === 'machine' && verified.target.kind === 'machine'
+                && proof.method.toUpperCase() === 'GET' && proof.body === undefined)) {
         // The HTTP auth adapter uses the same route operation/selector owner
-        // as direct Session admission. Reads retain domain access checks and
-        // mutations must declare this root's actual effect on that exact Session.
-    } else if ('authentication' in verified.binding) {
+        // as direct Session admission. Read roots retain domain access checks;
+        // a mutation may prepare only the source Session the runner already reads.
+        // Mutations still declare this root's actual effect on its exact Session.
+    } else {
         const path = proof.path.split('?')[0];
         const childPurpose = verified.binding.actionId === 'session.spawn_new' && verified.binding.managedContinuation
             && proof.method.toUpperCase() === 'POST' && path === '/v1/sessions';

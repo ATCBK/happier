@@ -29,14 +29,16 @@ export function registerSessionFollowRoutes(app: Fastify) {
         { error: "feature_unavailable" },
     );
     app.get("/v2/sessions/:sessionId/follow", { preHandler: [app.authenticate, requireFeature],
-        config: { allowApiToken: true },
+        config: { allowApiToken: true, apiTokenSessionAction: 'session.follow.get',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: { params: paramsSchema, response: { 200: GetSessionFollowResponseSchema, ...errorResponses } },
     }, async (request, reply) => {
         const result = await getAccountSessionFollow({ accountId: request.userId, sessionId: request.params.sessionId, authentication: readSessionAccessAuthenticationFromRequest(request) });
         return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
     });
     app.put("/v2/sessions/:sessionId/follow", { preHandler: [app.authenticate, requireFeature],
-        config: { allowApiToken: true },
+        config: { allowApiToken: true, apiTokenSessionAction: 'session.follow.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: { params: paramsSchema, response: { 200: SetSessionFollowResponseSchema, ...errorResponses } },
     }, async (request, reply) => {
         const body = SetSessionFollowRequestSchema.safeParse(request.body);
@@ -45,7 +47,8 @@ export function registerSessionFollowRoutes(app: Fastify) {
         return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
     });
     app.delete("/v2/sessions/:sessionId/follow", { preHandler: [app.authenticate, requireFeature],
-        config: { allowApiToken: true },
+        config: { allowApiToken: true, apiTokenSessionAction: 'session.follow.remove',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: { params: paramsSchema, response: { 200: RemoveSessionFollowResponseSchema, ...errorResponses } },
     }, async (request, reply) => {
         const result = await removeAccountSessionFollow({ accountId: request.userId, sessionId: request.params.sessionId, authentication: readSessionAccessAuthenticationFromRequest(request) });

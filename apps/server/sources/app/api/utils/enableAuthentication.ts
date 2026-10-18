@@ -15,7 +15,7 @@ import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrl
 import {
     isRestrictedAuthTokenDeniedForRoute,
     admitApiTokenSessionOperation,
-    readRestrictedCredentialRouteField,
+    readRestrictedCredentialRouteSessionIds,
     resolveApiTokenSessionActionForRoute,
     isExternalActionSessionRoutePurposeAllowed,
     PRESENT_USER_REQUIRED_ERROR,
@@ -143,10 +143,12 @@ export function enableAuthentication(app: Fastify) {
                 return sendInvalidConnectionCredentialFailure(request, reply);
             }
             const sessionBinding = request.routeOptions?.config?.restrictedCredentialBinding;
-            const routeSessionId = sessionBinding?.scope === 'session'
-                && resolveApiTokenSessionActionForRoute(request) !== undefined
+            const routeActionId = resolveApiTokenSessionActionForRoute(request);
+            const routeSessionIds = sessionBinding?.scope === 'session'
                 && isExternalActionSessionRoutePurposeAllowed(request, effectActionId)
-                ? readRestrictedCredentialRouteField(request, sessionBinding.session) : null;
+                ? readRestrictedCredentialRouteSessionIds(request, sessionBinding) : [];
+            if (routeSessionIds === null) return sendInvalidConnectionCredentialFailure(request, reply);
+            const [routeSessionId, ...additionalSessionIds] = routeSessionIds;
             const proof = {
                 authorizationToken: executionAuthorization,
                 machineSignature,
@@ -156,20 +158,22 @@ export function enableAuthentication(app: Fastify) {
                 path: request.url,
                 body: request.body,
                 ...(typeof routeSessionId === 'string' && routeSessionId.length > 0
-                    ? { sessionRouteTarget: { kind: 'session' as const, sessionId: routeSessionId } } : {}),
+                    ? { sessionRouteTarget: { kind: 'session' as const, sessionId: routeSessionId,
+                        ...(routeActionId ? { actionId: routeActionId } : {}),
+                        ...(additionalSessionIds.length > 0 ? { additionalSessionIds } : {}) } } : {}),
                 routeInput: {
                     ...(request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {}),
                     ...(request.query && typeof request.query === 'object' && !Array.isArray(request.query) ? request.query : {}),
                     ...(request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {}),
                 },
             };
-            const routeActionId = typeof request.params?.actionId === "string"
+            const externalActionRouteId = typeof request.params?.actionId === "string"
                 ? request.params.actionId
                 : null;
-            const authorizationCurrentnessActionId = routeActionId !== null
+            const authorizationCurrentnessActionId = externalActionRouteId !== null
                 && request.routeOptions?.url
                     === EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_VERIFY_HTTP_PATH_TEMPLATE_V1
-                ? routeActionId
+                ? externalActionRouteId
                 : null;
             const verified = authorizationCurrentnessActionId !== null
                 ? await verifyExternalActionExecutionAuthorizationCurrentness({
@@ -196,6 +200,7 @@ export function enableAuthentication(app: Fastify) {
                 return reply.code(403).send({ error: "credential_origin_denied" });
             }
             request.externalActionExecutionAuthorized = true;
+            if (proof.sessionRouteTarget) request.externalActionSessionAccessAdmitted = true;
             request.externalActionExecutionAuthorizationBinding = verified.binding;
             request.externalActionManagedGuestActivity = verified.managedGuestActivity;
             // Ordinary authenticated callers have no PAT input ceiling.
@@ -299,17 +304,19 @@ export function enableAuthentication(app: Fastify) {
         const sessionAction = resolveApiTokenSessionActionForRoute(request);
         const binding = request.routeOptions.config.restrictedCredentialBinding;
         if (apiTokenPrincipal && sessionAction && binding?.scope === "session") {
-            const sessionId = readRestrictedCredentialRouteField(request, binding.session);
-            if (typeof sessionId !== "string") {
+            const sessionIds = readRestrictedCredentialRouteSessionIds(request, binding);
+            if (sessionIds === null) {
                 return reply.code(403).send({ error: "credential_scope_denied" });
             }
-            const admitted = await admitApiTokenSessionOperation({
-                principal: apiTokenPrincipal, sessionId, actionId: sessionAction,
-                targetMachineId: await app.resolveCurrentSessionMachine?.({
-                    accountId: apiTokenPrincipal.accountId, sessionId,
-                }),
-            });
-            if (!admitted.ok) return reply.code(403).send({ error: admitted.error });
+            for (const sessionId of sessionIds) {
+                const admitted = await admitApiTokenSessionOperation({
+                    principal: apiTokenPrincipal, sessionId, actionId: sessionAction,
+                    targetMachineId: await app.resolveCurrentSessionMachine?.({
+                        accountId: apiTokenPrincipal.accountId, sessionId,
+                    }),
+                });
+                if (!admitted.ok) return reply.code(403).send({ error: admitted.error });
+            }
         }
         captureAccountStoredContentCompatibilityForHttpRequest(request);
     });

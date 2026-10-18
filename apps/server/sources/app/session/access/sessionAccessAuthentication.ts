@@ -16,7 +16,7 @@ export type SessionAccessAuthentication = Readonly<{
     authenticationEvidence: readonly AuthTokenAuthenticationEvidenceV1[] | undefined;
     tokenEpoch?: number;
     sessionRuntimePrincipal?: VerifiedEphemeralSessionRunnerPrincipal;
-    /** Direct PAT capability ceiling; a verified signed Action effect has its own admission. */
+    /** PAT ceiling retained until signed admission proves every Session operand's captured resource scope. */
     apiTokenGrant?: ApiTokenGrantV1;
     /** Verified caller constraints also survive signed Action-effect admission. */
     callerInputConstraints?: CallerInputConstraintsV1;
@@ -30,6 +30,7 @@ export function readSessionAccessAuthenticationFromRequest(request: Readonly<{
     sessionRuntimePrincipal?: VerifiedEphemeralSessionRunnerPrincipal;
     apiTokenPrincipal?: Readonly<{ grant: ApiTokenGrantV1 }>;
     externalActionExecutionAuthorized?: boolean;
+    externalActionSessionAccessAdmitted?: boolean;
     externalActionInputConstraints?: CallerInputConstraintsV1;
 }>): SessionAccessAuthentication {
     if (!request.authAuthority) {
@@ -49,8 +50,10 @@ export function readSessionAccessAuthenticationFromRequest(request: Readonly<{
                 models: request.apiTokenPrincipal.grant.models,
                 permissionModes: request.apiTokenPrincipal.grant.permissionModes,
             },
-            apiTokenGrant: request.apiTokenPrincipal.grant,
         } : {}),
+        ...(request.apiTokenPrincipal
+            && !(request.externalActionExecutionAuthorized === true && request.externalActionSessionAccessAdmitted === true)
+            ? { apiTokenGrant: request.apiTokenPrincipal.grant } : {}),
         ...(request.authTokenEpoch !== undefined ? { tokenEpoch: request.authTokenEpoch } : {}),
         ...(request.sessionRuntimePrincipal
             ? { sessionRuntimePrincipal: request.sessionRuntimePrincipal }

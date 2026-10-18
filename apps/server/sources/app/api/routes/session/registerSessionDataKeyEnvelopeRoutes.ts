@@ -71,6 +71,7 @@ function statusForPatchError(error: SessionDataKeyEnvelopePatchError): 400 | 403
 export function registerSessionDataKeyEnvelopeRoutes(app: Fastify) {
     app.get("/v2/sessions/:sessionId/data-key/envelopes", {
         preHandler: app.authenticate,
+        config: { restrictedCredentialBinding: { scope: "session", session: "params.sessionId", allowSessionRuntime: false } },
         attachValidation: true,
         schema: {
             params: ParamsSchema,

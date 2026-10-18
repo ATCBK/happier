@@ -181,8 +181,18 @@ export function readRestrictedCredentialRouteField(
             return params?.sessionId;
         case "params.destinationSessionId":
             return params?.destinationSessionId;
+        case "params.sourceSessionId":
+            return params?.sourceSessionId;
         case "body.sessionId":
             return body?.sessionId;
+        case "body.leadSessionId":
+            return body?.leadSessionId;
+        case "body.expectedLeadSessionId":
+            return body?.expectedLeadSessionId;
+        case "body.subject.id": {
+            const subject = readRecord(body?.subject);
+            return subject?.kind === "session" ? subject.id : undefined;
+        }
         case "body.consumer.sessionId": {
             const consumer = readRecord(body?.consumer);
             return consumer?.kind === "session" ? consumer.sessionId : undefined;
@@ -198,6 +208,24 @@ export function readRestrictedCredentialRouteField(
     }
 }
 
+/** Project every declared operand once; only an explicitly nullable field may omit a Session with null. */
+export function readRestrictedCredentialRouteSessionIds(
+    request: AuthenticatedRouteRequest,
+    binding: Extract<RestrictedCredentialRouteBinding, { scope: 'session' }>,
+): readonly string[] | null {
+    const primary = readRestrictedCredentialRouteField(request, binding.session);
+    if (typeof primary !== 'string' || primary.length === 0) return null;
+    const sessionIds = [primary];
+    for (const operand of binding.additionalSessions ?? []) {
+        const nullable = typeof operand === 'object' && 'field' in operand;
+        const value = readRestrictedCredentialRouteField(request, nullable ? operand.field : operand);
+        if (nullable && value === null) continue;
+        if (typeof value !== 'string' || value.length === 0) return null;
+        sessionIds.push(value);
+    }
+    return sessionIds;
+}
+
 /**
  * A Runner credential is admitted on a route that declares how the request
  * names its Session and Machine, and only when those exact values are the ones
@@ -210,7 +238,9 @@ function isEphemeralSessionRunnerRequestBound(request: AuthenticatedRouteRequest
     const binding = request.routeOptions?.config?.restrictedCredentialBinding;
     if (!binding) return false;
     if (binding.scope === "account") return true;
-    if (readRestrictedCredentialRouteField(request, binding.session) !== principal.sessionId) return false;
+    if (binding.allowSessionRuntime === false) return false;
+    const sessionIds = readRestrictedCredentialRouteSessionIds(request, binding);
+    if (sessionIds === null || sessionIds.some(sessionId => sessionId !== principal.sessionId)) return false;
     if (binding.machine === undefined) return true;
     const machineId = readRestrictedCredentialRouteField(request, binding.machine);
     if (binding.machineOptional === true && (machineId === undefined || machineId === null)) return true;

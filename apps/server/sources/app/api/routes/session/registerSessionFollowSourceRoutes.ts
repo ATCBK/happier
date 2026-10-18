@@ -89,6 +89,8 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
 
     app.get("/v2/sessions/:destinationSessionId/follows/sessions", {
         preHandler: [app.authenticate, requireFeature],
+        config: { apiTokenSessionAction: 'session.follow.sources.list',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false } },
         schema: {
             params: destinationParamsSchema,
             response: { 200: ListSessionFollowSourcesResponseSchema, ...errorResponses },
@@ -108,6 +110,9 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
 
     app.put("/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId", {
         preHandler: [app.authenticate, requireFeature],
+        config: { apiTokenSessionAction: 'session.follow.sources.set', restrictedCredentialBinding: {
+            scope: 'session', session: 'params.destinationSessionId', additionalSessions: ['params.sourceSessionId'], allowSessionRuntime: false,
+        } },
         schema: {
             params: sourceParamsSchema,
             // The body is parsed inside the handler so an unexpected field maps to
@@ -133,6 +138,9 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
 
     app.delete("/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId", {
         preHandler: [app.authenticate, requireFeature],
+        config: { apiTokenSessionAction: 'session.follow.sources.remove', restrictedCredentialBinding: {
+            scope: 'session', session: 'params.destinationSessionId', additionalSessions: ['params.sourceSessionId'], allowSessionRuntime: false,
+        } },
         schema: {
             params: sourceParamsSchema,
             response: { 200: RemoveSessionFollowSourceResponseSchema, ...errorResponses },

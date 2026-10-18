@@ -33,6 +33,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     const collaborationApp = createServerFeatureGatedRouteApp(app, "sharing.session");
     collaborationApp.post('/v2/sessions/access-candidates/inspect', {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.candidates.inspect',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: SessionAccessCandidatesInspectRequestV1Schema,
             response: { 200: SessionAccessCandidatesInspectResponseV1Schema, ...errors } },
     }, async (request, reply) => {
@@ -61,6 +63,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     });
     collaborationApp.post("/v2/sessions/access-grants/list", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.grants.list',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: SessionAccessGrantsListRequestV1Schema, response: { 200: SessionAccessGrantsListResponseV1Schema, ...errors } },
     }, async (request, reply) => {
         const result = await inspectSessionAccessGrants({
@@ -73,6 +77,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     });
     collaborationApp.post("/v2/sessions/access-grants/set", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.grant.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: SetSessionAccessGrantRequestV1Schema, response: { 200: SetSessionAccessGrantResponseV1Schema, ...errors } },
     }, async (request, reply) => {
         const { sessionId, subject, accessLevel, canApprovePermissions, accountEnvelopeInput, requiredTeamCredential } = request.body;
@@ -146,6 +152,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     });
     collaborationApp.post("/v2/sessions/access-grants/remove", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.grant.remove',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: RemoveSessionAccessGrantRequestV1Schema, response: { 200: RemoveSessionAccessGrantResponseV1Schema, ...errors } },
     }, async (request, reply) => {
         const result = await inTx(async (tx) => {
@@ -175,6 +183,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     });
     collaborationApp.post("/v2/sessions/access-context/set", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.context.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: SetSessionAccessContextRequestV1Schema, response: { 200: SetSessionAccessContextResponseV1Schema, ...errors } },
     }, async (request, reply) => {
         const result = await inTx(async (tx) => await setSessionAccessContextInTx(tx, {

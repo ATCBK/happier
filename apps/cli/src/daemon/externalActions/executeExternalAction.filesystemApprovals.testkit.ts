@@ -88,7 +88,7 @@ const repository = { provider: { id: 'github', kind: 'github' as const, displayN
 export async function createHarness(actionId: ActionId, approval: 'ask' | 'allowed' = 'ask', setup = false, homeId = 'srv_n2',
   home?: Readonly<{
     token: string;
-    mintAuthorization(actionId: ActionId, envelope: ExternalActionRequestEnvelopeV1): Promise<ExternalActionExecutionAuthorizationV1>;
+    mintAuthorization(actionId: ActionId, envelope: ExternalActionRequestEnvelopeV1, authentication: Readonly<{ kind: 'account' | 'terminal'; tokenEpoch: number }>): Promise<ExternalActionExecutionAuthorizationV1>;
     request(input: Readonly<{ method: 'GET' | 'POST'; path: string; body?: unknown; headers: Record<string, string> }>): Promise<{ status: number; data: unknown }>;
   }>, worker = false) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-action-composition-'));
@@ -523,7 +523,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       requestId = 'original-request'): Promise<ActionExecuteResult> {
       const authentication = { kind: surface === 'cli' ? 'terminal' as const : 'account' as const, tokenEpoch: 1 };
       const envelope = { v: 1 as const, requestId, target, input };
-      const authorization = home ? await home.mintAuthorization(requestedActionId, envelope)
+      const authorization = home ? await home.mintAuthorization(requestedActionId, envelope, authentication)
         : { v: 1 as const, token: 'synthetic-home-root', binding: { accountId: 'account', custodianAccountId: 'account',
         authentication, accountEncryptionMode: 'plain' as const, serverIdentityId: homeId, machineId: target.machineId,
         installationId: installation.installationId, actionId: requestedActionId, requestId: envelope.requestId, target,

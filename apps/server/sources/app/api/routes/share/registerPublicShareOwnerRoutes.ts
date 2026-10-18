@@ -18,6 +18,8 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
     app.post('/v1/sessions/:sessionId/public-share', {
         preHandler: app.authenticate,
         config: {
+            apiTokenSessionAction: 'session.public_link.create',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false },
             rateLimit: resolveApiHotEndpointRateLimit(process.env, "share.public.manage"),
         },
         schema: {
@@ -105,6 +107,8 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
      */
     app.get('/v1/sessions/:sessionId/public-share', {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.public_link.get',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: z.object({
                 sessionId: z.string()
@@ -157,6 +161,8 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
      */
     app.delete('/v1/sessions/:sessionId/public-share', {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.public_link.remove',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: z.object({
                 sessionId: z.string()

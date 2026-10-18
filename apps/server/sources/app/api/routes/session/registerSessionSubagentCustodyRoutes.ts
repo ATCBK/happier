@@ -23,6 +23,7 @@ function mutationErrorStatus(error: string): 400 | 404 | 409 | 500 {
 export function registerSessionSubagentCustodyRoutes(app: Fastify) {
     app.get('/v2/sessions/:sessionId/subagents/custody/capability', {
         preHandler: app.authenticate,
+        config: { restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: ParamsSchema,
             response: { 200: SessionSubagentCustodyCapabilityV1Schema, 404: ErrorSchema },
@@ -47,6 +48,7 @@ export function registerSessionSubagentCustodyRoutes(app: Fastify) {
 
     app.get('/v2/sessions/:sessionId/subagents/custody', {
         preHandler: app.authenticate,
+        config: { restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: ParamsSchema,
             querystring: SessionSubagentCustodyListQueryV1Schema,
