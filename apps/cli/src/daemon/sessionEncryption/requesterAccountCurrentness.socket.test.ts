@@ -14,6 +14,7 @@ import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedService
 import { readAccountEncryptionModeOnce } from '@/api/client/accountEncryptionMode';
 import { readHttpStatus } from '@/api/client/httpStatusError';
 import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { logger } from '@/ui/logger';
 
 const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
     accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account', tokenEpoch: 1 },
@@ -24,6 +25,29 @@ const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: '
 afterEach(() => vi.restoreAllMocks());
 
 describe('requester Account currentness over the installed socket wiring', () => {
+    it('reports transport creation failure without secrets while preserving fresh HTTP reads', async () => {
+        const sockets = await import('@/api/session/sockets');
+        // Transport creation and file logging are system boundaries; currentness logic stays real.
+        vi.spyOn(sockets, 'createUserScopedSocketConnection').mockImplementation(() => {
+            throw new Error('transport failure with secret-token');
+        });
+        const warnings = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const first = { mode: 'plain' as const, version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const second = { ...first, version: 2 };
+        vi.spyOn(axios, 'get').mockResolvedValueOnce({ status: 200, data: first }).mockResolvedValueOnce({ status: 200, data: second });
+        const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: 'private-account', token: 'secret-token', serverBaseUrl: 'https://private-home.example' });
+        try {
+            await expect(observation.read()).resolves.toEqual(first);
+            await expect(observation.read()).resolves.toEqual(second);
+            expect(warnings).toHaveBeenCalled();
+            expect(JSON.stringify(warnings.mock.calls)).not.toContain('secret-token');
+            expect(JSON.stringify(warnings.mock.calls)).not.toContain('private-account');
+            expect(JSON.stringify(warnings.mock.calls)).not.toContain('private-home.example');
+        } finally {
+            await observation.dispose();
+        }
+    });
+
     it('reads exact claim currentness freshly while sharing only Account/Home encryption identity', async () => {
         const channel = await createRequesterCurrentnessSocketHarness();
         const fact = { mode: 'plain' as const, version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null };
