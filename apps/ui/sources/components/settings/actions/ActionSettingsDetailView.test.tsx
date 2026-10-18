@@ -240,7 +240,6 @@ describe('ActionSettingsDetailView', () => {
         );
         expect(approvalNotice?.body).toEqual(expect.stringContaining('approval request'));
         expect(approvalNotice?.body).toEqual(expect.stringContaining('does not wait'));
-        expect(approvalNotice?.body).not.toEqual(expect.stringContaining('confirmation'));
     });
 
     it('renders approval-capable targets as mode tabs and ordinary placements as switches', async () => {

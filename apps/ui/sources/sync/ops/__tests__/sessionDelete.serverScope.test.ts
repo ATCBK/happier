@@ -1,3 +1,4 @@
+import { matchesServerFetchRequest } from '@/dev/testkit';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockRequest, mockResolveContext, mockRuntimeFetch, mockStorageState } = vi.hoisted(() => ({
@@ -88,7 +89,7 @@ describe('sessionDeleteWithServerScope', () => {
     const res = await sessionDeleteWithServerScope('sid-2', { serverId: 'server-b' });
     expect(res).toEqual({ success: true });
     const deleteCall = mockRuntimeFetch.mock.calls.find(([url, init]) => (
-      url === 'https://scoped.example/v1/sessions/sid-2'
+      matchesServerFetchRequest(url, 'https://scoped.example/v1/sessions/sid-2')
       && (init as RequestInit | undefined)?.method === 'DELETE'
     ));
     expect(deleteCall).toBeTruthy();

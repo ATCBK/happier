@@ -14,6 +14,7 @@ function createSession(overrides: Partial<Session> = {}): Session {
         encryptionMode: 'plain',
         createdAt: 1,
         updatedAt: 1,
+        meaningfulActivityAt: 1,
         active: true,
         activeAt: 1,
         thinking: false,

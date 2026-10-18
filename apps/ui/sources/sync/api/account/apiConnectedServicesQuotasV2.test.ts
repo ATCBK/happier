@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { matchesServerFetchRequest } from '@/dev/testkit';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 
 vi.mock('@/utils/timing/time', async (importOriginal) => {
@@ -53,7 +54,7 @@ describe('apiConnectedServicesQuotasV2', () => {
     const res = await getConnectedServiceQuotaSnapshotSealed(credentials, { serviceId: 'openai-codex', profileId: 'work' });
     expect(res?.sealed?.ciphertext).toBe('cipher');
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.example.test/v2/connect/openai-codex/profiles/work/quotas',
+      expect.toSatisfy((input: unknown) => matchesServerFetchRequest(input, 'https://api.example.test/v2/connect/openai-codex/profiles/work/quotas')),
       expect.objectContaining({ method: 'GET', headers: expect.any(Headers) }),
     );
   });
@@ -66,7 +67,7 @@ describe('apiConnectedServicesQuotasV2', () => {
       if (url === 'https://api.example.test/health' || url === 'https://api.example.test/v1/auth/ping') {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) });
       }
-      if (url === 'https://api.example.test/v2/connect/openai-codex/profiles/work/quotas') {
+      if (matchesServerFetchRequest(url, 'https://api.example.test/v2/connect/openai-codex/profiles/work/quotas')) {
         requestSignal = init?.signal ?? undefined;
         return new Promise<Response>(() => {});
       }
@@ -129,7 +130,7 @@ describe('apiConnectedServicesQuotasV2', () => {
     const ok = await requestConnectedServiceQuotaSnapshotRefresh(credentials, { serviceId: 'openai-codex', profileId: 'work' });
     expect(ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.example.test/v2/connect/openai-codex/profiles/work/quotas/refresh',
+      expect.toSatisfy((input: unknown) => matchesServerFetchRequest(input, 'https://api.example.test/v2/connect/openai-codex/profiles/work/quotas/refresh')),
       expect.objectContaining({ method: 'POST', headers: expect.any(Headers) }),
     );
   });

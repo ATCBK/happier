@@ -116,12 +116,6 @@ export function installSessionDetailsPanelCommonModuleMocks(
  */
 async function withPaneSessionStateFillIns(storageModule: unknown): Promise<unknown> {
     if (!storageModule || typeof storageModule !== 'object') return storageModule;
-    const { createSessionMessagesHooksMock } = await import('@/dev/testkit/mocks/storage');
-    const fillIns: Record<string, unknown> = {
-        useSession: () => null,
-        ...createSessionMessagesHooksMock(),
-    };
-    const missing = Object.entries(fillIns).filter(([key]) => !(key in storageModule));
-    if (missing.length === 0) return storageModule;
-    return { ...Object.fromEntries(missing), ...storageModule };
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleStub({ useSession: () => null, ...storageModule });
 }

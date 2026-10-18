@@ -34,13 +34,14 @@ describe('apiAccountEncryptionMode', () => {
     mockServerConfig();
     vi.stubGlobal('fetch', (vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
-      if (url.endsWith('/health')) {
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith('/health')) {
         return { ok: true, status: 200, json: async () => ({ ok: true }) };
       }
-      if (url.endsWith('/v1/auth/ping')) {
+      if (pathname.endsWith('/v1/auth/ping')) {
         return { ok: true, status: 200, json: async () => ({ ok: true }) };
       }
-      if (url.endsWith('/v1/account/encryption')) {
+      if (pathname.endsWith('/v1/account/encryption')) {
         return { ok: false, status: 404, json: async () => ({ error: 'not_found' }) };
       }
       throw new Error(`Unexpected fetch to ${url}`);

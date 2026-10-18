@@ -67,10 +67,11 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     mockServerConfig();
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
       if (url.includes('/credential') && method === 'POST') {
@@ -97,26 +98,27 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     mockServerConfig();
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/features') && method === 'GET') {
+      if (pathname.endsWith('/v1/features') && method === 'GET') {
         return new Response(JSON.stringify(buildServerFeaturesResponse()), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         const body = init?.body ? JSON.parse(String(init.body)) : null;
         expect(body?.expectedCredentialRevision).toBeNull();
         return new Response(JSON.stringify({ success: true, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' }), { status: 200 });
@@ -145,22 +147,23 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     };
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({
           content: { t: 'plain', v: releasedRecord },
         }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         expect(JSON.parse(String(init?.body))).toEqual({
           content: { t: 'plain', v: record },
         });
@@ -186,26 +189,27 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     const record = sampleRecord();
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/features') && method === 'GET') {
+      if (pathname.endsWith('/v1/features') && method === 'GET') {
         return new Response(JSON.stringify(parseReleasedServerV021Features()), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         expect(JSON.parse(String(init?.body))).toEqual({
           content: { t: 'plain', v: record },
         });
@@ -256,14 +260,15 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let featuresReadCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/features') && method === 'GET') {
+      if (pathname.endsWith('/v1/features') && method === 'GET') {
         featuresReadCount += 1;
         return new Response(JSON.stringify(
           activeContract === 'released'
@@ -274,13 +279,13 @@ describe('storeConnectedServiceCredentialForAccount', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         const body = JSON.parse(String(init?.body));
         if (activeContract === 'released') {
           expect(body).toEqual({ content: { t: 'plain', v: record } });
@@ -317,20 +322,21 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     mockServerConfig();
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         const body = init?.body ? JSON.parse(String(init.body)) : null;
         expect(body?.reconnect).toEqual({ allowProviderIdentityChange: true });
         return new Response(JSON.stringify({ success: true, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' }), { status: 200 });
@@ -353,20 +359,21 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     mockServerConfig();
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         const body = init?.body ? JSON.parse(String(init.body)) : null;
         expect(body?.sealed?.format).toBe('account_scoped_v1');
         expect(typeof body?.sealed?.ciphertext).toBe('string');
@@ -392,20 +399,21 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     mockServerConfig();
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') {
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') {
         return new Response('', { status: 200 });
       }
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         const body = init?.body ? JSON.parse(String(init.body)) : null;
         expect(body?.reconnect).toEqual({ allowProviderIdentityChange: true });
         return new Response(JSON.stringify({ success: true, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' }), { status: 200 });
@@ -434,13 +442,14 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let postCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return committed
           ? new Response(JSON.stringify({
             credentialRevision: 'csr_1123456789ABCDEFGHJKMNPQRS',
@@ -448,7 +457,7 @@ describe('storeConnectedServiceCredentialForAccount', () => {
           }), { status: 200 })
           : new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         postCount += 1;
         const body = JSON.parse(String(init?.body));
         expect(body.expectedCredentialRevision).toBeNull();
@@ -481,16 +490,17 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let postCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ credentialRevision: revision, content: { t: 'plain', v: current } }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         postCount += 1;
         const body = JSON.parse(String(init?.body));
         expect(body.expectedCredentialRevision).toBe('csr_0123456789ABCDEFGHJKMNPQRS');
@@ -523,19 +533,20 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let postCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({
           credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
           content: { t: 'plain', v: original },
         }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         postCount += 1;
         const body = JSON.parse(String(init?.body));
         expect(body.expectedCredentialRevision).toBe('csr_0123456789ABCDEFGHJKMNPQRS');
@@ -570,13 +581,14 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let postCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         credentialGetCount += 1;
         if (credentialGetCount === 1) {
           return new Response(JSON.stringify({
@@ -586,7 +598,7 @@ describe('storeConnectedServiceCredentialForAccount', () => {
         }
         throw new Error('authoritative settlement unavailable');
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         postCount += 1;
         throw writeError;
       }
@@ -610,19 +622,20 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let postCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({
           credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
           content: { t: 'plain', v: original },
         }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         postCount += 1;
         throw new Error(`ambiguous write ${postCount}`);
       }
@@ -647,16 +660,17 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     }> = [];
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         postBodies.push(JSON.parse(String(init?.body)));
         if (postBodies.length === 1) throw new Error('request failed before commit');
         return new Response(JSON.stringify({
@@ -692,19 +706,20 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let postCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({
           credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
           content: { t: 'plain', v: record },
         }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         postCount += 1;
         return new Response(JSON.stringify({
           error: 'connect_credential_mutation_superseded',
@@ -735,27 +750,28 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let v3PostCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         modeGetCount += 1;
         return new Response(JSON.stringify({
           mode: modeGetCount === 1 ? 'e2ee' : 'plain',
           updatedAt: modeGetCount,
         }), { status: 200 });
       }
-      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'GET') {
         return new Response(JSON.stringify({ error: 'connect_credential_not_found' }), { status: 404 });
       }
-      if (url.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v2/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         v2PostCount += 1;
         return new Response(JSON.stringify({ success: true, credentialRevision: 'csr_1123456789ABCDEFGHJKMNPQRS' }), { status: 200 });
       }
-      if (url.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
+      if (pathname.endsWith('/v3/connect/openai-codex/profiles/work/credential') && method === 'POST') {
         v3PostCount += 1;
         return new Response(JSON.stringify({ success: true, credentialRevision: 'csr_2123456789ABCDEFGHJKMNPQRS' }), { status: 200 });
       }
@@ -793,10 +809,11 @@ describe('storeConnectedServiceCredentialForAccount', () => {
     let v3DeleteCount = 0;
     const fetchMock = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
+      const pathname = new URL(url).pathname;
       const method = String(init?.method ?? 'GET').toUpperCase();
-      if (url.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
-      if (url.endsWith('/v1/account/encryption') && method === 'GET') {
+      if (pathname.endsWith('/health') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/auth/ping') && method === 'GET') return new Response('', { status: 200 });
+      if (pathname.endsWith('/v1/account/encryption') && method === 'GET') {
         modeGetCount += 1;
         return new Response(JSON.stringify({
           mode: modeGetCount === 1 ? 'e2ee' : 'plain',

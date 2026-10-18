@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createPartialStorageModuleMock, findGestureByKind, renderScreen } from '@/dev/testkit';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
+vi.mock('@shopify/flash-list', async () => {
+    const { createCapturingFlashListMock } = await import('@/dev/testkit/mocks/flashList');
+    return createCapturingFlashListMock({ renderItems: true }).module;
+});
+
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('react-native-gesture-handler', async () => {
@@ -42,16 +47,6 @@ installSessionShellCommonModuleMocks({
             Platform: {
                 OS: 'web',
             },
-            FlatList: ({ data, renderItem, keyExtractor, ListHeaderComponent, ...rest }: any) =>
-                React.createElement(
-                    'FlatList',
-                    { ...rest },
-                    ListHeaderComponent ? React.createElement(ListHeaderComponent) : null,
-                    (data ?? []).map((item: any, index: number) => {
-                        const key = keyExtractor ? keyExtractor(item, index) : String(index);
-                        return React.createElement(React.Fragment, { key }, renderItem({ item, index }));
-                    }),
-                ),
         });
     },
     router: async () => {

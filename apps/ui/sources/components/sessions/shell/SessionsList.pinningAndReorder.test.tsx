@@ -9,10 +9,19 @@ import {
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
-import { createCapturingFlatListMock } from '@/dev/testkit/mocks/flashList';
 import type { SessionOrganizationProjection } from '@/sync/domains/session/organization/types';
 import { HappyError } from '@/utils/errors/errors';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+
+vi.mock('@shopify/flash-list', async () => {
+    const { createCapturingFlashListMock } = await import('@/dev/testkit/mocks/flashList');
+    const captured = createCapturingFlashListMock({ renderItems: true });
+    const CapturingList = captured.module.FlashList;
+    return { FlashList: React.forwardRef((props, ref) => {
+        capturedRootFlatListProps = props;
+        return React.createElement(CapturingList, { ...props, ref });
+    }) };
+});
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,7 +56,6 @@ const sessionOrganizationOps = vi.hoisted(() => ({
 const tokenStorageMocks = vi.hoisted(() => ({
     getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token-a', secret: 'secret-a' })),
 }));
-const flatListMock = createCapturingFlatListMock({ renderItems: true });
 let sessionOrganizationProjection: SessionOrganizationProjection | null = null;
 
 const groupKey = 'server:server_a:day:2026-02-17';
@@ -81,11 +89,6 @@ installSessionShellCommonModuleMocks({
         return createReactNativeWebMock({
             Platform: { OS: 'web', select: (value: any) => value.web ?? value.default },
             TurboModuleRegistry: { get: () => ({}) },
-            FlatList: (props: any) => {
-                const element = flatListMock.module.FlatList(props);
-                capturedRootFlatListProps = flatListMock.state.props;
-                return element;
-            },
         });
     },
     router: async () => {
@@ -558,10 +561,10 @@ describe('SessionsList pinning + per-group ordering', () => {
 
         expect(screen.root).toBeTruthy();
         expect(capturedRootFlatListProps).toBeTruthy();
-        expect(typeof capturedRootFlatListProps?.onWheel).toBe('function');
+        expect(typeof capturedRootFlatListProps?.overrideProps?.onWheel).toBe('function');
 
         const stopPropagation = vi.fn();
-        capturedRootFlatListProps?.onWheel?.({ stopPropagation });
+        capturedRootFlatListProps?.overrideProps?.onWheel?.({ stopPropagation });
         expect(stopPropagation).toHaveBeenCalledTimes(1);
     });
 

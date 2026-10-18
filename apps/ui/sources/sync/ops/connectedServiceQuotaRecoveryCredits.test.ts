@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { buildRecoveryCreditConsumeIdempotencyKey } from '@happier-dev/protocol';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 
@@ -17,10 +18,13 @@ describe('connectedServiceQuotaRecoveryCredits ops', () => {
     });
 
     it('consumes a profile recovery credit through server-scoped machine RPC', async () => {
+        const idempotencyKey = buildRecoveryCreditConsumeIdempotencyKey({
+            serviceId: 'openai-codex', profileId: 'work', providerCreditId: 'credit-1', sourceSnapshotFetchedAtMs: 1_000,
+        });
         machineRpcWithServerScopeMock.mockResolvedValueOnce({
             ok: true,
             receipt: {
-                idempotencyKey: 'connected-service-quota-recovery-credit:v1:openai-codex:work:credit:credit-1',
+                idempotencyKey,
                 providerCreditId: 'credit-1',
                 status: 'consumed',
             },
@@ -57,13 +61,13 @@ describe('connectedServiceQuotaRecoveryCredits ops', () => {
                 serviceId: 'openai-codex',
                 profileId: 'work',
                 providerCreditId: 'credit-1',
-                idempotencyKey: 'connected-service-quota-recovery-credit:v1:openai-codex:work:credit:credit-1',
+                idempotencyKey,
             },
         });
         expect(result).toEqual({
             ok: true,
             receipt: {
-                idempotencyKey: 'connected-service-quota-recovery-credit:v1:openai-codex:work:credit:credit-1',
+                idempotencyKey,
                 providerCreditId: 'credit-1',
                 status: 'consumed',
             },

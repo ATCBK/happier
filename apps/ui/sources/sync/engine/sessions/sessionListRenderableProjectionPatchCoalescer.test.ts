@@ -77,7 +77,7 @@ describe('createSessionListRenderableProjectionPatchCoalescer', () => {
         const coalescer = createSessionListRenderableProjectionPatchCoalescer<number>({
             getConfig: () => ({ enabled: true, windowMs: 100, maxBatchSize: 10 }),
             readRenderable: (sessionId) => renderables.get(sessionId),
-            buildPatch: ({ payload }) => ({ updatedAt: payload }),
+            buildPatch: ({ payload }) => ({ keepVisibleWhenInactive: payload === 2 }),
             applyPatches,
         });
 
@@ -131,7 +131,7 @@ describe('createSessionListRenderableProjectionPatchCoalescer', () => {
         const coalescer = createSessionListRenderableProjectionPatchCoalescer<number>({
             getConfig: () => ({ enabled: true, windowMs: 100, maxBatchSize: 10 }),
             readRenderable: (sessionId) => renderables.get(sessionId),
-            buildPatch: ({ payload }) => ({ updatedAt: payload }),
+            buildPatch: ({ payload }) => ({ keepVisibleWhenInactive: payload === 2 }),
             applyPatches,
         });
 

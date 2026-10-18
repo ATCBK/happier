@@ -30,6 +30,7 @@ vi.mock('react-native', async () => {
 
 describe('apiPush endpoint supervision', () => {
     afterEach(() => {
+        vi.unstubAllGlobals();
         runtimeFetchMock.mockReset();
         getCredentialsForServerUrlMock.mockReset();
         appState.currentState = 'active';
@@ -41,12 +42,12 @@ describe('apiPush endpoint supervision', () => {
         const globalFetch = vi.fn(() => {
             throw new Error('raw global fetch should not be called');
         });
-        (globalThis as unknown as { fetch?: unknown }).fetch = globalFetch as unknown;
+        vi.stubGlobal('fetch', globalFetch);
 
         getCredentialsForServerUrlMock.mockResolvedValue({ token: 'token-1', secret: 'secret' });
         runtimeFetchMock.mockImplementation(async (url: unknown) => {
             const asString = String(url ?? '');
-            if (asString.endsWith('/v1/push-tokens')) {
+            if (new URL(asString).pathname === '/v1/push-tokens') {
                 return new Response(JSON.stringify({ success: true }), { status: 200, headers: new Headers() });
             }
             return new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() });
@@ -70,7 +71,7 @@ describe('apiPush endpoint supervision', () => {
         getCredentialsForServerUrlMock.mockResolvedValue({ token: 'token-1', secret: 'secret' });
         runtimeFetchMock.mockImplementation(async (url: unknown) => {
             const asString = String(url ?? '');
-            if (asString.endsWith('/v1/push-tokens')) {
+            if (new URL(asString).pathname === '/v1/push-tokens') {
                 return new Response(JSON.stringify({ success: true }), { status: 200, headers: new Headers() });
             }
             return new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() });

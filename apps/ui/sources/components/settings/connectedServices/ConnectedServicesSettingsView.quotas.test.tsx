@@ -1,3 +1,4 @@
+import { AGENT_IDS, getAgentCore } from '@/agents/catalog/catalog';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
@@ -260,11 +261,11 @@ describe('ConnectedServicesSettingsView quotas', () => {
       v: 1,
       defaults: { configMode: 'linked', stateMode: 'shared' },
       byAgentId: {},
-      acknowledgedRisksByAgentId: {
-        claude: { sharedStatePrivacy: true },
-        codex: { sharedStatePrivacy: true },
-        pi: { sharedStatePrivacy: true },
-      },
+      acknowledgedRisksByAgentId: Object.fromEntries(AGENT_IDS.filter((agentId) => {
+        const state = getAgentCore(agentId).connectedServices?.providerStateSharing?.state;
+        return state?.supported === true && state.modes.includes('shared')
+          && state.sharedStatePrivacyRiskAcknowledgementRequired === true;
+      }).map((agentId) => [agentId, { sharedStatePrivacy: true }])),
     });
     expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
   });

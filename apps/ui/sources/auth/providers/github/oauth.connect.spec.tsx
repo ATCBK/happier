@@ -39,14 +39,14 @@ function stubFetch(
 ): ReturnType<typeof vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>> {
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
         const url = String(input);
-        if (url.endsWith('/health')) {
+        if (new URL(url).pathname === '/health') {
             return {
                 ok: true,
                 status: 200,
                 json: async () => ({ ok: true }),
             } as Response;
         }
-        if (url.endsWith('/v1/auth/ping')) {
+        if (new URL(url).pathname === '/v1/auth/ping') {
             return {
                 ok: true,
                 status: 200,
@@ -249,7 +249,7 @@ describe('/oauth/[provider] (connect flow)', () => {
         });
 
         const fetchMock = stubFetch(async (url, init) => {
-            if (url.endsWith('/v1/connect/external/github/finalize')) {
+            if (new URL(url).pathname === '/v1/connect/external/github/finalize') {
                 expect(init?.method).toBe('POST');
                 const body = JSON.parse(String(init?.body ?? '{}'));
                 expect(body).toEqual({ pending: 'p1', username: 'octocat_2' });
@@ -286,9 +286,9 @@ describe('/oauth/[provider] (connect flow)', () => {
         });
 
         const fetchMock = stubFetch(async (url) => {
-            if (url.endsWith('/v1/connect/external/github/finalize')) {
+            if (new URL(url).pathname === '/v1/connect/external/github/finalize') {
                 const callCount = fetchMock.mock.calls.filter((call) =>
-                    String(call[0]).endsWith('/v1/connect/external/github/finalize'),
+                    new URL(String(call[0])).pathname === '/v1/connect/external/github/finalize',
                 ).length;
                 if (callCount === 1) {
                     return {

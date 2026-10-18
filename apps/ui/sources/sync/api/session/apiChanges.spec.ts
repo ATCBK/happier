@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fetchChanges, fetchCurrentChangesCursor } from './apiChanges';
+import { matchesServerFetchRequest } from '@/dev/testkit';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
@@ -55,9 +56,9 @@ describe('apiChanges', () => {
             changes: [{ cursor: 2, kind: 'session', entityId: 's1', changedAt: 1, hint: null }],
             nextCursor: '2',
         });
-        expect(global.fetch).toHaveBeenCalledWith('https://api.test.com/v2/changes?after=1&limit=50', expect.any(Object));
+        expect(global.fetch).toHaveBeenCalledWith(expect.toSatisfy((input: unknown) => matchesServerFetchRequest(input, 'https://api.test.com/v2/changes?after=1&limit=50')), expect.any(Object));
         const calls = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
-        const call = calls.find(([input]) => String(input) === 'https://api.test.com/v2/changes?after=1&limit=50');
+        const call = calls.find(([input]) => matchesServerFetchRequest(input, 'https://api.test.com/v2/changes?after=1&limit=50'));
         const requestInit = call?.[1] as RequestInit | undefined;
         expect(requestInit).toBeDefined();
         expect(requestInit?.headers).toBeInstanceOf(Headers);
@@ -107,7 +108,7 @@ describe('apiChanges', () => {
         );
 
         await fetchChanges({ credentials, afterCursor: '-100', limit: 10_000 });
-        expect(global.fetch).toHaveBeenCalledWith('https://api.test.com/v2/changes?after=0&limit=500', expect.any(Object));
+        expect(global.fetch).toHaveBeenCalledWith(expect.toSatisfy((input: unknown) => matchesServerFetchRequest(input, 'https://api.test.com/v2/changes?after=0&limit=500')), expect.any(Object));
     });
 
     it('returns the current cursor from /v2/cursor', async () => {
@@ -116,9 +117,9 @@ describe('apiChanges', () => {
         const res = await fetchCurrentChangesCursor({ credentials });
 
         expect(res).toEqual({ status: 'ok', cursor: '42' });
-        expect(global.fetch).toHaveBeenCalledWith('https://api.test.com/v2/cursor', expect.any(Object));
+        expect(global.fetch).toHaveBeenCalledWith(expect.toSatisfy((input: unknown) => matchesServerFetchRequest(input, 'https://api.test.com/v2/cursor')), expect.any(Object));
         const calls = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
-        const call = calls.find(([input]) => String(input) === 'https://api.test.com/v2/cursor');
+        const call = calls.find(([input]) => matchesServerFetchRequest(input, 'https://api.test.com/v2/cursor'));
         const requestInit = call?.[1] as RequestInit | undefined;
         expect(requestInit).toBeDefined();
         expect(requestInit?.headers).toBeInstanceOf(Headers);

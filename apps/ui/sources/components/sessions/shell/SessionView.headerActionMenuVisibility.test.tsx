@@ -946,6 +946,7 @@ describe('SessionView header action menu visibility', () => {
     sessionMessagesState.messages = [
       {
         kind: 'tool-call',
+        children: [],
         tool: { name: 'SubAgentRun', input: { runId: 'run_1' }, result: { runId: 'run_1' } },
       },
     ];
@@ -969,6 +970,7 @@ describe('SessionView header action menu visibility', () => {
       {
         id: 'tool-msg-1',
         kind: 'tool-call',
+        children: [],
         createdAt: 1,
         tool: {
           name: 'Task',
