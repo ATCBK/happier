@@ -169,6 +169,10 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
     }
     if (requested && !selectedIdentityMatches) return sessionRefusal('denied', 'widget_target_identity_mismatch');
     if (requested && !selectedCanRead) return sessionRefusal('denied', 'widget_session_access_denied');
+    // A missing type during its projection's establishment is not a removal.
+    // Admission waits here; current absent types still fail schema validation below.
+    if (executableRuntime.phase === 'establishing' && fields.some(field => field.inputType && 'pluginId' in field.inputType && !readInputType(field)))
+        return { status: 'loading', reasonCode: 'widget_projection_establishing' };
     // A readable bound Session is not an absent widget while its exact daemon
     // projection is still being established. Retained AppShell metadata names
     // the definition, but never supplies execution authority for that target.
@@ -183,6 +187,9 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
         const value = readInputPath(draftInput, field.path);
         if (value === undefined) continue;
         const type = readInputType(field);
+        if (field.inputType && 'pluginId' in field.inputType && !type
+            && executableRuntime.pluginUiProjection?.inputTypesById[buildQualifiedPluginContributionKey(field.inputType)])
+            return { status: 'unavailable', reasonCode: 'widget_projection_unavailable' };
         const refuse = (validation: Exclude<ReturnType<typeof validateInputFieldValue>, { status: 'valid' }>): ConfiguredWidgetTargetResolution => {
             const reasonCode = validation.reasonCode === 'input_type_option_invalid' ? 'widget_input_option_unavailable' : validation.reasonCode;
             return { status: validation.status, reasonCode, fields: [{ path: field.path, status: validation.status, reasonCode }] };

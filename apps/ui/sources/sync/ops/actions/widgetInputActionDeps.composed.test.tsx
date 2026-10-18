@@ -498,16 +498,49 @@ it('validates a mounted schema-only typed pin from its selected origin before ex
         if (!union.pluginUiProjection) throw new Error('Expected the current selected projection');
         let descriptor = readWidgetDescriptor(union.pluginUiProjection, surface)!;
         let currentProjection = union.pluginUiProjection;
+        let projectionPhase: 'current' | 'establishing' = 'current';
         const scope = { serverId: connection.home.id, accountId: 'viewer', owner: { kind: 'home' as const } };
         const hook = await renderHook((repositoryId: string | number) => useConfiguredWidgetTarget({ scope, descriptor,
             providedContext: {}, instance: { v: 1, id: 'typed-copy', definition: { kind: 'installed', surface },
                 bindings: { repository: { kind: 'value', value: { repositoryId } } } },
-            appRuntime: { pluginUiProjection: currentProjection, pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
+            appRuntime: { pluginUiProjection: currentProjection, pluginBrowserProjection: null, phase: projectionPhase, interactionEnabled: projectionPhase === 'current',
                 machineId: 'machine', serverId: scope.serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime() },
         }), { initialProps: 42 as string | number });
         expect(hook.getCurrent()).toMatchObject({ status: 'invalid', reasonCode: 'input_type_value_invalid' });
         await hook.rerender('repo');
         expect(hook.getCurrent()).toMatchObject({ status: 'ready', input: { repository: { repositoryId: 'repo' } } });
+        const refreshing = unionPluginUiProjections([
+            { machineId: 'machine', serverId: connection.home.id, projection, phase: 'establishing', interactionEnabled: false },
+            { machineId: 'other-machine', serverId: connection.home.id, projection: normalizePluginUiProjection(
+                PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {}, familiesById: {} })),
+                phase: 'current', interactionEnabled: true },
+        ], new Map());
+        expect(refreshing.phase).toBe('current');
+        if (!refreshing.pluginUiProjection) throw new Error('Expected retained type declarations during refresh');
+        currentProjection = refreshing.pluginUiProjection;
+        await hook.rerender('repo');
+        // Known schema remains admissible; its unbound source still has no
+        // effect authority (the controller owns offline/refresh presentation).
+        expect(hook.getCurrent()).toMatchObject({ status: 'ready', input: { repository: { repositoryId: 'repo' } } });
+        await hook.rerender(42);
+        expect(hook.getCurrent()).toMatchObject({ status: 'invalid', reasonCode: 'input_type_value_invalid' });
+        projectionPhase = 'establishing';
+        await hook.rerender('repo');
+        expect(hook.getCurrent()).toMatchObject({ status: 'ready', input: { repository: { repositoryId: 'repo' } } });
+        currentProjection = { ...projection, inputTypesById: {} };
+        await hook.rerender('repo');
+        expect(hook.getCurrent()).toMatchObject({ status: 'loading', reasonCode: 'widget_projection_establishing' });
+        projectionPhase = 'current';
+        currentProjection = union.pluginUiProjection;
+        await hook.rerender('repo');
+        expect(hook.getCurrent()).toMatchObject({ status: 'ready', input: { repository: { repositoryId: 'repo' } } });
+        const typeId = `${inputType.pluginId}/${inputType.localId}`;
+        currentProjection = { ...union.pluginUiProjection, inputTypesById: {
+            [typeId]: { ...union.pluginUiProjection.inputTypesById[typeId]!, occurrenceId: undefined },
+        } };
+        await hook.rerender('repo');
+        expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', reasonCode: 'widget_projection_unavailable' });
+        currentProjection = union.pluginUiProjection;
         descriptor = { ...descriptor, inputs: { fields: [InputFieldHintSchema.parse({ path: 'repository', title: 'Repository',
             widget: 'select', inputType, options: [{ value: { repositoryId: 'repo' }, label: 'Repository' }] })] } };
         await hook.rerender('excluded');

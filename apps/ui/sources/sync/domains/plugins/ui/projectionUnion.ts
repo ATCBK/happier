@@ -372,17 +372,15 @@ function memberHasAdmittedContribution(
 ): boolean {
     return declarationMaps(member.projection).some(map => Object.values(map).some(entry => readString(asRecord(entry)?.pluginId) !== null))
         || Object.values(member.projection.resourcesById).some(entry => resourceHasCurrentProducerOrigin(member.projection, entry)
-            && selectedOriginOwnsEntry({ entry, machineId: member.machineId, selectedOriginsByPluginId }))
-        || Object.values(member.projection.inputTypesById).some(entry => entryHasCurrentOccurrence(member.projection, entry)
-            && (readPluginUiProjectionEntryExecutionOrigin(entry) === null
-                || selectedOriginOwnsEntry({ entry, machineId: member.machineId, selectedOriginsByPluginId })));
+            && selectedOriginOwnsEntry({ entry, machineId: member.machineId, selectedOriginsByPluginId }));
 }
 
 function declarationMaps(model: PluginUiProjectionModel): readonly Readonly<Record<string, unknown>>[] {
     return [model.translationsByPluginId, model.sessionHeaderActionsById, model.searchProvidersById,
         model.hostedWebById, model.reactNativeBundlesById, model.surfacePlacementsById,
         model.settingsGroupsById, model.settingsPagesById, model.actionsById, model.voiceProvidersById,
-        model.dragSourcesById, model.dropTargetsById, model.atmospherePicturesById, model.registrySourcesById, model.skillsById, model.unknownEntriesById];
+        model.dragSourcesById, model.dropTargetsById, model.atmospherePicturesById, model.registrySourcesById, model.skillsById, model.unknownEntriesById,
+        model.inputTypesById];
 }
 
 /** Runtime identity and health are not portable declaration content. */
@@ -810,7 +808,8 @@ export function unionPluginUiProjections(
         occurrenceId: string | null;
         supply: PluginUiContributionSupplyV1;
     }>>();
-    const publishFirstAdmitted = <T>(map: Record<string, T>, key: string, value: T, origin: PluginUiContributionOriginV1): void => {
+    const publishFirstAdmitted = <T>(map: Record<string, T>, key: string, value: T, origin: PluginUiContributionOriginV1,
+        retainDeclarationOccurrence = false): void => {
         const entry = asRecord(value);
         const pluginId = readString(entry?.pluginId);
         if (!entry || !pluginId) return;
@@ -846,9 +845,10 @@ export function unionPluginUiProjections(
             // Complete the selected producer stamp so artifact adoption cannot
             // borrow a release version (and byte route) from another supply.
             ...(binding?.pluginVersion ? { pluginVersion: binding.pluginVersion } : {}),
-            // A descriptive row may not carry the first replica's runtime
-            // identity into a consumer that reads the direct producer stamp.
-            ...(!binding ? { occurrenceId: undefined, executionOrigin: undefined } : {}),
+            // Executable rows may not borrow an unselected replica's runtime
+            // identity. Schema declarations retain their separate type identity.
+            ...(!binding ? { occurrenceId: retainDeclarationOccurrence && !conflict ? representative.occurrenceId : undefined,
+                executionOrigin: undefined } : {}),
             hostOrigin: binding,
             hostSupplies: supplies,
             hostCompatibility: conflict ? 'conflict' : 'compatible',
@@ -949,10 +949,14 @@ export function unionPluginUiProjections(
         for (const [id, entry] of Object.entries(model.inputTypesById)) {
             const origin = entryHasCurrentOccurrence(model, entry)
                 && (readPluginUiProjectionEntryExecutionOrigin(entry) === null
+                    || !selectedOriginsByPluginId.has(entry.pluginId)
                     || selectedOriginOwnsEntry({ entry, machineId: member.machineId, selectedOriginsByPluginId }))
                 ? originFor(entry)
                 : null;
-            if (origin) publishFirstAdmitted(inputTypesById, id, stamp(entry, origin), origin);
+            // A registered type's schema remains a declaration when its source
+            // cannot execute. Keep that occurrence for schema/options identity;
+            // only the selected hostOrigin may authorize Resource or picker effects.
+            if (origin) publishFirstAdmitted(inputTypesById, id, stamp(entry, origin), origin, true);
         }
         for (const [id, entry] of Object.entries(model.registrySourcesById)) {
             // Source visibility and suppliers are installation declarations;
@@ -994,14 +998,13 @@ export function unionPluginUiProjections(
     // keep their reported supplies for Administration's origin picker.
     const publishedMaps: readonly Record<string, unknown>[] = [translationsByPluginId, sessionHeaderActionsById, searchProvidersById,
         hostedWebById, reactNativeBundlesById, surfacePlacementsById, settingsGroupsById, settingsPagesById, actionsById,
-        voiceProvidersById, dragSourcesById, dropTargetsById, atmospherePicturesById, registrySourcesById, skillsById, unknownEntriesById, resourcesById, inputTypesById];
+        voiceProvidersById, dragSourcesById, dropTargetsById, atmospherePicturesById, registrySourcesById, skillsById, unknownEntriesById, inputTypesById, resourcesById];
     for (const [index, map] of publishedMaps.entries()) {
         for (const [key, entry] of Object.entries(map)) {
             const pluginId = readString(asRecord(entry)?.pluginId);
             const selectedMember = pluginId ? selectedMembersByPluginId.get(pluginId) : undefined;
             if (!selectedMember) continue;
-            const selectedMaps = [...declarationMaps(selectedMember.projection), selectedMember.projection.resourcesById,
-                selectedMember.projection.inputTypesById];
+            const selectedMaps = [...declarationMaps(selectedMember.projection), selectedMember.projection.resourcesById];
             if (!Object.hasOwn(selectedMaps[index]!, key)) delete map[key];
         }
     }

@@ -962,6 +962,25 @@ describe('unionPluginUiProjections', () => {
         const admitted = unionPluginUiProjections([source], selectedOrigins(origin)).pluginUiProjection?.inputTypesById[type.id];
         expect(admitted).toMatchObject({ occurrenceId: 'current', definition: type.definition });
         expect(readPluginUiContributionOrigin(admitted)).toMatchObject({ executionOrigin: origin, machineId: 'machine-a' });
+        const refreshing = unionPluginUiProjections([
+            { ...source, phase: 'establishing', interactionEnabled: false },
+            { machineId: 'machine-b', serverId: 'server-1', projection: machineProjection({ generation: 1, entriesById: {} }),
+                phase: 'current', interactionEnabled: true },
+        ], new Map());
+        expect(refreshing.phase).toBe('current');
+        const pendingType = refreshing.pluginUiProjection?.inputTypesById[type.id];
+        expect(pendingType).toMatchObject({ occurrenceId: 'current', definition: type.definition });
+        expect(pendingType?.executionOrigin).toBeUndefined();
+        expect(readPluginUiContributionOrigin(pendingType)).toBeNull();
+        expect(readPluginUiContributionSupplies(pendingType)).toMatchObject([
+            { machineId: 'machine-a', occurrenceId: 'current', phase: 'establishing', interactionEnabled: false },
+        ]);
+        const offline = unionPluginUiProjections([{ ...source, phase: 'retainedOffline', interactionEnabled: false }], new Map());
+        expect(offline.interactionEnabled).toBe(false);
+        const offlineType = offline.pluginUiProjection?.inputTypesById[type.id];
+        expect(offlineType).toMatchObject({ occurrenceId: 'current', definition: type.definition });
+        expect(offlineType?.executionOrigin).toBeUndefined();
+        expect(readPluginUiContributionOrigin(offlineType)).toBeNull();
         expect(unionPluginUiProjections([source], selectedOrigins({ ...origin,
             materializationRef: { ...origin.materializationRef, materializationId: 'another-materialization' },
         })).pluginUiProjection?.inputTypesById[type.id]).toBeUndefined();
@@ -973,7 +992,7 @@ describe('unionPluginUiProjections', () => {
         const unselected = unionPluginUiProjections([{ ...source, projection: originless }], new Map())
             .pluginUiProjection?.inputTypesById[type.id];
         expect(unselected).toMatchObject({ definition: type.definition });
-        expect(unselected?.occurrenceId).toBeUndefined();
+        expect(unselected?.occurrenceId).toBe('current');
         expect(readPluginUiContributionOrigin(unselected)).toBeNull();
         expect(readPluginUiContributionSupplies(unselected)).toMatchObject([
             { machineId: 'machine-a', occurrenceId: 'current', executionOrigin: null },
