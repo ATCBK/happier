@@ -732,7 +732,7 @@ describe('active account settings snapshot publication', () => {
         expect(accountAReentered).toBeGreaterThan(cleared);
     });
 
-  it('keeps configured transcript sources current across an unrelated Account catalog hydration', () => {
+  it('keeps configured transcript sources current across unrelated catalog and queue preference changes', () => {
     const cached = { ...snapshot({ scopeKey: 'source-account', version: 4, timing: 'after_runtime_idle' }), source: 'cache' as const };
     setActiveAccountSettingsSnapshot(cached);
     const sourceRevision = configuredExternalSessionSourceRevisions
@@ -750,7 +750,7 @@ describe('active account settings snapshot publication', () => {
     setActiveAccountSettingsSnapshot({ ...hydrated, settingsVersion: 5,
       settings: accountSettingsParse({ sessionPendingQueueDeliveryTiming: 'after_foreground_ready' }) });
     expect(configuredExternalSessionSourceRevisions
-      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).not.toBe(sourceRevision);
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).toBe(sourceRevision);
     clearActiveAccountSettingsSnapshot();
     setActiveAccountSettingsSnapshot(hydrated);
     expect(configuredExternalSessionSourceRevisions
@@ -766,6 +766,29 @@ describe('active account settings snapshot publication', () => {
     expect(commitActiveAccountSettingsSnapshot({ ...unavailable, source: 'network', rawSettings: {}, loadedAtMs: 1 }).didCommit).toBe(true);
     expect(configuredExternalSessionSourceRevisions
       .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).not.toBe(sourceRevision);
+  });
+
+  it('retires configured sources on consumed source settings or Account key withdrawal', () => {
+    const sources = [{ sourceKind: 'configuredHome', instances: [{ kind: 'agentSetting',
+      settingId: 'piAgentDir', byServerIdSettingId: 'piAgentDirByServerId', field: 'homePath', normalization: 'configuredPath' }] }];
+    const initial = { ...snapshot({ scopeKey: 'source-account', version: 1, timing: 'after_runtime_idle' }),
+      settings: accountSettingsParse({ piAgentDir: '/native/fallback', piAgentDirByServerId: { home: '/native/first', other: '/other' } }),
+      settingsSecretsReadKeys: [new Uint8Array(32).fill(1)] };
+    setActiveAccountSettingsSnapshot(initial);
+    const revision = () => activeAccountSettingsSnapshot.resolveActiveAccountConfiguredExternalSessionSourceRevision(
+      getActiveAccountSettingsSnapshot(), sources, 'home');
+    const first = revision();
+    setActiveAccountSettingsSnapshot({ ...initial, settingsVersion: 2,
+      settings: accountSettingsParse({ piAgentDir: '/changed/fallback', piAgentDirByServerId: { home: '/native/first', other: '/changed/other' },
+        sessionPendingQueueDeliveryTiming: 'after_foreground_ready' }) });
+    expect(revision()).toBe(first);
+    setActiveAccountSettingsSnapshot({ ...initial, settingsVersion: 3,
+      settings: accountSettingsParse({ piAgentDir: '/native/fallback', piAgentDirByServerId: { home: '/native/second' } }) });
+    expect(revision()).not.toBe(first);
+    const changedSource = revision();
+    setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, settingsVersion: 4,
+      settingsSecretsReadKeys: [] });
+    expect(revision()).not.toBe(changedSource);
   });
 
   it('publishes a Connected Services-only projection through the active source revision without changing Settings revision', () => {

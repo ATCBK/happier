@@ -640,9 +640,13 @@ export async function createCurrentGlobalExternalSessionsAuthorService(
     ...(params.activeServerId ? { activeServerId: params.activeServerId } : {}),
     readAccountRevision: () => resolveActiveAccountConfiguredExternalSessionSourceRevision(
       getActiveAccountSettingsSnapshot(),
+      params.agents.flatMap(agent => agent.richDefinition?.definition.surfaces?.externalSession.sources ?? []),
+      params.activeServerId ?? null,
     ),
     subscribeAccountRevision: (listener) => subscribeActiveAccountSettingsSnapshot(
-      (_previous, next) => listener(resolveActiveAccountConfiguredExternalSessionSourceRevision(next)),
+      (_previous, next) => listener(resolveActiveAccountConfiguredExternalSessionSourceRevision(next,
+        params.agents.flatMap(agent => agent.richDefinition?.definition.surfaces?.externalSession.sources ?? []),
+        params.activeServerId ?? null)),
     ),
     isCurrent: params.isCurrent,
     resolveAgentOccurrence: (agentId) => {
@@ -685,6 +689,8 @@ export async function createCurrentGlobalExternalSessionsAuthorService(
               readAccountRevision: () =>
                 resolveActiveAccountConfiguredExternalSessionSourceRevision(
                   getActiveAccountSettingsSnapshot(),
+                  agent.richDefinition?.definition.surfaces?.externalSession.sources,
+                  params.activeServerId ?? null,
                 ),
               occurrenceRetirementSignal: runtime.retirementSignal,
               isOccurrenceCurrent: () => params.isCurrent() && runtime.isCurrent(),

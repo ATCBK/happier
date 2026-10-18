@@ -4851,11 +4851,13 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     ),
                     readAccountRevision: () => hostRuntimeParams.accountSettingsAuthority === 'session'
                         ? ''
-                        : resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot()),
+                        : resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot(),
+                            params.agent.richDefinition?.definition.surfaces?.externalSession.sources, happierConfiguration.activeServerId),
                     subscribeAccountRevision: hostRuntimeParams.accountSettingsAuthority === 'session'
                         ? () => () => {}
                         : (listener) => subscribeActiveAccountSettingsSnapshot(
-                            (_previous, next) => listener(resolveActiveAccountConfiguredExternalSessionSourceRevision(next)),
+                            (_previous, next) => listener(resolveActiveAccountConfiguredExternalSessionSourceRevision(next,
+                                params.agent.richDefinition?.definition.surfaces?.externalSession.sources, happierConfiguration.activeServerId)),
                         ),
                     isCurrent: identity.isCurrent,
                     resolveAgentOccurrence: () => Object.freeze({

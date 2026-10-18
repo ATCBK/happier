@@ -3215,6 +3215,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
         }
         const accountRevision = resolveActiveAccountConfiguredExternalSessionSourceRevision(
             getActiveAccountSettingsSnapshot(),
+            agents.flatMap(agent => agent.richDefinition?.definition.surfaces?.externalSession.sources ?? []),
+            params?.externalSessionsActiveServerId ?? null,
         );
         const previous = currentGlobalExternalSessions;
         try {

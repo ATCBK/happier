@@ -10,6 +10,8 @@ import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
+import { materializeExternalSessionSourceInstances, type ExternalSessionSourceDeclarationInput } from '@happier-dev/protocol/plugins/backendExternalSessionSourceInstances';
 import type { ConnectedPresentationCatalogSnapshotV1, ConnectedAcknowledgementsCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import type { AccountRoleOverridesReadV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
@@ -744,19 +746,29 @@ export function resolveActiveAccountSettingsSnapshotRevision(
 }
 
 /**
- * Configured sources consume Account preferences and Connected Services, not
+ * Configured sources consume declared source settings and Connected Services, not
  * the independently hydrated Profile, Prompt, Provider or MCP catalogs. A
  * catalog publication or a newer read timestamp must not retire a live native
- * transcript follower. Keep actual preference/availability changes and Account
+ * transcript follower. Keep actual source/availability changes and Account
  * lifetime or Connected Services revocation in the existing source lifecycle.
  */
 export function resolveActiveAccountConfiguredExternalSessionSourceRevision(
   snapshot: ActiveAccountSettingsSnapshot | null,
+  sources: readonly ExternalSessionSourceDeclarationInput[] = [],
+  activeServerId: string | null = null,
 ): string {
+  const sourceSettings = sources.filter(source => source.instances?.some(instance =>
+    instance.kind === 'agentSetting' || instance.kind === 'agentSettingOverride')).map(declaration =>
+    materializeExternalSessionSourceInstances({ declaration, agentSettings: snapshot?.settings, activeServerId }));
+  // Key withdrawal must still fence retained source reads. Private source
+  // settings and key material must not appear in revision diagnostics.
+  const facts = createHash('sha256').update(JSON.stringify(sourceSettings));
+  for (const key of snapshot?.settingsSecretsReadKeys ?? []) facts.update(`${key.length}:`).update(key);
   return [
     snapshot
-      ? `${snapshot.scopeKey ?? 'active'}:${snapshot.settingsVersion}:${snapshot.source === 'none' ? 'unavailable' : 'available'}`
+      ? `${snapshot.scopeKey ?? 'active'}:${snapshot.source === 'none' ? 'unavailable' : 'available'}`
       : 'account-profile:bootstrap',
+    facts.digest('hex'),
     'connected-services',
     activeLifetimeToken,
     activeConnectedServicesProjectionRevision,

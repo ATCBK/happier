@@ -217,6 +217,7 @@ it.each(['runner_http_fresh_terminal_interrupt_recovery', 'runner_http_fresh_ter
       let pendingAvailable = false;
       let firstNativePrompt = replay?.firstPrompt ?? '';
       let followupNativePrompt = replay?.longPrompt ?? '';
+      let followupReopenedNative = false;
       if (kind === 'listener_failure') listener = async () => {
         // The consumer delivery boundary refuses this real native baseline.
         throw new Error('secret delivery failure', { cause: Object.assign(new Error('secret filesystem failure'), { code: 'ENOENT' }) });
@@ -718,10 +719,13 @@ it.each(['runner_http_fresh_terminal_interrupt_recovery', 'runner_http_fresh_ter
               const hostCount = vi.mocked(terminal.service.createOrAttachHost).mock.calls.length;
               publishPending!();
               expect(publisher.getPendingQueueState()).toMatchObject({ known: true, pendingCount: 1, pendingVersion: 2 });
-              // A changed full prompt plan resumes the native process. Model
-              // that process's authenticated hook, not just its terminal handle.
-              await vi.waitFor(() => expect(vi.mocked(terminal.service.createOrAttachHost).mock.calls.length).toBeGreaterThan(hostCount), { timeout: 15000 });
-              await replayNativeHook!({ hook_event_name: 'SessionStart', source: 'resume' });
+              // A changed plan can resume the native process; an unchanged
+              // plan can deliver directly. Drive a real hook only on reopen.
+              await vi.waitFor(() => expect(vi.mocked(terminal.service.createOrAttachHost).mock.calls.length > hostCount
+                || vi.mocked(terminal.service.injectUserPrompt).mock.calls.some(([, input]) => input.text.includes(replay.longPrompt)),
+              loopFailure ?? 'Pending follow-up was not dispatched').toBe(true), { timeout: 15000 });
+              followupReopenedNative = vi.mocked(terminal.service.createOrAttachHost).mock.calls.length > hostCount;
+              if (followupReopenedNative) await replayNativeHook!({ hook_event_name: 'SessionStart', source: 'resume' });
               await vi.waitFor(() => expect(vi.mocked(terminal.service.injectUserPrompt).mock.calls
                 .some(([, input]) => input.text.includes(replay.longPrompt))).toBe(true), { timeout: 15000 });
               followupNativePrompt = vi.mocked(terminal.service.injectUserPrompt).mock.calls.find(([, input]) => input.text.includes(replay.longPrompt))![1].text;
@@ -850,6 +854,14 @@ it.each(['runner_http_fresh_terminal_interrupt_recovery', 'runner_http_fresh_ter
           lifetimeToken: settings.getActiveAccountSettingsSnapshotLifetimeToken(),
           catalog: { status: 'ready', authority: 'inactive', control: null, controlRevision: 'absent',
             records: [], diagnostics: [], referenceGuardRevision: 7 } })).toBe(true);
+        // A delivery preference is not a native transcript source change. The
+        // existing follow must carry the later durable reply without rebinding.
+        if (!pendingFollowup) {
+          settings.setActiveAccountSettingsSnapshot({ ...settings.getActiveAccountSettingsSnapshot()!,
+            settingsVersion: cached.settingsVersion + 1,
+            settings: { ...cached.settings, sessionPendingQueueDeliveryTiming: cached.settings.sessionPendingQueueDeliveryTiming === 'after_runtime_idle'
+              ? 'after_foreground_ready' : 'after_runtime_idle' } });
+        }
         expect(replay.longText.split('\n')).toHaveLength(400);
         expect(replay.longText).toHaveLength(33281);
         await enqueueFollowup?.();
@@ -860,11 +872,11 @@ it.each(['runner_http_fresh_terminal_interrupt_recovery', 'runner_http_fresh_ter
         await vi.waitFor(() => expect(replayStages.rawLines).toBeGreaterThanOrEqual(3), { timeout: 10000 });
         await replayNativeHook!({ hook_event_name: 'Stop', stop_hook_active: false });
         await appendFile(nativePath, replay.completion);
-        await vi.waitFor(() => expect(replayStages.rawLines).toBe(pendingFollowup ? 8 : 6), { timeout: 10000 });
+        await vi.waitFor(() => expect(replayStages.rawLines).toBe(followupReopenedNative ? 8 : 6), { timeout: 10000 });
         await vi.waitFor(() => expect(events.flatMap(event => event.kind === 'data' ? event.items : [])
           .some(item => item.kind === 'agent' && JSON.stringify(item.data).includes(JSON.stringify(replay.longText)))).toBe(true), { timeout: 10000 });
         await vi.waitFor(() => expect(replayStages.durableLongAck).toBeGreaterThan(0), { timeout: 10000 });
-        expect(replayStages).toMatchObject(pendingFollowup
+        expect(replayStages).toMatchObject(followupReopenedNative
           ? { target: 2, bind: 2, rawLines: 8, durableLongAck: 1 }
           : { target: 1, bind: 1, rawLines: 6, durableLongAck: 1 });
         if (!pendingFollowup) expect(replayStages.identityAck).toBeGreaterThan(0);
@@ -873,6 +885,10 @@ it.each(['runner_http_fresh_terminal_interrupt_recovery', 'runner_http_fresh_ter
         expect(replayStages.sourceItems).toBeGreaterThan(2);
         expect(manager.countActiveLeases(sessionId)).toBe(1);
         await interruptAndRecover?.();
+        if (kind === 'runner_http_fresh_terminal_catalog_refresh') {
+          settings.clearActiveAccountSettingsSnapshot();
+          await vi.waitFor(() => expect(manager.countActiveLeases(sessionId)).toBe(0), { timeout: 10000 });
+        }
       }
       expect(events.some(event => event.kind === 'data' && event.providerSessionId === remoteSessionId)).toBe(true);
       if (usesTerminalService) {
