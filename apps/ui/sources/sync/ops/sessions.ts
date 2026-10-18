@@ -214,6 +214,15 @@ async function runResumeSession(
     options: ResumeSessionOptions,
     presentation: 'explicit_resume' | 'ensure_pending_consumer',
 ): Promise<ResumeSessionResult> {
+    // A pending-input wake does not authorize restoring an archived session.
+    // Keep restoration with the explicit Resume action, before any lifecycle or RPC effects.
+    if (presentation === 'ensure_pending_consumer' && storage.getState().sessions[options.sessionId]?.archivedAt != null) {
+        return {
+            type: 'error',
+            errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+            errorMessage: 'session_archived',
+        };
+    }
     // Pending delivery also uses the daemon's spawn/adopt RPC so the daemon can prove whether the
     // recorded active runner is still serviceable. That serviceability check is not itself a user
     // resume. Only publish the resuming lifecycle when the caller explicitly resumed the session,
