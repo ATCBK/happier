@@ -230,13 +230,10 @@ export async function reconcileProjectedPluginUiClientExecutables(input: Readonl
     });
     const cache = getInstalledPluginReactNativeBundleCache();
     const backend = input.loaderBackend ?? resolveDefaultReactNativeLoaderBackend();
-    const prepared: Array<Readonly<{
-        activation: PluginUiClientExecutableActivation;
-        release: () => void;
-    }>> = [];
-    for (const target of targets) {
-        if (!isCurrent(input)) break;
-        const activation = await createProjectedClientExecutableActivation({
+    // Byte preparation is independent; settlement preserves target order for
+    // the one registration transaction and cleanup of every acquired lease.
+    const preparations = await Promise.allSettled(targets.map((target) => (
+        createProjectedClientExecutableActivation({
             target,
             composition,
             cache,
@@ -246,8 +243,15 @@ export async function reconcileProjectedPluginUiClientExecutables(input: Readonl
             isCurrent: input.isCurrent,
             retainCommittedActivation: input.retainCommittedActivation,
             createDerivedScope: input.createDerivedScope,
-        });
-        if (activation) prepared.push(activation);
+        })
+    )));
+    const prepared = preparations.flatMap((result) => (
+        result.status === 'fulfilled' && result.value ? [result.value] : []
+    ));
+    const failed = preparations.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') {
+        for (const candidate of prepared) release(candidate.release);
+        throw failed.reason;
     }
     if (!isCurrent(input)) {
         for (const candidate of prepared) release(candidate.release);

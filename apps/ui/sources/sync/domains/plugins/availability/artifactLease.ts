@@ -177,8 +177,8 @@ export type PluginSelectedArtifactLeaseAcquireResult =
 const SOURCE_ORDER = Object.freeze([
     'persistentCache',
     'appExact',
-    'daemon',
     'accountHosted',
+    'daemon',
 ] satisfies readonly PluginArtifactSourceKind[]);
 
 function cloneArtifactFact(

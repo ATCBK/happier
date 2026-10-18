@@ -233,6 +233,62 @@ function daemonResponse(record: ReturnType<typeof fixture>) {
 }
 
 describe('Artifact selected handle lease', () => {
+    it('completes hosted acquisition after local misses while the daemon boundary is held', async () => {
+        const current = fixture(true);
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: current.snapshot });
+        let releaseDaemon!: () => void;
+        const heldDaemon = new Promise<void>((resolve) => { releaseDaemon = resolve; });
+        const daemonRead = vi.fn(async () => { await heldDaemon; return daemonResponse(current); });
+        const order: string[] = [];
+        let result: Awaited<ReturnType<typeof acquirePluginSelectedArtifactLease>> | undefined;
+        const pending = acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), accountLifetime: createLifetime(), slot, artifactGraph: current.graph,
+            sources: [
+                createPluginArtifactDaemonSource({ transport: { machineId: 'machine-a', serverId: scope.serverId },
+                    family: 'hostedWeb', fetchArtifactBytes: daemonRead }),
+                { kind: 'accountHosted', fetch: async () => { order.push('hosted'); return current.bytesByPath; } },
+                { kind: 'appExact', fetch: async () => { order.push('app'); return null; } },
+                { kind: 'persistentCache', fetch: async () => { order.push('cache'); return null; } },
+            ],
+        }).then((acquired) => { result = acquired; return acquired; });
+        try {
+            await vi.waitFor(() => expect(result).toMatchObject({ kind: 'available', lease: { sourceKind: 'accountHosted' } }));
+            expect(order).toEqual(['cache', 'app', 'hosted']);
+            expect(daemonRead).not.toHaveBeenCalled();
+        } finally {
+            releaseDaemon();
+            const acquired = await pending;
+            if (acquired.kind === 'available') acquired.lease.dispose();
+        }
+    });
+
+    it.each(['missing', 'corrupt'] as const)('falls back from %s hosted bytes to verified daemon bytes', async (hostedState) => {
+        const current = fixture(true, 42, hostedState === 'missing' ? null : undefined);
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: current.snapshot });
+        const hostedRequests: Array<string | undefined> = [];
+        const acquired = await acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), accountLifetime: createLifetime(), slot, artifactGraph: current.graph,
+            sources: [
+                { kind: 'daemon', fetch: async () => current.bytesByPath },
+                { kind: 'accountHosted', fetch: async (request) => {
+                    hostedRequests.push(request.accountHostedArtifactId);
+                    return request.accountHostedArtifactId
+                        ? new Map([[current.graph.entry, new Uint8Array([0])]]) : null;
+                } },
+            ],
+        });
+        expect(acquired).toMatchObject({ kind: 'available', lease: { sourceKind: 'daemon' } });
+        expect(hostedRequests).toHaveLength(1);
+        if (acquired.kind === 'available') {
+            expect(await acquired.lease.readFile(current.graph.entry)).toMatchObject({
+                kind: 'available', bytes: current.bytesByPath.get(current.graph.entry),
+            });
+            acquired.lease.dispose();
+        }
+    });
+
     it('keeps initial Account Availability pending until its admitted snapshot supplies the selected Artifact', async () => {
         const current = fixture(true);
         const store = createPluginAccountAvailabilityReaderStore();

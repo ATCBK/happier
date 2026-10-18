@@ -13,6 +13,7 @@ import {
     upsertServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storageStore';
+import * as machineDisplayNames from '@/utils/sessions/machineDisplayNames';
 
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from './selectionPreferences';
 import { useMachineAdministrationExecutionTargetBinding } from './useExecutionTargetBinding';
@@ -59,11 +60,30 @@ describe('machine administration target demand', () => {
                 machineListStatusByServerId: { [profile.id]: 'idle' },
                 settings: { ...state.settings, machineAdministrationTargetsLocalV1: {} },
             }));
-            const hook = await renderHook(() => useMachineAdministrationTargetSelection(selectionKey));
-            expect(hook.getCurrent().selectedTarget).toBeNull();
-            expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
-            expect(storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey]).toBeUndefined();
-            await hook.unmount();
+            // Observe actual projection work; the spy delegates to the real name owner.
+            const names = vi.spyOn(machineDisplayNames, 'resolveMachineDisplayNames');
+            const hook = await renderHook(() => {
+                const before = names.mock.calls.length;
+                const selection = useMachineAdministrationTargetSelection(selectionKey);
+                return { ...selection, nameProjections: names.mock.calls.length - before };
+            });
+            try {
+                expect(hook.getCurrent().pickerRows).toHaveLength(2);
+                expect(hook.getCurrent().nameProjections).toBe(1);
+                expect(hook.getCurrent().candidates.every((candidate, index) => candidate === hook.getCurrent().pickerRows[index]?.candidate)).toBe(true);
+                expect(hook.getCurrent().selectedTarget).toBeNull();
+                expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
+                expect(storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey]).toBeUndefined();
+                await act(async () => storage.setState({ machineListByServerId: { [profile.id]: [other,
+                    createMachineFixture({ ...machine, metadata: { ...machine.metadata!, displayName: 'Renamed machine' } }),
+                ] } }));
+                const updated = hook.getCurrent();
+                expect(updated.candidates.find(candidate => candidate.target.machineId === machine.id)?.displayName).toBe('Renamed machine');
+                expect(updated.candidates.every((candidate, index) => candidate === updated.pickerRows[index]?.candidate)).toBe(true);
+            } finally {
+                await hook.unmount();
+                names.mockRestore();
+            }
         } finally {
             storage.setState(previous);
             await removeServerProfile(profile.id);

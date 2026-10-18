@@ -44,7 +44,6 @@ import {
 } from './targetSelection';
 import {
     buildMachineAdministrationCandidateInventoryRowsFromSnapshots,
-    buildMachineAdministrationCandidatesFromSnapshots,
     type MachineAdministrationCandidateInventoryRowV1,
 } from './targetState';
 
@@ -226,13 +225,13 @@ export function useMachineAdministrationTargetSelection(
             && target && areServerProfileIdentifiersEquivalent(value.serverId, target.serverIdentityId));
         return resolveFreshMachineAdministrationExecutionTarget(target, { ...options, accountScope: binding?.scope ?? null });
     }, [bindings]);
-    const candidates = React.useMemo(
-        () => buildMachineAdministrationCandidatesFromSnapshots({ snapshots }),
-        [reachabilityRevision, snapshots],
-    );
     const pickerRows = React.useMemo(
         () => buildMachineAdministrationCandidateInventoryRowsFromSnapshots({ snapshots }),
         [reachabilityRevision, snapshots],
+    );
+    const candidates = React.useMemo(
+        () => Object.freeze(pickerRows.map((row) => row.candidate)),
+        [pickerRows],
     );
     const allowSoleCandidate = enabled && areMachineAdministrationInventoriesKnown(snapshots)
         && options.allowSoleCandidate !== false;
