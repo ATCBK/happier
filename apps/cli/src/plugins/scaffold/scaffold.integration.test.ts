@@ -10,7 +10,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PluginManifestV2Schema } from '@happier-dev/protocol';
 import { PLUGIN_UI_HOST_METHODS_V1 } from '@happier-dev/protocol/plugins/ui';
-import type { PluginApi } from '@happier-dev/plugin-sdk';
+import { definePlugin, type PluginApi } from '@happier-dev/plugin-sdk';
+import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1 } from '@happier-dev/plugin-sdk/ui/build';
@@ -403,6 +404,28 @@ describe('scaffoldLocalPlugin',
     expect(parsedManifest.ok).toBe(true);
     if (!parsedManifest.ok) throw new Error('Expected generated manifest to parse.');
     const manifest = parsedManifest.manifest;
+    // Compare with the former explicit declaration through the real author
+    // helper: dropping defaults must preserve the entire projected Action.
+    const explicit = definePlugin({
+      id: 'acme.template',
+      version: '0.1.0',
+      displayName: 'Acme Template',
+      actions: {
+        'save-note': {
+          title: 'Save note',
+          description: 'Returns the supplied note from one minimal plugin action.',
+          scopes: ['global'],
+          surfaces: ['agent', 'cli', 'mcp', 'ui'],
+          execution: { target: 'daemon' },
+          placementBindings: ['commandPalette'],
+          dangerLevel: 'safe',
+          inputSchema: defineProtocolObject({ note: defineProtocolString() }, { policy: 'closed' }),
+          resultSchema: defineProtocolObject({ note: defineProtocolString() }, { policy: 'closed' }),
+          async run(input) { return { note: input.note }; },
+        },
+      },
+    });
+    expect(manifest.contributes.actions).toEqual(explicit.manifest.contributes.actions);
     expect(manifest.engines).toBeUndefined();
     // The default scaffold shape is the declarative surface, so `save-note` is
     // reachable from the UI it ships with as well as from the headless surfaces.

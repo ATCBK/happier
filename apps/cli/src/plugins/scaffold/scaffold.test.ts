@@ -155,8 +155,6 @@ describe('scaffoldLocalPlugin',
     expect(source).toContain('note: defineProtocolString()');
     expect(source).toContain('async run(input) {');
     expect(source).toContain('return { note: input.note };');
-    expect(source).toContain("execution: { target: 'daemon' }");
-    expect(source).toContain("placementBindings: ['commandPalette']");
     expect(source).not.toContain('engines: { happier:');
     expect(source).not.toMatch(/@happier-dev\/plugin-sdk\/runtime|export function activate|api\.actions\.register/u);
     const testSource = await readFile(join(targetDir, 'test', 'index.test.mjs'), 'utf8');
