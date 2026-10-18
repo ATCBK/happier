@@ -1182,7 +1182,10 @@ describe('target action invocation registry', () => {
     });
 
     it('binds target-action services and context.ui to the same validated current-session interaction owner', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
+        const handleToolCall = vi.fn(async () => ({
+            decision: 'approved' as const,
+            answers: { confirmation: ['confirm'] },
+        }));
         const presentation = Object.freeze({
             notify: vi.fn(async () => ({ status: 'applied' as const, revision: 'r1' })),
             setStatus: vi.fn(),

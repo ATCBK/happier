@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
+import type { AgentState } from '@/api/types';
 import type {
     HostSessionApprovalRequest,
     HostSessionConfirmationRequest,
@@ -70,8 +73,76 @@ const questionsRequest: HostSessionQuestionsRequest = {
 };
 
 describe('native Agent current-session interactions', () => {
+    it.each(['default', 'yolo'] as const)(
+        'requires explicit confirmation answers through the real permission owner in %s mode',
+        async (mode) => {
+            // Session state and authenticated RPC are external boundaries; domain owners stay real.
+            const session = {
+                sessionId: 'native-confirmation-test',
+                rpcHandlerManager: new ServerBoundPermissionRpcHandlerManager('native-confirmation-test'),
+                state: { requests: {}, completedRequests: {} } as AgentState,
+                getAgentStateSnapshot() { return this.state; },
+                getMetadataSnapshot() { return null; },
+                updateAgentState(update: (state: AgentState) => AgentState) {
+                    this.state = update(this.state);
+                    return this.state;
+                },
+            };
+            const handler = new ProviderEnforcedPermissionHandler(
+                session as unknown as ApiSessionClient,
+                { logPrefix: '[Native confirmation test]', getWorkspaceWrites: () => 'allow' },
+            );
+            handler.setPermissionMode(mode);
+            const lifetime = new AbortController();
+            const fixture = createFixture(handler.handleToolCall.bind(handler), { signal: lifetime.signal });
+            try {
+                for (const [choice, status] of [
+                    ['confirm', 'approved'], ['decline', 'declined'], ['denied', 'declined'], ['abort', 'userCancelled'],
+                ] as const) {
+                    const pending = fixture.current.request({ kind: 'confirmation', message: 'Continue?' }, {
+                        permissionContext: {
+                            turnId: 'turn-1',
+                            causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: mode },
+                        },
+                    });
+                    let settledResult: unknown;
+                    void pending.then((result) => { settledResult = result; });
+                    await vi.waitFor(() => expect({
+                        settledResult,
+                        pendingRequestCount: Object.keys(session.state.requests ?? {}).length,
+                    }).toEqual({ settledResult: undefined, pendingRequestCount: 1 }));
+                    const [[id, request]] = Object.entries(session.state.requests ?? {});
+                    expect(request).toMatchObject({
+                        tool: 'AskUserQuestion', kind: 'user_action',
+                        arguments: {
+                            questions: [{
+                                id: 'confirmation', question: 'Continue?', required: true,
+                                selection: 'single',
+                                options: [{ id: 'confirm', label: 'Confirm' }, { id: 'decline', label: 'Cancel' }],
+                            }],
+                        },
+                    });
+                    const respond = session.rpcHandlerManager.handlers.get('session.user_action.answer');
+                    expect(respond).toBeDefined();
+                    const answered = choice === 'confirm' || choice === 'decline';
+                    expect(await respond?.({
+                        id, approved: answered, decision: answered ? 'approved' : choice,
+                        ...(answered ? { answers: { confirmation: [choice] } } : {}),
+                    })).toBeUndefined();
+                    await expect(pending).resolves.toMatchObject({ kind: 'confirmation', status });
+                    expect(Object.keys(session.state.requests ?? {})).toEqual([]);
+                }
+            } finally {
+                lifetime.abort();
+                await handler.abortPendingRequestsAndFlush('test cleanup');
+            }
+        },
+    );
+
     it('presents through the permission owner without a caller-supplied deadline', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
+        const handleToolCall = vi.fn(async () => ({
+            decision: 'approved' as const, answers: { confirmation: ['confirm'] },
+        }));
         const fixture = createFixture(handleToolCall, { interactionDeadlineMs: undefined });
 
         expect(fixture.availability('interactions')).toEqual({ status: 'available' });
@@ -85,8 +156,8 @@ describe('native Agent current-session interactions', () => {
         });
         expect(handleToolCall).toHaveBeenCalledWith(
             expect.any(String),
-            'AgentConfirmation',
-            expect.objectContaining({ message: 'Continue?' }),
+            'AskUserQuestion',
+            expect.objectContaining({ questions: [expect.objectContaining({ id: 'confirmation', question: 'Continue?' })] }),
             expect.objectContaining({
                 owner: { kind: 'plugin', pluginId: 'acme.plugin', runtimeId: 'acme.agent/runtime' },
             }),
@@ -271,9 +342,11 @@ describe('native Agent current-session interactions', () => {
             message: 'Continue with the operation?',
         };
         const decisions = [
-            { decision: 'approved' as const },
+            { decision: 'approved' as const, answers: { confirmation: ['confirm'] } },
+            { decision: 'approved' as const, answers: { confirmation: ['decline'] } },
             { decision: 'denied' as const },
             { decision: 'abort' as const },
+            { decision: 'approved' as const },
             { decision: 'approved_for_session' as const },
             {
                 decision: 'approved' as const,
@@ -284,7 +357,9 @@ describe('native Agent current-session interactions', () => {
 
         await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'approved' });
         await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'declined' });
+        await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'declined' });
         await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'userCancelled' });
+        await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'unavailable' });
         await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'unavailable' });
         await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'unavailable' });
     });
@@ -364,7 +439,9 @@ describe('native Agent current-session interactions', () => {
     });
 
     it('host-stamps authenticated requester attribution into the permission owner', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
+        const handleToolCall = vi.fn(async () => ({
+            decision: 'approved' as const, answers: { confirmation: ['confirm'] },
+        }));
         const fixture = createFixture(handleToolCall);
 
         const result = await fixture.current.request({
@@ -386,8 +463,11 @@ describe('native Agent current-session interactions', () => {
         });
         expect(handleToolCall).toHaveBeenCalledWith(
             result.requestId,
-            'AgentConfirmation',
-            { title: undefined, message: 'Continue?' },
+            'AskUserQuestion',
+            { questions: [{
+                id: 'confirmation', question: 'Continue?', required: true, selection: 'single',
+                options: [{ id: 'confirm', label: 'Confirm' }, { id: 'decline', label: 'Cancel' }],
+            }] },
             expect.objectContaining({
                 owner: {
                     kind: 'plugin',

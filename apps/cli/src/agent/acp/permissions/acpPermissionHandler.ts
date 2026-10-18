@@ -20,6 +20,8 @@ export type AcpPermissionDecisionResult = Readonly<{
 export type AcpPermissionCausalAuthority = SessionInputCausalPermissionAuthorityV1;
 
 export type AcpPermissionCallContext = Readonly<{
+  /** Cancellation of this exact native ACP request, independent of its turn. */
+  signal?: AbortSignal;
   /** Host-only child Run policy input; never an admitted user-input authority. */
   mcpToolPolicy?: Readonly<{
     permissionMode: string;

@@ -1776,12 +1776,15 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 state: { enabled: true },
             },
         });
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
+        const handleToolCall = vi.fn(async () => ({
+            decision: 'approved' as const,
+            answers: { confirmation: ['confirm'] },
+        }));
         const cleanupWarning = vi.spyOn(logger, 'warn');
         let projectedUrlAfterRegistryDispose: string | null = null;
 
         try {
-            const runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir });
+            const runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, pluginIds: ['acme.mcp.session'] });
             try {
                 expect(runtimeRegistry.contributes.mcpDiscoverySources).toEqual(expect.arrayContaining([
                     expect.objectContaining({
@@ -1872,8 +1875,10 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 await resourceSubscription.dispose();
                 expect(handleToolCall).toHaveBeenCalledWith(
                     expect.any(String),
-                    'AgentConfirmation',
-                    expect.objectContaining({ message: 'Run the session MCP tool?' }),
+                    'AskUserQuestion',
+                    expect.objectContaining({ questions: [expect.objectContaining({
+                        id: 'confirmation', question: 'Run the session MCP tool?',
+                    })] }),
                     expect.objectContaining({
                         owner: {
                             kind: 'plugin',
@@ -2058,7 +2063,10 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                     signal: AbortSignal.timeout(1_000),
                 })).rejects.toBeInstanceOf(Error);
 
-                const reboundHandleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
+                const reboundHandleToolCall = vi.fn(async () => ({
+                    decision: 'approved' as const,
+                    answers: { confirmation: ['confirm'] },
+                }));
                 const reboundHostOwners = await createHostOwners({
                     handleToolCall: reboundHandleToolCall,
                 });

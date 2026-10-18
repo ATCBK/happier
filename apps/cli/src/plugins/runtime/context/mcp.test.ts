@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { InteractionsService } from '@happier-dev/plugin-sdk/interactions';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import {
     ServerBoundPermissionRpcHandlerManager,
@@ -13,13 +15,13 @@ class FakePermissionSession {
     // authenticated server stamps the RPC authorization context, so this test
     // drives the canonical server-bound boundary instead of the raw handler.
     rpcHandlerManager = new ServerBoundPermissionRpcHandlerManager(this.sessionId);
-    agentState: any = { requests: {}, completedRequests: {} };
+    agentState: { requests: Record<string, unknown>; completedRequests: Record<string, unknown> } = { requests: {}, completedRequests: {} };
 
     getAgentStateSnapshot() {
         return this.agentState;
     }
 
-    updateAgentState(updater: any) {
+    updateAgentState(updater: (state: typeof this.agentState) => typeof this.agentState) {
         this.agentState = updater(this.agentState);
         return this.agentState;
     }
@@ -38,16 +40,52 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
     return result === pending ? 'pending' : result;
 }
 
-async function flushAsyncPermissionPublication(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
-}
-
 describe('createSessionScopedMcpServices permission integration', () => {
+    it('presents long schema context through the real session interaction and permission owners', async () => {
+        const session = new FakePermissionSession();
+        const permissionHandler = new ProviderEnforcedPermissionHandler(session as unknown as ApiSessionClient, {
+            logPrefix: '[SessionMcpFormIntegration]',
+        });
+        const services = createNativeAgentSessionServices({
+            permissionHandler,
+            pluginId: 'happier.agent.test', contributionId: 'test', runtimeId: 'test',
+            sessionId: session.sessionId, occurrenceId: 'occurrence-1',
+            isCurrent: () => true, signal: new AbortController().signal,
+            readActiveTurnAdmissionWitness: () => ({
+                inputId: 'input-1', turnId: 'turn-1', userMessageSeq: 1, userMessageSeqs: [1],
+                causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+            }),
+        });
+        const service = createSessionScopedMcpServices({
+            interactions: services.interactions,
+            readScope: async () => ({ permissionHandler }),
+        });
+        try {
+            const pending = service.elicit({
+                toolName: 'configure', prompt: 'Deployment context. '.repeat(400),
+                schema: { type: 'object', properties: {
+                    mode: { type: 'string', title: 'Which deployment mode?', enum: ['safe', 'fast'] },
+                }, required: ['mode'] },
+            });
+            await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
+            const [id, request] = Object.entries(session.agentState.requests)[0]!;
+            expect(request).toMatchObject({
+                tool: 'AskUserQuestion', kind: 'user_action',
+                arguments: { questions: [{ question: expect.stringContaining('Which deployment mode?') }] },
+            });
+            await session.rpcHandlerManager.handlers.get('session.user_action.answer')!({
+                id, turnId: 'turn-1', approved: true, decision: 'approved', answers: { mode: ['safe'] },
+            });
+            await expect(pending).resolves.toEqual({ status: 'accepted', decision: 'approved', content: { mode: 'safe' } });
+        } finally {
+            await permissionHandler.reset();
+        }
+    });
     it('routes MCP elicitation through provider-enforced permission responses with plugin owner isolation', async () => {
         const session = new FakePermissionSession();
-        const permissionHandler = new ProviderEnforcedPermissionHandler(session as any, {
+        const permissionHandler = new ProviderEnforcedPermissionHandler(session as unknown as ApiSessionClient, {
             logPrefix: '[SessionMcpIntegration]',
+            getWorkspaceWrites: () => 'allow',
         });
         const ownerA = { kind: 'plugin' as const, pluginId: 'plugin-a', runtimeId: 'runtime-a' };
         const ownerB = { kind: 'plugin' as const, pluginId: 'plugin-b', runtimeId: 'runtime-b' };
@@ -70,12 +108,11 @@ describe('createSessionScopedMcpServices permission integration', () => {
             input,
         });
 
-        await flushAsyncPermissionPublication();
-        expect(session.agentState.requests['mcp-allow-session']).toMatchObject({
+        await vi.waitFor(() => expect(session.agentState.requests['mcp-allow-session']).toMatchObject({
             tool: 'mcp__shell__run_command',
             arguments: input,
             owner: ownerA,
-        });
+        }));
 
         await respond?.({
             id: 'mcp-allow-session',
@@ -114,13 +151,12 @@ describe('createSessionScopedMcpServices permission integration', () => {
             toolName: 'run_command',
             input,
         });
-        await flushAsyncPermissionPublication();
-        expect(await settledState(ownerBRequest)).toBe('pending');
-        expect(session.agentState.requests['mcp-owner-b']).toMatchObject({
+        await vi.waitFor(() => expect(session.agentState.requests['mcp-owner-b']).toMatchObject({
             tool: 'mcp__shell__run_command',
             arguments: input,
             owner: ownerB,
-        });
+        }));
+        expect(await settledState(ownerBRequest)).toBe('pending');
         await respond?.({ id: 'mcp-owner-b', approved: false, decision: 'denied' });
         await expect(ownerBRequest).resolves.toEqual({
             status: 'declined',
@@ -133,7 +169,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
             toolName: 'run_command',
             input: { command: 'printf cancelled' },
         });
-        await flushAsyncPermissionPublication();
+        await vi.waitFor(() => expect(session.agentState.requests['mcp-cancelled']).toBeDefined());
         await respond?.({ id: 'mcp-cancelled', approved: false, decision: 'abort' });
         await expect(cancelled).resolves.toEqual({
             status: 'cancelled',
@@ -147,12 +183,10 @@ describe('createSessionScopedMcpServices permission integration', () => {
             toolName: 'run_command',
             input: { command: 'printf aborted' },
         }, { signal: controller.signal });
-        await flushAsyncPermissionPublication();
-        expect(session.agentState.requests['mcp-aborted-by-caller']).toBeDefined();
+        await vi.waitFor(() => expect(session.agentState.requests['mcp-aborted-by-caller']).toBeDefined());
         controller.abort(new Error('caller retired'));
         await expect(aborted).rejects.toThrow('caller retired');
-        await flushAsyncPermissionPublication();
-        expect(session.agentState.requests['mcp-aborted-by-caller']).toBeUndefined();
+        await vi.waitFor(() => expect(session.agentState.requests['mcp-aborted-by-caller']).toBeUndefined());
     });
 
     it('uses the canonical interaction owner for schema elicitation and returns schema-shaped typed content', async () => {
@@ -280,7 +314,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
         expect(confirm).toHaveBeenCalledWith(
             {
                 kind: 'confirmation',
-                title: 'MCP request',
+                title: 'Confirmation',
                 message: 'Proceed with deployment?',
             },
             expect.any(Object),

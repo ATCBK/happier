@@ -1,22 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import type {
+import {
   CreateElicitationRequest,
-  CreateElicitationResponse,
+  type CreateElicitationResponse,
 } from '@agentclientprotocol/sdk';
 import {
-  MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1,
-  MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1,
   type SessionInputCausalPermissionAuthorityV1,
 } from '@happier-dev/protocol';
 import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import type { HostCurrentSessionInteractionsService as PluginCurrentSessionInteractionsService } from '@/agent/runtime/state/currentSessionUiTypes';
 import { isWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
+import { logger } from '@/ui/logger';
 import {
-  clampToMaxCodePoints,
   mcpElicitationFormContent,
-  mcpElicitationFormQuestions,
-  parseMcpElicitationFormSchema,
+  mcpElicitationFormRequest,
+  parseAcpElicitationFormSchema,
 } from '@/plugins/runtime/invocation/services/mcpElicitationForm';
 
 import type {
@@ -167,7 +165,11 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
       request: CreateElicitationRequest,
       context?: AcpPermissionCallContext,
     ): Promise<CreateElicitationResponse> {
-      if (request.mode !== 'form') {
+      if (request.mode !== 'form' || context?.signal?.aborted || params.signal.aborted) {
+        return Object.freeze({ action: 'cancel' as const });
+      }
+      if (!CreateElicitationRequest.isForm(request)) {
+        logger.warn('[ACP] Form elicitation schema could not be presented');
         return Object.freeze({ action: 'cancel' as const });
       }
       const toolCallId =
@@ -179,14 +181,13 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
         return Object.freeze({ action: 'cancel' as const });
       }
 
-      let schema: ReturnType<typeof parseMcpElicitationFormSchema>;
-      let questions: ReturnType<typeof mcpElicitationFormQuestions>;
+      let schema: ReturnType<typeof parseAcpElicitationFormSchema>;
+      let interaction: ReturnType<typeof mcpElicitationFormRequest>;
       try {
-        schema = parseMcpElicitationFormSchema(request.requestedSchema);
-        questions = mcpElicitationFormQuestions(schema, {
-          message: request.message,
-        });
+        schema = parseAcpElicitationFormSchema(request.requestedSchema);
+        interaction = mcpElicitationFormRequest(schema, request.message);
       } catch {
+        logger.warn('[ACP] Form elicitation schema could not be presented');
         return Object.freeze({ action: 'cancel' as const });
       }
 
@@ -198,19 +199,17 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
         resolveSettled: () => resolveSettled(),
       });
       pending.add(entry);
+      const signal = AbortSignal.any([params.signal, controller.signal, ...(context?.signal ? [context.signal] : [])]);
       try {
-        if (questions === null) {
+        if (interaction.kind === 'confirmation') {
           const result = await params.interactions.request(
+            interaction,
             {
-              kind: 'confirmation',
-              title: 'Confirmation',
-              message: request.message.trim() || 'Confirmation',
-            },
-            {
-              signal: AbortSignal.any([params.signal, controller.signal]),
+              signal,
               ...(custody.permissionContext ? { permissionContext: custody.permissionContext } : {}),
             },
           );
+          if (signal.aborted) return Object.freeze({ action: 'cancel' as const });
           if (result.status === 'approved') {
             return Object.freeze({ action: 'accept' as const, content: {} });
           }
@@ -220,42 +219,14 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
           return Object.freeze({ action: 'cancel' as const });
         }
 
-        const trimmedMessage = request.message.trim();
-        const alreadyContainedInPrompt = questions.some((q) => q.prompt.includes(trimmedMessage));
-        const shouldIncludeTitle =
-          trimmedMessage.length > 0
-          && !alreadyContainedInPrompt
-          && Array.from(trimmedMessage).length <= MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1;
-
-        let finalQuestions = questions;
-        if (
-          trimmedMessage.length > 0
-          && !alreadyContainedInPrompt
-          && Array.from(trimmedMessage).length > MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1
-        ) {
-          const first = questions[0];
-          const combinedPrompt = clampToMaxCodePoints(
-            `${trimmedMessage}\n\n${first.prompt}`,
-            MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1,
-          );
-          finalQuestions = [
-            Object.freeze({ ...first, prompt: combinedPrompt }),
-            ...questions.slice(1),
-          ] as unknown as typeof questions;
-        }
-
         const result = await params.interactions.request(
+          interaction,
           {
-            kind: 'questions',
-            ...(shouldIncludeTitle ? { title: trimmedMessage } : {}),
-            questions: finalQuestions,
-          },
-          {
-            signal: AbortSignal.any([params.signal, controller.signal]),
+            signal,
             ...(custody.permissionContext ? { permissionContext: custody.permissionContext } : {}),
           },
         );
-        if (result.status !== 'answered') {
+        if (signal.aborted || result.status !== 'answered') {
           return Object.freeze({ action: 'cancel' as const });
         }
         return Object.freeze({
@@ -266,6 +237,7 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
         if (isWorkflowInteractionCapacityError(error)) {
           throw error;
         }
+        if (!signal.aborted) logger.warn('[ACP] Form elicitation presentation failed');
         return Object.freeze({ action: 'cancel' as const });
       } finally {
         pending.delete(entry);

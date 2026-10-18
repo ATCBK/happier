@@ -2,12 +2,14 @@ import {
     ElicitRequestFormParamsSchema,
     type ElicitRequestFormParams,
 } from '@modelcontextprotocol/sdk/types.js';
+import type { ElicitationSchema } from '@agentclientprotocol/sdk';
 
 import { PluginError } from '@happier-dev/plugin-sdk';
 import {
     MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1,
     MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1,
     type InteractionTransientAuthorQuestionV1,
+    type InteractionTransientAuthorRequestV1,
     type InteractionTransientQuestionAnswerV1,
 } from '@happier-dev/protocol';
 
@@ -20,7 +22,7 @@ type McpElicitationChoice = Readonly<{
 export type McpElicitationFormSchema = ElicitRequestFormParams['requestedSchema'];
 export type McpElicitationFormContentValue = string | number | boolean | string[];
 
-export function clampToMaxCodePoints(value: string, maxCodePoints: number): string {
+function clampToMaxCodePoints(value: string, maxCodePoints: number): string {
     const codePoints = Array.from(value);
     if (codePoints.length <= maxCodePoints) return value;
     const marker = '\n\n... [truncated]';
@@ -107,6 +109,22 @@ export function parseMcpElicitationFormSchema(value: unknown): McpElicitationFor
     };
 }
 
+export function parseAcpElicitationFormSchema(schema: ElicitationSchema): McpElicitationFormSchema {
+    // ACP 1.2.1 uses null for absent optional schema fields; MCP 1.25.3 uses
+    // undefined. Keep that protocol translation separate from MCP validation.
+    const properties = Object.fromEntries(Object.entries(schema.properties ?? {}).map(([id, property]) => [
+        id,
+        Object.fromEntries(Object.entries(property).filter(([key, value]) => (
+            value !== null || key === 'type' || key === 'items'
+        ))),
+    ]));
+    return parseMcpElicitationFormSchema({
+        type: schema.type ?? 'object',
+        properties,
+        ...(schema.required == null ? {} : { required: schema.required }),
+    });
+}
+
 function choicesForProperty(property: Readonly<Record<string, unknown>>): readonly McpElicitationChoice[] {
     if (Array.isArray(property.enum)) {
         const values = property.enum.filter((value): value is string => typeof value === 'string');
@@ -191,38 +209,12 @@ function findCompanionOtherChoiceId(
     const companionTitle = typeof companionOther.title === 'string'
         ? companionOther.title.trim().toLowerCase()
         : '';
-    const companionDesc = typeof companionOther.description === 'string'
-        ? companionOther.description.trim().toLowerCase()
-        : '';
-
-    // 1. Exact match on choice.id or choice.label against companion title
-    if (companionTitle.length > 0) {
-        const exactMatch = choices.find((c) =>
-            c.id.toLowerCase() === companionTitle || (c.label && c.label.toLowerCase() === companionTitle)
-        );
-        if (exactMatch) return exactMatch.id;
-    }
-
-    // 2. Exact match against companion description
-    if (companionDesc.length > 0) {
-        const descMatch = choices.find((c) =>
-            c.id.toLowerCase() === companionDesc || (c.label && c.label.toLowerCase() === companionDesc)
-        );
-        if (descMatch) return descMatch.id;
-    }
-
-    // 3. Common identifiers/labels for "other" / "custom"
-    const commonMatch = choices.find((c) => {
-        const idLower = c.id.trim().toLowerCase();
-        const labelLower = (c.label ?? c.id).trim().toLowerCase();
-        return idLower === 'other' || labelLower === 'other'
-            || idLower === 'custom' || labelLower === 'custom'
-            || labelLower.startsWith('other ') || labelLower.startsWith('other(')
-            || labelLower.startsWith('other (');
-    });
-    if (commonMatch) return commonMatch.id;
-
-    return null;
+    if (companionTitle.length === 0) return null;
+    const matches = choices.filter((choice) => (
+        choice.id.toLowerCase() === companionTitle
+        || choice.label?.toLowerCase() === companionTitle
+    ));
+    return matches.length === 1 ? matches[0]!.id : null;
 }
 
 function readCompanionOtherProperty(
@@ -232,6 +224,7 @@ function readCompanionOtherProperty(
     required: ReadonlySet<string>,
 ): Readonly<Record<string, unknown>> | null {
     if (id.endsWith('__other') || !isChoiceProperty(property)) return null;
+    if (required.has(`${id}__other`)) return null;
     const candidate = properties[`${id}__other`];
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
     const record = candidate as Readonly<Record<string, unknown>>;
@@ -260,45 +253,27 @@ function isCompanionOtherKey(
     return readCompanionOtherProperty(properties, baseId, baseProperty as Readonly<Record<string, unknown>>, required) !== null;
 }
 
+function propertyPrompt(property: Readonly<Record<string, unknown>>): string | undefined {
+    return typeof property.title === 'string' && property.title.trim().length > 0
+        ? property.title.trim()
+        : typeof property.description === 'string' && property.description.trim().length > 0
+            ? property.description.trim()
+            : undefined;
+}
+
 export function mcpElicitationFormQuestions(
     schema: McpElicitationFormSchema,
-    options?: Readonly<{ message?: string }>,
 ): readonly [InteractionTransientAuthorQuestionV1, ...InteractionTransientAuthorQuestionV1[]] | null {
     const required = new Set(schema.required ?? []);
     const properties = schema.properties as Readonly<Record<string, unknown>>;
     const primaryEntries = Object.entries(properties).filter(
         ([id]) => !isCompanionOtherKey(properties, id, required),
     );
-    const fallbackMessage =
-        typeof options?.message === 'string' && options.message.trim().length > 0
-            ? options.message.trim()
-            : undefined;
-
-    const questions = primaryEntries.map(([id, rawProperty], index): InteractionTransientAuthorQuestionV1 => {
+    const questions = primaryEntries.map(([id, rawProperty]): InteractionTransientAuthorQuestionV1 => {
         const property = rawProperty as Readonly<Record<string, unknown>>;
-        const rawPrompt = typeof property.title === 'string' && property.title.trim().length > 0
-            ? property.title.trim()
-            : typeof property.description === 'string' && property.description.trim().length > 0
-                ? property.description.trim()
-                : undefined;
+        const rawPrompt = propertyPrompt(property);
 
-        let prompt: string;
-        if (!rawPrompt) {
-            prompt = primaryEntries.length === 1 && fallbackMessage ? fallbackMessage : id;
-        } else if (!fallbackMessage || fallbackMessage === rawPrompt || rawPrompt.includes(fallbackMessage)) {
-            prompt = rawPrompt;
-        } else if (
-            index === 0
-            && Array.from(fallbackMessage).length > MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1
-        ) {
-            // When the plan summary exceeds the 512-code-point title limit, preserve it in the
-            // primary question prompt rather than dropping it.
-            prompt = `${fallbackMessage}\n\n${rawPrompt}`;
-        } else {
-            prompt = rawPrompt;
-        }
-
-        const boundedPrompt = clampToMaxCodePoints(prompt, MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1);
+        const boundedPrompt = clampToMaxCodePoints(rawPrompt ?? id, MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1);
 
         const companionOther = readCompanionOtherProperty(properties, id, property, required);
         const companionOtherChoiceId = companionOther
@@ -362,6 +337,46 @@ export function mcpElicitationFormQuestions(
     return questions.length === 0
         ? null
         : questions as [InteractionTransientAuthorQuestionV1, ...InteractionTransientAuthorQuestionV1[]];
+}
+
+export function mcpElicitationFormRequest(
+    schema: McpElicitationFormSchema,
+    message: string,
+): Extract<InteractionTransientAuthorRequestV1, { kind: 'questions' | 'confirmation' }> {
+    const questions = mcpElicitationFormQuestions(schema);
+    const context = message.trim();
+    if (questions === null) {
+        return {
+            kind: 'confirmation',
+            title: 'Confirmation',
+            message: clampToMaxCodePoints(context || 'Confirmation', MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1),
+        };
+    }
+    if (!context || questions.some((question) => question.prompt.includes(context))) {
+        return { kind: 'questions', questions: [...questions] };
+    }
+    const first = questions[0];
+    const property = schema.properties[first.id] as Readonly<Record<string, unknown>>;
+    const hasQuestionPrompt = propertyPrompt(property) !== undefined;
+    if (questions.length === 1 && !hasQuestionPrompt) {
+        return {
+            kind: 'questions',
+            questions: [{ ...first, prompt: clampToMaxCodePoints(context, MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1) }],
+        };
+    }
+    if (Array.from(context).length <= MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1) {
+        return { kind: 'questions', title: context, questions: [...questions] };
+    }
+    return {
+        kind: 'questions',
+        questions: [
+            {
+                ...first,
+                prompt: clampToMaxCodePoints(`${first.prompt}\n\n${context}`, MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1),
+            },
+            ...questions.slice(1),
+        ],
+    };
 }
 
 function selectedValue(answer: InteractionTransientQuestionAnswerV1): string {

@@ -30,6 +30,7 @@ export type AcpClientConnectionHandlers = Readonly<{
   ) => WriteTextFileResponse | Promise<WriteTextFileResponse>;
   createElicitation?: (
     params: CreateElicitationRequest,
+    context?: Readonly<{ signal: AbortSignal }>,
   ) => CreateElicitationResponse | Promise<CreateElicitationResponse>;
 }>;
 

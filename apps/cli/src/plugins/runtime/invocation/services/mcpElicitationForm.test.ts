@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { InteractionTransientAuthorRequestV1Schema } from '@happier-dev/protocol';
 
 import {
   mcpElicitationFormContent,
   mcpElicitationFormQuestions,
+  mcpElicitationFormRequest,
+  parseAcpElicitationFormSchema,
   parseMcpElicitationFormSchema,
 } from './mcpElicitationForm';
 
@@ -31,9 +34,9 @@ describe('mcpElicitationForm', () => {
       required: ['value'],
     });
 
-    const questions = mcpElicitationFormQuestions(schema, {
-      message: 'Approve plan ready at plan://session/plan.md?',
-    });
+    const request = mcpElicitationFormRequest(schema, 'Approve plan ready at plan://session/plan.md?');
+    expect(request.kind).toBe('questions');
+    const questions = request.kind === 'questions' ? request.questions : [];
 
     expect(questions).toEqual([
       {
@@ -67,10 +70,8 @@ describe('mcpElicitationForm', () => {
       required: ['notes'],
     });
     expect(
-      mcpElicitationFormQuestions(textSchema, {
-        message: 'Provide notes:',
-      }),
-    ).toEqual([
+      mcpElicitationFormRequest(textSchema, 'Provide notes:'),
+    ).toEqual({ kind: 'questions', questions: [
       {
         id: 'notes',
         prompt: 'Provide notes:',
@@ -78,7 +79,7 @@ describe('mcpElicitationForm', () => {
         required: true,
         initialValue: 'Initial draft',
       },
-    ]);
+    ] });
   });
 
   it('collapses companion __other fields into allowCustom choice questions and maps custom answers back to __other', () => {
@@ -239,6 +240,43 @@ describe('mcpElicitationForm', () => {
     expect(questions?.map((q) => q.id)).toEqual(['choice', 'choice__other']);
   });
 
+  it('preserves ordinary Custom options when the provider has a separate Other input', () => {
+    const schema = parseMcpElicitationFormSchema({
+      type: 'object',
+      properties: {
+        q0: { type: 'string', oneOf: [
+          { const: 'Standard', title: 'Standard' },
+          { const: 'Custom', title: 'Custom' },
+        ] },
+        q0__other: { type: 'string', title: 'Other (type your own)' },
+      },
+    });
+    expect(mcpElicitationFormQuestions(schema)).toMatchObject([
+      { id: 'q0', allowCustom: true, choices: [{ id: 'Standard' }, { id: 'Custom' }] },
+    ]);
+    expect(mcpElicitationFormContent(schema, {
+      q0: { kind: 'singleChoice', answer: { kind: 'choice', choiceId: 'Custom' } },
+    })).toEqual({ q0: 'Custom' });
+    expect(mcpElicitationFormContent(schema, {
+      q0: { kind: 'singleChoice', answer: { kind: 'custom', value: 'An independent answer' } },
+    })).toEqual({ q0__other: 'An independent answer' });
+  });
+
+  it('does not infer a sentinel when the companion title matches more than one choice', () => {
+    const schema = parseMcpElicitationFormSchema({
+      type: 'object',
+      properties: {
+        choice: { type: 'string', oneOf: [
+          { const: 'first', title: 'Other' },
+          { const: 'second', title: 'Other' },
+        ] },
+        choice__other: { type: 'string', title: 'Other' },
+      },
+      required: ['choice'],
+    });
+    expect(mcpElicitationFormQuestions(schema)?.map((question) => question.id)).toEqual(['choice', 'choice__other']);
+  });
+
   it('preserves plan summaries exceeding 512 code points when property has its own title', () => {
     const longPlan = `### Plan Steps\n\n${'- Step description in detail with reasoning.\n'.repeat(15)}`;
     expect(Array.from(longPlan).length).toBeGreaterThan(512);
@@ -258,9 +296,10 @@ describe('mcpElicitationForm', () => {
       required: ['decision'],
     });
 
-    const questions = mcpElicitationFormQuestions(schema, { message: longPlan });
+    const request = mcpElicitationFormRequest(schema, longPlan);
+    const questions = request.kind === 'questions' ? request.questions : [];
     expect(questions).toHaveLength(1);
-    expect(questions![0].prompt).toContain(longPlan);
+    expect(questions![0].prompt).toContain(longPlan.trim());
     expect(questions![0].prompt).toContain('Decision');
   });
 
@@ -282,7 +321,8 @@ describe('mcpElicitationForm', () => {
       required: ['decision'],
     });
 
-    const questions = mcpElicitationFormQuestions(schema, { message: hugePlan });
+    const request = mcpElicitationFormRequest(schema, hugePlan);
+    const questions = request.kind === 'questions' ? request.questions : [];
     expect(questions).toHaveLength(1);
     expect(Array.from(questions![0].prompt).length).toBeLessThanOrEqual(4_096);
     expect(questions![0].prompt).toContain('... [truncated]');
@@ -293,6 +333,79 @@ describe('mcpElicitationForm', () => {
       type: 'object',
       properties: {},
     });
-    expect(mcpElicitationFormQuestions(schema, { message: 'Confirm?' })).toBeNull();
+    expect(mcpElicitationFormQuestions(schema)).toBeNull();
+    expect(mcpElicitationFormRequest(schema, 'Confirm?')).toEqual({
+      kind: 'confirmation', title: 'Confirmation', message: 'Confirm?',
+    });
+  });
+
+  it('keeps a required companion field independently answerable for regular choices', () => {
+    const schema = parseMcpElicitationFormSchema({
+      type: 'object',
+      properties: {
+        choice: { type: 'string', enum: ['first', 'other'] },
+        choice__other: { type: 'string', title: 'Other' },
+      },
+      required: ['choice', 'choice__other'],
+    });
+    expect(mcpElicitationFormQuestions(schema)?.map((question) => question.id)).toEqual(['choice', 'choice__other']);
+    expect(mcpElicitationFormContent(schema, {
+      choice: { kind: 'singleChoice', answer: { kind: 'choice', choiceId: 'first' } },
+      choice__other: { kind: 'text', value: 'Required details' },
+    })).toEqual({ choice: 'first', choice__other: 'Required details' });
+  });
+
+  it('translates ACP nullable schema fields while preserving strict MCP validation', () => {
+    const schema = parseAcpElicitationFormSchema({
+      type: 'object',
+      required: null,
+      properties: {
+        decision: { type: 'string', minLength: null, maxLength: null, enum: null, oneOf: [
+          { const: 'approve', title: 'Approve', description: 'Execute the plan' },
+          { const: 'refine', title: 'Refine' },
+        ] },
+        tags: { type: 'array', minItems: null, maxItems: null, items: { type: 'string', enum: ['cli', 'ui'] } },
+      },
+    });
+    expect(mcpElicitationFormQuestions(schema)).toMatchObject([
+      { id: 'decision', type: 'singleChoice', required: false, choices: [
+        { id: 'approve', description: 'Execute the plan' }, { id: 'refine' },
+      ] },
+      { id: 'tags', type: 'multipleChoice', choices: [{ id: 'cli' }, { id: 'ui' }] },
+    ]);
+    expect(() => parseMcpElicitationFormSchema({ type: 'object', properties: {}, required: null })).toThrow();
+  });
+
+  it('retains the actual question when the shared context exceeds the prompt budget', () => {
+    const schema = parseMcpElicitationFormSchema({ type: 'object', properties: {
+      decision: { type: 'string', title: 'Approve deployment to production?', enum: ['approve', 'refine'] },
+      notes: { type: 'string', title: 'Additional instructions' },
+    } });
+    const request = mcpElicitationFormRequest(schema, 'Plan detail. '.repeat(1_000));
+    expect(request.kind).toBe('questions');
+    if (request.kind !== 'questions') throw new Error('Expected questions');
+    expect(request.questions[0].prompt).toContain('Approve deployment to production?');
+    expect(request.questions[0].prompt).toContain('Plan detail.');
+    expect(request.questions[0].prompt).toContain('... [truncated]');
+    expect(Array.from(request.questions[0].prompt).length).toBeLessThanOrEqual(4_096);
+    expect(request.questions[1].prompt).toBe('Additional instructions');
+    expect(InteractionTransientAuthorRequestV1Schema.safeParse(request).success).toBe(true);
+  });
+
+  it('bounds confirmation context and retains regular boolean, text, and choice answers', () => {
+    const confirmation = mcpElicitationFormRequest(parseMcpElicitationFormSchema({ type: 'object', properties: {} }), 'Details. '.repeat(1_000));
+    expect(confirmation.kind).toBe('confirmation');
+    if (confirmation.kind !== 'confirmation') throw new Error('Expected confirmation');
+    expect(Array.from(confirmation.message).length).toBeLessThanOrEqual(4_096);
+    expect(confirmation.message).toContain('... [truncated]');
+    expect(InteractionTransientAuthorRequestV1Schema.safeParse(confirmation).success).toBe(true);
+    const schema = parseMcpElicitationFormSchema({ type: 'object', properties: {
+      enabled: { type: 'boolean' }, notes: { type: 'string', default: 'Existing notes' }, choice: { type: 'string', enum: ['a', 'b'] },
+    } });
+    expect(mcpElicitationFormContent(schema, {
+      enabled: { kind: 'singleChoice', answer: { kind: 'choice', choiceId: 'false' } },
+      notes: { kind: 'text', value: 'New notes' },
+      choice: { kind: 'singleChoice', answer: { kind: 'choice', choiceId: 'b' } },
+    })).toEqual({ enabled: false, notes: 'New notes', choice: 'b' });
   });
 });

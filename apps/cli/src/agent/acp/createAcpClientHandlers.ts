@@ -88,25 +88,28 @@ export function createAcpClientHandlers(params: Readonly<{
       ? {
           createElicitation: async (
             request: CreateElicitationRequest,
+            context?: Readonly<{ signal: AbortSignal }>,
           ): Promise<CreateElicitationResponse> => {
             const requestSessionId =
               request.mode === 'form' && typeof request.sessionId === 'string'
                 ? request.sessionId
                 : (params.getActiveSessionId() ?? '');
             const permissionRequest = params.capturePermissionRequest(requestSessionId);
-            if (!permissionRequest.isCurrent()) {
+            if (context?.signal.aborted || !permissionRequest.isCurrent()) {
               return { action: 'cancel' };
             }
 
             try {
-              const response = await handleElicitation(request);
-              if (!permissionRequest.isCurrent()) {
+              const response = await (context
+                ? handleElicitation(request, { signal: context.signal })
+                : handleElicitation(request));
+              if (context?.signal.aborted || !permissionRequest.isCurrent()) {
                 return { action: 'cancel' };
               }
               return response;
             } catch (error) {
               logger.debug('[AcpBackend] Error in elicitation handler:', error);
-              if (permissionRequest.isCurrent() && isWorkflowInteractionCapacityError(error)) {
+              if (!context?.signal.aborted && permissionRequest.isCurrent() && isWorkflowInteractionCapacityError(error)) {
                 await permissionRequest.cancel(error).catch((cancelError: unknown) => {
                   logger.warn('[AcpBackend] Elicitation capacity cancellation failed', {
                     errorType: cancelError instanceof Error ? 'Error' : typeof cancelError,

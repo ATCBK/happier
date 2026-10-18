@@ -30,7 +30,9 @@ export function registerAcpClientHandlers(params: Readonly<{
   }
   if (params.handlers.createElicitation) {
     const createElicitation = params.handlers.createElicitation;
-    params.app.onRequest(methods.client.elicitation.create, (context) => createElicitation(context.params));
+    params.app.onRequest(methods.client.elicitation.create, (context) => (
+      createElicitation(context.params, { signal: context.signal })
+    ));
   }
 
   const registrationKeys = new Set<string>();

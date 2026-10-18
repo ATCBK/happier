@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isAcpFsEnabled } from '../AcpBackend';
-import { buildInitializeRequest } from '../fs/acpClientFsMethods';
+import { isAcpFsEnabled, buildInitializeRequest } from '../fs/acpClientFsMethods';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 
 const envScope = createEnvKeyScope(['HAPPIER_ACP_FS']);

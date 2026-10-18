@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
+
 import type {
   HostCurrentSessionInteractionsService as PluginCurrentSessionInteractionsService,
   HostSessionApprovalRequest as PluginSessionApprovalRequest,
@@ -35,9 +37,7 @@ function interactions(request: ApprovalRequester): PluginCurrentSessionInteracti
 
 class FakePermissionSession {
   sessionId = 'public-acp-permission-test';
-  rpcHandlerManager = {
-    registerHandler() {},
-  };
+  rpcHandlerManager = new ServerBoundPermissionRpcHandlerManager(this.sessionId);
   agentState: {
     requests: Record<string, unknown>;
     completedRequests: Record<string, unknown>;
@@ -249,223 +249,140 @@ describe('createPublicAcpPermissionHandler', () => {
     await expect(pending).resolves.toEqual(expect.objectContaining({ decision: 'abort' }));
   });
 
-  it('presents ACP form elicitation through nativeAgentSessionInteractions and returns accepted answers', async () => {
-    const { createNativeAgentCurrentSessionUiServices } = await import(
-      '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'
-    );
-    const multiLinePlanMessage = `${"# Plan Summary\n\n"}${"- Step 1: Inspect ACP form elicitation.\n".repeat(20)}`;
-    const handleToolCall = vi.fn(async (_toolCallId: string, toolName: string, input: unknown) => {
-      expect(toolName).toBe('AskUserQuestion');
-      expect(input).toMatchObject({
-        questions: [
-          {
-            id: 'value',
-            question: multiLinePlanMessage.trim(),
-            options: [
-              { id: 'approve', label: 'Approve plan', description: 'Exit plan mode and execute' },
-              { id: 'refine', label: 'Refine plan', description: 'Stay in plan mode' },
-            ],
-          },
-        ],
-      });
-      return {
-        decision: 'approved' as const,
-        answers: {
-          value: ['approve'],
-        },
-      };
+  async function elicitationFixture(permissionMode: 'default' | 'yolo' | 'plan' = 'default') {
+    const [{ ProviderEnforcedPermissionHandler }, { createNativeAgentCurrentSessionUiServices }] = await Promise.all([
+      import('@/agent/permissions/providerEnforced/handler'),
+      import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'),
+    ]);
+    const session = new FakePermissionSession();
+    // The fake replaces the server-backed session transport; permission policy stays real.
+    const permissionHandler = new ProviderEnforcedPermissionHandler(session as unknown as ApiSessionClient, {
+      logPrefix: '[PublicAcpElicitationTest]',
+      getWorkspaceWrites: () => 'allow',
     });
+    permissionHandler.setPermissionMode(permissionMode);
+    const signal = new AbortController().signal;
     const currentSession = createNativeAgentCurrentSessionUiServices({
-      permissionHandler: { handleToolCall },
-      pluginId: 'happier.agent.omp',
-      contributionId: 'omp',
-      runtimeId: 'omp',
-      sessionId: 'public-acp-permission-test',
+      permissionHandler,
+      pluginId: 'happier.agent.test',
+      contributionId: 'test',
+      runtimeId: 'test',
+      sessionId: session.sessionId,
       occurrenceId: 'occurrence-1',
-      interactionDeadlineMs: 1_000,
       isCurrent: () => true,
-      signal: new AbortController().signal,
+      signal,
     });
     const handler = createPublicAcpPermissionHandler({
       interactions: currentSession.interactions,
-      signal: new AbortController().signal,
-      resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
+      signal,
+      resolveRequestId: toolCallId => `turn-1:${toolCallId}`,
       resolveTurnId: () => 'turn-1',
       resolveCausalPermissionAuthority: () => ({
         kind: 'admittedSessionInputV1',
-        admittedPermissionCeiling: 'plan',
+        admittedPermissionCeiling: permissionMode,
       }),
     });
+    async function publishedRequest() {
+      await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
+      const [id, input] = Object.entries(session.agentState.requests)[0]!;
+      return { id, input };
+    }
+    async function answer(id: string, approved: boolean, answers?: Readonly<Record<string, readonly string[]>>) {
+      const respond = session.rpcHandlerManager.handlers.get('session.user_action.answer');
+      expect(respond).toBeDefined();
+      await expect(respond!({
+        id,
+        turnId: 'turn-1',
+        approved,
+        decision: approved ? 'approved' : 'denied',
+        ...(answers ? { answers } : {}),
+      })).resolves.toBeUndefined();
+    }
+    return { session, permissionHandler, handler, publishedRequest, answer };
+  }
 
-    await expect(
-      handler.handleElicitation!({
-        mode: 'form',
-        sessionId: 'session-1',
-        toolCallId: 'elicit-plan-1',
-        message: multiLinePlanMessage,
+  it('keeps plan questions pending for an explicit refine answer through the real permission owner', async () => {
+    const fixture = await elicitationFixture('plan');
+    try {
+      const message = '# Plan summary\n' + '- Inspect the ACP adapter.\n'.repeat(25);
+      const pending = fixture.handler.handleElicitation!({
+        mode: 'form', sessionId: 'session-1', message,
         requestedSchema: {
-          type: 'object',
-          properties: {
-            value: {
-              type: 'string',
-              oneOf: [
-                { const: 'approve', title: 'Approve plan', description: 'Exit plan mode and execute' },
-                { const: 'refine', title: 'Refine plan', description: 'Stay in plan mode' },
-              ],
-            },
-          },
-          required: ['value'],
+          type: 'object', properties: {
+            value: { type: 'string', oneOf: [
+              { const: 'approve', title: 'Approve plan', description: 'Execute the plan' },
+              { const: 'refine', title: 'Refine plan', description: 'Keep planning' },
+            ] },
+          }, required: ['value'],
         },
-      }),
-    ).resolves.toEqual({
-      action: 'accept',
-      content: {
-        value: 'approve',
-      },
-    });
-    expect(handleToolCall).toHaveBeenCalledTimes(1);
+      });
+      const request = await fixture.publishedRequest();
+      expect(request.input).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action', turnId: 'turn-1' });
+      await fixture.answer(request.id, true, { value: ['refine'] });
+      await expect(pending).resolves.toEqual({ action: 'accept', content: { value: 'refine' } });
+      expect(Object.keys(fixture.session.agentState.requests)).toEqual([]);
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
   });
 
-  it('routes empty-property ACP form elicitation through confirmation and maps decline/cancel', async () => {
-    const { createNativeAgentCurrentSessionUiServices } = await import(
-      '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'
-    );
-    const handleToolCall = vi.fn(async (_toolCallId: string, toolName: string, input: unknown) => {
-      expect(toolName).toBe('AgentConfirmation');
-      const confirmation = input as { message?: string };
-      if (confirmation.message === 'Confirm accept?') {
-        return {
-          decision: 'approved' as const,
-        };
+  it.each(['default', 'yolo'] as const)('requires explicit confirmation acceptance or decline in %s mode', async (mode) => {
+    const fixture = await elicitationFixture(mode);
+    try {
+      for (const approved of [false, true]) {
+        const pending = fixture.handler.handleElicitation!({
+          mode: 'form', sessionId: 'session-1', message: 'Continue?',
+          requestedSchema: { type: 'object', properties: {} },
+        });
+        const request = await fixture.publishedRequest();
+        expect(request.input).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action' });
+        await fixture.answer(request.id, true, { confirmation: [approved ? 'confirm' : 'decline'] });
+        await expect(pending).resolves.toEqual(approved
+          ? { action: 'accept', content: {} }
+          : { action: 'decline' });
       }
-      return {
-        decision: 'rejected' as const,
-      };
-    });
-    const currentSession = createNativeAgentCurrentSessionUiServices({
-      permissionHandler: { handleToolCall },
-      pluginId: 'happier.agent.omp',
-      contributionId: 'omp',
-      runtimeId: 'omp',
-      sessionId: 'public-acp-permission-test',
-      occurrenceId: 'occurrence-1',
-      interactionDeadlineMs: 1_000,
-      isCurrent: () => true,
-      signal: new AbortController().signal,
-    });
-    const handler = createPublicAcpPermissionHandler({
-      interactions: currentSession.interactions,
-      signal: new AbortController().signal,
-      resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
-    });
-
-    await expect(
-      handler.handleElicitation!({
-        mode: 'form',
-        sessionId: 'session-1',
-        toolCallId: 'confirm-1',
-        message: 'Confirm accept?',
-        requestedSchema: {
-          type: 'object',
-          properties: {},
-        },
-      }),
-    ).resolves.toEqual({
-      action: 'accept',
-      content: {},
-    });
-
-    await expect(
-      handler.handleElicitation!({
-        mode: 'form',
-        sessionId: 'session-1',
-        toolCallId: 'confirm-2',
-        message: 'Confirm decline?',
-        requestedSchema: {
-          type: 'object',
-          properties: {},
-        },
-      }),
-    ).resolves.toEqual({
-      action: 'decline',
-    });
-
-    await expect(
-      handler.handleElicitation!({
-        mode: 'url',
-        sessionId: 'session-1',
-        elicitationId: 'url-1',
-        message: 'Open URL',
-        url: 'https://example.com',
-      } as never),
-    ).resolves.toEqual({
-      action: 'cancel',
-    });
-    expect(handleToolCall).toHaveBeenCalledTimes(2);
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
   });
 
-  it('truncates plan messages exceeding 4,096 code points without failing canonical schema validation', async () => {
-    const { createNativeAgentCurrentSessionUiServices } = await import(
-      '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'
-    );
-    const hugePlanMessage = 'Plan step details. '.repeat(350); // ~6,650 characters (> 4,096 limit)
-    let capturedQuestionPrompt: string | undefined;
-    const handleToolCall = vi.fn(async (_toolCallId: string, toolName: string, input: unknown) => {
-      expect(toolName).toBe('AskUserQuestion');
-      const questionsInput = input as { questions: Array<{ id: string; question: string }> };
-      capturedQuestionPrompt = questionsInput.questions[0]?.question;
-      return {
-        decision: 'approved' as const,
-        answers: {
-          decision: ['approve'],
-        },
+  it('keeps the actual question visible with long context and accepts ACP nullable schema fields', async () => {
+    const fixture = await elicitationFixture();
+    try {
+      const pending = fixture.handler.handleElicitation!({
+        mode: 'form', sessionId: 'session-1', message: 'Plan details. '.repeat(400),
+        requestedSchema: { type: 'object', properties: {
+          value: { type: 'string', title: 'Which implementation?', enum: ['simple', 'other'] },
+        }, required: null },
+      });
+      const request = await fixture.publishedRequest();
+      expect(request.input).toMatchObject({ arguments: { questions: [{ question: expect.stringContaining('Which implementation?') }] } });
+      await fixture.answer(request.id, true, { value: ['simple'] });
+      await expect(pending).resolves.toEqual({ action: 'accept', content: { value: 'simple' } });
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
+  });
+
+  it('withdraws only the cancelled elicitation and still accepts the next request', async () => {
+    const fixture = await elicitationFixture();
+    try {
+      const controller = new AbortController();
+      const input = {
+        mode: 'form' as const, sessionId: 'session-1', message: 'Your answer?',
+        requestedSchema: { type: 'object' as const, properties: { value: { type: 'string' as const } }, required: ['value'] },
       };
-    });
-    const currentSession = createNativeAgentCurrentSessionUiServices({
-      permissionHandler: { handleToolCall },
-      pluginId: 'happier.agent.omp',
-      contributionId: 'omp',
-      runtimeId: 'omp',
-      sessionId: 'public-acp-permission-test',
-      occurrenceId: 'occurrence-1',
-      interactionDeadlineMs: 1_000,
-      isCurrent: () => true,
-      signal: new AbortController().signal,
-    });
-    const handler = createPublicAcpPermissionHandler({
-      interactions: currentSession.interactions,
-      signal: new AbortController().signal,
-      resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
-    });
-
-    const response = await handler.handleElicitation!({
-      mode: 'form',
-      sessionId: 'session-1',
-      toolCallId: 'huge-plan-1',
-      message: hugePlanMessage,
-      requestedSchema: {
-        type: 'object',
-        properties: {
-          decision: {
-            type: 'string',
-            oneOf: [
-              { const: 'approve', title: 'Approve plan' },
-              { const: 'refine', title: 'Refine plan' },
-            ],
-          },
-        },
-        required: ['decision'],
-      },
-    });
-
-    expect(response).toEqual({
-      action: 'accept',
-      content: {
-        decision: 'approve',
-      },
-    });
-    expect(capturedQuestionPrompt).toBeDefined();
-    expect(Array.from(capturedQuestionPrompt!).length).toBeLessThanOrEqual(4_096);
-    expect(capturedQuestionPrompt!).toContain('... [truncated]');
+      const pending = fixture.handler.handleElicitation!(input, { signal: controller.signal });
+      const request = await fixture.publishedRequest();
+      controller.abort();
+      await expect(pending).resolves.toEqual({ action: 'cancel' });
+      expect(fixture.session.agentState.requests[request.id]).toBeUndefined();
+      const next = fixture.handler.handleElicitation!(input);
+      const nextRequest = await fixture.publishedRequest();
+      await fixture.answer(nextRequest.id, true, { value: ['still active'] });
+      await expect(next).resolves.toEqual({ action: 'accept', content: { value: 'still active' } });
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
   });
 });
