@@ -86,6 +86,9 @@ export function RootLayoutNavigationEffects(): React.ReactElement | null {
     }>();
     const debugRouterEnabled = process.env.EXPO_PUBLIC_DEBUG === '1';
     const happierVoiceSupported = useHappierVoiceSupport();
+    const usesHappierVoice = storage((state) =>
+        state.settings.voice.providerId === 'realtime_elevenlabs'
+        && state.settings.voice.adapters.realtime_elevenlabs.billingMode === 'happier');
     const activeServerAccountScope = useActiveServerAccountScope();
     const isTerminalConnectRoute = segments.includes('terminal') && segments.includes('connect');
 
@@ -234,9 +237,7 @@ export function RootLayoutNavigationEffects(): React.ReactElement | null {
     React.useEffect(() => {
         if (!auth.isAuthenticated) return;
         if (happierVoiceSupported !== false) return;
-        const voice = storage.getState().settings.voice;
-        if (voice.providerId !== 'realtime_elevenlabs') return;
-        if (voice.adapters.realtime_elevenlabs.billingMode !== 'happier') return;
+        if (!usesHappierVoice) return;
         let cancelled = false;
         fireAndForget((async () => {
             const { applySystemSettings } = await import('@/sync/store/settingsWriters');
@@ -250,7 +251,7 @@ export function RootLayoutNavigationEffects(): React.ReactElement | null {
         return () => {
             cancelled = true;
         };
-    }, [auth.isAuthenticated, happierVoiceSupported]);
+    }, [auth.isAuthenticated, happierVoiceSupported, usesHappierVoice]);
 
     if (debugRouterEnabled && Platform.OS === 'web') {
         return (
