@@ -460,6 +460,20 @@ host dependency vendoring and explicit external-package bundles. Remove it when 
 Transformers distribution declares the dependency or stops importing it. Validate this closure
 outside the repository's hoisted `node_modules`, which otherwise masks the missing dependency.
 
+Current development source keeps each Sharp dependency tree together with Yarn's existing
+`nohoist` policy: the CLI, server and website use Sharp 0.35.5, while older transitive consumers
+retain their own native addon and matching libvips. `sharpRuntimeSidecars.ts` resolves the
+CLI/server closure from the importing workspace and stages the target packages together beside
+the executable. CLI packaging excludes Sharp from its generic dependency copier so this shared
+projection owns both binary layouts. Target validation resolves packages within the payload;
+dependencies in the source checkout cannot satisfy a missing packaged native dependency.
+
+Both binaries use `packages/cli-common/scripts/buildBunBinary.mjs`. It bundles Sharp's public
+CJS entry, preserving Sharp's platform selection, CPU checks and error reporting, and redirects
+only the resolved native addon import to its staged file. The filename comes from the actual
+native import, preserving libvips adjacency without embedding renamed Bun native assets.
+This does not enable Bun's package-json autoloader; the CLI also keeps dotenv autoloading disabled.
+
 Binary artifact finalization projects native dependencies from the requested artifact target,
 not the build host: ONNX Runtime Node retains its target OS/architecture directory with all
 support libraries, and PTY packages retain target prebuilds plus source-built Release/Debug

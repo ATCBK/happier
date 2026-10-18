@@ -221,9 +221,6 @@ export async function compileBunBinary({
   }
   for (const [name, value] of Object.entries(defines)) args.push(`--define=${name}=${value}`);
   if (autoloadDotenv !== undefined) {
-    if (buildRunnerEntrypoint) {
-      throw new Error('[component-artifacts] compile dotenv autoload option is unsupported by the custom Bun build runner');
-    }
     args.push(autoloadDotenv ? '--compile-autoload-dotenv' : '--no-compile-autoload-dotenv');
   }
   for (const external of externals) {

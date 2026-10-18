@@ -200,7 +200,9 @@
       "**/react-native",
       "**/react-native/**",
       "**/react-native-edge-to-edge/**",
-      "**/react-native-incall-manager/**"
+      "**/react-native-incall-manager/**",
+      "**/sharp",
+      "**/sharp/**"
     ]
   },
   "resolutions": {

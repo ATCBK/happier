@@ -1,11 +1,12 @@
 import * as Sentry from "@sentry/node";
 import { createRequire } from "node:module";
-import type { Integration } from "@sentry/core";
-import type { Log } from "@sentry/core";
+import type { Log } from "@sentry/node";
 
 import { parseOptionalBooleanEnv } from "@/config/env";
 import { redactSentryEvent, redactSentryLog } from "./sentryLogRedaction";
 import { redactPublicShareCapabilityUrl } from "@happier-dev/protocol";
+
+type Integration = Parameters<typeof Sentry.addIntegration>[0];
 
 type ServerSentryConfig = {
     dsn: string;
