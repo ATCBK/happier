@@ -280,6 +280,28 @@ user. Dequeue flushes only the admitted existing route and retains its provenanc
 These are 0.3 development source contracts, not released or loaded-runtime QA
 claims. An ordinary link or committed receipt does not supply copy provenance.
 
+New 0.3 worker-copy relationships store `committedAtMs: null` while staged. The
+existing relationship owner replaces it with the commit timestamp only after
+the target commit settles, in the same publication that enables the link.
+Pause/resume preserves that fact. A failed creation retains the explicit null;
+an absent field on an older row conservatively retains possible native custody.
+The Project Service binding observer excludes only worker-copy definitions with
+the explicit null marker. Committed and legacy paused links still require a
+complete native binding observation; an unreadable endpoint returns unavailable
+with its Machine identity. This recorded creation fact does not replace the
+target-local materialization receipt or authorize removal of target files.
+The stored relationship and placement result remain closed V1 objects; the
+tolerant stored reader accepts an absent legacy field and validates present
+values. These undeployed 0.3 refinements introduce no supported old-reader/new-writer
+or rollback direction.
+
+Service placement observations in 0.3 development carry an optional bounded
+`reasonCode` when native custody cannot be read. Machine-specific failures also
+retain the Machine identity; Account/topology currentness and malformed binding
+failures remain distinct from absence. The closed V1 reader accepts omission
+from earlier development producers. This diagnostic grants no execution or
+control authority and adds no persisted state or supported rollback direction.
+
 ### Widget and organization stored readers (0.3 development)
 
 WorkBoard widget placement refs retain their original server label, which can

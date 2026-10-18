@@ -1,9 +1,83 @@
 import { describe, expect, it } from 'vitest';
-import { observeProjectServicePlacementActualV1 } from './projectServicePlacementV1.js';
+import { observeProjectServicePlacementActualV1, ProjectServicePlacementGetResultV1Schema, createDefaultProjectServicePlacementV1 } from './projectServicePlacementV1.js';
 import type { WorkspaceSyncChildMachineFacts } from './workspaceSyncTopology.js';
 import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1 } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 
 describe('actual service placement through admitted Sync endpoints', () => {
+  it.each(['currentness', 'workspace', 'topology', 'binding', 'child-read'] as const)('names the cause of an unavailable %s observation', async cause => {
+    const source = { id: 'source', serverId: 'home', machineId: 'source-machine', rootPath: '/source', createdAtMs: 1 };
+    const actual = await observeProjectServicePlacementActualV1({ workspace: { serverId: 'home', refId: source.id }, serviceName: 'web',
+      workspaceRefs: cause === 'workspace' ? [] : cause === 'topology' ? [source, { ...source, rootPath: '/other' }] : [source],
+      relationships: [], isCurrent: () => cause !== 'currentness',
+      ...(cause === 'child-read' ? { readChildMachines: async () => { throw new Error('Machine observation failed'); } } : {}),
+      readSnapshot: async () => ({ protocolVersion: 1, snapshot: { v: 1, machineId: source.machineId, updatedAt: 1,
+        targets: cause === 'binding' ? [{ id: 'incomplete', machineId: source.machineId, source: 'managed_service',
+          sourceClass: { kind: 'managed_service', managedServiceId: 'instance' }, title: 'web', state: 'available', confidence: 'high', actions: [] }] : [] } }),
+    });
+    expect(actual).toMatchObject({ status: 'unavailable', reasonCode: expect.any(String) });
+    expect(ProjectServicePlacementGetResultV1Schema.parse({ status: 'ready', placement: createDefaultProjectServicePlacementV1(),
+      revision: 'absent', provenance: 'default', actual }).actual).toEqual(actual);
+  });
+  it.each([
+    ['source', 'transport'], ['worker', 'transport'], ['source', 'snapshot'], ['source', 'binding'],
+  ] as const)('retains the observed %s binding when the other native Machine read fails (%s)', async (hosting, failure) => {
+    const source = { id: 'source', serverId: 'home', machineId: 'source-machine', rootPath: '/source', createdAtMs: 1 };
+    const worker = { ...source, id: 'worker', machineId: 'worker-machine', rootPath: '/worker' };
+    const host = hosting === 'source' ? source : worker;
+    const policy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+    const relationship: WorkspaceSyncRelationshipV1 = { v: 1, relationshipId: 'copy', controllerMachineId: source.machineId,
+      alphaWorkspaceRefId: source.id, betaWorkspaceRefId: worker.id, mode: 'keep_synced', enabled: false,
+      contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, createdAtMs: 1, updatedAtMs: 1 };
+    const target = { id: 'actual', source: 'managed_service', sourceClass: { kind: 'managed_service', managedServiceId: 'instance' },
+      machineId: host.machineId, workspaceId: host.id, workspace: { serverId: host.serverId, workspaceId: host.id,
+        machineId: host.machineId, rootPath: host.rootPath }, cwd: host.rootPath,
+      declaration: { workspaceRefId: host.id, selection: { kind: 'manifest', name: 'web' } },
+      serviceState: 'healthy', readiness: 'ready', title: 'web', state: 'available', confidence: 'high', actions: ['manage'] };
+    const actual = await observeProjectServicePlacementActualV1({ workspace: { serverId: source.serverId, refId: source.id }, serviceName: 'web',
+      workspaceRefs: [source, worker], relationships: [relationship], isCurrent: () => true,
+      readSnapshot: async request => {
+        if (request.machineId !== host.machineId) {
+          if (failure === 'transport') throw new Error('Candidate unavailable');
+          if (failure === 'snapshot') return { protocolVersion: 1, snapshot: { v: 1, machineId: 'wrong-machine', updatedAt: 1, targets: [] } };
+          const { declaration: _declaration, ...unqualified } = target;
+          return { protocolVersion: 1, snapshot: { v: 1, machineId: request.machineId, updatedAt: 1, targets: [unqualified] } };
+        }
+        return { protocolVersion: 1, snapshot: { v: 1, machineId: host.machineId, updatedAt: 1, targets: [target] } };
+      } });
+    expect(actual).toEqual({ status: 'present', target });
+    expect(ProjectServicePlacementGetResultV1Schema.parse({ status: 'ready', placement: createDefaultProjectServicePlacementV1(),
+      provenance: 'default', revision: 'absent', actual })).toMatchObject({ actual });
+  });
+  it('excludes only explicitly uncommitted worker copies and names an unreadable committed or legacy Machine', async () => {
+    const source = { id: 'source', serverId: 'home', machineId: 'source-machine', rootPath: '/source', createdAtMs: 1 };
+    const worker = { ...source, id: 'worker', machineId: 'offline-machine', rootPath: '/worker' };
+    const policy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+    const relationship = { v: 1 as const, relationshipId: 'copy', controllerMachineId: source.machineId,
+      alphaWorkspaceRefId: source.id, betaWorkspaceRefId: worker.id, mode: 'keep_synced' as const, enabled: false,
+      provenance: { kind: 'worker_clean_copy' as const, sourceWorkspaceRefId: source.id, targetWorkspaceRefId: worker.id },
+      contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, createdAtMs: 1, updatedAtMs: 1 };
+    const reads = new Set<string>();
+    const input = { workspace: { serverId: 'home', refId: source.id }, serviceName: 'web', workspaceRefs: [source, worker],
+      relationships: [relationship], isCurrent: () => true,
+      readSnapshot: async (request: { machineId: string }) => {
+        reads.add(request.machineId);
+        if (request.machineId === worker.machineId) throw new Error('Machine offline');
+        return { protocolVersion: 1, snapshot: { v: 1, machineId: request.machineId, updatedAt: 1, targets: [] } };
+      } };
+    for (const enabled of [false, true]) {
+      expect(await observeProjectServicePlacementActualV1({ ...input, relationships: [{ ...relationship, enabled, committedAtMs: null }] }))
+        .toEqual({ status: 'absent' });
+      expect(reads).toEqual(new Set([source.machineId]));
+    }
+    for (const edge of [{ ...relationship, committedAtMs: 2 }, relationship,
+      { ...relationship, committedAtMs: null, provenance: undefined }]) {
+      const actual = await observeProjectServicePlacementActualV1({ ...input, relationships: [edge] });
+      expect(actual)
+        .toEqual({ status: 'unavailable', machineId: worker.machineId, reasonCode: 'machine_unavailable' });
+      expect(ProjectServicePlacementGetResultV1Schema.parse({ status: 'ready', placement: createDefaultProjectServicePlacementV1(),
+        provenance: 'default', revision: 'absent', actual })).toMatchObject({ actual });
+    }
+  });
   it.each(['source', 'worker'] as const)('observes a bind child %s namespace on a paused physical component without requiring its controller', async childRole => {
     const source = { id: 'source', serverId: 'home', machineId: 'source-machine', rootPath: '/source', createdAtMs: 1 };
     const worker = { ...source, id: 'worker', machineId: 'worker-machine', rootPath: '/worker' };
@@ -62,6 +136,6 @@ describe('actual service placement through admitted Sync endpoints', () => {
     expect(await observeProjectServicePlacementActualV1(scopedInput)).toEqual({ status: 'present', target });
     expect(await observeProjectServicePlacementActualV1({ ...input,
       childMachines: [{ ...childMachines[0], managedMachine: { ...childMachines[0].managedMachine, enrolledMachineId: 'replaced-child' } }],
-    })).toEqual({ status: 'unavailable' });
+    })).toMatchObject({ status: 'unavailable' });
   });
 });
