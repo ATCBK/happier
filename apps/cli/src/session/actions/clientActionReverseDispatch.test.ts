@@ -38,7 +38,7 @@ describe('client Action reverse delivery', () => {
       { surface: 'cli', authority: 'account_automation' })).toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
   });
   it('keeps Run-on reads unambiguous and exposes current client addresses for the next mutation', async () => {
-    const result = { status: 'available', storedTarget: null, storedOrigin: null, selectedOrigin: null, candidates: [] };
+    const result = { status: 'available', storedTarget: null, storedOrigin: null, selectedOrigin: null, selectionSource: null, candidates: [] };
     const client: ClientActionMachineRpc = {
       hasConnectedClientRpcHandler: () => true,
       callConnectedClientRpc: async (_method, _raw, options) => {

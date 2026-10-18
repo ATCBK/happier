@@ -19,12 +19,16 @@ import { adoptHomeProfile, setActiveServerId } from '@/sync/domains/server/serve
 import { storage } from '@/sync/domains/state/storageStore';
 import { useIsMachineListSettled, useMachineListStatusForServer } from '@/sync/store/hooks';
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
+import { clearMachineRequestReachabilityForScope, clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
+import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
+import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 
 import { advancePluginExecutionOriginSelectionRevision, usePluginMachineExecutionOriginSelection } from './usePluginExecutionOriginSelection';
 import { getPluginExecutionOriginCandidateOrigin } from './pluginExecutionOrigin';
 import * as executionOrigin from './pluginExecutionOrigin';
 import { resolveFreshMachineAdministrationExecutionTarget } from './useTargetSelection';
-import { setPluginMachineExecutionOriginPreference } from './selectionPreferences';
+import { setPluginMachineExecutionOriginPreference, readPluginMachineExecutionLastUsedTarget } from './selectionPreferences';
 
 const externalStoreReads = await vi.hoisted(async () => {
     // Zustand's CommonJS adapter reads React through require, outside Vitest's ESM spies.
@@ -49,6 +53,20 @@ vi.mock('socket.io-client', async (importOriginal) => (
 
 const FIXTURE_ACCOUNT_ID = 'account-machine-origin-fixture';
 let network: SessionOpsNetworkBoundary;
+let syncBridge: Awaited<ReturnType<typeof loadVitestModuleForNodeRequire>>;
+const { URL: NodeURL } = getVitestNodeBuiltin<typeof import('node:url')>('node:url');
+
+function readOriginSnapshotCallback(): (() => unknown) | undefined {
+    const readers = vi.mocked(React.useMemo).mock.results.flatMap(result => {
+        const value: unknown = result.type === 'return' ? result.value : null;
+        return value && typeof value === 'object' && 'get' in value && typeof value.get === 'function'
+            && 'subscribe' in value ? [value.get as () => unknown] : [];
+    });
+    return [...externalStoreReads.reads, ...readers].reverse().find(read => {
+        const value = read();
+        return value !== null && typeof value === 'object' && 'key' in value && 'snapshots' in value;
+    });
+}
 
 describe('execution-origin plugin identity with real Account and machine owners', () => {
     beforeEach(async () => {
@@ -56,17 +74,172 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const home = await network.addHome('https://inventory-readiness.example.test', FIXTURE_ACCOUNT_ID);
         await setActiveServerId(home.id);
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        // Match the app entry: the public sync handle is registered by its real implementation.
+        await import('@/sync/syncEngine');
+        syncBridge = await loadVitestModuleForNodeRequire(new NodeURL('../../../sync.ts', import.meta.url), () => import('@/sync/sync'));
         const scope = { serverId: home.id, accountId: FIXTURE_ACCOUNT_ID };
         storage.setState({ ...storage.getInitialState(), profileScope: scope, settingsScope: scope }, true);
     });
     afterEach(async () => {
         await standardCleanup();
+        syncBridge.dispose();
         clearPluginAccountAvailabilityProjection();
+        clearMachineRequestReachabilityForTest();
         await network.dispose();
         publishAppliedActiveServerRuntimeAvailability(false);
         vi.restoreAllMocks();
         externalStoreReads.reads.length = 0;
         vi.useRealTimers();
+    });
+
+    it('auto-picks qualified rows during hydration, remembers use locally and never replaces a pending pin', async () => {
+        const serverIdentityId = 'srv_auto_inventory';
+        const url = 'https://auto-inventory.example.test';
+        await network.addHome(url, FIXTURE_ACCOUNT_ID);
+        const home = await adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: serverIdentityId,
+            canonicalServerUrl: url, revision: 1, endpoints: [{ kind: 'https', url }] }, source: 'manual' });
+        await setActiveServerId(home.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        const scope = { serverId: home.id, accountId: FIXTURE_ACCOUNT_ID };
+        replacePluginAccountAvailabilityProjection({ scope, snapshot: { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] } });
+        const pluginId = 'acme.auto';
+        const a = createMachineFixture({ id: 'auto-a', active: true, activeAt: Date.now() - 1000 });
+        const b = createMachineFixture({ id: 'auto-b', active: true, activeAt: Date.now() });
+        const sources = [a, b].map(machine => ({ source: { origin: { serverIdentityId, sourceRef: { machineId: machine.id, pluginId,
+            sourceCustody: { kind: 'development' as const, registeredRootId: machine.id } } }, version: '1.0.0',
+            occurrenceId: machine.id, serverId: home.id, generation: 1 }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }));
+        const pending = (machine: typeof a) => ({ ...machine, availability: undefined, metadata: null });
+        storage.setState({ profileScope: scope, settingsScope: scope, isDataReady: true, machines: {},
+            machineListByServerId: { [home.id]: [pending(a), pending(b)] }, machineListStatusByServerId: { [home.id]: 'loading' } });
+        let autoPick = true;
+        const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({ pluginId, sourceCandidates: sources,
+            autoPick, renderedVersion: '1.0.0', classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier() }));
+        expect(hook.getCurrent()).toMatchObject({ loading: true, selectedOrigin: null, canExecute: false });
+        expect(hook.getCurrent().state).toMatchObject({ kind: 'unavailable', reasons: ['unknown'] });
+        // List completion is not content completion for a socket-superseded row.
+        await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'idle' } }); });
+        expect(hook.getCurrent()).toMatchObject({ loading: true, selectedOrigin: null, canExecute: false });
+        await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, pending(b)] } }); });
+        expect(hook.getCurrent()).toMatchObject({ loading: false, selectedOrigin: sources[0]!.source.origin, canExecute: true });
+        await act(async () => { storage.setState({ settings: { ...storage.getState().settings, machineAdministrationTargetsLocalV1:
+            setPluginMachineExecutionOriginPreference({}, pluginId, sources[1]!.source.origin) } }); });
+        expect(hook.getCurrent()).toMatchObject({ loading: true, selectedOrigin: null, canExecute: false,
+            state: { kind: 'unavailable', storedTarget: { serverIdentityId, machineId: b.id }, reasons: ['unknown'] } });
+        await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, { ...b, metadata: null,
+            availability: { kind: 'locked', reason: 'decryption_failed' } }] } }); });
+        expect(hook.getCurrent()).toMatchObject({ loading: false, selectedOrigin: null, canExecute: false });
+        await act(async () => { storage.setState({ settings: { ...storage.getState().settings, machineAdministrationTargetsLocalV1: {} },
+            machineListByServerId: { [home.id]: [a, b] } }); });
+        expect(hook.getCurrent().state).toMatchObject({ kind: 'selected', selectionSource: 'auto', origin: sources[1]!.source.origin });
+        expect(hook.getCurrent()).toMatchObject({ loading: false, canExecute: true });
+        await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'idle' } }); });
+        // Recency is a ranking fact. A changed order must reach the chip before
+        // invocation, while timestamps that retain the order stay presentation-only.
+        await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [{ ...a, activeAt: b.activeAt + 1 }, b] } }); });
+        expect(hook.getCurrent().selectedOrigin).toEqual(sources[0]!.source.origin);
+        await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, b] } }); });
+        // Machine RPC records its exact routing profile; Administration reads
+        // the portable Home identity. Both must observe the same refusal.
+        await act(async () => { recordMachineRequestFailed({ ...scope, machineId: b.id }); });
+        expect(hook.getCurrent().selectedOrigin).toEqual(sources[0]!.source.origin);
+        await act(async () => { clearMachineRequestReachabilityForScope({ ...scope, serverId: serverIdentityId }); });
+        expect(hook.getCurrent().selectedOrigin).toEqual(sources[1]!.source.origin);
+        const { getSystemTasksRunner } = await import('@/components/systemTasks/systemTasksRuntime');
+        const { publishLocalDaemonStatus, readLocalDaemonSharedState } = await import('@/components/settings/machines/localControl/localDaemonSharedState');
+        const runner = getSystemTasksRunner();
+        const previousLocalStatus = readLocalDaemonSharedState(runner).status;
+        try {
+            await act(async () => { publishLocalDaemonStatus(runner, { serviceInstalled: true, daemonRunning: true, needsAuth: false,
+                machineId: a.id, daemonServerUrl: url, daemonAccountId: FIXTURE_ACCOUNT_ID }); });
+            expect(hook.getCurrent().state).toMatchObject({ kind: 'selected', origin: sources[0]!.source.origin });
+        } finally {
+            await act(async () => { publishLocalDaemonStatus(runner, previousLocalStatus); });
+        }
+        await act(async () => { expect(hook.getCurrent().resolveExecutionOrigin()?.origin).toEqual(sources[1]!.source.origin); });
+        expect(readPluginMachineExecutionLastUsedTarget(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId))
+            .toEqual({ serverIdentityId, machineId: b.id });
+        const offline = { ...b, active: false, activeAt: 0 };
+        await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, offline] } }); });
+        expect(hook.getCurrent().state).toMatchObject({ kind: 'selected', selectionSource: 'auto', origin: sources[0]!.source.origin });
+        await act(async () => { storage.setState({ settings: { ...storage.getState().settings, machineAdministrationTargetsLocalV1:
+            setPluginMachineExecutionOriginPreference(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId, sources[1]!.source.origin) } }); });
+        expect(hook.getCurrent().state).toMatchObject({ kind: 'unavailable', storedTarget: { serverIdentityId, machineId: b.id } });
+        expect(hook.getCurrent().resolveExecutionOrigin()).toBeNull();
+        autoPick = false;
+        await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [a, b] }, settings: { ...storage.getState().settings,
+            machineAdministrationTargetsLocalV1: {} } }); });
+        await hook.rerender();
+        expect(hook.getCurrent().state).toMatchObject({ kind: 'selectionRequired' });
+        await hook.unmount();
+    });
+
+    it('does not resolve unrelated Home credentials for a renderless plugin selection', async () => {
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const foreignUrl = 'https://unrelated-origin.example.test';
+        await network.addHome(foreignUrl, FIXTURE_ACCOUNT_ID);
+        const foreignHome = await adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: 'srv_unrelated_origin',
+            canonicalServerUrl: foreignUrl, revision: 1, endpoints: [{ kind: 'https', url: foreignUrl }] }, source: 'manual' });
+        const serverIdentityId = 'srv_scoped_origin';
+        const url = 'https://scoped-origin.example.test';
+        await network.addHome(url, FIXTURE_ACCOUNT_ID);
+        const home = await adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: serverIdentityId,
+            canonicalServerUrl: url, revision: 1, endpoints: [{ kind: 'https', url }] }, source: 'manual' });
+        await setActiveServerId(home.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        const scope = { serverId: home.id, accountId: FIXTURE_ACCOUNT_ID };
+        const machine = createMachineFixture({ id: 'scoped-origin-machine', active: true, activeAt: Date.now() });
+        storage.setState({ profileScope: scope, settingsScope: scope, isDataReady: true,
+            machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
+            machineListStatusByServerId: { [home.id]: 'idle' } });
+        replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+            availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+        } });
+        const pluginId = 'example.scoped-origin';
+        const origin = { serverIdentityId, sourceRef: { machineId: machine.id, pluginId,
+            sourceCustody: { kind: 'development' as const, registeredRootId: 'scoped-origin-root' } } };
+        const sources = [{ source: { origin, version: '1.0.0', occurrenceId: 'scoped-occurrence',
+            generation: 1, serverId: home.id }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
+        let sourceCandidates = sources;
+        let renders = 0;
+        // Spy on the genuine device-storage boundary, forwarding every read.
+        const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
+        const hook = await renderHook(() => {
+            renders += 1;
+            return usePluginMachineExecutionOriginSelection({ pluginId,
+                includeMachineCandidates: false, classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(), sourceCandidates });
+        });
+        expect(hook.getCurrent().selectedOrigin).toEqual(origin);
+        expect(credentials.mock.calls.filter(([readUrl, options]) => readUrl === foreignUrl
+            && options?.storageReadFailure === 'surface')).toHaveLength(0);
+        const settledRenders = renders;
+        await act(async () => { recordMachineRequestFailed({ ...scope, machineId: 'unrelated-machine' }); });
+        expect(renders).toBe(settledRenders);
+        await act(async () => { recordMachineRequestFailed({ ...scope, machineId: machine.id }); });
+        expect(hook.getCurrent().canExecute).toBe(false);
+        // A previously unrelated Home becomes a real input as soon as it
+        // supplies this plugin. Its credential and withdrawal must be observed.
+        const foreignMachine = createMachineFixture({ id: 'foreign-origin-machine', active: true, activeAt: Date.now() });
+        const foreignOrigin = { ...origin, serverIdentityId: 'srv_unrelated_origin',
+            sourceRef: { ...origin.sourceRef, machineId: foreignMachine.id } };
+        sourceCandidates = [{ ...sources[0]!, source: { ...sources[0]!.source,
+            origin: foreignOrigin, serverId: foreignHome.id } }];
+        await act(async () => { storage.setState(state => ({
+            machineListByServerId: { ...state.machineListByServerId, [foreignHome.id]: [foreignMachine] },
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [foreignHome.id]: 'idle' },
+        })); });
+        await hook.rerender();
+        await vi.waitFor(() => expect(hook.getCurrent().candidates).toMatchObject([
+            { source: { origin: foreignOrigin }, validation: { kind: 'admitted' } },
+        ]));
+        expect(credentials.mock.calls.some(([readUrl, options]) => readUrl === foreignUrl
+            && options?.storageReadFailure === 'surface')).toBe(true);
+        // Auto stays on this Home; the foreign candidate still observes withdrawal.
+        await act(async () => { recordMachineRequestFailed({ serverId: foreignHome.id,
+            accountId: FIXTURE_ACCOUNT_ID, machineId: foreignMachine.id }); });
+        expect(hook.getCurrent().candidates).toMatchObject([
+            { source: { origin: foreignOrigin }, validation: { kind: 'rejected', reason: 'home_unreachable' } },
+        ]);
+        await hook.unmount();
     });
 
     it('advances its local revision monotonically across A-to-B-to-A', () => {
@@ -127,7 +300,11 @@ describe('execution-origin plugin identity with real Account and machine owners'
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [] },
             machineListStatusByServerId: { [home.id]: 'idle' } }); });
         expect(snapshot()).toMatchObject({ kind: 'resolved', settled: true, machines: [] });
-        for (const status of ['loading', 'error', 'signedOut'] as const) {
+        await act(async () => { storage.setState({ machines: { [machine.id]: machine },
+            machineListByServerId: { [home.id]: [machine] }, machineListStatusByServerId: { [home.id]: 'loading' } }); });
+        expect(snapshot()).toMatchObject({ inventoryStatus: 'loading', executionEligibleMachineIds: [machine.id] });
+        expect(resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId, machineId: machine.id })?.machine).toBe(machine);
+        for (const status of ['error', 'signedOut'] as const) {
             await act(async () => { storage.setState({ machines: { [machine.id]: machine },
                 machineListByServerId: { [home.id]: [machine] }, machineListStatusByServerId: { [home.id]: status } }); });
             expect(snapshot()).toMatchObject({ inventoryStatus: status,
@@ -151,8 +328,10 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const scope = { serverId: home.id, accountId: FIXTURE_ACCOUNT_ID };
         storage.setState({ profileScope: scope, settingsScope: scope, isDataReady: true,
             machines: {}, machineListByServerId: { [home.id]: [] }, machineListStatusByServerId: { [home.id]: 'idle' } });
+        let establishingTargets: readonly { serverIdentityId: string; machineId: string }[] = [];
+        let contextualTarget: Parameters<typeof usePluginMachineExecutionOriginSelection>[0]['contextualTarget'];
         const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({
-            pluginId: 'acme.loading', classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(),
+            pluginId: 'acme.loading', classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(), establishingTargets, contextualTarget,
         }));
         // Nothing is known yet: this is not the answer "no Machine can run it".
         expect(hook.getCurrent().loading).toBe(true);
@@ -165,6 +344,22 @@ describe('execution-origin plugin identity with real Account and machine owners'
         await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'loading' } }); });
         expect(hook.getCurrent().loading).toBe(true);
         await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'idle' } }); });
+        expect(hook.getCurrent().loading).toBe(false);
+        establishingTargets = [{ serverIdentityId, machineId: 'initial-describe-machine' }];
+        await hook.rerender();
+        expect(hook.getCurrent().loading).toBe(true);
+        contextualTarget = { serverIdentityId, machineId: 'another-machine' };
+        await hook.rerender();
+        expect(hook.getCurrent().loading).toBe(false);
+        contextualTarget = establishingTargets[0];
+        await hook.rerender();
+        expect(hook.getCurrent().loading).toBe(true);
+        contextualTarget = null;
+        await hook.rerender();
+        expect(hook.getCurrent().loading).toBe(false);
+        contextualTarget = undefined;
+        establishingTargets = [{ serverIdentityId: 'srv_unrelated', machineId: 'initial-describe-machine' }];
+        await hook.rerender();
         expect(hook.getCurrent().loading).toBe(false);
         await hook.unmount();
     });
@@ -243,10 +438,11 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const pickerRead = new Promise<void>(resolve => { releasePickerRead = resolve; });
         let reads = 0;
         // Device credential storage is a real asynchronous boundary. Keep the
-        // real reader and delay only its second (picker-presentation) result.
+        // real reader and delay its picker-presentation result. Semantic
+        // selection already has the active Account and does not reread it.
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (serverUrl, options) => {
             const result = await readCredentials.call(TokenStorage, serverUrl, options);
-            if (serverUrl === url && options?.storageReadFailure === 'surface' && ++reads === 2) await pickerRead;
+            if (serverUrl === url && options?.storageReadFailure === 'surface' && ++reads === 1) await pickerRead;
             return result;
         });
         const returnPresentations: Array<{ loading: boolean; kind: string }> = [];
@@ -258,6 +454,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         });
         try {
             await vi.waitFor(() => expect(hook.getCurrent().canExecute).toBe(true));
+            expect(reads).toBeGreaterThan(0);
             await act(async () => { releasePickerRead(); });
             expect(hook.getCurrent().loading).toBe(false);
             expect(hook.getCurrent().state.kind).toBe('selected');
@@ -359,17 +556,19 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({ pluginId: 'acme.source',
             classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(), sourceCandidates: candidates,
             readSourceCandidates: () => currentSources, declaredDefaultOrigins: [origin],
-            readDeclaredDefaultOrigins: () => currentDefaults }));
+            readDeclaredDefaultOrigins: () => currentDefaults, autoPick: false }));
         expect(hook.getCurrent().selectedOrigin).toEqual(origin);
         expect(hook.getCurrent().machineCandidates).toEqual(expect.arrayContaining([
             expect.objectContaining({ target: { serverIdentityId, machineId: machine.id }, availability: 'online' }),
         ]));
+        expect(storage.getState().settings).toBe(settingsBeforeMount);
         expect(hook.getCurrent().resolveExecutionOrigin()?.source).toEqual(source);
-        // A retained source can already be selected while its Home's live
-        // Machine census is still resolving. That is pending, not an outage.
+        const settingsAfterUse = storage.getState().settings;
+        // An opened row stays executable while unrelated census work continues.
         await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: 'loading' } }); });
-        expect(hook.getCurrent().canExecute).toBe(false);
-        expect(hook.getCurrent().loading).toBe(true);
+        expect(hook.getCurrent().canExecute).toBe(true);
+        expect(hook.getCurrent().selectedOrigin).toEqual(origin);
+        expect(hook.getCurrent().loading).toBe(false);
         for (const status of ['error', 'signedOut'] as const) {
             await act(async () => { storage.setState({ machineListStatusByServerId: { [home.id]: status } }); });
             expect(hook.getCurrent().canExecute).toBe(false);
@@ -379,7 +578,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         expect(hook.getCurrent().canExecute).toBe(true);
         expect(hook.getCurrent().loading).toBe(false);
         await hook.rerender();
-        expect(storage.getState().settings).toBe(settingsBeforeMount);
+        expect(storage.getState().settings).toBe(settingsAfterUse);
         const alternate = { ...candidates[0]!, source: { ...source, origin: { ...origin,
             sourceRef: { ...origin.sourceRef, sourceCustody: { kind: 'development' as const, registeredRootId: 'alternate-source-root' } } } } };
         currentSources = [...candidates, alternate];
@@ -477,6 +676,16 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const settledRenders = renders;
         const beforePresentationRefresh = machineFactsSerializations();
 
+        // Another surface's relative-time wake is not a Machine eligibility change.
+        vi.useFakeTimers();
+        const unrelatedWake = {};
+        sessionListRuntimeClock.requestWake(unrelatedWake, Date.now() + 1);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        sessionListRuntimeClock.clearWake(unrelatedWake);
+        vi.useRealTimers();
+        expect(renders).toBe(settledRenders);
+        expect(hook.getCurrent().state).toBe(initial.state);
+
         const refreshed = { ...machine, activeAt: Date.now(), updatedAt: 11,
             metadata: { ...machine.metadata!, displayName: 'After' } };
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [refreshed] } }); });
@@ -532,6 +741,23 @@ describe('execution-origin plugin identity with real Account and machine owners'
         expect(hook.getCurrent().state).toMatchObject({ kind: 'unavailable', reasons: ['unknown'] });
         expect(hook.getCurrent().canExecute).toBe(false);
         expect(initial.resolveExecutionOrigin()).toBeNull();
+        // Clock wiring must still expire a real lease without a store update,
+        // including after a heartbeat extends the first requested deadline.
+        vi.useFakeTimers();
+        const renewed = { ...refreshed, activeAt: Date.now() };
+        await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [renewed] },
+            machineListStatusByServerId: { [home.id]: 'idle' } }); });
+        const firstExpiry = readMachineStatusNextRefreshAtMs(renewed, Date.now())!;
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        const heartbeat = { ...renewed, activeAt: Date.now() };
+        await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [heartbeat] } }); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(firstExpiry - Date.now()); });
+        expect(hook.getCurrent().canExecute).toBe(true);
+        const expiry = readMachineStatusNextRefreshAtMs(heartbeat, Date.now())!;
+        await act(async () => { await vi.advanceTimersByTimeAsync(expiry - Date.now()); });
+        expect(hook.getCurrent().state).toMatchObject({ kind: 'unavailable', reasons: ['offline'] });
+        expect(hook.getCurrent().canExecute).toBe(false);
+        vi.useRealTimers();
         await hook.unmount();
     });
 
@@ -605,10 +831,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
 
     it('keeps retained external-store selectors stable when execution-origin inputs change', async () => {
         // Observe the callbacks passed to React without replacing any hook or store logic.
-        const callbacks = vi.mocked(React.useCallback);
-        const memos = vi.mocked(React.useMemo);
-        callbacks.mockClear();
-        memos.mockClear();
+        vi.mocked(React.useMemo).mockClear();
         const serverIdentityId = 'srv_retained_origin';
         const url = 'https://retained-origin.example.test';
         await network.addHome(url, FIXTURE_ACCOUNT_ID);
@@ -635,23 +858,19 @@ describe('execution-origin plugin identity with real Account and machine owners'
                 includeMachineCandidates: false, classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier() }),
         { initialProps: { pluginId: 'acme.retained-a', sources: sourceA } });
         const readSelector = () => {
-            const callback = [...memos.mock.results, ...callbacks.mock.results].reverse().find((result) => result.type === 'return'
-                && typeof result.value === 'function'
-                && result.value.toString().includes('readExecutionOriginMachineSnapshots'))?.value;
+            const callback = readOriginSnapshotCallback();
             expect(callback).toBeTypeOf('function');
-            // The observed React callback is the store selector, whose public input is StorageState.
-            return callback as (state: ReturnType<typeof storage.getState>) => unknown;
+            return callback!;
         };
         const retained = readSelector();
         await hook.rerender({ pluginId: 'acme.retained-b', sources: sourceB });
         const current = readSelector();
         expect(current).not.toBe(retained);
-        const state = storage.getState();
-        const before = retained(state);
-        const currentBefore = current(state);
+        const before = retained();
+        const currentBefore = current();
         expect(currentBefore).not.toEqual(before);
-        expect(retained(state)).toBe(before);
-        expect(current(state)).toBe(currentBefore);
+        expect(retained()).toBe(before);
+        expect(current()).toBe(currentBefore);
         await hook.unmount();
     });
 
@@ -683,16 +902,14 @@ describe('execution-origin plugin identity with real Account and machine owners'
             version: '1.0.0', occurrenceId: 'snapshot-expiry-occurrence', generation: 1, serverId: home.id,
         }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
         externalStoreReads.reads.length = 0;
+        vi.mocked(React.useMemo).mockClear();
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         const readAtMs = Date.now();
         const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({ pluginId,
             sourceCandidates: sources, includeMachineCandidates: false,
             classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier() }));
         // Observe the real getSnapshot handed to React, including the store's selector adapter.
-        const readSnapshot = [...externalStoreReads.reads].reverse().find(read => {
-            const value = read();
-            return value !== null && typeof value === 'object' && 'key' in value && 'snapshots' in value;
-        });
+        const readSnapshot = readOriginSnapshotCallback();
         expect(readSnapshot).toBeTypeOf('function');
         const state = storage.getState();
         const before = readSnapshot!();

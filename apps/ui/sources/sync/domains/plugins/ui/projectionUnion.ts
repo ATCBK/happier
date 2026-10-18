@@ -24,6 +24,7 @@ import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginR
 import type { PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PluginSourceCustodyV1Schema, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 import { PluginDeclarativeProjectedModelV1Schema, projectPluginDeclarativeModelComparisonV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
 import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness';
@@ -89,6 +90,7 @@ export type PluginUiContributionSupplyV1 = PluginUiContributionOriginV1 & Readon
     pluginVersion: string | null;
     sourceCustody: PluginSourceCustodyV1 | null;
     executionTargetDefault: boolean;
+    executionTargetAutoPick?: boolean;
 }>;
 
 // Availability publishes immutable declaration arrays; each machine's runtime
@@ -444,9 +446,19 @@ export function readPluginUiContributionSupplies(entry: unknown): readonly Plugi
         const custody = facts?.sourceCustody == null ? null : PluginSourceCustodyV1Schema.safeParse(facts.sourceCustody);
         return [{ ...origin, occurrenceId: readString(facts?.occurrenceId), pluginVersion: readString(facts?.pluginVersion),
             sourceCustody: custody?.success ? custody.data : null,
-            executionTargetDefault: facts?.executionTargetDefault === true }];
+            executionTargetDefault: facts?.executionTargetDefault === true,
+            ...(facts?.executionTargetAutoPick === false ? { executionTargetAutoPick: false } : {}) }];
     }) : [];
 }
+
+export type PluginUiExecutionOriginCandidateFacts = Readonly<{
+    establishingTargets: readonly MachineAdministrationTargetV1[];
+    sourceCandidates: readonly PluginMachineSourceExecutionOriginCandidateV1[];
+    declaredDefaultOrigins: readonly PluginMachineExecutionOriginV1[];
+    machineRejections: readonly PluginMachineExecutionOriginRejectionV1[];
+    autoPick: boolean;
+    renderedVersion?: string;
+}>;
 
 /** Project exact reported supplies into Administration; never elect an origin here. */
 export function readPluginUiExecutionOriginCandidates(params: Readonly<{
@@ -455,16 +467,15 @@ export function readPluginUiExecutionOriginCandidates(params: Readonly<{
     entry?: unknown;
     /** Package occurrences also supply native-only contributions, with no UI declaration. */
     members?: readonly PluginUiProjectionUnionMember[];
-}>): Readonly<{
-    sourceCandidates: readonly PluginMachineSourceExecutionOriginCandidateV1[];
-    declaredDefaultOrigins: readonly PluginMachineExecutionOriginV1[];
-    machineRejections: readonly PluginMachineExecutionOriginRejectionV1[];
-}> {
+    /** This consumer's last projection, retained only when every selection fact is unchanged. */
+    previous?: PluginUiExecutionOriginCandidateFacts;
+}>): PluginUiExecutionOriginCandidateFacts {
     const entries = params.entry ? [params.entry] : params.projection
         ? declarationMaps(params.projection).flatMap(map => Object.values(map).filter(entry => asRecord(entry)?.pluginId === params.pluginId)) : [];
     const sourceCandidates: PluginMachineSourceExecutionOriginCandidateV1[] = [];
     const declaredDefaultOrigins: PluginMachineExecutionOriginV1[] = [];
     const machineRejections: PluginMachineExecutionOriginRejectionV1[] = [];
+    const establishingTargets: MachineAdministrationTargetV1[] = [...(params.projection?.establishingExecutionTargetsByPluginId?.[params.pluginId] ?? [])];
     const packageSupplies: PluginUiContributionSupplyV1[] = [];
     for (const member of params.members ?? []) {
         if (!member.projection) continue;
@@ -479,7 +490,8 @@ export function readPluginUiExecutionOriginCandidates(params: Readonly<{
         if (!origin || (!origin.executionOrigin && !origin.unavailableReasonCode)) continue;
         packageSupplies.push({ ...origin, occurrenceId: installed.occurrenceId ?? null, pluginVersion: installed.version ?? null,
             sourceCustody: installed.sourceCustody ?? null,
-            executionTargetDefault: installed.executionTarget?.default === 'installation' });
+            executionTargetDefault: installed.executionTarget?.default === 'installation',
+            executionTargetAutoPick: installed.executionTarget?.autoPick });
     }
     const supplyGroups = [
         ...entries.map(entry => ({ conflict: asRecord(entry)?.hostCompatibility === 'conflict', supplies: readPluginUiContributionSupplies(entry) })),
@@ -487,6 +499,10 @@ export function readPluginUiExecutionOriginCandidates(params: Readonly<{
     ];
     for (const { conflict, supplies } of supplyGroups) {
         for (const supply of supplies) {
+            if (supply.phase === 'establishing' && supply.serverIdentityId
+                && !establishingTargets.some(target => target.serverIdentityId === supply.serverIdentityId && target.machineId === supply.machineId)) {
+                establishingTargets.push({ serverIdentityId: supply.serverIdentityId, machineId: supply.machineId });
+            }
             const origin = supply.executionOrigin;
             const reason = readPluginUiSupplyRejection(supply);
             const serverIdentityId = origin?.serverIdentityId ?? supply.serverIdentityId;
@@ -512,7 +528,41 @@ export function readPluginUiExecutionOriginCandidates(params: Readonly<{
             }));
         }
     }
-    return Object.freeze({ sourceCandidates: Object.freeze(sourceCandidates), declaredDefaultOrigins: Object.freeze(declaredDefaultOrigins),
+    const installed = params.projection?.installedPackagesById[params.pluginId];
+    const autoPick = installed ? installed.executionTarget?.autoPick !== false
+        : !supplyGroups.some(({ supplies }) => supplies.some(supply => supply.executionTargetAutoPick === false));
+    const renderedVersion = installed?.version;
+    const previous = params.previous;
+    if (previous && previous.autoPick === autoPick && previous.renderedVersion === renderedVersion
+        && previous.establishingTargets.length === establishingTargets.length
+        && establishingTargets.every((target, index) => target.serverIdentityId === previous.establishingTargets[index]!.serverIdentityId
+            && target.machineId === previous.establishingTargets[index]!.machineId)
+        && previous.sourceCandidates.length === sourceCandidates.length
+        && sourceCandidates.every((candidate, index) => {
+            const other = previous.sourceCandidates[index]!;
+            return candidate.source.generation === other.source.generation
+                && candidate.source.serverId === other.source.serverId
+                && candidate.source.version === other.source.version
+                && candidate.source.occurrenceId === other.source.occurrenceId
+                && arePluginMachineExecutionOriginsEqual(candidate.source.origin, other.source.origin)
+                && candidate.releaseContent === other.releaseContent
+                && candidate.validation.kind === other.validation.kind
+                && (candidate.validation.kind !== 'rejected'
+                    || (other.validation.kind === 'rejected' && candidate.validation.reason === other.validation.reason));
+        })
+        && previous.declaredDefaultOrigins.length === declaredDefaultOrigins.length
+        && declaredDefaultOrigins.every((origin, index) => arePluginMachineExecutionOriginsEqual(origin, previous.declaredDefaultOrigins[index]!))
+        && previous.machineRejections.length === machineRejections.length
+        && machineRejections.every((rejection, index) => {
+            const other = previous.machineRejections[index]!;
+            return rejection.serverIdentityId === other.serverIdentityId && rejection.machineId === other.machineId
+                && rejection.reason === other.reason;
+        })) return previous;
+    return Object.freeze({ establishingTargets: Object.freeze(establishingTargets), sourceCandidates: Object.freeze(sourceCandidates), declaredDefaultOrigins: Object.freeze(declaredDefaultOrigins),
+        // The rendered declaration owns policy. An older replica's opt-out
+        // cannot change the current rendered release's automatic placement.
+        autoPick,
+        ...(renderedVersion ? { renderedVersion } : {}),
         machineRejections: Object.freeze(machineRejections) });
 }
 
@@ -627,6 +677,25 @@ export function unionPluginUiProjections(
     const eligible = members.filter((member) => readString(member.machineId) !== null);
     const phase = resolveUnionProjectionPhase(eligible);
     const hasEstablishingMembers = eligible.some((member) => member.phase === 'establishing');
+    // A known Account installation can precede its first runtime projection,
+    // including all contribution supplies. Preserve that producer's pending
+    // fact without inventing custody, an occurrence, or executable authority.
+    const establishingExecutionTargetsByPluginId: Record<string, readonly MachineAdministrationTargetV1[]> = {};
+    for (const member of eligible) {
+        if (member.phase !== 'establishing') continue;
+        for (const [pluginId, installation] of Object.entries(member.materializationsByPluginId ?? {})) {
+            if (!installation.enabled || installation.trustState !== 'trusted' || installation.machineId !== member.machineId
+                || installation.serverIdentityId !== member.serverIdentityId) continue;
+            establishingExecutionTargetsByPluginId[pluginId] = Object.freeze([
+                ...(establishingExecutionTargetsByPluginId[pluginId] ?? []),
+                Object.freeze({ serverIdentityId: installation.serverIdentityId, machineId: installation.machineId }),
+            ]);
+        }
+    }
+    const establishingFacts = Object.keys(establishingExecutionTargetsByPluginId).length > 0
+        ? { establishingExecutionTargetsByPluginId: Object.freeze(establishingExecutionTargetsByPluginId) } : {};
+    const emptyProjection = 'establishingExecutionTargetsByPluginId' in establishingFacts
+        ? Object.freeze({ ...EMPTY_PLUGIN_UI_PROJECTION, ...establishingFacts }) : null;
     const soleMember = eligible.length === 1 ? eligible[0] : undefined;
     const contributing = [...eligible]
         .filter((member): member is PluginUiProjectionUnionMember & Readonly<{ projection: PluginUiProjectionModel }> => (
@@ -638,7 +707,7 @@ export function unionPluginUiProjections(
 
     if (contributing.length === 0) {
         return Object.freeze({
-            pluginUiProjection: null,
+            pluginUiProjection: emptyProjection,
             phase,
             unavailableReasonCode: soleMember?.unavailableReasonCode,
             hasEstablishingMembers,
@@ -696,7 +765,7 @@ export function unionPluginUiProjections(
 
     if (admittedContributing.length === 0) {
         return Object.freeze({
-            pluginUiProjection: null,
+            pluginUiProjection: emptyProjection,
             phase,
             unavailableReasonCode: soleMember?.unavailableReasonCode,
             hasEstablishingMembers,
@@ -756,7 +825,8 @@ export function unionPluginUiProjections(
         if (!supply) {
             const rawSupply: PluginUiContributionSupplyV1 = { ...origin, occurrenceId,
                 pluginVersion: installed?.version ?? null, sourceCustody,
-                executionTargetDefault: installed?.executionTarget?.default === 'installation' };
+                executionTargetDefault: installed?.executionTarget?.default === 'installation',
+                executionTargetAutoPick: installed?.executionTarget?.autoPick };
             const parsedSupply = readPluginUiContributionSupplies({ hostSupplies: [rawSupply] })[0];
             if (!parsedSupply) return;
             supply = Object.freeze(parsedSupply);
@@ -768,7 +838,7 @@ export function unionPluginUiProjections(
         const selected = selectedOriginsByPluginId.get(pluginId);
         const binding = conflict ? null : selected
             ? supplies.find(supply => supply.executionOrigin && arePluginMachineExecutionOriginsEqual(selected, supply.executionOrigin)) ?? null
-            : supplies.length === 1 ? supplies[0]! : null;
+            : null;
         const representative = binding === supply || !previous ? entry : previous;
         const availability = asRecord(representative.availability);
         map[key] = Object.freeze({
@@ -967,7 +1037,7 @@ export function unionPluginUiProjections(
         // keeps a loading union from reading as a projection REPLACEMENT and
         // needlessly invalidating the React Native runtime.
         return Object.freeze({
-            pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION,
+            pluginUiProjection: emptyProjection ?? EMPTY_PLUGIN_UI_PROJECTION,
             phase,
             hasEstablishingMembers,
             interactionEnabled,
@@ -977,6 +1047,7 @@ export function unionPluginUiProjections(
     }
 
     const pluginUiProjection: PluginUiProjectionModel = Object.freeze({
+        ...establishingFacts,
         generation,
         installedPackagesById: Object.freeze(installedPackagesById),
         // Composer contribution families remain scoped to their Session host.

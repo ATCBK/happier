@@ -7,6 +7,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { listMachinesForVoiceTool } from '@/voice/tools/actionImpl/machinesList';
 import { readMachineDaemonCliVersionForServerScope } from './readMachineDaemonCliVersionForServerScope';
 import {
+    readLiveMachineInventoryRows,
     resolveExactServerScopedMachine,
     resolvePortableMachineAdministrationTarget,
     resolveServerScopedMachines,
@@ -31,6 +32,24 @@ describe('resolveServerScopedMachines', () => {
         await setActiveServerId(profile.id);
     });
     afterEach(() => standardCleanup());
+
+    it.each(['idle', 'loading'] as const)('qualifies only admitted current scoped rows while %s, never an active fallback or stale alias', (status) => {
+        const ready = createMachineFixture({ id: 'ready', availability: { kind: 'available' } });
+        const pending = createMachineFixture({ id: 'pending', metadata: null });
+        const locked = createMachineFixture({ id: 'locked', availability: { kind: 'locked', reason: 'decryption_failed' } });
+        const fallback = createMachineFixture({ id: 'fallback', availability: { kind: 'available' } });
+        const context = { profile, serverIdentityId: identity, activeServerId: profile.id,
+            activeMachines: [ready, pending, locked, fallback],
+            machineListByServerId: { [identity]: [ready, pending, locked], [profile.id]: [fallback] },
+            machineListStatusByServerId: { [identity]: status, [profile.id]: 'idle' as const } };
+        expect([...readLiveMachineInventoryRows(context)]).toEqual([ready]);
+        expect(readLiveMachineInventoryRows({ ...context, machineListByServerId: {} }).size).toBe(0);
+        expect(readLiveMachineInventoryRows({ ...context,
+            machineListByServerId: { [identity]: [], [profile.id]: [fallback] } }).size).toBe(0);
+        for (const status of [undefined, 'error', 'signedOut'] as const) {
+            expect(readLiveMachineInventoryRows({ ...context, machineListStatusByServerId: { [identity]: status } }).size).toBe(0);
+        }
+    });
 
     it('lists Voice inventory through equivalent Home keys without disclosing settled stale or foreign rows', async () => {
         const original = storage.getState();

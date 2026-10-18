@@ -7,7 +7,8 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storageStore';
-import { readFreshPluginMachineExecutionOriginCandidates, resolveFreshPluginMachineExecutionOrigin } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
+import { readFreshPluginMachineExecutionOriginCandidates, resolveFreshPluginMachineExecutionOrigin,
+    readPluginExecutionOriginAutomaticHints } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
 import { getPluginExecutionOriginCandidateOrigin, getPluginExecutionOriginCandidateVersion,
     isPluginMachineExecutionOriginCandidateSelectable, resolvePluginMachineExecutionOriginState } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { persistPluginMachineExecutionOriginSelection, readCurrentPluginMachineExecutionTargetPreference } from '@/sync/domains/machines/administration/selectionPreferences';
@@ -62,9 +63,11 @@ export function createPluginExecutionOriginActionDeps(account: Pick<LazyActionAc
             const candidates = readFreshPluginMachineExecutionOriginCandidates(facts);
             const storedTarget = readCurrentPluginMachineExecutionTargetPreference(parsed.pluginId);
             const selection = resolvePluginMachineExecutionOriginState({ ...facts, storedOrigin: null, storedTarget, candidates,
+                ...readPluginExecutionOriginAutomaticHints(parsed.pluginId, candidates),
                 homeServerIdentityId: getServerProfileById(scope.serverId)?.serverIdentityId });
             return { status: 'available', storedTarget, storedOrigin: null,
                 selectedOrigin: selection.kind === 'selected' ? selection.origin : null,
+                selectionSource: storedTarget ? 'pinned' : selection.kind === 'selected' ? selection.selectionSource : null,
                 candidates: candidates.map(candidate => ({ origin: getPluginExecutionOriginCandidateOrigin(candidate),
                     version: getPluginExecutionOriginCandidateVersion(candidate), selectable: isPluginMachineExecutionOriginCandidateSelectable(candidate) })) };
         }

@@ -34,15 +34,20 @@ export function resolveFleetMachineRejection(params: Readonly<{
     serverIdentityId: string;
     machineId: string;
     machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
-}>): 'unknown' | 'missing' | 'stale' | 'offline' | 'revoked' | 'replaced' | null {
+}>): 'unknown' | 'missing' | 'stale' | 'offline' | 'home_unreachable' | 'revoked' | 'replaced' | null {
     const snapshot = params.machineSnapshots.find((candidate) => candidate.kind === 'resolved'
         && candidate.serverIdentityId === params.serverIdentityId);
     if (!snapshot || snapshot.kind !== 'resolved') return 'unknown';
     const machine = snapshot.machines.find((candidate) => candidate.id === params.machineId);
     if (!machine) return snapshot.settled === true ? 'missing' : 'unknown';
     if (snapshot.observation === 'stale') return 'stale';
-    const availability = resolveFleetMachineAvailability(createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId), machine);
-    return availability === 'locked' ? 'unknown' : availability === 'online' ? null : availability;
+    if (machine.availability?.kind === 'locked') return 'unknown';
+    const presence = resolveMachinePickerPresence(machine, undefined, createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId));
+    // Presence shells can look online before their scoped content is opened.
+    // Consume the inventory owner's qualification rather than re-deriving it.
+    if (presence.status === 'online' && snapshot.executionEligibleMachineIds
+        && !snapshot.executionEligibleMachineIds.includes(params.machineId)) return 'unknown';
+    return presence.status === 'online' ? null : presence.status === 'offline' ? presence.reason : presence.status;
 }
 
 export type FleetReadState = 'current' | 'resolving' | 'transportFailure' | 'failed';

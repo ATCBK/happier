@@ -3,6 +3,7 @@ import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 import { AccessibleMachineAccessV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 
+/** Already-hydrated client row; pending/locked fixtures override its admitted availability. */
 export function createMachineFixture(overrides: Partial<Machine> = {}): Machine {
     const createdAt = overrides.createdAt ?? 1;
     const updatedAt = overrides.updatedAt ?? createdAt;
@@ -24,6 +25,7 @@ export function createMachineFixture(overrides: Partial<Machine> = {}): Machine 
         metadataVersion: 1,
         daemonState: null,
         daemonStateVersion: 1,
+        availability: { kind: 'available' },
         ...overrides,
     };
 }

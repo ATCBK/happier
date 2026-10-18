@@ -6,12 +6,14 @@ import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixt
 import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { readLiveMachineInventoryRows, resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { resolveAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/machineInventorySnapshots';
 import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
+import { createFakeCryptoWorker } from '@/sync/encryption/nativeCryptoWorker/fakeCryptoWorker';
 import { InvalidateSync } from '@/utils/sessions/sync';
 
-import { fetchAndApplyMachines, type FetchedMachineRow } from './syncMachines';
+import { buildUpdatedMachineFromSocketUpdate, fetchAndApplyMachines, type FetchedMachineRow } from './syncMachines';
 
 const credentials = { token: 'header.eyJzdWIiOiJhY2NvdW50LTEifQ==.signature' };
 const initialState = storage.getState();
@@ -41,6 +43,167 @@ function createInventory() {
 }
 
 describe('Machine-list settlement through sync and the real store', () => {
+    it('opens online content without joining an offline peer data-key batch', async () => {
+        const inventory = createInventory();
+        const secret = new Uint8Array(32).fill(17);
+        const encryption = await Encryption.create(secret);
+        const rows: FetchedMachineRow[] = [];
+        for (const [index, id] of ['offline-key', 'online-key'].entries()) {
+            const key = new Uint8Array(32).fill(23 + index);
+            const envelope = encodeBase64(await encryption.encryptEncryptionKey(key), 'base64');
+            await encryption.initializeMachines(new Map([[id, key]]));
+            const machine = createMachineFixture({ id, active: id === 'online-key', activeAt: id === 'online-key' ? Date.now() : 1,
+                metadataVersion: 1, daemonStateVersion: 0, dataEncryptionKey: envelope });
+            rows.push({ ...machine, metadata: await encryption.getMachineEncryption(id)!.encryptMetadata(machine.metadata!),
+                daemonState: null, daemonStateVersion: 0 });
+            encryption.removeMachineEncryption(id);
+        }
+        const offlineEnvelope = rows[0]!.dataEncryptionKey;
+        const entered = createDeferred<void>(), release = createDeferred<void>();
+        const worker = createFakeCryptoWorker();
+        // The native batch is the boundary: one slow batch must not hold online content.
+        encryption.configureNativeCryptoWorker({ routing: { mode: 'require', minPayloadBytes: 0 }, worker: {
+            ...worker, decryptDataKeyEnvelopeV1: async request => {
+                if (request.items.some(item => item.envelopeBase64 === offlineEnvelope)) {
+                    entered.resolve(); await release.promise;
+                }
+                return worker.decryptDataKeyEnvelopeV1(request);
+            },
+        } });
+        const pending = fetchAndApplyMachines({ ...inventory.callbacks,
+            credentials: { ...credentials, secret: encodeBase64(secret, 'base64url') }, expectedAccountMode: 'e2ee',
+            encryption, machineDataKeys: new Map(), request: async () => Response.json(rows),
+            applyMachineDisplayEntries: (machines, options) => storage.getState().replaceMachineDisplays(machines,
+                { sourceServerId: inventory.serverId, ...options }),
+        });
+        try {
+            await entered.promise;
+            await vi.waitFor(() => expect(storage.getState().machines['online-key']).toMatchObject({
+                metadata: createMachineFixture().metadata, availability: { kind: 'available' },
+            }));
+            expect(storage.getState().machines['offline-key']?.metadata).toBeNull();
+            expect(inventory.read().status).toBe('loading');
+        } finally { release.resolve(); await pending; }
+    });
+
+    it('finishes current metadata hydration when a socket has already opened newer daemon state', async () => {
+        const inventory = createInventory();
+        const secret = new Uint8Array(32).fill(17);
+        const encryption = await Encryption.create(secret);
+        encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const key = new Uint8Array(32).fill(23);
+        const envelope = encodeBase64(await encryption.encryptEncryptionKey(key), 'base64');
+        await encryption.initializeMachines(new Map([['online', key]]));
+        const cipher = encryption.getMachineEncryption('online')!;
+        const machine = createMachineFixture({ id: 'online', metadataVersion: 2, daemonStateVersion: 1,
+            dataEncryptionKey: envelope, storageMode: 'e2ee', active: true });
+        const rows: FetchedMachineRow[] = [{ ...machine, metadata: await cipher.encryptMetadata(machine.metadata!),
+            daemonState: await cipher.encryptDaemonState({ status: 'running', httpPort: 3000 }) }];
+        const socketState = { status: 'running', httpPort: 4000 };
+        const socketCiphertext = await cipher.encryptDaemonState(socketState);
+        const entered = createDeferred<void>(), release = createDeferred<void>();
+        const decrypt = platformCrypto.decryptAsyncAES;
+        // Only hold the platform metadata decode; the socket, cipher and store remain real.
+        vi.spyOn(platformCrypto, 'decryptAsyncAES').mockImplementationOnce(async (...args) => {
+            entered.resolve(); await release.promise; return decrypt(...args);
+        });
+        const pending = fetchAndApplyMachines({ ...inventory.callbacks,
+            credentials: { ...credentials, secret: encodeBase64(secret, 'base64url') }, expectedAccountMode: 'e2ee',
+            encryption, machineDataKeys: new Map(), request: async () => Response.json(rows),
+            applyMachineDisplayEntries: (machines, options) => storage.getState().replaceMachineDisplays(machines,
+                { sourceServerId: inventory.serverId, ...options }),
+        });
+        try {
+            await entered.promise;
+            const update = await buildUpdatedMachineFromSocketUpdate({ existingMachine: storage.getState().machines.online,
+                machineUpdate: { machineId: 'online', daemonState: { version: 2, value: socketCiphertext } },
+                updateSeq: 2, updateCreatedAt: machine.updatedAt + 1,
+                getMachineEncryption: id => encryption.getMachineEncryption(id) });
+            expect(update).not.toBeNull();
+            storage.getState().applyMachines([update!], false, { sourceServerId: inventory.serverId });
+            release.resolve(); await pending;
+            expect(storage.getState().machines.online).toMatchObject({ metadata: machine.metadata, metadataVersion: 2,
+                daemonState: socketState, daemonStateVersion: 2, availability: { kind: 'available' } });
+        } finally { release.resolve(); await pending; }
+    });
+
+    it.each(['cold', 'retained', 'refreshing'] as const)('admits a hydrated active row before an offline peer completes, starting %s', async (initial) => {
+        const inventory = createInventory();
+        const profile = { id: inventory.serverId, serverIdentityId: inventory.serverId, name: 'Test Home',
+            serverUrl: 'https://census.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 };
+        const snapshot = () => resolveAllProfileMachineInventorySnapshots({ profiles: [profile],
+            activeServerId: inventory.serverId, activeMachines: Object.values(storage.getState().machines),
+            machineListByServerId: storage.getState().machineListByServerId,
+            machineListStatusByServerId: storage.getState().machineListStatusByServerId,
+            accountScopesByServerId: new Map([[inventory.serverId, { serverId: inventory.serverId, accountId: 'account-1' }]]),
+            loadWarmEntries: () => ({}) })[0];
+        const liveRows = () => readLiveMachineInventoryRows({ profile, serverIdentityId: inventory.serverId,
+            activeServerId: inventory.serverId, activeMachines: Object.values(storage.getState().machines),
+            machineListByServerId: storage.getState().machineListByServerId,
+            machineListStatusByServerId: storage.getState().machineListStatusByServerId });
+        const secret = new Uint8Array(32).fill(17);
+        const encryption = await Encryption.create(secret);
+        encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const dataKey = new Uint8Array(32).fill(23);
+        const envelope = encodeBase64(await encryption.encryptEncryptionKey(dataKey), 'base64');
+        const rows: FetchedMachineRow[] = [];
+        for (const id of ['offline', 'active']) {
+            const machine = createMachineFixture({ id, active: id === 'active', activeAt: id === 'active' ? Date.now() : 1, metadataVersion: 2 });
+            await encryption.initializeMachines(new Map([[id, dataKey]]));
+            rows.push({ ...machine, metadata: await encryption.getMachineEncryption(id)!.encryptMetadata(machine.metadata!),
+                daemonState: null, daemonStateVersion: 0, dataEncryptionKey: envelope });
+        }
+        if (initial !== 'cold') storage.getState().applyMachines([createMachineFixture({ id: 'active',
+            activeAt: Date.now(), daemonStateVersion: 0, storageMode: 'e2ee', dataEncryptionKey: envelope, availability: { kind: 'available' } })],
+            false, { sourceServerId: inventory.serverId });
+        if (initial === 'refreshing') storage.getState().markMachineListSettled(inventory.serverId);
+        const inventoryStatus = initial === 'refreshing' ? 'idle' : 'loading';
+        const activeStarted = createDeferred<void>();
+        const offlineStarted = createDeferred<void>();
+        const releaseActive = createDeferred<void>();
+        const releaseOffline = createDeferred<void>();
+        let decryptions = 0;
+        const decrypt = platformCrypto.decryptAsyncAES;
+        // Hold only native crypto; real sync ordering, admission, encryption and store remain composed.
+        vi.spyOn(platformCrypto, 'decryptAsyncAES').mockImplementation(async (...args) => {
+            const active = decryptions++ === 0;
+            (active ? activeStarted : offlineStarted).resolve();
+            await (active ? releaseActive : releaseOffline).promise;
+            return decrypt(...args);
+        });
+        const pending = fetchAndApplyMachines({ ...inventory.callbacks,
+            credentials: { ...credentials, secret: encodeBase64(secret, 'base64url') }, expectedAccountMode: 'e2ee',
+            encryption, machineDataKeys: new Map(), replace: true, machineDisplayHydrationConcurrencyLimit: 1,
+            request: async () => Response.json(rows),
+            applyMachineDisplayEntries: (machines, options) => storage.getState().replaceMachineDisplays(machines,
+                { sourceServerId: inventory.serverId, ...options }),
+        });
+        try {
+            await activeStarted.promise;
+            expect(inventory.read().machines).toHaveLength(2);
+            expect(snapshot()).toMatchObject({ inventoryStatus, executionEligibleMachineIds: [] });
+            expect(liveRows().size).toBe(0);
+            releaseActive.resolve();
+            await offlineStarted.promise;
+            // Input order was offline first: the existing owner hydrated the active row first.
+            expect(storage.getState().machines.active).toMatchObject({ metadataVersion: 2, availability: { kind: 'available' } });
+            expect(storage.getState().machines.offline?.metadata).toBeNull();
+            expect(inventory.read().status).toBe(inventoryStatus);
+            expect([...liveRows()].map(machine => machine.id)).toEqual(['active']);
+            expect(snapshot()).toMatchObject({ inventoryStatus, executionEligibleMachineIds: ['active'] });
+            for (const status of ['error', 'signedOut'] as const) {
+                storage.setState({ machineListStatusByServerId: { [inventory.serverId]: status } });
+                expect(liveRows().size).toBe(0);
+                expect(snapshot()).toMatchObject({ executionEligibleMachineIds: [] });
+            }
+        } finally {
+            releaseActive.resolve();
+            releaseOffline.resolve();
+            await pending;
+        }
+        expect(inventory.read().status).toBe('idle');
+    });
+
     it('does not settle on a socket row while the full Home list is still in flight', async () => {
         const inventory = createInventory();
         const response = createDeferred<Response>();

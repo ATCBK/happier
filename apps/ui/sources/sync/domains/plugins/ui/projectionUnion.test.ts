@@ -19,6 +19,7 @@ import { dispatchPluginSurfaceAction } from '@/components/plugins/surfaces/plugi
 import { createPluginUiProjectedActionResolver } from './projection';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
+import { resolvePluginMachineExecutionOriginState } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 
 import { normalizePluginUiProjection, EMPTY_PLUGIN_UI_PROJECTION } from './projection';
 import { selectPluginSurfacePlacementsForBinding } from './surfacePlacementSelectors';
@@ -309,13 +310,34 @@ it('reuses the live occurrence for the same declared root without confusing runt
 it('retains the declaring installation default beside each exact contribution supply', () => {
     const pluginId = 'acme.channels';
     const entry = placementEntry({ pluginId, localId: 'channels', container: 'appPage' });
-    const projection = unionPluginUiProjections([member({ machineId: 'machine-a', generation: 1,
+    const sourceCustody = { kind: 'development' as const, registeredRootId: 'channels-source' };
+    const project = (autoPick?: false) => unionPluginUiProjections(['machine-a', 'machine-b'].map(machineId => member({ machineId, generation: 1,
+        producerOriginsByPluginId: { [pluginId]: { serverIdentityId: 'srv_test', sourceRef: { machineId, pluginId, sourceCustody } } },
         entriesById: { [String(entry.id)]: entry }, installedPackagesById: { [pluginId]: {
             id: pluginId, displayName: 'Channels', version: '1.0.0', enabled: true,
-            source: { kind: 'bundled' }, executionTarget: { default: 'installation' },
-        } } })]).pluginUiProjection;
+            source: { kind: 'localPath' }, occurrenceId: entry.occurrenceId, sourceCustody,
+            executionOrigin: { serverIdentityId: 'srv_test', sourceRef: { machineId, pluginId, sourceCustody } },
+            executionTarget: { default: 'installation', ...(autoPick === undefined ? {} : { autoPick }) },
+        } } }))).pluginUiProjection;
+    const projection = project(false);
     expect(readPluginUiContributionSupplies(projection?.surfacePlacementsById[String(entry.id)])[0])
-        .toMatchObject({ executionTargetDefault: true });
+        .toMatchObject({ executionTargetDefault: true, executionTargetAutoPick: false });
+    expect(readPluginUiExecutionOriginCandidates({ projection, pluginId })).toMatchObject({ autoPick: false, renderedVersion: '1.0.0' });
+    const resolve = (projection: PluginUiProjectionUnionMember['projection']) => {
+        const facts = readPluginUiExecutionOriginCandidates({ projection, pluginId });
+        expect(facts.sourceCandidates).toHaveLength(2);
+        return resolvePluginMachineExecutionOriginState({ pluginId, storedOrigin: null, ...facts, candidates: facts.sourceCandidates });
+    };
+    expect(resolve(projection)).toMatchObject({ kind: 'selectionRequired' });
+    expect(resolve(project())).toMatchObject({ kind: 'selected', selectionSource: 'auto', origin: { sourceRef: { machineId: 'machine-a' } } });
+    const current = project()!;
+    const page = current.surfacePlacementsById[String(entry.id)]!;
+    const mixed = { ...current, surfacePlacementsById: { [String(entry.id)]: { ...page,
+        hostSupplies: readPluginUiContributionSupplies(page).map((supply, index) => index === 0
+            ? { ...supply, pluginVersion: '0.9.0', executionTargetAutoPick: false } : supply),
+    } } };
+    expect(readPluginUiExecutionOriginCandidates({ projection: mixed, pluginId })).toMatchObject({ autoPick: true, renderedVersion: '1.0.0' });
+    expect(resolve(mixed)).toMatchObject({ kind: 'selected', selectionSource: 'auto', origin: { sourceRef: { machineId: 'machine-b' } } });
 });
 
 it('projects only a real current source occurrence for execution and retains its exact offline identity', () => {
@@ -805,13 +827,24 @@ describe('unionPluginUiProjections', () => {
     });
 
     it('retains visible declarations when a saved execution target is offline', () => {
-        const union = unionPluginUiProjections([
+        const sources = [
             member({ machineId: 'machine-a', generation: 1, phase: 'retainedOffline', interactionEnabled: false,
                 entriesById: { panel: placementEntry({ pluginId: 'acme.notes', localId: 'notes' }) } }),
-        ], new Map());
+        ];
+        const origin = selectedOrigin('acme.notes', 'machine-a');
+        const union = unionPluginUiProjections(sources, selectedOrigins(origin));
         const placement = union.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.notes:notes'];
         expect(placement).toBeDefined();
-        expect(readPluginUiContributionOrigin(placement)).toMatchObject({ phase: 'retainedOffline', interactionEnabled: false });
+        expect(readPluginUiContributionOrigin(placement)).toMatchObject({ phase: 'retainedOffline', interactionEnabled: false,
+            machineId: 'machine-a', executionOrigin: origin });
+        // 2026-10-16 owner ruling: visible supply alone never elects Run on.
+        const unselected = unionPluginUiProjections(sources, new Map()).pluginUiProjection
+            ?.surfacePlacementsById['surfacePlacement:acme.notes:notes'];
+        expect(unselected).toBeDefined();
+        expect(readPluginUiContributionOrigin(unselected)).toBeNull();
+        expect(readPluginUiContributionSupplies(unselected)).toMatchObject([
+            { phase: 'retainedOffline', interactionEnabled: false, executionOrigin: origin },
+        ]);
     });
 
     it('does not let retained offline or establishing versions conflict with a current selectable supply', () => {
@@ -882,7 +915,10 @@ describe('unionPluginUiProjections', () => {
             const union = unionPluginUiProjections([source], new Map());
             const placement = Object.values(union.pluginUiProjection?.surfacePlacementsById ?? {})[0];
             expect(placement).toBeDefined();
-            expect(readPluginUiContributionOrigin(placement)).toMatchObject({ machineId: 'machine-a', executionOrigin: null });
+            expect(readPluginUiContributionOrigin(placement)).toBeNull();
+            expect(readPluginUiContributionSupplies(placement)).toMatchObject([
+                { machineId: 'machine-a', executionOrigin: null },
+            ]);
             expect(parse).not.toHaveBeenCalled();
         } finally {
             parse.mockRestore();
@@ -934,8 +970,14 @@ describe('unionPluginUiProjections', () => {
             .pluginUiProjection?.inputTypesById[type.id]).toBeUndefined();
         const originless = { ...projection, inputTypesById: { [type.id]: { ...type,
             executionOrigin: undefined } } };
-        expect(unionPluginUiProjections([{ ...source, projection: originless }], new Map())
-            .pluginUiProjection?.inputTypesById[type.id]).toMatchObject({ occurrenceId: 'current' });
+        const unselected = unionPluginUiProjections([{ ...source, projection: originless }], new Map())
+            .pluginUiProjection?.inputTypesById[type.id];
+        expect(unselected).toMatchObject({ definition: type.definition });
+        expect(unselected?.occurrenceId).toBeUndefined();
+        expect(readPluginUiContributionOrigin(unselected)).toBeNull();
+        expect(readPluginUiContributionSupplies(unselected)).toMatchObject([
+            { machineId: 'machine-a', occurrenceId: 'current', executionOrigin: null },
+        ]);
     });
     it('admits a Resource-only plugin from its exact selected producer origin and current occurrence', () => {
         const pluginId = 'acme.data';
@@ -1033,7 +1075,9 @@ describe('unionPluginUiProjections', () => {
         const originlessUnion = unionPluginUiProjections([{ ...source, projection: originless }], new Map());
         expect(originlessUnion.pluginUiProjection?.resourcesById['acme.inspector/report']).toMatchObject(resource);
         expect(readPluginUiContributionOrigin(originlessUnion.pluginUiProjection?.resourcesById['acme.inspector/report']))
-            .toMatchObject({ machineId: 'machine-a', executionOrigin: null });
+            .toBeNull();
+        expect(readPluginUiContributionSupplies(originlessUnion.pluginUiProjection?.resourcesById['acme.inspector/report']))
+            .toMatchObject([{ machineId: 'machine-a', executionOrigin: null }]);
     });
 
     it('uses the exact selected installation despite another installation having different content', () => {
@@ -1493,15 +1537,16 @@ describe('unionPluginUiProjections', () => {
         expect(union.pluginUiProjection?.installedPackagesById['happier.triage']).toBeDefined();
         expect(union.pluginUiProjection?.installedPackagesById['acme.inspector']).toBeDefined();
         expect(union.interactionEnabled).toBe(true);
-        // The exact origin is absent because no materialization exists — every
-        // consumer that needs one (launch input, mounted action caller) keeps
-        // failing closed on its own rather than on a fabricated identity.
+        // 2026-10-16 owner ruling: these are descriptive supplies, not an
+        // implicit Machine binding. Exact-origin consumers remain fail-closed.
         for (const admitted of [bundled, external]) {
-            expect(readPluginUiContributionOrigin(admitted)).toMatchObject({
+            expect(readPluginUiContributionOrigin(admitted)).toBeNull();
+            expect(admitted?.occurrenceId).toBeUndefined();
+            expect(readPluginUiContributionSupplies(admitted)).toMatchObject([{
                 machineId: 'machine-a',
                 phase: 'current',
                 executionOrigin: null,
-            });
+            }]);
         }
     });
 

@@ -48,10 +48,7 @@ import {
     useMachineCliDetectionTarget,
 } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
-import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { readMachineName } from '@/utils/sessions/machineDisplayNames';
-import { readCurrentPluginMachineExecutionTargetPreference } from '@/sync/domains/machines/administration/selectionPreferences';
-import { resolveFreshMachineAdministrationExecutionTarget } from '@/sync/domains/machines/administration/useTargetSelection';
+import type { PluginMachineExecutionOriginStateV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
@@ -185,6 +182,8 @@ export type BoundPluginSurfaceFacts = Readonly<{
     machineId?: string | null;
     /** Presentation-only label from the existing machine display projection. */
     machineDisplayName?: string | null;
+    /** Presentation consumes Administration's decision; absence of a pin is not a decision. */
+    executionOriginSelectionKind?: PluginMachineExecutionOriginStateV1['kind'];
     serverId?: string | null;
     /** The projection generation this mount is bound to. */
     projectionGeneration?: number | string | null;
@@ -334,8 +333,8 @@ export type BoundPluginSurfaceCurrentUiContextPublication = Readonly<{
  * a fact about the host around the surface, never a pre-composed API.
  */
 export type BoundPluginSurfaceBinding = Readonly<{
-    /** Invocation-time revalidation supplied by the canonical per-plugin target owner. */
-    isExecutionOriginCurrent?: () => boolean;
+    /** Revalidation is read-only unless an actual operation records the existing last-use hint. */
+    isExecutionOriginCurrent?: (options?: Readonly<{ recordUse?: boolean }>) => boolean;
     /**
      * The host-ActionSpec front door. Defaults to the canonical lazily-resolved
      * `ActionExecutor.execute`, so ActionsSettings enablement and approval routing
@@ -922,8 +921,8 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                 ? { currentUiContext: input.facts.readCurrentUiContext }
                 : {}),
         };
-    const isDaemonInteractionEnabled = () => (input.facts.isDaemonInteractionEnabled?.() ?? input.facts.daemonInteractionEnabled)
-        && binding?.isExecutionOriginCurrent?.() !== false;
+    const isDaemonInteractionEnabled = (recordUse = true) => (input.facts.isDaemonInteractionEnabled?.() ?? input.facts.daemonInteractionEnabled)
+        && binding?.isExecutionOriginCurrent?.({ recordUse }) !== false;
     // Home-family Actions and borrowed Resources share the exact same target scope.
     const homeFamilyScope = accountLifetime
         && (!input.facts.serverId || areServerProfileIdentifiersEquivalent(input.facts.serverId, accountLifetime.scope.serverId))
@@ -1179,17 +1178,9 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         if (!daemonUnavailable || input.facts.isDaemonConnectionPending?.() === true) return undefined;
         const machineId = input.facts.machineId?.trim();
         if (!machineId) {
-            if (!daemonUnavailable) return undefined;
-            // A Machine the person chose with Run on that cannot answer is the cause, not "choose where it runs".
-            const chosen = readCurrentPluginMachineExecutionTargetPreference(input.facts.pluginId);
-            if (!chosen || resolveFreshMachineAdministrationExecutionTarget(chosen)) return t('settingsPlugins.targetSelection.selectionRequired');
-            const machine = resolveServerScopedMachine(storage.getState(), chosen.serverIdentityId, chosen.machineId);
-            // A name still loading is "this machine" in a sentence, never "Loading…".
-            return t('settingsPlugins.surfaces.machineCapabilityUnavailable', {
-                machine: readMachineName(machine) ?? t('machine.thisMachineInSentence'),
-            });
+            const kind = input.facts.executionOriginSelectionKind;
+            if (kind === 'selectionRequired' || kind === 'conflict') return t('settingsPlugins.targetSelection.selectionRequired');
         }
-        // A Machine whose name has not loaded yet is "this machine" in a sentence, never its raw id.
         // A Machine whose name has not loaded yet is "this machine" in a sentence, never its raw id.
         const machine = input.facts.machineDisplayName?.trim() || t('machine.thisMachineInSentence');
         return daemonUnavailable

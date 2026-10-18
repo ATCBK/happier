@@ -39,6 +39,7 @@ const selection = lazyZodSchema(() => z.strictObject({
   storedTarget: z.optional(z.nullable(MachineAdministrationTargetV1Schema)),
   storedOrigin: z.nullable(PluginMachineExecutionOriginV1Schema),
   selectedOrigin: z.nullable(PluginMachineExecutionOriginV1Schema),
+  selectionSource: z.nullable(z.enum(['auto', 'pinned'])),
   candidates: z.array(z.strictObject({ origin: PluginMachineExecutionOriginV1Schema,
     version: z.string().check(z.minLength(1)), selectable: z.boolean() })),
 }));

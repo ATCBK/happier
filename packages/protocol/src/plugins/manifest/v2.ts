@@ -71,9 +71,11 @@ export const PluginBrandV2Schema = lazyZodSchema(() => z.strictObject({
 }));
 export type PluginBrandV2 = z.infer<typeof PluginBrandV2Schema>;
 
-/** Preference for the supplying installation; never an execution grant. */
+/** Run-on preferences; omitted autoPick enables automatic placement, never execution authority. */
 export const PluginExecutionTargetV2Schema = lazyZodSchema(() => z.strictObject({
-  default: z.literal('installation'),
+  default: z.optional(z.literal('installation')),
+  /** False keeps the explicit-choice flow when several Machines are eligible. */
+  autoPick: z.optional(z.boolean()),
 }));
 export type PluginExecutionTargetV2 = z.infer<typeof PluginExecutionTargetV2Schema>;
 

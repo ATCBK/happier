@@ -497,8 +497,8 @@ export interface PluginManifest {
   readonly runtime: Readonly<{ apiVersion: 1 }>;
   readonly entrypoints?: Readonly<{ daemon?: string; development?: string }>;
   readonly brand?: Readonly<{ iconResourceId: string; monochrome?: boolean }>;
-  /** Prefer the admitted supplying installation, after an explicit user choice. */
-  readonly executionTarget?: Readonly<{ default: 'installation' }>;
+  /** Run-on defaults to automatic placement; false asks when several Machines are eligible. */
+  readonly executionTarget?: Readonly<{ default?: 'installation'; autoPick?: boolean }>;
   readonly activation?: Readonly<{ events?: readonly Readonly<{ kind: 'startup' }>[] }>;
   readonly hostAccess?: Readonly<{
     required?: readonly Readonly<{

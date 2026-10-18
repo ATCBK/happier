@@ -145,12 +145,12 @@ describe('declarative plugin workflows', () => {
         const plugin = definePlugin({
             id: 'com.acme.execution-default',
             version: '1.0.0',
-            executionTarget: { default: 'installation' },
+            executionTarget: { default: 'installation', autoPick: false },
         });
-        expect(plugin.manifest.executionTarget).toEqual({ default: 'installation' });
+        expect(plugin.manifest.executionTarget).toEqual({ default: 'installation', autoPick: false });
         const parsed = parsePluginManifest(plugin.manifest);
         expect(parsed.ok).toBe(true);
-        if (parsed.ok) expect(parsed.manifest.executionTarget).toEqual({ default: 'installation' });
+        if (parsed.ok) expect(parsed.manifest.executionTarget).toEqual({ default: 'installation', autoPick: false });
         const omitted = definePlugin({ id: 'com.acme.no-execution-default', version: '1.0.0' });
         expect(omitted.manifest).not.toHaveProperty('executionTarget');
     });

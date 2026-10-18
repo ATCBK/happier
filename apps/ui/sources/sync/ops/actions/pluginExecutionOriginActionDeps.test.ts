@@ -135,12 +135,18 @@ describe('answering-client plugin origin preferences', () => {
                 .toMatchObject({ status: 'applied' });
             expect(raw).toEqual(retainedAccountSettings);
             expect(writes).toBe(0);
+            expect(await invokeRegistered('plugins.execution_origin.list', { pluginId })).toMatchObject({
+                status: 'available', selectionSource: 'pinned', selectedOrigin: origin,
+            });
             expect(Object.values(storage.getState().settings.machineAdministrationTargetsLocalV1))
                 .toContainEqual({ serverIdentityId: 'srv_origin', machineId: 'machine' });
             expect(await invokeRegistered('plugins.execution_origin.clear', { pluginId }))
                 .toEqual({ status: 'applied' });
             expect(raw).toEqual(retainedAccountSettings);
             expect(storage.getState().settings.machineAdministrationTargetsLocalV1).toEqual({});
+            expect(await invokeRegistered('plugins.execution_origin.list', { pluginId })).toMatchObject({
+                status: 'available', selectionSource: 'auto', selectedOrigin: origin,
+            });
             storage.setState({ settingsVersion: null });
             expect(await invokeRegistered('plugins.execution_origin.set', { pluginId, origin }, 'agent'))
                 .toEqual({ status: 'applied' });

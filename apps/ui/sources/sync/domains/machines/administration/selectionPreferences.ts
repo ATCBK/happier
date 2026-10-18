@@ -102,3 +102,30 @@ export function readPluginMachineExecutionTargetPreference(
 export function readCurrentPluginMachineExecutionTargetPreference(pluginId: string): MachineAdministrationTargetV1 | null {
     return readPluginMachineExecutionTargetPreference(storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId);
 }
+
+/** A hint in the existing device/Account/Home map, never explicit placement intent. */
+export function readPluginMachineExecutionLastUsedTarget(
+    targets: MachineAdministrationTargetsV1,
+    pluginId: string,
+): MachineAdministrationTargetV1 | null {
+    return targets[`plugin.lastRunOn:${pluginId}`] ?? null;
+}
+
+export function setPluginMachineExecutionLastUsedTarget(
+    targets: MachineAdministrationTargetsV1,
+    pluginId: string,
+    target: MachineAdministrationTargetV1,
+): MachineAdministrationTargetsV1 {
+    const previous = readPluginMachineExecutionLastUsedTarget(targets, pluginId);
+    return previous?.serverIdentityId === target.serverIdentityId && previous.machineId === target.machineId
+        ? targets : setMachineAdministrationTargetPreference(targets, `plugin.lastRunOn:${pluginId}`, target);
+}
+
+export function rememberPluginMachineExecutionOriginUse(pluginId: string, origin: PluginMachineExecutionOriginV1, scope: AccountSettingsScope): void {
+    const state = storage.getState();
+    if (!areAccountSettingsScopesEqual(scope, state.settingsScope)) return;
+    const current = state.settings.machineAdministrationTargetsLocalV1;
+    const next = setPluginMachineExecutionLastUsedTarget(current, pluginId, { serverIdentityId: origin.serverIdentityId,
+        machineId: getPluginMachineExecutionOriginRef(origin).machineId });
+    if (next !== current) getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: next }, { expectedSettingsScope: scope });
+}

@@ -13,7 +13,27 @@ type MachineLike = Readonly<{
 
 type MachineWithId = MachineLike & Readonly<{
     id: string;
+    availability?: Readonly<{ kind: string }>;
+    metadata?: unknown;
+    metadataVersion?: number;
+    daemonStateVersion?: number;
+    keyBasis?: Readonly<{ metadataVersion: number; daemonStateVersion: number }> | null;
 }>;
+
+/** A newer published hint must be opened before its content can authorize execution. */
+export function hasCurrentMachineContent(machine: MachineWithId): boolean {
+    return machine.metadata != null && (!machine.keyBasis
+        || ((machine.metadataVersion ?? 0) >= machine.keyBasis.metadataVersion
+            && (machine.daemonStateVersion ?? 0) >= machine.keyBasis.daemonStateVersion));
+}
+
+/** Content admission is independent of list settlement and presence. */
+export function readMachineInventoryRowReadiness(machine: MachineWithId): 'available' | 'pending' | 'unavailable' {
+    if (machine.availability?.kind === 'locked') return 'unavailable';
+    if (machine.availability?.kind === 'available') return machine.metadata == null ? 'unavailable'
+        : hasCurrentMachineContent(machine) ? 'available' : 'pending';
+    return 'pending';
+}
 
 /**
  * Resolves the Account-portable target at the existing profile and machine
@@ -55,10 +75,18 @@ export function readLiveMachineInventoryRows<T extends MachineWithId>(params: Re
 }>): ReadonlySet<T> {
     const inventory = resolveServerScopedMachineInventory({
         ...params,
+        // Presentation's active fallback is not evidence of scoped membership.
+        activeServerId: '',
         serverId: params.serverIdentityId,
         serverIdAliases: [params.profile.id, ...(params.profile.legacyServerIds ?? [])],
     });
-    return new Set(inventory.status === 'idle' ? inventory.machines ?? [] : []);
+    if (inventory.status !== 'idle' && inventory.status !== 'loading') return new Set();
+    // A row's admitted content need not wait for unrelated fleet hydration.
+    // Use scoped membership here: the active display fallback may still contain
+    // an older row or a socket-only presence shell absent from the current list.
+    // A refresh may retain the previous idle list status while newer content is
+    // pending, so the row's readiness is required for both list states.
+    return new Set((inventory.machines ?? []).filter(machine => readMachineInventoryRowReadiness(machine) === 'available'));
 }
 
 /** The same ordered Home keys drive inventory reads and their subscription signatures. */

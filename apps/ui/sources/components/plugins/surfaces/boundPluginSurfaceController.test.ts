@@ -271,6 +271,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
     it('keeps supported Machine methods structurally admitted without an execution target', async () => {
         const controller = createBoundPluginSurfaceController({ facts: {
             ...FACTS, machineId: null, occurrenceId: null, executionOrigin: null, daemonInteractionEnabled: false,
+            executionOriginSelectionKind: 'selectionRequired',
         } });
         try {
             for (const method of ['readStoredImage', 'watchLiveStream', 'selectActionInput', 'readResource', 'watchResource'] as const) {
@@ -323,32 +324,19 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         } finally { controller.dispose(); }
     });
 
-    it('names the Machine chosen with Run on when a mount has none bound and that Machine cannot answer', async () => {
-        const target = { serverIdentityId: 'srv_pinned', machineId: 'machine_pinned_offline' };
-        const previousState = storage.getState();
+    it('names the unavailable Run-on Machine supplied by the surface host without a bound execution origin', async () => {
         const controller = createBoundPluginSurfaceController({ facts: {
-            ...FACTS, machineId: null, occurrenceId: null, executionOrigin: null, daemonInteractionEnabled: false,
+            ...FACTS, machineId: 'machine_pinned_offline', machineDisplayName: 'Old laptop',
+            occurrenceId: null, executionOrigin: null, daemonInteractionEnabled: false,
+            executionOriginSelectionKind: 'unavailable',
         } });
         try {
-            await act(async () => {
-                storage.setState((state) => ({
-                    ...state,
-                    settings: { ...state.settings, machineAdministrationTargetsLocalV1: { [`plugin.runOn:${FACTS.pluginId}`]: target } },
-                    machineListByServerId: { ...state.machineListByServerId, [target.serverIdentityId]: [
-                        createMachineFixture({ id: target.machineId, active: false, activeAt: 1,
-                            metadata: { host: 'old.local', platform: 'darwin', happyCliVersion: '0.0.0-test',
-                                happyHomeDir: '/Users/old/.happy-dev', homeDir: '/Users/old', displayName: 'Old laptop' } }),
-                    ] },
-                    machineListStatusByServerId: { ...state.machineListStatusByServerId, [target.serverIdentityId]: 'idle' },
-                }));
-            });
             const invocation = request('executeAction', { action: 'refresh-index', input: {} });
             const result = await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
             expect(result).toMatchObject({ kind: 'error', payload: { code: 'unavailable',
                 message: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: 'Old laptop' }) } });
         } finally {
             controller.dispose();
-            await act(async () => { storage.setState(previousState); });
         }
     });
 
@@ -372,9 +360,10 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(lend).toHaveBeenLastCalledWith(null);
     });
 
-    it('asks for a target when an unbound Action cannot establish its mounted Machine caller', async () => {
+    it.each(['selectionRequired', 'conflict'] as const)('asks for a target only when Administration reports %s', async executionOriginSelectionKind => {
         const controller = createBoundPluginSurfaceController({ facts: {
             ...FACTS, machineId: null, executionOrigin: null, daemonInteractionEnabled: false,
+            executionOriginSelectionKind,
         } });
         try {
             await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: 'refresh-index' })).resolves.toMatchObject({
@@ -1954,6 +1943,18 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             code: 'unsupported_method',
             diagnostics: ['host_api_method_not_installed:applyComposer'],
         });
+    });
+
+    it('does not infer a Run-on choice request from the absence of a bound Machine', async () => {
+        const controller = createBoundPluginSurfaceController({
+            facts: { ...FACTS, machineId: null, daemonInteractionEnabled: false },
+        });
+        try {
+            expect(await controller.hostApi.handleRequest(request('readResource', {
+                resource: { pluginId: FACTS.pluginId, localId: 'latest' },
+            }))).toMatchObject({ code: 'unavailable',
+                message: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: t('machine.thisMachineInSentence') }) });
+        } finally { controller.dispose(); }
     });
 
     it('keeps canonical Connected Accounts navigation available without daemon interaction', async () => {

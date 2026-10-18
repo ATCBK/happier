@@ -11,6 +11,10 @@ describe('Administration fleet policy', () => {
         const scope = { serverId: 'home-a', accountId: 'account-a' };
         recordMachineRequestFailed({ ...scope, machineId: machine.id });
         expect(isMachineSelectableForFleet(scope, machine)).toBe(false);
+        expect(resolveFleetMachineRejection({ serverIdentityId: scope.serverId, machineId: machine.id,
+            machineSnapshots: [{ kind: 'resolved', accountId: scope.accountId, profileId: scope.serverId,
+                serverIdentityId: scope.serverId, serverName: 'Studio', observation: 'live', machines: [machine] }] }))
+            .toBe('home_unreachable');
         expect(isMachineSelectableForFleet({ ...scope, serverId: 'home-b' }, machine)).toBe(true);
         expect(isMachineSelectableForFleet({ ...scope, accountId: 'account-b' }, machine)).toBe(true);
         recordMachineRequestSucceeded({ ...scope, machineId: machine.id });

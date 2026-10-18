@@ -63,23 +63,32 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
     projection: PluginUiProjectionModel | null | undefined;
     entry?: Readonly<{ id: string }> | null;
     enabled: boolean;
+    /** Only a rendered Run-on selector needs the full Machine label projection. */
+    includeMachineCandidates?: boolean;
     contextualTarget?: PluginExecutionOriginContextualTarget | null;
 }>) {
     const classifyRelease = useActivePluginAccountAvailabilityReleaseClassifier();
     // Selection is plugin-scoped, just like the shell's Administration
     // reporter. The open page narrows only the selected producer's supply,
     // never the candidates or defaults used to choose that producer.
-    const supplied = React.useMemo(() => readPluginUiExecutionOriginCandidates({
-        projection: params.projection ?? null, pluginId: params.pluginId,
-    }), [params.pluginId, params.projection]);
+    const suppliedRef = React.useRef<ReturnType<typeof readPluginUiExecutionOriginCandidates> | undefined>(undefined);
+    const supplied = React.useMemo(() => {
+        const next = readPluginUiExecutionOriginCandidates({
+            projection: params.projection ?? null, pluginId: params.pluginId, previous: suppliedRef.current,
+        });
+        suppliedRef.current = next;
+        return next;
+    }, [params.pluginId, params.projection]);
     const readCurrentCandidates = React.useCallback(() => readPluginUiExecutionOriginCandidates({
         projection: readCurrentAppShellPluginUiProjection(), pluginId: params.pluginId,
     }), [params.pluginId]);
     const readSourceCandidates = React.useCallback(() => readCurrentCandidates().sourceCandidates, [readCurrentCandidates]);
+    const readMachineRejections = React.useCallback(() => readCurrentCandidates().machineRejections, [readCurrentCandidates]);
     const readDeclaredDefaultOrigins = React.useCallback(() => readCurrentCandidates().declaredDefaultOrigins, [readCurrentCandidates]);
     const selection = usePluginMachineExecutionOriginSelection({
         pluginId: params.pluginId, enabled: params.enabled, classifyRelease,
-        ...supplied, readSourceCandidates, readDeclaredDefaultOrigins,
+        includeMachineCandidates: params.includeMachineCandidates,
+        ...supplied, readSourceCandidates, readMachineRejections, readDeclaredDefaultOrigins,
         contextualTarget: params.contextualTarget,
     });
     const selectedSupplyFromSelection = React.useMemo(() => selection.selectedOrigin
@@ -104,7 +113,9 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
         && previous?.accountLifetime === accountLifetime && previous.entryId === params.entry?.id
         && (!selection.selectedOrigin || arePluginMachineExecutionOriginsEqual(selection.selectedOrigin, previous.supply.executionOrigin!))
         && offlineCandidate?.validation.kind === 'rejected'
-        && (offlineCandidate.validation.reason === 'offline' || offlineCandidate.validation.reason === 'stale');
+        && (offlineCandidate.validation.reason === 'offline' || offlineCandidate.validation.reason === 'stale'
+            || offlineCandidate.validation.reason === 'home_unreachable' || offlineCandidate.validation.reason === 'daemon_unavailable'
+            || offlineCandidate.validation.reason === 'daemon_invalid_response');
     const retainedSupply = canRetainSupply ? readPluginUiContributionSupplies(params.entry).find(supply => (
         supply.executionOrigin && previous?.supply.executionOrigin
         && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, previous.supply.executionOrigin)
@@ -121,8 +132,8 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
             lastSelectedSupply.current = null;
         }
     }, [accountLifetime, params.entry, retainedSupply, selectedSupplyFromSelection, selection.canExecute]);
-    const isExecutionOriginCurrent = React.useCallback(() => {
-        const fresh = selection.resolveExecutionOrigin();
+    const isExecutionOriginCurrent = React.useCallback((options?: Readonly<{ recordUse?: boolean }>) => {
+        const fresh = selection.resolveExecutionOrigin({ recordUse: options?.recordUse === true });
         if (!fresh || !selectedSupply?.executionOrigin || !selectedSupply.occurrenceId
             || selectedSupply.phase !== 'current' || !selectedSupply.interactionEnabled
             || !arePluginMachineExecutionOriginsEqual(fresh.origin, selectedSupply.executionOrigin)) return false;

@@ -2310,14 +2310,20 @@ function PluginSurfaceHostMount(props: Readonly<(
     //
     // A single-machine (session/project/browser/services) projection stamps no
     // origin, and there the mount's own facts remain authoritative.
-    const accountUnionMount = !hasEmbeddedMount && selectedSurfaceBinding?.targetKind === 'app'
+    // Composition depth does not select execution: ordinary app inline widgets
+    // consume the same Account union and Administration owner as app pages.
+    // Daemon-selected embedded mounts already carry their exact contextual origin.
+    const accountUnionMount = !hasEmbeddedRendererMount && selectedSurfaceBinding?.targetKind === 'app'
         && Array.isArray(descriptor?.hostSupplies);
     const needsMachineExecution = accountUnionMount && descriptor != null && isPluginSurfaceMachineBound({
         pluginId: mountedPluginId, surface: descriptor, projection: props.pluginUiProjection,
     });
+    const showsExecutionOriginSelector = needsMachineExecution && props.descriptor?.contributionKind === 'surfacePlacement'
+        && (props.descriptor.binding.kind !== 'destination' || props.descriptor.binding.container !== 'appPage');
     const pluginExecution = usePluginSurfaceExecutionOrigin({
         pluginId: mountedPluginId, projection: props.pluginUiProjection, entry: descriptor,
         enabled: needsMachineExecution,
+        includeMachineCandidates: showsExecutionOriginSelector,
         contextualTarget: props.contextualExecutionTarget,
     });
     // Producer snapshots are immutable; preserve their derived origin between
@@ -2913,6 +2919,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         });
     const controllerFacts = Object.freeze({
         ...baseControllerFacts,
+        executionOriginSelectionKind: needsMachineExecution ? pluginExecution.selection.state.kind : undefined,
         isDaemonConnectionPending: () => machineConnectionPending,
         resolveContributedAction,
         ...(currentUiContextReader
@@ -4270,8 +4277,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             machineId={machineId ?? undefined} serverId={serverId} sessionId={props.sessionId}
             accountLifetime={accountLifetime ?? undefined} isCurrent={controller.isCurrent}
             contextKey={surfaceTargetAuthorityKey ?? undefined}>
-            {needsMachineExecution && props.descriptor?.contributionKind === 'surfacePlacement'
-                && (props.descriptor.binding.kind !== 'destination' || props.descriptor.binding.container !== 'appPage') ? <View style={surfaceHostStyles.executionOriginBand}>
+            {showsExecutionOriginSelector ? <View style={surfaceHostStyles.executionOriginBand}>
             <PluginMachineExecutionOriginSelectorView selection={pluginExecution.selection}
                 presentation="chip" groupTitle={t('settingsPlugins.executionOriginTitle')}
                 testIDPrefix="plugin-surface-execution" />

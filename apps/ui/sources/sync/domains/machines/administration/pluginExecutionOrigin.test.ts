@@ -6,17 +6,62 @@ import {
     combinePluginMachineExecutionOriginCandidates,
     composePluginMachineExecutionOriginV1,
     resolvePluginMachineExecutionOriginState,
+    serializePluginMachineExecutionOriginMachineFacts,
     type PluginMachineExecutionOriginCandidateV1,
 } from './pluginExecutionOrigin';
 import { resolveFleetMachineRejection } from './fleetUnion';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 import { resolveAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/machineInventorySnapshots';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { createMachineFixture } from '@/dev/testkit';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { parseToken } from '@/utils/auth/parseToken';
 
 const accountId = parseToken(createAccountTokenForTests('plugin-owner'));
 afterEach(clearMachineRequestReachabilityForTest);
+
+describe('execution-origin Machine fact serialization', () => {
+    it('ignores activity ordering among rejected targets but retains selectable target ordering', () => {
+        const rows = ['machine-a', 'machine-b'];
+        const materializations = rows.map(machineId => candidate({ serverIdentityId: 'srv_one', machineId,
+            materializationId: machineId }).materialization);
+        const serialize = (activity: readonly number[], revoked: boolean, includeEligibility = true) => serializePluginMachineExecutionOriginMachineFacts({
+            pluginId: 'acme.plugin', materializations, sources: [],
+            machineSnapshots: [{ kind: 'resolved', profileId: 'home', serverIdentityId: 'srv_one',
+                serverName: 'Home', accountId, observation: 'live', inventoryStatus: 'idle',
+                ...(includeEligibility ? { executionEligibleMachineIds: revoked ? [] : rows } : {}),
+                machines: rows.map((id, index) => createMachineFixture({ id, active: true,
+                    activeAt: Date.now() + activity[index], ...(revoked ? { revokedAt: 1 } : {}) })) }],
+        });
+        expect(serialize([1, 2], true)).toBe(serialize([2, 1], true));
+        expect(serialize([1, 2], false)).not.toBe(serialize([2, 1], false));
+        expect(serialize([1, 2], false, false)).not.toBe(serialize([2, 1], false, false));
+        expect(serialize([1, 2], true)).not.toBe(serialize([1, 2], false));
+    });
+
+    it('reads activity once per target instead of rescanning the fleet in sort comparisons', () => {
+        let activityReads = 0;
+        const rows = Array.from({ length: 64 }, (_, index) => ({
+            id: `machine-${String(index).padStart(2, '0')}`,
+            activity: (index * 17) % 64,
+        }));
+        const machines = rows.map(row => ({ ...createMachineFixture({ id: row.id, revokedAt: 1 }),
+            get activeAt() { activityReads += 1; return row.activity; },
+        }));
+        const actual = serializePluginMachineExecutionOriginMachineFacts({
+            pluginId: 'acme.plugin',
+            materializations: rows.map(row => candidate({ serverIdentityId: 'srv_one', machineId: row.id,
+                materializationId: row.id }).materialization),
+            sources: [],
+            machineSnapshots: [{ kind: 'resolved', profileId: 'home', serverIdentityId: 'srv_one',
+                serverName: 'Home', accountId, observation: 'live', inventoryStatus: 'loading', machines }],
+        });
+        // Actual Fleet policy still refuses each revoked target during a pending census.
+        expect(JSON.parse(actual)).toEqual([...rows].sort((a, b) => a.id.localeCompare(b.id))
+            .map(row => ['srv_one', row.id, 'revoked', false]));
+        expect(activityReads).toBe(rows.length);
+    });
+});
 
 function candidate(input: Readonly<{
     serverIdentityId: string;
@@ -48,6 +93,58 @@ function candidate(input: Readonly<{
 }
 
 describe('resolvePluginMachineExecutionOriginState', () => {
+    it('auto-picks compatible admitted supply during census hydration and keeps unresolved coverage pending', () => {
+        const a = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'a' });
+        const b = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-b', materializationId: 'b', version: '2.0.0' });
+        const params = { pluginId: 'acme.plugin', storedOrigin: null, inventoryPending: true,
+            renderedVersion: '1.0.0', candidates: [b, a] };
+        expect(resolvePluginMachineExecutionOriginState(params)).toMatchObject({ kind: 'selected',
+            origin: composePluginMachineExecutionOriginV1(a.materialization), selectionSource: 'auto' });
+        for (const candidates of [[], [b], [{ ...a, validation: { kind: 'rejected', reason: 'unknown' } }]] as const) {
+            expect(resolvePluginMachineExecutionOriginState({ ...params, candidates })).toMatchObject({
+                kind: 'unavailable', reasons: ['unknown'],
+            });
+        }
+    });
+    it('auto-picks by last use, own Machine, then activity with stable ties, and re-picks a dropped auto target', () => {
+        const a = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'a' });
+        const b = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-b', materializationId: 'b' });
+        const target = (entry: typeof a) => ({ serverIdentityId: entry.materialization.serverIdentityId, machineId: entry.materialization.machineId });
+        const params = { pluginId: 'acme.plugin', storedOrigin: null, candidates: [b, a],
+            machineActivity: [{ ...target(a), activeAt: 100 }, { ...target(b), activeAt: 200 }] };
+        const selected = (entry: typeof a) => ({ kind: 'selected', origin: composePluginMachineExecutionOriginV1(entry.materialization), selectionSource: 'auto' });
+        expect(resolvePluginMachineExecutionOriginState(params)).toMatchObject(selected(b));
+        expect(resolvePluginMachineExecutionOriginState({ ...params, localMachineTarget: target(a) })).toMatchObject(selected(a));
+        expect(resolvePluginMachineExecutionOriginState({ ...params, localMachineTarget: target(b), lastUsedTarget: target(a) })).toMatchObject(selected(a));
+        expect(resolvePluginMachineExecutionOriginState({ ...params, lastUsedTarget: { ...target(a), serverIdentityId: 'srv_elsewhere' } })).toMatchObject(selected(b));
+        expect(resolvePluginMachineExecutionOriginState({ ...params, lastUsedTarget: target(b),
+            candidates: [a, { ...b, validation: { kind: 'rejected', reason: 'offline' } }] })).toMatchObject(selected(a));
+        expect(resolvePluginMachineExecutionOriginState({ ...params, machineActivity: [] })).toMatchObject(selected(a));
+        expect(resolvePluginMachineExecutionOriginState({ ...params, machineActivity: [], candidates: [a, b] })).toMatchObject(selected(a));
+        expect(resolvePluginMachineExecutionOriginState({ ...params, autoPick: false })).toMatchObject({ kind: 'selectionRequired' });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, autoPick: false,
+            declaredDefaultOrigins: [composePluginMachineExecutionOriginV1(b.materialization)] })).toMatchObject({ kind: 'selectionRequired' });
+    });
+    it('keeps an explicit admitted development choice able to replace the bundled rendered version', () => {
+        const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'dev-machine', pluginId: 'acme.plugin',
+            sourceCustody: { kind: 'development', registeredRootId: 'dev-root' } } } as const;
+        const source = { source: { origin, version: '2.0.0', occurrenceId: 'dev-occurrence', serverId: 'local-one', generation: 1 },
+            releaseContent: 'matched', validation: { kind: 'admitted' } } as const;
+        const params = { pluginId: 'acme.plugin', storedOrigin: null, renderedVersion: '1.0.0', candidates: [source] };
+        expect(resolvePluginMachineExecutionOriginState({ ...params, storedOrigin: origin })).toMatchObject({ kind: 'selected', origin, selectionSource: 'pinned' });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, storedTarget: { serverIdentityId: 'srv_one', machineId: 'dev-machine' } }))
+            .toMatchObject({ kind: 'selected', origin, selectionSource: 'pinned' });
+    });
+    it('prefers the rendered release across versions and asks only if no selectable version matches', () => {
+        const a = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'a' });
+        const b = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-b', materializationId: 'b', version: '2.0.0' });
+        const params = { pluginId: 'acme.plugin', storedOrigin: null, candidates: [a, b], renderedVersion: '2.0.0' };
+        expect(resolvePluginMachineExecutionOriginState(params)).toMatchObject({ kind: 'selected',
+            origin: composePluginMachineExecutionOriginV1(b.materialization), selectionSource: 'auto' });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, renderedVersion: '3.0.0' })).toMatchObject({ kind: 'conflict', reasons: ['different_versions'] });
+        expect(resolvePluginMachineExecutionOriginState({ ...params, storedTarget: { serverIdentityId: 'srv_one', machineId: 'machine-a' },
+            candidates: [{ ...a, validation: { kind: 'rejected', reason: 'offline' } }, b] })).toMatchObject({ kind: 'unavailable', reasons: ['offline'] });
+    });
     it('uses only the local Home for an unpinned operation', () => {
         const local = candidate({ serverIdentityId: 'srv_one', machineId: 'local', materializationId: 'local-custody' });
         const foreign = candidate({ serverIdentityId: 'srv_two', machineId: 'foreign', materializationId: 'foreign-custody' });
@@ -55,7 +152,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
             homeServerIdentityId: 'srv_one', candidates: [foreign] })).toMatchObject({ kind: 'unavailable' });
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
             homeServerIdentityId: 'srv_one', candidates: [foreign, local], declaredDefaultOrigins: [composePluginMachineExecutionOriginV1(foreign.materialization)] }))
-            .toMatchObject({ kind: 'selected', origin: composePluginMachineExecutionOriginV1(local.materialization), selectionSource: 'soleCandidate' });
+            .toMatchObject({ kind: 'selected', origin: composePluginMachineExecutionOriginV1(local.materialization), selectionSource: 'auto' });
     });
     it('keeps an offline explicit Machine pinned while resolving replacement custody on that Machine', () => {
         const own = candidate({ serverIdentityId: 'srv_one', machineId: 'pinned-machine', materializationId: 'new-custody' });
@@ -87,15 +184,14 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: saved, candidates: [own, other] }))
             .toMatchObject({ kind: 'unavailable', storedOrigin: saved });
     });
-    it('does not count a nonselectable machine-local census as a fleet version disagreement', () => {
+    it('ignores a nonselectable machine-local census when auto-picking a compatible admitted copy', () => {
         const current = candidate({ serverIdentityId: 'srv_one', machineId: 'current-machine', materializationId: 'current', version: '2.0.0' });
         const local = candidate({ serverIdentityId: 'srv_one', machineId: 'local-machine', materializationId: 'local',
             version: '1.0.0', sourceClass: 'localPath' });
         const state = resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
             candidates: [current, local] });
-        // The Artifact/source-custody refusal remains diagnostic; it is not a
-        // disagreement between two selectable execution origins.
-        expect(state).toMatchObject({ kind: 'conflict', reasons: ['machine_local'] });
+        expect(state).toMatchObject({ kind: 'selected', selectionSource: 'auto',
+            origin: composePluginMachineExecutionOriginV1(current.materialization) });
     });
     it('keeps source and release selection aligned with server-scoped reachability and retry recovery', () => {
         const machineId = 'plugin-reachability-machine';
@@ -147,7 +243,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         const sourceCandidate = { source: { origin, version: '1.0.0', occurrenceId: 'occurrence-a',
             serverId: 'local-one', generation: 1 }, releaseContent: 'matched', validation: { kind: 'admitted' } } as const;
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
-            candidates: [sourceCandidate] })).toMatchObject({ kind: 'selected', origin, selectionSource: 'soleCandidate' });
+            candidates: [sourceCandidate] })).toMatchObject({ kind: 'selected', origin, selectionSource: 'auto' });
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: origin,
             candidates: [{ ...sourceCandidate, validation: { kind: 'rejected', reason: 'offline' } }] }))
             .toMatchObject({ kind: 'unavailable', storedOrigin: origin, reasons: ['offline'] });
@@ -162,22 +258,22 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         const origin = (entry: typeof a) => ({ serverIdentityId: entry.materialization.serverIdentityId,
             materializationRef: { machineId: entry.materialization.machineId, materializationId: entry.materialization.materializationId, pluginId: 'acme.plugin' } });
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
-            candidates: [a, b], declaredDefaultOrigins: [origin(b)] })).toMatchObject({ kind: 'selected', origin: origin(b), selectionSource: 'pluginDefault' });
+            candidates: [a, b], declaredDefaultOrigins: [origin(b)] })).toMatchObject({ kind: 'selected', origin: origin(b), selectionSource: 'auto' });
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
             candidates: [{ ...a, releaseContent: 'unknown' }, b], declaredDefaultOrigins: [origin(b)] }))
-            .toMatchObject({ kind: 'selected', origin: origin(b), selectionSource: 'pluginDefault' });
+            .toMatchObject({ kind: 'selected', origin: origin(b), selectionSource: 'auto' });
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: origin(a),
-            candidates: [a, b], declaredDefaultOrigins: [origin(b)] })).toMatchObject({ kind: 'selected', origin: origin(a), selectionSource: 'stored' });
+            candidates: [a, b], declaredDefaultOrigins: [origin(b)] })).toMatchObject({ kind: 'selected', origin: origin(a), selectionSource: 'pinned' });
         const offline = { ...a, validation: { kind: 'rejected', reason: 'offline' } } as const;
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: origin(a),
             candidates: [offline, b], declaredDefaultOrigins: [origin(b)] })).toMatchObject({ kind: 'unavailable', reasons: ['offline'] });
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
-            candidates: [a, b], declaredDefaultOrigins: [origin(a), origin(b)] }).kind).toBe('selectionRequired');
+            candidates: [a, b], autoPick: false, declaredDefaultOrigins: [origin(a), origin(b)] }).kind).toBe('selectionRequired');
         const replacement = { ...b, materialization: { ...b.materialization, machineId: a.materialization.machineId } };
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
             storedTarget: { serverIdentityId: 'srv_one', machineId: 'machine-a' },
             candidates: [a, replacement], declaredDefaultOrigins: [origin(replacement)] }))
-            .toMatchObject({ kind: 'selected', origin: origin(replacement), selectionSource: 'stored' });
+            .toMatchObject({ kind: 'selected', origin: origin(replacement), selectionSource: 'pinned' });
     });
     it('composes uncollapsed Availability rows with exact machine state and Artifact-owned release validation', () => {
         const materialization = candidate({
@@ -327,8 +423,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
     it('keeps a stored origin selected through its Home\'s machine-list refresh and fails it closed once the read failed', () => {
         const base = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'mat-a' }).materialization;
         const stored = composePluginMachineExecutionOriginV1(base);
-        const row: Machine = { id: 'machine-a', seq: 1, createdAt: 1, updatedAt: 20, active: true, activeAt: Date.now(), revokedAt: null,
-            replacedByMachineId: null, metadata: null, metadataVersion: 1, daemonState: null, daemonStateVersion: 0 };
+        const row = createMachineFixture({ id: 'machine-a', active: true, activeAt: Date.now() });
         const profile = { id: 'local-one', name: 'Server One', serverUrl: 'https://one.example.test', serverIdentityId: 'srv_one',
             createdAt: 1, updatedAt: 1, lastUsedAt: 1 };
         const stateWhen = (status: 'idle' | 'loading' | 'error') => resolvePluginMachineExecutionOriginState({
@@ -403,20 +498,22 @@ describe('resolvePluginMachineExecutionOriginState', () => {
                 },
             },
             candidate: only,
-            selectionSource: 'soleCandidate',
+            selectionSource: 'auto',
         });
     });
 
-    it('requires explicit choice between matching replicas and is stable under input permutation', () => {
+    it('retains explicit choice between matching replicas for an opt-out plugin under input permutation', () => {
         const machineA = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a', materializationId: 'mat-a' });
         const machineB = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-b', materializationId: 'mat-b' });
 
         const first = resolvePluginMachineExecutionOriginState({
+            autoPick: false,
             pluginId: 'acme.plugin',
             storedOrigin: null,
             candidates: [machineB, machineA],
         });
         const reordered = resolvePluginMachineExecutionOriginState({
+            autoPick: false,
             pluginId: 'acme.plugin',
             storedOrigin: null,
             candidates: [machineA, machineB],
@@ -449,7 +546,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         expect(resolvePluginMachineExecutionOriginState({
             pluginId: 'acme.plugin',
             storedOrigin: null,
-            candidates: [base, contentConflict],
+            candidates: [base, contentConflict], autoPick: false,
         }).kind).toBe('conflict');
 
         const local = candidate({
@@ -461,7 +558,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         expect(resolvePluginMachineExecutionOriginState({
             pluginId: 'acme.plugin',
             storedOrigin: null,
-            candidates: [base, local],
+            candidates: [base, local], autoPick: false,
         }).kind).toBe('conflict');
     });
 
@@ -569,7 +666,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         })).toMatchObject({
             kind: 'selected',
             origin: storedOrigin,
-            selectionSource: 'stored',
+            selectionSource: 'pinned',
         });
     });
 
