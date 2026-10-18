@@ -82,7 +82,7 @@ describe('AgentInputSelectionPopover', () => {
         expect(capturedPopoverProps.current?.anchorRef).toBe(anchorRef);
         // On web, AgentInput popovers should default to the viewport boundary (ignore any boundary provider).
         expect(capturedPopoverProps.current?.boundaryRef).toBeNull();
-        expect(capturedPopoverProps.current?.placement).toBe('bottom');
+        expect(capturedPopoverProps.current?.placement).toBe('top');
         expect(capturedPopoverProps.current?.maxHeightCap).toBe(480);
         expect(capturedPopoverProps.current?.maxWidthCap).toBe(512);
         expect(capturedPopoverProps.current?.edgePadding).toEqual({ horizontal: 12, vertical: 12 });
@@ -144,7 +144,7 @@ describe('AgentInputSelectionPopover', () => {
         windowWidthState.value = 480;
     });
 
-    it('opens every composer picker toward the roomier side of its chip (owner 2026-10-12: more room above, above)', async () => {
+    it('opens every composer picker directly above its chip, never flipped below or pushed past the composer (0.2 placement, owner 2026-10-18)', async () => {
         windowWidthState.value = 1440;
         const { resolveHappierPopoverPlacement } = await import('@happier-dev/plugin-ui/presentation');
         const { AgentInputSelectionPopover } = await import('./AgentInputSelectionPopover');
@@ -154,20 +154,18 @@ describe('AgentInputSelectionPopover', () => {
                 {() => <React.Fragment />}
             </AgentInputSelectionPopover>,
         );
+        // The chip itself is the vertical anchor: the picker may overlap the composer's text.
+        expect(capturedPopoverProps.current?.clearanceRef).toBeUndefined();
         const decide = (available: Readonly<{ top: number; bottom: number }>) => resolveHappierPopoverPlacement({
             placement: capturedPopoverProps.current?.placement as 'top' | 'bottom',
             preferredMinAvailable: (capturedPopoverProps.current?.placementMinSpace as number | undefined) ?? 560,
-            flip: true,
+            flip: capturedPopoverProps.current?.flip !== false,
             available: { ...available, left: 0, right: 0 },
         });
-        // The Home composer at 1440×900: 256 px below, 400 above.
+        // The Home composer at 1440×900.
         expect(decide({ top: 400, bottom: 256 })).toBe('top');
-        // A session composer docked at the window's foot.
-        expect(decide({ top: 700, bottom: 40 })).toBe('top');
-        // A composer near the top of a tall window: the room is below.
-        expect(decide({ top: 120, bottom: 640 })).toBe('bottom');
-        // Both sides hold the whole list: still the roomier one.
-        expect(decide({ top: 900, bottom: 700 })).toBe('top');
+        // A New Session composer high in the window: still above, scrolling inside itself.
+        expect(decide({ top: 120, bottom: 640 })).toBe('top');
         windowWidthState.value = 480;
     });
 

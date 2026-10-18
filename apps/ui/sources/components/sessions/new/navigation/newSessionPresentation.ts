@@ -63,9 +63,9 @@ export function isNewSessionFloatingComposerPresentation(params: Readonly<{
     if (params.variant !== 'simple') return false;
     // A forced screen presentation is not a modal at all; there is nothing to float over.
     if (params.mode === 'screen') return false;
-    // Web keeps Expo Router's modal route, which it renders as a drawer with its own frosted
-    // scrim. Nothing to replace there.
-    return params.platformOs === 'ios' || params.platformOs === 'android';
+    // Web too (owner, 2026-10-18): no route card or sheet. Expo Router renders a transparent modal
+    // as a bare full-window drawer, and the screen paints its own blurred backdrop.
+    return params.platformOs === 'ios' || params.platformOs === 'android' || params.platformOs === 'web';
 }
 
 export function resolveNewSessionShouldBottomAnchor(params: Readonly<{

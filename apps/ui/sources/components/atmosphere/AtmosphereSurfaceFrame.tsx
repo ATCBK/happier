@@ -26,6 +26,8 @@ export function AtmosphereSurfaceFrame(props: Readonly<{
     visible?: boolean;
     session?: boolean;
     editor?: AtmosphereEditor;
+    /** False when the surface seats Look itself (the floating New Session composer's status row). */
+    showLook?: boolean;
     children: React.ReactNode;
 }>) {
     const destinationFocus = useDestinationFocus();
@@ -76,9 +78,10 @@ export function AtmosphereSurfaceFrame(props: Readonly<{
                 pane={{ width: geometry.rect.width, height: geometry.rect.height }} placement={atmosphere.planet.placement}
                 style={atmosphere.planet.style} digits={atmosphere.planet.digits} theme={theme.dark ? 'dark' : 'light'} phone={phone}
                 hero={geometry.band > 0 ? { composerTop: 2 * geometry.focus.y - geometry.band, aboveBottom: geometry.band, nextTop: null } : null}
+                band={typeof props.surface === 'object' && geometry.band > 0 ? geometry.band : undefined}
                 hidden={!visible || sending} leave={sending ? 'climb' : 'fade'} reducedMotion={atmosphere.reducedMotion} /> : null}
             <AtmosphereBandBoundary.Provider value={enabled ? boundary : null}>{props.children}</AtmosphereBandBoundary.Provider>
-            {enabled && !props.session && typeof props.surface === 'string' ? <View style={{ position: 'absolute', right: 16, top: 14 }}>
+            {enabled && !props.session && props.showLook !== false && typeof props.surface === 'string' ? <View style={{ position: 'absolute', right: 16, top: 14 }}>
                 <LookChip target={target} testID="new-session-look" />
             </View> : null}
         </GlassSurface>

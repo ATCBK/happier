@@ -11,7 +11,7 @@ import type { ModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 import { ModalBoundaryProvider } from '@/modal/context/ModalBoundaryContext';
 import { useGlassBlurSetting } from '@/components/ui/glass/useGlassBlurSetting';
 import { t } from '@/text';
-import { createBackdropNativeStyle, createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
+import { createBackdropNativeStyle, createModalScrimWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import { resolveOverlayPointerEvents } from '@/components/ui/overlays/resolveOverlayPointerEvents';
 import {
     OverlayMotionFrame,
@@ -226,15 +226,10 @@ export function BaseModal({
                     ]
                     : []),
             ].join(', '),
-            ...createBackdropWebStyle({
-                backgroundColor: visible
-                    ? ((theme.colors.overlay.scrimWizard ?? theme.colors.overlay.scrim) as unknown as string)
-                    : 'transparent',
-                blurPx: visible ? 2 : 0,
-                enableBlur: materialBlurEnabled && visible,
-                fallbackBackgroundColorWhenBlurDisabled: visible
-                    ? ((theme.colors.overlay.scrimStrong ?? theme.colors.overlay.scrim) as unknown as string)
-                    : 'transparent',
+            ...createModalScrimWebStyle({
+                overlay: theme.colors.overlay as unknown as { scrim: string; scrimWizard?: string; scrimStrong?: string },
+                enableBlur: materialBlurEnabled,
+                visible,
             }),
         };
 

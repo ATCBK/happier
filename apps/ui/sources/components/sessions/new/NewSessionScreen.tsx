@@ -1,5 +1,7 @@
 import React from 'react';
 import { AtmosphereSurfaceFrame } from '@/components/atmosphere/AtmosphereSurfaceFrame';
+import { LookChip, type LookTarget } from '@/components/atmosphere/look/LookChip';
+import { useNewSessionFloatingComposer } from '@/components/sessions/new/navigation/useNewSessionFloatingComposer';
 import { StoredPluginUiNewSessionSeedOriginV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { ProjectSetupDraftFootnote, ProjectSetupDraftHeader } from '@/components/projects/projectSetup/ProjectSetupReturn';
 import type { SessionDirectoryIntentV1 } from '@happier-dev/protocol';
@@ -176,6 +178,8 @@ function NewSessionEmbeddedComposerCard(props: Readonly<{
     );
 }
 
+const NEW_SESSION_LOOK_TARGET: LookTarget = { surface: 'new-session' };
+
 function NewSessionContent(props: Readonly<{
     presentation: NewSessionScreenPresentation;
     allowBlockingGuidance: boolean;
@@ -189,6 +193,15 @@ function NewSessionContent(props: Readonly<{
     inputPlaceholder?: string;
 }>) {
     const shouldBlock = useShouldBlockNewSessionWithGettingStartedGuidance();
+    // With no route card around it, the floating composer seats Look in its own status row,
+    // beside Start another and Delete draft, instead of in the window's corner.
+    const floatingComposer = useNewSessionFloatingComposer(props.presentation);
+    const statusTrailingActions = floatingComposer ? (
+        <>
+            {props.statusTrailingActions}
+            <LookChip target={NEW_SESSION_LOOK_TARGET} testID="new-session-look" />
+        </>
+    ) : props.statusTrailingActions;
 
     if (props.allowBlockingGuidance && shouldBlock) {
         return <SessionGettingStartedGuidance variant="newSessionBlocking" />;
@@ -196,8 +209,8 @@ function NewSessionContent(props: Readonly<{
 
     return (
         <NewSessionScreenPortalScope>
-            {props.presentation === 'screen' ? <AtmosphereSurfaceFrame surface="new-session">
-                <NewSessionScreenInner {...props} />
+            {props.presentation === 'screen' ? <AtmosphereSurfaceFrame surface="new-session" showLook={!floatingComposer}>
+                <NewSessionScreenInner {...props} statusTrailingActions={statusTrailingActions} />
             </AtmosphereSurfaceFrame> : <NewSessionScreenInner {...props} />}
         </NewSessionScreenPortalScope>
     );

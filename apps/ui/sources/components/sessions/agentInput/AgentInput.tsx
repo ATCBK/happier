@@ -786,16 +786,10 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     // Default (non-glass) composer surface — the original styling: standard input
     // background + hairline surface border, no drop shadow.
     unifiedPanel: resolveAgentInputPanelLayoutStyle(theme),
-    // The composer style changes its rim/shadow; the Elements material owns its fill.
-    // Fully redefines the border so the
-    // standard hairline + highlight don't leak through. The cast shadow lives on the
-    // `panelShadow` wrapper (glass mode only).
+    // The composer style changes its shadow; the Elements material owns its fill. The edge stays
+    // the standard single even hairline: the composer has no lip (DESIGN.md, owner 2026-10-15).
+    // The cast shadow lives on the `panelShadow` wrapper (glass mode only).
     unifiedPanelGlass: {
-        // Light: a touch thicker rim so the edge reads against the white surface.
-        borderWidth: theme.dark ? 1.5 : 2,
-        borderColor: theme.colors.glass.border,
-        borderTopWidth: theme.dark ? 1.5 : 2,
-        borderTopColor: theme.colors.glass.border,
         // Composer-only fainter inner shadow (the other glass surfaces keep `glass.innerShadow`).
         boxShadow: theme.colors.glass.composerInnerShadow,
     },

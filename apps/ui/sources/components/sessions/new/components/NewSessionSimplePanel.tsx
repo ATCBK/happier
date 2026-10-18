@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { NewSessionLaunchApprovalNoticeState } from '@/components/sessions/new/components/NewSessionLaunchApprovalNotice';
 import type { ViewStyle } from 'react-native';
-import { Keyboard, Platform, Pressable, View, useWindowDimensions } from 'react-native';
+import { Keyboard, Platform, Pressable, StyleSheet as RNStyleSheet, View, useWindowDimensions } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
 import Animated, {
     runOnJS,
@@ -12,8 +12,12 @@ import Animated, {
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { OverlayScrim } from '@/components/ui/overlays/OverlayScrim';
+import { createModalScrimWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
+import { useGlassBlurSetting } from '@/components/ui/glass/useGlassBlurSetting';
+import { ESCAPE_LAYER_PRIORITIES, EscapeLayerProvider, useEscapeLayer } from '@/keyboard/escape';
+import { useUnistyles } from 'react-native-unistyles';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { isNewSessionFloatingComposerPresentation } from '@/components/sessions/new/navigation/newSessionPresentation';
+import { useNewSessionFloatingComposer } from '@/components/sessions/new/navigation/useNewSessionFloatingComposer';
 import {
     NEW_SESSION_CLOSE_BUTTON_GAP,
     NEW_SESSION_CLOSE_ROW_HEIGHT,
@@ -21,7 +25,6 @@ import {
     NewSessionComposerKeyboardDismissButton,
 } from '@/components/sessions/new/components/NewSessionComposerCloseButton';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
-import { useSetting } from '@/sync/domains/state/storage';
 import { AgentInput } from '@/components/sessions/agentInput';
 import type { AgentInputExtraActionPresentation } from '@/components/sessions/agentInput/agentInputContracts';
 import { PopoverBoundaryProvider } from '@/components/ui/popover';
@@ -228,20 +231,38 @@ const NewSessionFloatingComposerCapsuleRow = React.memo(
     },
 );
 
+/**
+ * The floating composer's ground on web: the shared modal scrim over the whole window, at the
+ * floating glass frost, so the composer, its status line and its actions sit directly on the
+ * frosted page with no card around them. Native seats the card with `OverlayScrim`'s short band instead. Pressing it closes.
+ */
+function NewSessionWebFloatingBackdrop(props: Readonly<{ onPress: (() => void) | undefined }>): React.ReactElement {
+    const { theme } = useUnistyles();
+    const { blurEnabled } = useGlassBlurSetting();
+    const scrimStyle = createModalScrimWebStyle({
+        overlay: theme.colors.overlay as unknown as { scrim: string; scrimWizard?: string; scrimStrong?: string },
+        enableBlur: blurEnabled,
+        frost: 'floating',
+    }) as unknown as ViewStyle;
+    return (
+        <Pressable
+            testID="new-session-scrim"
+            accessible={false}
+            onPress={props.onPress}
+            style={[RNStyleSheet.absoluteFill, scrimStyle]}
+        />
+    );
+}
+
 export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.ReactElement {
     const { width: windowWidth } = useWindowDimensions();
     const shouldBottomAnchor =
         props.shouldBottomAnchor ?? (Platform.OS !== 'web' || isMobileLayoutWidth(windowWidth));
     const minimumTopGap = shouldBottomAnchor ? Math.min(props.newSessionTopPadding, SIMPLE_NEW_SESSION_MIN_TOP_GAP) : 0;
 
-    // On native this screen is presented as a transparent modal, so it owns its own ground, its own
-    // entrance and its own dismissal. On web the router's drawer still owns all three.
-    const newSessionPresentationMode = useSetting('newSessionPresentationModeV1');
-    const isFloatingComposer = isNewSessionFloatingComposerPresentation({
-        mode: newSessionPresentationMode,
-        variant: 'simple',
-        platformOs: Platform.OS,
-    });
+    // This screen is presented as a transparent modal, so it owns its own ground, its own entrance
+    // and its own dismissal (web included, owner 2026-10-18).
+    const isFloatingComposer = useNewSessionFloatingComposer();
     const router = useRouter();
     const navigation = useNavigation();
     const reducedMotion = useReducedMotionPreference();
@@ -329,6 +350,20 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
         });
     }, [cardExitProgress, navigation, reducedMotion, router]);
 
+    const isWebFloatingComposer = isFloatingComposer && Platform.OS === 'web';
+    // The modal contract on a keyboard: Escape closes the floating composer (the draft is kept).
+    // It is a modal layer like `BaseModal`'s; the composer's popovers and suggestions are scoped
+    // under it (`EscapeLayerProvider` below), so they consume Escape first.
+    const escapeLayer = useEscapeLayer({
+        enabled: isFloatingComposer && !props.isCreating,
+        priority: ESCAPE_LAYER_PRIORITIES.modal,
+        allowEditableTarget: true,
+        onEscape: () => {
+            handleDismissScreen();
+            return true;
+        },
+    });
+
     // Travel only, never opacity: the scrim carries the fade, and a card that never faded in cannot
     // be left invisible if the entrance is somehow missed — the blank-composer hazard
     // `ComposerKeyboardScaffold` warns about.
@@ -370,7 +405,9 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
             ]
             : [
                 {
-                    justifyContent: 'flex-start' as const,
+                    // A desktop floating composer sits in the middle of the frosted window, where
+                    // the route card used to.
+                    justifyContent: isWebFloatingComposer ? 'center' as const : 'flex-start' as const,
                     paddingTop: 0,
                 },
             ]),
@@ -380,8 +417,15 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
         // mounted after the card has visually gone. Disarming only the backdrop left the rest of
         // that surface swallowing the first press on the tab bar underneath.
         isFloatingComposer && isDismissing ? { pointerEvents: 'none' as const } : null,
+        // On web the scaffold spans the window above the frosted backdrop: only its content takes
+        // presses, so a press beside the composer reaches the backdrop and closes.
+        isWebFloatingComposer && !isDismissing ? { pointerEvents: 'box-none' as const } : null,
     ];
     return (
+        <EscapeLayerProvider layer={escapeLayer}>
+        {isWebFloatingComposer ? (
+            <NewSessionWebFloatingBackdrop onPress={props.isCreating ? undefined : handleDismissScreen} />
+        ) : null}
         <ComposerKeyboardScaffold
             testID="new-session-keyboard-host"
             mode="newSession"
@@ -427,7 +471,9 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                             isFloatingComposer ? composerEnterStyle : null,
                         ]}
                     >
-                        {isFloatingComposer ? (
+                        {/* A centred desktop composer closes from its frosted ground and Escape; the
+                            capsule row belongs to the bottom-anchored (touch) composition. */}
+                        {isFloatingComposer && shouldBottomAnchor ? (
                             <NewSessionFloatingComposerCapsuleRow
                                 sidePadding={props.newSessionSidePadding}
                                 onClose={handleDismissScreen}
@@ -440,7 +486,7 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                           * band a capsule-plus-gap higher than the edge it is supposed to seat.
                           */}
                         <View>
-                        {isFloatingComposer ? (
+                        {isFloatingComposer && !isWebFloatingComposer ? (
                             <OverlayScrim
                                 progress={enterProgress}
                                 rampHeight={SIMPLE_NEW_SESSION_SCRIM_RAMP_HEIGHT}
@@ -494,5 +540,6 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                 ) : null}
             </View>
         </ComposerKeyboardScaffold>
+        </EscapeLayerProvider>
     );
 }

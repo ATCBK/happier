@@ -8,9 +8,10 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { Item } from '@/components/ui/lists/Item';
-import { Popover } from '@/components/ui/popover';
-import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
+import { AgentInputSelectionPopover } from '@/components/sessions/agentInput/selection/AgentInputSelectionPopover';
+import { AgentInputPopoverSurface } from '@/components/sessions/agentInput/components/AgentInputPopoverSurface';
 import { TriggerPopover } from '@/components/workflows/triggers/TriggerPopover';
 import { TriggerRow } from '@/components/workflows/triggers/TriggerRow';
 import { describeTriggerTarget } from '@/components/workflows/triggers/sessionTriggerGroups';
@@ -75,6 +76,7 @@ function NewSessionTriggersPopover(props: InitialTriggersProps & Readonly<{
     if (editing !== null) {
         return <TriggerPopover testID="new-session-trigger-popover" anchorRef={props.anchorRef}
             onRequestClose={props.onRequestClose} creatingSession sessionId={null}
+            shell={AgentInputSelectionPopover}
             whenKinds={['sessionStarts', ...SESSION_TRIGGER_WHEN_KINDS.filter((kind) => kind !== 'sessionStarts')]}
             unavailableKinds={{ prComment: t('workflows.triggers.kindDescription.pullRequestUnavailable'),
                 ciFailed: t('workflows.triggers.kindDescription.pullRequestUnavailable') }}
@@ -99,10 +101,13 @@ function NewSessionTriggersPopover(props: InitialTriggersProps & Readonly<{
                 onDelete: async () => props.onInitialTriggersChange((current) => current.filter((_, index) => index !== editing)),
             } : {})} />;
     }
-    return <Popover open anchorRef={props.anchorRef} placement="auto" maxWidthCap={420} maxHeightCap={640}
-        autoFocusOnOpen onRequestClose={props.onRequestClose} portal={{ web: true, native: true, matchAnchorWidth: false }}>
-        {({ maxHeight }) => <FloatingOverlay maxHeight={maxHeight} scrollEnabled>
-            <ItemGroup title={t('workflows.triggers.section.title')} action={<RoundButton testID="new-session-triggers-add"
+    return <AgentInputSelectionPopover open anchorRef={props.anchorRef} maxWidthCap={420} maxHeightCap={640}
+        autoFocusOnOpen onRequestClose={props.onRequestClose}>
+        {({ maxHeight }) => <AgentInputPopoverSurface maxHeight={maxHeight}>
+            {/* A configuration section, as in the trigger editor: its rows sit on the popover itself
+                (no card inside it) and its title carries Add (lab T1). */}
+            <ListPresentationProvider value="page">
+            <ItemGroup surface="none" title={t('workflows.triggers.section.title')} action={<RoundButton testID="new-session-triggers-add"
                 size="small" title={t('workflows.triggers.section.add')} onPress={() => setEditing('new')} />}>
                 {libraryNotice}
                 {props.initialTriggers.map((entry, index) => <TriggerRow key={index} testID={`new-session-trigger-draft:${index}`}
@@ -112,6 +117,7 @@ function NewSessionTriggersPopover(props: InitialTriggersProps & Readonly<{
                     onToggle={(enabled) => props.onInitialTriggersChange((current) => current.map((value, itemIndex) =>
                         itemIndex === index ? { ...value, trigger: { ...value.trigger, enabled } } : value))} />)}
             </ItemGroup>
-        </FloatingOverlay>}
-    </Popover>;
+            </ListPresentationProvider>
+        </AgentInputPopoverSurface>}
+    </AgentInputSelectionPopover>;
 }

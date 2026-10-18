@@ -120,7 +120,49 @@ type TriggerPopoverBaseProps = Readonly<{
     onSaveAsWorkflow?: (target: TriggerTargetV1) => void;
     /** Writes the trigger through its owner; a rejection keeps the popover and its edits. */
     onDelete?: () => Promise<void>;
+    /**
+     * The popover frame the editor opens in. Defaults to a popover hanging from the launching row;
+     * a host with its own popover owner (the composer's chip pickers) passes that owner's shell.
+     */
+    shell?: React.ComponentType<TriggerPopoverShellProps>;
 }>;
+
+export type TriggerPopoverShellProps = Readonly<{
+    anchorRef: React.RefObject<View | null>;
+    onRequestClose: () => void;
+    open: true;
+    autoFocusOnOpen: true;
+    phonePresentation: 'sheet';
+    sheetHeaderAction?: React.ReactNode;
+    sheetSubtitle?: string;
+    accessibilityLabel?: string;
+    maxWidthCap: number;
+    maxHeightCap: number;
+    /** `placement` is reported only by a shell whose side can vary; it points the surface's arrow. */
+    children: (args: Readonly<{
+        maxHeight: number;
+        placement?: 'top' | 'bottom' | 'left' | 'right';
+        presentation: 'popover' | 'sheet';
+    }>) => React.ReactNode;
+}>;
+
+function TriggerAnchoredPopoverShell(props: TriggerPopoverShellProps): React.ReactElement {
+    return (
+        <Popover
+            {...props}
+            placement="bottom"
+            // Keep both steps on the launching row's edge. Side-auto placement put the event
+            // step over the document when the settings pane had no room to its right.
+            portal={{ web: { target: 'body' }, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
+        >
+            {({ maxHeight, placement, presentation }) => props.children({
+                maxHeight,
+                placement,
+                presentation: presentation === 'sheet' ? 'sheet' : 'popover',
+            })}
+        </Popover>
+    );
+}
 
 type TriggerPopoverWrite<Trigger> = Readonly<{
     trigger: Trigger;
@@ -238,6 +280,7 @@ function FieldSelect(props: Readonly<{
  * one. Session and Account triggers differ only in the kinds offered and the write their host makes.
  */
 export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
+    const Shell = props.shell ?? TriggerAnchoredPopoverShell;
     const isNew = props.initial === null;
     const [when, setWhen] = React.useState<TriggerWhenValue>(() => props.initial?.when ?? props.initialWhen
         ?? createDefaultWhen(props.whenKinds[0] ?? 'turnEnds', props.pullRequestLinks));
@@ -322,7 +365,7 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
         disabled={!complete} loading={pending} onPress={submit} />;
 
     return (
-        <Popover
+        <Shell
             // Each step reuses the overlay's focus/close owner; the parent keeps the form draft.
             key={eventEditing ? 'event' : 'trigger'}
             open
@@ -331,14 +374,10 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
             sheetSubtitle={eventEditing ? undefined : unavailableWhen ?? props.subtitle}
             accessibilityLabel={eventEditing ? t('workflows.triggers.popover.configureEvent') : title}
             anchorRef={props.anchorRef}
-            placement="bottom"
             maxWidthCap={TRIGGER_POPOVER_WIDTH}
             maxHeightCap={640}
             autoFocusOnOpen
             onRequestClose={props.onRequestClose}
-            // Keep both steps on the launching row's edge. Side-auto placement put the event
-            // step over the document when the settings pane had no room to its right.
-            portal={{ web: { target: 'body' }, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
         >
             {({ maxHeight, placement, presentation }) => eventEditing && when.kind === 'pluginEvent' ? (
                 <TriggerPluginEventRows testID={props.testID} when={when} onChange={setWhen}
@@ -346,8 +385,8 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
                     eventEdit={props.eventEdit} activityEvent={props.activityEvent}
                     editing onEditingChange={setEventEditing} editorMaxHeight={maxHeight} />
             ) : (
-                // An opaque theme surface: the form must not show the document through it (lab T1).
-                <FloatingOverlay maxHeight={maxHeight} scrollEnabled surfaceChrome="theme" arrow={{ placement }} footer={<RoundButtonSizeScope size="small" presentation="uniform"><View style={styles.foot}>
+                // The floating theme surface every popover shares (DESIGN.md floating glass).
+                <FloatingOverlay maxHeight={maxHeight} scrollEnabled surfaceChrome="theme" arrow={placement ? { placement } : false} footer={<RoundButtonSizeScope size="small" presentation="uniform"><View style={styles.foot}>
                             {isNew ? (
                                 <>
                                     <RoundButton size="small" display="inverted"
@@ -501,7 +540,7 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
                     </ListPresentationProvider>
                 </FloatingOverlay>
             )}
-        </Popover>
+        </Shell>
     );
 }
 

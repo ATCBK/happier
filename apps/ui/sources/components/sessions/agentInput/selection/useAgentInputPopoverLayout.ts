@@ -16,18 +16,20 @@ const DEFAULT_POPOVER_MAX_HEIGHT = 400;
 const NATIVE_KEYBOARD_VISIBLE_POPOVER_FRACTION = 0.5;
 const DEFAULT_POPOVER_GAP = 8;
 /**
- * A composer picker opens toward the roomier side of its chip (owner, 2026-10-12: more room above →
- * above). No side is "enough" on its own, so the bottom placement flips whenever the top has more.
+ * A caret-anchored menu (slash/@ autocomplete) opens toward the roomier side of the composer: no
+ * side is "enough" on its own, so the bottom placement flips whenever the top has more.
  */
-const AGENT_INPUT_POPOVER_ROOMIER_SIDE_WINS = Number.POSITIVE_INFINITY;
+const AGENT_INPUT_CARET_MENU_ROOMIER_SIDE_WINS = Number.POSITIVE_INFINITY;
 
 export type AgentInputPopoverLayout = Readonly<{
     maxHeightCap?: number;
     keyboardBottomInset: number;
-    /** Web opens toward the roomier side of the chip; native keeps above its keyboard-docked composer. */
+    /** Chip pickers: always directly above the chip. Caret menus on web: the roomier side of the composer. */
     placement: 'top' | 'bottom';
-    /** See `Popover.placementMinSpace`: on web, the roomier side always wins. */
+    /** See `Popover.placementMinSpace`: for a caret menu on web, the roomier side always wins. */
     placementMinSpace?: number;
+    /** See `Popover.flip`: a chip picker never flips; it scrolls inside the room above its chip. */
+    flip: boolean;
     gap: number;
     edgePadding: Readonly<{ horizontal: number; vertical: number; top?: number }>;
     portal: PopoverPortalOptions;
@@ -37,6 +39,11 @@ export function useAgentInputPopoverLayout(input: Readonly<{
     open: boolean;
     maxHeightCap?: number;
     portalTopBottomLayout?: 'anchored' | 'boundary';
+    /**
+     * `chip` (default): a composer picker opens directly above its chip and may overlap the composer
+     * (the 0.2 composition, owner 2026-10-18). `caret`: the slash/@ menu keeps the roomier side.
+     */
+    anchor?: 'chip' | 'caret';
 }>): AgentInputPopoverLayout {
     const keyboardHeight = useKeyboardHeight();
     const composerKeyboardLayout = useComposerKeyboardLayout();
@@ -124,11 +131,13 @@ export function useAgentInputPopoverLayout(input: Readonly<{
         };
     }, [input.portalTopBottomLayout]);
 
+    const caretAnchored = input.anchor === 'caret';
     return {
         maxHeightCap,
         keyboardBottomInset: effectiveKeyboardHeight,
-        placement: Platform.OS === 'web' ? 'bottom' : 'top',
-        ...(Platform.OS === 'web' ? { placementMinSpace: AGENT_INPUT_POPOVER_ROOMIER_SIDE_WINS } : {}),
+        placement: caretAnchored && Platform.OS === 'web' ? 'bottom' : 'top',
+        ...(caretAnchored && Platform.OS === 'web' ? { placementMinSpace: AGENT_INPUT_CARET_MENU_ROOMIER_SIDE_WINS } : {}),
+        flip: caretAnchored,
         // The popover now anchors correctly on every platform (Popover resolves the portal-relative
         // anchor via window-deltas on Android — see `resolvePortalRelativeAnchorRect`), so the gap is
         // the same snug value everywhere. Previously Android over-padded (32) to mask an anchor that

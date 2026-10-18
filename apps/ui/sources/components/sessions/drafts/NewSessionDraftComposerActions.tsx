@@ -43,7 +43,7 @@ export const NewSessionDraftComposerActions = React.memo(function NewSessionDraf
                 style={styles.labeledAction}
             >
                 <Icon name="plus" size={15} color={theme.colors.text.secondary} />
-                <Text style={styles.secondaryLabel} numberOfLines={1}>
+                <Text variant="body" style={styles.secondaryLabel} numberOfLines={1}>
                     {t('sessionDrafts.startAnother')}
                 </Text>
             </Pressable>
@@ -83,7 +83,7 @@ export const NewSessionDraftComposerActions = React.memo(function NewSessionDraf
                     style={[styles.labeledAction, props.deleteDisabled && styles.disabled]}
                 >
                     <Icon name="trash" size={15} color={theme.colors.text.tertiary} />
-                    <Text style={styles.deleteLabel} numberOfLines={1}>
+                    <Text variant="body" style={styles.deleteLabel} numberOfLines={1}>
                         {t('sessionDrafts.delete.action')}
                     </Text>
                 </Pressable>
@@ -118,7 +118,6 @@ const styles = StyleSheet.create((theme) => ({
     },
     deleteLabel: {
         color: theme.colors.text.tertiary,
-        fontSize: 13,
     },
     disabled: {
         opacity: 0.4,

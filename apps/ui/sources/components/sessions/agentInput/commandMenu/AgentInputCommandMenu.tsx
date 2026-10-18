@@ -46,6 +46,7 @@ function OpenAgentInputCommandMenu(props: CommandMenuProps) {
     const popoverLayout = useAgentInputPopoverLayout({
         open: true,
         maxHeightCap: props.maxHeight,
+        anchor: 'caret',
     });
 
     return (

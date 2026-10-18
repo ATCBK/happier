@@ -83,8 +83,13 @@ describe('new session route presentation', () => {
             .toBe('modal');
     });
 
-    it('keeps web on the modal presentation Expo Router renders as its own drawer', () => {
+    it('floats the simple composer on web too, with no route card or sheet (owner 2026-10-18)', () => {
         expect(resolveNewSessionRoutePresentation({ mode: 'auto', variant: 'simple', platformOs: 'web' }))
+            .toBe('transparentModal');
+        expect(isNewSessionFloatingComposerPresentation({ mode: 'modal', variant: 'simple', platformOs: 'web' }))
+            .toBe(true);
+        // The wizard is a scrolling form and keeps its sheet.
+        expect(resolveNewSessionRoutePresentation({ mode: 'auto', variant: 'wizard', platformOs: 'web' }))
             .toBe('modal');
     });
 
