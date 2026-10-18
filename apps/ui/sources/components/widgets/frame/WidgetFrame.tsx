@@ -192,6 +192,12 @@ const FRESH_RING_FADE_MS = 600;
  * Happier's theme, text owner, glyphs, the W1 state bodies and the arrival ring.
  */
 /** The room a rendered viewport holds right now, read from the DOM (web only); null until it has one. */
+/** A plugin's widget often names its plugin ("New in PRs & Issues"): the header says it once. */
+function sourceRepeatsTitle(source: WidgetFrameProps['source'], title: WidgetFrameProps['title']): boolean {
+    return typeof source === 'string' && typeof title === 'string'
+        && title.toLocaleLowerCase().includes(source.trim().toLocaleLowerCase());
+}
+
 function readViewportRoom(node: unknown): WidgetBodyPresentation['geometry'] | null {
     const measure = (node as { getBoundingClientRect?: () => { width: number; height: number } } | null)?.getBoundingClientRect;
     if (typeof measure !== 'function') return null;
@@ -379,7 +385,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                     {props.titleMeta}
                 </View>
             ) : props.title}
-            {...(props.source ? { source: props.source } : {})}
+            {...(props.source && !sourceRepeatsTitle(props.source, props.title) ? { source: props.source } : {})}
             renderSourceGlyph={renderSourceGlyph}
             sourcePlacement={props.sourcePlacement ?? (phone || props.titleMeta ? 'below' : 'inline')}
             meta={meta}
