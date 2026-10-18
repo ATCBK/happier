@@ -7,6 +7,7 @@ import { t } from '@/text';
 import { getPreferredLanguage } from '@/text/i18n';
 import type { RoleCatalogEntry } from '@/sync/domains/roles/roleCatalog';
 import { RoleActionInputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
+import { readWidgetApprovalPresentationV1 } from '@happier-dev/protocol/widgets';
 
 export type ActionApprovalPresentationInput = Readonly<{
     actionId: string;
@@ -44,7 +45,10 @@ export function presentActionApproval(input: ActionApprovalPresentationInput): R
     const roleIdentity = role && roleKind ? { name: role.role.name, kind: roleKind } : undefined;
     const english = getPreferredLanguage() === 'en';
     const titleSource = roleIdentity || !english ? resolveActionTitle(spec.id, spec) : spec.title;
-    const summarySource = buildApprovalPreviewSummary(spec, input.actionArgs);
+    const widgetPresentation = readWidgetApprovalPresentationV1(input.preview);
+    const summarySource = buildApprovalPreviewSummary(spec, input.actionArgs, {
+        ...(widgetPresentation ? { widgetPresentation } : {}),
+    });
     const authoredSummary = input.authoredSummary?.trim();
     const distinctAuthoredSummary = authoredSummary && authoredSummary !== summarySource ? authoredSummary : null;
     const summary = distinctAuthoredSummary ? distinctAuthoredSummary

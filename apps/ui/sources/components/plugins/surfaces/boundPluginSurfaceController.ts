@@ -426,8 +426,8 @@ export type BoundPluginSurfaceController = Readonly<{
         destination: PluginContributionIdentityV1,
     ) => Promise<PluginUiJsonValueV1>;
     /**
-     * A declarative page's `widgetArea` node reaches the page's declared area through this same
-     * mounted facade; the installed area handler remains the one admission and currentness owner.
+     * Host-owned native/declarative widget-area controls. Public plugin code uses
+     * hostApi instead; both paths share declared-area admission and mount lifetime.
      */
     widgetArea?: (
         request: PluginUiWidgetAreaRequestV1,
@@ -629,7 +629,7 @@ function createBoundPluginSurfaceOpenDispatcher(input: Readonly<{
 
 function createBoundPluginSurfaceWidgetAreaDispatcher(input: Readonly<{
     surfaceContext: PluginUiSurfaceContextV1;
-    hostApi: PluginSurfaceHostApiV1;
+    hostApi: Pick<PluginSurfaceHostApiV1, 'handleRequest'>;
 }>): NonNullable<BoundPluginSurfaceController['widgetArea']> {
     let requestSequence = 0;
     return (payload, options) => {
@@ -1190,6 +1190,13 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const widgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent, lifetimeSignal: mountLifetime.signal, hostAction, callerBinding,
         isConnectionPending: reason => isConnectionPending([reason]),
         describeUnavailable: (reason) => describeMachineUnavailable([reason]) });
+    const hostWidgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent: isInteractionCurrent,
+        hostControl: true,
+        lifetimeSignal: mountLifetime.signal, callerBinding,
+        isConnectionPending: reason => isConnectionPending([reason]),
+        describeUnavailable: reason => describeMachineUnavailable([reason]),
+        hostAction,
+    });
     const hostApi = createPluginSurfaceActionHostApi({
         pluginUiProjection: input.facts.pluginUiProjection,
         surfaceContext,
@@ -1272,7 +1279,10 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const dispatchAction = createBoundPluginSurfaceActionDispatcher({ surfaceContext, hostApi });
     const applyComposer = createBoundPluginSurfaceComposerApplyDispatcher({ surfaceContext, hostApi });
     const openSurface = createBoundPluginSurfaceOpenDispatcher({ surfaceContext, hostApi });
-    const widgetAreaDispatch = createBoundPluginSurfaceWidgetAreaDispatcher({ surfaceContext, hostApi });
+    const widgetAreaDispatch = createBoundPluginSurfaceWidgetAreaDispatcher({ surfaceContext, hostApi: {
+        handleRequest: (request, options) => hostWidgetArea && isInteractionCurrent()
+            ? hostWidgetArea(request, options) : hostApi.handleRequest(request, options),
+    } });
     let accountRetirement: Readonly<{ dispose(): void }> | undefined;
     let parentRetirement: Readonly<{ dispose(): void }> | undefined;
     let disposed = false;

@@ -10,6 +10,8 @@ import { PluginExecutionOriginActionIdSchema, PluginExecutionOriginActionInputSc
 import { NpmRegistryProfileActionIdV1Schema, NpmRegistryProfileActionInputSchemasV1 } from './npmRegistryProfileActionFamily.js';
 import { PluginAccountAdministrationActionIdSchema, PluginAccountAdministrationActionInputSchemas } from './pluginAccountAdministrationActionFamily.js';
 import { readWidgetActionAccountScopeAdmissionV1 } from '../widgets/widgetActionScopeV1.js';
+import { WidgetInstanceV1Schema } from '../widgets/widgetInstanceV1.js';
+import { isSameWidgetDefinitionV1, readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
 import { LOCAL_DAEMON_SERVICE_ACTION_IDS, LOCAL_DAEMON_SERVICE_INPUT_SCHEMAS, type LocalDaemonServiceActionId } from './specs/localDaemonService.js';
 import { AutomationEventTestInputV1Schema, testAutomationEventV1 } from '../automations/automationEventTestV1.js';
 import { getWorkflowStarterExamplesV1, materializeWorkflowStarterExample } from '../workflows/builtins/examples.js';
@@ -61,7 +63,7 @@ import { isAccountSettingActionSurfaceAllowedV1 } from './accountSettingDeclarat
 import { AccountHomeContinuationInputV1Schema } from './accountHomeContinuationV1.js';
 import { bytesToHex, randomBytes } from '@noble/hashes/utils';
 import { resolveProjectActionMachineV1 } from './executor/projectActionPlacement.js';
-import type { PublicActionInputById } from './actionSpecs.js';
+import type { ApprovalPresentationContext, PublicActionInputById } from './actionSpecs.js';
 import type { SessionResumeRequestV1 } from '../sessions/control/sessionResumeRequestV1.js';
 import type { SessionGoalSetRequestV1 } from '../sessions/work/state/sessionWorkStateRpc.js';
 import { WaitActionInputV1Schema } from './specs/wait.js';
@@ -1229,10 +1231,10 @@ function sentenceTerminated(value: string): string {
 }
 
 /** One canonical summary source for every approval and present-user confirmation; domain presenters refine exact effects. */
-export function buildApprovalPreviewSummary(spec: ActionSpec, input: unknown): string {
+export function buildApprovalPreviewSummary(spec: ActionSpec, input: unknown, context?: ApprovalPresentationContext): string {
   let domainSummary: string | null = null;
   try {
-    domainSummary = spec.approvalPresentation?.summary(input)?.trim() || null;
+    domainSummary = spec.approvalPresentation?.summary(input, context)?.trim() || null;
   } catch {
     // Presentation cannot become a second effect-admission failure.
   }
@@ -1280,6 +1282,7 @@ async function prepareApprovalRequest(params: Readonly<{
   actionArgs: unknown;
   context: ActionExecutorContext;
   computerApprovalDisplay?: ComputerApprovalDisplayV1;
+  widgetSurfaceRead?: ReturnType<typeof WidgetSurfaceReadV1Schema.parse>;
 }>): Promise<Readonly<{ actionArgs: unknown; preview: unknown }> | ActionExecuteFailure | null> {
   const spec = getActionSpec(params.actionId);
   let computerApprovalDisplay = params.computerApprovalDisplay;
@@ -1308,10 +1311,37 @@ async function prepareApprovalRequest(params: Readonly<{
   const widgetLibraryName = fragmentAction.success
     ? libraryItem?.name ?? readWidgetLayoutFragmentApprovalNameV1(params.input) : null;
   const summaryInput = libraryItem ? { ...readRecord(params.input), fragment: { name: libraryItem.name } } : params.input;
+  let widgetPresentation: ApprovalPresentationContext['widgetPresentation'];
+  if (params.actionId === 'widgets.item.add' || params.actionId === 'widgets.item.remove') {
+    const surface = readWidgetActionSurfaceV1(params.input);
+    if (surface) {
+      try {
+        const admitted = params.widgetSurfaceRead ? { ok: true as const, read: params.widgetSurfaceRead }
+          : await readWidgetActionSurfaceAdmissionV1(params.deps, surface, params.context,
+            params.actionId === 'widgets.item.remove' ? { readPlacement: true } : undefined);
+        if (!admitted.ok) return admitted;
+        const ref = readRecord(readRecord(params.input).ref);
+        const instance = WidgetInstanceV1Schema.safeParse(params.actionId === 'widgets.item.add' ? readRecord(params.input).instance
+          : admitted.read?.instances.find(entry => entry.instance.id === ref.instanceId)?.instance);
+        const entries = instance.success && params.deps.widgetCatalog
+          ? await params.deps.widgetCatalog.list(surface, params.context, params.context.signal) : null;
+        const catalog = entries && !('ok' in entries) ? entries : null;
+        const widgetName = instance.success ? instance.data.displayName
+          || catalog?.find(entry => isSameWidgetDefinitionV1(entry.definition, instance.data.definition))?.title
+          || readBuiltinWidgetDescriptorV1(instance.data.definition)?.title : undefined;
+        const surfaceNames = await params.deps.widgetCatalog?.describeSurface?.(surface, params.context, params.context.signal);
+        if (widgetName || surfaceNames) widgetPresentation = { ...surfaceNames, ...(widgetName ? { widgetName } : {}) };
+      } catch {
+        // Optional display data cannot become a second execution/admission requirement.
+        params.context.signal?.throwIfAborted();
+      }
+    }
+  }
   const defaultPreview = {
     actionId: params.actionId,
     actionArgs: observedInput,
-    summary: buildApprovalPreviewSummary(spec, summaryInput),
+    summary: buildApprovalPreviewSummary(spec, summaryInput, widgetPresentation ? { widgetPresentation } : undefined),
+    ...(widgetPresentation ? { widgetPresentation } : {}),
     ...(widgetLibraryName ? { widgetLibraryName } : {}),
   } as const;
   if (params.actionId === 'computer.secret.fill' || params.actionId === 'browser.automation.secret.fill') {
@@ -1353,6 +1383,7 @@ async function prepareApprovalRequest(params: Readonly<{
     summary: customizedSummary || defaultPreview.summary,
     ...(widgetLibraryName ? { widgetLibraryName } : {}),
     ...(computerApprovalDisplay ? { computerApprovalDisplay } : {}),
+    ...(widgetPresentation ? { widgetPresentation } : {}),
     ...(setupReview ? { setupReview } : {}),
     ...(machineAccessApprovalDisclosure(params.actionId, params.input)
       ? { machineAccessDisclosure: machineAccessApprovalDisclosure(params.actionId, params.input) } : {}),
@@ -2400,6 +2431,11 @@ function isActionFamilyId<Id extends string>(
   schema: Readonly<{ options: readonly Id[] }>,
 ): actionId is Id {
   return schema.options.some((id) => id === actionId);
+}
+
+/** Removing a reference placement preserves its definition; groups have no single instance. */
+function widgetRemovalDeletesStoredContent(instance: ReturnType<typeof WidgetInstanceV1Schema.parse> | undefined): boolean {
+  return !instance || instance.definition.kind === 'inline';
 }
 
 export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
@@ -3914,20 +3950,43 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // Home is Account-private; Artifact-backed surfaces supply their admitted
     // audience through the same read that proves edit authority.
     let widgetSourceIsShared: boolean | undefined = widgetTarget?.owner.kind === 'home' ? false : undefined;
+    let widgetSourceRead: ReturnType<typeof WidgetSurfaceReadV1Schema.parse> | undefined;
     let widgetDestinationIsShared: boolean | undefined;
     if (!existingAdmission && spec.safety === 'danger' && widgetTarget) {
       for (const [target, destination] of [[widgetTarget, false], [widgetDestination, true]] as const) {
-        if (!target || target.owner.kind !== 'project' && target.owner.kind !== 'workBoard'
+        const readPlacement = actionId === 'widgets.item.remove' && !destination;
+        if (!target || !readPlacement && target.owner.kind !== 'project' && target.owner.kind !== 'workBoard'
           && target.owner.kind !== 'pluginArea' && target.owner.kind !== 'corePage') continue;
-        const admitted = await readWidgetActionSurfaceAdmissionV1(deps, target, ctx);
+        const admitted = await readWidgetActionSurfaceAdmissionV1(deps, target, ctx, readPlacement ? { readPlacement: true } : undefined);
         if (!admitted.ok) return admitted;
         if (!admitted.read?.canEdit) return { ok: false, errorCode: 'widget_edit_denied', error: 'widget_edit_denied' };
         if (destination) widgetDestinationIsShared = admitted.read.isShared;
-        else widgetSourceIsShared = admitted.read.isShared;
+        else { widgetSourceIsShared = admitted.read.isShared; widgetSourceRead = admitted.read; }
       }
     }
     const widgetMoveWidensAudience = actionId === 'widgets.item.move' && widgetDestination !== null
       && widgetSourceIsShared === false && widgetDestinationIsShared === true;
+    const removedWidget = actionId === 'widgets.item.remove' && widgetSourceRead
+      ? widgetSourceRead.instances.find(entry => entry.instance.id === readRecord(readRecord(admittedInput).ref).instanceId)?.instance : undefined;
+    // Reference placements can be added again, including on shared layouts.
+    // A group, an inline definition's sole copy, or a Session source is deletion.
+    const widgetRemovalDeletesContent = actionId === 'widgets.item.remove'
+      && (widgetTarget?.owner.kind === 'sessionBoard'
+        || widgetRemovalDeletesStoredContent(removedWidget));
+    const homeLayoutInput = actionId === 'home.hub.layout.update' ? HomeHubLayoutUpdateInputSchema.safeParse(admittedInput) : null;
+    const homeRemoval = homeLayoutInput?.success && (homeLayoutInput.data.intent.kind === 'remove'
+      || homeLayoutInput.data.intent.kind === 'widget_remove' && !homeLayoutInput.data.intent.expectedInstance)
+      ? homeLayoutInput.data.intent : null;
+    let homeRemovalDeletesContent = false;
+    if (!existingAdmission && homeRemoval) {
+      homeRemovalDeletesContent = true;
+      if (deps.homeHubArtifacts) {
+        const description = await deps.homeHubArtifacts.describe(await deps.homeHubArtifacts.read(ctx.signal), ctx.signal);
+        const instance = description.sections.flatMap(section => section.kind === 'group' ? section.children : [section])
+          .find(section => section.kind === 'widget' && section.id === homeRemoval.instanceId);
+        homeRemovalDeletesContent = widgetRemovalDeletesStoredContent(instance?.kind === 'widget' ? instance.instance : undefined);
+      }
+    }
     // Ordinary reversible edits stay declaration-owned. Proven publication from
     // a private surface strengthens only the shared policy's UI default.
     const contextualSafety = !existingAdmission && visualAdmission ? visualAdmission.safety
@@ -3961,11 +4020,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       ...(retainHostOperationApproval ? { retainHostOperationApproval: true } : {}),
       ...(computerSelection ? { computerConsentGranted: computerSelection.consentGranted } : {}),
       ...(contextualSafety === undefined ? {} : { defaultSafety: contextualSafety }),
-      ...(widgetMoveWidensAudience ? { defaultUiConfirmation: true } : {}),
+      ...(widgetMoveWidensAudience || widgetRemovalDeletesContent || homeRemovalDeletesContent ? { defaultUiConfirmation: true } : {}),
       // Pass the raw policy-hook result through (boolean | undefined). When the hook is unwired,
       // `undefined` propagates so `resolveActionApprovalRouting` applies its centralized fail-safe
       // default instead of coercing an unwired dependency to "no approval" here. (F7)
-      requiredByPolicy: context.bypassApprovals ? false : widgetMoveWidensAudience
+      requiredByPolicy: context.bypassApprovals ? false : widgetMoveWidensAudience || widgetRemovalDeletesContent || homeRemovalDeletesContent
         ? deps.isActionApprovalRequired?.(actionId, context, admittedInput, true) : contextualSafety === undefined
         || visualAdmission && context.surface === 'ui' && resolveHostStampedAuthority(context) === 'present_user'
         ? deps.isActionApprovalRequired?.(actionId, context, admittedInput) : undefined,
@@ -4148,6 +4207,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           input: admittedInput,
           actionArgs: initialApprovalActionArgs,
           context: ctx,
+          ...(widgetSourceRead ? { widgetSurfaceRead: widgetSourceRead } : {}),
           ...(computerSelection ? { computerApprovalDisplay: computerSelection.approvalDisplay } : {}),
         });
         if (!preparedApproval) {

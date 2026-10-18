@@ -9,6 +9,20 @@ import { BUILT_IN_ROLES_V1 } from '@happier-dev/protocol/prompts/roles/builtInRo
 afterEach(() => setPreferredLanguageFromSettings('en'));
 
 describe('the shared Action approval presentation owner', () => {
+    it('retains captured widget and plugin-page names in a request preview across locales', async () => {
+        const actionArgs = { ref: { surface: { serverId: 'home', accountId: 'account', owner: {
+            kind: 'pluginArea', pluginId: 'examples.widget-areas', pageId: 'overview', area: 'pinned',
+        } }, instanceId: 'removed-copy' } };
+        const preview = { widgetPresentation: { widgetName: 'Directory count', pageName: 'Widget areas', areaName: 'Pinned' } };
+        for (const language of ['en', 'fr'] as const) {
+            await preloadTranslations(language);
+            setPreferredLanguageFromSettings(language);
+            const presentation = presentActionApproval({ actionId: 'widgets.item.remove', actionArgs, preview });
+            expect(presentation.summary).toContain('Directory count');
+            expect(presentation.summary).toContain('Widget areas · Pinned');
+            if (language === 'en') expect(presentation.summary).toBe('Remove “Directory count” from Widget areas · Pinned.');
+        }
+    });
     it('omits a title-only fallback while retaining a distinct authored consequence', async () => {
         for (const language of ['en', 'fr'] as const) {
             await preloadTranslations(language);

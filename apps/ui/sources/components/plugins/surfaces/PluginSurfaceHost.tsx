@@ -6,7 +6,7 @@ import { scopedHomeActionExecutor } from '@/sync/ops/actions/scopedHomeActionExe
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useFindSurfaceRegistrationHost } from '@/keyboard/KeyboardShortcutProvider';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
-import type { PluginUiResourceStore } from '@happier-dev/plugin-ui/advanced';
+import type { PluginUiResourceStore, PluginUiWidgetAreaPresentation } from '@happier-dev/plugin-ui/advanced';
 import { PluginUiHostPresentationScope } from '@happier-dev/plugin-ui/advanced';
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { getInstalledPluginUiClientExecutableComposition, resolvePluginUiClientDragSourceRegistration, resolvePluginUiClientDropTargetRegistration } from '@/components/plugins/reactNative/clientExecutableContributions';
@@ -250,7 +250,6 @@ import {
     type PluginUiPrivateTargetedSurfacePresentation,
 } from './pluginUiPrivatePresentationHost';
 import { renderPluginSessionPart } from './PluginSessionPartHost';
-import { PluginPageWidgetArea } from '@/components/widgets/area/PluginPageWidgetArea';
 import { createDeclarativeWidgetAreaRender, type DeclarativeWidgetAreaRender } from './declarativeWidgetArea';
 import { usePluginDestinationRowRenderer } from '@/components/appShell/workspace/usePluginDestinationRowRenderer';
 import { useIsBeneathPluginSurfaceNestingBoundary } from './pluginSurfaceNesting';
@@ -1337,6 +1336,7 @@ function PluginHostedWebBrowserArtifactFramePane(props: Readonly<{
 }
 
 function PluginReactNativeSurfaceHost(props: Readonly<{
+    renderWidgetArea?: DeclarativeWidgetAreaRender;
     entityDragBinding?: PluginEntityDragDropBinding | null;
     readLiveStreamViewing: BoundPluginSurfaceController['readLiveStreamViewing'];
     liveStreamMachineId: string | null;
@@ -1675,9 +1675,8 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
                     focusEligible: props.focusEligible,
                 }),
                 // The page's declared areas, named for this plugin ("Add to PRs & Issues").
-                renderWidgetArea: (input) => (
-                    <PluginPageWidgetArea {...input} surfaceName={canonicalRenderIdentity.brand?.displayName ?? canonicalRenderIdentity.pluginId} />
-                ),
+                ...(props.renderWidgetArea ? { renderWidgetArea: (input: PluginUiWidgetAreaPresentation) => props.renderWidgetArea!({ ...input,
+                    testID: input.testID ?? `widget-area.${input.area}` }) } : {}),
                 renderDestinationRow,
                 ...(props.entityDragBinding ? {
                     renderDragSource: input => <PluginEntityDragSourceView binding={props.entityDragBinding!} {...input} />,
@@ -1695,6 +1694,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         ),
         [
             renderDestinationRow,
+            props.renderWidgetArea,
             findRegistrationHost,
             props.entityDragBinding,
             hostStateSize,
@@ -3463,7 +3463,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             : undefined,
         [mountedBrandTarget],
     );
-    // A declarative page's `widgetArea` nodes reach its declared areas through this mount's facade.
+    // Native and declarative area controls share this host-only area facade.
     const renderDeclarativeWidgetArea = React.useMemo<DeclarativeWidgetAreaRender | undefined>(() => (controller.widgetArea
         ? createDeclarativeWidgetAreaRender({ dispatch: controller.widgetArea, surfaceName: projectedBrand?.displayName ?? mountedPluginId,
             machineConnectionPending, machineExecutionReady: controllerFacts.daemonInteractionEnabled })
@@ -4195,6 +4195,7 @@ function PluginSurfaceHostMount(props: Readonly<(
                 ?? descriptor!.id;
         return renderWithTargetedSurfaceBoundary(
             <PluginReactNativeSurfaceHost
+                {...(renderDeclarativeWidgetArea ? { renderWidgetArea: renderDeclarativeWidgetArea } : {})}
                 entityDragBinding={entityDragBinding}
                 readLiveStreamViewing={controller.readLiveStreamViewing}
                 liveStreamMachineId={machineId ?? null}

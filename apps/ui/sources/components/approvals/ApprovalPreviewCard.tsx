@@ -5,7 +5,8 @@ import { StyleSheet } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { WidgetLayoutFragmentActionIdV1Schema } from '@happier-dev/protocol/widgets';
+import { WidgetLayoutFragmentActionIdV1Schema, readWidgetApprovalPresentationV1 } from '@happier-dev/protocol/widgets';
+import { presentActionApproval } from './actionApprovalPresentation';
 
 type ApprovalSummaryInput = Readonly<{ actionId: string; actionArgs: unknown }>;
 
@@ -23,6 +24,8 @@ export function readApprovalPreviewSummary(preview: unknown, request?: ApprovalS
         if (WidgetLayoutFragmentActionIdV1Schema.safeParse(actionId.data).success
             && 'widgetLibraryName' in preview && typeof preview.widgetLibraryName === 'string' && preview.widgetLibraryName.trim()) return storedSummary;
         const spec = getActionSpec(actionId.data);
+        if (readWidgetApprovalPresentationV1(preview)) return presentActionApproval({ actionId: actionId.data,
+            actionArgs: request?.actionArgs, preview }).summary;
         const summary = spec.approvalPresentation && spec.inputSchema.safeParse(request?.actionArgs).success
             ? spec.approvalPresentation?.summary(request?.actionArgs) : null;
         if (summary) return summary;

@@ -83,7 +83,7 @@ export function createCliActionExecutorHarness(
         placement: ctx.placement ?? null,
       },
     );
-  const isActionApprovalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, ctx) =>
+  const isActionApprovalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, ctx, input, defaultUiConfirmation?: boolean) =>
     isApprovalRequiredByActionsSettings(
       id,
       params.actionsSettingsProvider?.getActionsSettings()
@@ -94,6 +94,7 @@ export function createCliActionExecutorHarness(
         authority: ctx.authority,
         presentUserConfirmation: ctx.presentUserConfirmation,
       },
+      undefined, undefined, input, defaultUiConfirmation,
     );
   const rawDeps: MutableActionExecutorDeps = {
     ...baseDepsForRuntime,

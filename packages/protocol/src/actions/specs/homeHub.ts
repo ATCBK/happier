@@ -49,15 +49,15 @@ export const HOME_HUB_LAYOUT_ACTION_SPECS = [
     examples: { voice: { argsExample: '{}' } },
   },
   {
-    id: 'home.hub.layout.update', approval: {result: 'required'}, title: 'Customize Home',
+    id: 'home.hub.layout.update', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'required'}, title: 'Customize Home',
     description: 'Reorder, move, show or hide Home sections and layout items, create and edit groups, set or clear a frame style override, mark or dismiss individual setup steps, restore them or reset the layout. Start and attention stay visible.',
     safety: 'safe', sideEffectClass: 'write', executionPlacement: 'account', placements: [],
     safetyForInput: (input: unknown) => {
       const parsed = HomeHubLayoutUpdateInputSchema.safeParse(input);
       if (!parsed.success) return 'safe';
       const intent = parsed.data.intent;
-      // Guarded removal is the existing acknowledged-Add Undo; ordinary removal
-      // needs the same configurable dangerous-Action policy as widgets.item.remove.
+      // Automation keeps removal's danger floor. Own UI edits classify reference
+      // placements versus deleted content through the canonical admitted layout.
       return intent.kind === 'remove' || (intent.kind === 'widget_remove' && !intent.expectedInstance)
         ? 'danger' : 'safe';
     },

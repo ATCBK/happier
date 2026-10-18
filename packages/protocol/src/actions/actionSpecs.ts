@@ -1,4 +1,10 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+
+/** What a presenting app knows that an approval summary may use; every field is optional. */
+export type ApprovalPresentationContext = Readonly<{
+  /** Names captured from the admitted widget/catalog owners; presentation only, never routing. */
+  widgetPresentation?: Readonly<{ widgetName?: string; pageName?: string; areaName?: string }>;
+}>;
 import { ScmDiffSummaryModelSelectorSchema } from '../scm/diffSummary.js';
 import { BugReportSubmitInputSchema, BugReportSubmitOutputSchema, projectBugReportSubmitInput } from './specs/bugReport.js';
 import { ModelFavoriteMutationV1Schema } from '../providers/modelFavoritesV1.js';
@@ -1028,7 +1034,7 @@ export const ActionSpecSchema = lazyZodSchema(() => z.looseObject({
   )),
   /** Domain-owned, value-free human description of the exact effect under review. */
   approvalPresentation: z.optional(z.strictObject({
-    summary: z.custom<(input: unknown) => string | null>((value) => typeof value === 'function'),
+    summary: z.custom<(input: unknown, context?: ApprovalPresentationContext) => string | null>((value) => typeof value === 'function'),
     /**
      * Input paths that identify or correlate the request (command, view and session ids, fixed discriminators,
      * client plumbing) rather than say what it does. Approval reads them under Technical details; a path

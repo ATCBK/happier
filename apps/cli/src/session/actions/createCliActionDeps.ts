@@ -74,6 +74,7 @@ import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/libra
 import { applyTodoSessionLinkV1, TodoSessionLinkErrorV1, TodoSessionLinkInputV1Schema, projectTodoSessionLinkFailureV1 } from '@happier-dev/protocol/todos/todoSessionLinkV1';
 import { createCliAccountKvJsonTransport } from '@/api/client/accountKvJsonTransport';
 import { readCliWidgetCatalogProjectionV1, cliWidgetCatalogEntryV1 } from './widgetCatalogProjection';
+import { describeWidgetAreaApprovalSurfaceV1 } from '@happier-dev/protocol/widgets';
 import { createCliWidgetInputActionDepsV1 } from './widgetInputActionDeps';
 import { createCliWidgetAreaActionDepsV1 } from './widgetAreaActionDeps';
 import { createCliWidgetDefinitionActionDepsV1 } from './widgetDefinitionActionDeps';
@@ -3627,7 +3628,10 @@ export function createCliActionDeps(params: Readonly<{
       const accountId = params.credentials ? readAccountIdFromToken(params.credentials.token) : null;
       return accountId ? { serverId: widgetHomeId, accountId, isSameServerId: isSameActionHomeId } : null;
     },
-    widgetCatalog: { readInstalledInputFields: async ({ surface, definition, signal, boundSession }) => {
+    widgetCatalog: { describeSurface: async (surface, _context, signal) => {
+      const projection = await readWidgetProjection(signal);
+      return describeWidgetAreaApprovalSurfaceV1(surface, Object.values(projection?.familiesById.pluginUi?.entriesById ?? {}));
+    }, readInstalledInputFields: async ({ surface, definition, signal, boundSession }) => {
       const physicalSession = readWidgetActionSessionTargetV1(surface);
       const candidates = await readWidgetCandidates(signal, readWidgetActionSessionTargetV1(surface, boundSession));
       if (physicalSession && boundSession && physicalSession.sessionId !== boundSession.sessionId) {

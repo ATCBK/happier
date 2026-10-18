@@ -15,6 +15,7 @@ import { normalizeUiSurfaceCapabilityRequestV1 } from '../plugins/contributions/
 import { SessionVisualReviewedAdmissionV1Schema } from '../sessions/board/actions.js';
 import { resolveSessionVisualEffectiveCapabilitiesV1 } from '../sessions/board/visualPolicy.js';
 import { z } from 'zod/mini';
+import { readWidgetActionSurfaceV1 } from '../widgets/actionsV1.js';
 import { unwrapActionInputSchema } from './actionInputSchemaPath.js';
 import { isSettingsDeclarationActionIdV1 } from './settingsDeclarationActionFamily.js';
 import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
@@ -341,7 +342,7 @@ function appendApprovalStructuredEntries(
     const keyReference = describeApprovalKeyReference(key, value);
     const reference = keyReference?.kind === 'session' ? undefined : keyReference;
     const technical = !reference && (isTechnicalApprovalKey(key) || isEmptyApprovalValue(value)
-      || widgetStructure && key !== undefined && ['id', 'instanceId', 'groupId', 'artifactId', 'pluginId', 'localId', 'kind'].includes(key));
+      || widgetStructure && key !== undefined && ['id', 'instanceId', 'groupId', 'artifactId', 'pluginId', 'localId', 'pageId', 'area', 'layoutId', 'kind'].includes(key));
     output.push({
       label, value: formatApprovalEntryValue(key, value), depth,
       ...(reference ? { reference } : {}),
@@ -590,7 +591,9 @@ export function describeApprovalActionFields(input: Readonly<{
         reference: describeApprovalReference(input.actionId, field, [value], presentationInput),
       }))
       : field.widget === 'json' && !reference && !place?.success ? describeApprovalStructuredValue(values,
-        input.actionId.startsWith('widgets.') && ['instance', 'group', 'fragment', 'definition'].includes(field.path)) : undefined;
+        input.actionId.startsWith('widgets.') && (['instance', 'group', 'fragment', 'definition'].includes(field.path)
+          || ['surface', 'ref', 'to'].includes(field.path)
+            && readWidgetActionSurfaceV1(input.actionArgs)?.owner.kind === 'pluginArea')) : undefined;
     if (input.actionId === 'mcp.servers.tools.set' && field.path === 'tools') {
       const settings: Readonly<Record<string, string>> = { off: 'Off', ask: 'Ask', allow: 'Allow', inherit: 'Use server default' };
       entries = values.flatMap(value => isRecord(value) ? Object.entries(value).map(([name, setting]) => ({

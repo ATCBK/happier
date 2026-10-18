@@ -17,11 +17,12 @@ export type DeclarativeWidgetAreaBinding = Readonly<{
 }>;
 
 /** What the declarative renderer calls for one `widgetArea` node. */
-export type DeclarativeWidgetAreaRender = (input: Readonly<{ area: string; context: Readonly<Record<string, unknown>>; testID: string }>) => React.ReactNode;
+export type DeclarativeWidgetAreaRender = (input: Readonly<{ area: string; context: Readonly<Record<string, unknown>>;
+    title?: string; description?: string; testID: string }>) => React.ReactNode;
 
 /** The renderer bridge for one mount: each node becomes the same area owner over this mount's facade. */
 export function createDeclarativeWidgetAreaRender(binding: DeclarativeWidgetAreaBinding): DeclarativeWidgetAreaRender {
-    return (input) => <DeclarativeWidgetArea area={input.area} context={input.context} binding={binding} testID={input.testID} />;
+    return (input) => <DeclarativeWidgetArea {...input} binding={binding} />;
 }
 
 const UNAVAILABLE: PluginUiWidgetAreaResultV1 = { ok: false, errorCode: 'widget_area_unavailable', error: 'widget_area_unavailable' };
@@ -34,6 +35,8 @@ const UNAVAILABLE: PluginUiWidgetAreaResultV1 = { ok: false, errorCode: 'widget_
 export function DeclarativeWidgetArea(props: Readonly<{
     area: string;
     context: Readonly<Record<string, unknown>>;
+    title?: string;
+    description?: string;
     binding: DeclarativeWidgetAreaBinding | null;
     testID: string;
 }>): React.ReactElement {
@@ -53,6 +56,8 @@ export function DeclarativeWidgetArea(props: Readonly<{
         <PluginPageWidgetArea
             area={props.area}
             context={props.context as Readonly<Record<string, JsonValue>>}
+            title={props.title}
+            description={props.description}
             port={port}
             surfaceName={props.binding?.surfaceName ?? props.area}
             testID={props.testID}

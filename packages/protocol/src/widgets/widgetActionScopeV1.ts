@@ -38,15 +38,16 @@ export function readWidgetActionAccountScopeAdmissionV1(
 
 /** Captured host authority admits metadata reads and instance operations alike. */
 export async function readWidgetActionSurfaceAdmissionV1(
-  deps: Pick<ActionExecutorDeps, 'widgetAccountScope' | 'widgetSurfaceActions' | 'workBoardArtifacts'>,
+  deps: Pick<ActionExecutorDeps, 'widgetAccountScope' | 'widgetSurfaceActions' | 'workBoardArtifacts' | 'homeHubArtifacts' | 'sessionBoardAction'>,
   surface: WidgetSurfaceRefV1,
   context: ActionExecutorContext,
+  options?: Readonly<{ readPlacement: true }>,
 ): Promise<Readonly<{ ok: true; read: WidgetSurfaceReadV1 | null }> | ActionExecuteFailure> {
   const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
   const account = readWidgetActionAccountScopeAdmissionV1(deps, surface, context);
   if (!account.ok) return account;
   const { scope } = account;
-  if (surface.owner.kind === 'project' || surface.owner.kind === 'workBoard'
+  if (options?.readPlacement || surface.owner.kind === 'project' || surface.owner.kind === 'workBoard'
     || surface.owner.kind === 'pluginArea' || surface.owner.kind === 'corePage') {
     const port = readWidgetActionSurfacePortV1(deps, surface);
     if (!port) return failure('unsupported_widget_surface');

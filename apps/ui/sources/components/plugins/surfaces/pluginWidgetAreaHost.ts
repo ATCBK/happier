@@ -10,6 +10,8 @@ import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 export function createPluginWidgetAreaHostHandler(input: Readonly<{
     facts: BoundPluginSurfaceFacts; isCurrent(): boolean; lifetimeSignal: AbortSignal;
     hostAction: PluginSurfaceHostActionBinding; callerBinding: PluginSurfaceActionMountedBinding | null;
+    /** Host-private presentation path; never decoded from a plugin request. */
+    hostControl?: true;
     /** The same mounted-host readiness decision used by ordinary Host API failures. */
     isConnectionPending?: (reason: string) => boolean;
     /** The mount's own words for a Machine-owned refusal (names the Run-on Machine); the code stays the code. */
@@ -20,7 +22,8 @@ export function createPluginWidgetAreaHostHandler(input: Readonly<{
     if (!scope || facts.serverId && scope.serverId !== facts.serverId) return null;
     // The admitted page declaration owns its areas. Its supplying occurrence
     // need not be the selected execution Machine's occurrence (or have one).
-    // Actual operations retain the mounted-caller gate in Action dispatch below.
+    // Plugin-code operations retain the mounted-caller gate below. Host controls
+    // use this same declared-area admission with their private mount lifetime.
     const matches = Object.values(facts.pluginUiProjection?.surfacePlacementsById ?? {}).filter(row => row.pluginId === facts.pluginId
         && row.descriptorId === facts.contributionId
         && row.binding.kind === 'destination' && row.binding.container === 'appPage');
@@ -30,7 +33,12 @@ export function createPluginWidgetAreaHostHandler(input: Readonly<{
     const port = createPluginWidgetAreaHostPortV1({ scope, pluginId: facts.pluginId, pageId: facts.contributionId,
             declarations: declarations.data, isCurrent: input.isCurrent,
             execute: async (actionId, actionInput, context) => {
-                const outcome = await dispatchPluginSurfaceAction({ action: actionId, input: PluginUiJsonValueV1Schema.parse(actionInput),
+                const outcome = input.hostControl
+                    ? await input.hostAction.execute(actionId, actionInput, { ...input.hostAction.context, ...context,
+                        surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } }).then(result => result.ok
+                            ? { ok: true as const, result: PluginUiJsonValueV1Schema.parse(result.result) }
+                            : { ok: false as const, code: 'unavailable' as const, reason: result.errorCode, message: result.error })
+                    : await dispatchPluginSurfaceAction({ action: actionId, input: PluginUiJsonValueV1Schema.parse(actionInput),
                     ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}), callerPluginId: facts.pluginId, callerContributionLocalId: facts.contributionId,
                     ...(input.callerBinding ? { callerBinding: input.callerBinding } : {}),
                     hostAction: { ...input.hostAction, context: { ...input.hostAction.context, ...context } },

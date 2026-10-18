@@ -7,6 +7,8 @@ import {
 } from '@happier-dev/protocol';
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, createWidgetActionInputResolverV1, readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets';
 import type { HomeHubArtifactTransportV1 } from '@happier-dev/protocol/home';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import {
@@ -412,6 +414,68 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(renewed.hostApi.handleRequest(request('context'))).not.toMatchObject({ code: 'stale_surface' });
         controller.dispose();
         renewed.dispose();
+    });
+    it.each([false, true])('keeps human area edits distinct from plugin and agent requests, honoring explicit Ask (%s)', async ask => {
+        const scope = CURRENT_ACCOUNT_LIFETIME.scope;
+        const boundary = createWorkBoardArtifactBoundary({ v: 1, boards: [] });
+        const surface = { ...scope, owner: { kind: 'pluginArea', pluginId: FACTS.pluginId, pageId: FACTS.contributionId, area: 'pinned' } } as const;
+        const store = createWidgetSurfaceArtifactPortV1(boundary.forAccount(scope.accountId), { surface, isCurrent: () => true });
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
+            widgetSurfaceActions: { pluginArea: createWidgetAreaActionPortV1(() => store) },
+            widgetInputs: createWidgetActionInputResolverV1({ readDescriptor: async request => readBuiltinWidgetDescriptorV1(request.instance.definition),
+                readContext: async () => ({}), readViewerValues: async () => ({ values: {} }), validateValue: async () => ({ status: 'valid' }),
+                resolveOptions: async () => [{ value: { serverId: scope.serverId, sessionId: 'readable-session' } }] }),
+        }));
+        const destination = normalizePluginUiDestinationBindingV1({ pluginId: FACTS.pluginId, destinationId: FACTS.contributionId,
+            container: 'appPage', target: { kind: 'app' }, rendererId: 'native', instancePolicy: 'singleton' });
+        if (!destination) throw new Error('Destination admission failed');
+        const settings = normalizeActionsSettingsV1(ask ? { v: 1, actions: {
+            'widgets.item.add': { approvalRequiredSurfaces: ['ui'] }, 'widgets.item.remove': { approvalRequiredSurfaces: ['ui'] },
+        } } : { v: 1 });
+        const controller = createBoundPluginSurfaceController({ facts: { ...FACTS,
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, surfacePlacementsById: {
+                [FACTS.surfaceId]: { id: FACTS.surfaceId, pluginId: FACTS.pluginId, occurrenceId: FACTS.occurrenceId,
+                    contributionKind: 'surfacePlacement', descriptorId: FACTS.contributionId, binding: destination,
+                    target: {}, renderer: {}, display: {}, headerActions: [], availability: { state: 'available', reason: 'available', diagnostics: [] },
+                    widgetAreas: [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }],
+                },
+            } },
+        }, binding: { executeHostAction: (id, input, context) => executor.execute(id, input, { ...context, actionsSettings: settings }) } });
+        const instance = { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'session_summary' }, bindings: {
+            session: { kind: 'value', value: { serverId: scope.serverId, sessionId: 'readable-session' } },
+        } } as const;
+        const add = { area: 'pinned', operation: { actionId: 'widgets.item.add', instance } } as const;
+        const remove = { area: 'pinned', operation: { actionId: 'widgets.item.remove', instanceId: instance.id } } as const;
+        try {
+            // The public plugin transport cannot inherit the person's UI authority.
+            expect(await controller.hostApi.handleRequest(request('widgetArea', add)))
+                .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            expect(await controller.hostApi.handleRequest(request('executeAction', { action: 'widgets.item.add', input: { surface, instance } })))
+                .toMatchObject({ code: 'unavailable', diagnostics: ['approvals_not_supported'] });
+            expect(await executor.execute('widgets.item.add', { surface, instance }, { surface: 'agent', authority: 'account_automation' }))
+                .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            expect(boundary.rows.size).toBe(0);
+            const added = await controller.widgetArea!(add);
+            if (ask) {
+                expect(added).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+                expect(boundary.rows.size).toBe(0);
+                await store.apply({ kind: 'add', instance });
+            } else {
+                expect(added).toMatchObject({ ok: true, result: { instance } });
+            }
+            expect((await store.read()).items).toHaveLength(1);
+            expect(await controller.hostApi.handleRequest(request('widgetArea', remove)))
+                .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            expect(await controller.hostApi.handleRequest(request('executeAction', { action: 'widgets.item.remove', input: { ref: { surface, instanceId: instance.id } } })))
+                .toMatchObject({ code: 'unavailable', diagnostics: ['approvals_not_supported'] });
+            expect(await executor.execute('widgets.item.remove', { ref: { surface, instanceId: instance.id } },
+                { surface: 'agent', authority: 'account_automation' })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            const removed = await controller.widgetArea!(remove);
+            expect(removed).toMatchObject(ask ? { ok: false, errorCode: 'approvals_not_supported' } : { ok: true, result: { instance: null } });
+            expect((await store.read()).items).toHaveLength(ask ? 1 : 0);
+            controller.retire();
+            expect(await controller.widgetArea!(add)).toMatchObject({ code: 'stale_surface' });
+        } finally { controller.dispose(); }
     });
     it.each(['available', 'pending', 'unavailable'] as const)('installs a declared page area independently of Machine availability and preserves Action custody (target: %s)', async (targetState) => {
         const scope = CURRENT_ACCOUNT_LIFETIME.scope;

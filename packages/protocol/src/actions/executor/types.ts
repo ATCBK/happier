@@ -1070,6 +1070,8 @@ export type ActionExecutorDeps = Readonly<{
   widgetAreaLayoutSelect?: (surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal) => Promise<ActionExecuteResult>;
   widgetInputs?: WidgetActionInputResolverV1;
   widgetCatalog?: Readonly<{
+    /** Admitted page/area display metadata. Never participates in target selection or access. */
+    describeSurface?(surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal): Promise<Readonly<{ pageName?: string; areaName?: string }> | null>;
     list(surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal, boundSession?: Readonly<{ serverId: string; sessionId: string }>): Promise<readonly WidgetCatalogSourceEntryV1[] | ActionExecuteFailure>;
     /** Installed metadata needs its admitted runtime, not the surface's saved content or instance counts. */
     readInstalledInputFields?(args: Readonly<{
@@ -2622,8 +2624,9 @@ export type ActionExecutorDeps = Readonly<{
    * Optional approvals routing policy hook.
    *
    * When true, the executor will create an approval request instead of executing the action.
+   * Host-admitted UI defaults are resolved against the hook's current persisted policy.
    */
-  isActionApprovalRequired?: (actionId: ActionId, ctx: ActionExecutorContext, input?: unknown) => boolean;
+  isActionApprovalRequired?: (actionId: ActionId, ctx: ActionExecutorContext, input?: unknown, defaultUiConfirmation?: boolean) => boolean;
 
   // Server routing resolver (optional)
   resolveServerIdForSessionId?: (sessionId: string) => string | null;

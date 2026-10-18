@@ -576,6 +576,27 @@ describe('approval field presentation', () => {
     );
   });
 
+  it('uses captured widget and page names while keeping plugin routing operands technical', () => {
+    const surface = { serverId: 'home', accountId: 'account', owner: {
+      kind: 'pluginArea', pluginId: 'examples.widget-areas', pageId: 'overview', area: 'pinned',
+    } };
+    const widgetPresentation = { widgetName: 'Directory count', pageName: 'Widget areas', areaName: 'Pinned' };
+    for (const actionId of ['widgets.item.add', 'widgets.item.remove'] as const) {
+      const actionArgs = actionId === 'widgets.item.add'
+        ? { surface, instance: { v: 1, id: 'copy', definition: { kind: 'installed', surface: { pluginId: 'examples.widget-areas', localId: 'count' } }, bindings: {} } }
+        : { ref: { surface, instanceId: 'copy' } };
+      expect(getActionSpec(actionId).approvalPresentation?.summary(actionArgs, { widgetPresentation }))
+        .toContain('“Directory count”');
+      expect(getActionSpec(actionId).approvalPresentation?.summary(actionArgs, { widgetPresentation }))
+        .toContain('Widget areas · Pinned');
+      const entries = describeApprovalActionFields({ actionId, actionArgs }).rows.flatMap(row => row.kind === 'value' ? row.entries ?? [] : []);
+      for (const value of ['examples.widget-areas', 'overview', 'pinned']) {
+        expect(entries.filter(entry => entry.value?.includes(value))).not.toEqual([]);
+        expect(entries.filter(entry => entry.value?.includes(value)).every(entry => entry.technical)).toBe(true);
+      }
+    }
+  });
+
   it('reads adding a saved widget by what it is and the network it gets, not by its routing operands', () => {
     const input = { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
       instance: { v: 1, id: 'qa-html-instance', definition: { kind: 'artifact', artifactId: '8807a622' }, bindings: {},

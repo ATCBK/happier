@@ -905,6 +905,22 @@ describe('isApprovalRequiredByActionsSettings', () => {
     }).required).toBe(false);
   });
 
+  it.each(['widgets.item.add', 'widgets.item.remove'] as const)('admits a person’s reversible plugin-area %s while preserving automation approval and explicit Ask', actionId => {
+    const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'pluginArea', pluginId: 'example', pageId: 'overview', area: 'pinned' } } as const;
+    const input = actionId === 'widgets.item.add'
+      ? { surface, instance: { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} } }
+      : { ref: { surface, instanceId: 'copy' } };
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+    expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings: EMPTY_SETTINGS }).required).toBe(false);
+    const settings = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+    expect(resolveActionApprovalRouting({ actionId, spec, input, context, settings }).required).toBe(true);
+    for (const surface of ['plugin', 'agent'] as const) {
+      expect(resolveActionApprovalRouting({ actionId, spec, input,
+        context: { surface, authority: 'account_automation' }, settings: EMPTY_SETTINGS }).required).toBe(true);
+    }
+  });
+
   it('confirms new source disclosure but admits Stop directly, honoring explicit Ask on either', () => {
     const actionId = 'usage.sources.consent.set' as const;
     const spec = getActionSpec(actionId);

@@ -6,6 +6,7 @@ export * from './widgetSharedInputAdmissionV1.js';
 export * from './widgetViewerPurposeV1.js';
 export * from './widgetActionInputResolverV1.js';
 export * from './actionsV1.js';
+export * from './widgetApprovalPresentationV1.js';
 export * from './widgetPresentationV1.js';
 export { admitWidgetActionSurfaceV1 } from './widgetActionScopeV1.js';
 export * from './homeWidgetActionPortV1.js';

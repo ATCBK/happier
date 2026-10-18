@@ -1,6 +1,7 @@
 import type { ActionExecuteFailure, ActionExecutorDeps } from '@happier-dev/protocol';
 import { readWidgetActionSurfacePortV1, widgetCandidateDefinitionV1, isSameWidgetDefinitionV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { readWidgetActionSessionTargetV1 } from '@happier-dev/protocol/widgets/actionsV1';
+import { describeWidgetAreaApprovalSurfaceV1 } from '@happier-dev/protocol/widgets';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { selectWidgetCandidates, selectBuiltinWidgetCandidates, describeWidgetDefinitionSummaryV1, describeAuthoredWidgetDefinitionV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { createSessionPluginPolicyEvaluationContext } from '@/components/sessions/model/usePluginUiSessionPolicyEvaluationContext';
@@ -129,7 +130,13 @@ export function createWidgetCatalogActionDepsV1(account: LazyActionAccountContex
     const catalogDeps = { ...deps, widgetAccountScope };
     return {
         widgetAccountScope,
-        widgetCatalog: { readInstalledInputFields: async ({ surface, definition, signal, boundSession }) => {
+        widgetCatalog: { describeSurface: async (surface, _context, signal) => {
+            account.assertCurrent();
+            signal?.throwIfAborted();
+            if (!canReadActiveWidgetCatalogV1(account)) return null;
+            const projection = readCurrentAppShellPluginUiProjection();
+            return describeWidgetAreaApprovalSurfaceV1(surface, Object.values(projection?.surfacePlacementsById ?? {}));
+        }, readInstalledInputFields: async ({ surface, definition, signal, boundSession }) => {
             const runtime = await readWidgetActionRuntimeV1(surface, account, signal, boundSession, catalogDeps);
             if ('ok' in runtime) return runtime;
             if (!runtime.isCurrent()) return unavailable('widget_scope_unavailable');
