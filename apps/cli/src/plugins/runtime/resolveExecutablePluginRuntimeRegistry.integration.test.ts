@@ -1962,8 +1962,9 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                         }),
                     } satisfies HostSessionRuntimeFactoryParams;
                     const attachments: Readonly<{ dispose(): void | Promise<void> }>[] = [];
+                    const signal = new AbortController().signal;
                     const resolvedMcpServers = await runtimeRegistry.materializePluginMcpServers!({
-                        scope: { kind: 'session', sessionId: 'session-1' }, directory: pluginRoot, permissionHandler,
+                        scope: { kind: 'session', sessionId: 'session-1' }, directory: pluginRoot, permissionHandler, signal,
                         servers: [{ id: 'plugin:acme.mcp.session/session-tools', name: 'session-tools', transport: { kind: 'http', url: 'http://127.0.0.1' },
                             scope: { sessionId: 'session-1', directory: pluginRoot } },
                         { id: 'pi.docs', name: 'discovered-docs', transport: { kind: 'http', url: 'https://mcp.example.test/discovered' },
@@ -1996,7 +1997,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                         },
                         sessionId: 'session-1',
                         directory: pluginRoot,
-                        signal: new AbortController().signal,
+                        signal,
                     });
                     return { ...owners, async dispose() {
                         await owners.dispose();
