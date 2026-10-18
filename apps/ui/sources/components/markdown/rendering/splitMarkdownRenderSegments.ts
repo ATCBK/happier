@@ -1,4 +1,5 @@
 import { parseMarkdownBlockSource } from '../streaming/parseMarkdownBlockSource';
+import { readMarkdownOption } from '../parseMarkdownBlock';
 import { preprocessStreamingMarkdown } from '../streaming/preprocessStreamingMarkdown';
 import {
     splitMarkdownIntoBlockSources,
@@ -64,7 +65,8 @@ function isSpecialSource(source: LocatedMarkdownBlockSource): boolean {
     if (source.container || source.codeBlock) return true;
     if (source.incompleteKind) return true;
     return source.blockType === 'FencedCode'
-        || source.blockType === 'Table' || source.source.trimStart().startsWith('<options>');
+        || source.blockType === 'Table' || source.source.trimStart().startsWith('<options>')
+        || source.source.split('\n').some((line) => readMarkdownOption(line) !== null);
 }
 
 function withReferenceDefinitions(markdown: string, definitions: string): string {

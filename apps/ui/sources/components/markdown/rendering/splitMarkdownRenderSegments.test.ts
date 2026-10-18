@@ -3,6 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { splitMarkdownRenderSegments } from './splitMarkdownRenderSegments';
 
 describe('splitMarkdownRenderSegments', () => {
+    it.each(['static', 'streaming'] as const)('renders dedicated continuation option lines in %s mode without converting inline examples', (streamingMode) => {
+        const segments = splitMarkdownRenderSegments({
+            markdown: 'Choose next:\n<option>Continue</option>\n<option>Review first</option>\n</options>',
+            streamingMode,
+        });
+        expect(segments.flatMap((segment) => segment.type === 'special-block' ? segment.blocks : [])).toContainEqual({
+            type: 'options', items: ['Continue', 'Review first'],
+        });
+        const prose = splitMarkdownRenderSegments({
+            markdown: 'Mention <option>Continue</option> in a sentence.',
+            streamingMode,
+        });
+        expect(prose.map((segment) => segment.type)).toEqual(['enriched-markdown']);
+    });
+
     it('reuses segment arrays for unchanged markdown and rendering mode', () => {
         const markdown = [
             '## Long section',
