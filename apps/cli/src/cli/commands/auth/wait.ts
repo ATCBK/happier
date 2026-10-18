@@ -52,6 +52,13 @@ type PendingAuthState = Readonly<{
 const V3_REQUIRED_ERROR =
   'Authenticated terminal pairing v3 is required. Update the Happier mobile app and scan a new QR code.';
 
+class AuthWaitError extends Error {
+  constructor(readonly code: 'AUTH_REQUEST_EXPIRED' | 'AUTH_RESPONSE_HOME_MISMATCH' | 'AUTH_RESPONSE_INVALID' | 'AUTH_PAIRING_V3_REQUIRED', message: string) {
+    super(message);
+    this.name = 'AuthWaitError';
+  }
+}
+
 // Bound the claim response before decoding: legitimate v3 payloads are ~141
 // bytes (188 base64 chars), so anything beyond this is malformed server input.
 const MAX_PROVISIONING_RESPONSE_B64_CHARS = 4096;
@@ -273,8 +280,7 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
     const statusData = await readTerminalAuthRequestStatus({ runtime: acquired.runtime, publicKey: state.publicKey, ...(signal ? { signal } : {}) });
     const status = isRecord(statusData) ? statusData.status : undefined;
     if (status === 'not_found') {
-      console.error('Authentication request expired. Run `happier auth request --json` again.');
-      process.exit(1);
+      throw new AuthWaitError('AUTH_REQUEST_EXPIRED', 'Authentication request expired. Run `happier auth request --json` again.');
     }
 
     if (status === 'authorized') {
@@ -290,18 +296,16 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
       }
       const claimedServerIdentityId = normalizeServerIdentityIdCapability(claimData.serverIdentityId);
       if (claimedServerIdentityId !== state.serverIdentityId) {
-        console.error(
+        throw new AuthWaitError('AUTH_RESPONSE_HOME_MISMATCH',
           `The authentication response came from a different Home identity `
           + `(expected ${state.serverIdentityId}, received ${claimedServerIdentityId ?? 'missing'}). `
           + 'Credentials were not changed; create a new request for the intended Home.',
         );
-        process.exit(1);
       }
       const token = String(claimData.token ?? '');
       const responseB64 = String(claimData.response ?? '');
       if (!token || !responseB64 || responseB64.length > MAX_PROVISIONING_RESPONSE_B64_CHARS) {
-        console.error('Unexpected response from server.');
-        process.exit(1);
+        throw new AuthWaitError('AUTH_RESPONSE_INVALID', 'Unexpected response from server.');
       }
       if (target.descriptor) {
         const authenticatedSnapshot = await fetchServerFeaturesSnapshot({
@@ -322,8 +326,7 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
         supportsTokenOnly: true,
       });
       if (!opened) {
-        console.error(V3_REQUIRED_ERROR);
-        process.exit(1);
+        throw new AuthWaitError('AUTH_PAIRING_V3_REQUIRED', V3_REQUIRED_ERROR);
       }
 
       signal?.throwIfAborted();

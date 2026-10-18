@@ -23,7 +23,7 @@ describe('buffered normal auth request/wait', () => {
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
   afterEach(() => { env.restore(); reloadConfiguration(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-  it.each(['current', 'retired'] as const)('retains the admitted tuple privately and saves the Account bearer only for a %s normal registration', async (admission) => {
+  it.each(['current', 'retired', 'invalid-response'] as const)('retains the admitted tuple privately and saves the Account bearer only for a %s normal registration', async (admission) => {
     await withTempDir('happier-buffered-auth-', async (homeDir) => {
       env.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_SERVER_URL: undefined, HAPPIER_ACTIVE_SERVER_ID: undefined });
       reloadConfiguration();
@@ -79,6 +79,12 @@ describe('buffered normal auth request/wait', () => {
         createdAtMs: request.pairing.createdAtMs, expiresAtMs: request.pairing.expiresAtMs,
         randomBytes: (length) => new Uint8Array(randomBytes(length)),
       })).toString('base64');
+      if (admission === 'invalid-response') {
+        response = Buffer.from([0]).toString('base64');
+        // The process-exit boundary must not swallow a typed auth refusal.
+        vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process_exit'); });
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      }
       // A second guest process does not inherit the first process's ephemeral
       // Home selection. Only the non-secret returned profile identifies its
       // incumbent profile-scoped pending state.
@@ -100,10 +106,13 @@ describe('buffered normal auth request/wait', () => {
         });
         expect(consumed).toMatchObject({ machineId: JSON.parse(completion).machineId, remoteProfileId: request.remoteProfileId,
           homeServerIdentityId: descriptor.homeServerIdentityId });
+      } else if (admission === 'invalid-response') {
+        await expect(wait).rejects.toMatchObject({ code: 'AUTH_PAIRING_V3_REQUIRED' });
       } else {
         await expect(wait).rejects.toThrow('retired managed row');
       }
-      expect(registration).toMatchObject({ managedEnrollment });
+      if (admission === 'invalid-response') expect(registration).toBeUndefined();
+      else expect(registration).toMatchObject({ managedEnrollment });
       expect((await readdir(homeDir, { recursive: true })).some((path) => /(?:^|[\\/])access\.key$/u.test(path))).toBe(admission === 'current');
       expect(outputs.join('')).not.toContain('full-account-bearer');
     });

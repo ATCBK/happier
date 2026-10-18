@@ -53,6 +53,40 @@ function createExecutor(params: Readonly<{
 }
 
 describe('runRemoteHomeEnrollmentRecipe', () => {
+  it.each(['request', 'wait'] as const)('retains the typed %s failure and exit phase without subprocess secrets', async phase => {
+    const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+      publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
+      pairing: { secretB64Url: PAIRING_SECRET, createdAtMs: 10, expiresAtMs: 20 },
+      supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'remote-home-profile' };
+    const failure = await runRemoteHomeEnrollmentRecipe({ processIO: 'buffered',
+      homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+      executor: { runHappierJson: async () => { throw new Error('not used'); },
+        runHappierText: async args => args[1] !== phase
+          ? { status: 0, stdout: JSON.stringify(request), stderr: '' }
+          : { status: 1, stdout: JSON.stringify({ v: 1, ok: false, kind: `auth_${phase}`,
+            error: { code: 'ERR_BAD_REQUEST', category: 'http_error', status: 409, token: 'private-token', message: 'private-message' } }),
+            stderr: 'private-stderr' } },
+      approvePairingRequest: async () => {}, timeoutMs: 5_000,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: 'remote_command_failed',
+      message: `Remote Home enrollment failed during auth ${phase} (exit 1; code ERR_BAD_REQUEST; category http_error; HTTP 409).` });
+    expect(JSON.stringify(failure)).not.toMatch(/private-token|private-message|private-stderr/);
+  });
+
+  it.each(['older-text', 'wrong-kind'] as const)('retains only phase and exit for an untrusted failure envelope (%s)', async variant => {
+    const failure = await runRemoteHomeEnrollmentRecipe({ processIO: 'buffered',
+      homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+      executor: { runHappierJson: async () => { throw new Error('not used'); },
+        runHappierText: async () => ({ status: 1, stderr: 'private-stderr',
+          stdout: variant === 'older-text' ? 'private-stdout' : JSON.stringify({ v: 1, ok: false,
+            kind: 'auth_wait', error: { code: 'UNTRUSTED_CODE', category: 'http_error', status: 409 } }) }) },
+      approvePairingRequest: async () => {}, timeoutMs: 5_000,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: 'remote_command_failed',
+      message: 'Remote Home enrollment failed during auth request (exit 1).' });
+    expect(JSON.stringify(failure)).not.toMatch(/private-|UNTRUSTED_CODE|http_error|409/);
+  });
+
   it('requires a remote CLI update for released ordinary auth request stdout without disclosing it', async () => {
     const seen: Array<Readonly<{ args: readonly string[]; input?: string; includeStdoutInError?: boolean }>> = [];
     const approvePairingRequest = vi.fn(async () => {});

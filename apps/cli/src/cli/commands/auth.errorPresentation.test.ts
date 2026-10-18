@@ -8,6 +8,25 @@ import { projectSafeAuthError } from './auth/errorDiagnostic';
 afterEach(() => vi.restoreAllMocks());
 
 describe('auth command error presentation', () => {
+  it('emits a credential-free JSON failure for finite remote enrollment commands', async () => {
+    const failure = Object.assign(new Error('private-response-body'), { code: 'ERR_BAD_REQUEST',
+      response: { status: 409, data: { token: 'private-token' } } });
+    vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () { throw failure; });
+    const chunks: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk, encodingOrCallback, callback) => {
+      chunks.push(String(chunk));
+      (typeof encodingOrCallback === 'function' ? encodingOrCallback : callback)?.();
+      return true;
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('test_exit'); });
+    await expect(handleAuthCliCommand({ args: ['auth', 'wait', '--json', '--remote-enrollment', '--secrets-json-stdin'],
+      rawArgv: [], terminalRuntime: null })).rejects.toThrow('test_exit');
+    expect(JSON.parse(chunks.join(''))).toEqual({ v: 1, ok: false, kind: 'auth_wait',
+      error: { code: 'ERR_BAD_REQUEST', category: 'http_error', status: 409 } });
+    expect(chunks.join('')).not.toMatch(/private-response-body|private-token/);
+  });
+
   it.each([undefined, '', 'Unknown error'])('surfaces a safe error code when the message is %s without DEBUG', async (message) => {
     const code = `MODULE_NOT_FOUND:${'dependency.'.repeat(12)}missing`;
     const error = { code, message, request: { token: 'private-token' } };

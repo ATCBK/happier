@@ -6,6 +6,7 @@ import type { HappierJsonExecutor, HappierTextResult } from '../executors/happie
 import { SystemTaskExecutionError } from '../runSystemTask.js';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 
 export type RemoteHomeEnrollmentPairingRequest = Readonly<{
   publicKey: string;
@@ -205,13 +206,31 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
         timeoutMs: params.timeoutMs, includeStdoutInError: false,
       });
       params.signal?.throwIfAborted();
-      if (result.status !== 0) throw new SystemTaskExecutionError('remote_command_failed', 'Remote Home enrollment failed.');
       if (Buffer.byteLength(result.stdout, 'utf8') > MAX_PROTOCOL_LINE_BYTES) {
         throw new SystemTaskExecutionError('invalid_cli_response', 'Remote enrollment protocol line was too large.');
       }
-      try { return JSON.parse(result.stdout); } catch {
-        throw new SystemTaskExecutionError('invalid_cli_response', 'Remote enrollment returned invalid JSON.');
+      let response: unknown;
+      try { response = JSON.parse(result.stdout); } catch {
+        if (result.status === 0) throw new SystemTaskExecutionError('invalid_cli_response', 'Remote enrollment returned invalid JSON.');
       }
+      if (result.status !== 0 || (isRecord(response) && response.ok === false)) {
+        const diagnostic = isRecord(response) && response.v === 1 && response.ok === false
+          && response.kind === `auth_${args[1]}` && isRecord(response.error) ? response.error : null;
+        const fields = [`exit ${result.status}`];
+        if (typeof diagnostic?.code === 'string' && /^[A-Za-z0-9_.:-]+$/u.test(diagnostic.code)) {
+          fields.push(`code ${redactBugReportSensitiveText(diagnostic.code)}`);
+        } else if (typeof diagnostic?.code === 'number' && Number.isSafeInteger(diagnostic.code)) {
+          fields.push(`code ${diagnostic.code}`);
+        }
+        if (diagnostic && ['http_error', 'auth_error'].includes(String(diagnostic.category))) {
+          fields.push(`category ${diagnostic.category}`);
+        }
+        if (typeof diagnostic?.status === 'number' && Number.isInteger(diagnostic.status) && diagnostic.status >= 100 && diagnostic.status <= 599) {
+          fields.push(`HTTP ${diagnostic.status}`);
+        }
+        throw new SystemTaskExecutionError('remote_command_failed', `Remote Home enrollment failed during auth ${args[1]} (${fields.join('; ')}).`);
+      }
+      return response;
     };
     const response = await capture(
       ['auth', 'request', '--json', '--remote-enrollment', '--home-target-stdin', ...(managedEnrollment ? ['--managed-enrollment-stdin'] : [])],

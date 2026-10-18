@@ -3,6 +3,7 @@ import type { CommandContext } from '@/cli/commandRegistry';
 import { hasFlagValue } from '@/cli/commands/shared/argvFlags';
 import { showAuthHelp } from './auth/help';
 import { projectSafeAuthError } from './auth/errorDiagnostic';
+import { wantsJson, writeJsonStdout } from '@/cli/output/jsonEnvelope';
 
 export async function handleAuthCommand(args: string[], signal?: AbortSignal): Promise<void> {
   args = await (await import('./auth/stdinSecrets')).expandAuthSecretsFromStdin(args);
@@ -81,6 +82,17 @@ export async function handleAuthCliCommand(context: CommandContext): Promise<voi
   } catch (error) {
     const { errorFrame } = await import('@happier-dev/cli-common/output');
     const diagnostic = projectSafeAuthError(error);
+    const phase = context.args[1];
+    if ((phase === 'request' || phase === 'wait') && wantsJson(context.args)) {
+      // Auth errors may carry HTTP bodies and pairing secrets. Finite remote
+      // enrollment consumes only this credential-free diagnostic projection.
+      await writeJsonStdout({ v: 1, ok: false, kind: `auth_${phase}`, error: {
+        ...(diagnostic.code !== undefined ? { code: diagnostic.code } : {}),
+        category: diagnostic.status !== undefined ? 'http_error' : 'auth_error',
+        ...(diagnostic.status !== undefined ? { status: diagnostic.status } : {}),
+      } });
+      process.exit(1);
+    }
     console.error(errorFrame('Error:', [diagnostic.message]));
     if (process.env.DEBUG) {
       // Error objects from HTTP clients retain request bodies, response bodies,
