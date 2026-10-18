@@ -24,9 +24,56 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 
 describe('startHappyServer notification stream', () => {
+    it.each(['turn', 'native runtime'] as const)('keeps MCP discovery available across %s retirement while tool calls keep their cancellation scope', async (retirement) => {
+        daemonCatalogBoundary.read.mockReset();
+        daemonCatalogBoundary.read.mockImplementation(async (options?: Readonly<{ signal?: AbortSignal }>) => {
+            options?.signal?.throwIfAborted();
+            return { kind: 'available', plugins: [], tools: [] };
+        });
+        let lifetime = new AbortController();
+        let nativeOpened = false;
+        let turn = new AbortController();
+        const session = Object.assign(createMutableApiSessionClientFixture({ sessionId: 'reconnecting-mcp-session' }), {
+            getRuntimeLifetimeSignal: () => nativeOpened ? lifetime.signal : null,
+            getHostTurnAbortSignal: () => turn.signal,
+            getWorkDepth: () => 0,
+            getActiveTurnPermissionWitness: () => turn.signal.aborted || lifetime.signal.aborted ? null : ({ turnId: 'reconnecting-mcp-turn', workDepth: 0,
+                causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const } }),
+        });
+        const server = await startHappyServer(session, {
+            sessionCredentials: { token: 'reconnecting-mcp-fixture', encryption: null }, accountSettings: accountSettingsParse({}),
+        });
+        nativeOpened = true;
+        const original = new Client({ name: 'original-native-session', version: '1' });
+        const resumed = new Client({ name: 'resumed-native-session', version: '1' });
+        try {
+            await original.connect(new StreamableHTTPClientTransport(new URL(server.url)));
+            expect((await original.listTools()).tools.map(tool => tool.name)).toContain('action_execute');
+            await original.close();
+            (retirement === 'turn' ? turn : lifetime).abort();
+
+            // Native session resume discovers tools before the next host turn is admitted.
+            await resumed.connect(new StreamableHTTPClientTransport(new URL(server.url)));
+            expect((await resumed.listTools()).tools.map(tool => tool.name)).toContain('action_execute');
+            expect(await server.readToolNames()).toContain('action_execute');
+            await expect(resumed.callTool({ name: 'action_spec_get', arguments: { id: 'browser.view.open' } })).rejects.toThrow();
+
+            turn = new AbortController();
+            lifetime = new AbortController();
+            const result = await resumed.callTool({ name: 'action_spec_get', arguments: { id: 'browser.view.open' } });
+            expect(result).toMatchObject({ isError: false, structuredContent: { actionSpec: { id: 'browser.view.open' } } });
+            server.stop();
+            await expect(server.readToolNames()).rejects.toThrow();
+        } finally {
+            await Promise.all([original.close(), resumed.close()]);
+            server.stop();
+        }
+    });
+
     it('keeps a shared catalog read available to a surviving native tool when another caller cancels', async () => {
         daemonCatalogBoundary.read.mockReset();
         const host = new AbortController();
+        const lifetime = new AbortController();
         const cancelledCaller = new AbortController();
         const survivingCaller = new AbortController();
         let enter: () => void = () => undefined;
@@ -44,6 +91,7 @@ describe('startHappyServer notification stream', () => {
             });
         });
         const session = Object.assign(createMutableApiSessionClientFixture({ sessionId: 'shared-catalog-session' }), {
+            getRuntimeLifetimeSignal: () => lifetime.signal,
             getHostTurnAbortSignal: () => host.signal,
             getWorkDepth: () => 0,
             getActiveTurnPermissionWitness: () => ({ turnId: 'shared-catalog-turn', workDepth: 0,
@@ -78,6 +126,7 @@ describe('startHappyServer notification stream', () => {
         daemonCatalogBoundary.read.mockReset();
         daemonCatalogBoundary.read.mockResolvedValueOnce({ kind: 'available', plugins: [], tools: [] });
         const turn = new AbortController();
+        const lifetime = new AbortController();
         let enter: (signal: AbortSignal | undefined) => void = () => undefined;
         let release: () => void = () => undefined;
         const entered = new Promise<AbortSignal | undefined>(resolve => { enter = resolve; });
@@ -89,6 +138,7 @@ describe('startHappyServer notification stream', () => {
             });
         });
         const session = Object.assign(createMutableApiSessionClientFixture({ sessionId: 'catalog-stop-session' }), {
+            getRuntimeLifetimeSignal: () => lifetime.signal,
             getHostTurnAbortSignal: () => turn.signal,
         });
         const server = await startHappyServer(session);
