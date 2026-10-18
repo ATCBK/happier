@@ -472,7 +472,10 @@ Both binaries use `packages/cli-common/scripts/buildBunBinary.mjs`. It bundles S
 CJS entry, preserving Sharp's platform selection, CPU checks and error reporting, and redirects
 only the resolved native addon import to its staged file. The filename comes from the actual
 native import, preserving libvips adjacency without embedding renamed Bun native assets.
-This does not enable Bun's package-json autoloader; the CLI also keeps dotenv autoloading disabled.
+This does not enable Bun's package-json autoloader; the CLI also keeps dotenv autoloading
+disabled. The canonical Bun compiler defaults disable bunfig autoloading for standalone CLI, server, hsetup, hstack and Prisma
+migration executables, so a working directory cannot inject a preload before startup.
+Both custom Bun build adapters consume the same defaults.
 
 Binary artifact finalization projects native dependencies from the requested artifact target,
 not the build host: ONNX Runtime Node retains its target OS/architecture directory with all

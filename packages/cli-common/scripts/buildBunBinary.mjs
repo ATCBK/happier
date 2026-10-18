@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { DEFAULT_BUN_COMPILE_OPTIONS } from '../src/componentArtifacts/commands.ts';
+
 import { statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, relative, resolve } from 'node:path';
@@ -31,10 +33,13 @@ const result = await Bun.build({
   entrypoints: [entrypoint],
   external,
   compile: {
+    ...DEFAULT_BUN_COMPILE_OPTIONS,
     target,
     outfile,
     ...(process.argv.includes('--no-compile-autoload-dotenv') ? { autoloadDotenv: false }
       : process.argv.includes('--compile-autoload-dotenv') ? { autoloadDotenv: true } : {}),
+    ...(process.argv.includes('--no-compile-autoload-bunfig') ? { autoloadBunfig: false }
+      : process.argv.includes('--compile-autoload-bunfig') ? { autoloadBunfig: true } : {}),
   },
   plugins: [{
     name: 'load-packaged-sharp-addon',

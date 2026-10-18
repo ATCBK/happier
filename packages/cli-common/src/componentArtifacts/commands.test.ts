@@ -196,7 +196,7 @@ describe('compileBunBinary', () => {
             expect(calls).toEqual([
                 {
                     cmd: 'bun',
-                    args: ['build', '--compile', '--no-cache', '--target=bun-windows-x64', entrypoint, '--outfile', outfile],
+                    args: ['build', '--compile', '--no-cache', '--target=bun-windows-x64', entrypoint, '--outfile', outfile, '--no-compile-autoload-bunfig'],
                     cwd: process.cwd(),
                 },
             ]);
@@ -236,6 +236,7 @@ describe('compileBunBinary', () => {
                     `--entrypoint=${entrypoint}`,
                     `--outfile=${outfile}`,
                     '--no-compile-autoload-dotenv',
+                    '--no-compile-autoload-bunfig',
                     '--external=redis',
                 ],
             }]);
