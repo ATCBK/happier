@@ -5762,6 +5762,7 @@ export class ApiSessionClient extends EventEmitter {
      */
     updateAgentState(handler: (state: AgentState) => AgentState, options?: AgentStateWriteOptions): Promise<void> {
         logger.debugLargeJson('Updating agent state', this.agentState);
+        let retentionAdmission: Promise<void> | undefined;
         const update = this.agentStateLock.inLock(async () => {
             let captured: ReturnType<typeof buildAgentStateRequestSettlement> = { v: 1, entries: [] };
             let handlerInvoked = false;
@@ -5793,9 +5794,9 @@ export class ApiSessionClient extends EventEmitter {
                 });
             } catch (error) {
                 if (options?.retainPermissionCompletionsOnFailure) {
-                    try {
-                        // Offline admission can fail before the acknowledged updater calls its
-                        // handler. The same lock still owns this snapshot and exact history delta.
+                    retentionAdmission = (async () => {
+                        // Capture and reserve admission under the state lock; await sealing and
+                        // disk persistence only after releasing it so ordinary ACK writes can proceed.
                         if (!handlerInvoked) capture(this.agentState ?? {});
                         if (captured.entries.length > 0) {
                             await this.enqueueAgentStateRequestSettlement(captured);
@@ -5803,15 +5804,22 @@ export class ApiSessionClient extends EventEmitter {
                                 sessionId: this.sessionId, operation: 'update-state',
                             });
                         }
-                    } catch (retentionError) {
-                        logger.infoFile('[API] session_permission_completion_retention_failed', {
-                            sessionId: this.sessionId, operation: 'journal-agent-state-completion',
-                        });
-                        throw retentionError;
-                    }
+                    })();
                 }
                 throw error;
             }
+        }).catch(async (error) => {
+            if (retentionAdmission) {
+                try {
+                    await retentionAdmission;
+                } catch (retentionError) {
+                    logger.infoFile('[API] session_permission_completion_retention_failed', {
+                        sessionId: this.sessionId, operation: 'journal-agent-state-completion',
+                    });
+                    throw retentionError;
+                }
+            }
+            throw error;
         });
         if (options?.retainPermissionCompletionsOnFailure) {
             // The caller still observes the normal write failure. Close drains the

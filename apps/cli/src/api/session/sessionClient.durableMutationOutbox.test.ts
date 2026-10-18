@@ -639,16 +639,43 @@ describe('ApiSessionClient durable mutation outbox', () => {
     const handler = new ProviderEnforcedPermissionHandler(first, { logPrefix: '[AutomaticHistoryTest]' });
     handler.setPermissionMode('yolo');
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const enteredDiskAdmission = createDeferred<void>();
+    const releaseDiskAdmission = createDeferred<void>();
+    const rename = fsBoundary.rename;
+    let held = false;
+    const disk = vi.spyOn(fsBoundary, 'rename').mockImplementation(async (from, to) => {
+      if (failure === 'ack' && !held && String(to).endsWith('session-s-auto-history.json')) {
+        held = true;
+        enteredDiskAdmission.resolve();
+        await releaseDiskAdmission.promise;
+      }
+      await rename(from, to);
+    });
+    let ordinaryAck: Promise<void> | undefined;
     try {
       await expect(handler.handleToolCall('automatic', automatic.tool, automatic.arguments))
         .resolves.toEqual({ decision: 'approved' });
       failAcknowledgement.resolve();
+      if (failure === 'ack') {
+        await enteredDiskAdmission.promise;
+        online = true;
+        ordinaryAck = first.updateAgentState((state) => ({ ...state, controlledByUser: true }));
+        void ordinaryAck.catch(() => undefined);
+        // Retention owns disk admission, not the unrelated acknowledged state writer.
+        await expect.poll(() => serverState.controlledByUser).toBe(true);
+        await ordinaryAck;
+        online = false;
+        releaseDiskAdmission.resolve();
+      }
       await expect.poll(async () => await readPersistedOutboxMutations('s-auto-history'))
         .toEqual([expect.objectContaining({ kind: 'agent_state_request_settlement' })]);
     } finally {
       failAcknowledgement.resolve();
       connectionReady.resolve();
+      releaseDiskAdmission.resolve();
+      await ordinaryAck?.catch(() => undefined);
       await first.close();
+      disk.mockRestore();
       clock.mockRestore();
     }
     useRealSupervisor = false;

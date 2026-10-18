@@ -1741,6 +1741,8 @@ existing durable mutation journal. Runtime-captured settlements retain their ord
 credential reads, sealing and journal admission, so a later Stop cannot overtake an
 already observed tool completion. Observed-completion and cancellation capture releases
 the Agent-state lock before disk admission, leaving ordinary acknowledged writes usable.
+Failed automatic-history writes also reserve retention under that lock and await its
+admission after releasing it; close still drains the complete retention attempt.
 PostToolUse is the explicit evidence that a native tool already ran; the journal never replays an unapplied UI or provider approval.
 Cancellation rejects local waiters even if admission fails, retaining the detached
 occurrence for a retirement retry and reporting the failure. Local bridge disposal
