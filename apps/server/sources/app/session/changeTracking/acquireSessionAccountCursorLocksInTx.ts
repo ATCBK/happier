@@ -1,7 +1,48 @@
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/session/access/sessionRecipients";
-import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
 import { getSessionLifecycleAutomationPublicationAudienceInTx } from "@/app/workflows/workflowPublicationAudience";
+
+type SessionAccountCursorLockOptions = Readonly<{ includeLifecyclePublications?: boolean }>;
+
+/** One census serves pre-attempt discovery and transactional currentness checks. */
+async function readSessionAccountCursorAudienceInTx(
+    tx: Tx,
+    sessionIds: readonly string[],
+    additionalAccountIds: readonly string[],
+    options?: SessionAccountCursorLockOptions,
+) {
+    const ids = [...new Set(sessionIds)].sort();
+    const lifecycle = options?.includeLifecyclePublications
+        ? await getSessionLifecycleAutomationPublicationAudienceInTx(tx, ids)
+        : { sessionIds: [], accountIds: [] };
+    const sourceSessionIds = [...new Set([...ids, ...lifecycle.sessionIds])].sort();
+    // Archive/rejoin invalidates both Reports-to endpoints, including children
+    // of a lead. Follow's destination wake is socket-only and allocates no cursor.
+    const reportsTo = sourceSessionIds.length > 0 ? await tx.sessionReportsTo.findMany({
+        where: { OR: [{ sessionId: { in: sourceSessionIds } }, { leadSessionId: { in: sourceSessionIds } }] },
+        select: { sessionId: true, leadSessionId: true },
+    }) : [];
+    const projectionSessionIds = [...new Set([
+        ...sourceSessionIds, ...reportsTo.flatMap(edge => [edge.sessionId, edge.leadSessionId]),
+    ])].sort();
+    const recipients = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, {
+        sessionIds: projectionSessionIds, includeUnpublishedGrants: true, includeInactiveAccounts: true,
+    });
+    const accountIds = [...new Set([...recipients.values()].flat().concat([...additionalAccountIds], lifecycle.accountIds))].sort();
+    return { projectionSessionIds, accountIds };
+}
+
+/** Discover outside the mutation snapshot; fence and verify inside each attempt. */
+export async function prepareSessionAccountCursorLocks(
+    sessionIds: readonly string[],
+    additionalAccountIds: readonly string[] = [],
+    options?: SessionAccountCursorLockOptions,
+): Promise<(tx: Tx) => Promise<void>> {
+    if (getDbProviderFromEnv(process.env, "postgres") === "sqlite") return async () => {};
+    const audience = await inReadSnapshot(tx => readSessionAccountCursorAudienceInTx(tx, sessionIds, additionalAccountIds, options));
+    return tx => fenceSessionAccountCursorAudienceInTx(tx, audience, sessionIds, additionalAccountIds, options);
+}
 
 /**
  * Acquire publication's Account locks before taking any Session write lock.
@@ -14,31 +55,24 @@ export async function acquireSessionAccountCursorLocksInTx(
     tx: Tx,
     sessionIds: readonly string[],
     additionalAccountIds: readonly string[] = [],
-    options?: Readonly<{ includeLifecyclePublications?: boolean }>,
+    options?: SessionAccountCursorLockOptions,
 ): Promise<void> {
     const provider = getDbProviderFromEnv(process.env, "postgres");
     // SQLite has one database writer rather than independently lockable rows.
     if (provider === "sqlite") return;
-    const ids = [...new Set(sessionIds)].sort();
-    if (ids.length === 0 && additionalAccountIds.length === 0) return;
-    const readAudience = async () => {
-        const lifecycle = options?.includeLifecyclePublications
-            ? await getSessionLifecycleAutomationPublicationAudienceInTx(tx, ids)
-            : { sessionIds: [], accountIds: [] };
-        const sourceSessionIds = [...new Set([...ids, ...lifecycle.sessionIds])].sort();
-        // Source publication invalidates its direct ReportsTo lead projection as
-        // well. Follow's destination wake is socket-only and allocates no cursor.
-        const reportsTo = sourceSessionIds.length > 0 ? await tx.sessionReportsTo.findMany({
-            where: { sessionId: { in: sourceSessionIds } }, select: { leadSessionId: true },
-        }) : [];
-        const projectionSessionIds = [...new Set([...sourceSessionIds, ...reportsTo.map(edge => edge.leadSessionId)])].sort();
-        const recipients = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, {
-            sessionIds: projectionSessionIds, includeUnpublishedGrants: true, includeInactiveAccounts: true,
-        });
-        const accountIds = [...new Set([...recipients.values()].flat().concat([...additionalAccountIds], lifecycle.accountIds))].sort();
-        return { projectionSessionIds, accountIds };
-    };
-    const { projectionSessionIds, accountIds } = await readAudience();
+    const audience = await readSessionAccountCursorAudienceInTx(tx, sessionIds, additionalAccountIds, options);
+    await fenceSessionAccountCursorAudienceInTx(tx, audience, sessionIds, additionalAccountIds, options);
+}
+
+async function fenceSessionAccountCursorAudienceInTx(
+    tx: Tx,
+    { projectionSessionIds, accountIds }: Awaited<ReturnType<typeof readSessionAccountCursorAudienceInTx>>,
+    sessionIds: readonly string[],
+    additionalAccountIds: readonly string[],
+    options?: SessionAccountCursorLockOptions,
+): Promise<void> {
+    if (projectionSessionIds.length === 0 && accountIds.length === 0) return;
+    const provider = getDbProviderFromEnv(process.env, "postgres");
     let lockedAccounts: { id: string }[];
     if (provider === "postgres") {
         lockedAccounts = await tx.$queryRawUnsafe<{ id: string }[]>(
@@ -57,7 +91,7 @@ export async function acquireSessionAccountCursorLocksInTx(
     // ReadCommitted can admit a grant or ReportsTo change between discovery
     // and lock acquisition. Never extend a captured lock set out of order:
     // roll back and let inTx replay the complete transaction on its own budget.
-    const current = await readAudience();
+    const current = await readSessionAccountCursorAudienceInTx(tx, sessionIds, additionalAccountIds, options);
     const owners = current.projectionSessionIds.length > 0 ? await tx.session.findMany({
         where: { id: { in: current.projectionSessionIds } }, select: { accountId: true },
     }) : [];
