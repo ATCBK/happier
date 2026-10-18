@@ -225,6 +225,10 @@ describe('useSessionListRowInteractions', () => {
                 expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot()).toMatchObject({ phase: 'pending', item: { kind: 'session-workspace' } });
                 act(() => { dispatch(source, 'dragend'); });
                 expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot()).toMatchObject({ phase: 'pending', item: { kind: 'session-workspace' } });
+                // A new gesture must not retire the source whose write is still pending.
+                act(() => { expect(dispatch(source, 'dragstart')).toBe(false); });
+                expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot()).toMatchObject({ phase: 'pending', item: { kind: 'session-workspace' } });
+                expect(setOrder).toHaveBeenCalledTimes(1);
                 await act(async () => { finishWrite(); });
                 await vi.waitFor(() => expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).not.toBe('pending'));
             }

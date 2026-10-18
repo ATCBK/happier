@@ -316,6 +316,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
     }, [buildContext, execute, resolve, runtime, scope, targetId]);
 
     const prepareSource = React.useCallback((request: SessionListDragSnapshot | Readonly<{ sourceRowId: string }>) => {
+        if (runtime.getSnapshot().phase === 'pending') return null;
         sourceRef.current?.dispose();
         const current = scopeRef.current;
         if (!current) return null;
