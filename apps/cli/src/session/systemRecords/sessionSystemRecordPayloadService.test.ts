@@ -26,6 +26,7 @@ function createE2eeSession(
     },
     updateMetadata: vi.fn(),
     updateAgentState: vi.fn(),
+    updateAgentStateRequestSettlement: vi.fn(async () => undefined),
     keepAlive: vi.fn(),
     getMetadataSnapshot: () => null,
     hasUserMessageLocalConsumption: () => false,

@@ -58,7 +58,11 @@ export type AgentSessionHookServerStartRequest = Readonly<{
   /** Ephemeral resources for one execution; omission preserves the host's Session retention. */
   lifetime?: 'invocation';
   onSessionHook?: (providerSessionId: string, data: AgentSessionHookProviderPayload) => void | Promise<void>;
-  onPermissionHook?: (data: AgentSessionHookProviderPayload) => unknown | Promise<unknown>;
+  /** The signal withdraws this hook's permission wait when its HTTP transport retires. */
+  onPermissionHook?: (
+    data: AgentSessionHookProviderPayload,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ) => unknown | Promise<unknown>;
   onStatuslineUpdate?: (data: AgentSessionHookProviderPayload) => void | Promise<void>;
   defaultPermissionHookResponse?: (
     data: AgentSessionHookProviderPayload,

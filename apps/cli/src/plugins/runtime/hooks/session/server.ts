@@ -80,7 +80,7 @@ export type StartSessionHookServerOptions = Readonly<{
     requestedPort?: number;
     session?: SessionHookEventIdentity | (() => SessionHookEventIdentity | null);
     onSessionHook?: (providerSessionId: string, data: SessionHookPayload) => void | Promise<void>;
-    onPermissionHook?: (data: PermissionHookPayload) => unknown | Promise<unknown>;
+    onPermissionHook?: (data: PermissionHookPayload, options?: Readonly<{ signal?: AbortSignal }>) => unknown | Promise<unknown>;
     /**
      * Claude statusline payloads pushed by the statusline forwarder wrapper. The endpoint is
      * authenticated with the session hook secret, responds 200 BEFORE the consumer runs, and
@@ -487,6 +487,13 @@ async function handlePermissionHook(
 
     // The response timeout is created after the body is read so the per-tool resolver can see
     // the tool name. The read itself is bounded by the separate read timeout below.
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const onResponseClose = () => {
+        if (!res.writableEnded) abort();
+    };
+    req.once('aborted', abort);
+    res.once('close', onResponseClose);
     let responseTimeout: ReturnType<typeof setTimeout> | null = null;
     const armResponseTimeout = async (toolName: string | null): Promise<void> => {
         const effectiveTimeoutMs = await resolveEffectivePermissionRequestTimeoutMs(options, toolName);
@@ -494,6 +501,9 @@ async function handlePermissionHook(
         responseTimeout = setTimeout(() => {
             if (!res.headersSent) {
                 logger.debug('[sessionHookServer] Permission hook request timeout');
+                // Withdraw approval admission before retiring the native hook. Persistence of
+                // this observed retirement uses the permission owner's existing async path.
+                abort();
                 res.writeHead(408).end('timeout');
             }
         }, effectiveTimeoutMs);
@@ -542,7 +552,7 @@ async function handlePermissionHook(
         });
 
         const response = options.onPermissionHook
-            ? await options.onPermissionHook(data)
+            ? await options.onPermissionHook(data, { signal: controller.signal })
             : await resolveDefaultPermissionHookResponse(options, data);
 
         if (responseTimeout) clearTimeout(responseTimeout);
@@ -555,6 +565,9 @@ async function handlePermissionHook(
         if (!res.headersSent) {
             writeJson(res, await resolveDefaultPermissionHookResponse(options, data));
         }
+    } finally {
+        req.off('aborted', abort);
+        res.off('close', onResponseClose);
     }
 }
 

@@ -4,6 +4,7 @@ import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSna
 import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { AgentState } from '@/api/types';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
@@ -35,14 +36,22 @@ function createFixture(runPermissionMode?: string) {
     const sessionId = 'native-startup-question';
     const rpcHandlerManager = new ServerBoundPermissionRpcHandlerManager(sessionId);
     // AgentState persistence and authenticated RPC ingress are the system boundaries.
-    const session = { sessionId, rpcHandlerManager,
+    const persistence = {
         getAgentStateSnapshot: () => state, getMetadataSnapshot: () => null,
-        updateAgentState: (update: (previous: AgentState) => AgentState) => {
-            const apply = () => { state = update(state); };
-            return stateWriteBarrier ? stateWriteBarrier.then(apply) : apply();
+        updateAgentState: async (update: (previous: AgentState) => AgentState) => {
+            if (stateWriteBarrier) await stateWriteBarrier;
+            state = update(state);
         },
-    };
-    const permissions = new ProviderEnforcedPermissionHandler(session as unknown as ApiSessionClient, { logPrefix: '[StartupQuestion]' });
+        updateAgentStateRequestSettlement: async (update: (previous: AgentState) => AgentState) => {
+            await persistence.updateAgentState(update);
+        },
+    } satisfies Pick<ApiSessionClient, 'getAgentStateSnapshot' | 'getMetadataSnapshot'
+        | 'updateAgentState' | 'updateAgentStateRequestSettlement'>;
+    const session = createMutableApiSessionClientFixture({ sessionId, overrides: persistence });
+    vi.spyOn(session.rpcHandlerManager, 'registerHandler').mockImplementation(
+        rpcHandlerManager.registerHandler.bind(rpcHandlerManager),
+    );
+    const permissions = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[StartupQuestion]' });
     const occurrence = new AbortController();
     let witness: AgentInvocationTurnAdmissionWitness | null = null;
     const runScope = runPermissionMode ? createRunScopedExecutionPermissionHandler({

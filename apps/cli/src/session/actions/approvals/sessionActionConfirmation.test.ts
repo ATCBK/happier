@@ -19,6 +19,9 @@ function createSessionTransport() {
         updateAgentState: (update: (current: AgentState) => AgentState) => {
             state = update(state);
         },
+        updateAgentStateRequestSettlement: async (update: (current: AgentState) => AgentState) => {
+            state = update(state);
+        },
     };
     return { session, store: new AgentStateRequestStore({ session, logPrefix: '[confirmation-test]' }) };
 }

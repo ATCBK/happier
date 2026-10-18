@@ -142,6 +142,61 @@ async function cancellations(dir: string): Promise<unknown[]> {
 }
 
 describe('ACP permission cancellation ownership', () => {
+  it('keeps provider Stop independent of a failed permission write and records its failure by default', async () => {
+    await withTempDir('happier-acp-stop-permission-log-', async (dir) => {
+      const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_LOG_LEVEL', 'DEBUG', 'DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING']);
+      env.patch({ HAPPIER_HOME_DIR: dir, HAPPIER_LOG_LEVEL: undefined, DEBUG: undefined, DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING: undefined });
+      vi.resetModules();
+      const { logger } = await import('@/ui/logger');
+      const { AcpBackend: LoggedAcpBackend } = await import('../AcpBackend');
+      const { ProviderEnforcedPermissionHandler } = await import('@/agent/permissions/providerEnforced/handler');
+      const { createMutableApiSessionClientFixture } = await import('@/testkit/backends/sessionFixtures');
+      let failWrites = false;
+      const fixture = createMutableApiSessionClientFixture();
+      const updateAgentState = fixture.updateAgentState.bind(fixture);
+      // Session persistence is the boundary; policy, store and coordinator stay real.
+      const writer = vi.spyOn(fixture, 'updateAgentState').mockImplementation((updater) => {
+        if (failWrites) return Promise.reject(new Error('private-permission-write-payload'));
+        return updateAgentState(updater);
+      });
+      const handler = new ProviderEnforcedPermissionHandler(fixture, { logPrefix: '[ACP Stop test]' });
+      const backend = new LoggedAcpBackend({
+        agentName: 'test', cwd: dir, command: process.execPath,
+        args: [permissionAgent(dir, 'owned-session')],
+        permissionHandler: handler,
+        transportHandler: createAcpTestTransportHandler({ idleTimeoutMs: 50 }),
+      });
+      try {
+        const started = await backend.startSession();
+        await backend.sendPrompt(started.sessionId, 'permission');
+        const stopped = expect(backend.waitForResponseComplete()).rejects.toMatchObject({ name: 'AbortError' });
+        await expect.poll(() => fixture.getAgentStateSnapshot()?.requests?.['first-tool']).toBeDefined();
+        failWrites = true;
+        await backend.cancel(started.sessionId);
+        await stopped;
+        await expect.poll(() => cancellations(dir)).toEqual([{ sessionId: 'owned-session', promptCount: 1 }]);
+        await expect.poll(() => {
+          logger.flushSync();
+          return existsSync(logger.getLogPath()) ? readFileSync(logger.getLogPath(), 'utf8') : '';
+        }).toContain('permission_request_cancellation_persistence_failed');
+        const log = readFileSync(logger.getLogPath(), 'utf8');
+        const diagnostics = log.split('\n').filter((line) => line.includes('permission_request_cancellation_persistence_failed'))
+          .map((line) => JSON.parse(line.slice(line.indexOf('{'))));
+        expect(diagnostics).toContainEqual(expect.objectContaining({ errorName: 'Error' }));
+        expect(log).not.toContain('private-permission-write-payload');
+        expect(fixture.getAgentStateSnapshot()?.requests?.['first-tool']).toBeDefined();
+      } finally {
+        failWrites = false;
+        await handler.reset();
+        await backend.dispose();
+        writer.mockRestore();
+        await fixture.close();
+        logger.flushSync();
+        env.restore();
+      }
+    });
+  });
+
   it.each(['pre_prompt', 'decision'] as const)('records %s policy withdrawal at the default session log level', async (phase) => {
     await withTempDir('happier-acp-permission-log-', async (dir) => {
       const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_LOG_LEVEL', 'DEBUG', 'DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING']);

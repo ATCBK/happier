@@ -49,8 +49,10 @@ export type DeferredApiSessionTarget = Readonly<{
   ) => void | Promise<void>;
   updateMetadata: (updater: (metadata: Metadata) => Metadata) => void | Promise<void>;
   updateAgentState: (updater: (state: AgentState) => AgentState) => void | Promise<void>;
+  updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState) => Promise<void>;
   keepAlive: (thinking: boolean, mode: 'local' | 'remote') => void;
   getMetadataSnapshot: () => Metadata | null;
+  getAgentStateSnapshot: () => AgentState | null;
   fetchLatestUserPermissionIntentFromTranscript?: (
     opts?: { take?: number },
   ) => Promise<{ intent: import('@/api/types').PermissionMode; updatedAt: number } | null>;
@@ -431,6 +433,25 @@ export class DeferredApiSessionClient {
     return deferred.promise;
   }
 
+  updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+    const target = this.target;
+    if (target && !this.flushInFlight) return target.updateAgentStateRequestSettlement(updater);
+    const deferred = createDeferredPromise<void>();
+    const unavailable = () => deferred.reject(new Error('Request settlement unavailable before Session attachment'));
+    if (this.cancelled) {
+      unavailable();
+      return deferred.promise;
+    }
+    this.pushBufferedCall(async attached => {
+      await attached.updateAgentStateRequestSettlement(updater);
+      deferred.resolve();
+    }, { hint: 'updateAgentStateRequestSettlement' }, {
+      onDrop: unavailable,
+      onError: error => deferred.reject(error),
+    });
+    return deferred.promise;
+  }
+
   keepAlive(_thinking: boolean, _mode: 'local' | 'remote'): void {
     const target = this.target;
     if (target && !this.flushInFlight) {
@@ -445,6 +466,10 @@ export class DeferredApiSessionClient {
     const target = this.target;
     if (!target) return null;
     return target.getMetadataSnapshot();
+  }
+
+  getAgentStateSnapshot(): AgentState | null {
+    return this.target?.getAgentStateSnapshot() ?? null;
   }
 
   async fetchLatestUserPermissionIntentFromTranscript(

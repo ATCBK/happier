@@ -212,6 +212,9 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
         updateAgentState(updater: (current: AgentState) => AgentState) {
             agentState = updater(agentState);
         },
+        async updateAgentStateRequestSettlement(updater: (current: AgentState) => AgentState) {
+            agentState = updater(agentState);
+        },
         async fetchRecentTranscriptTextItemsForAcpImport() {
             return [];
         },

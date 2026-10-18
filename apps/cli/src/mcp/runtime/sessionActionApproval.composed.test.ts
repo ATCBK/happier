@@ -24,7 +24,10 @@ it.each(['approve', 'deny', 'cancel', 'foreign', 'pending-deny'] as const)('sett
   const sessionId = 'actionwait-session';
   let state: AgentState = { requests: {}, completedRequests: {} };
   const session = { sessionId, getAgentStateSnapshot: () => state,
-    updateAgentState: (update: (current: AgentState) => AgentState) => { state = update(state); } };
+    updateAgentState: (update: (current: AgentState) => AgentState) => { state = update(state); },
+    updateAgentStateRequestSettlement: async (update: (current: AgentState) => AgentState) => {
+      session.updateAgentState(update);
+    } };
   const store = new AgentStateRequestStore({ session, logPrefix: '[actionwait]' });
   const lifetime = new AbortController();
   const adapter = createSessionActionConfirmationAdapter({ sessionId, store, sessionSignal: lifetime.signal,

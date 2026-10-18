@@ -487,7 +487,7 @@ export function createSessionHooksService(
                         }
                         : undefined,
                     onPermissionHook: request.onPermissionHook
-                        ? async (data: PermissionHookPayload) => await request.onPermissionHook?.(data)
+                        ? async (data: PermissionHookPayload, options?: Readonly<{ signal?: AbortSignal }>) => await request.onPermissionHook?.(data, options)
                         : undefined,
                     onStatuslineUpdate: request.onStatuslineUpdate
                         ? async (data: StatuslineHookPayload) => await request.onStatuslineUpdate?.(data)

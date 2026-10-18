@@ -8,8 +8,9 @@ import type { QueuedSessionClientDurableMutation } from './sessionClientDurableM
 
 export function isAuthoritativeSessionClientDurableMutationKind(
     kind: string,
-): kind is 'session_turn_mutation' | 'session_end' | 'voice_agent_transcript_turn' {
-    return kind === 'session_turn_mutation'
+): kind is 'agent_state_request_settlement' | 'session_turn_mutation' | 'session_end' | 'voice_agent_transcript_turn' {
+    return kind === 'agent_state_request_settlement'
+        || kind === 'session_turn_mutation'
         || kind === 'session_end'
         || kind === 'voice_agent_transcript_turn';
 }

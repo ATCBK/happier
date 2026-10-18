@@ -60,6 +60,7 @@ function createPlainSession(overrides: Partial<SessionClientPort> = {}): Session
     },
     updateMetadata: vi.fn(),
     updateAgentState: vi.fn(),
+    updateAgentStateRequestSettlement: vi.fn(async () => undefined),
     keepAlive: vi.fn(),
     getMetadataSnapshot: () => null,
     hasUserMessageLocalConsumption: () => false,

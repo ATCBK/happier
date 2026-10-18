@@ -1924,6 +1924,48 @@ recorded in the default file log and can be retried by a subsequent flush.
 Before local admission succeeds, that retained text is process-local. Once admitted,
 the existing session outbox owns reconnect delivery and restart recovery.
 
+## Permission cancellation recovery (development)
+
+The permission coordinator distinguishes a cancellation that still precedes
+provider or waiter effects from an already observed local retirement. A reset or
+scope cancellation with live coordinator entries keeps its acknowledged-write
+contract: a failed write leaves the request live and does not defer cancellation.
+An abort after the last local waiter has detached, or plugin retirement with no
+local entry, may retain exact unclaimed request cancellations in the existing
+runtime mutation journal before attempting delivery. The caller still succeeds
+only after acknowledgement; a failed attempt is reported while the journal
+retains the cancellation for later delivery and same-Session reconstruction.
+
+The journal replays exact request occurrences through the canonical owner
+metadata tuple CAS, preserving newer requests, claims and neighboring background
+work. When no request remains, the first acknowledged terminal completion wins
+over later stale replay. Pre-effect approvals, policy closures, response targets and already-applied
+native choices keep their existing acknowledged permission lifecycles. Native
+choice identity and receipt recovery remain owned by the bound request store.
+No additional native-tool event or historical transcript replay is introduced.
+
+New private intents use the device-local secret storage owner with a distinct
+`device_local_v1` content format, including on keyless plain Accounts. The reader
+also accepts the 0.2 predecessor's explicit `encrypted` format using retained
+credentials bound to the same owner token, and its `installation_encrypted_v1`
+format using the original installation identity. The latter derives the key
+with the existing KeyTree owner and the exact predecessor purpose, journal
+profile, bound JWT Account id and Session id. A same-Account token refresh keeps
+that scope. Recovery reads the existing identity without creating a replacement.
+Missing or changed predecessor material leaves a logged, retryable journal entry;
+it does not invent Account keys or discard the pending recovery intent. This is
+local runtime recovery. This change does not add unattended daemon takeover.
+
+Fast startup keeps the same owner: the deferred Session adapter forwards the
+acknowledged Agent state snapshot and queues retirement behind request publication
+until the real client attaches. It cannot report a dropped retirement as saved.
+
+An authenticated, decoded settlement that violates the intent schema is retained
+as encrypted bytes in the existing permanent dead-letter path, allowing later
+mutations to proceed. The default file log records only Session and mutation
+identity. Missing credentials and ciphertext that cannot be decrypted remain
+retryable, so restoring the correct bound-owner key can recover them.
+
 ## CLI entry flow
 
 ```mermaid

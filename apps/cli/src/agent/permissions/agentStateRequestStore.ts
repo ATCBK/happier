@@ -109,6 +109,8 @@ export type AgentStateResponseTargetDispatch = Readonly<{
     completedRequest: Readonly<Record<string, unknown>>;
 }>;
 
+export type AgentStateRequestCancellation = Pick<AgentStateResponseTargetDispatch, 'requestId' | 'completedRequest'>;
+
 /**
  * A target handler may explicitly report an unsuccessful delivery. Legacy
  * handlers that return void remain compatible and are treated as having
@@ -209,6 +211,7 @@ export type AgentStateOutstandingRequest = Readonly<{
 type SessionLike = Readonly<{
     sessionId: string;
     updateAgentState: (updater: (state: AgentState) => AgentState) => Promise<void> | void;
+    updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState) => Promise<void>;
     getAgentStateSnapshot?: () => AgentState | null | undefined;
     getMetadataSnapshot?: () => unknown;
     getAgentStateResponseTargetDispatcher?: () => AgentStateResponseTargetDispatcher;
@@ -250,11 +253,16 @@ type AgentStateRequestPublication = Readonly<{
     updateState?: (state: AgentState) => AgentState;
 }>;
 
-function createSessionPersistenceTarget(session: SessionLike): AgentStateRequestPersistenceTarget {
+type AgentStateRequestPersistenceOwner = AgentStateRequestPersistenceTarget & Readonly<{
+    settleRequests: (updater: (state: AgentState) => AgentState) => Promise<void>;
+}>;
+
+function createSessionPersistenceTarget(session: SessionLike): AgentStateRequestPersistenceOwner {
     return Object.freeze({
         scopeId: session.sessionId,
         readState: () => session.getAgentStateSnapshot?.() ?? null,
         updateState: (updater) => session.updateAgentState(updater),
+        settleRequests: (updater) => session.updateAgentStateRequestSettlement(updater),
         ...(session.getAgentStateResponseTargetDispatcher
             ? { getResponseTargetDispatcher: () => session.getAgentStateResponseTargetDispatcher!() }
             : {}),
@@ -279,6 +287,7 @@ export type AgentStateRequestCompletion = Readonly<{
     isCurrent?: () => boolean;
     fallback?: Readonly<{
         toolName: string;
+        mcpTool?: ResolvedMcpToolIdentityV1;
         toolInput: unknown;
         createdAt: number;
         turnId?: string;
@@ -293,6 +302,8 @@ export type AgentStateRequestCompletion = Readonly<{
     updateState?: (state: AgentState) => AgentState;
     /** The external native choice has already been applied successfully. */
     applicationAcknowledged?: AgentStateRequestApplication;
+    /** The last local waiter is already detached, so replay cannot authorize an effect. */
+    observedRetirement?: true;
 }>;
 
 export type AppliedRequestCompletion = Readonly<{
@@ -322,7 +333,7 @@ function pendingIdentity(entry: unknown): unknown {
 export class AgentStateRequestStore {
     private appliedCompletionOwner: AgentStateRequestStore = this;
     private appliedCompletions = new Map<string, RetainedAppliedCompletion>();
-    private target: AgentStateRequestPersistenceTarget;
+    private target: AgentStateRequestPersistenceOwner;
     private session: SessionLike | null;
     private readonly logPrefix: string;
     private readonly getPushSender: () => PermissionRequestPushSender | null;
@@ -349,7 +360,9 @@ export class AgentStateRequestStore {
             throw new Error('AgentStateRequestStore requires exactly one persistence target');
         }
         this.session = params.session ?? null;
-        this.target = params.target ?? createSessionPersistenceTarget(params.session!);
+        this.target = params.target
+            ? { ...params.target, settleRequests: async updater => { await params.target!.updateState(updater); } }
+            : createSessionPersistenceTarget(params.session!);
         this.ownsResponseTargetDispatcher = !this.target.getResponseTargetDispatcher;
         this.responseTargetDispatcher = this.target.getResponseTargetDispatcher?.() ?? new AgentStateResponseTargetDispatcher();
         this.logPrefix = params.logPrefix;
@@ -810,6 +823,14 @@ export class AgentStateRequestStore {
         }
         const appliedCompletion = params.applicationAcknowledged
             ? this.appliedCompletions.get(params.requestId) : undefined;
+        const current = clonePlainObjectToNullProto(this.target.readState()?.requests?.[params.requestId]);
+        // Approvals retain the incumbent pre-effect ACK contract. The journal is
+        // only for an already-decided cancellation without another live owner.
+        const durableRetirement = params.observedRetirement === true && params.status === 'canceled' && !params.applicationAcknowledged
+            && params.isCurrent === undefined && params.updateState === undefined
+            && !readResponseTarget(params.fallback?.responseTarget)
+            && !readResponseTarget(params.extraCompletedFields?.responseTarget)
+            && this.canJournalRequestRetirement(params.requestId, current);
         await this.updateAgentStateWithResponseDispatch((currentState) => {
             if (params.applicationAcknowledged && this.appliedCompletions.has(params.requestId)) {
                 const state = this.applyAppliedCompletions(currentState);
@@ -819,7 +840,7 @@ export class AgentStateRequestStore {
             const next = this.buildRequestCompletion(currentState, params, completedRequestIds);
             didCompleteRequest = next.didCompleteRequest === true;
             return next;
-        });
+        }, durableRetirement);
         this.confirmAppliedCompletions();
 
         if (appliedCompletion) return await appliedCompletion.acknowledgement;
@@ -841,6 +862,14 @@ export class AgentStateRequestStore {
             return { state: currentState };
         }
         const existingEntry = clonePlainObjectToNullProto(existing);
+        if (params.observedRetirement && existingEntry) {
+            const expected = params.fallback;
+            // Observed retirement belongs to the detached local occurrence,
+            // never a replacement that reused its request id while awaiting IO.
+            if (!expected || !isSameAgentStateRequestOccurrence(existingEntry, {
+                ...expected, tool: expected.toolName, arguments: expected.toolInput,
+            })) return { state: currentState };
+        }
         if (params.isCurrent && !params.isCurrent()) {
             return { state: currentState };
         }
@@ -1059,17 +1088,18 @@ export class AgentStateRequestStore {
         reason: string;
         decision?: string;
         requestIds: readonly string[];
-    }>): Promise<void> {
-        await this.cancelRequests(params);
+    }>): Promise<readonly AgentStateRequestCancellation[]> {
+        return await this.cancelRequests(params);
     }
 
     async cancelRequestsByOwner(params: Readonly<{
         owner: PermissionRequestOwner;
+        observedRetirement?: true;
         reason: string;
         decision?: string;
         requestIds: readonly string[];
-    }>): Promise<void> {
-        await this.cancelRequests({
+    }>): Promise<readonly AgentStateRequestCancellation[]> {
+        return await this.cancelRequests({
             ...params,
             pluginId: params.owner.pluginId,
         });
@@ -1091,82 +1121,97 @@ export class AgentStateRequestStore {
         requestIds: readonly string[];
         pluginId?: string;
         source?: string;
-    }>): Promise<void> {
-        const completedRequestIds = new Set<string>();
-        await this.updateAgentStateAndWait(
-            (currentState) => {
-                const pendingRequests = cloneStringKeyedRecordToNullProto(currentState.requests);
-                const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
-                const now = Date.now();
+        observedRetirement?: true;
+    }>): Promise<readonly AgentStateRequestCancellation[]> {
+        const completedRequestsById = new Map<string, AgentStateRequestCancellation>();
+        // Classify each selected current row, not an unrelated Session claim.
+        // Both persistence owners preserve ACK-before-return; only ordinary
+        // cancellations additionally retain a private restart recovery intent.
+        for (const durableRetirement of params.observedRetirement ? [true, false] : [false]) {
+            const persist = durableRetirement ? this.target.settleRequests : this.target.updateState;
+            const selectedRequests = new Map<string, AgentStateRequestCancellation>();
+            await persist(
+                (currentState) => {
+                    // A CAS retry replaces the discarded attempt's selection.
+                    selectedRequests.clear();
+                    const pendingRequests = cloneStringKeyedRecordToNullProto(currentState.requests);
+                    const completedRequests = cloneStringKeyedRecordToNullProto(currentState.completedRequests);
+                    const now = Date.now();
 
-                for (const [id, request] of Object.entries(pendingRequests)) {
-                    const entry = clonePlainObjectToNullProto(request) ?? Object.create(null);
-                    if (params.source !== undefined && entry.source !== params.source) continue;
-                    if (
-                        params.pluginId
-                        && !isPermissionRequestOwnedByPlugin(
-                            normalizePermissionRequestOwner(entry.owner, 'stored'),
-                            params.pluginId,
-                        )
-                    ) {
-                        continue;
+                    for (const [id, request] of Object.entries(pendingRequests)) {
+                        const entry = clonePlainObjectToNullProto(request) ?? Object.create(null);
+                        if (params.observedRetirement && this.canJournalRequestRetirement(id, entry) !== durableRetirement) continue;
+                        if (params.source !== undefined && entry.source !== params.source) continue;
+                        if (
+                            params.pluginId
+                            && !isPermissionRequestOwnedByPlugin(
+                                normalizePermissionRequestOwner(entry.owner, 'stored'),
+                                params.pluginId,
+                            )
+                        ) {
+                            continue;
+                        }
+                        delete pendingRequests[id];
+                        entry.completedAt = now;
+                        entry.status = 'canceled';
+                        entry.reason = params.reason;
+                        if (typeof params.decision === 'string') {
+                            entry.decision = params.decision;
+                        }
+                        removePermissionResponseClaim(entry);
+                        completedRequests[id] = entry as AgentStateCompletedEntry;
+                        selectedRequests.set(id, { requestId: id, completedRequest: entry });
                     }
-                    delete pendingRequests[id];
-                    entry.completedAt = now;
-                    entry.status = 'canceled';
-                    entry.reason = params.reason;
-                    if (typeof params.decision === 'string') {
-                        entry.decision = params.decision;
-                    }
-                    removePermissionResponseClaim(entry);
-                    completedRequests[id] = entry as AgentStateCompletedEntry;
-                    completedRequestIds.add(id);
-                }
 
-                // A caller includes an id here only when it admitted lifecycle
-                // cancellation before an in-flight ordinary completion
-                // persisted. A cancellation already written above (or by an
-                // earlier repeat) is the sole durable terminal result.
-                for (const id of params.requestIds) {
-                    if (completedRequestIds.has(id)) continue;
-                    const completed = completedRequests[id];
-                    if (!completed) continue;
-                    const entry = clonePlainObjectToNullProto(completed) ?? Object.create(null);
-                    if (params.source !== undefined && entry.source !== params.source) continue;
-                    if (entry.status === 'canceled') continue;
-                    if (
-                        params.pluginId
-                        && !isPermissionRequestOwnedByPlugin(
-                            normalizePermissionRequestOwner(entry.owner, 'stored'),
-                            params.pluginId,
-                        )
-                    ) {
-                        continue;
+                    // A caller includes an id here only when it admitted lifecycle
+                    // cancellation before an in-flight ordinary completion
+                    // persisted. A cancellation already written above (or by an
+                    // earlier repeat) is the sole durable terminal result.
+                    for (const id of params.requestIds) {
+                        if (selectedRequests.has(id) || completedRequestsById.has(id)) continue;
+                        const completed = completedRequests[id];
+                        if (!completed) continue;
+                        const entry = clonePlainObjectToNullProto(completed) ?? Object.create(null);
+                        if (params.observedRetirement && this.canJournalRequestRetirement(id, entry) !== durableRetirement) continue;
+                        if (params.source !== undefined && entry.source !== params.source) continue;
+                        if (entry.status === 'canceled') continue;
+                        if (
+                            params.pluginId
+                            && !isPermissionRequestOwnedByPlugin(
+                                normalizePermissionRequestOwner(entry.owner, 'stored'),
+                                params.pluginId,
+                            )
+                        ) {
+                            continue;
+                        }
+                        entry.completedAt = now;
+                        entry.status = 'canceled';
+                        entry.reason = params.reason;
+                        if (typeof params.decision === 'string') {
+                            entry.decision = params.decision;
+                        } else {
+                            delete entry.decision;
+                        }
+                        removePermissionResponseClaim(entry);
+                        completedRequests[id] = entry as AgentStateCompletedEntry;
+                        selectedRequests.set(id, { requestId: id, completedRequest: entry });
                     }
-                    entry.completedAt = now;
-                    entry.status = 'canceled';
-                    entry.reason = params.reason;
-                    if (typeof params.decision === 'string') {
-                        entry.decision = params.decision;
-                    } else {
-                        delete entry.decision;
-                    }
-                    removePermissionResponseClaim(entry);
-                    completedRequests[id] = entry as AgentStateCompletedEntry;
-                    completedRequestIds.add(id);
-                }
 
-                return {
-                    ...currentState,
-                    requests: pendingRequests,
-                    completedRequests,
-                };
-            },
-        );
-        for (const requestId of completedRequestIds) {
+                    return {
+                        ...currentState,
+                        requests: pendingRequests,
+                        completedRequests,
+                    };
+                },
+            );
+            for (const [id, subject] of selectedRequests) completedRequestsById.set(id, subject);
+            this.confirmAppliedCompletions();
+        }
+        for (const requestId of completedRequestsById.keys()) {
             this.markPermissionRequestCompletedBestEffort(requestId);
             this.dispatchResponseTargetBestEffort(this.readCompletedResponseTarget(requestId));
         }
+        return [...completedRequestsById.values()];
     }
 
     dispose(): void {
@@ -1242,12 +1287,20 @@ export class AgentStateRequestStore {
      * Terminal request mutations are not best-effort: callers must retain the
      * live request and avoid effects/waiter resolution when this write fails.
      */
+    private canJournalRequestRetirement(requestId: string, entry: Record<string, unknown> | null): boolean {
+        return !this.appliedCompletions.has(requestId)
+            && !(entry && hasOpaquePermissionResponseClaim(entry))
+            && !readResponseTarget(entry?.responseTarget);
+    }
+
     private async updateAgentStateWithResponseDispatch(
         updater: (state: AgentState) => AgentStateUpdateWithResponseDispatch,
+        durableRetirement = false,
     ): Promise<void> {
         let responseDispatch: AgentStateResponseTargetDispatch | null = null;
         let didRunUpdater = false;
-        const result = this.target.updateState((currentState) => {
+        const persist = durableRetirement ? this.target.settleRequests : this.target.updateState;
+        const result = persist((currentState) => {
             const next = updater(currentState);
             responseDispatch = next.responseDispatch ?? null;
             didRunUpdater = true;
@@ -1350,6 +1403,22 @@ type AgentStateUpdateWithResponseDispatch = Readonly<{
     state: AgentState;
     responseDispatch?: AgentStateResponseTargetDispatch | null;
 }>;
+
+/** Compare occurrence custody across pending and completed request projections. */
+export function isSameAgentStateRequestOccurrence(left: unknown, right: unknown): boolean {
+    const first = clonePlainObjectToNullProto(left);
+    const second = clonePlainObjectToNullProto(right);
+    if (!first || !second) return false;
+    const identity = (record: Record<string, unknown>) => ({
+        tool: record.tool, arguments: record.arguments, createdAt: record.createdAt,
+        kind: typeof record.kind === 'string' ? record.kind
+            : resolveAgentRequestKind(typeof record.tool === 'string' ? record.tool : ''),
+        ...readAgentStateRequestMetadata(record),
+    });
+    // Completion timestamps, decisions and delivery markers are not occurrence
+    // identity. Native-effect application retains its stronger pendingIdentity fence.
+    return deepEqual(identity(first), identity(second));
+}
 
 function readAgentStateRequestMetadata(entry: unknown): AgentStateRequestMetadata {
     const record = clonePlainObjectToNullProto(entry);

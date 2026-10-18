@@ -1308,7 +1308,15 @@ also rejected rather than using
 another Account's model-catalog evidence. ACP, daemon-proxy and direct-terminal
 variants without equivalent enforcement do not claim confinement.
 
-Whole-Session permission reset reaches the existing Session request store even when the current coordinator has no local waiters, including after handler replacement. The store cancels pending requests and delivers their response targets. Cancellation waits for in-flight coordinator completion persistence before writing the terminal result; plugin-scoped cancellation retains its owner filter and performs no write for an empty local scope.
+Whole-Session permission reset reaches the existing Session request store even when the current coordinator has no local waiters, including after handler replacement. The store cancels pending requests and delivers their response targets. Cancellation waits for in-flight coordinator completion persistence before writing the terminal result; plugin-scoped cancellation retains its owner filter and performs no write when neither local nor persisted requests match. The store returns the exact occurrences selected by its committed write, so the coordinator also rejects matching provider waiters published while an older completion was draining, without retiring a replacement occurrence.
+
+Cancellation removes only the cached decisions it captured before persistence, so a newer decision created while an older scope stops remains available. A cancellation that starts before a queued native decision applies prevents that new application; recovery of an already-applied native choice retains its existing receipt boundary.
+
+ACP Stop cancels the provider independently of permission-state persistence. A failed permission cancellation retains the request for retry and emits the default file-log event `permission_request_cancellation_persistence_failed` with the error type, without request content or the error payload.
+
+Session rebinding republishes the coordinator's admitted request context, including its original creation time, source, turn and native MCP identity. An offline client without a readable snapshot keeps that identity. MCP catalog preparation has not yet admitted a permission request and stays unpublished across rebinding until preparation finishes.
+
+The native permission-hook HTTP owner aborts its callback signal before sending its finite timeout response, and also aborts on a disconnected response. Claude's SDK and unified terminal callbacks forward that signal through the existing permission engine. The final unclaimed waiter withdraws response admission synchronously; the existing observed-retirement path then persists the exact cancellation asynchronously. The HTTP deadline does not await an arbitrary callback or journal write. A failed write retains the exact request for lifecycle retry and keeps it unavailable to late answers. The default file log records `permission_request_cancellation_persistence_failed` with the error type, without request content or the error payload.
 
 In development source, a `message-delta` can supply the same stable `messageId` as its
 `transcript-message-committed` event. The host stream bridge uses that identity for live and

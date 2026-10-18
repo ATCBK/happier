@@ -2028,7 +2028,10 @@ export class AcpBackend implements CatalogAcpBackend {
     if (this.permissionFlushTurnGeneration === this.turnGeneration) return;
     this.permissionFlushTurnGeneration = this.turnGeneration;
     void abortPendingAcpPermissionRequests(this.options.permissionHandler, reason, (error) => {
-      logger.debug('[AcpBackend] Failed to abort pending permission requests:', error);
+      logger.infoFile('[AcpBackend] Pending permission cancellation persistence failed', {
+        event: 'permission_request_cancellation_persistence_failed',
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
     });
   }
 

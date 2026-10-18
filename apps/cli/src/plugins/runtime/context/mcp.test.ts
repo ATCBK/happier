@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { InteractionsService } from '@happier-dev/plugin-sdk/interactions';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import type { AgentState } from '@/api/types';
 import {
     ServerBoundPermissionRpcHandlerManager,
 } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
@@ -22,6 +23,10 @@ class FakePermissionSession {
     updateAgentState(updater: any) {
         this.agentState = updater(this.agentState);
         return this.agentState;
+    }
+
+    async updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+        this.updateAgentState(updater);
     }
 
     getMetadataSnapshot() {

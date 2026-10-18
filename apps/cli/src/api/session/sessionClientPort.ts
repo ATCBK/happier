@@ -97,6 +97,7 @@ export interface SessionClientPort {
   ): Promise<CommittedTranscriptLocalIdBaseline>;
 
   updateMetadata(updater: (metadata: Metadata) => Metadata): void | Promise<void>;
+  updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void>;
   updateAgentState(updater: (state: AgentState) => AgentState): void | Promise<void>;
   /** Runtime-owned availability of the incumbent rich Activity alert sender. */
   setOwnerActivityDelivery?(delivery: 'rich_sender' | 'home_required'): void;

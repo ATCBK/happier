@@ -1017,7 +1017,7 @@ describe('startSessionHookServer', () => {
       hook_event_name: 'PreToolUse',
       tool_name: 'AskUserQuestion',
       tool_use_id: 'toolu_ask_pre_forwarder_1',
-    }));
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(JSON.parse(result.stdout)).toMatchObject({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

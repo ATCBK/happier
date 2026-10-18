@@ -1,4 +1,5 @@
 import { deepEqual } from '@/utils/deterministicJson';
+import { logger } from '@/ui/logger';
 import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import type {
     AgentStateOutstandingRequest,
@@ -7,11 +8,13 @@ import type {
     AppliedRequestCompletion,
     AgentStateRequestResponseTarget,
     AgentStateResponseTargetDispatch,
+    AgentStateRequestCancellation,
     PermissionResponseClaim,
     PermissionResponseClaimAcquisition,
     PermissionResponseClaimRejoin,
     PermissionResponseClaimSettlement,
 } from './agentStateRequestStore';
+import { isSameAgentStateRequestOccurrence } from './agentStateRequestStore';
 import {
     isPermissionRequestOwnedByPlugin,
     isPermissionRequestOwnedByPluginTurn,
@@ -44,6 +47,7 @@ export type PermissionRequestCoordinatorContext = Readonly<{
     toolName: string;
     toolInput: unknown;
     createdAt: number;
+    mcpTool?: ResolvedMcpToolIdentityV1;
     turnId?: string;
     kind?: string;
     source?: string;
@@ -104,8 +108,10 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         extraCompletedFields?: Readonly<Record<string, unknown>> | null;
         isCurrent?: () => boolean;
         applicationAcknowledged?: AgentStateRequestApplication;
+        observedRetirement?: true;
         fallback?: Readonly<{
             toolName: string;
+            mcpTool?: ResolvedMcpToolIdentityV1;
             toolInput: unknown;
             createdAt: number;
             turnId?: string;
@@ -122,13 +128,14 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         reason: string;
         decision?: string;
         requestIds: readonly string[];
-    }>): void | Promise<void>;
+    }>): Promise<readonly AgentStateRequestCancellation[]>;
     cancelRequestsByOwner?(params: Readonly<{
         owner: PermissionRequestOwner;
+        observedRetirement?: true;
         reason: string;
         decision?: string;
         requestIds: readonly string[];
-    }>): void | Promise<void>;
+    }>): Promise<readonly AgentStateRequestCancellation[]>;
     hasOutstandingRequest(requestId: string): boolean;
     hasPermissionResponseClaim?(requestId: string): boolean;
     readOutstandingRequest(requestId: string): AgentStateOutstandingRequest | null;
@@ -342,6 +349,7 @@ export class PermissionRequestCoordinator<TResult> {
                 toolName: entry.toolName,
                 toolInput: entry.toolInput,
                 createdAt: entry.createdAt,
+                ...(entry.mcpTool ? { mcpTool: entry.mcpTool } : {}),
                 ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
                 ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
                 ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
@@ -366,6 +374,7 @@ export class PermissionRequestCoordinator<TResult> {
             toolName: outstanding.toolName,
             toolInput: outstanding.toolInput,
             createdAt: outstanding.createdAt,
+            ...(outstanding.mcpTool ? { mcpTool: outstanding.mcpTool } : {}),
             ...(typeof outstanding.turnId === 'string' ? { turnId: outstanding.turnId } : {}),
             ...(typeof outstanding.kind === 'string' ? { kind: outstanding.kind } : {}),
             ...(typeof outstanding.source === 'string' ? { source: outstanding.source } : {}),
@@ -483,6 +492,7 @@ export class PermissionRequestCoordinator<TResult> {
                     await this.store.recoverAppliedCompletions?.();
                     return await retained.acknowledgement;
                 }
+                if (entry.cancelReason) return false;
                 const application = params.acknowledgeDecisionApplication
                     ? this.store.captureRequestApplication?.(entry.requestId) : null;
                 if (params.acknowledgeDecisionApplication && this.store.captureRequestApplication && !application) return false;
@@ -638,6 +648,7 @@ export class PermissionRequestCoordinator<TResult> {
 
     async cancelRequests(requestIds: readonly string[], reason: string): Promise<void> {
         const uniqueRequestIds = [...new Set(requestIds)];
+        const cachedDecisions = uniqueRequestIds.map((requestId) => [requestId, this.cachedDecisions.get(requestId)] as const);
         const entries = uniqueRequestIds
             .map((requestId) => this.pendingRequests.get(requestId) ?? null)
             .filter((entry): entry is PendingPermissionRequest<TResult> => entry !== null);
@@ -673,11 +684,14 @@ export class PermissionRequestCoordinator<TResult> {
                 }));
             },
         });
-        for (const requestId of uniqueRequestIds) this.cachedDecisions.delete(requestId);
+        for (const [requestId, cached] of cachedDecisions) {
+            if (cached && this.cachedDecisions.get(requestId) === cached) this.cachedDecisions.delete(requestId);
+        }
     }
 
     async cancelAll(reason: string): Promise<void> {
         const entries = [...this.pendingRequests.values()];
+        const cachedDecisions = [...this.cachedDecisions.entries()];
         // The Session store may hold requests without coordinator-local waiters.
         await this.cancelEntries({
             entries,
@@ -688,7 +702,9 @@ export class PermissionRequestCoordinator<TResult> {
                 requestIds,
             }),
         });
-        this.cachedDecisions.clear();
+        for (const [requestId, cached] of cachedDecisions) {
+            if (this.cachedDecisions.get(requestId) === cached) this.cachedDecisions.delete(requestId);
+        }
     }
 
     async cancelByPluginTurn(pluginId: string, turnId: string, reason: string): Promise<void> {
@@ -706,7 +722,9 @@ export class PermissionRequestCoordinator<TResult> {
         const ownedEntries = [...this.pendingRequests.values()].filter(
             (entry) => isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId),
         );
-        if (ownedEntries.length > 0) {
+        if (ownedEntries.length > 0 || this.store.listOutstandingRequests().some(
+            entry => isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId),
+        )) {
             await this.cancelEntries({
                 entries: ownedEntries,
                 reason,
@@ -715,22 +733,19 @@ export class PermissionRequestCoordinator<TResult> {
                     reason,
                     decision: 'abort',
                     requestIds,
+                    ...(ownedEntries.length === 0 ? { observedRetirement: true } : {}),
                 }),
             });
         }
 
-        for (const [requestId, cached] of [...this.cachedDecisions.entries()]) {
-            if (isPermissionRequestOwnedByPlugin(cached.owner, normalizedPluginId)) {
-                this.cachedDecisions.delete(requestId);
-            }
-        }
     }
 
     private async cancelEntries(params: Readonly<{
         entries: readonly PendingPermissionRequest<TResult>[];
         reason: string;
-        persist: (requestIds: readonly string[]) => Promise<void> | void;
+        persist: (requestIds: readonly string[]) => Promise<readonly AgentStateRequestCancellation[] | void>;
     }>): Promise<void> {
+        const entriesToRetire = new Set(params.entries);
         const markedEntries = params.entries.filter(
             (entry) => !entry.cancelReason,
         );
@@ -747,7 +762,17 @@ export class PermissionRequestCoordinator<TResult> {
                 const failure = outcomes.find((outcome) => outcome.status === 'rejected');
                 if (failure && failure.status === 'rejected') throw failure.reason;
             }
-            await params.persist(markedEntries.map((entry) => entry.requestId));
+            const canceled = await params.persist(markedEntries.map((entry) => entry.requestId));
+            // Whole-Session/plugin selection belongs to the store. It may have
+            // selected a request published while an older completion drained.
+            for (const subject of canceled ?? []) {
+                const entry = this.pendingRequests.get(subject.requestId);
+                if (entry && isSameAgentStateRequestOccurrence(subject.completedRequest, {
+                    ...entry,
+                    tool: entry.toolName,
+                    arguments: entry.toolInput,
+                })) entriesToRetire.add(entry);
+            }
         } catch (error) {
             for (const entry of markedEntries) {
                 if (
@@ -760,7 +785,7 @@ export class PermissionRequestCoordinator<TResult> {
             throw error;
         }
 
-        for (const entry of params.entries) {
+        for (const entry of entriesToRetire) {
             if (this.pendingRequests.get(entry.requestId) !== entry) continue;
             if (this.store.hasOutstandingRequest(entry.requestId)) {
                 if (entry.cancelReason === params.reason) entry.cancelReason = null;
@@ -845,10 +870,12 @@ export class PermissionRequestCoordinator<TResult> {
         const cancellationPersistence = Promise.resolve(this.store.completeRequest({
             requestId: entry.requestId,
             status: 'canceled',
+            observedRetirement: true,
             decision: 'abort',
             reason: error.message,
             fallback: {
                 toolName: entry.toolName,
+                ...(entry.mcpTool ? { mcpTool: entry.mcpTool } : {}),
                 toolInput: entry.toolInput,
                 createdAt: entry.createdAt,
                 ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
@@ -887,6 +914,10 @@ export class PermissionRequestCoordinator<TResult> {
                 if (this.pendingRequests.get(entry.requestId) === entry) {
                     entry.status = 'detached';
                 }
+                logger.infoFile('[Permissions] Final waiter cancellation persistence failed', {
+                    event: 'permission_request_cancellation_persistence_failed',
+                    errorName: persistenceError instanceof Error ? persistenceError.name : typeof persistenceError,
+                });
                 waiter.reject(persistenceError instanceof Error ? persistenceError : error);
             },
         );
@@ -976,6 +1007,7 @@ function createPendingRequestFromOutstanding<TResult>(
     return {
         requestId: outstanding.requestId,
         toolName: outstanding.toolName,
+        ...(outstanding.mcpTool ? { mcpTool: outstanding.mcpTool } : {}),
         toolInput: outstanding.toolInput,
         createdAt: outstanding.createdAt,
         lifetime,

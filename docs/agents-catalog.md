@@ -834,6 +834,10 @@ input. This preserves real tool interception changes and permission updates whil
 avoiding Claude's rewrite-specific rule recheck for an unchanged approval.
 `PreToolUse` continues to carry interaction answers in its input. See the
 [Claude hook decision contract](https://code.claude.com/docs/en/hooks#permissionrequest-decision-control).
+Both runtimes also forward the host hook's cancellation signal to the same
+permission engine when the HTTP hook expires or disconnects. The
+[runtime cancellation owner](runtime-core.md) keeps finite transport deadlines
+and exact request retirement separate.
 
 ### 4) App agents catalog: `apps/ui/sources/agents/catalog/catalog.ts`
 

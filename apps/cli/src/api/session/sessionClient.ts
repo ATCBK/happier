@@ -1,7 +1,12 @@
 import { logger } from '@/ui/logger'
+import { decodeBase64, decrypt } from '@/api/encryption';
+import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
+import { AgentStateRequestSettlementSchema, applyAgentStateRequestSettlement, buildAgentStateRequestSettlement } from './agentStateRequestSettlement';
 import { registerPluginCatalogSignal } from './client/registerPluginCatalogSignal';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { deriveKey } from '@/utils/deriveKey';
 import { createExternalActionAuthorizedRequestHeaders, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { randomUUID } from 'node:crypto'
 import {
@@ -571,6 +576,7 @@ export class ApiSessionClient extends EventEmitter {
     private readonly executionRunActivityListeners = new Set<(activeCount: number) => void>();
     private executionRunWorkerUpdateSource: Pick<import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge').ExecutionRunHostBridge,
         'takeWorkerUpdate' | 'waitForWorkerUpdateChange' | 'prepareWorkerUpdates'> | null = null;
+    private readonly pendingRequestSettlementAdmissions = new Set<Promise<void>>();
     private readonly pendingSessionTurnMutationUpdates = new Set<Promise<void>>();
     private readonly pendingTranscriptMessageUpdates = new Set<Promise<unknown>>();
     private readonly locallyAuthoredTranscriptObservationUserLocalIds = new Set<string>();
@@ -1207,6 +1213,11 @@ export class ApiSessionClient extends EventEmitter {
                 });
             },
         });
+        // The predecessor key names the profile owning this journal, even if the active Home changes later.
+        const predecessorSettlementScope = {
+            serverId: configuration.activeServerId,
+            installationIdentityPath: configuration.installationIdentityFile,
+        };
         this.durableMutationOutbox = createRuntimeSessionClientDurableMutationOutbox({
             signal: this.socketAckAbortController.signal,
             serverUrl: this.transport.serverUrl,
@@ -1220,6 +1231,40 @@ export class ApiSessionClient extends EventEmitter {
                 if (mutation.messageRole === 'user') {
                     this.markLocallyAuthoredTranscriptObservationUserLocalId(mutation.localId);
                 }
+            },
+            deliverAgentStateRequestSettlement: async (mutation) => {
+                let value: unknown;
+                if (mutation.content.t === 'device_local_v1') {
+                    const storage = await readOrCreateDeviceLocalSecretStorage({ path: configuration.deviceLocalSecretKeyFile });
+                    value = storage.openJson({ purpose: 'agent_state_request_settlement', ciphertext: mutation.content.c });
+                } else if (mutation.content.t === 'installation_encrypted_v1') {
+                    // Exact keyless 0.2 journal ingress; recovery never creates a replacement identity.
+                    const identity = readInstallationIdentityIfExistsSync(predecessorSettlementScope.installationIdentityPath);
+                    if (!identity) throw new Error('Predecessor request settlement requires the original installation identity');
+                    const accountId = readAccountIdFromToken(this.token);
+                    if (!accountId) throw new Error('Predecessor request settlement requires the bound session account identity');
+                    const key = await deriveKey(decodeBase64(identity.privateKey, 'base64url'), 'Happier Session Mutation', [
+                        'request-settlement-v1', predecessorSettlementScope.serverId, accountId, this.sessionId,
+                    ]);
+                    value = decrypt(key, 'dataKey', decodeBase64(mutation.content.c));
+                } else {
+                    // Exact 0.2 journal ingress uses retained owner material, never a fresh Machine DEK.
+                    const credentials = await this.readCurrentOwnerCredentials();
+                    if (!credentials?.encryption) throw new Error('Predecessor request settlement requires retained owner encryption material');
+                    const material = credentials.encryption;
+                    value = decrypt(material.type === 'legacy' ? material.secret : material.machineKey,
+                        material.type === 'legacy' ? 'legacy' : 'dataKey', decodeBase64(mutation.content.c));
+                }
+                if (value === null) throw new Error('Request settlement recovery could not decrypt payload');
+                const settlement = AgentStateRequestSettlementSchema.safeParse(value);
+                if (!settlement.success) {
+                    logger.infoFile('[API] Invalid durable request settlement payload', {
+                        sessionId: this.sessionId, mutationId: mutation.mutationId,
+                    });
+                    return { delivered: false, terminalFailureReason: 'invalid_agent_state_request_settlement' };
+                }
+                await this.updateAgentState(state => applyAgentStateRequestSettlement(state, settlement.data));
+                return { delivered: true };
             },
             deliverRegisteredSessionStateFieldMutation: async (mutation) => {
                 const runtimeActivityProjection = readRuntimeActivityProjectionWriteFromRegisteredMutation(mutation);
@@ -3592,6 +3637,32 @@ export class ApiSessionClient extends EventEmitter {
         });
     }
 
+    /** Persist exact ordinary cancellation before one canonical delivery attempt. */
+    updateAgentStateRequestSettlement(handler: (state: AgentState) => AgentState): Promise<void> {
+        let finishAdmission!: () => void;
+        const admission = new Promise<void>((resolve) => { finishAdmission = resolve; });
+        this.pendingRequestSettlementAdmissions.add(admission);
+        void admission.then(() => this.pendingRequestSettlementAdmissions.delete(admission));
+        return this.admitAgentStateRequestSettlement(handler, finishAdmission).finally(finishAdmission);
+    }
+
+    private async admitAgentStateRequestSettlement(handler: (state: AgentState) => AgentState,
+        finishAdmission: () => void): Promise<void> {
+        if (!this.hasOwnerMetadataAuthority()) throw new SessionOwnerAuthorityUnavailableError('Session request settlement');
+        const settlement = await this.metadataLock.inLock(async () => {
+            const current = this.agentState ?? {};
+            return buildAgentStateRequestSettlement(current, handler(current));
+        });
+        if (settlement.entries.length === 0) return;
+        const storage = await readOrCreateDeviceLocalSecretStorage({ path: configuration.deviceLocalSecretKeyFile });
+        const result = await this.durableMutationOutbox.enqueueAgentStateRequestSettlement({
+            v: 1, sessionId: this.sessionId, mutationId: randomUUID(), source: 'agent_state_request_settlement',
+            content: { t: 'device_local_v1', c: storage.sealJson({ purpose: 'agent_state_request_settlement', value: settlement }) },
+        }, finishAdmission);
+        if (!result.persisted) throw new Error('Request settlement was not durably admitted');
+        if (!result.delivered) throw new Error('Request settlement is durably admitted and awaiting acknowledged delivery');
+    }
+
     enqueueSessionTurnMutation(mutation: RuntimeSessionTurnMutationV1): Promise<void> {
         const observed = this.observeSessionTurnMutationForCachedTurnStatus(mutation);
         const persistedUpdate = this.durableMutationOutbox.enqueueSessionTurnMutation(mutation);
@@ -3657,6 +3728,7 @@ export class ApiSessionClient extends EventEmitter {
 
     private async drainBestEffortSessionWrites(): Promise<void> {
         await Promise.all([
+            ...[...this.pendingRequestSettlementAdmissions].map((update) => update.catch(() => undefined)),
             ...[...this.pendingProviderInputSettlementWrites].map((update) => update.catch(() => undefined)),
             this.messageCommitQueueTail.catch(() => undefined),
             this.durableMutationOutbox.flush('flush').catch(() => undefined),
@@ -3669,6 +3741,7 @@ export class ApiSessionClient extends EventEmitter {
 
     private async drainPendingLifecycleWritesBeforeClose(): Promise<void> {
         await Promise.all([
+            ...[...this.pendingRequestSettlementAdmissions].map((update) => update.catch(() => undefined)),
             ...[...this.pendingProviderInputSettlementWrites].map((update) => update.catch(() => undefined)),
             ...[...this.pendingSessionTurnMutationUpdates].map((update) => update.catch(() => undefined)),
             ...[...this.pendingTranscriptMessageUpdates].map((update) => update.catch(() => undefined)),

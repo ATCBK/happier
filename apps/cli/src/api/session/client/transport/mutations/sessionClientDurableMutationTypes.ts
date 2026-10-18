@@ -60,6 +60,17 @@ export type SessionClientDurableMutationSocket = Readonly<{
     timeout?(ms: number): SessionClientDurableMutationSocket;
 }>;
 
+/** Private device-local request retirement; never sent as a new wire operation. */
+export type AgentStateRequestSettlementMutationV1 = Readonly<{
+    v: 1;
+    source: 'agent_state_request_settlement';
+    sessionId: string;
+    mutationId: string;
+    content: Readonly<{ t: 'device_local_v1'; c: string }>
+        | Readonly<{ t: 'encrypted'; c: string }>
+        | Readonly<{ t: 'installation_encrypted_v1'; c: string }>;
+}>;
+
 export type SessionEndMutationV1 = Readonly<{
     v: 1;
     sessionId: string;
@@ -156,7 +167,8 @@ export type SessionClientDurableMutationAttemptReason =
     | 'session_turn_mutation_rejected'
     | 'metadata_tuple_conflict'
     | 'transcript_message_provenance_missing_or_invalid'
-    | 'transcript_message_invalid_observation';
+    | 'transcript_message_invalid_observation'
+    | 'invalid_agent_state_request_settlement';
 
 export type SessionClientDurableMutationAttemptV1 = Readonly<{
     v: 1;
@@ -177,6 +189,16 @@ type SessionClientDurableMutationAttemptAccounting =
     }>;
 
 export type QueuedSessionClientDurableMutation = SessionClientDurableMutationAttemptAccounting & (
+    | Readonly<{
+        kind: 'agent_state_request_settlement';
+        mutationId: string;
+        payload: AgentStateRequestSettlementMutationV1;
+        createdAt: number;
+        attempts: number;
+        nextAttemptAt: number;
+        dependsOn?: readonly SessionClientDurableMutationDependency[];
+        paused?: SessionClientDurableMutationPause;
+    }>
     | Readonly<{
         kind: 'session_turn_mutation';
         mutationId: string;

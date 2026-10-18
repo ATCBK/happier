@@ -44,7 +44,6 @@ import type {
 import { HAPPIER_ACTION_REQUEST_SOURCE, resolveAgentRequestKind } from './requestKind';
 import { AgentStateRequestStore } from './agentStateRequestStore';
 import type {
-    AgentStateOutstandingRequest,
     AgentStateRequestResponseTarget,
     PermissionResponseClaim,
 } from './agentStateRequestStore';
@@ -985,10 +984,8 @@ export abstract class BasePermissionHandler {
      * This is critical for avoiding stale session references after onSessionSwap.
      */
     updateSession(newSession: ApiSessionClient): void {
-        const pendingMetadataById = new Map<string, AgentStateOutstandingRequest | null>();
-        for (const id of this.pendingRequests.keys()) {
-            pendingMetadataById.set(id, this.requestStore.readOutstandingRequest(id));
-        }
+        const pendingContexts = new Map([...this.pendingRequests.keys()].map((id) =>
+            [id, this.requestCoordinator.getResponseContext(id)] as const));
 
         logger.debug(`${this.getLogPrefix()} Session reference updated`);
         this.session = newSession;
@@ -1011,37 +1008,10 @@ export abstract class BasePermissionHandler {
         // If we were mid-permission when the session reference swapped (offline reconnect),
         // republish still-pending items into the new agentState and re-attempt push notifications.
         for (const [id, pending] of this.pendingRequests.entries()) {
+            const context = pendingContexts.get(id);
+            if (!context) continue;
             if (!this.requestStore.hasOutstandingRequest(id)) {
-                const priorOutstanding = pendingMetadataById.get(id);
-                this.requestStore.publishRequest({
-                    requestId: id,
-                    toolName: pending.toolName,
-                    toolInput: pending.input,
-                    createdAt: priorOutstanding?.createdAt ?? Date.now(),
-                    ...(typeof priorOutstanding?.turnId === 'string' ? { turnId: priorOutstanding.turnId } : {}),
-                    ...(typeof priorOutstanding?.kind === 'string' ? { kind: priorOutstanding.kind } : {}),
-                    ...(priorOutstanding?.responseTarget ?? pending.responseTarget
-                        ? { responseTarget: priorOutstanding?.responseTarget ?? pending.responseTarget ?? null }
-                        : {}),
-                    ...(typeof priorOutstanding?.subagentRef !== 'undefined'
-                        ? { subagentRef: priorOutstanding.subagentRef }
-                        : typeof pending.subagentRef !== 'undefined'
-                            ? { subagentRef: pending.subagentRef }
-                            : {}),
-                    ...(typeof priorOutstanding?.sidechainId === 'string'
-                        ? { sidechainId: priorOutstanding.sidechainId }
-                        : typeof pending.sidechainId === 'string'
-                            ? { sidechainId: pending.sidechainId }
-                            : {}),
-                    ...(Array.isArray(priorOutstanding?.permissionSuggestions)
-                        ? { permissionSuggestions: priorOutstanding.permissionSuggestions }
-                        : Array.isArray(pending.permissionSuggestions)
-                            ? { permissionSuggestions: pending.permissionSuggestions }
-                            : {}),
-                    ...(priorOutstanding?.owner ?? pending.owner
-                        ? { owner: priorOutstanding?.owner ?? pending.owner ?? null }
-                        : {}),
-                });
+                this.requestStore.publishRequest(context);
             } else {
                 this.requestStore.notifyPermissionRequestPushBestEffort({
                     permissionId: id,

@@ -13,6 +13,10 @@ class FakeSession {
         completedRequests: Object.create(null),
     };
 
+    async updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+        await this.updateAgentState(updater);
+    }
+
     getAgentStateSnapshot() {
         return this.agentState;
     }
@@ -37,6 +41,10 @@ class DeferredUpdateSession extends FakeSession {
 
     deferNextUpdate(): void {
         this.deferNext = true;
+    }
+
+    hasDeferredUpdate(): boolean {
+        return this.applyDeferredUpdate !== null;
     }
 
     resolveDeferredUpdate(): void {
@@ -138,6 +146,118 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
 }
 
 describe('PermissionRequestCoordinator', () => {
+    it.each(['Session', 'plugin'] as const)('retires the provider waiter for every request the %s store cancels while an older ACK drains', async (scope) => {
+        const session = new DeferredUpdateSession();
+        const { coordinator } = createHarness(session);
+        const owner = { kind: 'plugin' as const, pluginId: 'plugin-a' };
+        const older = coordinator.requestDecision({ ...bashRequest, owner });
+        const olderRejected = expect(older).rejects.toThrow('Session ended');
+        session.deferNextUpdate();
+        const response = coordinator.handleResponse({ requestId: bashRequest.requestId, buildCompletion: () => ({
+            result: approve(), completedRequest: { status: 'approved', decision: 'approved' },
+        }) });
+        await vi.waitFor(() => expect(session.hasDeferredUpdate()).toBe(true));
+        const cancellation = scope === 'Session' ? coordinator.cancelAll('Session ended')
+            : coordinator.cancelByPlugin('plugin-a', 'Session ended');
+        const newcomerId = 'published-during-reset';
+        let newcomerOutcome = 'pending';
+        const newcomer = coordinator.requestDecision({ ...bashRequest, requestId: newcomerId, createdAt: 200, owner });
+        const observed = newcomer.then(() => { newcomerOutcome = 'approved'; }, () => { newcomerOutcome = 'canceled'; });
+        const neighborAbort = new AbortController();
+        const neighbor = scope === 'plugin' ? coordinator.requestDecision({ ...bashRequest, requestId: 'neighbor',
+            owner: { kind: 'plugin', pluginId: 'plugin-b' } }, { signal: neighborAbort.signal }) : null;
+        void neighbor?.catch(() => {});
+        session.resolveDeferredUpdate();
+        try {
+            await cancellation;
+            await expect(response).resolves.toBe(false);
+            await olderRejected;
+            expect(session.agentState.requests?.[newcomerId]).toBeUndefined();
+            expect(session.agentState.completedRequests?.[newcomerId]).toMatchObject({ status: 'canceled' });
+            expect(newcomerOutcome).toBe('canceled');
+            expect(coordinator.getResponseContext(newcomerId)).toBeNull();
+            if (neighbor) {
+                expect(session.agentState.requests?.neighbor).toBeDefined();
+                expect(coordinator.getResponseContext('neighbor')).not.toBeNull();
+            }
+        } finally {
+            neighborAbort.abort();
+            if (neighbor) await expect(neighbor).rejects.toThrow();
+            await coordinator.dispose();
+            await observed;
+        }
+    });
+
+    it.each(['all', 'selected'] as const)('keeps a newer cached decision created while %s cancellation persists', async (scope) => {
+        const session = new DeferredUpdateSession();
+        const { coordinator, store } = createHarness(session);
+        const cacheDecision = async (request: typeof bashRequest) => {
+            const abort = new AbortController();
+            const pending = coordinator.requestDecision(request, { signal: abort.signal });
+            const rejected = expect(pending).rejects.toThrow('Permission request aborted');
+            const response = coordinator.handleResponse({ requestId: request.requestId, buildCompletion: () => ({
+                result: approve(request.requestId), completedRequest: { status: 'approved', decision: 'approved' },
+            }) });
+            abort.abort();
+            await rejected;
+            await expect(response).resolves.toBe(true);
+        };
+        await cacheDecision(bashRequest);
+        const blocker = coordinator.requestDecision({ ...bashRequest, requestId: 'old-cancel-blocker' });
+        const blockerRejected = expect(blocker).rejects.toThrow('old scope stopped');
+        session.deferNextUpdate();
+        const cancellation = scope === 'all' ? coordinator.cancelAll('old scope stopped')
+            : coordinator.cancelRequests(['old-cancel-blocker', bashRequest.requestId], 'old scope stopped');
+        await vi.waitFor(() => expect(session.hasDeferredUpdate()).toBe(true));
+        const newer = { ...bashRequest, createdAt: 200, toolInput: { command: ['bash', '-lc', 'echo newer'] } };
+        await cacheDecision(newer);
+        session.resolveDeferredUpdate();
+        await cancellation;
+        await blockerRejected;
+        const retryAbort = new AbortController();
+        const retry = coordinator.requestDecision(newer, { signal: retryAbort.signal });
+        void retry.catch(() => {});
+        try {
+            expect(store.hasOutstandingRequest(newer.requestId)).toBe(false);
+            await expect(retry).resolves.toEqual(approve(newer.requestId));
+        } finally {
+            retryAbort.abort();
+            await coordinator.dispose();
+        }
+    });
+
+    it('does not apply a queued native decision after single-request cancellation begins', async () => {
+        const { coordinator, session } = createHarness();
+        const pending = coordinator.requestDecision(bashRequest);
+        const rejected = expect(pending).rejects.toThrow();
+        let nativeApplied = false;
+        const handled = coordinator.completeResponse({
+            context: coordinator.getResponseContext(bashRequest.requestId)!,
+            completion: { result: approve(), completedRequest: { status: 'approved', decision: 'approved' } },
+            acknowledgeDecisionApplication: async () => { nativeApplied = true; },
+        });
+        const canceled = coordinator.cancelRequests([bashRequest.requestId], 'native hook retired');
+        await expect(handled).resolves.toBe(false);
+        await canceled;
+        await rejected;
+        expect(nativeApplied).toBe(false);
+        expect(session.agentState.completedRequests?.[bashRequest.requestId]).toMatchObject({ status: 'canceled' });
+    });
+
+    it('retires persisted plugin requests after local waiters have disappeared', async () => {
+        const session = new FakeSession();
+        const persistedRequests = {
+            retained: { tool: 'Bash', arguments: {}, createdAt: 1, owner: { kind: 'plugin', pluginId: 'plugin-a' } },
+            neighbor: { tool: 'Bash', arguments: {}, createdAt: 2, owner: { kind: 'plugin', pluginId: 'plugin-b' } },
+        };
+        session.agentState.requests = persistedRequests;
+        const { coordinator } = createHarness(session);
+        await coordinator.cancelByPlugin('plugin-a', 'plugin retired');
+        expect(session.agentState.requests).not.toHaveProperty('retained');
+        expect(session.agentState.requests).toHaveProperty('neighbor');
+        expect(session.agentState.completedRequests?.retained?.status).toBe('canceled');
+    });
+
     it('cancels only one plugin turn while occurrence questions and neighboring requests remain live', async () => {
         const { coordinator, session } = createHarness();
         const requests = [

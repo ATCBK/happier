@@ -11,6 +11,7 @@ import {
 } from '@happier-dev/protocol';
 
 import { BasePermissionHandler, type PermissionResult } from './BasePermissionHandler';
+import type { AgentState } from '@/api/types';
 import type { AgentStateRequestResponseTarget } from './agentStateRequestStore';
 import { ServerBoundPermissionRpcHandlerManager } from './testkit/serverBoundPermissionRpcHandlerManager';
 
@@ -37,6 +38,10 @@ class FakeSession {
     this.agentState = updater(this.agentState);
     return this.agentState;
   }
+
+  async updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+    this.updateAgentState(updater);
+  }
 }
 
 class TestPermissionHandler extends BasePermissionHandler {
@@ -44,15 +49,8 @@ class TestPermissionHandler extends BasePermissionHandler {
     return '[Test]';
   }
 
-  publishPending(toolCallId: string, toolName: string, input: unknown): void {
-    this.addPendingRequestToState(toolCallId, toolName, input);
-  }
-
   request(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {
-    return new Promise<PermissionResult>((resolve, reject) => {
-      this.pendingRequests.set(toolCallId, { resolve, reject, toolName, input });
-      this.addPendingRequestToState(toolCallId, toolName, input);
-    });
+    return this.requestPermissionDecision(toolCallId, toolName, input);
   }
 
   seedPendingRequest(
@@ -151,7 +149,7 @@ describe('BasePermissionHandler push notifications', () => {
 
     const input = { path: '/tmp/x', content: 'hi' };
     const p1 = handler.request('perm-1', 'Write', input);
-    handler.publishPending('perm-1', 'Write', input);
+    const p2 = handler.request('perm-1', 'Write', input);
 
     await Promise.resolve();
     await Promise.resolve();
@@ -159,7 +157,8 @@ describe('BasePermissionHandler push notifications', () => {
 
     const rpc = session.rpcHandlerManager.handlers.get('permission');
     await rpc?.({ id: 'perm-1', approved: false, decision: 'denied' });
-    await p1;
+    await expect(p1).resolves.toMatchObject({ decision: 'denied' });
+    await expect(p2).resolves.toMatchObject({ decision: 'denied' });
   });
 
   it('re-attempts permission-request push after a session swap while still pending', async () => {

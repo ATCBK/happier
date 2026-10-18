@@ -23,7 +23,7 @@ vi.mock('socket.io-client', () => ({
 }));
 
 // Cold source transformation belongs to collection, not a held-operation deadline.
-await Promise.all([import('./api'), import('./rpc/RpcHandlerManager')]);
+await import('./api');
 
 describe('ApiMachineClient updates', () => {
   afterEach(() => {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse, buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol';
+import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,8 +8,10 @@ import { join } from 'node:path';
 import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/protocol/agents/claude';
 
 import { ProviderEnforcedPermissionHandler } from './handler';
+import { DeferredApiSessionClient } from '@/agent/runtime/startup/DeferredApiSessionClient';
 import { __resetToolTraceForTests } from '@/agent/tools/trace/toolTrace';
 import { ServerBoundPermissionRpcHandlerManager } from '../testkit/serverBoundPermissionRpcHandlerManager';
+import type { AgentState } from '@/api/types';
 import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
 import { readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -37,6 +40,10 @@ class FakeSession {
   updateAgentState(updater: any) {
     this.agentState = updater(this.agentState);
     return this.agentState;
+  }
+
+  async updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+    await this.updateAgentState(updater);
   }
 
   getMetadataSnapshot() {
@@ -79,6 +86,42 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
   ]);
   return result === pending ? 'pending' : result;
 }
+
+it.each(['Edit', 'mcp__docs__create'] as const)('preserves the coordinator occurrence and native metadata when an offline permission reconnects without a snapshot (%s)', async (toolName) => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  const deferred = new DeferredApiSessionClient({ placeholderSessionId: 'offline', limits: { maxEntries: 10, maxBytes: 10_000 } });
+  const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'docs-id', name: 'docs', title: 'Docs', transport: 'stdio',
+    stdio: { command: 'fixture-mcp', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
+    tools: { default: 'allow_read_only', overrides: {} }, toolsSnapshot: { checkedAt: 1, machineId: 'fixture-machine',
+      tools: [{ name: 'create', tokens: 10, annotations: { destructiveHint: true } }] } }], bindings: [] });
+  const handler = new ProviderEnforcedPermissionHandler(deferred as never, { logPrefix: '[offline rebind]',
+    getMcpToolContext: () => ({ catalog: { status: 'ready', authority: 'active', revision: 1, diagnostics: [], catalog },
+      mcpServerIdentities: { docs: { serverId: 'docs-id', serverTitle: 'Docs' } } }) });
+  const pending = handler.handleToolCall('offline-request', toolName, { file_path: 'a', old_string: 'a', new_string: 'b' }, {
+    turnId: 'offline-turn', source: 'offline-source',
+    owner: { kind: 'plugin', pluginId: 'fixture.plugin' },
+    causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+  });
+  const rejected = expect(pending).rejects.toThrow();
+  try {
+    expect(deferred.getAgentStateSnapshot()).toBeNull();
+    expect(deferred.getBufferStats().entryCount).toBeGreaterThan(0);
+    now.mockReturnValue(2000);
+    const connected = new FakeSession();
+    handler.updateSession(connected as never);
+    expect(connected.agentState.requests['offline-request']).toMatchObject({
+      createdAt: 1000, source: 'offline-source', turnId: 'offline-turn',
+      owner: { kind: 'plugin', pluginId: 'fixture.plugin' },
+      ...(toolName.startsWith('mcp__') ? { mcpTool: { server: 'docs', tool: 'create', item: { serverId: 'docs-id' } } } : {}),
+    });
+  } finally {
+    await handler.abortPendingRequestsAndFlush('test cleanup');
+    await rejected;
+    deferred.cancel();
+    now.mockRestore();
+  }
+});
+
 
 describe('QA Edit button payloads at the native permission owner', () => {
   const buttons = [

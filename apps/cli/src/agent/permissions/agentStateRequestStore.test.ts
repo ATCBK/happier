@@ -18,6 +18,10 @@ class FakeSession {
         completedRequests: Object.create(null),
     };
 
+    async updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+        await this.updateAgentState(updater);
+    }
+
     getAgentStateSnapshot() {
         return this.agentState;
     }
@@ -41,6 +45,27 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('AgentStateRequestStore', () => {
+    it('returns only cancellation subjects from the committed CAS attempt', async () => {
+        class RetriedSession extends FakeSession {
+            override updateAgentState(updater: (state: AgentState) => AgentState) {
+                // The transport discards the first candidate after a version conflict.
+                updater({ requests: { discarded: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
+                this.agentState = updater({ requests: { committed: { tool: 'Bash', arguments: {}, createdAt: 2 } } });
+            }
+        }
+        const session = new RetriedSession();
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+
+        const canceled = await store.cancelAllRequests({ reason: 'Session ended', requestIds: [] });
+
+        expect(canceled).toEqual([
+            { requestId: 'committed', completedRequest: expect.objectContaining({ createdAt: 2, status: 'canceled' }) },
+        ]);
+        expect(session.agentState.requests).toEqual({});
+        expect(session.agentState.completedRequests).not.toHaveProperty('discarded');
+        store.dispose();
+    });
+
     it.each<PermissionResponseClaim>([
         { version: 1, origin: 'automaticPolicy' },
         { version: 1, origin: 'approvalReviewer', turnId: 'turn-1', decision: 'approved', scope: 'request' },
