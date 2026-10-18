@@ -10,6 +10,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 
 import { WidgetFrame } from './WidgetFrame';
+import { WIDGET_FRAME_REFRESH_WORD_DELAY_MS } from './widgetFrameResourceActivity';
 import { renderWidgetSizeMenuSection } from './WidgetSizeControl';
 import { darkTheme, lightTheme } from '@/theme';
 import { SessionBoardDeclarativeContent } from '@/components/sessions/board/SessionBoardDeclarativeContent';
@@ -217,6 +218,11 @@ describe('WidgetFrame', () => {
         const roomy = await renderScreen(frame('roomy'));
         await flushHookEffects({ cycles: 2 });
         await act(async () => { roomy.findByTestId('roomy')!.props.onLayout({ nativeEvent: { layout: { width: 400, height: 280 } } }); });
+        // FA19 W9: a refresh is quiet work. The glyph shows at once; the sentence only once it has run long enough to matter.
+        expect(roomy.findByTestId('roomy.refreshing')).not.toBeNull();
+        expect(roomy.findByTestId('roomy.refreshing')?.props.accessibilityLabel).toBe('widgetDefinition.refreshing');
+        expect(roomy.getTextContent()).not.toContain('widgetDefinition.refreshing');
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, WIDGET_FRAME_REFRESH_WORD_DELAY_MS + 50)); });
         expect(roomy.getTextContent()).toContain('widgetDefinition.refreshing');
         // Below the frame's narrowing width the title keeps its room and the glyph stays, named for assistive technology.
         const tight = await renderScreen(frame('tight'));
