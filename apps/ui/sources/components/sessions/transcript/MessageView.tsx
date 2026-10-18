@@ -830,7 +830,7 @@ function UserTextBlock(props: {
                 interaction={props.interaction}
                 onJumpToAnchor={handleJumpToAnchor}
               />
-              <MarkdownView markdown={renderedMarkdownText} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
+              <MarkdownView codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])} markdown={renderedMarkdownText} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
               {sessionMediaInlineImages.length > 0 ? (
                 <SessionMediaInlineImages
                   sessionId={props.sessionId}
@@ -1317,6 +1317,7 @@ function AgentTextBlock(props: {
               shouldRenderStreamingMarkdown ? (
                 <MarkdownView
                   markdown={streamingMarkdownText}
+                  codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])}
                   agentTexMath
                   onOptionPress={handleOptionPress}
                   onOptionLongPress={handleOptionLongPress}
@@ -1340,6 +1341,7 @@ function AgentTextBlock(props: {
               ) : (
                 <MarkdownView
                   markdown={markdown}
+                  codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])}
                   agentTexMath
                   onOptionPress={handleOptionPress}
                   onOptionLongPress={handleOptionLongPress}
