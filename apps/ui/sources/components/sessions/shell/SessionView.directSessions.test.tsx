@@ -550,7 +550,7 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', async (importOriginal) => {
             actionExecuteSpy(...input);
             return executor.execute(...input);
           }
-          return (input[0].startsWith('providers.') || input[0] === 'session.permission_mode.set' || input[0] === 'session.message.send' || input[0] === 'session.turn.cancel')
+          return (input[0].startsWith('providers.') || input[0] === 'session.permission.respond' || input[0] === 'session.permission_mode.set' || input[0] === 'session.message.send' || input[0] === 'session.turn.cancel')
             ? executor.execute(...input)
             : actionExecuteSpy(...input);
         },
@@ -3981,6 +3981,8 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('passes session-scoped open approval artifacts to AgentInput', async () => {
+    const artifactSnapshot = createDeferred<void>();
+    homes.answer('server-route-1', 'GET /v1/artifacts', { body: [], respondAfter: artifactSnapshot.promise });
     const approval = StoredApprovalRequestSchema.parse({
       v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
@@ -4001,21 +4003,27 @@ describe('SessionView (direct sessions)', () => {
       },
     };
 
-    const screen = await renderSessionViewAndSettle();
+    try {
+      const screen = await renderSessionViewAndSettle();
 
-    const agentInput = findAgentInput(screen);
-    expect(agentInput.props.approvalRequests).toEqual([
-      expect.objectContaining({
-        artifact: expect.objectContaining({ id: 'approval_1' }),
-        approval: expect.objectContaining({
-          actionId: 'session.list',
-          summary: 'List sessions',
+      const agentInput = findAgentInput(screen);
+      expect(agentInput.props.approvalRequests).toEqual([
+        expect.objectContaining({
+          artifact: expect.objectContaining({ id: 'approval_1' }),
+          approval: expect.objectContaining({
+            actionId: 'session.list',
+            summary: 'List sessions',
+          }),
         }),
-      }),
-    ]);
+      ]);
+    } finally {
+      artifactSnapshot.resolve();
+    }
   });
 
   it('keeps a settled failed effect in the composer attention tray', async () => {
+    const artifactSnapshot = createDeferred<void>();
+    homes.answer('server-route-1', 'GET /v1/artifacts', { body: [], respondAfter: artifactSnapshot.promise });
     const approval = StoredApprovalRequestSchema.parse({
       v: 2, status: 'executed', createdAtMs: 1, updatedAtMs: 3,
       createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
@@ -4055,17 +4063,23 @@ describe('SessionView (direct sessions)', () => {
       },
     };
 
-    const screen = await renderSessionViewAndSettle();
+    try {
+      const screen = await renderSessionViewAndSettle();
 
-    expect(findAgentInput(screen).props.approvalRequests).toEqual([
-      expect.objectContaining({
-        artifact: expect.objectContaining({ id: 'failed_effect' }),
-        approval: expect.objectContaining({ status: 'executed', actionId: 'daemon.filesystem.writeFile' }),
-      }),
-    ]);
+      expect(findAgentInput(screen).props.approvalRequests).toEqual([
+        expect.objectContaining({
+          artifact: expect.objectContaining({ id: 'failed_effect' }),
+          approval: expect.objectContaining({ status: 'executed', actionId: 'daemon.filesystem.writeFile' }),
+        }),
+      ]);
+    } finally {
+      artifactSnapshot.resolve();
+    }
   });
 
   it('keeps bodyless approval headers indexed without exposing an unhydrated request to AgentInput', async () => {
+    const artifactSnapshot = createDeferred<void>();
+    homes.answer('server-route-1', 'GET /v1/artifacts', { body: [], respondAfter: artifactSnapshot.promise });
     const approval = StoredApprovalRequestSchema.parse({
       v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
@@ -4086,14 +4100,18 @@ describe('SessionView (direct sessions)', () => {
       },
     };
 
-    const screen = await renderSessionViewAndSettle();
+    try {
+      const screen = await renderSessionViewAndSettle();
 
-    const agentInput = findAgentInput(screen);
-    expect(agentInput.props.approvalRequests).toEqual([]);
-    const { collectOpenApprovalSessionReferences } = await import('@/sync/domains/artifacts/approvalArtifacts');
-    expect(collectOpenApprovalSessionReferences(Object.values(storage.getState().artifacts))).toEqual([
-      { kind: 'exact', address: { serverId: 'server-route-1', sessionId: 's1' } },
-    ]);
+      const agentInput = findAgentInput(screen);
+      expect(agentInput.props.approvalRequests).toEqual([]);
+      const { collectOpenApprovalSessionReferences } = await import('@/sync/domains/artifacts/approvalArtifacts');
+      expect(collectOpenApprovalSessionReferences(Object.values(storage.getState().artifacts))).toEqual([
+        { kind: 'exact', address: { serverId: 'server-route-1', sessionId: 's1' } },
+      ]);
+    } finally {
+      artifactSnapshot.resolve();
+    }
   });
 
   it('passes live engine control props directly to AgentInput instead of custom agent picker options', async () => {

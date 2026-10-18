@@ -3197,8 +3197,21 @@ export function useOpenApprovalArtifactsForSession(
 }
 
 /**
+ * The composer's approvals: every open request under the same projection as the open hook, plus
+ * settled requests whose body declares an attention presentation. Unlike the transcript hook this
+ * does not demand body hydration, so bodyless open headers remain index-only until sync hydrates them.
+ */
+export function useComposerApprovalArtifactsForSession(
+  target: SessionAddress | null | undefined,
+  settledPresentations: readonly ApprovalSettledPresentation[],
+): ReadonlyArray<OpenApprovalArtifactForSession> {
+  return useSessionApprovalArtifacts(target, settledPresentations);
+}
+
+/**
  * The transcript's approvals: open ones plus settled ones whose approval body declares a settled
- * presentation (pass a module-stable list). Badges, counts and the composer use the open hook.
+ * presentation (pass a module-stable list). Badges and counts use the open hook; the composer uses
+ * its dedicated hook so transcript hydration cannot replace the open-request contract.
  */
 export function useTranscriptApprovalArtifactsForSession(
   target: SessionAddress | null | undefined,
