@@ -6,6 +6,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StyleSheet } from 'react-native';
 
+import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurface';
+
 import { VirtualizedList } from '../VirtualizedList';
 import { CollectionList } from '../../collection/CollectionList';
 
@@ -42,8 +44,17 @@ function isFillSized(element: HTMLElement): boolean {
         && (style.minHeight === '0px' || style.minHeight === '0');
 }
 
+function isInsideDisplayNone(element: Element): boolean {
+    for (let node: Element | null = element; node; node = node.parentElement) {
+        if (window.getComputedStyle(node).display === 'none') return true;
+    }
+    return false;
+}
+
 function measuredRect(element: Element): DOMRectReadOnly {
     const htmlElement = element as HTMLElement;
+    // A browser lays out nothing under `display: none`: every box there reads 0 x 0.
+    if (isInsideDisplayNone(element)) return rect(0, 0);
     if (htmlElement.id === 'virtualized-list-host') {
         return rect(800, 400);
     }
@@ -368,6 +379,48 @@ describe('VirtualizedList web DOM integration', () => {
             }
         });
         expect(thrown).toBeNull();
+    });
+
+    // A retained surface that is not being presented is `display: none`, so every row the list renders
+    // there measures 0 x 0. Legend accepts a 0 x 0 row (its own viewport ignores 0 x 0, its row
+    // coordinator does not), so a data change under a hidden surface made every row "fit": the pool
+    // grew a batch per layout pass until React's nested-update limit threw (Settings -> Actions, DF33).
+    it('does not relayout a list inside a hidden retained surface, and shows current data once presented', async () => {
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const makeRows = (prefix: string, count: number): Row[] => Array.from({ length: count }, (_value, index) => ({ id: `${prefix}-${index}` }));
+        const Surface = (props: Readonly<{ presented: boolean; rows: readonly Row[] }>) => (
+            <RetainedPanelSurface isActive={props.presented}>
+                <div id="virtualized-list-host" style={{ display: 'flex', flexDirection: 'column', height: 400 }}>
+                    <VirtualizedList
+                        backendPreference="legend"
+                        data={props.rows}
+                        estimatedItemSize={560}
+                        keyExtractor={(item) => item.id}
+                        recycleItems
+                        renderItem={({ item }) => <div data-row-height="56" data-testid={`row:${item.id}`} role="option">{item.id}</div>}
+                    />
+                </div>
+            </RetainedPanelSurface>
+        );
+        const render = async (presented: boolean, rows: readonly Row[]) => {
+            await act(async () => { root.render(<Surface presented={presented} rows={rows} />); });
+            await flushLegendWork();
+        };
+        const mountedRows = () => container.querySelectorAll('[role="option"]').length;
+
+        await render(true, makeRows('first', 200));
+        const presentedWindow = mountedRows();
+        expect(presentedWindow).toBeGreaterThan(0);
+        expect(presentedWindow).toBeLessThan(40);
+
+        await render(false, makeRows('second', 180));
+        expect(mountedRows()).toBeLessThanOrEqual(presentedWindow);
+        expect(consoleError.mock.calls.flat().map(String).join('\n')).not.toContain('Maximum update depth');
+
+        await render(true, makeRows('second', 180));
+        expect(container.querySelector('[data-testid="row:second-0"]')).not.toBeNull();
+        expect(container.querySelector('[data-testid="row:first-0"]')).toBeNull();
+        expect(mountedRows()).toBeLessThan(40);
     });
 
 });
