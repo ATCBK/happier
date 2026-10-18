@@ -38,7 +38,7 @@ const SourceExportRecordSchemaV1 = z.object({
   targetMachineId: z.string().min(1).optional(),
   stateTransfer: z.enum(['transfer', 'existing']).optional(),
   exportedAtMs: z.number().int().nonnegative(),
-  acceptedHandoffAuthorization: ExternalActionExecutionAuthorizationV1Schema.optional(),
+  acceptedHandoffAuthorization: z.optional(ExternalActionExecutionAuthorizationV1Schema),
   requesterSessionCredentialBinding: z.object({ sessionId: z.string().min(1),
     attribution: RequesterWorkAttributionV1Schema }).strict().optional(),
   agentBundle: AgentBundleFileSchema.optional(),

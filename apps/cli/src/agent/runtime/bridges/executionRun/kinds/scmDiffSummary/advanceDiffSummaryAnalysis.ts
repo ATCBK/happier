@@ -20,7 +20,7 @@ const AnalysisStateSchema = z.object({
   failures: z.array(z.string()), failedRefs: z.array(z.string()),
   expectedInputId: z.string().optional(),
   instructions: z.string().optional(),
-  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
+  outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
   evidenceContext: z.string().optional(),
   taskInstructions: z.string().optional(),
   admitted: z.number().int().nonnegative().optional(), completed: z.number().int().nonnegative().optional(),

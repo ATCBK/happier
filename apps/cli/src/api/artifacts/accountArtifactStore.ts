@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import axios from 'axios';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1 } from '@happier-dev/transfers';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
@@ -265,7 +266,7 @@ function parseStoredArtifact(raw: unknown): StoredArtifact | null {
     ? { ...header, body, bodyVersion: header.bodyVersion } : null;
 }
 
-const artifactAuthorityProjectionSchema = ArtifactAccessRecipientCensusResponseV1Schema.pick({ ownerAccountId: true, access: true, encryptionMode: true });
+const artifactAuthorityProjectionSchema = zMini.pick(ArtifactAccessRecipientCensusResponseV1Schema, { ownerAccountId: true, access: true, encryptionMode: true });
 
 function readStoredAccess(value: Record<string, unknown>): Pick<StoredArtifact, 'ownerAccountId' | 'access' | 'encryptionMode'> {
   const projection = artifactAuthorityProjectionSchema

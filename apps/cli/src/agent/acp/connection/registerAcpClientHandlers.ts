@@ -28,6 +28,12 @@ export function registerAcpClientHandlers(params: Readonly<{
     const writeTextFile = params.handlers.writeTextFile;
     params.app.onRequest(methods.client.fs.writeTextFile, (context) => writeTextFile(context.params));
   }
+  if (params.handlers.createElicitation) {
+    const createElicitation = params.handlers.createElicitation;
+    params.app.onRequest(methods.client.elicitation.create, (context) => (
+      createElicitation(context.params, { signal: context.signal })
+    ));
+  }
 
   const registrationKeys = new Set<string>();
   for (const extension of params.extensions) {

@@ -21,7 +21,7 @@ const execute = promisify(execFile);
 const component = z.string().regex(/^[A-Za-z0-9_-]+$/u);
 const identitySchema = z.strictObject({ dev: z.string().min(1), ino: z.string().min(1), kind: z.enum(['file', 'directory', 'symlink', 'other']) });
 const manifestSchema = z.strictObject({ v: z.literal(1), entry: TrashEntryV1Schema, identity: identitySchema,
-    phase: z.enum(['prepared', 'moved', 'emptying', 'restoring']), ownerData: StrictJsonValueSchema.optional(),
+    phase: z.enum(['prepared', 'moved', 'emptying', 'restoring']), ownerData: z.optional(StrictJsonValueSchema),
     restorePath: z.string().optional(), attribution: z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })]),
     emptyAttribution: z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })]).optional(),
     restoreAttribution: z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })]).optional(),

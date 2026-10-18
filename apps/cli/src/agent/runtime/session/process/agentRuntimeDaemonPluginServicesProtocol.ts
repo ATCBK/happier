@@ -109,12 +109,12 @@ const RunnerDaemonExternalSessionDiagnosticV1Schema = lazyZodSchema(() => z.obje
     code: BoundedIdSchema,
     severity: z.enum(['info', 'warning', 'error']),
     message: BoundedTextSchema.optional(),
-    details: AgentRuntimeJsonValueV1Schema.optional(),
+    details: z.optional(AgentRuntimeJsonValueV1Schema),
     remediation: RunnerDaemonExternalSessionRemediationV1Schema.optional(),
 }).strict());
 const RunnerDaemonExternalSessionTranscriptItemV1Schema = lazyZodSchema(() => z.object({
     id: ExternalSessionTranscriptItemIdV1Schema,
-    timestampMs: ExternalSessionTranscriptSourceTimestampV1Schema.optional(),
+    timestampMs: z.optional(ExternalSessionTranscriptSourceTimestampV1Schema),
     kind: z.enum(['user', 'agent', 'system', 'event']),
     data: AgentRuntimeJsonValueV1Schema,
 }).strict());
@@ -246,7 +246,7 @@ export const RunnerDaemonManagedProviderBootstrapV1Schema:
     providerPluginHardRevocationRevisionAtAdmission:
         SafeNonNegativeIntegerSchema,
     sessionBindingMetadata:
-        SessionProviderBindingMetadataV1Schema.optional(),
+        z.optional(SessionProviderBindingMetadataV1Schema),
 }).strict().superRefine((value, context) => {
     const expectedUses = value.scope.runtimeBindingBasis.deployment.kind
         === 'managedLocal'

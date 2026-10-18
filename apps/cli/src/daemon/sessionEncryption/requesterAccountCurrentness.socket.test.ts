@@ -1,6 +1,7 @@
 import axios from 'axios';
 import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { admitRequesterAccountActionContext, prepareRequesterAccountActionContext, readRequesterAccountActionContext } from './requesterAccountActionProjection';
@@ -10,10 +11,11 @@ import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol
 import { createExternalActionAuthorizedRequestHeaders, projectExternalActionRequesterHttpAuthorization, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { prepareRequesterSessionBootstrap } from './requesterSessionCredentials';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
-import { readAccountEncryptionModeOnce } from '@/api/client/accountEncryptionMode';
+import { ConnectedServiceCredentialHttpClient, fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readHttpStatus } from '@/api/client/httpStatusError';
 import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { logger } from '@/ui/logger';
 
 const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
     accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account', tokenEpoch: 1 },
@@ -24,6 +26,35 @@ const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: '
 afterEach(() => vi.restoreAllMocks());
 
 describe('requester Account currentness over the installed socket wiring', () => {
+    it('reports transport creation failure without secrets while preserving fresh HTTP reads', async () => {
+        const sockets = await import('@/api/session/sockets');
+        // Transport creation and file logging are system boundaries; currentness logic stays real.
+        vi.spyOn(sockets, 'createUserScopedSocketConnection').mockImplementation(() => {
+            throw new Error('transport failure with secret-token');
+        });
+        const warnings = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const first = { mode: 'plain' as const, version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const second = { ...first, version: 2 };
+        vi.spyOn(axios, 'get').mockResolvedValueOnce({ status: 200, data: first }).mockResolvedValueOnce({ status: 200, data: second });
+        const scope = { accountId: 'private-account', serverBaseUrl: 'https://private-home.example' };
+        const observation = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'secret-token' });
+        const remaining = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'remaining-secret-token' });
+        try {
+            await expect(observation.read()).resolves.toEqual(first);
+            await observation.dispose();
+            await expect(remaining.read()).resolves.toEqual(second);
+            expect(axios.get).toHaveBeenLastCalledWith('https://private-home.example/v1/account/encryption/currentness',
+                expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer remaining-secret-token' }) }));
+            expect(warnings).toHaveBeenCalled();
+            expect(JSON.stringify(warnings.mock.calls)).not.toContain('secret-token');
+            expect(JSON.stringify(warnings.mock.calls)).not.toContain('private-account');
+            expect(JSON.stringify(warnings.mock.calls)).not.toContain('private-home.example');
+        } finally {
+            await observation.dispose();
+            await remaining.dispose();
+        }
+    });
+
     it('reads exact claim currentness freshly while sharing only Account/Home encryption identity', async () => {
         const channel = await createRequesterCurrentnessSocketHarness();
         const fact = { mode: 'plain' as const, version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null };
@@ -34,6 +65,9 @@ describe('requester Account currentness over the installed socket wiring', () =>
         const scope = { accountId: 'bob', token: `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`,
             serverBaseUrl: 'https://home.example' };
         const observation = acquireRequesterAccountEncryptionCurrentness(scope);
+        const api = new ConnectedServiceCredentialHttpClient({ token: scope.token });
+        const readObservedMode = () => runWithServerHttpBaseUrl(scope.serverBaseUrl,
+            () => api.getAccountEncryptionMode({ refresh: true, throwOnTransportError: true }));
         try {
             await observation.read();
             // Claiming advances the Account cursor before returning its exact
@@ -43,9 +77,7 @@ describe('requester Account currentness over the installed socket wiring', () =>
                 .toEqual({ mode: 'plain', version: 2, contentKeyFingerprint: null });
             available = false;
             await expect(fetchAccountEncryptionCurrentness(scope)).rejects.toThrow();
-            const fallback = vi.fn(async () => ({ status: 503, data: {} }));
-            expect(await readAccountEncryptionModeOnce({ scope, request: fallback })).toEqual({ kind: 'resolved', mode: 'plain' });
-            expect(fallback).not.toHaveBeenCalled();
+            await expect(readObservedMode()).resolves.toBe('plain');
             await expect(fetchAccountEncryptionCurrentness({ ...scope, serverBaseUrl: 'https://other.home' })).rejects.toThrow();
             await expect(fetchAccountEncryptionCurrentness({ ...scope,
                 token: `header.${Buffer.from(JSON.stringify({ sub: 'alice' })).toString('base64url')}.signature` })).rejects.toThrow();
@@ -55,8 +87,7 @@ describe('requester Account currentness over the installed socket wiring', () =>
             await expect(fetchAccountEncryptionCurrentness({ ...scope, authorizationHeaders: signedHeaders })).rejects.toThrow();
             await channel.disconnect();
             await expect(fetchAccountEncryptionCurrentness(scope)).rejects.toThrow();
-            await expect(readAccountEncryptionModeOnce({ scope, request: fallback })).rejects.toThrow();
-            expect(fallback).not.toHaveBeenCalled();
+            await expect(readObservedMode()).rejects.toThrow();
         } finally { await observation.dispose(); await channel.close(); }
     });
     it.each(['finite', 'session'] as const)('does not register another Account credential as the requester observation (%s)', async kind => {
@@ -92,24 +123,31 @@ describe('requester Account currentness over the installed socket wiring', () =>
         try {
             expect(await admit('alice')).toBeNull();
             expect(channel.clients).toHaveLength(0);
+            // Session admission may read Alice's own HTTP witness while checking
+            // her profile; it must never register that fact as Bob's observation.
+            expect(encryptionAccounts.every(account => account === 'alice')).toBe(true);
+            const beforeBob = encryptionAccounts.length;
             accepted = await admit('bob');
             expect(accepted).not.toBeNull();
-            expect(encryptionAccounts).toEqual(['bob']);
-            expect(channel.clients).toHaveLength(1);
+            const bobReads = encryptionAccounts.slice(beforeBob);
+            expect(bobReads.length).toBeGreaterThan(0);
+            expect(bobReads.every(account => account === 'bob')).toBe(true);
+            expect(channel.clients).toHaveLength(kind === 'finite' ? 1 : 0);
         } finally { await accepted?.dispose(); await channel.close(); }
     });
 
-    it.each(['unbound', 'bound'] as const)('shares the observed encryption fact with real requester bootstrap decisions (%s)', async binding => {
+    it.each(['unbound', 'bound'] as const)('revalidates requester bootstrap and projected custody against fresh HTTP facts (%s)', async binding => {
         const channel = await createRequesterCurrentnessSocketHarness();
-        const reads = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+        let serverFact: AccountEncryptionCurrentnessResponse = { mode: 'plain', version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
             if (url.endsWith('/profile')) return { status: 200, data: { id: 'bob' } };
             if (url.endsWith('/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
             if (url.endsWith('/v2/sessions/session')) return { status: 200, data: { session: createSessionRecordFixture({
                 id: 'session', encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }),
                 dataEncryptionKey: null, share: null,
             }) } };
-            if (url.endsWith('/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
-                updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null } };
+            if (url.endsWith('/currentness')) return { status: 200, data: serverFact };
             throw new Error(`Unexpected GET ${url}`);
         });
         vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
@@ -128,18 +166,13 @@ describe('requester Account currentness over the installed socket wiring', () =>
             expect(projected).not.toBeNull();
             expect(await projected?.requesterAccountProjection?.isCurrent()).toBe(true);
             expect(await custody.admitted.isCurrent()).toBe(true);
-            expect(reads.mock.calls.filter(([url]) => String(url).endsWith('/currentness'))).toHaveLength(1);
-            expect(channel.clients).toHaveLength(1);
-            await channel.push('bob', { mode: 'e2ee', version: 2, updatedAt: 2,
-                signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content' });
+            expect(channel.clients).toHaveLength(0);
+            serverFact = { mode: 'e2ee', version: 2, updatedAt: 2,
+                signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content' };
             expect(await projected?.requesterAccountProjection?.isCurrent()).toBe(false);
             expect(await custody.admitted.isCurrent()).toBe(false);
         } finally {
-            await custody?.cleanupOnFailure();
-            reads.mockClear();
-            if (custody) expect(await custody.admitted.isCurrent()).toBe(false);
-            expect(reads).not.toHaveBeenCalled();
-            await channel.close();
+            try { await custody?.cleanupOnFailure(); } finally { await channel.close(); }
         }
     });
 
@@ -228,6 +261,78 @@ describe('requester Account currentness over the installed socket wiring', () =>
             await first.dispose();
             expect(second.isCurrent(fact)).toBe(true);
         } finally { vi.useRealTimers(); await first.dispose(); await second.dispose(); await channel.close(); }
+    });
+
+    it('keeps the shared observation on a live credential after its original holder retires', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        let retired = false;
+        const reads = vi.spyOn(axios, 'get').mockImplementation(async (_url, config) =>
+            retired && config?.headers?.Authorization === 'Bearer original-token'
+                ? { status: 401, data: {} } : { status: 200, data: fact });
+        const scope = { accountId: 'bob', serverBaseUrl: 'https://home.example' };
+        const first = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'original-token' });
+        const remaining = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'remaining-token' });
+        try {
+            await expect(first.read()).resolves.toEqual(fact);
+            await first.dispose();
+            retired = true;
+            await expect(remaining.read()).resolves.toEqual(fact);
+            await channel.push('bob', null);
+            await expect(remaining.read()).resolves.toEqual(fact);
+            expect(reads).toHaveBeenLastCalledWith('https://home.example/v1/account/encryption/currentness',
+                expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer remaining-token' }) }));
+            const connected = channel.clients.filter(client => client.connected);
+            expect(connected).toHaveLength(1);
+            expect(connected[0]?.auth).toMatchObject({ token: 'remaining-token' });
+        } finally {
+            await first.dispose();
+            await remaining.dispose();
+            await channel.close();
+        }
+    });
+
+    it('does not wait for a retired credential HTTP read or publish its late fact after handover', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const oldFact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const currentFact = { ...oldFact, version: 2, updatedAt: 2 };
+        let entered!: () => void;
+        let release!: () => void;
+        const waiting = new Promise<void>(resolve => { entered = resolve; });
+        const held = new Promise<void>(resolve => { release = resolve; });
+        vi.spyOn(axios, 'get').mockImplementation(async (_url, config) => {
+            if (config?.headers?.Authorization === 'Bearer original-token') {
+                entered();
+                // A network boundary can finish after its AbortSignal; publication must remain fenced.
+                await held;
+                return { status: 200, data: oldFact };
+            }
+            return { status: 200, data: currentFact };
+        });
+        const scope = { accountId: 'bob', serverBaseUrl: 'https://home.example' };
+        const original = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'original-token' });
+        const remaining = acquireRequesterAccountEncryptionCurrentness({ ...scope, token: 'remaining-token' });
+        const reading = original.read().then(() => 'resolved', () => 'retired');
+        try {
+            await waiting;
+            await original.dispose();
+            await expect(reading).resolves.toBe('retired');
+            await expect(remaining.read()).resolves.toEqual(currentFact);
+            release();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            await expect(remaining.read()).resolves.toEqual(currentFact);
+            expect(remaining.isCurrent(currentFact)).toBe(true);
+            const connected = channel.clients.filter(client => client.connected);
+            expect(connected).toHaveLength(1);
+            expect(connected[0]?.auth).toMatchObject({ token: 'remaining-token' });
+        } finally {
+            release();
+            await original.dispose();
+            await remaining.dispose();
+            await channel.close();
+        }
     });
 
     it('keeps a pushed fact when an earlier HTTP subscription read finishes later', async () => {

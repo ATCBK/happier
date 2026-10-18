@@ -30,6 +30,8 @@ function createFakeSession(params?: Readonly<{
 describe('importAcpReplaySidechainV1', () => {
   it('imports agent messages and tool events with sidechainId, namespacing tool call ids to avoid collisions', async () => {
     const { session, committed } = createFakeSession();
+    const opaqueToolCallId = ' \tcall/工具+=\n ';
+    const distinctToolCallId = opaqueToolCallId.trim();
 
     await importAcpReplaySidechainV1({
       session,
@@ -39,12 +41,14 @@ describe('importAcpReplaySidechainV1', () => {
       replay: [
         { type: 'message', role: 'user', text: 'ignored user prompt' },
         { type: 'message', role: 'agent', text: 'hello' },
-        { type: 'tool_call', toolCallId: 't1', kind: 'execute', rawInput: { command: 'echo hi' } },
-        { type: 'tool_result', toolCallId: 't1', status: 'success', rawOutput: { stdout: 'hi' } },
+        { type: 'tool_call', toolCallId: opaqueToolCallId, kind: 'execute', rawInput: { command: 'echo hi' } },
+        { type: 'tool_result', toolCallId: opaqueToolCallId, status: 'success', rawOutput: { stdout: 'hi' } },
+        { type: 'tool_call', toolCallId: distinctToolCallId, kind: 'execute', rawInput: { command: 'echo again' } },
+        { type: 'tool_result', toolCallId: distinctToolCallId, status: 'success', rawOutput: { stdout: 'again' } },
       ],
     });
 
-    expect(committed.length).toBe(3);
+    expect(committed.length).toBe(5);
     expect(committed[0].provider).toBe('opencode');
     expect(committed[0].body.sidechainId).toBe('tool_task_1');
     expect(committed[0].body.type).toBe('message');
@@ -52,13 +56,22 @@ describe('importAcpReplaySidechainV1', () => {
     expect(committed[1].body.type).toBe('tool-call');
     expect(committed[1].body.sidechainId).toBe('tool_task_1');
     if (committed[1].body.type !== 'tool-call') throw new Error('expected tool-call');
-    expect(committed[1].body.callId).toBe('sc:tool_task_1:t1');
+    expect(committed[1].body.callId).toBe(`sc:tool_task_1:${opaqueToolCallId}`);
 
     expect(committed[2].body.type).toBe('tool-result');
     expect(committed[2].body.sidechainId).toBe('tool_task_1');
     if (committed[2].body.type !== 'tool-result') throw new Error('expected tool-result');
-    expect(committed[2].body.callId).toBe('sc:tool_task_1:t1');
+    expect(committed[2].body.callId).toBe(`sc:tool_task_1:${opaqueToolCallId}`);
+    expect(committed.slice(1).map(({ body }) =>
+      body.type === 'tool-call' || body.type === 'tool-result' ? body.callId : null)).toEqual([
+      `sc:tool_task_1:${opaqueToolCallId}`,
+      `sc:tool_task_1:${opaqueToolCallId}`,
+      `sc:tool_task_1:${distinctToolCallId}`,
+      `sc:tool_task_1:${distinctToolCallId}`,
+    ]);
     expect(committed.map((entry) => entry.opts.provenance)).toEqual([
+      { kind: 'non_dependent', source: 'sidechain' },
+      { kind: 'non_dependent', source: 'sidechain' },
       { kind: 'non_dependent', source: 'sidechain' },
       { kind: 'non_dependent', source: 'sidechain' },
       { kind: 'non_dependent', source: 'sidechain' },

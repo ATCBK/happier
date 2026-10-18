@@ -2479,6 +2479,11 @@
       "types": "./dist/scm/resolveScmBackendCapabilities.d.ts",
       "default": "./dist/scm/resolveScmBackendCapabilities.js"
     },
+    "./actions/settings/settingMutationReversal": {
+      "happier-source": "./src/actions/settings/settingMutationReversal.ts",
+      "types": "./dist/actions/settings/settingMutationReversal.d.ts",
+      "default": "./dist/actions/settings/settingMutationReversal.js"
+    },
     "./actions/settings/settingsDeclarations": {
       "happier-source": "./src/actions/settings/settingsDeclarations.ts",
       "types": "./dist/actions/settings/settingsDeclarations.d.ts",

@@ -34,6 +34,8 @@ import {
 import type { PluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
 import { createProductionPluginInvocationServiceOwners } from './services/production';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import {
     createPluginInvocationLogger,
     createPluginInvocationSecretRedactor,
@@ -1182,17 +1184,13 @@ describe('target action invocation registry', () => {
     });
 
     it('binds target-action services and context.ui to the same validated current-session interaction owner', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
-        const presentation = Object.freeze({
-            notify: vi.fn(async () => ({ status: 'applied' as const, revision: 'r1' })),
-            setStatus: vi.fn(),
-            setWidget: vi.fn(),
-            purgeOwner: vi.fn(async () => ({ status: 'applied' as const, revision: 'r1' })),
-            replaceComposerText: vi.fn(),
-            present: vi.fn(),
+        // Only the Session state/transport boundary is in memory; policy and reply parsing stay real.
+        const session = createMutableApiSessionClientFixture({ sessionId: 'session-1' });
+        const permissionHandler = createProviderEnforcedPermissionHandler({
+            session, logPrefix: '[Target action interaction]', getWorkspaceWrites: () => 'allow',
         });
         const currentSession = createNativeAgentCurrentSessionUiServices({
-            permissionHandler: { handleToolCall },
+            permissionHandler,
             pluginId: 'acme.alpha',
             contributionId: 'run',
             runtimeId: 'run',
@@ -1201,14 +1199,12 @@ describe('target action invocation registry', () => {
             interactionDeadlineMs: 1_000,
             isCurrent: () => true,
             signal: new AbortController().signal,
-            presentation,
         });
         const serviceOwners = createProductionPluginInvocationServiceOwners({
             loggerSink: { write: () => {} },
         });
-        const createServices = vi.fn(serviceOwners.createServices);
         const registry = createRegistry({
-            createServices,
+            createServices: serviceOwners.createServices,
             resolveHostBinding: serviceOwners.resolveHostBinding,
             resolveCurrentSessionUi: (sessionId) => (
                 sessionId === 'session-1' ? currentSession : null
@@ -1224,19 +1220,33 @@ describe('target action invocation registry', () => {
             }],
         });
 
-        await expect(registry.invoke({
-            pluginId: 'acme.alpha',
-            localId: 'run',
-            input: { value: 'x' },
-            surface: 'cli',
-            sessionId: 'session-1',
-        })).resolves.toEqual({ status: 'executed', value: { echoed: 'approved' } });
-        expect(handleToolCall).toHaveBeenCalledOnce();
-        expect(createServices).toHaveBeenCalledWith(
-            expect.objectContaining({ currentSession }),
-            expect.any(Object),
-        );
-        await serviceOwners.dispose();
+        try {
+            const pending = registry.invoke({
+                pluginId: 'acme.alpha',
+                localId: 'run',
+                input: { value: 'x' },
+                surface: 'cli',
+                sessionId: 'session-1',
+            });
+            await vi.waitFor(() => expect(Object.keys(session.__getAgentState().requests ?? {})).toHaveLength(1));
+            const [[id, request]] = Object.entries(session.__getAgentState().requests ?? {});
+            expect(request).toMatchObject({
+                kind: 'user_action', tool: 'AskUserQuestion',
+                arguments: { questions: [expect.objectContaining({
+                    id: 'confirmation', question: 'Use the selected account?',
+                })] },
+            });
+            await expect(session.rpcHandlerManager.invokeLocal('session.user_action.answer', {
+                id, approved: true, answers: { confirmation: ['confirm'] },
+            })).resolves.toBeUndefined();
+            await expect(pending).resolves.toEqual({ status: 'executed', value: { echoed: 'approved' } });
+            expect(Object.keys(session.__getAgentState().requests ?? {})).toHaveLength(0);
+            expect(Object.keys(session.__getAgentState().completedRequests ?? {})).toHaveLength(1);
+        } finally {
+            await permissionHandler.abortPendingRequestsAndFlush('test cleanup');
+            await serviceOwners.dispose();
+            await session.close();
+        }
     });
 
     it('fails closed when late-bound occurrence currentness no longer matches the registered action', async () => {

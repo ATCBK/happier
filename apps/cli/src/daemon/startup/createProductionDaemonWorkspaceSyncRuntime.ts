@@ -1,3 +1,4 @@
+import { z as zClassic } from 'zod';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
@@ -1485,7 +1486,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
           return input.readProjectWorkerDependencies(workspaceRefId, relationship.relationshipId);
         }
         try {
-          return ProjectWorkerDependencyV1Schema.array().parse(await factories.callMachineRpc({
+          return zClassic.array(ProjectWorkerDependencyV1Schema).parse(await factories.callMachineRpc({
             credentials: input.credentials, machineId,
             method: RPC_METHODS.DAEMON_PROJECT_WORKER_DEPENDENCIES,
             request: { serverId, machineId,

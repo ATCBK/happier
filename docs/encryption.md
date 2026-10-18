@@ -51,6 +51,18 @@ encryption-currentness admission. Missing or malformed readiness remains unknown
 not inferred from key presence. This endpoint is development-only; it is absent
 from the inspected 0.2.11 stable/preview and current 0.2 predecessor contracts.
 
+In 0.3 development, the CLI's
+`api/client/accountEncryptionCurrentnessObservation.ts` owns the live Account/Home
+observation shared by requester admission and connected-service mode reads.
+Only exact credentials independently authenticated by a live admitted holder
+can borrow that observation; other credentials use their own fresh HTTP read.
+When the transport credential loses its last holder, the existing observation
+withdraws its fact and reconnects with a remaining admitted credential; stale
+transport events and HTTP responses cannot publish through that handover.
+Readers outside a subscribed lifetime retain fresh HTTP reads. A disconnected
+or invalidated observation grants no currentness; canceling one reader leaves
+other subscription holders active.
+
 After the Account-mode decision, each persisted row or domain envelope remains
 authoritative for its representation until the canonical transition owner rewrites
 it. Callers must not infer mode from a token, credential shape, key presence,

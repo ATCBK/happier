@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
@@ -28,8 +29,8 @@ export type AgentCliInstallOutcome = Readonly<{ agentId: string; jobId: string; 
 type AgentCliOptions = Readonly<{ argv: readonly string[]; signal?: AbortSignal; actionExecutionDeps?: Partial<ActionCliExecutionDeps>;
   consumeInstallOutcome?: (receipt: AgentCliInstallOutcome) => boolean | Promise<boolean> }>;
 // The compiled CLI success adapter removes the transport's ok:true envelope.
-const InstallStartPayloadSchema = DaemonAgentInstallStartResponseSchema.options[0].omit({ ok: true });
-const InstallReadPayloadSchema = DaemonAgentInstallReadResponseSchema.options[0].omit({ ok: true });
+const InstallStartPayloadSchema = zMini.omit(DaemonAgentInstallStartResponseSchema._zod.def.options[0], { ok: true });
+const InstallReadPayloadSchema = zMini.omit(DaemonAgentInstallReadResponseSchema._zod.def.options[0], { ok: true });
 
 // This reads the existing Machine list projection; extra presentation fields
 // carry no targeting authority and never enter install inputs.

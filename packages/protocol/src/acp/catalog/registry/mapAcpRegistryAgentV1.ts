@@ -12,7 +12,9 @@ export function selectAcpRegistryDistributionV1(distributions: AcpRegistryAgentV
 }
 
 /** The only ACP URL → archive/raw executable conversion, shared by mapping and platform fit. */
-export function mapAcpRegistryBinaryAssetsV1(binary: NonNullable<AcpRegistryAgentV1['distributions']['binary']>) {
+export function mapAcpRegistryBinaryAssetsV1(
+  binary: NonNullable<AcpRegistryAgentV1['distributions']['binary']>,
+): ReturnType<typeof PinnedArchiveAssetsByPlatformSchema.safeParse> {
   return PinnedArchiveAssetsByPlatformSchema.safeParse(Object.fromEntries(Object.entries(binary).map(([platform, asset]) => [platform, {
     archiveUrl: asset.archiveUrl, ...(asset.sha256 ? { sha256: asset.sha256 } : {}),
     // Upstream FORMAT.md also names .tbz2; both bzip2 aliases remain archives with unsupported extraction.

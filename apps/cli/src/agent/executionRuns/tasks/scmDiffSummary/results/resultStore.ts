@@ -30,8 +30,8 @@ const pendingInputSchema = z.object({ inputId: z.string().min(1), baseRevision: 
 }).strict();
 const storedSchema = z.object({
   result: ScmDiffSummaryResultSchema, cwd: z.string().min(1), sessionId: z.string().min(1).optional(),
-  undoOutput: ScmDiffSummaryGenerateOutputSchema.optional(), inputs: z.array(pendingInputSchema),
-  undoWalkthroughProvenance: ScmWalkthroughProvenanceSchema.optional(),
+  undoOutput: z.optional(ScmDiffSummaryGenerateOutputSchema), inputs: z.array(pendingInputSchema),
+  undoWalkthroughProvenance: z.optional(ScmWalkthroughProvenanceSchema),
   reviewFindingCitations: reviewFindingCitationsSchema.optional(),
   generation: z.object({ key: z.string().min(1), runId: z.string().min(1).optional(), inputId: z.string().min(1).optional() }).strict().optional(),
 }).strict();

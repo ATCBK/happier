@@ -1,4 +1,8 @@
 import type {
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+} from '@agentclientprotocol/sdk';
+import type {
   SessionPermissionFollowUpPromptIntent as SessionPermissionFollowUpPromptIntentV1,
 } from '@happier-dev/plugin-sdk/sessions';
 import type { SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol';
@@ -16,6 +20,8 @@ export type AcpPermissionDecisionResult = Readonly<{
 export type AcpPermissionCausalAuthority = SessionInputCausalPermissionAuthorityV1;
 
 export type AcpPermissionCallContext = Readonly<{
+  /** Cancellation of this exact native ACP request, independent of its turn. */
+  signal?: AbortSignal;
   /** Host-only child Run policy input; never an admitted user-input authority. */
   mcpToolPolicy?: Readonly<{
     permissionMode: string;
@@ -75,6 +81,15 @@ export interface AcpPermissionHandler {
     input: unknown,
     context?: AcpPermissionCallContext,
   ): Promise<AcpPermissionDecisionResult>;
+
+  /**
+   * Handle an ACP `elicitation/create` request through the canonical session
+   * interactions service.
+   */
+  handleElicitation?(
+    request: CreateElicitationRequest,
+    context?: AcpPermissionCallContext,
+  ): Promise<CreateElicitationResponse>;
 
   /**
    * Abort one exact provider permission occurrence and settle its durable host

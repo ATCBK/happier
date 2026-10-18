@@ -1,3 +1,4 @@
+import { z as zClassic } from 'zod';
 import type {
     PluginContributionIntrospectionProjectionV1,
     PluginDiagnosticRecordV1,
@@ -266,7 +267,7 @@ function resolveActionScopes(
     // Scope is a manifest-declared semantic fact. Surface only controls where
     // an Action can be invoked; deriving scope from it silently rewrites the
     // current qualified Action's host context.
-    return PluginActionScopeV2Schema.array().min(1).parse(
+    return zClassic.array(PluginActionScopeV2Schema).min(1).parse(
         action.definition.scopes,
     );
 }

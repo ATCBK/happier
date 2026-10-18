@@ -914,7 +914,13 @@ const PluginContributesV2BaseSchema = lazyZodSchema(() => buildPluginContributio
   PLUGIN_CORE_CONTRIBUTION_FAMILIES_V2,
 ));
 
-function createPluginContributesV2SchemaWithoutDefault() {
+type PluginContributesV2BaseShape = (typeof PluginContributesV2BaseSchema)['shape'];
+export type PluginContributesV2Shape = PluginContributesV2BaseShape & {
+  mcp: typeof PluginMcpContributesV1Schema;
+  ui: typeof PluginUiContributionsV2Schema;
+};
+
+function createPluginContributesV2SchemaWithoutDefault(): z.ZodMiniObject<PluginContributesV2Shape> {
   return lazyZodSchema(() => z.extend(PluginContributesV2BaseSchema, {
   mcp: PluginMcpContributesV1Schema,
   ui: PluginUiContributionsV2Schema,
@@ -954,8 +960,6 @@ function createPluginContributesV2SchemaWithoutDefault() {
   validateTargetedContributionEnvelopeBoundsV1(value, ctx);
 })));
 }
-type PluginContributesV2ShapeDefinition = ReturnType<typeof createPluginContributesV2SchemaWithoutDefault>['shape'];
-export interface PluginContributesV2Shape extends PluginContributesV2ShapeDefinition {}
 const PluginContributesV2SchemaWithoutDefault: z.ZodMiniObject<PluginContributesV2Shape> =
   lazyZodSchema(createPluginContributesV2SchemaWithoutDefault);
 

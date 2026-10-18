@@ -1,3 +1,4 @@
+import { z as zClassic } from 'zod';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -144,7 +145,7 @@ export function unwrapActionResultForRpc(actionId: ActionId, result: ActionExecu
     if (actionId === 'projects.worker.copy.retire') {
         const outcomeUnknown = readObjectValue(result.details, 'kind') === 'outcomeUnknown';
         if (result.errorCode === 'workspace_sync_relationship_in_use') {
-            const dependencies = ProjectWorkerDependencyV1Schema.array().safeParse(readObjectValue(result.details, 'dependencies'));
+            const dependencies = zClassic.array(ProjectWorkerDependencyV1Schema).safeParse(readObjectValue(result.details, 'dependencies'));
             if (dependencies.success) details = { ...(outcomeUnknown ? { kind: 'outcomeUnknown' } : {}), dependencies: dependencies.data };
         }
         if (outcomeUnknown && details === undefined) details = { kind: 'outcomeUnknown' };

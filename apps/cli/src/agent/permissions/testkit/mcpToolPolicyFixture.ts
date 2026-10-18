@@ -23,10 +23,24 @@ import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engin
 import { createNativeAgentExecutionRunHostServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionHostServiceOwners';
 import { ServerBoundPermissionRpcHandlerManager } from './serverBoundPermissionRpcHandlerManager';
 
+type McpToolPolicyFixture = {
+  fixtureServer: AgentMcpToolPolicyContractInput['fixtureServer'];
+  services: ReturnType<typeof createNativeAgentSessionServices>;
+  readonly toolExecution: ReturnType<typeof createNativeAgentExecutionRunHostServices>['toolExecution'];
+  beginInvocation(scope: 'once' | 'session'): string;
+  permissions(): AgentMcpToolPolicyPermissionObservation[];
+  callServer(
+    key: string,
+    tool: string,
+    args: Readonly<Record<string, unknown>>,
+    nativeConfig?: AgentSessionMcpLaunchConfig,
+  ): ReturnType<Client['callTool']>;
+};
+
 /** Real host policy and real stdio→HTTP MCP, shared by native protocol fixtures.
  * Session state/RPC and Saved Secret storage are external boundary fixtures;
  * the catalog mutation, materializer, bridge and permission owners stay real. */
-export function createMcpToolPolicyFixture(pluginId: string, contributionId: string) {
+export function createMcpToolPolicyFixture(pluginId: string, contributionId: string): McpToolPolicyFixture {
   const promptedIds = new Set<string>();
   let rpcFailure: unknown;
   let rejectRpc!: (error: unknown) => void;

@@ -1168,7 +1168,7 @@ export function createDaemonControlApp({
   });
   typed.post('/doctor/vitals', {
     onRequest: requireAuth,
-    schema: { body: z.object({}).strict(), response: { 200: DoctorSnapshotResourceVitalsSchema.nullable() } },
+    schema: { body: z.object({}).strict(), response: { 200: z.nullable(DoctorSnapshotResourceVitalsSchema) } },
   }, async () => readDoctorResourceVitals?.() ?? null);
   typed.post('/agents/install/start', {
     onRequest: requireAuth,
@@ -1997,7 +1997,7 @@ export function createDaemonControlApp({
         originDaemonExecutionGenerationV1: z.string().min(1).max(256).optional(),
         sessionId: z.string().min(1),
         switchesThisTurn: z.number().int().nonnegative().optional(),
-        resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1Schema.optional(),
+        resumePromptMode: z.optional(SessionUsageLimitRecoveryResumePromptModeV1Schema),
         classification: z.object({
           kind: ConnectedServiceRuntimeAuthFailureKindSchema,
           serviceId: z.string().min(1),
@@ -2013,7 +2013,7 @@ export function createDaemonControlApp({
         200: z.object({
           ok: z.literal(true),
           result: z.unknown(),
-          resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1Schema.optional(),
+          resumePromptMode: z.optional(SessionUsageLimitRecoveryResumePromptModeV1Schema),
           recoveryReceipt: z.object({
             reportId: z.string().min(1).max(256),
             attemptId: z.string().min(1).max(256),
@@ -2406,7 +2406,7 @@ export function createDaemonControlApp({
       body: z.object({
         sessionId: z.string().min(1),
         snapshot: ProviderAccountUsageSnapshotV1Schema,
-        source: ConnectedServiceUsageSourceV1Schema.optional(),
+        source: z.optional(ConnectedServiceUsageSourceV1Schema),
         deriveCredentialFingerprintFromSource: z.literal(true).optional(),
         credentialFingerprint: z.string().regex(/^sha256:[a-f0-9]{8}$/u).nullable().optional(),
         policyDisposition: z.literal('evidence_only').optional(),

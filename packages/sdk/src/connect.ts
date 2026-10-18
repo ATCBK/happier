@@ -12,6 +12,7 @@ import type { AccountApiTokenChildCreateRequestV1, AccountApiTokenSelfV1, Accoun
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { buildAccountStoredContentCompatibilityHttpHeadersV1, CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows';
+import { z } from 'zod/mini';
 import { createHttpExchange } from '#http';
 import type { HttpExchange, HttpResponse, HttpResponseBody } from './http/httpExchange.js';
 
@@ -326,7 +327,7 @@ export type HappierApiTokens = Readonly<{
   self: (options?: Readonly<{ signal?: AbortSignal }>) => Promise<AccountApiTokenSelfV1>;
 }>;
 
-const ChildTokenCreateInputSchema = AccountApiTokenChildCreateRequestV1Schema.omit({ tokenId: true });
+const ChildTokenCreateInputSchema = z.omit(AccountApiTokenChildCreateRequestV1Schema, { tokenId: true });
 
 export type HappierClient = Readonly<{
   actions: HappierActions;

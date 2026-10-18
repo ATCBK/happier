@@ -1,6 +1,11 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
-import { SessionAuthoringTerminalV1Schema } from './authoring/creationFieldsV1.js';
+import * as zMini from 'zod/mini';
+import {
+  SessionAuthoringTerminalModeV1Schema,
+  SessionAuthoringTmuxTerminalV1Schema,
+  SessionAuthoringHerdrTerminalV1Schema,
+} from './authoring/creationFieldsV1.js';
 import { OperationUpdateRequiredV1Schema } from '../compat/operationUpdateRequiredV1.js';
 import { SessionAccessErrorCodeV1Schema } from './access/sessionAccessOperationsV1.js';
 
@@ -17,11 +22,11 @@ export { SessionSpawnLaunchErrorV1Schema, type SessionSpawnLaunchErrorV1 } from 
 import { SessionSpawnLaunchErrorV1Schema, type SessionSpawnLaunchErrorV1 } from './creation/sessionSpawnLaunchErrorV1.js';
 
 // Process launch accepts the existing daemon modes, not integrated UI authoring.
-export const SpawnSessionTerminalSchema = lazyZodSchema(() => SessionAuthoringTerminalV1Schema.pick({ mode: true, tmux: true, herdr: true }).extend({
-  mode: SessionAuthoringTerminalV1Schema.shape.mode.unwrap().exclude(['integrated']).optional(),
-  tmux: SessionAuthoringTerminalV1Schema.shape.tmux.unwrap().strip().optional(),
-  herdr: SessionAuthoringTerminalV1Schema.shape.herdr.unwrap().strip().optional(),
-}).strip());
+export const SpawnSessionTerminalSchema = lazyZodSchema(() => zMini.object({
+  mode: zMini.optional(zMini.enum(SessionAuthoringTerminalModeV1Schema.options.filter(mode => mode !== 'integrated'))),
+  tmux: zMini.optional(zMini.object(SessionAuthoringTmuxTerminalV1Schema.shape)),
+  herdr: zMini.optional(zMini.object(SessionAuthoringHerdrTerminalV1Schema.shape)),
+}));
 
 /** Fresh execution authority is bound to the exact opaque user-message local id. */
 export const SpawnSessionExecutionAuthorizationSchema = lazyZodSchema(() => z.object({
@@ -220,7 +225,7 @@ export const SessionCreationTerminalSpawnErrorDetailSchema = lazyZodSchema(() =>
     kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.SESSION_CREATION_INITIAL_TRIGGER_REFUSED),
     code: z.enum(['invalid_input', 'target_unavailable', 'feature_disabled']),
   }).strict(),
-  OperationUpdateRequiredV1Schema.extend({
+  zMini.extend(OperationUpdateRequiredV1Schema, {
     operation: z.literal('session.spawn_new'),
     component: z.enum(['server', 'daemon']),
     reason: z.literal('session_initial_access_update_required'),
@@ -238,9 +243,9 @@ export const TerminalHostUnavailableSpawnErrorDetailSchema = lazyZodSchema(() =>
 export type TerminalHostUnavailableSpawnErrorDetail = z.infer<typeof TerminalHostUnavailableSpawnErrorDetailSchema>;
 
 /** Optional presentation diagnostic; the existing spawn outcome and error code remain authoritative. */
-export const SpawnFailureSpawnErrorDetailSchema = lazyZodSchema(() => SpawnFailureV1Schema.extend({
+export const SpawnFailureSpawnErrorDetailSchema = lazyZodSchema(() => zMini.extend(SpawnFailureV1Schema, {
   kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.SPAWN_FAILURE),
-}).strict());
+}));
 export type SpawnFailureSpawnErrorDetail = z.infer<typeof SpawnFailureSpawnErrorDetailSchema>;
 
 /** Exact daemon proof: startup failed before input, and its wrapper/runner custody was retired. */

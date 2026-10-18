@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { ComposerContentHandleV1Schema, MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { FoundSkillDownloadRequestV1Schema, type FoundSkillDownloadRequestV1 } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
 import type { RegistryDownloadRequestV1 } from '@happier-dev/protocol/registries';
@@ -36,7 +37,7 @@ export type DirectTransferExportPrepareRequest =
     }>;
 
 const DirectTransferExportPrepareRequestSchema = z.union([
-    asHostProtocolZod(FoundSkillDownloadRequestV1Schema.extend({ t: z.literal('prompt_asset_download_v1') }).strict()),
+    asHostProtocolZod(zMini.extend(FoundSkillDownloadRequestV1Schema, { t: z.literal('prompt_asset_download_v1') })),
     z.object({
         t: z.literal('prompt_registry_download_v1'),
         sourceId: z.string().min(1),
@@ -52,9 +53,9 @@ const DirectTransferExportPrepareRequestSchema = z.union([
         confinedToWorkingDirectory: z.boolean().optional(),
     }).strict(),
     asHostProtocolZod(WorkspaceSyncSeedExportPrepareV1Schema),
-    asHostProtocolZod(WorkspaceSyncTargetConflictStageV1Schema.extend({
+    asHostProtocolZod(zMini.extend(WorkspaceSyncTargetConflictStageV1Schema, {
         t: z.literal('workspace_sync_resolution_v1'),
-    }).strict()),
+    })),
     z.object({
         t: z.literal('composer_media_stage_inspect_v1'),
         handle: asHostProtocolZod(ComposerContentHandleV1Schema),

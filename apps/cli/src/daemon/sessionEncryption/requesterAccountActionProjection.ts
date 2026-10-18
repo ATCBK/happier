@@ -5,7 +5,7 @@ import { ExternalActionExecutionAuthorizationV1Schema,
   type ExternalActionExecutionAuthorizationBindingV1,
   type ExternalActionRequesterAccountProjectionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
-import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness, sameRequesterAccountEncryptionCurrentness, isRequesterAccountEncryptionCurrentnessObserved } from './requesterAccountEncryptionCurrentness';
+import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness, sameRequesterAccountEncryptionCurrentness, isRequesterAccountEncryptionCurrentnessObserved } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import type { AdmittedRequesterSessionBootstrap } from './requesterSessionCredentials';
@@ -91,6 +91,9 @@ async function projectAdmittedAccountCustody(
     const isCurrent = async (): Promise<boolean> => {
       try {
         if (input.signal?.aborted || !isCustodyLive()) return false;
+        // A held decision cannot refresh away a withdrawn encryption witness.
+        if (!isRequesterAccountEncryptionCurrentnessObserved({ accountId: stamp.accountId,
+          token: bootstrap.credentials.token, serverBaseUrl: bootstrap.serverHttpBaseUrl }, currentness)) return false;
         const next = await readRequesterAccountEncryptionCurrentness({ accountId: stamp.accountId, token: bootstrap.credentials.token,
           serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
         // Account seq also advances for unrelated activity; encryption custody follows its own mode/key transition.
@@ -240,6 +243,15 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
   if (!parsed.success || parsed.data.binding.serverIdentityId !== input.serverIdentityId
     || input.signal?.aborted || !await input.isCurrent()) return null;
+  let profile: Awaited<ReturnType<typeof fetchAccountProfile>>;
+  try {
+    profile = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => fetchAccountProfile({
+      token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}),
+    }));
+  } catch {
+    return null;
+  }
+  if (profile.id !== parsed.data.binding.accountId || input.signal?.aborted || !await input.isCurrent()) return null;
   const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: parsed.data.binding.accountId,
     token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl });
   let admitted = false;
@@ -255,12 +267,11 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   };
   const isCurrent = async () => live && !input.signal?.aborted && await input.isCurrent();
   try {
-    const [profile, currentness] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
-      fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) }),
-      readRequesterAccountEncryptionCurrentness({ accountId: parsed.data.binding.accountId, token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
-        ...(input.signal ? { signal: input.signal } : {}) }),
-    ]));
-    if (profile.id !== parsed.data.binding.accountId || parsed.data.binding.accountEncryptionMode !== currentness.mode
+    const currentness = await readRequesterAccountEncryptionCurrentness({
+      accountId: parsed.data.binding.accountId, token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    if (parsed.data.binding.accountEncryptionMode !== currentness.mode
       || (currentness.mode === 'plain' ? input.credentials.encryption !== null : input.credentials.encryption === null)
       || !await isCurrent()) return null;
     if (currentness.mode === 'e2ee' && currentness.contentKeyFingerprint && input.credentials.encryption) {

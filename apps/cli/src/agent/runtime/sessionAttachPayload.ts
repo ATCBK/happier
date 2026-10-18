@@ -51,16 +51,16 @@ export type SessionAttachPayload =
   | LegacyAttachPayload;
 
 const AttachSnapshotSchema = z.object({
-  reportsTo: SessionReportsToV1Schema.optional(),
-  origin: SessionAwarenessOriginV1Schema.optional(),
+  reportsTo: z.optional(SessionReportsToV1Schema),
+  origin: z.optional(SessionAwarenessOriginV1Schema),
   metadata: z.record(z.string(), z.unknown()),
   metadataVersion: z.number().int().nonnegative(),
   agentState: z.record(z.string(), z.unknown()).nullable(),
   agentStateVersion: z.number().int().nonnegative(),
   pendingExecutionRunIds: z.array(ExecutionRunIdSchema).optional(),
   metadataLayoutVersion: z.literal(SESSION_METADATA_LAYOUT_VERSION_V1).optional(),
-  ownerMetadata: SessionOwnerMetadataV1Schema.optional(),
-  ownerMetadataEnvelope: SessionOwnerMetadataEnvelopeV1Schema.optional(),
+  ownerMetadata: z.optional(SessionOwnerMetadataV1Schema),
+  ownerMetadataEnvelope: z.optional(SessionOwnerMetadataEnvelopeV1Schema),
 });
 
 const LegacyAttachPayloadSchema = z.object({

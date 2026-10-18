@@ -44,7 +44,7 @@ const DaemonSessionMarkerSchema = z.object({
   startedBy: z.enum(['daemon', 'terminal']).optional(),
   cwd: z.string().optional(),
   linuxLaunchUnit: z.string().refine(unit => unit.startsWith('happier-') && !unit.includes('/') && unit.endsWith('.scope')).optional(),
-  requesterWorkAttributionV1: RequesterWorkAttributionStoredReadV1Schema.optional(),
+  requesterWorkAttributionV1: z.optional(RequesterWorkAttributionStoredReadV1Schema),
   // Legacy positive-classification witness and diagnostic snapshot. Mutable command text is not process generation.
   processCommandHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   // Canonical OS process-generation witness paired with the PID.
@@ -84,7 +84,7 @@ const DaemonSessionMarkerSchema = z.object({
     RunnerManagedDependencyRetentionV1Schema.optional(),
   // Required startup identity persisted before runtime open; not proof of application.
   agentSessionStartupInstructionsMarkerV1:
-    AgentSessionStartupInstructionsMarkerV1Schema.optional(),
+    z.optional(AgentSessionStartupInstructionsMarkerV1Schema),
 }).superRefine((marker, context) => {
   if (
     marker.agentRuntimeDaemonServiceActiveAdmission
