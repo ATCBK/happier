@@ -1140,6 +1140,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         <SelectionListBody
             mode="measure"
             step={currentStep}
+            emptyQuery={filterQuery}
             rootTestID={resolvedTestId}
             selectedOptionIds={selectedOptionIds}
             multiselectable={selection.kind === 'multiple'}
@@ -1260,6 +1261,8 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         <SelectionListBody
             surface={surface}
             step={currentStep}
+            emptyQuery={filterQuery}
+            onClearInput={handleClearInput}
             rootTestID={resolvedTestId}
             selectedOptionIds={selectedOptionIds}
             multiselectable={selection.kind === 'multiple'}

@@ -1244,6 +1244,7 @@ const ca: BoardsTranslations = {
         addHint: 'Afegeix',
         addAndPlaceHint: 'Afegeix i col·loca',
         empty: 'No hi ha coincidències.',
+        noMatch: ({ query }) => `Cap element coincideix amb “${query}”`,
     },
     empty: {
         title: 'Tria què mostra aquest tauler',

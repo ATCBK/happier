@@ -1266,6 +1266,7 @@ const ru: BoardsTranslations = {
         addHint: 'Добавить',
         addAndPlaceHint: 'Добавить и разместить',
         empty: 'Ничего не найдено.',
+        noMatch: ({ query }) => `Ничего не найдено по запросу «${query}»`,
     },
     empty: {
         title: 'Выберите, что покажет эта доска',

@@ -495,6 +495,11 @@ export type SelectionListStep = Readonly<{
     autoFocusFirstOption?: boolean;
     /** Override the empty-state copy for this step. */
     emptyStateLabel?: string;
+    /**
+     * The empty state while a search is typed: its sentence (it may name the query) and, when `clearLabel`
+     * is given, a quiet link that empties the search. A search that finds nothing is never a dead end.
+     */
+    emptyStateForQuery?: (query: string) => Readonly<{ label: string; clearLabel?: string }>;
     /** Ordered array of section descriptors; the array order IS the visual order. */
     sections: ReadonlyArray<SelectionListSectionDescriptor>;
     /**

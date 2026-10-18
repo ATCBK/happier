@@ -1244,6 +1244,7 @@ const es: BoardsTranslations = {
         addHint: 'Añadir',
         addAndPlaceHint: 'Añadir y colocar',
         empty: 'No hay coincidencias.',
+        noMatch: ({ query }) => `Nada coincide con “${query}”`,
     },
     empty: {
         title: 'Elige qué muestra este tablero',

@@ -1244,6 +1244,7 @@ const it: BoardsTranslations = {
         addHint: 'Aggiungi',
         addAndPlaceHint: 'Aggiungi e posiziona',
         empty: 'Nessun risultato.',
+        noMatch: ({ query }) => `Niente corrisponde a “${query}”`,
     },
     empty: {
         title: 'Scegli cosa mostra questa bacheca',

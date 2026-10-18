@@ -1255,6 +1255,7 @@ const pl: BoardsTranslations = {
         addHint: 'Dodaj',
         addAndPlaceHint: 'Dodaj i umieść',
         empty: 'Nic nie pasuje.',
+        noMatch: ({ query }) => `Nic nie pasuje do „${query}”`,
     },
     empty: {
         title: 'Wybierz, co pokazuje ta tablica',

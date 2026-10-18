@@ -1244,6 +1244,7 @@ const fr: BoardsTranslations = {
         addHint: 'Ajouter',
         addAndPlaceHint: 'Ajouter et placer',
         empty: 'Aucun résultat.',
+        noMatch: ({ query }) => `Rien ne correspond à « ${query} »`,
     },
     empty: {
         title: 'Choisis ce que montre ce tableau',

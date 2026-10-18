@@ -1238,6 +1238,7 @@ const de: BoardsTranslations = {
         addHint: 'Hinzufügen',
         addAndPlaceHint: 'Hinzufügen und platzieren',
         empty: 'Nichts passt.',
+        noMatch: ({ query }) => `Nichts passt zu „${query}“`,
     },
     empty: {
         title: 'Wähle, was dieses Board zeigt',

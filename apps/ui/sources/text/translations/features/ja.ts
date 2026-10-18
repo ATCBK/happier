@@ -1244,6 +1244,7 @@ const ja: BoardsTranslations = {
         addHint: '追加',
         addAndPlaceHint: '追加して配置',
         empty: '一致するものはありません。',
+        noMatch: ({ query }) => `「${query}」に一致するものはありません`,
     },
     empty: {
         title: 'このボードに表示するものを選びましょう',

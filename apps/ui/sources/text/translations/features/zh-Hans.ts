@@ -1239,6 +1239,7 @@ const zhHans: BoardsTranslations = {
         addHint: '添加',
         addAndPlaceHint: '添加并放置',
         empty: '没有匹配项。',
+        noMatch: ({ query }) => `没有与“${query}”匹配的内容`,
     },
     empty: {
         title: '选择此面板显示什么',

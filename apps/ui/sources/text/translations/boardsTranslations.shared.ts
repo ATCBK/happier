@@ -95,6 +95,8 @@ export type BoardsTranslations = Readonly<{
         addHint: string;
         addAndPlaceHint: string;
         empty: string;
+        /** The no-match line while a search is typed; it names the search. */
+        noMatch: (params: Readonly<{ query: string }>) => string;
     }>;
     empty: Readonly<{ title: string; body: string; action: string }>;
     /** Configured widgets on a board (lab `dashboards` L1, G1): the Add group, the card menu and arrivals. */
@@ -227,6 +229,7 @@ export const en: BoardsTranslations = {
         addHint: 'Add',
         addAndPlaceHint: 'Add and place',
         empty: 'Nothing matches.',
+        noMatch: ({ query }) => `Nothing matches “${query}”`,
     },
     empty: {
         title: 'Pick what this board shows',

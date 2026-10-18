@@ -1244,6 +1244,7 @@ const pt: BoardsTranslations = {
         addHint: 'Adicionar',
         addAndPlaceHint: 'Adicionar e posicionar',
         empty: 'Nada encontrado.',
+        noMatch: ({ query }) => `Nada corresponde a “${query}”`,
     },
     empty: {
         title: 'Escolha o que este quadro mostra',

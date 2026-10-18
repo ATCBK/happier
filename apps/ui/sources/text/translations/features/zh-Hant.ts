@@ -1239,6 +1239,7 @@ const zhHant: BoardsTranslations = {
         addHint: '加入',
         addAndPlaceHint: '新增並放置',
         empty: '沒有符合的項目。',
+        noMatch: ({ query }) => `沒有符合「${query}」的內容`,
     },
     empty: {
         title: '選擇此面板顯示什麼',

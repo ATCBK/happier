@@ -295,6 +295,8 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
             id: 'board-add',
             inputPlaceholder: t('boards.add.search'),
             emptyStateLabel: t('boards.add.empty'),
+            // Typed and found nothing: say what was searched and clear it in place, as the Home gallery does.
+            emptyStateForQuery: (query) => ({ label: t('boards.add.noMatch', { query }), clearLabel: t('selectionList.clearInput') }),
             footerHints: [
                 { id: 'add', label: '↵', description: t('boards.add.addHint') },
                 { id: 'add-and-place', label: '⌘↵', description: t('boards.add.addAndPlaceHint') },
@@ -354,6 +356,8 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
             ) : undefined}
             listAccessibilityLabel={t('boards.add.title')}
             autoFocusInputOnWeb
+            // The panel keeps its size while a search narrows the rows (nothing resizes under the pointer).
+            heightBehavior="fixedToMaxHeight"
             maxHeight={props.maxHeight}
             onSelect={onSelect}
             onCommandSelect={onCommandSelect}
