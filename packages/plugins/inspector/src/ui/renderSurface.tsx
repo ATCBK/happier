@@ -26,6 +26,7 @@ import {
   Text,
   defineUiSurface,
   usePluginTheme,
+  usePluginHostReadiness,
   usePluginTranslation,
   useSurfaceContext,
 } from '@happier-dev/plugin-ui';
@@ -222,6 +223,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
   const [selfCheckSettlement, setSelfCheckSettlement] = React.useState<InspectorSelfCheckSettlement>('not-run');
   const [quickActionsContextMenuOpen, setQuickActionsContextMenuOpen] = React.useState(false);
   const surfaceContext = useSurfaceContext();
+  const readiness = usePluginHostReadiness();
   const theme = usePluginTheme();
   // §3.2: built-in and external authors use the same public translation seam,
   // including bounded interpolation of host-projected plugin messages.
@@ -246,6 +248,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
   }, [canOpenSurface, hostApi, text]);
 
   const refreshPluginList = React.useCallback((afterReload = false): Promise<void> => {
+    if (readiness.pending) return Promise.resolve();
     if (inventoryRead.current && !afterReload) return inventoryRead.current;
     if (!hostApi) {
       setError({ kind: 'inventory', code: 'host_api_unavailable',
@@ -280,12 +283,12 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
     });
     inventoryRead.current = read;
     return read;
-  }, [hostApi, text]);
+  }, [hostApi, readiness.pending, text]);
 
   React.useEffect(() => {
     void refreshPluginList();
     return () => { inventoryRead.current = null; };
-  }, [refreshPluginList]);
+  }, [refreshPluginList, readiness.revision]);
 
   const reloadPlugin = React.useCallback(async (pluginId: string) => {
     if (!hostApi) {
@@ -461,13 +464,9 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
         description="Inspect installed plugins, diagnostics, and reload state."
         descriptionKey="plugins.inspector.description"
         leading={<BrandMark size="medium" externallyLabelled />}
-        meta={[
-          ...(locationLabel ? [{ key: 'location', text: locationLabel, testID: 'inspector-location' }] : []),
-          ...(plugins ? [{
-            key: 'count',
-            text: text('plugins.inspector.surface.pluginCount', '{count} plugins', { count: plugins.length }),
-          }] : []),
-        ]}
+        // The header is the same height while the inventory loads and once it has: the plugin count
+        // lives beside the inventory it counts, not on a line that appears after the title.
+        meta={locationLabel ? [{ key: 'location', text: locationLabel, testID: 'inspector-location' }] : undefined}
         actions={quickMenus}
       />
       <ItemGroup
@@ -501,6 +500,14 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
         description={text(
           'plugins.inspector.surface.inventoryDescription',
           'Search admitted plugins, inspect diagnostics, and reload one development plugin at a time.',
+        )}
+        action={(
+          // Held (a blank line) until the inventory answers, so the count arrives without moving the section.
+          <Text
+            testID="inspector-plugin-count"
+            value={plugins ? text('plugins.inspector.surface.pluginCount', '{count} plugins', { count: plugins.length }) : '\u00A0'}
+            tone="secondary"
+          />
         )}
         surface="none"
       />
@@ -625,7 +632,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
           </Stack>
         ) : null}
 
-        {error ? (
+        {error && !(error.kind === 'inventory' && readiness.pending) ? (
           // In the page column with the sections around it (an untitled page section), not across the pane.
           <ItemGroup surface="none">
             <Banner
@@ -747,7 +754,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
       minDetailWidth={0}
       preferredListRatio={1}
       accessibilityLabel={text('plugins.inspector.surface.inventory', 'Installed plugins')}
-      loading={plugins === null && (loading || !error)}
+      loading={plugins === null && (loading || !error || readiness.pending)}
       anatomy={{
         glyph: () => null,
         title: inspectorPluginLabel,
