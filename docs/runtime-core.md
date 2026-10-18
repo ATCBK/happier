@@ -1312,7 +1312,7 @@ Whole-Session permission reset reaches the existing Session request store even w
 
 Cancellation removes only the cached decisions it captured before persistence, so a newer decision created while an older scope stops remains available. A cancellation that starts before a queued native decision applies prevents that new application; recovery of an already-applied native choice retains its existing receipt boundary.
 
-ACP Stop cancels the provider independently of permission-state persistence. A failed permission cancellation retains the request for retry and emits the default file-log event `permission_request_cancellation_persistence_failed` with the error type, without request content or the error payload.
+ACP Stop cancels the provider independently of permission-state persistence. A failed permission cancellation retains the request for retry and emits the default file-log event `permission_request_cancellation_persistence_failed` with the error type, without request content or the error payload. At the generic Session Stop entry point, a rejected permission reset leaves native turn cancellation reachable and records `permission_reset_failed`; a rejected native cancellation records `runtime_cancel_failed` in the default file log. Other reset callers retain the acknowledged-write contract.
 
 Session rebinding republishes the coordinator's admitted request context, including its original creation time, source, turn and native MCP identity. An offline client without a readable snapshot keeps that identity. MCP catalog preparation has not yet admitted a permission request and stays unpublished across rebinding until preparation finishes.
 

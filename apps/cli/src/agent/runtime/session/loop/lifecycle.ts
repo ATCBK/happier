@@ -813,13 +813,19 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const handleAbort = async () => {
     logger.debug(`${params.config.uiLogPrefix} Abort requested`);
     resetAssistantTextSnapshotTurnScope(params.session, 'abort');
-    await params.permissionHandler.reset();
+    try {
+      await params.permissionHandler.reset();
+    } catch {
+      logger.infoFile(`${params.config.uiLogPrefix} Permission reset failed during Stop; continuing runtime cancellation`, {
+        error: 'permission_reset_failed',
+      });
+    }
     try {
       abortController.abort();
       abortController = new AbortController();
       await runtimeForPromptLoop.cancelTurn();
     } catch {
-      logger.debug(`${params.config.uiLogPrefix} Failed to cancel current operation (non-fatal)`, {
+      logger.infoFile(`${params.config.uiLogPrefix} Failed to cancel current operation (non-fatal)`, {
         error: 'runtime_cancel_failed',
       });
     }

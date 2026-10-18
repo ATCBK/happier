@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { RuntimeCheckpointToolProtocolV1 } from '@happier-dev/agents';
 import type {
@@ -52,6 +52,12 @@ import { BROWSER_RUNTIME_ACTION_CONTROL_PATH, BrowserRuntimeActionControlRequest
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
+import { logger } from '@/ui/logger';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
+import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 
 // A real prompt plan reads the Home's Project associations even for an
 // unassociated checkout. Keep that HTTP boundary in-process, not the resolver.
@@ -2046,8 +2052,103 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     }
   });
 
+  it('physically stops the native turn after permission persistence fails and reports the failure by default', async () => {
+    const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const session = base.session;
+    const rpc = new RpcHandlerManager({ scopePrefix: session.sessionId, encryptionMode: 'plain' });
+    Object.assign(session, { rpcHandlerManager: rpc });
+    const permission = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[Stop persistence]' });
+    let failWrites = false;
+    const updateAgentState = session.updateAgentState.bind(session);
+    // Session persistence is the boundary; the permission handler, store and coordinator stay real.
+    const writer = vi.spyOn(session, 'updateAgentState').mockImplementation(async updater => {
+      if (failWrites) throw new Error('private-stop-permission-write-payload');
+      await updateAgentState(updater);
+    });
+    let pending: Promise<unknown> | undefined;
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts },
+    );
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    const provider: AgentSessionRuntime = {
+      async send() { return { status: 'admitted' }; },
+      watch(next) { listener = next; return { dispose() { listener = undefined; } }; },
+      dispose() {},
+    };
+    const cancelProvider = vi.fn();
+    const declaration = readAgentCatalogSnapshot().agentDefinitionsById.get('codex');
+    if (!declaration?.richDefinition || !declaration.pluginId) throw new Error('Missing Codex Agent declaration');
+    const runtimeScope = new AbortController();
+    const services = createUnavailablePluginServices();
+    const contextFixture = createAcpSessionRuntimeContextFixture({
+      agent: declaration.richDefinition.definition, pluginId: declaration.pluginId,
+      sessionId: session.sessionId, directory: '/workspace', signal: runtimeScope.signal,
+      session, permissionHandler: permission, services,
+      protocols: createPublicAcpRuntimeProtocols({ pluginId: declaration.pluginId, agentId: declaration.id,
+        signal: runtimeScope.signal, isCurrent: () => !runtimeScope.signal.aborted, services }),
+    });
+    onTestFinished(async () => { runtimeScope.abort(); await contextFixture.dispose(); });
+    const runtime = createNativeAgentSessionOperations(provider, session.sessionId, undefined, undefined, undefined, undefined, undefined, {
+      context: contextFixture.context, cwd: '/workspace', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: true },
+      cancellation: { declared: true, cancel: async ({ turnId }) => {
+        cancelProvider(turnId);
+        listener?.(canonicalRuntimeEvent({ kind: 'turn-cancelled', sessionId: session.sessionId, emittedAtMs: 2, turnId, cause: 'user' }));
+        return { status: 'requested', turnId };
+      } },
+      configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    let readTurnSignal: (() => AbortSignal) | undefined;
+    let terminate: ((event: RunnerTerminationEvent) => void) | undefined;
+    const info = vi.spyOn(logger, 'infoFile');
+    const running = runSessionLoopLifecycle({
+      ...base, session, permissionHandler: permission, runtime, hookRuntime: runtime,
+      permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+      setAbortRequestedCallback: (_callback, signalReader) => { readTurnSignal = signalReader; },
+      deps: { ...base.deps, registerRunnerTerminationHandlersFn: registration => {
+        const handlers = registerRunnerTerminationHandlers({ ...registration, processLifecycleOwnership: 'caller', sessionExitReport: null,
+          exit: () => undefined });
+        terminate = handlers.requestTermination;
+        return handlers;
+      } },
+    });
+    try {
+      await vi.waitFor(() => expect(listener).toBeTypeOf('function'));
+      // A native provider can start a turn independently of the host input queue.
+      listener?.(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: session.sessionId,
+        emittedAtMs: 1, turnId: 'stop-provider-turn', startedBy: 'provider' }));
+      pending = permission.handleToolCall('stop-pending', 'AskUserQuestion', { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] }, {
+        turnId: 'stop-provider-turn', lifetime: 'occurrence', origin: 'host_occurrence_question',
+      });
+      void pending.catch(() => undefined);
+      await vi.waitFor(() => expect(session.getAgentStateSnapshot()?.requests?.['stop-pending']).toBeDefined());
+      const signal = readTurnSignal?.();
+      expect(signal).toBeDefined();
+      failWrites = true;
+      await expect(rpc.invokeLocal('abort', {})).resolves.toBeUndefined();
+      expect(signal?.aborted).toBe(true);
+      expect(cancelProvider).toHaveBeenCalledOnce();
+      expect(session.getAgentStateSnapshot()?.requests?.['stop-pending']).toBeDefined();
+      expect(info).toHaveBeenCalledWith(expect.any(String), {
+        error: 'permission_reset_failed',
+      });
+      logger.flushSync();
+      const log = await readFile(logger.getLogPath(), 'utf8');
+      expect(log).toContain('permission_reset_failed');
+      expect(log).not.toContain('private-stop-permission-write-payload');
+    } finally {
+      failWrites = false;
+      await permission.reset();
+      terminate?.({ kind: 'killSession' });
+      await running;
+      await pending?.catch(() => undefined);
+      writer.mockRestore(); info.mockRestore();
+    }
+  });
+
   it('does not log a hostile runtime cancellation rejection', async () => {
     loggerDebugMock.mockClear();
+    const info = vi.spyOn(logger, 'infoFile');
     const baseParams = createLifecycleParams({ policyAgentId: 'codex' });
     const hostileFailure = createRevokedTranscriptFailure(
       'private cancellation transcript must not enter logs',
@@ -2073,10 +2174,12 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     await runSessionLoopLifecycle(params);
 
     expect(loggerReceivedIdentity(hostileFailure)).toBe(false);
-    expect(loggerDebugMock).toHaveBeenCalledWith(
-      '[Test] Failed to cancel current operation (non-fatal)',
+    expect(info).toHaveBeenCalledWith(
+      expect.any(String),
       { error: 'runtime_cancel_failed' },
     );
+    expect(info.mock.calls.some(call => call.includes(hostileFailure))).toBe(false);
+    info.mockRestore();
   });
 
   it('lets canonical runtime cancellation own the durable transcript marker without an abort-side duplicate', async () => {
