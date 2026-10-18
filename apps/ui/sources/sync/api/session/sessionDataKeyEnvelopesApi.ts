@@ -1,5 +1,6 @@
 import { PatchSessionDataKeyEnvelopesResultV1Schema, SessionDataKeyEnvelopeErrorCodeV1Schema, SessionDataKeyEnvelopePageV1Schema, type SessionDataKeyEnvelopeItemV1, type SessionDataKeyEnvelopeSummaryV1 } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
 import { runSessionDataKeyPreparationDetached } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyPreparationPass';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import {
@@ -87,6 +88,8 @@ async function requestEnvelopeCollection(
     const payload: unknown = await response.json();
     bound.guard.check();
     if (!response.ok) {
+        const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
+        if (scopeDenial) throw new SessionAccessApiError(scopeDenial.errorCode, response.status);
         const record = typeof payload === 'object' && payload !== null
             ? payload as Record<string, unknown>
             : {};

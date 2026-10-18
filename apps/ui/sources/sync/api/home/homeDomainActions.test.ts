@@ -91,6 +91,17 @@ afterEach(() => {
 
 describe('createHomeDomainActionExecutorForScope', () => {
     it.each([
+        { payload: { error: 'credential_scope_denied' }, errorCode: 'credential_scope_denied' },
+        { payload: { error: 'credential_scope_denied', details: {} }, errorCode: 'home_forbidden' },
+        { payload: { error: 'unknown_denial' }, errorCode: 'home_forbidden' },
+    ])('classifies the strict credential scope refusal: $errorCode', async ({ payload, errorCode }) => {
+        const { scope } = await scopeForNewHome('https://scope-denial.example');
+        runtimeFetchMock.mockResolvedValue(jsonResponse(payload, 403));
+        await expect(createHomeDomainActionExecutorForScope(scope)({ actionId: 'session.delete', input: { sessionId: 'same' }, context: {} }))
+            .resolves.toMatchObject({ ok: false, errorCode, error: errorCode });
+    });
+
+    it.each([
         { status: 409, body: { error: 'username-taken' }, code: 'username-taken', retryable: false },
         { status: 429, body: {}, code: 'home_unknown', retryable: true },
     ])('round-trips actual HTTP $status without losing typed domain details', async ({ status, body, code, retryable }) => {

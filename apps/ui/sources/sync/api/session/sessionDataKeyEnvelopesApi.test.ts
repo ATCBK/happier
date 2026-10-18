@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 
+// Transform the real transport graph during collection, before per-request assertions.
+import './sessionDataKeyEnvelopesApi';
+
 afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -45,6 +48,19 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
 }
 
 describe('Session envelope exact Account transport', () => {
+    it.each([
+        { payload: { error: 'credential_scope_denied' }, code: 'credential_scope_denied' },
+        { payload: { error: 'credential_scope_denied', details: {} }, code: 'session_data_key_envelope_request_failed' },
+    ])('preserves only a strict scope refusal: $code', async ({ payload, code }) => {
+        const env = await setup();
+        const { createSessionDataKeyEnvelopeClient } = await import('./sessionDataKeyEnvelopesApi');
+        env.request.mockImplementation(async () => Response.json(payload, { status: 403 }));
+        const client = createSessionDataKeyEnvelopeClient({ scope: { serverId: env.target.id, accountId: 'target-account' },
+            sessionId: 'same', availability: 'available' });
+        await expect(client.fetchPage(null)).rejects.toMatchObject({ code, status: 403 });
+        await expect(client.patchPage({ entries: [] })).rejects.toMatchObject({ code, status: 403 });
+    });
+
     it('reads the nested resource with target credentials and rejects an Account mismatch before discovery', async () => {
         const env = await setup();
         const { createSessionDataKeyEnvelopeClient } = await import('./sessionDataKeyEnvelopesApi');

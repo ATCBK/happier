@@ -14,6 +14,16 @@ import { createAccountSessionFollowController, type AccountSessionFollowTranspor
 installSettingsViewCommonModuleMocks();
 
 describe('Account Follow editor', () => {
+    it('presents a scope refusal with the existing denial notice and disabled controls', async () => {
+        const screen = await renderSettingsView(<AccountSessionFollowEditor state={{
+            projection: null, draft: null, loading: false, saving: false, online: true,
+            error: 'credential_scope_denied', voiceInitialSnapshotPending: false,
+        }} voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}}
+            onRetry={() => {}} onOpenNotificationSettings={() => {}} />);
+        expect(screen.getTextContent()).toContain(t('errors.permissionDenied'));
+        expect(screen.findByTestId('session-follow-enabled')?.props.disabled).toBe(true);
+        await screen.unmount();
+    });
     it('creates, updates, unfollows, and refollows through the mounted editor', async () => {
         const address = { serverId: 'home-a', sessionId: 'session-a' };
         let stored: GetSessionFollowResponse['follow'] = null;

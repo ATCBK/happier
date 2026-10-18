@@ -67,11 +67,13 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
                         : null;
     const error = state.error === 'session_not_found'
         ? t('session.follow.accessLost')
-        : state.error === 'session_archived'
-            ? t('session.follow.archived')
-            : state.error === 'feature_unavailable' || state.error === 'account_inactive'
-                ? t('common.unavailable')
-                : t('errors.unknownError');
+        : state.error === 'credential_scope_denied'
+            ? t('errors.permissionDenied')
+            : state.error === 'session_archived'
+                ? t('session.follow.archived')
+                : state.error === 'feature_unavailable' || state.error === 'account_inactive'
+                    ? t('common.unavailable')
+                    : t('errors.unknownError');
 
     const levelOptions = LEVELS.map((level) => ({ id: level, label: t(`session.follow.level.${level}`) }));
 

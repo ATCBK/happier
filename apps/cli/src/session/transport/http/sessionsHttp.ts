@@ -1,4 +1,5 @@
 import axios, { type AxiosResponse } from 'axios';
+import { readActionCredentialScopeDeniedHttpFailureV1, type ActionCredentialScopeDeniedFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import type { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { readSessionCreationInitialTriggerError } from '@/api/session/sessionCreationInitialTriggerError';
@@ -60,7 +61,7 @@ export async function setSessionOrganizationPin(params: Readonly<{
   request: SetSessionPinRequest;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'PUT'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
-}>): Promise<SetSessionPinResponse | Readonly<{
+}>): Promise<SetSessionPinResponse | ActionCredentialScopeDeniedFailureV1 | Readonly<{
   ok: false; errorCode: 'session_not_found' | 'session_pin_limit_exceeded' | 'unsupported_action'; error: string;
 }>> {
   const path = buildSessionOrganizationPinHttpPathV1(params.sessionId);
@@ -75,6 +76,8 @@ export async function setSessionOrganizationPin(params: Readonly<{
     validateStatus: () => true,
   });
   const payload: unknown = response.data;
+  const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
+  if (scopeDenial) return scopeDenial;
   const error = payload !== null && typeof payload === 'object' && 'error' in payload ? payload.error : undefined;
   if (response.status === 404) {
     const errorCode = error === 'Session not found' ? 'session_not_found' : 'unsupported_action';
@@ -94,7 +97,7 @@ export async function setSessionReportsTo(params: SessionReportsToSetActionInput
   token: string;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
-}>): Promise<SessionReportsToSetResultV1> {
+}>): Promise<SessionReportsToSetResultV1 | ActionCredentialScopeDeniedFailureV1> {
   const request = SessionReportsToSetActionInputV1Schema.parse({
     sessionId: params.sessionId, leadSessionId: params.leadSessionId, expectedLeadSessionId: params.expectedLeadSessionId,
   });
@@ -109,6 +112,8 @@ export async function setSessionReportsTo(params: SessionReportsToSetActionInput
     timeout: configuration.sessionControlHttpTimeoutMs,
     validateStatus: () => true,
   });
+  const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
+  if (scopeDenial) return scopeDenial;
   const result = SessionReportsToSetResultV1Schema.safeParse(response.data);
   if (result.success) {
     const expectedStatus = result.data.ok ? 200 : result.data.error === 'reports_to_cycle' ? 400
@@ -133,7 +138,7 @@ export async function setSessionAttentionStanding(params: Readonly<{
   request: Readonly<{ standing?: boolean | null; remindAt?: number | null }>;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'PUT'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
-}>): Promise<SessionAttentionSetResultV1 | Readonly<{ ok: false; errorCode: 'session_not_found'; error: 'session_not_found' }>> {
+}>): Promise<SessionAttentionSetResultV1 | ActionCredentialScopeDeniedFailureV1 | Readonly<{ ok: false; errorCode: 'session_not_found'; error: 'session_not_found' }>> {
   const path = buildSessionAttentionStandingHttpPath(params.sessionId);
   const body = params.request;
   const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'PUT', path, body })
@@ -145,6 +150,8 @@ export async function setSessionAttentionStanding(params: Readonly<{
     timeout: configuration.sessionControlHttpTimeoutMs,
     validateStatus: () => true,
   });
+  const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
+  if (scopeDenial) return scopeDenial;
   if (response.status === 404) return { ok: false, errorCode: 'session_not_found', error: 'session_not_found' };
   if (isAuthenticationStatus(response.status)) throwAuthenticationStatusError(response.status);
   if (response.status !== 200) throwUnexpectedStatusError(path, response.status);

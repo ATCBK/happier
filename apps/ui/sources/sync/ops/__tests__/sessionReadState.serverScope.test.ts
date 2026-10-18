@@ -71,7 +71,7 @@ describe('sessionSetManualReadStateWithServerScope (real Action and scoped trans
             const url = new URL(String(input));
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (url.pathname === '/v2/account/settings') return Response.json({ content: null, version: 0 });
-            if (!url.pathname.endsWith('/read-state')) return null;
+            if (!url.pathname.endsWith('/read-state') && !url.pathname.startsWith('/v2/session-organization/')) return null;
             mutations.push({ url: url.href, init });
             return await reply();
         });
@@ -97,6 +97,31 @@ describe('sessionSetManualReadStateWithServerScope (real Action and scoped trans
         await accountConnection?.dispose();
         await (await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool')).resetServerReachabilitySupervisors();
         await boundary?.dispose();
+    });
+
+    it('preserves a strict scope refusal and gives the existing denial copy without changing local read state', async () => {
+        const original = seedSession();
+        reply = async () => Response.json({ error: 'credential_scope_denied' }, { status: 403 });
+        const { t } = await import('@/text');
+        await expect(setReadState('sid-1', 'read', { serverId: home.id }))
+            .resolves.toEqual({ success: false, message: t('errors.permissionDenied') });
+        expect(storage.getState().sessions['sid-1']).toBe(original);
+    });
+
+    it('preserves scope refusals thrown by the real organization writers through the Action executor', async () => {
+        seedSession();
+        reply = async () => Response.json({ error: 'credential_scope_denied' }, { status: 403 });
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        for (const [actionId, input] of [
+            ['session.organization.pin.set', { sessionId: 'sid-1', pinned: false }],
+            ['session.folder.set', { sessionId: 'sid-1', folderId: null }],
+            ['session.attention.set', { sessionId: 'sid-1', standing: null }],
+        ] as const) {
+            await expect(executor.execute(actionId, input, { surface: 'ui', authority: 'present_user', serverId: home.id }))
+                .resolves.toEqual({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' });
+        }
+        expect(storage.getState().sessionOrganizationOptimisticRecords).toEqual({});
     });
 
     it('enters the shared Action policy before the domain transport', async () => {

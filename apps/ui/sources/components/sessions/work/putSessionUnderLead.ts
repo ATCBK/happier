@@ -6,7 +6,7 @@ import { t } from '@/text';
 
 import { resolvePutUnderEligibility } from './putUnderCandidates';
 import { selectSessionRelationRecords } from './reportSubtree';
-import { describeReportsToRefusal } from './putUnderPresentation';
+import { describeReportsToRefusal, isReportsToRefusal } from './putUnderPresentation';
 export { describeReportsToRefusal } from './putUnderPresentation';
 
 export type PutSessionUnderLeadResult = 'applied' | 'not-eligible' | 'refused' | 'unknown';
@@ -57,7 +57,7 @@ export async function putSessionUnderLead(input: Readonly<{
         facts?.dispose();
     }
     // A lost response or malformed/transport failure cannot prove that no edge was written.
-    if (!errorCode || !['reports_to_cycle', 'reports_to_cas_conflict', 'reports_to_forbidden'].includes(errorCode)) return 'unknown';
+    if (!isReportsToRefusal(errorCode)) return 'unknown';
     Modal.alert(t('sessionWork.putUnder.title'), describeReportsToRefusal(errorCode));
     return 'refused';
 }

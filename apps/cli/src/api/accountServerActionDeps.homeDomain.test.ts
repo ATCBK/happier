@@ -31,6 +31,18 @@ describe('Home family CLI adapter', () => {
   });
   afterEach(async () => { restore(); await app.close(); });
 
+  it.each([
+    { payload: { error: 'credential_scope_denied' }, denied: true },
+    { payload: { error: 'credential_scope_denied', details: {} }, denied: false },
+    { payload: { error: 'unknown_denial' }, denied: false },
+  ])('keeps the strict scope refusal at the Home Action boundary ($denied)', async ({ payload, denied }) => {
+    app.delete('/v1/sessions/:id', async (_request, reply) => reply.code(403).send(payload));
+    const deps = createAccountServerActionDeps({ token: 'bound', serverId: 'home', serverHttpBaseUrl: 'http://home.test' });
+    const result = deps.homeDomainAction!({ actionId: 'session.delete', input: { sessionId: 'same' }, context: {} });
+    if (denied) await expect(result).resolves.toEqual({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' });
+    else await expect(result).rejects.toMatchObject({ code: 'not_authenticated', response: { status: 403 } });
+  });
+
   it.each(['secrets.shared.promote', 'secrets.shared.grants.set'] as const)(
     'keeps %s MCP approval bound to its Home and settles without secret disclosure', async actionId => {
       const cipher = Buffer.alloc(40, 7).toString('base64');

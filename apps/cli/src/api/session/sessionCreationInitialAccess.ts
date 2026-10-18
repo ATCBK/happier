@@ -1,4 +1,5 @@
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { ENCRYPTED_DATA_KEY_V1_BYTES } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeFormatV1';
 import { PatchSessionDataKeyEnvelopesResultV1Schema, PatchSessionDataKeyEnvelopesV1Schema, SessionDataKeyEnvelopePageV1Schema } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
 import { SessionInitialAccessDraftV1Schema, SessionInitialAccessMaterializedV1Schema } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
@@ -25,6 +26,7 @@ export class SessionInitialAccessEnvelopeHostError extends Error {
   constructor(
     readonly code:
       | 'not_authenticated'
+      | 'credential_scope_denied'
       | 'recipient_key_unavailable'
       | 'session_access_invalid_recipient_envelope'
       | 'session_access_request_failed'
@@ -68,7 +70,9 @@ export async function prepareSessionInitialAccessDataKeyEnvelopes(params: Readon
     ...(params.signal ? { signal: params.signal } : {}),
     validateStatus: () => true,
   };
-  const assertResponse = (status: number) => {
+  const assertResponse = (status: number, payload: unknown) => {
+    const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(status, payload);
+    if (scopeDenial) throw new SessionInitialAccessEnvelopeHostError(scopeDenial.errorCode, status);
     if (status === 401 || status === 403) throw new SessionInitialAccessEnvelopeHostError('not_authenticated', status);
     if (status !== 200) throw new SessionInitialAccessEnvelopeHostError('session_access_request_failed', status);
   };
@@ -76,7 +80,7 @@ export async function prepareSessionInitialAccessDataKeyEnvelopes(params: Readon
     fetchPage: async cursor => {
       const response = await axios.get<unknown>(url, { ...options,
         params: { state: 'action_required', ...(cursor ? { cursor } : {}) } });
-      assertResponse(response.status);
+      assertResponse(response.status, response.data);
       const page = SessionDataKeyEnvelopePageV1Schema.parse(response.data);
       return page.status === 'not_required' ? { items: [], nextCursor: null } : page;
     },
@@ -96,7 +100,7 @@ export async function prepareSessionInitialAccessDataKeyEnvelopes(params: Readon
     },
     commitEntries: async entries => {
       const response = await axios.patch<unknown>(url, PatchSessionDataKeyEnvelopesV1Schema.parse({ entries }), options);
-      assertResponse(response.status);
+      assertResponse(response.status, response.data);
       return PatchSessionDataKeyEnvelopesResultV1Schema.parse(response.data).appliedCount;
     },
     isScopeCurrent: () => !params.signal?.aborted && (params.isScopeCurrent?.() ?? true),

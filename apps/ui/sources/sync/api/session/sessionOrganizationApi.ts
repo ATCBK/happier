@@ -8,6 +8,7 @@ import { SessionOrganizationSnapshotRequestSchema, SessionOrganizationSnapshotRe
 import { SetSessionAttentionStandingResponseSchema, type SetSessionAttentionStandingRequest, type SetSessionAttentionStandingResponse } from '@happier-dev/protocol/sessions/organization/standings';
 import type { z } from 'zod';
 import { SetSessionPinRequestSchema } from '@happier-dev/protocol/sessions/organization/mutations';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 const SESSION_ORGANIZATION_ROUTE = '/v2/session-organization';
 
@@ -54,6 +55,8 @@ function readErrorMessage(raw: unknown, fallbackMessage: string): string {
 async function parseJsonResponse<T>(response: Response, schema: z.ZodType<T>, fallbackMessage: string): Promise<T> {
     const raw = await readJsonBody(response);
     if (!response.ok) {
+        const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, raw);
+        if (scopeDenial) throw new HappyError(scopeDenial.error, false, { code: scopeDenial.errorCode, status: response.status });
         throw new HappyError(readErrorMessage(raw, fallbackMessage), false);
     }
     return parseJsonBody(raw, schema, fallbackMessage);

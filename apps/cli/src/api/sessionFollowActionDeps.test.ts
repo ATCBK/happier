@@ -62,6 +62,24 @@ describe('Follow HTTP family adapter', () => {
   let restore = () => {};
   beforeEach(() => { app = fastify(); restore = installAxiosFastifyAdapter({ app, origin: 'http://follow.test' }); });
   afterEach(async () => { restore(); await app.close(); });
+  it.each([
+    { actionId: 'session.follow.get', method: 'GET', path: '/v2/sessions/:sessionId/follow', input: { sessionId: 'session-1' } },
+    { actionId: 'session.follow.sources.list', method: 'GET', path: '/v2/sessions/:sessionId/follows/sessions', input: { destinationSessionId: 'session-1' } },
+  ] as const)('preserves strict credential scope refusals for $actionId', async ({ actionId, method, path, input: actionInput }) => {
+    app.route({ method, url: path, handler: async (_request, reply) => reply.code(403).send({ error: 'credential_scope_denied' }) });
+    const deps = createSessionFollowActionDeps({ token: 'token', serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
+    await expect(deps.sessionFollowAction!({ context: {}, actionId, input: actionInput, serverId: 'home' }))
+      .resolves.toEqual({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' });
+  });
+  it.each([
+    { error: 'credential_scope_denied', details: { sessionId: 'private' } },
+    { error: 'unknown_denial' },
+  ])('keeps malformed or unknown 403s closed', async (payload) => {
+    app.get('/v2/sessions/:sessionId/follows/sessions', async (_request, reply) => reply.code(403).send(payload));
+    const deps = createSessionFollowActionDeps({ token: 'token', serverId: 'home', serverHttpBaseUrl: 'http://follow.test' });
+    await expect(deps.sessionFollowAction!({ context: {}, actionId: 'session.follow.sources.list', input: { destinationSessionId: 'session-1' }, serverId: 'home' }))
+      .rejects.toMatchObject({ response: { status: 403 } });
+  });
   it('rejects a fixed Home endpoint without its matching Home identity', () => {
     const partialFixedHome = { token: 'token', serverHttpBaseUrl: 'http://follow.test' };
     // @ts-expect-error -- Untyped JavaScript callers can still provide a partial fixed-Home binding.

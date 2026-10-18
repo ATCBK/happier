@@ -1,4 +1,5 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { SessionReportsToSetRequestV1Schema, SessionReportsToSetResultV1Schema, projectSessionReportsToSourceKeyPreparationV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
 import type { SessionFollowSourceKeyPreparationResultV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
@@ -29,6 +30,8 @@ export function createSessionReportsToAction(
         }, { includeAuth: true });
         const payload: unknown = await response.json();
         account.assertCurrent();
+        const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
+        if (scopeDenial) return scopeDenial;
         const parsed = SessionReportsToSetResultV1Schema.safeParse(payload);
         if (parsed.success) {
             const result = parsed.data;

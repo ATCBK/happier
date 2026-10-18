@@ -66,6 +66,19 @@ const input = { sessionId: 'child/id', leadSessionId: 'lead', expectedLeadSessio
 const context = { surface: 'ui', authority: 'present_user' } as const;
 
 describe('reportsTo captured Home Action transport', () => {
+    it.each([
+        { payload: { error: 'credential_scope_denied' }, errorCode: 'credential_scope_denied' },
+        { payload: { error: 'credential_scope_denied', details: { sessionId: 'private' } }, errorCode: 'invalid_action_output' },
+        { payload: { error: 'unknown_denial' }, errorCode: 'invalid_action_output' },
+    ])('classifies only the strict scope denial: $errorCode', async ({ payload, errorCode }) => {
+        const env = await setup();
+        try {
+            env.request.mockResolvedValue(Response.json(payload, { status: 403 }));
+            await expect(env.execute({ ...input, context, serverId: env.home.id }))
+                .resolves.toEqual({ ok: false, errorCode, error: errorCode });
+        } finally { env.account.dispose(); }
+    });
+
     it('admits an unopened list candidate from the current HTTP eligibility read despite an older local lead', async () => {
         const env = await setup();
         try {

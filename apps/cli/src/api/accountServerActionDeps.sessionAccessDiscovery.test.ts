@@ -17,6 +17,19 @@ describe('Session access discovery HTTP adapter', () => {
   });
   afterEach(async () => { restore(); await app.close(); });
 
+  it.each([
+    { payload: { error: 'credential_scope_denied' }, denied: true },
+    { payload: { error: 'credential_scope_denied', details: {} }, denied: false },
+  ])('preserves only strict scope refusals through the real Action executor ($denied)', async ({ payload, denied }) => {
+    app.post('/v2/sessions/access-candidates/inspect', async (_request, reply) => reply.code(403).send(payload));
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({
+      token: 'bound', serverId: 'home', serverHttpBaseUrl: 'http://access.test',
+    }) });
+    await expect(executor.execute('session.access.candidates.inspect', { v: 1, sessionId: 'same', subjects: [] },
+      { surface: 'agent', authority: 'account_automation', serverId: 'home' }))
+      .resolves.toMatchObject({ ok: false, errorCode: denied ? 'credential_scope_denied' : 'not_authenticated' });
+  });
+
   it('executes sharing discovery through the real Account executor and declared HTTP transport', async () => {
     const inspected = { v: 1 as const, context: null, candidates: [
       { subject: { kind: 'account' as const, accountId: 'recipient' }, reason: 'session_access_subject_ineligible' as const },

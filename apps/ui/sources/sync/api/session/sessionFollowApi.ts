@@ -1,4 +1,5 @@
 import { parseSessionFollowActionResponse, resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { SessionFollowErrorCodeV1Schema, type SetSessionFollowRequest, ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
 import { SessionFollowSourcesErrorCodeV1Schema, type SessionFollowSourcesErrorCodeV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
@@ -14,7 +15,7 @@ import { resolveServerAccountRequestContext } from '@/sync/runtime/orchestration
 
 export type SessionFollowApiResult<T> =
     | Readonly<{ kind: 'ok'; value: T }>
-    | Readonly<{ kind: 'failed'; error: SessionFollowSourcesErrorCodeV1 | 'unavailable' }>;
+    | Readonly<{ kind: 'failed'; error: SessionFollowSourcesErrorCodeV1 | 'credential_scope_denied' | 'unavailable' }>;
 
 const UNAVAILABLE = Object.freeze({ kind: 'failed', error: 'unavailable' } as const);
 
@@ -96,6 +97,8 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
             const payload: unknown = await response.json();
             if (!isCurrent()) return UNAVAILABLE;
             if (!response.ok) {
+                const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
+                if (scopeDenial) return { kind: 'failed', error: scopeDenial.errorCode };
                 const record = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : {};
                 const error = SessionFollowSourcesErrorCodeV1Schema.safeParse(record.error);
                 return error.success ? { kind: 'failed', error: error.data } : UNAVAILABLE;
@@ -121,6 +124,7 @@ async function executeAccountFollowAction<TActionId extends Exclude<SessionFollo
 ) {
     const result = await executeSessionFollowAction(actionId, input, serverId);
     if (result.kind === 'ok') return result;
+    if (result.error === 'credential_scope_denied') return { kind: 'failed' as const, error: result.error };
     const error = SessionFollowErrorCodeV1Schema.safeParse(result.error);
     return { kind: 'failed' as const, error: error.success ? error.data : 'unavailable' as const };
 }
@@ -158,6 +162,8 @@ export async function replaceSessionVoiceInclusions(
             const payload: unknown = await response.json();
             if (!isCurrent()) return UNAVAILABLE;
             if (!response.ok) {
+                const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
+                if (scopeDenial) return { kind: 'failed', error: scopeDenial.errorCode };
                 const record = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : {};
                 const error = SessionFollowErrorCodeV1Schema.safeParse(record.error);
                 return error.success ? { kind: 'failed', error: error.data } : UNAVAILABLE;

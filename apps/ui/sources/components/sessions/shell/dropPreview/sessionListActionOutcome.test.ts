@@ -2,8 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { EntityDropOutcomeV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { projectSessionReportsToSourceKeyPreparationV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
 import { projectActionOutcome } from './sessionListActionOutcome';
+import { t } from '@/text';
 
 describe('Session list Action outcomes', () => {
+    it('uses the generic denial for a non-relation Action scope refusal', () => {
+        expect(projectActionOutcome('session.organization.move', {
+            ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied',
+        })).toEqual({ status: 'refused', reason: { code: 'credential_scope_denied', message: t('errors.permissionDenied') } });
+    });
+    it('keeps a credential scope refusal definite and uses the existing reports-to denial notice', () => {
+        const scope = projectActionOutcome('session.reports_to.set', {
+            ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied',
+        });
+        const forbidden = projectActionOutcome('session.reports_to.set', {
+            ok: false, errorCode: 'reports_to_forbidden', error: 'reports_to_forbidden',
+        });
+        expect(scope.status).toBe('refused');
+        if (scope.status !== 'refused' || forbidden.status !== 'refused') throw new Error('Expected definite refusals');
+        expect(scope.reason?.message).toBe(forbidden.reason?.message);
+    });
     it('preserves a committed reports-to edge as applied while source-key readiness waits', () => {
         const committed = { ok: true, sessionId: 'child', leadSessionId: 'lead', attachedAt: 1 } as const;
         const waiting = projectSessionReportsToSourceKeyPreparationV1(committed,

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { resolveSessionFollowActionRequest, parseSessionFollowActionResponse } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { SessionFollowSourcesErrorResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import { ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
@@ -104,6 +105,8 @@ export function createSessionFollowActionDeps(input: Readonly<{
         validateStatus: () => true,
       });
       if (response.status < 200 || response.status >= 300) {
+        const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
+        if (scopeDenial) return scopeDenial;
         const failure = SessionFollowSourcesErrorResponseSchema.safeParse(response.data);
         if (failure.success) return { ok: false, errorCode: failure.data.error, error: failure.data.error };
         if ([404, 405, 501].includes(response.status)) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };

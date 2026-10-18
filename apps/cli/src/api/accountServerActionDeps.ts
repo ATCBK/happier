@@ -1,4 +1,5 @@
 import axios, { type AxiosResponse } from 'axios';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { ACCOUNT_API_TOKENS_CREATE_HTTP_PATH_V1, AccountApiTokensServerErrorV1Schema, ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, ACCOUNT_API_TOKENS_REVOKE_ALL_HTTP_PATH_V1, ACCOUNT_API_TOKENS_REVOKE_HTTP_PATH_V1, ACCOUNT_API_TOKENS_UPDATE_HTTP_PATH_V1, AccountApiTokensCreateActionInputV1Schema, AccountApiTokensCreateActionOutputV1Schema, AccountApiTokensListActionInputV1Schema, AccountApiTokensListActionOutputV1Schema, AccountApiTokensRevokeActionInputV1Schema, AccountApiTokensRevokeActionOutputV1Schema, AccountApiTokensRevokeAllActionInputV1Schema, AccountApiTokensRevokeAllActionOutputV1Schema, AccountApiTokensUpdateActionInputV1Schema, AccountApiTokensUpdateActionOutputV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
 import { ProjectWorkerActionInputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import type { ActionExecuteFailure, ActionExecutorDeps, ActionExecutorContext, ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
@@ -297,20 +298,23 @@ export function createAccountServerActionDeps(input: Readonly<{
     }
 
     let requestIssued = false;
-    const issueRequest = () => axios.request<unknown>({
-      method: params.method,
-      url: `${serverHttpBaseUrl}${params.path}`,
-      ...(params.body === undefined ? {} : { data: params.body }),
-      headers: { ...params.headers, 'Content-Type': 'application/json' },
-      timeout: 15_000,
-      ...(params.signal ? { signal: params.signal } : {}),
-      validateStatus: () => true,
-    });
+    const issueRequest = async (): Promise<Readonly<{ ok: true; response: AxiosResponse<unknown> }> | ActionExecuteFailure> => {
+      const response = await axios.request<unknown>({
+        method: params.method,
+        url: `${serverHttpBaseUrl}${params.path}`,
+        ...(params.body === undefined ? {} : { data: params.body }),
+        headers: { ...params.headers, 'Content-Type': 'application/json' },
+        timeout: 15_000,
+        ...(params.signal ? { signal: params.signal } : {}),
+        validateStatus: () => true,
+      });
+      const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
+      return scopeDenial ?? { ok: true, response };
+    };
     try {
       input.onRequestIssued?.();
       requestIssued = true;
-      const response = await issueRequest();
-      return { ok: true, response };
+      return await issueRequest();
     } catch (error) {
       const cancelled = params.signal?.aborted === true || axios.isCancel(error);
       const failure = classifyActionTransportFailure(error, { mutation, requestIssued, cancelled });
@@ -321,7 +325,7 @@ export function createAccountServerActionDeps(input: Readonly<{
           try {
             // Public-link POST is value-idempotent. This reuses the one
             // materialized body so bearer and ciphertext bytes stay exact.
-            return { ok: true, response: await issueRequest() };
+            return await issueRequest();
           } catch {
             return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
           }

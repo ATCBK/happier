@@ -2,9 +2,30 @@ import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import * as sessionsHttp from './sessionsHttp';
 
-vi.mock('axios', () => ({ default: { post: vi.fn() } }));
+vi.mock('axios', () => ({ default: { post: vi.fn(), put: vi.fn() } }));
 
 describe('reportsTo HTTP mutation', () => {
+  it('preserves scope refusals for the specialized organization writers', async () => {
+    vi.mocked(axios.put).mockResolvedValue({ status: 403, data: { error: 'credential_scope_denied' } });
+    const denial = { ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' };
+    await expect(sessionsHttp.setSessionOrganizationPin({ token: 'token', sessionId: 'same', request: { pinned: false } }))
+      .resolves.toEqual(denial);
+    await expect(sessionsHttp.setSessionAttentionStanding({ token: 'token', sessionId: 'same', request: { standing: null } }))
+      .resolves.toEqual(denial);
+  });
+  it('preserves the strict credential scope refusal before domain decoding', async () => {
+    vi.mocked(axios.post).mockResolvedValueOnce({ status: 403, data: { error: 'credential_scope_denied' } });
+    await expect(sessionsHttp.setSessionReportsTo({ token: 'token', sessionId: 'worker', leadSessionId: 'lead', expectedLeadSessionId: null }))
+      .resolves.toEqual({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' });
+  });
+  it.each([
+    { error: 'credential_scope_denied', details: { sessionId: 'private' } },
+    { error: 'unknown_denial' },
+  ])('keeps malformed or unknown 403s closed', async (data) => {
+    vi.mocked(axios.post).mockResolvedValueOnce({ status: 403, data });
+    await expect(sessionsHttp.setSessionReportsTo({ token: 'token', sessionId: 'worker', leadSessionId: 'lead', expectedLeadSessionId: null }))
+      .rejects.toMatchObject({ response: { status: 403 } });
+  });
   it.each([
     { status: 409, result: { ok: false, error: 'reports_to_cas_conflict' } },
     { status: 400, result: { ok: false, error: 'reports_to_cycle' } },

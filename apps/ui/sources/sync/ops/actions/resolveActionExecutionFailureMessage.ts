@@ -22,6 +22,7 @@ function readFailureMessage(value: unknown): string | null {
     const record = asRecord(value);
     if (!record) return null;
     const code = record.errorCode ?? record.code;
+    if (code === 'credential_scope_denied') return t('errors.permissionDenied');
     if (code === 'server_unreachable' || code === 'home_unreachable') return t('settingsPlugins.targetSelection.unreachableThisHome');
     if (code === 'outcome_unknown' || code === 'approval_execution_outcome_unknown') return t('entityDragDrop.preview.unknownDetail');
     const widgetRefusal = readWidgetRefusalMessage(code);

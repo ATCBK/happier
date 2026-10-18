@@ -19,9 +19,11 @@ type AccountSessionFollowIntent =
     | Readonly<{ kind: 'set'; preferences: SetSessionFollowRequest }>
     | Readonly<{ kind: 'remove' }>;
 
+type FollowTransportError = SessionFollowErrorCodeV1 | 'credential_scope_denied' | 'unavailable';
+
 export type FollowTransportResult<T> =
     | Readonly<{ kind: 'ok'; value: T }>
-    | Readonly<{ kind: 'failed'; error: SessionFollowErrorCodeV1 | 'unavailable' }>;
+    | Readonly<{ kind: 'failed'; error: FollowTransportError }>;
 
 export type AccountSessionFollowTransport = Readonly<{
     get(address: SessionAddress): Promise<FollowTransportResult<GetSessionFollowResponse>>;
@@ -36,7 +38,7 @@ export type AccountSessionFollowEditorSnapshot = Readonly<{
     loading: boolean;
     saving: boolean;
     online: boolean;
-    error: SessionFollowErrorCodeV1 | 'unavailable' | null;
+    error: FollowTransportError | null;
     /** Feedback for this editor's explicit enable interaction, not a delivery acknowledgement. */
     voiceInitialSnapshotPending: boolean;
 }>;
@@ -68,7 +70,7 @@ export function createAccountSessionFollowController(
     // passive refresh reconciles the Home projection *beneath* it rather than erasing it.
     let mutation = createIdleSessionFollowMutationIntent<
         AccountSessionFollowIntent,
-        SessionFollowErrorCodeV1 | 'unavailable'
+        FollowTransportError
     >();
 
     function update(patch: Partial<AccountSessionFollowEditorSnapshot>) {
@@ -78,7 +80,7 @@ export function createAccountSessionFollowController(
     }
 
     function applyMutation(
-        event: SessionFollowMutationIntentEvent<AccountSessionFollowIntent, SessionFollowErrorCodeV1 | 'unavailable'>,
+        event: SessionFollowMutationIntentEvent<AccountSessionFollowIntent, FollowTransportError>,
         patch: Partial<AccountSessionFollowEditorSnapshot> = {},
     ) {
         mutation = reduceSessionFollowMutationIntent(mutation, event);
@@ -90,8 +92,9 @@ export function createAccountSessionFollowController(
         });
     }
 
-    function failed(error: SessionFollowErrorCodeV1 | 'unavailable') {
-        const accessLost = error === 'session_not_found' || error === 'account_inactive' || error === 'feature_unavailable';
+    function failed(error: FollowTransportError) {
+        const accessLost = error === 'session_not_found' || error === 'account_inactive' || error === 'feature_unavailable'
+            || error === 'credential_scope_denied';
         if (accessLost) {
             applyMutation({ kind: 'abandoned' }, {
                 error,

@@ -40,6 +40,20 @@ async function setup() {
 }
 
 describe('Follow exact Home Action transport', () => {
+    it.each([
+        { actionId: 'session.follow.get', input: { sessionId: 'same' } },
+        { actionId: 'session.follow.sources.list', input: { destinationSessionId: 'same' } },
+    ] as const)('classifies the strict scope refusal for $actionId', async ({ actionId, input }) => {
+        const env = await setup();
+        const { sessionFollowAction } = await import('./sessionFollowApi');
+        env.request.mockResolvedValue(Response.json({ error: 'credential_scope_denied' }, { status: 403 }));
+        await expect(sessionFollowAction({ actionId, input, serverId: env.target.id, context: {} }))
+            .resolves.toEqual({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' });
+        env.request.mockResolvedValue(Response.json({ error: 'credential_scope_denied', details: {} }, { status: 403 }));
+        await expect(sessionFollowAction({ actionId, input, serverId: env.target.id, context: {} }))
+            .resolves.toEqual({ ok: false, errorCode: 'network_error', error: 'unavailable' });
+    });
+
     it('edits declared auto-follow defaults on the captured Home without Account or device writes', async () => {
         const env = await setup();
         const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');

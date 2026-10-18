@@ -112,8 +112,8 @@ describe('Account Session Follow controller', () => {
         expect(controller.getSnapshot().projection?.follow).toMatchObject({ notificationLevel: 'none', includeInVoice: true });
     });
 
-    it('keeps an unavailable refresh visible, then clears private state after access loss', async () => {
-        let failure: 'unavailable' | 'session_not_found' | null = null;
+    it.each(['session_not_found', 'credential_scope_denied'] as const)('keeps an unavailable refresh visible, then clears private state after %s', async (denial) => {
+        let failure: 'unavailable' | typeof denial | null = null;
         const controller = createAccountSessionFollowController(address, createTransport({
             get: async () => failure ? { kind: 'failed', error: failure } : { kind: 'ok', value: initial },
         }));
@@ -121,9 +121,9 @@ describe('Account Session Follow controller', () => {
         failure = 'unavailable';
         await controller.refresh();
         expect(controller.getSnapshot().projection).toEqual(initial);
-        failure = 'session_not_found';
+        failure = denial;
         await controller.refresh();
-        expect(controller.getSnapshot()).toMatchObject({ projection: null, draft: null, error: 'session_not_found' });
+        expect(controller.getSnapshot()).toMatchObject({ projection: null, draft: null, error: denial });
     });
 
     it('retains an explicit Unfollow and never sends writes while offline', async () => {
