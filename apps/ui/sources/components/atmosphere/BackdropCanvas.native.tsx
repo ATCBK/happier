@@ -7,7 +7,7 @@ import { atmosphereResettleFact } from './atmosphereStage';
 import type { BackdropCanvasProps } from './backdropCanvas.types';
 import { backdropSettle } from './backdropResettle';
 import { backdropRenderRequest, backdropRequestKey } from './backdropRenderRequest';
-import { createNativeBackdropTransition, renderNativeBackdrop } from './renderBackdrop.native';
+import { createNativeBackdropTransition, NATIVE_TONE_SIDE, readNativePicturePixels, renderNativeBackdrop } from './renderBackdrop.native';
 import { useCanvasRenderState } from './useCanvasRenderState';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
@@ -30,6 +30,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
     const settled = React.useRef<number | null>(null);
     const ready = React.useRef(props.onReady); ready.current = props.onReady;
     const failed = React.useRef(props.onError); failed.current = props.onError;
+    const rendered = React.useRef(props.onRendered); rendered.current = props.onRendered;
     const dpr = props.dpr ?? PixelRatio.get();
     const request = backdropRenderRequest({ ...props, size: state.size }, dpr);
     const displaySize = { width: request.width / dpr, height: request.height / dpr };
@@ -56,6 +57,13 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
         // The serialized key includes all configuration; source is its own identity.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [key, props.source, state.visible]);
+    // The shown render's pixels give the atmosphere its tone, as the web canvas does.
+    React.useEffect(() => {
+        if (!fromImage || !rendered.current) return;
+        let live = true;
+        void readNativePicturePixels(fromImage, NATIVE_TONE_SIDE).then(pixels => { if (live) rendered.current?.(pixels); }, () => {});
+        return () => { live = false; };
+    }, [fromImage]);
     const { theme } = props;
     const [red, green, blue] = props.page;
     React.useEffect(() => {

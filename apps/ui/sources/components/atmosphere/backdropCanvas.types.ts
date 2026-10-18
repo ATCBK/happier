@@ -24,7 +24,7 @@ export type BackdropCanvasProps = Readonly<{
     /** Current Home idle/focus facts pause finite resettle playback without resetting its clock. */
     resettlePaused?: boolean;
     onReady?: () => void;
-    /** The rendered picture, where the platform holds its pixels (web): the atmosphere measures its tone. */
+    /** The rendered picture's pixels (web: the canvas; native: the shown render, read small): the atmosphere measures its tone. */
     onRendered?: (pixels: AtmospherePixels) => void;
     onError?: (error: Error) => void;
     style?: StyleProp<ViewStyle>;

@@ -3,7 +3,7 @@ import { PixelRatio } from 'react-native';
 import { Canvas, Image, useImage, type SkImage } from '@shopify/react-native-skia';
 import type { BackdropCanvasProps } from './backdropCanvas.types';
 import { backdropRenderRequest, backdropRequestKey } from './backdropRenderRequest';
-import { renderNativeBackdrop, renderNativeWallpaperHaze } from './renderBackdrop.native';
+import { NATIVE_TONE_SIDE, readNativePicturePixels, renderNativeBackdrop, renderNativeWallpaperHaze } from './renderBackdrop.native';
 import { useCanvasRenderState } from './useCanvasRenderState';
 import type { WallpaperHaze as WallpaperHazeComposition } from './wallpaperHaze';
 
@@ -30,6 +30,14 @@ export function WallpaperHaze(props: Readonly<{ source: BackdropCanvasProps['sou
     // The composition is derived each render; its content, not its identity, decides a redraw.
     const composition = React.useRef(props.haze); composition.current = props.haze;
     const compositionKey = JSON.stringify(props.haze);
+    const rendered = React.useRef(props.onRendered); rendered.current = props.onRendered;
+    // Head lines stand on this render: the atmosphere measures its tone as the web does from its canvas.
+    React.useEffect(() => {
+        if (!source || !rendered.current) return;
+        let live = true;
+        void readNativePicturePixels(source, NATIVE_TONE_SIDE).then(pixels => { if (live) rendered.current?.(pixels); }, () => {});
+        return () => { live = false; };
+    }, [source]);
     React.useEffect(() => {
         if (!source || !state.visible) return;
         let live = true;
