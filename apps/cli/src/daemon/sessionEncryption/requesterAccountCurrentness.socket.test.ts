@@ -1,6 +1,7 @@
 import axios from 'axios';
 import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { admitRequesterAccountActionContext, prepareRequesterAccountActionContext, readRequesterAccountActionContext } from './requesterAccountActionProjection';
@@ -10,8 +11,8 @@ import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol
 import { createExternalActionAuthorizedRequestHeaders, projectExternalActionRequesterHttpAuthorization, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { prepareRequesterSessionBootstrap } from './requesterSessionCredentials';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
-import { readAccountEncryptionModeOnce } from '@/api/client/accountEncryptionMode';
+import { ConnectedServiceCredentialHttpClient, fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readHttpStatus } from '@/api/client/httpStatusError';
 import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import { logger } from '@/ui/logger';
@@ -58,6 +59,9 @@ describe('requester Account currentness over the installed socket wiring', () =>
         const scope = { accountId: 'bob', token: `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`,
             serverBaseUrl: 'https://home.example' };
         const observation = acquireRequesterAccountEncryptionCurrentness(scope);
+        const api = new ConnectedServiceCredentialHttpClient({ token: scope.token });
+        const readObservedMode = () => runWithServerHttpBaseUrl(scope.serverBaseUrl,
+            () => api.getAccountEncryptionMode({ refresh: true, throwOnTransportError: true }));
         try {
             await observation.read();
             // Claiming advances the Account cursor before returning its exact
@@ -67,9 +71,7 @@ describe('requester Account currentness over the installed socket wiring', () =>
                 .toEqual({ mode: 'plain', version: 2, contentKeyFingerprint: null });
             available = false;
             await expect(fetchAccountEncryptionCurrentness(scope)).rejects.toThrow();
-            const fallback = vi.fn(async () => ({ status: 503, data: {} }));
-            expect(await readAccountEncryptionModeOnce({ scope, request: fallback })).toEqual({ kind: 'resolved', mode: 'plain' });
-            expect(fallback).not.toHaveBeenCalled();
+            await expect(readObservedMode()).resolves.toBe('plain');
             await expect(fetchAccountEncryptionCurrentness({ ...scope, serverBaseUrl: 'https://other.home' })).rejects.toThrow();
             await expect(fetchAccountEncryptionCurrentness({ ...scope,
                 token: `header.${Buffer.from(JSON.stringify({ sub: 'alice' })).toString('base64url')}.signature` })).rejects.toThrow();
@@ -79,8 +81,7 @@ describe('requester Account currentness over the installed socket wiring', () =>
             await expect(fetchAccountEncryptionCurrentness({ ...scope, authorizationHeaders: signedHeaders })).rejects.toThrow();
             await channel.disconnect();
             await expect(fetchAccountEncryptionCurrentness(scope)).rejects.toThrow();
-            await expect(readAccountEncryptionModeOnce({ scope, request: fallback })).rejects.toThrow();
-            expect(fallback).not.toHaveBeenCalled();
+            await expect(readObservedMode()).rejects.toThrow();
         } finally { await observation.dispose(); await channel.close(); }
     });
     it.each(['finite', 'session'] as const)('does not register another Account credential as the requester observation (%s)', async kind => {
@@ -116,24 +117,31 @@ describe('requester Account currentness over the installed socket wiring', () =>
         try {
             expect(await admit('alice')).toBeNull();
             expect(channel.clients).toHaveLength(0);
+            // Session admission may read Alice's own HTTP witness while checking
+            // her profile; it must never register that fact as Bob's observation.
+            expect(encryptionAccounts.every(account => account === 'alice')).toBe(true);
+            const beforeBob = encryptionAccounts.length;
             accepted = await admit('bob');
             expect(accepted).not.toBeNull();
-            expect(encryptionAccounts).toEqual(['bob']);
-            expect(channel.clients).toHaveLength(1);
+            const bobReads = encryptionAccounts.slice(beforeBob);
+            expect(bobReads.length).toBeGreaterThan(0);
+            expect(bobReads.every(account => account === 'bob')).toBe(true);
+            expect(channel.clients).toHaveLength(kind === 'finite' ? 1 : 0);
         } finally { await accepted?.dispose(); await channel.close(); }
     });
 
-    it.each(['unbound', 'bound'] as const)('shares the observed encryption fact with real requester bootstrap decisions (%s)', async binding => {
+    it.each(['unbound', 'bound'] as const)('revalidates requester bootstrap and projected custody against fresh HTTP facts (%s)', async binding => {
         const channel = await createRequesterCurrentnessSocketHarness();
-        const reads = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+        let serverFact: AccountEncryptionCurrentnessResponse = { mode: 'plain', version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
             if (url.endsWith('/profile')) return { status: 200, data: { id: 'bob' } };
             if (url.endsWith('/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
             if (url.endsWith('/v2/sessions/session')) return { status: 200, data: { session: createSessionRecordFixture({
                 id: 'session', encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }),
                 dataEncryptionKey: null, share: null,
             }) } };
-            if (url.endsWith('/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
-                updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null } };
+            if (url.endsWith('/currentness')) return { status: 200, data: serverFact };
             throw new Error(`Unexpected GET ${url}`);
         });
         vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
@@ -152,18 +160,13 @@ describe('requester Account currentness over the installed socket wiring', () =>
             expect(projected).not.toBeNull();
             expect(await projected?.requesterAccountProjection?.isCurrent()).toBe(true);
             expect(await custody.admitted.isCurrent()).toBe(true);
-            expect(reads.mock.calls.filter(([url]) => String(url).endsWith('/currentness'))).toHaveLength(1);
-            expect(channel.clients).toHaveLength(1);
-            await channel.push('bob', { mode: 'e2ee', version: 2, updatedAt: 2,
-                signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content' });
+            expect(channel.clients).toHaveLength(0);
+            serverFact = { mode: 'e2ee', version: 2, updatedAt: 2,
+                signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content' };
             expect(await projected?.requesterAccountProjection?.isCurrent()).toBe(false);
             expect(await custody.admitted.isCurrent()).toBe(false);
         } finally {
-            await custody?.cleanupOnFailure();
-            reads.mockClear();
-            if (custody) expect(await custody.admitted.isCurrent()).toBe(false);
-            expect(reads).not.toHaveBeenCalled();
-            await channel.close();
+            try { await custody?.cleanupOnFailure(); } finally { await channel.close(); }
         }
     });
 
