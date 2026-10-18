@@ -6,7 +6,7 @@ import type { HappierUiTypography } from '../../environment/types.js';
 import { resolveHappierTextStepStyle } from '../layout/pageText.js';
 import type { HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 import { HappierText } from '../text/Text.js';
-import { resolveHappierWorkStatusSurfaceStyle, type HappierWorkStatusColors } from '../work/workStatus.js';
+import { resolveHappierWorkStatusSurfaceStyle, type HappierWorkStatusColors, type HappierWorkStatusTone } from '../work/workStatus.js';
 import { resolveHappierWorkTextStep } from '../work/workTheme.js';
 
 export type HappierApprovalPromptTextRender = (input: Readonly<{
@@ -26,9 +26,10 @@ export type HappierApprovalPromptChromeProps = Readonly<{
   chrome?: 'card' | 'inline';
   /**
    * `attention` is a request that needs the person: the card wears the shared needs-you ring and tint
-   * (`resolveHappierWorkStatusSurfaceStyle`), the same as a Work card that needs you. It grants nothing.
+   * (`resolveHappierWorkStatusSurfaceStyle`), the same as a Work card that needs you. `danger` is an approved
+   * request whose effect failed, in the same ring and tint as a Work card in trouble. Neither grants anything.
    */
-  tone?: 'neutral' | 'attention';
+  tone?: HappierWorkStatusTone;
   /** Portable form of the incumbent host View's role vocabulary. */
   accessibilityRole?: 'none' | 'button' | 'togglebutton' | 'link' | 'search' | 'image' | 'keyboardkey'
     | 'text' | 'adjustable' | 'imagebutton' | 'header' | 'summary' | 'alert' | 'checkbox' | 'combobox'
@@ -88,7 +89,11 @@ export function HappierApprovalPromptChrome(props: HappierApprovalPromptChromePr
   // A bounded card never gets shorter than its head and its decision: when the bound is tighter (several
   // requests share a tray), the card keeps both whole and its host scrolls between cards instead.
   const [headHeight, setHeadHeight] = useState(0);
-  const [decisionHeight, setDecisionHeight] = useState(0);
+  // The decision's own content is what gets measured: a host reports a layout only when an element's content
+  // changes, so measuring the padded, hairlined wrapper would miss the pad and rule the clipped state adds
+  // and leave the facts one line short of the room they were counted for.
+  const [decisionContent, setDecisionContent] = useState(0);
+  const decisionHeight = decisionContent > 0 ? decisionContent + inset + (factsClipped ? step + 1 : 0) : 0;
   const boundedMinHeight = headHeight + decisionHeight;
   const onMeasure = props.onMeasure;
   const naturalHeight = bounded && headHeight > 0 ? headHeight + decisionHeight + factsContent : 0;
@@ -105,9 +110,7 @@ export function HappierApprovalPromptChrome(props: HappierApprovalPromptChromePr
   // A settled (inline) prompt has no card to tint; only a card asks.
   const bodyStyle: HappierPortableStyle = { paddingLeft: textColumnStart, paddingRight: inset,
     paddingBottom: props.bodyBottomInset ?? step, gap: step };
-  const toneSurface = !inline && props.tone === 'attention'
-    ? resolveHappierWorkStatusSurfaceStyle('attention', props.colors.status)
-    : null;
+  const toneSurface = !inline && props.tone ? resolveHappierWorkStatusSurfaceStyle(props.tone, props.colors.status) : null;
   return (
     <View testID={props.testID} accessibilityRole={props.accessibilityRole}
       style={[surface, toneSurface, bounded ? { maxHeight: props.maxHeight,
@@ -133,9 +136,10 @@ export function HappierApprovalPromptChrome(props: HappierApprovalPromptChromePr
           {props.children}
         </ScrollView>
       ) : <View style={bodyStyle}>{props.children}</View>}
-      {props.footer ? <View onLayout={bounded ? (event) => setDecisionHeight(event.nativeEvent.layout.height) : undefined}
-        style={{ flexShrink: 0, paddingLeft: textColumnStart, paddingRight: inset, paddingBottom: inset,
-        ...(factsClipped ? { borderTopWidth: 1, borderTopColor: props.colors.border, paddingTop: step } : null) }}>{props.footer}</View> : null}
+      {props.footer ? <View style={{ flexShrink: 0, paddingLeft: textColumnStart, paddingRight: inset, paddingBottom: inset,
+        ...(factsClipped ? { borderTopWidth: 1, borderTopColor: props.colors.border, paddingTop: step } : null) }}>
+        <View onLayout={bounded ? (event) => setDecisionContent(event.nativeEvent.layout.height) : undefined}>{props.footer}</View>
+      </View> : null}
     </View>
   );
 }

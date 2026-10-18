@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
@@ -10,33 +10,12 @@ import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
-import { useArtifact, useProjectAccountRows, useServerScopedMachine, useSessionListRenderableWithServerScope } from '@/sync/domains/state/storage';
-import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
-import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
-import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
-import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
-import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
-import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
-import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
-import { builtInSettingUiDeclaration } from '@/components/settings/catalog/settingDeclarations';
-import { useMcpServerCatalogForServer } from '@/components/settings/mcpServers/useMcpServersSettings';
-import { mcpServerDisplayName } from '@/components/settings/mcpServers/collection/mcpServerCollectionModel';
-import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
-import { useAgentCatalogIdentities } from '@/agents/registry/useSessionAgentCatalogIdentity';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
-import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
-import { BUILT_IN_REGISTRY_SOURCES_V1 } from '@happier-dev/protocol/registries';
 
 type ApprovalFieldRow = ApprovalActionFieldsPresentation['rows'][number];
 type ApprovalValueRow = Extract<ApprovalFieldRow, { kind: 'value' }>;
 type ApprovalReference = NonNullable<ApprovalValueRow['reference']>;
-import {
-    describeUnnamedApprovalSession,
-    resolveApprovalHomeName,
-} from './approvalRequesterLabels';
+import { useApprovalReferenceReading } from './approvalReferenceReading';
 
 /**
  * The arguments an approval would run with. `card` (default) is the self-contained card a transcript
@@ -48,12 +27,24 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     anatomy?: 'card' | 'page';
     /** The approval's Home: a value that is one of its sessions (or a Home) reads by its name. */
     serverId?: string | null;
+    /** A failure's code the page keeps behind this same disclosure, after the arguments' own lines. */
+    failureCode?: string;
+    /** The executor's own words for that failure, kept in the same disclosure ahead of its code. */
+    failureMessage?: string;
+    /** Card only: the arguments start behind their "Details" line (a phone's inline prompt keeps its decision in view). */
+    collapsed?: boolean;
 }>) {
+    const [detailsOpen, setDetailsOpen] = React.useState(props.collapsed !== true);
     const allRows = props.presentation.rows;
     // People read names, choices and values; opaque ids stay present, one disclosure away.
     const rows = React.useMemo(() => allRows.filter((row) => !(row.kind === 'value' && row.technical)), [allRows]);
-    const technical = React.useMemo(() => collectApprovalTechnicalLines(allRows), [allRows]);
-    if (allRows.length === 0) return null;
+    const technical = React.useMemo(
+        () => [...collectApprovalTechnicalLines(allRows),
+            ...(props.failureMessage ? [{ key: 'failure-message', label: t('detailPages.approval.failureTitle'), value: props.failureMessage }] : []),
+            ...(props.failureCode ? [{ key: 'failure-code', label: t('common.error'), value: props.failureCode }] : [])],
+        [allRows, props.failureCode, props.failureMessage],
+    );
+    if (allRows.length === 0 && technical.length === 0) return null;
     const serverId = props.serverId ?? null;
     const technicalDetails = technical.length > 0 ? <ApprovalTechnicalDetails lines={technical} /> : null;
 
@@ -87,9 +78,7 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
         );
     }
 
-    return (
-        <View style={styles.card}>
-            <Text style={styles.sectionTitle}>{t('approvals.details')}</Text>
+    const cardRows = (
             <View style={styles.rows}>
                 {rows.map((row) => (
                     <View key={row.path} style={styles.row}>
@@ -104,6 +93,34 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
                     </View>
                 ))}
             </View>
+    );
+    if (props.collapsed) {
+        return (
+            <View style={styles.card}>
+                <ExpandableItem
+                    testID="approvals.details-disclosure"
+                    expanded={detailsOpen}
+                    onExpandedChange={setDetailsOpen}
+                    showDivider={false}
+                    header={({ headerProps, expanded }) => (
+                        <Pressable {...headerProps} style={styles.disclosureHeader}>
+                            <Text style={styles.sectionTitle}>{t('approvals.details')}</Text>
+                            <ExpandableItemCaret expanded={expanded} />
+                        </Pressable>
+                    )}
+                >
+                    <View style={styles.disclosureBody}>
+                        {cardRows}
+                        {technicalDetails}
+                    </View>
+                </ExpandableItem>
+            </View>
+        );
+    }
+    return (
+        <View style={styles.card}>
+            <Text style={styles.sectionTitle}>{t('approvals.details')}</Text>
+            {cardRows}
             {technicalDetails}
         </View>
     );
@@ -147,98 +164,6 @@ function ApprovalValueItem(props: Readonly<{
 }
 
 /**
- * A reference reads by its name: a session by its title (or where it lives), a Home by its name, the
- * viewer's own Account as theirs. One this device cannot name keeps its exact id in place (`named`
- * false), and so keeps its id label.
- */
-function useApprovalReferenceReading(reference: ApprovalReference | undefined, literal: string, approvalServerId: string | null): Readonly<{ text: string; named: boolean }> {
-    const serverId = reference?.kind === 'session' ? reference.serverId ?? approvalServerId : approvalServerId;
-    const name = useApprovalSessionName(serverId, reference?.kind === 'session' ? reference.id : '');
-    const viewer = useAccountSettingsScope();
-    const ownHome = isSameApprovalHome(viewer?.serverId, approvalServerId);
-    const skill = useArtifact(reference?.kind === 'skill' && ownHome ? reference.id : '');
-    const machine = useServerScopedMachine(approvalServerId, reference?.kind === 'machine' ? reference.id : '');
-    const mcp = useMcpServerCatalogForServer(reference?.kind === 'mcpServer' ? approvalServerId : null, reference?.kind === 'mcpServer');
-    const registries = usePromptLibraryCatalogValue('registry-sources', reference?.kind === 'registrySource' && ownHome ? viewer : null);
-    const projects = useProjectAccountRows();
-    const agents = useAgentCatalogIdentities({ agentIds: reference?.kind === 'agent' ? [reference.id] : [], machineId: null,
-        serverId: reference?.kind === 'agent' ? approvalServerId : null });
-    const providerCatalog = useProviderCatalogForServer(reference?.kind === 'providerConnection' ? approvalServerId : null);
-    const declarations = readAccountProviderDeclarations();
-    if (reference?.kind === 'skill') {
-        const title = ownHome && skill?.header?.kind === 'prompt_bundle.v2'
-            && skill.header.bundleSchemaId === 'skills.skill_md_v1' ? skill.title ?? skill.header.title : null;
-        return { text: title ?? reference.id, named: Boolean(title) };
-    }
-    if (reference?.kind === 'machine') {
-        const title = getMachineDisplayName(machine) ?? reference.id;
-        return { text: reference.workspaceRoot ? `${formatPathRelativeToHome(reference.workspaceRoot)} · ${title}` : `${t('contextBar.machine')} ${title}`, named: Boolean(machine) };
-    }
-    if (reference?.kind === 'mcpServer') {
-        const server = mcp.value?.servers.find(row => row.id === reference.id);
-        return { text: server ? mcpServerDisplayName(server) : reference.id, named: Boolean(server) };
-    }
-    if (reference?.kind === 'registrySource') {
-        const source = registries.value?.sources.find(row => row.id === reference.id)
-            ?? BUILT_IN_REGISTRY_SOURCES_V1.find(row => row.id === reference.id);
-        return { text: source?.title ?? reference.id, named: Boolean(source) };
-    }
-    if (reference?.kind === 'project') {
-        const title = ownHome && projects && projects.scope.accountId === viewer?.accountId
-            && isSameApprovalHome(projects.scope.serverId, approvalServerId)
-            ? projects.organizations.find(row => row.key.projectKey === reference.id)?.value.label : null;
-        return { text: title ?? reference.id, named: Boolean(title) };
-    }
-    if (reference?.kind === 'agent') {
-        const title = agents.map(row => row.entry.title).join(', ');
-        return { text: title || reference.id, named: Boolean(title) };
-    }
-    if (reference?.kind === 'setting') {
-        const setting = builtInSettingUiDeclaration(reference.id);
-        return { text: t(setting.titleKey), named: true };
-    }
-    if (reference?.kind === 'providerContribution') {
-        const declaration = declarations.find(row => areProviderContributionKeysEqualV1(row.contributionKey, reference.id));
-        return { text: declaration?.definition.name ?? t('common.unavailable'), named: true };
-    }
-    if (reference?.kind === 'providerConnection') {
-        const connection = providerCatalog?.data?.connections.find(row => row.id === reference.id);
-        if (connection) {
-            const sourceName = connection.source.kind === 'custom' ? connection.source.template.name
-                : declarations.find(row => connection.source.kind === 'contribution'
-                    && areProviderContributionKeysEqualV1(row.contributionKey, connection.source.contributionKey))?.definition.name;
-            return { text: presentProviderConnectionIdentity({ ...connection,
-                providerName: sourceName ?? t('common.unavailable') }).title, named: true };
-        }
-        return { text: reference.displayName ?? t('common.unavailable'), named: true };
-    }
-    if (reference?.kind === 'session') return { text: name ?? describeUnnamedApprovalSession(resolveApprovalHomeName(serverId)), named: true };
-    if (reference?.kind === 'home') {
-        const home = resolveApprovalHomeName(reference.id)
-            ?? (isSameApprovalHome(reference.id, approvalServerId) ? t('settingsAccount.thisHomeTitle') : null);
-        return home === null ? { text: literal, named: false } : { text: home, named: true };
-    }
-    if (reference?.kind === 'account') {
-        const own = viewer !== null && viewer.accountId === reference.id && isSameApprovalHome(viewer.serverId, approvalServerId);
-        return own ? { text: t('accountDisplay.yours'), named: true } : { text: literal, named: false };
-    }
-    return { text: literal, named: false };
-}
-
-/**
- * Whether two Home ids name one Home on this device. A request may carry the Home's portable identity
- * where this device addresses it by its own profile id; the profile owner resolves both.
- */
-function isSameApprovalHome(left: string | null | undefined, right: string | null | undefined): boolean {
-    const a = left?.trim();
-    const b = right?.trim();
-    if (!a || !b) return false;
-    if (a === b) return true;
-    const profile = getServerProfileById(a);
-    return profile !== null && profile.id === getServerProfileById(b)?.id;
-}
-
-/**
  * A key over a name names the thing, not its id: "Session id" beside a Session's title reads
  * "Session", a Home's server id reads "Home". The exact id keeps its key in Technical details.
  */
@@ -249,7 +174,7 @@ function nameApprovalReferenceLabel(label: string, reference: ApprovalReference 
 }
 
 type ApprovalStructuredEntries = NonNullable<ApprovalValueRow['entries']>;
-type ApprovalTechnicalLine = Readonly<{ key: string; label: string; value: string }>;
+export type ApprovalTechnicalLine = Readonly<{ key: string; label: string; value: string }>;
 
 /**
  * What the readable part leaves out, in the request's order, labelled by where it sits ("Widget surface ›
@@ -295,7 +220,8 @@ function readableApprovalEntries(entries: ApprovalStructuredEntries): ApprovalSt
     return kept;
 }
 
-function ApprovalTechnicalDetails(props: Readonly<{ lines: readonly ApprovalTechnicalLine[] }>) {
+/** The one "Technical details" disclosure: exact identifiers and codes, one tap away from the readable page. */
+export function ApprovalTechnicalDetails(props: Readonly<{ lines: readonly ApprovalTechnicalLine[] }>) {
     const [expanded, setExpanded] = React.useState(false);
     return (
         <ExpandableItem
@@ -363,17 +289,6 @@ function ApprovalStructuredValue(props: Readonly<{ entries: ApprovalStructuredEn
     );
 }
 
-function useApprovalSessionName(serverId: string | null, value: string): string | null {
-    // An unresolved approval Home must not borrow the active Home's session names.
-    const candidate = serverId?.trim() ? value : '';
-    const session = useSessionListRenderableWithServerScope(serverId, candidate);
-    if (!candidate || !session) return null;
-    // A locked session's cached name stays private, as on every other approval surface.
-    const encryption = projectUiSessionAwareness(session, Date.now()).encryption;
-    const readable = encryption !== 'unknown' && isSessionAwarenessContentReadableV1(encryption);
-    return readable ? getSessionName(session, serverId) : null;
-}
-
 function ApprovalFieldValue(props: Readonly<{ row: ApprovalActionFieldsPresentation['rows'][number]; serverId?: string | null }>) {
     const { row } = props;
     return (
@@ -411,6 +326,16 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.elevated,
         padding: theme.space.s16,
+        gap: theme.space.s12,
+    },
+    disclosureHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        minHeight: 24,
+    },
+    disclosureBody: {
+        paddingTop: theme.space.s12,
         gap: theme.space.s12,
     },
     sectionTitle: {

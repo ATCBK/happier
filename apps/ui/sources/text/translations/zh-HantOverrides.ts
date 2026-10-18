@@ -1442,6 +1442,10 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
   },
   approvals: {
     staleFailure: "此請求已不是最新狀態，因此未執行。請在收件匣中查看最新請求。",
+    failureGeneric: '已核准的操作失敗了',
+    failureFileWrite: '無法寫入檔案',
+    failureFileRead: '無法讀取檔案',
+    failureFileOther: '無法完成檔案操作',
     confidential: {
       review: "檢視憑證",
       title: "憑證",

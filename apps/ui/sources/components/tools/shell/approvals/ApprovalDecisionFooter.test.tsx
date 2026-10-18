@@ -22,6 +22,16 @@ describe('ApprovalDecisionFooter', () => {
     expect(screen.findByTestId('approval-prompt-dismiss')).toBeNull();
   });
 
+  it('offers dismissal alone on a settled failure, without any decision, even when answers are not permitted', async () => {
+    const dismiss = vi.fn();
+    const screen = await renderScreen(<ApprovalDecisionFooter isDeciding={false} disabled disabledReason="notGranted"
+      onDismiss={dismiss} />);
+    expect(screen.findByTestId('approval-prompt-approve')).toBeNull();
+    expect(screen.findByTestId('approval-prompt-reject')).toBeNull();
+    await screen.pressByTestIdAsync('approval-prompt-dismiss');
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+
   it('blocks competing decisions while the answer is in flight', async () => {
     const decide = vi.fn();
     const screen = await renderScreen(<ApprovalDecisionFooter isDeciding onApprove={decide} onReject={decide} />);

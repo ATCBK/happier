@@ -182,6 +182,13 @@ const localSettingInputs = {
         description: 'When this device dismissed the MCP servers first-visit line ("Your servers now follow you")',
         storageScope: 'local',
     },
+    dismissedFailedApprovalsV1: {
+        // Approval artifact id -> when this device dismissed its failed-effect card from the composer. Presentation only.
+        schema: z.record(z.string(), z.number()).catch({}),
+        default: {},
+        description: 'Failed approvals this device dismissed from the composer attention tray, by approval artifact id',
+        storageScope: 'local',
+    },
     hasCompletedAuthOnce: {
         schema: z.boolean().catch(false),
         default: false,

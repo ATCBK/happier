@@ -1,5 +1,6 @@
 import { renderWithSessionTranscriptSource, createTestSessionTranscriptSource } from '@/dev/testkit';
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestSchema, ApprovalRequestV2Schema, ARTIFACT_PLAIN_DATA_KEY_MARKER, API_TOKEN_FULL_GRANT_V1, StrictJsonValueSchema, buildApprovalRequestArtifactHeaderV1, computeExternalActionRequestEnvelopeDigestV1, encodePlainArtifactStoredContent, signExternalActionApprovalInputV1, type ApprovalRequest, type ApprovalRequestV1, type ApprovalRequestV2 } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
@@ -15,6 +16,9 @@ import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixt
 
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { deriveTranscriptInteraction, deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
+import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { deriveReadOnlyTranscriptInteraction } from '@/components/sessions/transcript/forkContext/deriveReadOnlyTranscriptInteraction';
 import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from './transcriptSettledApprovalPresentations';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -290,8 +294,8 @@ describe('ApprovalPromptCard', () => {
         expect(screen.getTextContent()).toContain('Agent wants to inspect active sessions');
     });
 
-    it('retains and renders a persisted filesystem effect refusal as failed', async () => {
-        const approval = ApprovalRequestSchema.parse({
+    function failedWriteFile(): ApprovalRequest {
+        return ApprovalRequestSchema.parse({
             v: 1,
             status: 'executed',
             createdAtMs: 1,
@@ -299,8 +303,9 @@ describe('ApprovalPromptCard', () => {
             createdBy: { surface: 'agent', sessionId: 'session-1' },
             requestedSurface: 'agent',
             actionId: 'daemon.filesystem.writeFile',
-            actionArgs: { root: '/home/happier/mqa2-c14-clone', path: '.', content: '' },
-            summary: 'Write file',
+            actionArgs: { rootPath: '/home/happier/mqa2-c14-clone', path: '.', content: 'C24_FAIL' },
+            summary: 'Write . in mqa2-c14-clone.',
+            preview: { summary: 'Write . in mqa2-c14-clone.' },
             decision: { kind: 'approve', decidedAtMs: 2 },
             execution: {
                 executedAtMs: 3,
@@ -308,12 +313,75 @@ describe('ApprovalPromptCard', () => {
                 result: { success: false, error: "EISDIR: illegal operation on a directory, open '/home/happier/mqa2-c14-clone'" },
             },
         });
+    }
+
+    it('reads a persisted filesystem effect refusal as a plain outcome with the raw error behind Details', async () => {
+        const approval = failedWriteFile();
         expect(TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS.some(presents => presents(approval))).toBe(false);
-        const screen = await renderCard(approval);
-        expect(screen.findByTestId('approval-prompt-execution-failure')).toBeTruthy();
-        expect(screen.getTextContent()).toContain('EISDIR: illegal operation on a directory');
+        const screen = await renderCard(approval, { chrome: 'inline' });
         expect(screen.findByTestId('approval-prompt-approve')).toBeNull();
+        const text = screen.getTextContent();
+        expect(text).toContain('approvals.failureFileWrite');
+        // The effect summary reads once, as the subtitle.
+        expect(text.match(/Write \. in mqa2-c14-clone\./g)).toHaveLength(1);
+        // The executor's own words and its code wait in Details, collapsed.
+        expect(text).not.toContain('EISDIR');
+        expect(text).not.toContain('filesystem_operation_failed');
+        const expand = async (testID: string) => {
+            const node = screen.findAllByTestId(testID).find(candidate => typeof candidate.props.onExpandedChange === 'function');
+            await act(async () => { node?.props.onExpandedChange(true); });
+        };
+        await expand('approvals.details-disclosure');
+        await expand('approvals.technical-details');
+        expect(screen.getTextContent()).toContain('EISDIR: illegal operation on a directory');
+        expect(screen.getTextContent()).toContain('filesystem_operation_failed');
     });
+
+    it('falls back to a generic outcome for a failure with no typed copy', async () => {
+        const approval = ApprovalRequestSchema.parse({ ...failedWriteFile(), status: 'failed', actionId: 'session.list', actionArgs: {},
+            execution: { executedAtMs: 3, ok: false, errorCode: 'boom_happened', error: 'boom_happened' } });
+        const screen = await renderCard(approval, { chrome: 'inline' });
+        expect(screen.getTextContent()).toContain('approvals.failureGeneric');
+    });
+
+    it('dismisses a settled failure on this device only, and keeps open approvals undismissable', async () => {
+        const screen = await renderCard(failedWriteFile(), { chrome: 'inline' });
+        await screen.pressByTestIdAsync('approval-prompt-dismiss');
+        expect(typeof storage.getState().localSettings.dismissedFailedApprovalsV1['approval-1']).toBe('number');
+        expect(readApproval().status).toBe('executed');
+        const open = await renderCard(approvalRequest(), { chrome: 'inline' });
+        expect(open.findByTestId('approval-prompt-dismiss')).toBeNull();
+    });
+
+    it.each(['owner', 'view', 'notGranted', 'readOnly', 'public'] as const)('preserves artifact decision authority on an inactive %s transcript', async access => {
+        const approval = localUiApprovalRequest();
+        await seedApproval(approval);
+        const interaction = deriveReadOnlyTranscriptInteraction(access === 'public' ? deriveTranscriptInteraction({ kind: 'public' }) : deriveTranscriptInteractionFromSession({
+            active: false, access: createSessionAccessFixture(access === 'view' ? 'view' : access === 'notGranted' ? 'edit' : 'owner',
+                { approveRuntimePermissions: access === 'owner' || access === 'readOnly' }),
+        }), access === 'readOnly');
+        const source = { ...createApprovalTestSource(), useInteraction: () => interaction };
+        const screen = await renderWithSessionTranscriptSource(<ApprovalPromptCard
+            artifact={approvalArtifact(homeId)} approval={approval} sessionId="session-1"
+            canApprovePermissions={interaction.canApprovePermissions} disabledReason={interaction.permissionDisabledReason}
+        />, source);
+        expect(screen.findByTestId('approval-prompt-card')).toBeTruthy();
+        const approve = screen.findByTestId('approval-prompt-approve');
+        if (access === 'owner') {
+            expect(approve).toBeTruthy();
+            await screen.pressByTestIdAsync('approval-prompt-approve');
+            await expectDecision('approve');
+        } else {
+            expect(approve).toBeNull();
+            expect(readApproval().status).toBe('open');
+        }
+    });
+
+    it('reads a summary that only repeats the Action title once', async () => {
+        const repeated = await renderCard({ ...approvalRequest(), actionId: 'browser.view.open', actionArgs: {}, summary: 'Open browser view', preview: undefined });
+        expect(repeated.getTextContent().match(/browser\.view\.open|Open browser view/g)).toHaveLength(1);
+    });
+
     it('names a declared Session reference on the same Home used by the approval decision', async () => {
         const fixture = createSessionFixture();
         if (!fixture.metadata) throw new Error('Missing Session metadata fixture');

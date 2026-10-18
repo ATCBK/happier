@@ -16,7 +16,11 @@ import { buildPermissionToolCallRoute, canOpenPermissionToolCallRoute } from '@/
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { ApprovalDecisionFooter } from './ApprovalDecisionFooter';
 import { ApprovalPromptChrome } from './ApprovalPromptChrome';
-import { getApprovalDecisionErrorMessage, isApprovalReplayRouteUnavailable, presentApprovalFailure, useApprovalDecisionHandler, useApprovalHome } from './useApprovalDecisionHandler';
+import { BrowserOpenApprovalProgress } from '@/components/approvals/BrowserOpenOperationStatus';
+import { readBrowserOpenAcceptance } from '@/sync/domains/browser/firstUse/browserFirstUse';
+import { getApprovalDecisionErrorMessage, isApprovalReplayRouteUnavailable, useApprovalDecisionHandler, useApprovalHome } from './useApprovalDecisionHandler';
+import { presentApprovalFailureOutcome } from './approvalFailureOutcome';
+import { useFailedApprovalDismissal } from './failedApprovalDismissal';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ActionApprovalFieldsCard } from '@/components/approvals/ActionApprovalFieldsCard';
 import { PromptDocApprovalDiff, readPromptDocUpdateApproval } from '@/components/approvals/PromptDocApprovalDiff';
@@ -33,7 +37,9 @@ import { ResourceProposalBody, ResourceProposalModeChip } from '@/components/app
 import { useResourceProposalApprovalMode } from '@/components/approvals/resourceProposal/useResourceProposalApprovalMode';
 import { resolveResourceProposalLabels } from '@/components/approvals/resourceProposal/resourceProposalLabels';
 import { useResourceProposalCheck } from '@/components/approvals/resourceProposal/useResourceProposalCheck';
+import { CapabilityEnableApproval, readCapabilityEnableApproval } from '@/components/sessions/capabilities/CapabilityEnableApproval';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 
 type ApprovalPromptCardArtifact = Pick<DecryptedArtifact, 'id' | 'header'>;
@@ -71,6 +77,8 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const approvalHome = useApprovalHome(props.artifact, props.approval, props.sessionId);
     const [isDeciding, setIsDeciding] = React.useState(false);
     const chrome = props.chrome ?? 'card';
+    // On a phone the composer's inline prompt keeps its decision in view: the arguments wait behind Details.
+    const phone = useDeviceType() === 'phone';
     const actionTitle = React.useMemo(() => resolveActionTitle(props.approval), [props.approval]);
     const previewSummary = React.useMemo(() => getPreviewSummary(props.approval.preview), [props.approval.preview]);
     const approveAdmission = React.useMemo(
@@ -81,10 +89,13 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
         () => readApprovalExecutionFailure(props.approval),
         [props.approval],
     );
-    const executionFailurePresentation = React.useMemo(
-        () => executionFailure ? presentApprovalFailure(executionFailure, executionFailure.error) : null,
-        [executionFailure],
+    const failureOutcome = React.useMemo(
+        () => executionFailure ? presentApprovalFailureOutcome(props.approval, executionFailure) : null,
+        [executionFailure, props.approval],
     );
+    const { dismiss: dismissFailure } = useFailedApprovalDismissal();
+    const artifactId = props.artifact.id;
+    const onDismissFailure = React.useCallback(() => dismissFailure(artifactId), [artifactId, dismissFailure]);
     const confidentialAction = isConfidentialSecretApprovalAction(props.approval.actionId);
     const confidentialApproval = readConfidentialSecretApproval(props.approval);
     const actionFields = React.useMemo(() => confidentialAction ? null
@@ -95,6 +106,7 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const projectCommandDecisions = projectCommand ? describeProjectCommandApprovalDecisions(projectCommand) : null;
     // An Agent's instructions edit reads as its diff against the current document (lab `b-work P`).
     const promptDocUpdate = React.useMemo(() => readPromptDocUpdateApproval(props.approval), [props.approval]);
+    const capabilityEnable = React.useMemo(() => readCapabilityEnableApproval(props.approval), [props.approval]);
     const sessionId = props.sessionId;
     const computerChoice = useComputerApprovalChoice({
         artifactId: props.artifact.id,
@@ -117,11 +129,17 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const approvalWithheld = confidentialAction ? confidentialApproval === null || transcriptSource.navigate === null
         : approveAdmission?.status === 'unavailable' || Boolean(proposal?.approveWithheld);
     const sourceInteraction = transcriptSource.useInteraction();
+    // Runtime permission prompts need a live process; artifact decisions use the
+    // same access grant without that lifecycle restriction.
+    const approvalDisabledReason = props.disabledReason === 'inactive' ? undefined : props.disabledReason;
+    const presentationAllowsApproval = props.disabledReason === 'inactive'
+        ? props.canApprove !== false
+        : props.canApprovePermissions ?? props.canApprove ?? true;
     const canApprove = transcriptSource.actions !== null
-        && (props.canApprovePermissions ?? props.canApprove ?? sourceInteraction.canApprovePermissions)
-        && sourceInteraction.canApprovePermissions;
+        && presentationAllowsApproval
+        && (sourceInteraction.canApproveActions ?? sourceInteraction.canApprovePermissions);
     const approvalRouteUnavailable = isApprovalReplayRouteUnavailable(props.approval);
-    const accessDisabled = !canApprove || Boolean(props.disabledReason);
+    const accessDisabled = !canApprove || Boolean(approvalDisabledReason);
     const decisionDisabled = accessDisabled || approvalRouteUnavailable;
     const canOpenToolRoute = transcriptSource.navigate !== null && canOpenPermissionToolCallRoute(props.location ?? null);
 
@@ -158,40 +176,59 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
         }
     }, [approvalWithheld, confidentialAction, confidentialApproval, computerChoice, decisionDisabled, decide, isDeciding, proposal, props.artifact.id, transcriptSource]);
 
-    if (props.disabledReason === 'inactive') {
-        return null;
+    const viewToolButton = canOpenToolRoute ? (
+        <Pressable
+            testID="approval-prompt-view-tool"
+            onPress={onViewTool}
+            accessibilityRole="button"
+            accessibilityLabel={t('toolView.open')}
+            style={({ pressed }) => [styles.viewButton, pressed && styles.viewButtonPressed]}
+        >
+            <Icon name="arrow-square-out" size={16} color={theme.colors.text.secondary} />
+        </Pressable>
+    ) : null;
+    // An Agent asking to turn a skill or MCP server on for its session reads as that request (P8 U8.5, lab xi Q).
+    if (capabilityEnable) {
+        return <CapabilityEnableApproval artifact={props.artifact} approval={props.approval} sessionId={props.sessionId}
+            chrome={chrome} decisionsAvailable={!decisionDisabled} headerAccessory={viewToolButton} />;
+    }
+    // An approved Browser open reads as its live operation, not as a decision.
+    if (props.approval.status !== 'open' && readBrowserOpenAcceptance(props.approval)) {
+        return <BrowserOpenApprovalProgress request={props.approval} serverId={approvalHome.serverId} title={actionTitle}
+            chrome={chrome} headerAccessory={viewToolButton} />;
     }
     // A decided proposal stays in the transcript; declined collapses to its one line (lab `ra` A7·7).
     if (proposal && proposal.display.kind === 'declined' && props.approval.status !== 'open') {
         return <ResourceProposalBody controller={proposal} decisionsAvailable={!decisionDisabled} arrive={false} />;
     }
 
+    const requestTitle = projectCommandTitle ?? proposalLabels?.title ?? actionTitle;
+    // A failed approval leads with its outcome; what was approved follows once, as its summary.
+    const cardTitle = failureOutcome?.headline ?? requestTitle;
+    // A summary that only repeats the title says nothing more: the card reads it once.
+    const cardSubtitle = failureOutcome ? (!projectCommand && props.approval.summary?.trim()) || requestTitle
+        : projectCommand ? null
+            : !props.approval.summary ? t('approvals.untitled')
+                : props.approval.summary.trim() === cardTitle ? null : props.approval.summary;
     return (
         <ApprovalPromptChrome
             testID="approval-prompt-card"
             chrome={chrome}
-            title={projectCommandTitle ?? proposalLabels?.title ?? actionTitle}
+            title={cardTitle}
             titleNumberOfLines={1}
-            tone={executionFailure ? 'attention' : undefined}
-            subtitle={projectCommand ? null : props.approval.summary || t('approvals.untitled')}
+            tone={failureOutcome ? 'danger' : undefined}
+            icon={failureOutcome ? 'warning-circle' : undefined}
+            subtitle={cardSubtitle}
             subtitleNumberOfLines={2}
             headerAccessory={canOpenToolRoute || (proposal && proposalMode && props.approval.status === 'open') ? (
                 <View style={styles.headerAccessories}>
                     {proposal && proposalMode && props.approval.status === 'open' ? <ResourceProposalModeChip mode={proposalMode} /> : null}
-                    {canOpenToolRoute ? (
-                        <Pressable
-                            testID="approval-prompt-view-tool"
-                            onPress={onViewTool}
-                            accessibilityRole="button"
-                            accessibilityLabel={t('toolView.open')}
-                            style={({ pressed }) => [styles.viewButton, pressed && styles.viewButtonPressed]}
-                        >
-                            <Icon name="arrow-square-out" size={16} color={theme.colors.text.secondary} />
-                        </Pressable>
-                    ) : null}
+                    {viewToolButton}
                 </View>
             ) : null}
-            footer={props.approval.status !== 'open' ? undefined : (
+            footer={props.approval.status !== 'open' ? (failureOutcome ? (
+                <ApprovalDecisionFooter isDeciding={false} onDismiss={onDismissFailure} />
+            ) : undefined) : (
                 <ApprovalDecisionFooter
                     approveLabel={confidentialAction ? t('approvals.confidential.review') : projectCommandDecisions?.approve ?? proposalLabels?.approve}
                     rejectLabel={projectCommandDecisions?.reject ?? proposalLabels?.reject}
@@ -199,22 +236,19 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
                     decisionDisabled={approvalRouteUnavailable}
                     approveDisabled={approvalWithheld}
                     approveAccessibilityHint={approvalWithheld ? t('approvals.approveUnavailableHint') : undefined}
-                    disabledReason={props.disabledReason}
+                    disabledReason={approvalDisabledReason}
                     isDeciding={isDeciding}
                     onApprove={() => { void onDecision('approve'); }}
                     onReject={() => { void onDecision('reject'); }}
                 />
             )}
         >
-            {executionFailurePresentation ? (
+            {failureOutcome?.reason ? (
                 <View testID="approval-prompt-execution-failure" accessibilityRole="alert">
-                    <Text style={styles.failureText}>{executionFailurePresentation.reason}</Text>
-                    {executionFailurePresentation.code ? (
-                        <Text style={styles.failureCode}>{executionFailurePresentation.code}</Text>
-                    ) : null}
+                    <Text style={styles.previewText}>{failureOutcome.reason}</Text>
                 </View>
             ) : null}
-            {previewSummary ? (
+            {previewSummary && previewSummary !== cardSubtitle?.trim() ? (
                 <Text style={styles.previewText}>{previewSummary}</Text>
             ) : null}
             {computerAction ? (
@@ -233,8 +267,10 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
             ) : promptDocUpdate ? (
                 <PromptDocApprovalDiff request={promptDocUpdate} serverId={transcriptSource.serverId ?? null}
                     sessionId={props.sessionId} testID="approval-prompt-prompt-doc-diff" />
-            ) : actionFields && actionFields.rows.length > 0 ? (
-                <ActionApprovalFieldsCard presentation={actionFields} serverId={approvalHome.serverId} />
+            ) : actionFields && (actionFields.rows.length > 0 || failureOutcome) ? (
+                <ActionApprovalFieldsCard presentation={actionFields} serverId={approvalHome.serverId}
+                    failureMessage={failureOutcome?.message ?? undefined} failureCode={failureOutcome?.code ?? undefined}
+                    collapsed={failureOutcome !== null || (chrome === 'inline' && phone)} />
             ) : null}
             {approvalRouteUnavailable ? (
                 <Text style={styles.previewText}>{t('actionConfirmations.homeUnavailable')}</Text>
@@ -262,16 +298,6 @@ const styles = StyleSheet.create((theme) => ({
     previewText: {
         fontSize: 12,
         lineHeight: 17,
-        color: theme.colors.text.secondary,
-    },
-    failureText: {
-        fontSize: 12,
-        lineHeight: 17,
-        color: theme.colors.text.destructive,
-    },
-    failureCode: {
-        fontSize: 11,
-        lineHeight: 16,
         color: theme.colors.text.secondary,
     },
 }));

@@ -166,6 +166,7 @@ import type {
 } from '@/sync/domains/sessionControl/configOptionsControl';
 import type { PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
+import { useComposerApprovalRequests } from '@/components/tools/shell/approvals/failedApprovalDismissal';
 import { Text, TextSelectabilityScope } from '@/components/ui/text/Text';
 import { buildGlassCastShadowStyle } from '@/shadowElevation';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
@@ -694,6 +695,7 @@ interface AgentInputProps {
 type AgentInputPermissionRequestsProps = React.ComponentProps<typeof AgentInputPermissionRequests>;
 
 const EMPTY_PERMISSION_LOCATIONS_BY_ID: ReadonlyMap<string, PermissionToolCallMessageLocation | null> = new Map();
+const NO_APPROVAL_REQUESTS: ReadonlyArray<OpenApprovalArtifactForSession> = [];
 const EMPTY_APPROVAL_LOCATIONS_BY_ARTIFACT_ID: ReadonlyMap<string, PermissionToolCallMessageLocation | null> = new Map();
 
 const AgentInputAttentionRequestsWithLocations = React.memo(function AgentInputAttentionRequestsWithLocations(
@@ -1413,7 +1415,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
 
     const pendingPermissionRequests = props.permissionRequests ?? [];
-    const pendingApprovalRequests = props.approvalRequests ?? [];
+    const pendingApprovalRequests = useComposerApprovalRequests(props.approvalRequests ?? NO_APPROVAL_REQUESTS);
     const canApprovePermissions = props.canApprovePermissions === true;
     const permissionPromptSurface = useSetting('permissionPromptSurface');
     const resolvedPermissionPromptSurface = resolvePermissionPromptSurface(permissionPromptSurface);
