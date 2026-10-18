@@ -99,7 +99,8 @@ describe('core e2e: observed request retirement recovery', () => {
           expectedVersion: snapshot.metadataVersion },
         ownerMetadata: ownerEnvelope,
         agentState: { ciphertext: JSON.stringify(newerState), expectedVersion: snapshot.agentStateVersion },
-        activitySummaryV1: { pendingPermissionRequestCount: 3, pendingUserActionRequestCount: 0 },
+        activitySummaryV1: { pendingPermissionRequestCount: 3, pendingUserActionRequestCount: 0,
+          pendingRequestNewestCreatedAt: newerState.requests.newer.createdAt },
       } });
       // Reconstruct from the older snapshot to exercise the real metadata tuple CAS rebase.
       await launchRuntime('recover');
