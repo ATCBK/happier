@@ -110,6 +110,7 @@ import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
 import { forceStopKnownDaemonPid, isDaemonRunningCurrentlyInstalledHappyVersion, resolveDaemonSpawnSessionByNonce, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
 import { resolveTrackedSessionCatalogAgentId } from './sessions/resolveTrackedSessionCatalogAgentId';
+import { extractResumeIdFromCommand } from './sessions/extractResumeIdFromCommand';
 import { activatePendingSessionRuntime } from './sessions/activatePendingInactiveSession';
 import {
   recoverPendingSessionActivations,
@@ -3385,7 +3386,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               if (effectiveResume) {
                 for (const tracked of pidToTrackedSession.values()) {
                   if (tracked.happySessionId === normalizedExistingSessionId) continue;
-                  const trackedResume = tracked.vendorResumeId ?? tracked.spawnOptions?.resume;
+                  const trackedResume = tracked.vendorResumeId ?? tracked.spawnOptions?.resume
+                    // Terminal registration can precede its provider-id report.
+                    ?? extractResumeIdFromCommand(tracked.processCommand ?? '');
                   if (trackedResume !== effectiveResume) continue;
                   const trackedTarget = tracked.spawnOptions?.backendTarget;
                   const sameTarget = backendTarget?.kind === 'configuredAcpBackend'

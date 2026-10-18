@@ -10,15 +10,18 @@ const HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY =
 
 describe('createSessionMetadata', () => {
     it('captures only the non-secret native account directories for later resume', () => {
-        vi.stubEnv('CLAUDE_CONFIG_DIR', '/accounts/claude-b');
-        vi.stubEnv('CODEX_HOME', '/accounts/codex-b');
-        vi.stubEnv('ANTHROPIC_API_KEY', 'must-not-be-persisted');
+        vi.stubEnv('CLAUDE_CONFIG_DIR', '/accounts/ambient');
         try {
-            const { metadata } = createSessionMetadata({ flavor: 'claude', machineId: 'machine-1', startedBy: 'terminal' });
+            const nativeAgentEnvironment = { CLAUDE_CONFIG_DIR: '/accounts/claude-b',
+                ANTHROPIC_API_KEY: 'must-not-be-persisted' };
+            const { metadata } = createSessionMetadata({ flavor: 'claude', machineId: 'machine-1',
+                startedBy: 'terminal', nativeAgentEnvironment });
             expect(metadata).toMatchObject({ nativeAgentEnvironmentV1: {
-                CLAUDE_CONFIG_DIR: '/accounts/claude-b', CODEX_HOME: '/accounts/codex-b',
+                CLAUDE_CONFIG_DIR: '/accounts/claude-b',
             } });
             expect(Reflect.get(metadata, 'nativeAgentEnvironmentV1')).not.toHaveProperty('ANTHROPIC_API_KEY');
+            expect(createSessionMetadata({ flavor: 'codex', machineId: 'machine-1' }).metadata)
+                .not.toHaveProperty('nativeAgentEnvironmentV1');
         } finally {
             vi.unstubAllEnvs();
         }
