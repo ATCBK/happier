@@ -558,10 +558,11 @@ describe('SessionsList pinning + per-group ordering', () => {
 
         expect(screen.root).toBeTruthy();
         expect(capturedRootFlatListProps).toBeTruthy();
-        expect(typeof capturedRootFlatListProps?.onWheel).toBe('function');
+        const onWheel = capturedRootFlatListProps?.overrideProps?.onWheel;
+        expect(typeof onWheel).toBe('function');
 
         const stopPropagation = vi.fn();
-        capturedRootFlatListProps?.onWheel?.({ stopPropagation });
+        onWheel({ stopPropagation });
         expect(stopPropagation).toHaveBeenCalledTimes(1);
     });
 

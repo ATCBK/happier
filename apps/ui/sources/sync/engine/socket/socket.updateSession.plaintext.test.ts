@@ -1884,6 +1884,42 @@ describe('socket update handling: plaintext update-session', () => {
         expect((params.applySessions as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
     });
 
+    it('preserves newer lifecycle facts across out-of-order queued cache-only updates', async () => {
+        vi.useFakeTimers();
+        const sessionId = 's_cached_out_of_order_projection';
+        storage.getState().replaceSessionListRenderables([{
+            ...buildSession(sessionId),
+            lastViewedSessionSeq: 100,
+        }]);
+        const params = buildBaseParams();
+
+        for (const timestamp of [3, 2]) {
+            await handleUpdateContainer({
+                ...params,
+                updateData: {
+                    id: `u_cached_projection_${timestamp}`,
+                    seq: timestamp,
+                    createdAt: timestamp,
+                    body: {
+                        t: 'update-session',
+                        id: sessionId,
+                        latestReadyEventSeq: timestamp,
+                        latestReadyEventAt: timestamp,
+                    },
+                },
+            });
+        }
+        expect(storage.getState().sessionListRenderables[sessionId].updatedAt).toBe(1);
+
+        await vi.runAllTimersAsync();
+
+        expect(storage.getState().sessionListRenderables[sessionId]).toEqual(expect.objectContaining({
+            updatedAt: 3,
+            latestReadyEventSeq: 3,
+            latestReadyEventAt: 3,
+        }));
+    });
+
     it('updates cache-only renderables for runtime activity projection payloads without forcing hydration', async () => {
         storage.getState().replaceSessionListRenderables([
             {
