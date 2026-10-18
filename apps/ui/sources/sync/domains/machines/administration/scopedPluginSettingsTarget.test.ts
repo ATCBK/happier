@@ -1,13 +1,27 @@
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
-import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { installSessionOpsNetworkBoundary, type SessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { removeServerProfile, setActiveServerId, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { storage } from '@/sync/domains/state/storageStore';
 
 import { useScopedPluginSettingsDaemonTargetBinding } from './scopedPluginSettingsTarget';
 
-afterEach(standardCleanup);
+// Transport is the boundary; Account qualification and target currentness stay real.
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+
+let network: SessionOpsNetworkBoundary;
+beforeEach(async () => { network = await installSessionOpsNetworkBoundary(); });
+afterEach(async () => {
+    standardCleanup();
+    await network.dispose();
+    publishAppliedActiveServerRuntimeAvailability(false);
+});
 
 describe('useScopedPluginSettingsDaemonTargetBinding', () => {
     it('retains stable targets across unrelated edits but rejects daemon and local selection changes', async () => {
@@ -16,6 +30,10 @@ describe('useScopedPluginSettingsDaemonTargetBinding', () => {
         await upsertServerProfile({ serverUrl, name: 'Plugin binding' });
         const profile = await setServerProfileIdentityForUrl(serverUrl, 'srv_plugin_binding');
         if (!profile?.serverIdentityId) throw new Error('Test profile was not created');
+        const scope = { serverId: profile.id, accountId: 'plugin-binding-account' };
+        await network.addHome(serverUrl, scope.accountId);
+        await setActiveServerId(profile.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const targetA = { serverIdentityId: profile.serverIdentityId, machineId: 'machine-a' };
         const targetB = { serverIdentityId: profile.serverIdentityId, machineId: 'machine-b' };
         const machineA = createMachineFixture({ id: targetA.machineId, activeAt: Date.now(), daemonStateVersion: 1 });
@@ -23,6 +41,8 @@ describe('useScopedPluginSettingsDaemonTargetBinding', () => {
         try {
             storage.setState((state) => ({
                 isDataReady: true,
+                profileScope: scope,
+                settingsScope: scope,
                 machineListByServerId: { [profile.id]: [machineA, machineB] },
                 machineListStatusByServerId: { [profile.id]: 'idle' },
                 settings: { ...state.settings, machineAdministrationTargetsLocalV1: { 'plugins.home': targetA } },

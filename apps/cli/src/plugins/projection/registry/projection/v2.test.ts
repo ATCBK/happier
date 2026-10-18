@@ -156,7 +156,7 @@ describe('buildPluginProjectionV2', () => {
             sourceSpec: { kind: 'path', locator: `/plugins/${pluginId}`, trustPolicy: 'local_trusted', installPolicy: 'link' },
             manifest: normalizePluginManifestV2({
                 schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Default target', runtime: { apiVersion: 1 },
-                executionTarget: { default: 'installation' },
+                executionTarget: { default: 'installation', autoPick: false },
                 contributes: { resources: [{ id: 'config', kind: 'config', path: 'config.json', contentType: 'application/json' }] },
             }),
         };
@@ -165,9 +165,9 @@ describe('buildPluginProjectionV2', () => {
             provenance: 'external',
         }));
         const projection = buildPluginProjectionV2({ registry, generation: 1 });
-        expect(projection.installedPackagesById[pluginId]?.executionTarget).toEqual({ default: 'installation' });
+        expect(projection.installedPackagesById[pluginId]?.executionTarget).toEqual({ default: 'installation', autoPick: false });
         const admitted = PluginProjectionV2Schema.parse(projection);
-        expect(admitted.installedPackagesById[pluginId]?.executionTarget).toEqual({ default: 'installation' });
+        expect(admitted.installedPackagesById[pluginId]?.executionTarget).toEqual({ default: 'installation', autoPick: false });
     });
 
     it('projects installed Agent output capabilities without inferring them for undeclared Agents', () => {
