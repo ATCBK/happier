@@ -1,4 +1,4 @@
-import { SessionHandoffCapabilityV2Schema, type SessionHandoffCapabilityV2 } from '@happier-dev/protocol';
+import { readSessionHandoffError, SessionHandoffCapabilityV2Schema, type SessionHandoffCapabilityV2 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -34,12 +34,13 @@ export async function probeSessionHandoffCapability(input: Readonly<{
             payload: {},
             timeoutMs: resolveSessionHandoffRuntimeConfig().machineRpcPollTimeoutMs,
         });
-        if (raw !== null && typeof raw === 'object' && 'error' in raw && typeof raw.error === 'string') {
-            const errorCode = 'errorCode' in raw && typeof raw.errorCode === 'string' ? raw.errorCode : undefined;
+        const failure = readSessionHandoffError(raw);
+        if (failure) {
+            const { errorCode, errorMessage } = failure;
             return probeFailure(createRpcCallError({
                 error: errorCode === 'rpc_params_decryption_failed' || errorCode === 'machine_rpc_decryption_failed'
                     ? t('errors.machineRpcDecryptionFailed')
-                    : raw.error,
+                    : errorMessage,
                 errorCode,
             }));
         }

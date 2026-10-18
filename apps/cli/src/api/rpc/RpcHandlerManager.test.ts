@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RpcHandlerManager } from './RpcHandlerManager';
 import { logger } from '@/ui/logger';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
-import { RpcError } from '@happier-dev/protocol/rpcErrors';
+import { PublicRpcHandlerError, RpcError, isSocketRpcTargetFailureV1 } from '@happier-dev/protocol/rpcErrors';
 import { decodeBase64, encodeBase64, encrypt, decrypt } from '@/api/encryption';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import type { Socket } from 'socket.io-client';
@@ -298,6 +298,27 @@ describe('RpcHandlerManager.handleRequest (plaintext)', () => {
 });
 
 describe('RpcHandlerManager.handleRequest (encrypted)', () => {
+  it('projects public handler refusals through the safe encrypted failure envelope', async () => {
+    const encryptionKey = new Uint8Array(32).fill(5);
+    const privateMessage = 'Private structured answer details';
+    const rpc = new RpcHandlerManager({
+      scopePrefix: 'machine-1', encryptionKey, encryptionVariant: 'dataKey', logger: () => {},
+    });
+    rpc.registerHandler('question-answer', async () => {
+      throw new PublicRpcHandlerError('STRUCTURED_QUESTION_INVALID', privateMessage);
+    });
+
+    const response = await rpc.handleRequest({
+      method: 'machine-1:question-answer',
+      params: encodeBase64(encrypt(encryptionKey, 'dataKey', {})),
+    });
+    const failure = decrypt(encryptionKey, 'dataKey', decodeBase64(response));
+
+    expect(isSocketRpcTargetFailureV1(failure)).toBe(true);
+    expect(failure).toMatchObject({ type: 'socket-rpc-target-failure-v1', errorCode: 'STRUCTURED_QUESTION_INVALID' });
+    expect(JSON.stringify(failure)).not.toContain(privateMessage);
+  });
+
   it.each(['legacy', 'dataKey'] as const)('records a %s key mismatch without logging key material or running the handler', async (encryptionVariant) => {
     const encryptionKey = new Uint8Array(32).fill(3);
     const callerKey = new Uint8Array(32).fill(7);

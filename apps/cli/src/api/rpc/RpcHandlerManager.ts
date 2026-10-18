@@ -215,10 +215,12 @@ export class RpcHandlerManager {
         } catch (error) {
             this.logger('[RPC] [ERROR] Error handling request', { error });
             const errorCode = readRpcErrorCode(error);
-            const errorResponse = {
-                error: error instanceof Error ? error.message : 'Unknown error',
-                ...(errorCode ? { errorCode } : {}),
-            };
+            const errorResponse = isPublicRpcHandlerError(error)
+                ? toSocketRpcTargetFailureV1(error)
+                : {
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                    ...(errorCode ? { errorCode } : {}),
+                };
             return this.encodeTransportResponse(request, errorResponse);
         } finally {
             if (handlerExecutionId !== null) {

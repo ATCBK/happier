@@ -1,5 +1,6 @@
 import {
     readServerEnabledBit,
+    readSessionHandoffError,
     SessionHandoffCommitResponseSchema,
     SessionHandoffAbortResponseV2Schema,
     SessionHandoffPrepareTargetResultGetResponseSchema,
@@ -313,48 +314,6 @@ function isAgentRuntimeDescriptorV1(value: unknown): value is AgentRuntimeDescri
     );
 }
 
-function readRawSessionHandoffError(raw: unknown): Readonly<{
-    errorCode: string;
-    errorMessage: string;
-    handoffId?: string;
-    status?: SessionHandoffStatus;
-}> | null {
-    if (!raw || typeof raw !== 'object') return null;
-
-    const parsedStatus = SessionHandoffStatusSchema.safeParse((raw as { status?: unknown }).status);
-    const status = parsedStatus.success ? parsedStatus.data : undefined;
-    const handoffId =
-        typeof (raw as { handoffId?: unknown }).handoffId === 'string'
-            ? String((raw as { handoffId: string }).handoffId)
-            : status?.handoffId;
-
-    if (
-        (raw as { ok?: unknown }).ok === false &&
-        typeof (raw as { errorCode?: unknown }).errorCode === 'string'
-    ) {
-        return {
-            errorCode: String((raw as { errorCode: string }).errorCode),
-            errorMessage:
-                typeof (raw as { error?: unknown }).error === 'string'
-                    ? String((raw as { error: string }).error)
-                    : 'Session handoff failed',
-            ...(handoffId ? { handoffId } : {}),
-            ...(status ? { status } : {}),
-        };
-    }
-
-    if (typeof (raw as { error?: unknown }).error === 'string') {
-        return {
-            errorCode: 'UNEXPECTED',
-            errorMessage: String((raw as { error: string }).error),
-            ...(handoffId ? { handoffId } : {}),
-            ...(status ? { status } : {}),
-        };
-    }
-
-    return null;
-}
-
 function resolveSourceMachineId(options: Readonly<{
     sessionId: string;
     sourceMachineId?: string | null;
@@ -411,7 +370,7 @@ async function startSessionHandoffOnSourceWithMachineRpcTimeout(
             timeoutMs: machineRpcTimeoutMs,
         });
 
-        const errorResult = readRawSessionHandoffError(raw);
+        const errorResult = readSessionHandoffError(raw);
         if (errorResult) {
             return {
                 ok: false,
@@ -542,7 +501,7 @@ async function prepareTargetSessionHandoffWithMachineRpcTimeout(
             timeoutMs: machineRpcTimeoutMs,
             preferScoped: true,
         });
-        const errorResult = readRawSessionHandoffError(raw);
+        const errorResult = readSessionHandoffError(raw);
         if (errorResult) {
             return {
                 ok: false,
@@ -651,7 +610,7 @@ async function pollPreparedTargetSessionHandoffResult(params: Readonly<{
                 timeoutMs: pollMachineRpcTimeoutMs,
                 preferScoped: true,
             });
-            const resultError = readRawSessionHandoffError(rawResult);
+            const resultError = readSessionHandoffError(rawResult);
             if (!resultError) {
                 const parsedResult = SessionHandoffPrepareTargetResultGetResponseSchema.safeParse(rawResult);
                 if (parsedResult.success) {
@@ -689,7 +648,7 @@ async function pollPreparedTargetSessionHandoffResult(params: Readonly<{
                 timeoutMs: pollMachineRpcTimeoutMs,
                 preferScoped: true,
             });
-            const statusError = readRawSessionHandoffError(rawStatus);
+            const statusError = readSessionHandoffError(rawStatus);
             if (statusError) {
                 return {
                     ok: false,
@@ -830,7 +789,7 @@ async function commitSessionHandoff(params: SessionHandoffCommitParams): Promise
             serverId: normalizeId(params.serverId) || null,
             timeoutMs: runtimeConfig.machineRpcTimeoutMs,
         });
-        const errorResult = readRawSessionHandoffError(raw);
+        const errorResult = readSessionHandoffError(raw);
         if (errorResult) {
             return {
                 ok: false,
@@ -892,7 +851,7 @@ async function resumeSessionHandoffTargetV2(params: Readonly<{
             backendTarget: params.backendTarget,
             connectedServices: params.connectedServices,
         });
-        const error = readRawSessionHandoffError(raw);
+        const error = readSessionHandoffError(raw);
         if (error) return { ok: false, errorCode: error.errorCode, errorMessage: error.errorMessage };
         const parsed = SessionHandoffTargetResumeResponseV2Schema.safeParse(raw);
         if (!parsed.success || parsed.data.disposition === 'preexisting_or_adopted') {
@@ -1349,7 +1308,7 @@ export async function completeSessionHandoff(options: CompleteSessionHandoffOpti
         timeoutMs: runtimeConfig.machineRpcTimeoutMs,
         preferScoped: true,
     });
-    const confirmError = readRawSessionHandoffError(confirmedRaw);
+    const confirmError = readSessionHandoffError(confirmedRaw);
     if (confirmError) {
         restoreOptimisticBinding?.();
         const targetSafeForRestart = await abortSessionHandoff({

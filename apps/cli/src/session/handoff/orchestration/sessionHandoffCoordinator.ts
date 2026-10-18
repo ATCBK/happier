@@ -1,5 +1,6 @@
 import {
   readServerEnabledBit,
+  readSessionHandoffError,
   type FeaturesResponse,
   SessionHandoffCapabilityV2Schema,
   type SessionHandoffCapabilityV2,
@@ -200,11 +201,11 @@ function projectTargetStatusProgress(update: (value: OperationUpdate) => void, v
 export async function probeSessionHandoffCapability(probe: () => Promise<unknown>): Promise<SessionHandoffCapabilityV2 | null> {
   try {
     const value = await probe();
-    const response = record(value);
-    if (typeof response?.error === 'string') {
+    const refusal = readSessionHandoffError(value);
+    if (refusal) {
       throw createRpcCallError({
-        error: response.error,
-        errorCode: typeof response.errorCode === 'string' ? response.errorCode : undefined,
+        error: refusal.errorMessage,
+        errorCode: refusal.errorCode,
       });
     }
     const parsed = SessionHandoffCapabilityV2Schema.safeParse(value);

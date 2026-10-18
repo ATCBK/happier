@@ -54,9 +54,7 @@ describe('getFriendsList retry semantics', () => {
         };
 
         const promise = getFriendsList(credentials, { retry: 'none' });
-        const assertion = expect(promise).rejects.toThrow();
-        await vi.runAllTimersAsync();
-        await assertion;
+        await Promise.all([expect(promise).rejects.toThrow(), vi.runAllTimersAsync()]);
 
         const friendCalls = runtimeFetchSpy.mock.calls.filter((call) => getServerFetchUrl(call[0]).pathname === '/v1/friends').length;
         expect(friendCalls).toBe(1);

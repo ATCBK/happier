@@ -81,6 +81,17 @@ function createHarness(overrides: Partial<Parameters<typeof createSessionHandoff
 }
 
 describe('sessionHandoffCoordinator', () => {
+  it('preserves a message-less capability refusal before source mutation', async () => {
+    const { coordinator, calls } = createHarness({
+      probeTargetCapability: async () => ({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN }),
+    });
+    const error = await coordinator.admit({ ...baseInput, stateTransfer: 'existing' }).catch((caught: unknown) => caught);
+
+    expect(readRpcErrorCode(error)).toBe(RPC_ERROR_CODES.FORBIDDEN);
+    expect(error).toMatchObject({ message: 'Session handoff failed' });
+    expect(calls).toEqual([]);
+  });
+
   it.each([
     { role: 'target', decoded: true, code: RPC_ERROR_CODES.FORBIDDEN },
     { role: 'source', decoded: true, code: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE },
