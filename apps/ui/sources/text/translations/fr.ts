@@ -4183,6 +4183,13 @@ export const fr: TranslationStructure = {
         showLineNumbersInDiffsDescription: 'Afficher les numéros de ligne dans les diffs de code',
         showLineNumbersInToolViews: 'Numéros de ligne dans les vues d’outils',
         showLineNumbersInToolViewsDescription: 'Afficher les numéros de ligne dans les diffs des vues d’outils',
+        chatCodeBlocks: {
+            title: 'Blocs de code du chat',
+            showWrapControls: 'Afficher les commandes de retour à la ligne',
+            showWrapControlsDescription: 'Afficher un bouton de retour à la ligne sur chaque bloc de code du chat',
+            wrapByDefault: 'Retour à la ligne par défaut',
+            wrapByDefaultDescription: 'Renvoyer les longues lignes des blocs de code du chat à la ligne, sauf choix contraire pour un bloc',
+        },
         wrapLinesInDiffs: 'Retour à la ligne dans les vues de code',
         wrapLinesInDiffsDescription: 'Renvoyer les longues lignes à la ligne dans les aperçus de code et les éditeurs au lieu du défilement horizontal',
         alwaysShowContextSize: 'Toujours afficher la taille du contexte',
@@ -8827,6 +8834,20 @@ settingsSession: {
                         subtitle: 'Gère les fichiers Kokoro téléchargés sur cet appareil.',
                     },
                 },
+            },
+            modelPackDownload: {
+                progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} sur ${total}`,
+                progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `${loaded} sur ${total} · ${filesDone} ${filesDone <= 1 ? 'fichier' : 'fichiers'} sur ${filesTotal}`,
+                progressAccessibilityLabel: "Progression du téléchargement",
+                failedDetail: "Échec",
+                failedSubtitle: "Impossible de préparer le modèle. Touche pour réessayer.",
+                failedResumableSubtitle: ({ size }: { size: string }) => `Le téléchargement n'est pas terminé. ${size} sont conservés ; touche pour reprendre.`,
+                incompleteDetail: "Incomplet",
+                incompleteSubtitle: ({ size }: { size: string }) => `${size} téléchargés jusqu’ici. Touche pour continuer.`,
+                discardSubtitle: "Supprime le téléchargement inachevé pour libérer de l'espace.",
+                discardConfirmTitle: "Abandonner le téléchargement inachevé ?",
+                discardConfirmBody: ({ size }: { size: string }) => `Les ${size} déjà téléchargés seront supprimés. Tu pourras retélécharger le modèle plus tard.`,
             },
             localNeuralStt: {
                 modelPack: {

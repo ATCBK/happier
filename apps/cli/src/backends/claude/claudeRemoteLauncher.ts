@@ -2193,8 +2193,9 @@ export async function claudeRemoteLauncher(
                     && !exitReason
                     && (abortError || executionErrorAfterUserAbort),
                 );
+                const launchErrorInfo = getLaunchErrorInfo(e);
                 logger.debug('[remote]: launch error', {
-                    ...getLaunchErrorInfo(e),
+                    ...launchErrorInfo,
                     abortError,
                     executionErrorAfterUserAbort,
                     runtimeTerminationStarted,
@@ -2209,6 +2210,17 @@ export async function claudeRemoteLauncher(
                     sessionIdAtLaunchStart,
                     currentSessionId: session.sessionId,
                 });
+                if (errorDisposition !== 'ignore' && errorDisposition !== 'terminate' && !userAbort) {
+                    logger.infoFile('[remote]: launch error', {
+                        error: formatErrorForUi(
+                            launchErrorInfo.stack ?? launchErrorInfo.message
+                            ?? (typeof e === 'string' ? e : launchErrorInfo.name ?? 'Unknown Claude launch error'),
+                        ),
+                        code: launchErrorInfo.code,
+                        exitCode,
+                        disposition: errorDisposition,
+                    });
+                }
                 if (errorDisposition === 'terminate') {
                     // The outer runner is terminating. Do not start another provider launch while
                     // its cleanup owns this session.

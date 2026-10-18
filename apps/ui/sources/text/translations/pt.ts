@@ -4607,6 +4607,13 @@ export const pt: TranslationStructure = {
       "Mostrar números de linha nas visualizações de ferramentas",
     showLineNumbersInToolViewsDescription:
       "Exibir números de linha nos diffs das visualizações de ferramentas",
+    chatCodeBlocks: {
+        title: 'Blocos de código do chat',
+        showWrapControls: 'Mostrar controles de quebra de linha',
+        showWrapControlsDescription: 'Mostrar um botão de quebra de linha em cada bloco de código do chat',
+        wrapByDefault: 'Quebrar linhas por padrão',
+        wrapByDefaultDescription: 'Quebrar linhas longas nos blocos de código do chat, salvo escolha diferente para um bloco',
+    },
     wrapLinesInDiffs: "Quebrar linhas nas visualizações de código",
     wrapLinesInDiffsDescription:
       "Quebrar linhas longas em pré-visualizações de código e editores em vez de rolar horizontalmente",
@@ -9432,6 +9439,20 @@ settingsSession: {
             subtitle: "Gerencie os arquivos do Kokoro baixados neste dispositivo.",
           },
         },
+      },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} de ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'arquivo' : 'arquivos'}`,
+        progressAccessibilityLabel: "Progresso do download",
+        failedDetail: "Falhou",
+        failedSubtitle: "Não foi possível preparar o modelo. Toque para tentar novamente.",
+        failedResumableSubtitle: ({ size }: { size: string }) => `O download não terminou. ${size} foram mantidos; toque para retomar.`,
+        incompleteDetail: "Incompleto",
+        incompleteSubtitle: ({ size }: { size: string }) => `${size} baixados até agora. Toque para continuar.`,
+        discardSubtitle: "Exclua o download incompleto para liberar espaço.",
+        discardConfirmTitle: "Descartar o download incompleto?",
+        discardConfirmBody: ({ size }: { size: string }) => `Isso exclui os ${size} baixados até agora. Você pode baixar o modelo novamente mais tarde.`,
       },
       localNeuralStt: {
         modelPack: {

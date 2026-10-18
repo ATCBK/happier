@@ -169,6 +169,7 @@ describe('useSessionRuntimeStatusSource', () => {
         const previousState = storage.getState();
         try {
             const shellSession = createSession({
+                meaningfulActivityAt: 1,
                 latestTurnStatus: 'completed',
                 latestTurnStatusObservedAt: 1_000,
                 runtimeActivityState: 'idle',

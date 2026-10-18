@@ -4203,6 +4203,13 @@ export const en = {
         showLineNumbersInDiffsDescription: 'Display line numbers in code diffs',
         showLineNumbersInToolViews: 'Show Line Numbers in Tool Views',
         showLineNumbersInToolViewsDescription: 'Display line numbers in tool view diffs',
+        chatCodeBlocks: {
+            title: 'Chat code blocks',
+            showWrapControls: 'Show wrap controls',
+            showWrapControlsDescription: 'Show a wrap toggle on each chat code block',
+            wrapByDefault: 'Wrap code blocks by default',
+            wrapByDefaultDescription: 'Wrap long lines in chat code blocks unless you choose otherwise for a block',
+        },
         wrapLinesInDiffs: 'Wrap Lines in Code Views',
         wrapLinesInDiffsDescription: 'Wrap long lines instead of horizontal scrolling in code previews and editors',
         alwaysShowContextSize: 'Always Show Context Size',
@@ -8872,6 +8879,20 @@ settingsSession: {
                         subtitle: 'Manage downloaded Kokoro files on this device.',
                     },
                 },
+            },
+            modelPackDownload: {
+                progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} of ${total}`,
+                progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `${loaded} of ${total} · ${filesDone} of ${filesTotal} ${filesTotal === 1 ? 'file' : 'files'}`,
+                progressAccessibilityLabel: "Download progress",
+                failedDetail: "Failed",
+                failedSubtitle: "Couldn't get the model ready. Tap to try again.",
+                failedResumableSubtitle: ({ size }: { size: string }) => `Download didn't finish. ${size} is saved, so tap to resume.`,
+                incompleteDetail: "Incomplete",
+                incompleteSubtitle: ({ size }: { size: string }) => `${size} downloaded so far. Tap to continue.`,
+                discardSubtitle: "Delete the unfinished download to free up space.",
+                discardConfirmTitle: "Discard unfinished download?",
+                discardConfirmBody: ({ size }: { size: string }) => `This deletes the ${size} downloaded so far. You can download the model again later.`,
             },
             localNeuralStt: {
                 modelPack: {

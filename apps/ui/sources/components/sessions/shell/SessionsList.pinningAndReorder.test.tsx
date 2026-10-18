@@ -561,10 +561,11 @@ describe('SessionsList pinning + per-group ordering', () => {
 
         expect(screen.root).toBeTruthy();
         expect(virtualizedListHarness.state?.props).toBeTruthy();
-        expect(typeof virtualizedListHarness.state?.props?.overrideProps?.onWheel).toBe('function');
+        const onWheel = virtualizedListHarness.state?.props?.overrideProps?.onWheel;
+        expect(typeof onWheel).toBe('function');
 
         const stopPropagation = vi.fn();
-        virtualizedListHarness.state?.props?.overrideProps?.onWheel?.({ stopPropagation });
+        onWheel({ stopPropagation });
         expect(stopPropagation).toHaveBeenCalledTimes(1);
     });
 

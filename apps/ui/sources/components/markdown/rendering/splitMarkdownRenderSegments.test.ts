@@ -167,7 +167,7 @@ describe('splitMarkdownRenderSegments', () => {
         expect(next[0]?.key).toBe(first[0]?.key);
     });
 
-    it('preserves leading indentation and hard-break trailing spaces in enriched segments', () => {
+    it('preserves indented code source and trailing spaces while separating the following prose', () => {
         const markdown = [
             '    keep this indent  ',
             'next line',
@@ -183,8 +183,10 @@ describe('splitMarkdownRenderSegments', () => {
         });
 
         expect(segments[0]).toMatchObject({
-            type: 'enriched-markdown',
-            markdown: '    keep this indent  \nnext line',
+            type: 'special-block',
+            markdown: '    keep this indent  ',
+            blocks: [{ type: 'code-block', content: 'keep this indent  ', language: null }],
         });
+        expect(segments[1]).toMatchObject({ type: 'enriched-markdown', markdown: 'next line' });
     });
 });

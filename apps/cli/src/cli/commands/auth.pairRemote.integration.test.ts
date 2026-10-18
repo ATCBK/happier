@@ -56,6 +56,7 @@ describe('auth pair-remote (ssh)', () => {
   it('orchestrates remote request + local approve + remote wait using ssh', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
+    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
@@ -166,6 +167,7 @@ describe('auth pair-remote (ssh)', () => {
   it('skips the post-pair repair check when the remote CLI cannot report the paired server id', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
+    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
@@ -244,6 +246,7 @@ describe('auth pair-remote (ssh)', () => {
   it('reuses the approving machine data key when pairing a remote machine', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
+    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');

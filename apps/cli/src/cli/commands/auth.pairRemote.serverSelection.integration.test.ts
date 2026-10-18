@@ -52,6 +52,7 @@ describe('auth pair-remote server selection', () => {
   it('pairs in text mode with an explicit remote server URL while approving through the local API URL', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
+    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
@@ -143,6 +144,7 @@ describe('auth pair-remote server selection', () => {
   it('prompts with current-machine reachable address choices when the selected relay is loopback-only', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
+    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
