@@ -54,6 +54,8 @@ from the inspected 0.2.11 stable/preview and current 0.2 predecessor contracts.
 In 0.3 development, the CLI's
 `api/client/accountEncryptionCurrentnessObservation.ts` owns the live Account/Home
 observation shared by requester admission and connected-service mode reads.
+Only exact credentials independently authenticated by a live admitted holder
+can borrow that observation; other credentials use their own fresh HTTP read.
 Readers outside a subscribed lifetime retain fresh HTTP reads. A disconnected
 or invalidated observation grants no currentness; canceling one reader leaves
 other subscription holders active.

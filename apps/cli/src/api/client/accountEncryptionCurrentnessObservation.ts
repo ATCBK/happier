@@ -13,19 +13,21 @@ type Observation = Readonly<{
     isCurrent(expected: AccountEncryptionCurrentnessResponse): boolean;
     dispose(): Promise<void>;
 }>;
-type SharedObservation = Observation & { references: number };
+type SharedObservation = Observation & { references: Map<string, { count: number }> };
 
 // Only lifetimes with an authenticated Account/Home populate this map.
 // It stores a fact, never credentials selected by Account id or invocation authorization.
 const observations = new Map<string, SharedObservation>();
 const scopeKey = (scope: Scope) => JSON.stringify([normalizeServerHttpBaseUrl(scope.serverBaseUrl), scope.accountId]);
 
-/** Borrow a fact, never authentication or another holder's credentials. No holder means fresh HTTP. */
+/** Only an authenticated live holder's exact credential can borrow the shared fact. */
 export function readObservedAccountEncryptionCurrentness(scope: Readonly<{
     token: string; serverBaseUrl: string; signal?: AbortSignal;
 }>): Promise<AccountEncryptionCurrentnessResponse> | null {
     const accountId = readAccountIdFromToken(scope.token);
-    return accountId ? observations.get(scopeKey({ ...scope, accountId }))?.read(scope.signal) ?? null : null;
+    const observed = accountId ? observations.get(scopeKey({ ...scope, accountId })) : undefined;
+    // A decoded subject locates a candidate; the admitted credential grants borrowing.
+    return observed?.references.has(scope.token) ? observed.read(scope.signal) : null;
 }
 
 export function sameRequesterAccountEncryptionCurrentness(a: AccountEncryptionCurrentnessResponse, b: AccountEncryptionCurrentnessResponse): boolean {
@@ -53,7 +55,9 @@ export function acquireRequesterAccountEncryptionCurrentness(scope: Scope): Obse
         shared = createObservation(scope);
         observations.set(key, shared);
     }
-    shared.references++;
+    const credentialReferences = shared.references.get(scope.token) ?? { count: 0 };
+    shared.references.set(scope.token, credentialReferences);
+    credentialReferences.count++;
     const owned = shared;
     const retirement = new AbortController();
     let released = false;
@@ -65,7 +69,8 @@ export function acquireRequesterAccountEncryptionCurrentness(scope: Scope): Obse
             if (released) return;
             released = true;
             retirement.abort();
-            if (--owned.references !== 0) return;
+            if (--credentialReferences.count === 0) owned.references.delete(scope.token);
+            if (owned.references.size !== 0) return;
             observations.delete(key);
             await owned.dispose();
         },
@@ -142,7 +147,7 @@ function createObservation(scope: Scope): SharedObservation {
         await supervisor.start();
     })();
     return {
-        references: 0,
+        references: new Map(),
         isCurrent: expected => !disposed && (unsupported || connected && fact !== null && sameRequesterAccountEncryptionCurrentness(fact, expected)),
         async read(signal) {
             signal?.throwIfAborted();
