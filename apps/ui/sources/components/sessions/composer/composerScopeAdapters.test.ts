@@ -135,7 +135,7 @@ describe('composer scope adapters', () => {
 
     it('compiles one current attachment schema once across repeated snapshot projections, then recompiles once for a replacement catalog', async () => {
         vi.resetModules();
-        const protocol = await import('@happier-dev/protocol');
+        const protocol = await import('@happier-dev/protocol/plugins/actions/json-schema-validation');
         const compile = vi.spyOn(protocol, 'compilePluginJsonSchema');
         const [{ composerAttachmentDraftToView: projectAttachment }, { normalizePluginUiProjection }] = await Promise.all([
             import('./composerScopeAdapters'),

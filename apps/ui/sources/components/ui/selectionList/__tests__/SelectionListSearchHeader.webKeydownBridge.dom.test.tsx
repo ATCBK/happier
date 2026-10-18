@@ -145,9 +145,12 @@ vi.mock('react-native', async () => {
     });
 });
 
+// Compile/load the real component after the platform boundaries, outside the DOM interaction's
+// timeout. A cold transform under shared-host load is not a failed keyboard bridge.
+const { SelectionListSearchHeader } = await import('../SelectionListSearchHeader');
+
 describe('SelectionListSearchHeader web keydown bridge', () => {
     it('dispatches Tab keydown through a DOM ref bridge when React Native Web filters keyboard props', async () => {
-        const { SelectionListSearchHeader } = await import('../SelectionListSearchHeader');
         const container = document.createElement('div');
         document.body.append(container);
         const root = createRoot(container);
@@ -197,7 +200,6 @@ describe('SelectionListSearchHeader web keydown bridge', () => {
     });
 
     it('preserves native DOM Tab traversal for a populated search until Arrow navigation focuses a row', async () => {
-        const { SelectionListSearchHeader } = await import('../SelectionListSearchHeader');
         const { createSelectionListKeyPressHandler } = await import('../SelectionListKeyboardInput');
         const {
             useSelectionListKeyboardNav,
