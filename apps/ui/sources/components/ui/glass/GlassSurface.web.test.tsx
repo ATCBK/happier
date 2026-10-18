@@ -355,7 +355,7 @@ describe('web glass material', () => {
             expect(await paintOver(custom, toneOf([...backdrop]), 'card')).toEqual(await paintOver(custom, undefined, 'card'));
         }
     });
-    it('reads every ink on the Wallpaper plane in the page colour where the measured picture runs against the theme, and keeps the theme ink where it agrees', async () => {
+    it('reads every ink on the Wallpaper plane in the page colour where the atmosphere chose it, and keeps the theme ink otherwise', async () => {
         const { Text } = await import('@/components/ui/text/Text');
         const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
         const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
@@ -365,10 +365,11 @@ describe('web glass material', () => {
         const rgba = (value: unknown) => Color(String(value)).rgb().string();
         const colorOf = (screen: Awaited<ReturnType<typeof renderScreen>>, text: string) => rgba((flattenTestStyle(
             screen.findAll(node => String(node.type) === 'Text' && node.props.children === text)[0]?.props.style) as Record<string, unknown> | null)?.color);
-        // A night sky flips the plane to the page colour; a bright sky, and a mid-tone that defeats both inks, keep the theme's.
-        for (const [focus, ink] of [[0.012, lightTheme.colors.surface.base], [0.8, lightTheme.colors.text.primary], [0.2, lightTheme.colors.text.primary]] as const) {
+        // The atmosphere decides the plane's ink with its haze (`resolveWallpaperHaze`); the plane applies it.
+        for (const [planeInk, ink] of [['page', lightTheme.colors.surface.base], ['theme', lightTheme.colors.text.primary], [undefined, lightTheme.colors.text.primary]] as const) {
+            const focus = 0.2;
             const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
-                <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper', atmosphereTone: { dark: focus, light: focus, focus } }}>
+                <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper', atmosphereTone: { dark: focus, light: focus, focus, ink: planeInk } }}>
                     <GlassSurface testID="plane" plane surfaceGroup="content" finishRole={null}>
                         <Text style={{ color: lightTheme.colors.text.primary }}>Needs your attention</Text>
                         <Text style={{ color: lightTheme.colors.text.tertiary }}>4 needs you</Text>

@@ -209,12 +209,12 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     // A surface on the picture plane is its own ground: it takes its own material's ink, never the plane's.
     const inheritedInk = containingInk?.picture ? null : containingInk;
     // The quiet inks a head line uses: tertiary meta and a plain control's glyph (secondary is the role's own).
-    const pictureLuminance = onPicture ? environment.atmosphereTone?.focus : undefined;
+    const pictureInk = onPicture ? environment.atmosphereTone?.ink : undefined;
     const ownInk = React.useMemo(() => onPicture
         ? resolveGlassPictureInk({ primary: theme.colors.text.primary, page: theme.colors.surface.base, themeSecondary: theme.colors.text.secondary,
-            themeQuietInks: [theme.colors.text.tertiary, theme.colors.button.secondary.tint], pictureLuminance })
+            themeQuietInks: [theme.colors.text.tertiary, theme.colors.button.secondary.tint], pictureInk })
         : backed ? resolveGlassBackedInk(theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary) : null,
-        [onPicture, backed, pictureLuminance, theme.colors.text.primary, theme.colors.surface.base, theme.colors.text.secondary, theme.colors.text.tertiary, theme.colors.button.secondary.tint]);
+        [onPicture, backed, pictureInk, theme.colors.text.primary, theme.colors.surface.base, theme.colors.text.secondary, theme.colors.text.tertiary, theme.colors.button.secondary.tint]);
     // Text and icons that receive the faint tokens from JavaScript take them from this scope. Like the
     // web stylesheet tokens, they inherit through nested surfaces; the provider stays mounted so a tier
     // change never remounts the content.

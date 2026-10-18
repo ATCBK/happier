@@ -45,8 +45,8 @@ export function resolveGlassBackedInk(
 /**
  * The inks of a content plane that has cleared over a Wallpaper: text there stands on the picture itself,
  * so its quiet lines (meta, section actions, their glyphs) read in the primary ink, as the lab's Wallpaper
- * heads do (`.at-wall .at-wsh`). Where the measured picture runs against the theme (a night sky under the
- * light theme's dark ink), every ink on the plane, the primary included, reads in the page colour instead.
+ * heads do (`.at-wall .at-wsh`). Where the atmosphere chose the page colour for the plane (a person's own
+ * night picture under the light theme), every ink on the plane, the primary included, reads in it instead.
  * Elements on that plane take their own material's ink again.
  */
 export function resolveGlassPictureInk(
@@ -55,12 +55,12 @@ export function resolveGlassPictureInk(
     page: string;
     themeSecondary: string;
     themeQuietInks: readonly string[];
-    /** Relative luminance of the picture around the content column's centre, when measured. */
-    pictureLuminance?: number;
+    /** The plane's ink as the atmosphere decided it with the haze (`GlassAtmosphereTone.ink`). */
+    pictureInk?: 'theme' | 'page';
   }>,
 ): GlassBackedInk {
   const { primary, themeSecondary, themeQuietInks } = input;
-  const ink = pictureInk(primary, input.page, input.pictureLuminance);
+  const ink = input.pictureInk === 'page' ? input.page : primary;
   return ink === primary
     ? { themeSecondary, secondary: primary, picture: { themeInks: themeQuietInks, ink: primary } }
     : { themeSecondary, secondary: ink, picture: { themeInks: [primary, ...themeQuietInks], ink } };
@@ -71,11 +71,12 @@ const GLASS_PICTURE_BODY_CONTRAST = 4.5;
 const GLASS_PICTURE_LARGE_CONTRAST = 3;
 
 /**
- * The theme's ink stays while it keeps large-text contrast on the picture. It turns to the page colour only
- * where it fails even that (a night sky under the light theme) and the page colour reaches body contrast.
- * A mid-tone picture that defeats both (bright sky over dark land) keeps the theme's ink.
+ * Without the default haze to stand on (a person's own picture or look), the theme's ink stays while it keeps
+ * large-text contrast on the picture. It turns to the page colour only where it fails even that (a night sky
+ * under the light theme) and the page colour reaches body contrast. A mid-tone picture that defeats both
+ * (bright sky over dark land) keeps the theme's ink. Used by the atmosphere's `resolveWallpaperHaze`.
  */
-function pictureInk(primary: string, page: string, pictureLuminance: number | undefined): string {
+export function glassPictureInk(primary: string, page: string, pictureLuminance: number | undefined): string {
   if (pictureLuminance === undefined) return primary;
   const primaryColor = parseThemeColor(primary);
   const pageColor = parseThemeColor(page);

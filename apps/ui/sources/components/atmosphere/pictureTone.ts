@@ -58,5 +58,5 @@ export function measurePictureTone(pixels: AtmospherePixels, page: AtmosphereRgb
 
 /** Tones are rounded, so an unchanged picture republishes an equal value. */
 export function samePictureTone(a: GlassAtmosphereTone | undefined, b: GlassAtmosphereTone | undefined): boolean {
-    return a === b || (a !== undefined && b !== undefined && a.dark === b.dark && a.light === b.light && a.focus === b.focus);
+    return a === b || (a !== undefined && b !== undefined && a.dark === b.dark && a.light === b.light && a.focus === b.focus && a.ink === b.ink);
 }

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { WallpaperHaze } from './WallpaperHaze';
-import { WALLPAPER_HAZE_LAYERS } from './wallpaperHaze';
+import { resolveWallpaperHaze, WALLPAPER_HAZE_LAYERS, type WallpaperHaze as WallpaperHazeComposition } from './wallpaperHaze';
 import { useSetGlassAtmosphereBehind, useSetGlassAtmosphereTone } from '@/components/ui/glass/glassRuntimeEnvironment';
 import type { AtmospherePixels } from '@happier-dev/brand/atmosphere';
 import type { GlassAtmosphereTone } from '@/components/ui/glass/glassMaterial';
@@ -18,7 +18,7 @@ import {
   type AtmosphereRect,
   type AtmosphereStage,
 } from './atmosphereStage';
-import { effectivePictureLook } from './look/atmosphereEdits';
+import { changedPictureLookControls, effectivePictureLook } from './look/atmosphereEdits';
 import { pictureBackdropProps } from './pictureBackdrop';
 import { useAtmosphere } from './useAtmosphere';
 import { useAtmospherePictureCatalog } from './useAtmospherePictureCatalog';
@@ -165,28 +165,52 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
   // Wallpaper: content sits in its pane's column of the window-sized picture, at every scroll position, and
   // head lines stand around the column's centre, inside the haze. Horizon: the band scrolls with the page,
   // so the whole band is where content meets it.
-  const toneRegions = React.useRef<Readonly<{ column: PictureToneRegion; focus: PictureToneRegion }>>({ column: WHOLE, focus: WHOLE });
+  const toneRegions = React.useRef<Readonly<{ column: PictureToneRegion; focus: PictureToneRegion; heads: PictureToneRegion }>>({ column: WHOLE, focus: WHOLE, heads: WHOLE });
   toneRegions.current = layout === 'wallpaper' && frame.width > 0 && frame.height > 0
     ? wallpaperToneRegions(frame, geometry)
-    : { column: WHOLE, focus: WHOLE };
+    : { column: WHOLE, focus: WHOLE, heads: WHOLE };
   const page = atmospherePageRgb(theme.colors.surface.base);
   const pageRef = React.useRef(page); pageRef.current = page;
   const published = React.useRef<ReturnType<typeof measurePictureTone>>(undefined);
   // Content stands on the picture and, around the column's centre, on the Wallpaper haze drawn over it
   // (a softer render of the same picture). Both are measured; the tone spans both, and head lines read
   // the haze, which covers them.
-  const measured = React.useRef<{ picture?: GlassAtmosphereTone; haze?: GlassAtmosphereTone }>({});
+  const measured = React.useRef<{ picture?: GlassAtmosphereTone; haze?: GlassAtmosphereTone; heads?: GlassAtmosphereTone }>({});
+  // The Wallpaper haze and the plane's ink are decided together from the head-line band (the column across the
+  // haze core's height, on the picture itself, before the haze softens and veils it). With the default look (a
+  // built-in picture as released) the haze keeps the head lines legible; a person's own picture or look applies
+  // exactly as set.
+  const core = WALLPAPER_HAZE_LAYERS[0]!;
+  const hazeInput = React.useRef({ adaptive: false, page: '', primary: '', column: { x: 0, y: 0 } });
+  hazeInput.current = {
+    adaptive: atmosphere.builtinPicture !== null && changedPictureLookControls(atmosphere).length === 0,
+    page: theme.colors.surface.base,
+    primary: theme.colors.text.primary,
+    // The band around the haze's centre: the column's half-width, the core's half-height.
+    column: { x: frame.width > 0 ? geometry.rect.width / 2 / frame.width : 0, y: core.ry * core.solid },
+  };
+  const [haze, setHaze] = React.useState<WallpaperHazeComposition>(AS_COMPOSED_HAZE);
   const publish = React.useCallback(() => {
-    const { picture: base, haze } = measured.current;
-    const tone = base && haze
-      ? { dark: Math.min(base.dark, haze.dark), light: Math.max(base.light, haze.light), focus: haze.focus }
+    const { picture: base, haze: soft, heads } = measured.current;
+    const measuredTone = base && soft
+      ? { dark: Math.min(base.dark, soft.dark), light: Math.max(base.light, soft.light), focus: soft.focus }
       : base;
+    const next = soft && heads && measuredTone
+      ? resolveWallpaperHaze({ heads: { ...heads, focus: measuredTone.focus }, ...hazeInput.current })
+      : AS_COMPOSED_HAZE;
+    setHaze(previous => sameHaze(previous, next) ? previous : next);
+    const tone = measuredTone && soft ? { ...measuredTone, ink: next.ink } : measuredTone;
     if (samePictureTone(tone, published.current)) return;
     published.current = tone;
     setTone(tone);
   }, [setTone]);
+  // A changed look or theme decides again from the same measurement.
+  const { adaptive, page: pageInk, primary } = hazeInput.current;
+  React.useEffect(() => { publish(); }, [adaptive, pageInk, primary, publish]);
   const onRendered = React.useCallback((pixels: AtmospherePixels) => {
-    measured.current.picture = measurePictureTone(pixels, pageRef.current, toneRegions.current.column, toneRegions.current.focus);
+    const regions = toneRegions.current;
+    measured.current.picture = measurePictureTone(pixels, pageRef.current, regions.column, regions.focus);
+    measured.current.heads = measurePictureTone(pixels, pageRef.current, regions.heads);
     publish();
   }, [publish]);
   const onHazeRendered = React.useCallback((pixels: AtmospherePixels) => {
@@ -199,6 +223,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
     measured.current = {};
     published.current = undefined;
     setTone(undefined);
+    setHaze(AS_COMPOSED_HAZE);
   }, [record, setTone]);
   React.useEffect(() => () => { measured.current = {}; published.current = undefined; setTone(undefined); }, [setTone]);
   // Only Wallpaper has a haze; Horizon publishes the band alone.
@@ -261,7 +286,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
           onRendered={onRendered}
           testID="atmosphere-wallpaper"
         />
-        <WallpaperHaze source={record} size={size} job={job} focus={focus} onRendered={onHazeRendered} />
+        <WallpaperHaze source={record} size={size} job={job} focus={focus} haze={haze} onRendered={onHazeRendered} />
       </AtmosphereDissolve>
     );
   }
@@ -303,16 +328,24 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
 });
 
 const WHOLE: PictureToneRegion = { x0: 0, x1: 1, y0: 0, y1: 1 };
+const AS_COMPOSED_HAZE: WallpaperHazeComposition = { layers: WALLPAPER_HAZE_LAYERS, veil: null, ink: 'theme' };
+const sameHaze = (a: WallpaperHazeComposition, b: WallpaperHazeComposition) =>
+  a === b || (a.ink === b.ink && a.layers === b.layers && a.veil?.color === b.veil?.color && a.veil?.alpha === b.veil?.alpha
+    && a.veil?.rx === b.veil?.rx && a.veil?.ry === b.veil?.ry);
 
-/** The pane's column of the Wallpaper, and the haze's solid core around the column's centre. */
+/** The pane's column of the Wallpaper, the haze's solid core around the column's centre, and the head-line band across the column. */
 function wallpaperToneRegions(frame: AtmosphereRect, geometry: NonNullable<AtmosphereStage['geometry']>) {
   const x = geometry.rect.x - frame.x;
   const focusX = (x + geometry.focus.x) / frame.width;
   const focusY = (geometry.rect.y - frame.y + geometry.focus.y) / frame.height;
-  const core = WALLPAPER_HAZE_LAYERS[0];
+  const core = WALLPAPER_HAZE_LAYERS[0]!;
+  const column = { x0: x / frame.width, x1: (x + geometry.rect.width) / frame.width };
+  const band = { y0: focusY - core.ry * core.solid, y1: focusY + core.ry * core.solid };
   return {
-    column: { x0: x / frame.width, x1: (x + geometry.rect.width) / frame.width, y0: 0, y1: 1 },
-    focus: { x0: focusX - core.rx * core.solid, x1: focusX + core.rx * core.solid, y0: focusY - core.ry * core.solid, y1: focusY + core.ry * core.solid },
+    column: { ...column, y0: 0, y1: 1 },
+    focus: { x0: focusX - core.rx * core.solid, x1: focusX + core.rx * core.solid, ...band },
+    // Head lines stand across the whole column, edges included, at the haze core's height.
+    heads: { ...column, ...band },
   };
 }
 

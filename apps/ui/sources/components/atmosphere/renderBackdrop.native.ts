@@ -25,6 +25,8 @@ function backdropRuntime() {
 export function renderNativeWallpaperHaze(image: SkImage, input: Readonly<{
     width: number; height: number; x: number; y: number; dpr: number;
     layers: readonly Readonly<{ blur: number; rx: number; ry: number; solid: number }>[];
+    /** The page colour over the picture in its own ellipse (`resolveWallpaperHaze`). */
+    veil: Readonly<{ color: string; alpha: number; rx: number; ry: number; solid: number }> | null;
 }>): Promise<SkImage> {
     const api = Skia, dstIn = BlendMode.DstIn, clamp = TileMode.Clamp, decal = TileMode.Decal;
     return runOnRuntimeAsync(backdropRuntime(), (source: SkImage, options: typeof input) => {
@@ -47,6 +49,20 @@ export function renderNativeWallpaperHaze(image: SkImage, input: Readonly<{
                     mask.setShader(shader); mask.setBlendMode(dstIn); canvas.drawRect(rect, mask);
                     canvas.restore();
                 } finally { paint.dispose(); mask.dispose(); blur.dispose(); matrix.dispose(); shader.dispose(); }
+            }
+            const veil = options.veil;
+            if (veil) {
+                const paint = api.Paint(), mask = api.Paint();
+                const matrix = api.Matrix([veil.rx * width, 0, options.x * options.dpr, 0, veil.ry * height, options.y * options.dpr, 0, 0, 1]);
+                const shader = api.Shader.MakeRadialGradient({ x: 0, y: 0 }, 1, [api.Color('#000'), api.Color('#000'), api.Color('transparent')], [0, veil.solid, 1], clamp, matrix);
+                try {
+                    canvas.saveLayer();
+                    paint.setColor(api.Color(veil.color));
+                    paint.setAlphaf(veil.alpha);
+                    canvas.drawRect(rect, paint);
+                    mask.setShader(shader); mask.setBlendMode(dstIn); canvas.drawRect(rect, mask);
+                    canvas.restore();
+                } finally { paint.dispose(); mask.dispose(); matrix.dispose(); shader.dispose(); }
             }
             surface.flush();
             return surface.makeImageSnapshot();

@@ -29,7 +29,16 @@ export type GlassMaterialEnvironment = Readonly<{
  * picture itself). Default glass and ink derive from it, so they stay legible over pictures that run
  * against the theme.
  */
-export type GlassAtmosphereTone = Readonly<{ dark: number; light: number; focus: number }>;
+export type GlassAtmosphereTone = Readonly<{
+    dark: number;
+    light: number;
+    focus: number;
+    /**
+     * The ink of the Wallpaper plane, where head lines stand on the picture itself: the atmosphere decides it
+     * together with the haze under them (`resolveWallpaperHaze`). Absent means the theme's.
+     */
+    ink?: 'theme' | 'page';
+}>;
 
 export type GlassSurfaceResolution = Readonly<{
     material: GlassSurfaceMaterial;
