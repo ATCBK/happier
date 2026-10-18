@@ -40,6 +40,13 @@ export type { WidgetProjectAreaV1 } from './widgetPresentationV1.js';
 
 export { WIDGET_INSTANCE_ACTION_IDS_V1, WidgetInstanceActionIdV1Schema } from './actionIdsV1.js';
 export type { WidgetInstanceActionIdV1 } from './actionIdsV1.js';
+/** Metadata, types and options use the selected Session, or the hosting Session. */
+export function readWidgetActionSessionTargetV1(surface: WidgetSurfaceRefV1,
+  selected?: Readonly<{ serverId: string; sessionId: string }>): Readonly<{ serverId: string; sessionId: string }> | undefined {
+  const owner = surface.owner;
+  return selected ?? (owner.kind === 'sessionBoard' || owner.kind === 'companion'
+    ? { serverId: surface.serverId, sessionId: owner.sessionId } : undefined);
+}
 /** One nested-target reader for Action policy, approval custody and widget execution. */
 export function readWidgetActionSurfaceV1(input: unknown): WidgetSurfaceRefV1 | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;

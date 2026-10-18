@@ -27,6 +27,8 @@ import { MachinePoolResolveResultV1Schema } from '../machines/pools/v1.js';
 import { ProjectWorkerActionOutputSchemasV1 } from '../actions/specs/projectWorkers.js';
 import { ActionOperationCancelV1ResponseSchema } from '../actions/operations/v1.js';
 import { ApprovalStaleFailureDetailsSchema } from './approvalStaleReason.js';
+import { WidgetBindingResolutionV1Schema, WidgetInstanceActionInputSchemasV1 } from '../widgets/actionsV1.js';
+import { WidgetInstanceActionIdV1Schema } from '../widgets/actionIdsV1.js';
 import type {
   ApprovalExecutionV2,
   ApprovalRequest,
@@ -42,6 +44,18 @@ function parseStrictApprovalFailure(input: Readonly<{
     const details = (storedRead ? createStoredReadSchema(ApprovalStaleFailureDetailsSchema)
       : ApprovalStaleFailureDetailsSchema).safeParse(input.failure.details);
     return details.success ? { ...input.failure, details: details.data } : null;
+  }
+  if (input.failure.errorCode === 'widget_inputs_invalid') {
+    const action = WidgetInstanceActionIdV1Schema.safeParse(input.request.actionId);
+    if (!action.success) return null;
+    const schema = WidgetInstanceActionInputSchemasV1[action.data];
+    const args = (storedRead ? createStoredReadSchema(schema) : schema).safeParse(input.request.actionArgs);
+    const details = (storedRead ? createStoredReadSchema(WidgetBindingResolutionV1Schema)
+      : WidgetBindingResolutionV1Schema).safeParse(input.failure.details);
+    // A refused admission contains field facts only. Never persist resolved
+    // values, or promote an unrelated Action's opaque error bag into history.
+    return args.success && details.success && details.data.status !== 'ready'
+      ? { ...input.failure, details: details.data } : null;
   }
   if (input.request.actionId === 'settings.set') {
     if (input.failure.errorCode !== 'account_settings_invalid') return null;

@@ -2,7 +2,7 @@ import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/acti
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { expect, it, vi } from 'vitest';
-import { AccountProfileSchema, PluginProjectionV2Schema, PluginUiViewV2Schema, tryWriteServerEnabledBitInPlace, type ActionExecutorDeps, type PluginJsonSchemaV2 } from '@happier-dev/protocol';
+import { AccountProfileSchema, ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1, PluginProjectionV2Schema, PluginUiViewV2Schema, tryWriteServerEnabledBitInPlace, type ActionExecutorDeps, type PluginJsonSchemaV2 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createPluginWidgetAreaHostPortV1 } from '@happier-dev/protocol/plugins/ui';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -569,6 +569,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 it('resolves installed Board Count choices and input admission on the consumer Session machine', async () => {
     await import('@/sync/syncEngine');
     const http = createHomeHubArtifactHttpBoundary('viewer');
+    let approvalHttp: ReturnType<typeof createLayoutArtifactHttpBoundary<ReturnType<typeof ApprovalRequestV2Schema.parse>>> | null = null;
     const serverIdentityId = 'srv_board_counter_inputs';
     const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId } } });
     const invocations: ExternalActionRequesterInvocationV1[] = [];
@@ -597,6 +598,7 @@ it('resolves installed Board Count choices and input admission on the consumer S
     const connection = await restoreServerAccountForTest({ serverUrl: 'http://board-counter-input.test', serverIdentityId, accountId: 'viewer',
         credentials: { token: createAccountTokenForTests('viewer', { currentAccount: true }) }, request: async (input, init) => {
         const url = new URL(String(input));
+        if (approvalHttp && url.pathname.startsWith(`/v1/artifacts/${approvalHttp.artifactId}`)) return approvalHttp.request(input, init);
         const options = await optionsHttp.handle(url, init);
         if (options && url.pathname === '/v1/machines') return Response.json([
             createPlainMachineRowFixture({ id: 'a-other-machine', accountId: 'viewer' }), ...await options.json(),
@@ -669,6 +671,37 @@ it('resolves installed Board Count choices and input admission on the consumer S
                 await vi.waitFor(() => expect(hook.getCurrent().state(field)).toMatchObject({ status: 'ready',
                     options: [{ value: 'files' }, { value: 'folders' }] }));
             } finally { await hook.unmount(); }
+        }
+        // A CLI proposal is executed by the approving Account app. Keep its real
+        // catalog/type/options composition and inspect the durable replay result.
+        {
+            const filter = 'files';
+            const artifactId = 'approved-counter-files';
+            const actionArgs = { surface, instance: { ...instance(), id: 'approved-new-counter', bindings: {
+                ...instance().bindings, filter: { kind: 'value' as const, value: filter },
+            } } };
+            const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+                createdBy: { surface: 'cli', sessionId: session.id }, requestedSurface: 'cli',
+                approval: { flow: 'deferred', result: 'required' }, actionId: 'widgets.item.add', actionArgs, summary: 'Add directory count',
+                executionOriginV1: { v: 1, authority: 'present_user', surface: 'cli', caller: { kind: 'host' },
+                    serverId: scope.serverId, serverIdentityId, accountId: scope.accountId, sessionId: session.id,
+                    machineId: 'z-counter-machine', target: { kind: 'machine', machineId: 'z-counter-machine' },
+                    actionId: 'widgets.item.add', requestId: artifactId } });
+            approvalHttp = createLayoutArtifactHttpBoundary('viewer', { artifactId, kind: 'approval_request.v1', defaultLayout: request,
+                parseLayout: value => ApprovalRequestV2Schema.parse(value), buildHeader: buildApprovalRequestArtifactHeaderV1 });
+            approvalHttp.seed(request);
+            daemon.projections.set('z-counter-machine', PluginProjectionV2Schema.parse({ ...projection,
+                generation: 2, familiesById: { ...projection.familiesById, inputTypes: { family: 'inputTypes', entriesById: {} } } }));
+            clearDaemonMergedProjectionCacheForTests();
+            const decided = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' },
+                { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId });
+            const expected = { errorCode: 'widget_inputs_invalid', details: { status: 'unavailable', fields: [
+                    { path: 'filter', status: 'unavailable', reasonCode: 'input_type_unavailable' },
+                ] } };
+            expect(decided, JSON.stringify(decided)).toMatchObject({ ok: true, result: { status: 'failed', execution: expected } });
+            expect(approvalHttp.layout()).toMatchObject({ status: 'failed', execution: expected });
+            daemon.projections.set('z-counter-machine', projection);
+            clearDaemonMergedProjectionCacheForTests();
         }
         expect(invocations.length).toBeGreaterThan(0);
         expect(invocations.every(invocation => invocation.surface === 'ui' && invocation.authority === 'present_user'

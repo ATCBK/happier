@@ -79,6 +79,7 @@ import { createCliWidgetAreaActionDepsV1 } from './widgetAreaActionDeps';
 import { createCliWidgetDefinitionActionDepsV1 } from './widgetDefinitionActionDeps';
 import { BUILTIN_WIDGET_DESCRIPTORS_V1, countWidgetInstancesV1, isSameWidgetDefinitionV1, widgetCandidateDefinitionV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 import { readWidgetActionSurfacePortV1 } from '@happier-dev/protocol/widgets/executeWidgetInstanceActionV1';
+import { readWidgetActionSessionTargetV1 } from '@happier-dev/protocol/widgets/actionsV1';
 import { createHomeHubArtifactPortV1 } from '@happier-dev/protocol/home/homeHubArtifactV1';
 import type { HomeHubLayoutValue } from '@happier-dev/protocol/home';
 import { SessionWorkerPublishInputV1Schema, workerDeliverablesBelongToSessionV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
@@ -787,6 +788,8 @@ export function createCliActionDeps(params: Readonly<{
   pluginChangeService?: DaemonPluginChangeService;
   /** Canonical private-secret Action adapter supplied by the captured Account host. */
   personalSavedSecretActionExecute?: ActionExecutorDeps['personalSavedSecretActionExecute'];
+  /** Standalone input choices use the authenticated built-in Action owner. */
+  readAdmittedInputTypeOptions?: ActionExecutorDeps['readAdmittedInputTypeOptions'];
   /** Currentness of this composition's already-captured credential. */
   isCredentialCurrent?: () => boolean | Promise<boolean>;
   onRequesterSessionCredentialDisclosure?: Parameters<typeof dispatchOriginalAccountAction>[0]['onRequesterSessionCredentialDisclosure'];
@@ -3326,6 +3329,7 @@ export function createCliActionDeps(params: Readonly<{
     ...(params.isCredentialCurrent ? { isCredentialCurrent: params.isCredentialCurrent } : {}),
   }) : undefined;
   const actionDeps: ActionExecutorDeps = {
+    ...(params.readAdmittedInputTypeOptions ? { readAdmittedInputTypeOptions: params.readAdmittedInputTypeOptions } : {}),
     registryActionExecute: async ({actionId,input,context}) => {
       if(!params.credentials) throw new Error('account_credentials_unavailable');
       return createCliRegistryHostV1({credentials:params.credentials,
@@ -3624,10 +3628,8 @@ export function createCliActionDeps(params: Readonly<{
       return accountId ? { serverId: widgetHomeId, accountId, isSameServerId: isSameActionHomeId } : null;
     },
     widgetCatalog: { readInstalledInputFields: async ({ surface, definition, signal, boundSession }) => {
-      const owner = surface.owner;
-      const physicalSession = owner.kind === 'sessionBoard' || owner.kind === 'companion'
-        ? { serverId: surface.serverId, sessionId: owner.sessionId } : undefined;
-      const candidates = await readWidgetCandidates(signal, boundSession ?? physicalSession);
+      const physicalSession = readWidgetActionSessionTargetV1(surface);
+      const candidates = await readWidgetCandidates(signal, readWidgetActionSessionTargetV1(surface, boundSession));
       if (physicalSession && boundSession && physicalSession.sessionId !== boundSession.sessionId) {
         await resolveWidgetSessionTransport(physicalSession, signal);
       }
@@ -3637,7 +3639,7 @@ export function createCliActionDeps(params: Readonly<{
     }, list: async (surface, _context, signal, boundSession) => {
       const port = readWidgetActionSurfacePortV1(actionDeps, surface);
       if (!port) return { ok: false, errorCode: 'unsupported_widget_surface', error: 'unsupported_widget_surface' };
-      const sessionRef = boundSession ?? (surface.owner.kind === 'sessionBoard' ? { serverId: surface.serverId, sessionId: surface.owner.sessionId } : undefined);
+      const sessionRef = readWidgetActionSessionTargetV1(surface, boundSession);
       const candidates = await readWidgetCandidates(signal, sessionRef);
       const read = await port.read(surface, _context, signal);
       if ('ok' in read) return read;

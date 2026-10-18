@@ -14,7 +14,7 @@ import { findWidgetLayoutParentV1, readWidgetActionSurfacePortV1, WidgetSurfaceR
 import { readInputPath } from '@happier-dev/protocol/inputs/inputPredicates';
 import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
-import { createDaemonPluginActionExecutor } from './createDaemonPluginActionExecutor';
+import { readWidgetActionSessionTargetV1 } from '@happier-dev/protocol/widgets/actionsV1';
 
 type Request = Parameters<WidgetActionInputResolverV1['resolve']>[0];
 type Descriptor = WidgetInputDescriptorV1 & Readonly<{ resources?: readonly PluginContributionIdentityV1[]; resourceDeclarations?: readonly PluginProjectedResourceV2[];
@@ -87,10 +87,11 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             : reference.kind === 'artifact' ? await input.getDeps().widgetDefinitionArtifacts?.get(reference.artifactId, context.signal) : null;
         if ((reference.kind === 'inline' || reference.kind === 'artifact') && !authored) return unavailable;
         const definition = authored?.body.kind === 'installed' || authored?.body.kind === 'builtin' ? authored.body : reference;
-        const candidate = (await input.readCandidates(context.signal, consumer.selectedSession)).find(candidate => candidate.availability === 'available'
+        const sessionTarget = readWidgetActionSessionTargetV1(consumer.surface, consumer.selectedSession);
+        const candidate = (await input.readCandidates(context.signal, sessionTarget)).find(candidate => candidate.availability === 'available'
             && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition));
         const native = definition.kind === 'builtin' ? readBuiltinWidgetDescriptorV1(definition) : null;
-        const resources = authored && authored.body.kind !== 'installed' && authored.body.kind !== 'builtin' ? await input.readResources?.(context.signal, consumer.selectedSession) : null;
+        const resources = authored && authored.body.kind !== 'installed' && authored.body.kind !== 'builtin' ? await input.readResources?.(context.signal, sessionTarget) : null;
         const descriptor: Descriptor | undefined = authored?.body.kind === 'builtin'
             ? native ? { ...native, ...authored } : undefined
             : authored && authored.body.kind !== 'installed'
@@ -125,7 +126,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                 return descriptor;
             }
             if (authored && authored.body.kind !== 'installed') {
-                const projection = await input.readResources?.(request.signal);
+                const projection = await input.readResources?.(request.signal, readWidgetActionSessionTargetV1(request.ref.surface));
                 let descriptor: Descriptor = { sizeDeclaration: authored.sizeDeclaration, inputs: authored.inputs, inputSchema: authored.inputSchema, sessionInputPath: authored.sessionInputPath,
                     connectedAccountPurposeBindings: authored.connectedAccountPurposeBindings, resources: readWidgetDefinitionResourcesV1(authored),
                     resourceDeclarations: projection?.resources ?? [], connectedAccountDescriptors: projection?.connectedAccountDescriptors ?? [] };
@@ -146,9 +147,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             const definition = authored?.body.kind === 'installed' ? authored.body : reference;
             const matches = (candidate: Candidate) => candidate.availability === 'available'
                 && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition);
-            const owner = request.ref.surface.owner;
-            const ownerSession = owner.kind === 'sessionBoard' || owner.kind === 'companion'
-                ? { serverId: request.ref.surface.serverId, sessionId: owner.sessionId } : undefined;
+            const ownerSession = readWidgetActionSessionTargetV1(request.ref.surface);
             let candidate = (await input.readCandidates(request.signal, ownerSession)).find(matches);
             // A saved definition supplies its exact target field even when physical A
             // has no matching plugin. Bare installed copies discover metadata through
@@ -203,7 +202,8 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                 ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(bound.input, targetDeclaration.path)) : null;
             // The widget's selected daemon projection is the type catalog for
             // standalone callers, runtime hosts and saved definitions alike.
-            const types = await input.readInputTypes?.(request.signal, selected?.success ? selected.data : undefined);
+            const types = await input.readInputTypes?.(request.signal,
+                readWidgetActionSessionTargetV1(request.ref.surface, selected?.success ? selected.data : undefined));
             request.signal?.throwIfAborted();
             const entry = types?.entriesById[buildQualifiedPluginContributionKey(field.inputType)];
             return entry?.occurrenceId && entry.pluginId === field.inputType.pluginId && entry.definition.id === field.inputType.localId
@@ -248,13 +248,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             const descriptor = descriptors.get(request);
             const target = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             const selected = target?.kind === 'session' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(value, target.path)) : null;
-            const deps = input.getDeps();
-            const local = createActionExecutor(deps);
-            // Standalone Actions use the same incumbent daemon options owner
-            // as top-level discovery. A runtime host already has its committed
-            // input-type dependencies and stays within that owner in process.
-            const executor = field.inputType && 'pluginId' in field.inputType && !deps.resolveInputType
-                ? createDaemonPluginActionExecutor({ base: local }) : local;
+            const executor = createActionExecutor(input.getDeps());
             const result = await executor.execute('action.options.resolve', {
                 consumer: { kind: 'widget', surface: request.ref.surface, definition: request.instance.definition,
                     ...(selected?.success ? { selectedSession: selected.data } : {}) },

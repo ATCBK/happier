@@ -266,6 +266,30 @@ describe('ApprovalRequestV1Schema', () => {
         .not.toHaveProperty('details');
     }
   });
+  it('retains typed widget input failures without persisting values or opaque fields', () => {
+    const actionId = 'widgets.item.add';
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', actionId, summary: 'Add count',
+      actionArgs: { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
+        instance: { v: 1, id: 'counter', definition: { kind: 'installed', surface: { pluginId: 'example.widgets', localId: 'counter' } }, bindings: {} } },
+      executionOriginV1: { v: 1, authority: 'present_user', surface: 'cli', caller: { kind: 'host' },
+        serverId: 'home', accountId: 'account', machineId: 'machine', actionId, requestId: 'request' } });
+    const details = { status: 'unavailable', fields: [{ path: 'filter', status: 'unavailable', reasonCode: 'input_type_unavailable' }] };
+    const failure = { ok: false as const, errorCode: 'widget_inputs_invalid', error: 'widget_inputs_invalid', details };
+    const execution = projectApprovalExecutionFailureV2({ request, failure, executedAtMs: 3 });
+    expect(execution).toMatchObject({ details });
+    const stored = StoredApprovalRequestSchema.parse({ ...request, status: 'failed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution });
+    expect(readApprovalExecutionFailure(stored)).toMatchObject({ details });
+    for (const unsafe of [{ ...details, token: 'must-not-persist' },
+      { status: 'ready', input: { token: 'must-not-persist' } },
+      { ...details, fields: [{ ...details.fields[0], value: 'must-not-persist' }] }]) {
+      expect(projectApprovalExecutionFailureV2({ request, failure: { ...failure, details: unsafe }, executedAtMs: 3 }))
+        .not.toHaveProperty('details');
+    }
+    expect(projectApprovalExecutionFailureV2({ request: { ...request, actionId: 'settings.get' }, failure, executedAtMs: 3 }))
+      .not.toHaveProperty('details');
+  });
   it('retains the bounded Account Settings validator reason without persisting opaque details', () => {
     const actionId = 'settings.set';
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,

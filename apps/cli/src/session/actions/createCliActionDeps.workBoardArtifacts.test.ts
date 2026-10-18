@@ -9,7 +9,6 @@ import { buildWidgetSurfaceArtifactIdV1 } from '@happier-dev/protocol/widgets';
 import { createCliActionDeps } from './createCliActionDeps';
 import { createCliActionExecutor } from './createCliActionExecutor';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import * as daemonControl from '@/daemon/controlClient';
 import { createRegistryInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
@@ -99,13 +98,6 @@ describe('CLI Board Actions through the Artifact owner', () => {
         const inputType = { pluginId: 'external.directory-widgets', localId: 'count-kind' };
         const occurrenceId = createPluginRuntimeOccurrenceId(inputType.pluginId);
         const countOptions = [{ value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders', disabled: true }];
-        // The standalone executor's actual daemon control transport is the
-        // boundary; widget/field/options admission below it remains real.
-        vi.spyOn(daemonControl, 'requestDaemonPluginActionExecution').mockImplementation(async () => {
-            if (initiallyUnavailable) throw new Error('The current-process registry must not loop through daemon control');
-            return { matched: true, result: { ok: true, result: { actionId: 'widgets.catalog.list', fieldPath: 'filter',
-                optionsSourceId: 'plugin-input:external.directory-widgets/count-kind', options: countOptions } } };
-        });
         let projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {
             inputTypes: { family: 'inputTypes', entriesById: { 'external.directory-widgets/count-kind': {
                 id: 'external.directory-widgets/count-kind', pluginId: inputType.pluginId, pluginVersion: '1.0.0',
@@ -121,13 +113,22 @@ describe('CLI Board Actions through the Artifact owner', () => {
             resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId: inputType.pluginId,
                 definition: { id: 'count-kinds', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' } }],
         });
+        const inputTypeDeps = createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => ({
+            resource: { pluginId: inputType.pluginId, localId: 'count-kinds' }, kind: 'config',
+            contentType: 'application/json', digest: `sha256:${'a'.repeat(64)}`, bytes: new TextEncoder().encode(JSON.stringify(countOptions)),
+        }) });
+        const daemon = createCliActionExecutor({ token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
+            serverId: 'board-home', serverHttpBaseUrl: 'https://board-home.test', pluginActionExecutionOwner: 'current_process', inputTypeDeps,
+            machineActionDirectTargetTransport: { machineId: 'widget-machine', invoke: async () => ({ protocolVersion: 1, projection }) } });
         const executor = createCliActionExecutor({ token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
             serverId: 'board-home', serverHttpBaseUrl: 'https://board-home.test',
             ...(initiallyUnavailable ? { pluginActionExecutionOwner: 'current_process' as const,
-                inputTypeDeps: createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => ({
-                    resource: { pluginId: inputType.pluginId, localId: 'count-kinds' }, kind: 'config',
-                    contentType: 'application/json', digest: `sha256:${'a'.repeat(64)}`, bytes: new TextEncoder().encode(JSON.stringify(countOptions)),
-                }) }) } : {}),
+                inputTypeDeps } : { readAdmittedInputTypeOptions: async ({ input, context }) => {
+                    // Model only the process transport; the receiving built-in
+                    // options owner validates the real consumer and Resource.
+                    const result = await daemon.execute('action.options.resolve', input, context);
+                    return result.ok ? result.result : result;
+                } }),
             machineActionDirectTargetTransport: { machineId: 'widget-machine', invoke: async () => ({ protocolVersion: 1, projection }) } });
         const context = { surface: 'cli', bypassApprovals: true } as const;
         const created = await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'new-board', name: 'Board title' } } }, context);

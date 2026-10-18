@@ -146,6 +146,13 @@ function readNonEmptyString(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
+function isOriginalCliActionContext(context: ActionExecutorContext): boolean {
+  return (context.surface === undefined || context.surface === 'cli')
+    && (!context.actionCaller || context.actionCaller.kind === 'host')
+    && !context.externalActionCredential && !context.externalActionExecutionAuthorization
+    && !context.rpcSessionAuthorization && !context.causalPermissionAuthority;
+}
+
 function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Readonly<Record<string, unknown>>
@@ -779,6 +786,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     transcriptFollowLeaseRegistry: ReturnType<typeof createFollowLeaseRegistry>,
     sessionMemoryEnabled?: boolean,
     serverIdentityId = params.serverIdentityId,
+    readAdmittedInputTypeOptions?: ActionExecutorDeps['readAdmittedInputTypeOptions'],
   ): ReturnType<typeof createCliActionExecutor> => {
     const resolveServerFeaturesSnapshot = params.resolveServerFeaturesSnapshot
       ?? (async () => await resolveServerFeaturesSnapshotForCredentials(credentials));
@@ -886,6 +894,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     });
     return createCliActionExecutor({
       ...cryptoContext,
+      ...(readAdmittedInputTypeOptions ? { readAdmittedInputTypeOptions } : {}),
       ...(sessionMemoryEnabled !== undefined ? { sessionMemoryEnabled } : {}),
       clientActionExecute: params.clientActionExecute ?? getDaemonClientActionExecutor(approvalServerId),
       confidentialSecretFill: params.confidentialSecretFill ?? getDaemonConfidentialSecretFillExecutor(approvalServerId),
@@ -1090,6 +1099,17 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     transcriptFollowLeaseRegistry: ReturnType<typeof createFollowLeaseRegistry>,
     invocationSignal?: AbortSignal,
   ): CliActionExecutor => {
+    const readInputTypeOptions = (credentials: StoredCredentials): NonNullable<ActionExecutorDeps['readAdmittedInputTypeOptions']> =>
+      async ({ input, context }) => {
+        // The schema/consumer was admitted by the local input owner. Resolve
+        // live choices through the same authenticated built-in ingress, never
+        // the contributed-plugin endpoint or a locally invented registry.
+        if (!isOriginalCliActionContext(context)) return actionFailure('input_type_options_unavailable');
+        const prepared = await prepareOriginalCliActionInvocation('action.options.resolve', input, context, credentials, true);
+        if (!prepared.invocation) return actionFailure('input_type_options_unavailable');
+        const result = await prepared.invocation.run();
+        return result.ok ? result.result : result;
+      };
     // Default policy readers capture the Account lifetime at construction.
     // Bind them only after the first invocation has bootstrapped that Account;
     // an explicitly admitted runtime provider already owns its lifetime.
@@ -1097,7 +1117,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ? null
       : shouldUsePatPublicActionTransport(params.credentials, undefined)
         ? null
-        : createExecutor(params.credentials, transcriptFollowLeaseRegistry);
+        : createExecutor(params.credentials, transcriptFollowLeaseRegistry, undefined, params.serverIdentityId, readInputTypeOptions(params.credentials));
     let fixedExecutorServerIdentityId = params.serverIdentityId;
     const resolveExecutor = async (credentials: StoredCredentials, sessionMemoryEnabled?: boolean) => {
       // Resolve at the invocation boundary, not during synchronous composition.
@@ -1105,7 +1125,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       const serverIdentityId = params.serverIdentityId
         ?? (await enrichApprovalRoutingContext(undefined, credentials)).serverIdentityId;
       if (!fixedExecutor || sessionMemoryEnabled !== undefined) {
-        const executor = createExecutor(credentials, transcriptFollowLeaseRegistry, sessionMemoryEnabled, serverIdentityId);
+        const executor = createExecutor(credentials, transcriptFollowLeaseRegistry, sessionMemoryEnabled, serverIdentityId, readInputTypeOptions(credentials));
         if (!params.readCredentials && sessionMemoryEnabled === undefined) {
           fixedExecutor = executor;
           fixedExecutorServerIdentityId = serverIdentityId;
@@ -1113,7 +1133,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         return executor;
       }
       if (fixedExecutorServerIdentityId !== serverIdentityId) {
-        fixedExecutor = createExecutor(credentials, transcriptFollowLeaseRegistry, undefined, serverIdentityId);
+        fixedExecutor = createExecutor(credentials, transcriptFollowLeaseRegistry, undefined, serverIdentityId, readInputTypeOptions(credentials));
         fixedExecutorServerIdentityId = serverIdentityId;
       }
       return fixedExecutor;
@@ -1130,7 +1150,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       });
     };
     const prepareOriginalCliActionInvocation = async (actionId: string, input: unknown,
-      context: ActionExecutorContext, credentials: StoredCredentials) => {
+      context: ActionExecutorContext, credentials: StoredCredentials, requireDaemonIngress = false) => {
       // Qualified plugin Actions belong to the current contributed-Action
       // discovery/daemon owner, not the host's finite ActionSpec placement map.
       // Credential admission and approval context are already established;
@@ -1141,10 +1161,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       // Finite original CLI work is admitted at Home before the selected
       // retained guest is online. Keep policy/approval in the shared executor;
       // admitted Session/Run origins retain their existing credentialed owner.
-      const originalCliCaller = (context.surface === undefined || context.surface === 'cli')
-        && (!context.actionCaller || context.actionCaller.kind === 'host')
-        && !context.externalActionCredential && !context.externalActionExecutionAuthorization
-        && !context.rpcSessionAuthorization && !context.causalPermissionAuthority;
+      const originalCliCaller = isOriginalCliActionContext(context);
       const provenance = readAuthTokenProvenance(decodeJwtPayload(credentials.token), { allowLegacyHome: true });
       const ordinary = provenance?.provenance.kind === 'account' && provenance.provenance.authority === 'present_user'
         && context.authority !== 'account_automation';
@@ -1194,7 +1211,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       // A semantic Machine selector needs the same admitted delivery as an
       // outer CLI selector, even for Machine-placed friendly commands.
       const usesDaemonIngress = params.externalActionClient || requiresDaemonInputAdmission
-        || selectedOriginalMachine?.kind === 'ready';
+        || selectedOriginalMachine?.kind === 'ready' || requireDaemonIngress;
       const originalDaemonTarget = usesDaemonIngress && originalCliCaller
         ? await resolveLiveDaemonControlTargetForServer(fixedServerId ?? approvalServerId).catch(() => null)
         : undefined;

@@ -1,5 +1,6 @@
 import type { ActionExecuteFailure, ActionExecutorDeps } from '@happier-dev/protocol';
 import { readWidgetActionSurfacePortV1, widgetCandidateDefinitionV1, isSameWidgetDefinitionV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { readWidgetActionSessionTargetV1 } from '@happier-dev/protocol/widgets/actionsV1';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { selectWidgetCandidates, selectBuiltinWidgetCandidates, describeWidgetDefinitionSummaryV1, describeAuthoredWidgetDefinitionV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { createSessionPluginPolicyEvaluationContext } from '@/components/sessions/model/usePluginUiSessionPolicyEvaluationContext';
@@ -38,14 +39,6 @@ export type WidgetActionRuntimeV1 = Readonly<{
 /** Installed App metadata belongs to the proven active UI Account, not an arbitrary captured Home. */
 export function canReadActiveWidgetCatalogV1(account: Pick<LazyActionAccountContext, 'serverId' | 'accountId'>): boolean {
     return areServerAccountScopesEqual(getActiveServerAccountScope(), { serverId: account.serverId, accountId: account.accountId });
-}
-
-/** Catalog metadata and typed choices share the same selected or hosting Session. */
-export function readWidgetActionSessionTargetV1(surface: WidgetSurfaceRefV1,
-    selected?: Readonly<{ serverId: string; sessionId: string }>): Readonly<{ serverId: string; sessionId: string }> | undefined {
-    const owner = surface.owner;
-    return selected ?? (owner.kind === 'sessionBoard' || owner.kind === 'companion'
-        ? { serverId: surface.serverId, sessionId: owner.sessionId } : undefined);
 }
 
 export async function readWidgetActionRuntimeV1(
