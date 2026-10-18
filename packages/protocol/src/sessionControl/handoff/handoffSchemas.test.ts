@@ -1,11 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { SessionHandoffCapabilityV2Schema } from './handoffSchemas.js';
+import { SessionHandoffCapabilityV2Schema, readSessionHandoffError } from './handoffSchemas.js';
 
 async function loadHandoffModule() {
   return await import(new URL('./handoffRpc.js', import.meta.url).href).catch((error) => ({ error } as const));
 }
 
 describe('session handoff schemas', () => {
+  it('preserves handoff failure codes and recovery context across both daemon result shapes', () => {
+    const status = { handoffId: 'handoff-1', status: 'pending', phase: 'preparing' };
+    for (const value of [
+      { ok: false, errorCode: 'RPC_FORBIDDEN', error: 'Target denied', status },
+      { errorCode: 'RPC_FORBIDDEN', error: 'Target denied', handoffId: 'handoff-1', status },
+    ]) {
+      expect(readSessionHandoffError(value)).toMatchObject({
+        errorCode: 'RPC_FORBIDDEN', errorMessage: 'Target denied', handoffId: 'handoff-1', status,
+      });
+    }
+    expect(readSessionHandoffError({ error: 'Legacy failure' })).toEqual({
+      errorCode: 'UNEXPECTED', errorMessage: 'Legacy failure',
+    });
+    expect(readSessionHandoffError({ ok: false, errorCode: 'failed' })).toEqual({
+      errorCode: 'failed', errorMessage: 'Session handoff failed',
+    });
+    expect(readSessionHandoffError({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true })).toBeNull();
+  });
+
   it('defaults omitted optional capability flags to false and authorizes only explicit true', () => {
     const required = { protocolVersion: 2, atomicTargetResume: true, targetCleanup: true };
     expect(SessionHandoffCapabilityV2Schema.parse(required)).toEqual({

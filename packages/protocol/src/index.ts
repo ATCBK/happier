@@ -2647,6 +2647,7 @@ export {
 export {
   SessionHandoffAbortRequestSchema,
   SessionHandoffCapabilityV2Schema,
+  readSessionHandoffError,
   type SessionHandoffCapabilityV2,
   SessionHandoffAbortRequestV2Schema,
   SessionHandoffAbortResponseSchema,
