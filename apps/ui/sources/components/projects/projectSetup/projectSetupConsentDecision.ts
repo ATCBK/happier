@@ -112,7 +112,9 @@ function matchesRetainedCheckout(
   const target = current.domainRef;
   const original = retained.domainRef;
   if (target?.kind !== 'projectCommand' || original?.kind !== 'projectCommand') return false;
-  const source = target.sourceWorkspace;
+  // Once review clears, the same invocation's producer may project only its target.
+  // Its validated retained review still binds Source; a supplied Source must match.
+  const source = target.sourceWorkspace ?? (!current.setupReview ? original.sourceWorkspace : undefined);
   return current.operationId === retained.operationId && current.actionId === retained.actionId
     && current.scope.accountId === scope.accountId && current.scope.machineId === retained.scope.machineId
     && target.serverId === scope.serverId && target.machineId === current.scope.machineId

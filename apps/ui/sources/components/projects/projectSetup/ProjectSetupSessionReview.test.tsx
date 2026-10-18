@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol';
+import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 
 import { installSessionSubagentCommonModuleMocks } from '@/components/sessions/agents/sessionSubagentTestHelpers';
 import {
@@ -175,9 +176,15 @@ describe('Project setup review inside a Session', () => {
           ],
         },
       } as never);
-      const held = heldScript(serverId, 'session-1', workspace);
+      const held = ActionOperationSnapshotV1Schema.parse({ ...heldScript(serverId, 'session-1', workspace),
+        actionId: 'execution.run.start', state: 'running', startedAt: 100,
+        domainRef: { kind: 'projectCommand', purpose: 'setup', serverId, machineId: workspace.machineId,
+          workspaceRefId: workspace.workspaceId, cwd: workspace.rootPath, sourceWorkspace: workspace } });
+      const target = held.domainRef;
+      if (target?.kind !== 'projectCommand') throw new Error('Expected retained Project target');
       machineTransport.read.mockResolvedValueOnce({ kind: 'found', operation: held })
-        .mockResolvedValueOnce({ kind: 'found', operation: { ...held, revision: 2, setupReview: undefined } });
+        .mockResolvedValueOnce({ kind: 'found', operation: { ...held, revision: 2, setupReview: undefined,
+          domainRef: { ...target, sourceWorkspace: undefined } } });
       actionOperationStore.mergeSnapshots({
         serverId,
         snapshots: [
