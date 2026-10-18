@@ -150,8 +150,10 @@ describe('WorkBoard widgets', () => {
         const render: BoardCanvasWidgetRender = (widget, state) => <View testID={`frame:${widget.placement.instance.id}`}>
             {state.active !== false ? <RuntimeBody id={widget.placement.instance.id} /> : null}{state.grip}
         </View>;
-        const screen = await renderScreen(<BoardCanvas cards={[]} widgets={canvasWidgets(board)} renderWidget={render}
-            positionsByItemRef={board.positionsByItemRef} snap binding={canvasBinding(b, [])} onOpen={() => {}} />);
+        const retainedLayout = { current: null };
+        const canvasProps = { cards: [], widgets: canvasWidgets(board), renderWidget: render,
+            positionsByItemRef: board.positionsByItemRef, snap: true, binding: canvasBinding(b, []), onOpen: () => {}, retainedLayout };
+        const screen = await renderScreen(<BoardCanvas {...canvasProps} />);
         await act(async () => {
             screen.findHostByTestId('board-canvas')!.props.onLayout({ nativeEvent: { layout: { width: 900, height: 200 } } });
             for (const placed of [top, bottom]) {
@@ -162,6 +164,13 @@ describe('WorkBoard widgets', () => {
         });
         expect([...demanded]).toEqual(['top']);
         expect(screen.findHostByTestId('frame:bottom')).not.toBeNull();
+        // Phone replaces Canvas with By status. On returning, retained visible
+        // bodies must render before another asynchronous layout event; distant
+        // bodies must remain suspended under the same viewport policy.
+        await screen.update(<></>);
+        expect([...demanded]).toEqual([]);
+        await screen.update(<BoardCanvas {...canvasProps} />);
+        expect([...demanded]).toEqual(['top']);
         // Keyboard focus continues demanding its card, even while its frame is outside the window.
         await act(async () => { screen.findHostByTestId(`board-canvas-organize:${keyOf(bottom)}`)!.props.onFocus(); });
         expect([...demanded]).toEqual(['top', 'bottom']);

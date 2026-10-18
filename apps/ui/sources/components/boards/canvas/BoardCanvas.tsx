@@ -94,8 +94,8 @@ export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasPro
     const previousMembers = React.useRef<readonly CanvasMember[]>([]);
     const canvas = useBoardCanvasEntityDrop(props.binding, measured, props.snap);
     // The existing Canvas grid is the quantization boundary; Home's owner supplies demand overscan.
-    const [verticalDemand] = React.useState(() => createNearViewportTracker({ quantum: gridStepPx, initialViewportHeight: 0 }));
-    const [horizontalDemand] = React.useState(() => createNearViewportTracker({ quantum: gridStepPx, initialViewportHeight: 0, axis: 'x' }));
+    const [verticalDemand] = React.useState(() => createNearViewportTracker({ quantum: gridStepPx, initialViewportHeight: viewportHeight }));
+    const [horizontalDemand] = React.useState(() => createNearViewportTracker({ quantum: gridStepPx, initialViewportHeight: width, axis: 'x' }));
     const columnCount = resolveBoardCanvasColumnCount(Math.max(0, width - paddingPx * 2));
     const widgets = props.widgets ?? NO_WIDGETS;
     const members = React.useMemo(() => {
@@ -162,6 +162,7 @@ export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasPro
                     <CanvasSnapFeedback binding={props.binding} canvas={canvas} members={drawingMembers} heights={heights} />
                     {drawingMembers.map(member => <CanvasCard key={member.key} {...cardProps} member={member}
                         position={positions.get(member.key) ?? props.positionsByItemRef[member.key] ?? null}
+                        measuredHeight={heights.get(member.key)}
                         positioned={positions.has(member.key)} saved={props.positionsByItemRef[member.key] !== undefined}
                         placing={props.placingKey === member.key} restoreFocus={focusedKey === member.key} />)}
                 </View>
@@ -172,7 +173,8 @@ export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasPro
 });
 
 const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
-    member: CanvasMember; position: BoardCanvasPoint | null; positioned: boolean; saved: boolean; placing: boolean; restoreFocus: boolean;
+    member: CanvasMember; position: BoardCanvasPoint | null; measuredHeight: number | undefined;
+    positioned: boolean; saved: boolean; placing: boolean; restoreFocus: boolean;
     binding: WorkBoardEntityBinding; canvas: ReturnType<typeof useBoardCanvasEntityDrop>;
     onOpen: (card: BoardCard) => void; onPlaced?: () => void;
     onAction?: (card: BoardCard, action: BoardCardAction) => void;
@@ -331,12 +333,16 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
     };
     const ownLayout = React.useRef<Readonly<{ y: number; height: number }> | null>(null);
     const [gridInset, setGridInset] = React.useState(0);
-    const [span, setSpan] = React.useState<NearViewportSpan | null>(null);
+    // Canvas already retains this geometry across the phone replacement. Demand
+    // uses it in the first render, before the next asynchronous layout event.
+    const positionY = props.position?.y;
+    const span = React.useMemo<NearViewportSpan | null>(() => positionY !== undefined && props.measuredHeight !== undefined
+        ? { top: paddingPx + positionY, height: props.measuredHeight } : null,
+    [positionY, props.measuredHeight]);
     const report = () => {
         const layout = ownLayout.current;
         if (!layout) return;
         const point = latest.current.position ?? { x: 0, y: 0 };
-        if (member.kind === 'widget') setSpan(previous => previous?.top === paddingPx + point.y && previous.height === layout.height ? previous : { top: paddingPx + point.y, height: layout.height });
         latest.current.onReportRect(member.key, { ...point, width: memberWidthPx(member.span),
             height: member.kind === 'work' ? ceilToBoardCanvasGrid(layout.height) : layout.height }); canvas.refresh();
     };
