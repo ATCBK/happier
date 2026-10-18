@@ -14,6 +14,35 @@ afterEach(async () => {
 });
 
 describe("sharpRuntime", () => {
+    it.skipIf(!bunCommand)("defers an absent optional Sharp addon until its runtime branch is selected", async () => {
+        const root = await mkdtemp(join(tmpdir(), "happier-sharp-optional-addon-"));
+        tempDirs.push(root);
+        const optionalPackageDir = join(root, "node_modules", "@img", "sharp-wasm32");
+        await mkdir(optionalPackageDir, { recursive: true });
+        // Matches the optional WASM package exposed by CI's --ignore-platform install.
+        await writeFile(join(optionalPackageDir, "index.cjs"), "module.exports = require('./lib/sharp-wasm32-0.35.5.node');\n");
+        const entrypoint = join(root, "entrypoint.ts");
+        await writeFile(entrypoint, "if (process.env.SELECT_OPTIONAL_ADDON) require('./node_modules/@img/sharp-wasm32/index.cjs');\nelse process.stdout.write('optional-not-selected');\n");
+        const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
+        const target = resolveCurrentBinaryTarget({ availableTargets: SERVER_BINARY_TARGETS });
+        const executablePath = join(root, `optional-probe${target.exeExt}`);
+
+        await compileBunBinary({
+            entrypoint,
+            bunTarget: target.bunTarget,
+            outfile: executablePath,
+            bunCommand,
+            buildRunnerEntrypoint: join(repoRoot, "packages/cli-common/scripts/buildBunBinary.mjs"),
+        });
+
+        const ignored = spawnSync(executablePath, [], { cwd: root, encoding: "utf8", env: { PATH: "" } });
+        expect(ignored.status, ignored.stderr).toBe(0);
+        expect(ignored.stdout).toBe("optional-not-selected");
+        const selected = spawnSync(executablePath, [], { cwd: root, encoding: "utf8", env: { PATH: "", SELECT_OPTIONAL_ADDON: "1" } });
+        expect(selected.status).not.toBe(0);
+        expect(selected.stderr).toContain("sharp-wasm32-0.35.5.node");
+    });
+
     it.skipIf(!bunCommand).each(["server", "cli"] as const)("loads packaged Sharp native sidecars for %s in a standalone Bun executable", async (role) => {
         const root = await mkdtemp(join(tmpdir(), "happier-sharp-compiled-"));
         tempDirs.push(root);

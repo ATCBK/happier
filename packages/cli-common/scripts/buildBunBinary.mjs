@@ -2,7 +2,6 @@
 
 import { DEFAULT_BUN_COMPILE_OPTIONS } from '../src/componentArtifacts/commands.ts';
 
-import { statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, relative, resolve } from 'node:path';
 
@@ -54,7 +53,8 @@ const result = await Bun.build({
         if (!/[/\\]node_modules[/\\]@img[/\\]sharp-[^/\\]+[/\\]/.test(args.importer)
           || !args.path.startsWith('./lib/')) return;
         const path = resolve(dirname(args.importer), args.path);
-        if (!statSync(path).isFile()) throw new Error(`Missing Sharp native addon: ${path}`);
+        // Bun visits optional foreign-platform imports too. Their addon may
+        // not exist; Sharp selects the actual staged addon at runtime.
         return { path, namespace: 'sharp-sidecar' };
       });
       build.onLoad({ filter: /.*/, namespace: 'sharp-sidecar' }, (args) => {

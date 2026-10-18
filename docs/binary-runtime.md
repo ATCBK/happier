@@ -472,6 +472,9 @@ Both binaries use `packages/cli-common/scripts/buildBunBinary.mjs`. It bundles S
 CJS entry, preserving Sharp's platform selection, CPU checks and error reporting, and redirects
 only the resolved native addon import to its staged file. The filename comes from the actual
 native import, preserving libvips adjacency without embedding renamed Bun native assets.
+These redirects are virtual modules: compilation does not read optional foreign-platform
+addon files that Sharp never selects on the requested target. A selected missing addon still
+fails visibly through Sharp's runtime loading path.
 This does not enable Bun's package-json autoloader; the CLI also keeps dotenv autoloading
 disabled. The canonical Bun compiler defaults disable bunfig autoloading for standalone CLI, server, hsetup, hstack and Prisma
 migration executables, so a working directory cannot inject a preload before startup.
