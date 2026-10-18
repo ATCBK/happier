@@ -242,7 +242,7 @@ describe('PluginSurfaceInteractionBoundary.web', () => {
         const { PluginSurfaceInteractionBoundary } = await import('./PluginSurfaceInteractionBoundary.web');
         const { PluginSurfacePageHeaderContext } = await import('./pluginSurfaceInteractionAvailability');
         const page = (enabled: boolean) => (
-            <PluginSurfacePageHeaderContext.Provider value={<span data-testid="page-identity">GitHub</span>}>
+            <PluginSurfacePageHeaderContext.Provider value={{ header: <span data-testid="page-identity">GitHub</span>, loadingFrame: 'column' }}>
                 <PluginSurfaceInteractionBoundary surfaceId="surface-web-page" snapshotTitle="GitHub" enabled={enabled}>
                     <PluginSurfaceInteractionBoundary surfaceId="surface-web-nested" snapshotTitle="Nested" enabled={false}>
                         <span>nested</span>

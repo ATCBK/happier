@@ -58,6 +58,30 @@ describe('declarative node vocabulary v2', () => {
     }
   });
 
+  it('admits an appPage headerStyle in the parser, author schema and generated display only', () => {
+    const page = { id: 'reviews', renderer: 'native', container: 'appPage', target: { kind: 'app' } };
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(z.toJSONSchema(PluginUiViewV2Schema, { io: 'input', target: 'draft-2020-12', unrepresentable: 'any' }));
+    for (const candidate of [page, { ...page, headerStyle: 'page' }, { ...page, headerStyle: 'toolbar' }]) {
+      expect(PluginUiViewV2Schema.safeParse(candidate).success).toBe(true);
+      expect(validate(candidate)).toBe(true);
+    }
+    const projected = projectPluginPortableUiDeclarationsV1(PluginManifestV2Schema.parse({
+      schemaVersion: 2, id: 'acme.toolbar-page', version: '1.0.0', displayName: 'Toolbar page',
+      runtime: { apiVersion: 1 }, contributes: { ui: {
+        views: [{ ...page, headerStyle: 'toolbar' }],
+        renderers: [{ id: 'native', kind: 'declarative', root: { kind: 'text', text: 'Reviews' } }],
+      } },
+    }));
+    expect(projected['surfacePlacement:acme.toolbar-page:reviews']).toHaveProperty('display.headerStyle', 'toolbar');
+    for (const candidate of [
+      { ...page, headerStyle: 'banner' },
+      { ...page, container: 'rightSidebarTab', headerStyle: 'toolbar' },
+    ]) {
+      expect(PluginUiViewV2Schema.safeParse(candidate).success).toBe(false);
+      expect(validate(candidate)).toBe(false);
+    }
+  });
+
   it('admits useful widget sizes only on widget declarations through parser and author schema', () => {
     const widget = { id: 'sized', container: 'widget', renderer: 'native', target: { kind: 'app' },
       sizeDeclaration: { sizes: ['medium', 'tall'], defaultSize: 'tall' } };

@@ -9,15 +9,19 @@ import {
     DaemonPluginUiTargetedContributionsReadRequestSchema,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import {
     normalizePluginUiDestinationBindingV1,
     type PluginUiLaunchInputV1,
 } from '@happier-dev/protocol/plugins/ui';
 
-import { createMachineFixture, renderScreen, standardCleanup, withPopoverWebGlobals } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, renderScreen, standardCleanup, withPopoverWebGlobals } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type {
@@ -164,6 +168,16 @@ const routeRemoval = vi.hoisted(() => {
 
 const pluginSurfaceAccountLifetime: { value: ActiveServerAccountScopeLifetime | null } = { value: null };
 let pageConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+let pageAccountEncryptionRead: Promise<Response> | null = null;
+
+function deferPageAccountEncryptionRead() {
+    const response = createDeferred<Response>();
+    pageAccountEncryptionRead = response.promise;
+    return () => {
+        pageAccountEncryptionRead = null;
+        response.resolve(Response.json({ mode: 'plain', updatedAt: 1 }));
+    };
+}
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
@@ -193,8 +207,14 @@ async function restorePageAccount(serverId = 'server-1') {
         request: async url => {
             const path = new URL(String(url)).pathname;
             if (path === '/health') return Response.json({ status: 'ok' });
-            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/encryption') return pageAccountEncryptionRead ?? Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 1, updatedAt: 1 }));
+            if (path === '/v1/features' || path === '/v1/features/authenticated') {
+                return Response.json(createRootLayoutFeaturesResponse({ features: {
+                    plugins: { enabled: true, ui: { enabled: true,
+                        hostedWeb: { enabled: true }, reactNativeBundles: { enabled: true } } },
+                } }));
+            }
             return Response.json({ error: 'not_found' }, { status: 404 });
         } });
     if (pageConnection.home.id !== serverId) throw new Error('AppPage fixture must route through its restored Home');
@@ -205,7 +225,9 @@ async function restorePageAccount(serverId = 'server-1') {
         settingsScope: pluginSurfaceAccountLifetime.value.scope, endpointStatus: 'online', isDataReady: true,
         machines: { 'machine-1': machine }, machineListByServerId: { [serverId]: [machine] },
         machineListStatusByServerId: { [serverId]: 'idle' },
-        settings: { ...storage.getState().settings, machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} } } });
+        settings: { ...storage.getState().settings, machineAdministrationTargetsLocalV1: {} } });
+    replacePluginAccountAvailabilityProjection({ scope: pluginSurfaceAccountLifetime.value.scope,
+        snapshot: { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] } });
 }
 
 vi.mock('react-native', async () => {
@@ -343,6 +365,7 @@ const pageCacheIdentity = {
 
 function daemonProjection(input: Readonly<{
     description?: string | Readonly<{ key: string; fallback: string }>;
+    headerStyle?: 'page' | 'toolbar';
     availability?: Readonly<{ state: string; reason: string; diagnostics: readonly string[] }>;
     headerActions?: readonly unknown[];
     secondPlugin?: boolean;
@@ -354,6 +377,9 @@ function daemonProjection(input: Readonly<{
 }> = {}) {
     const generation = input.generation ?? 9;
     fixtureDaemonGeneration.value = generation;
+    const sourceCustody = { kind: 'bundled_first_party',
+        packagedRuntime: { kind: 'cli_version_root', versionRootId: 'plugin-app-page-fixture-root' } } as const;
+    const serverIdentityId = getServerProfileById(pluginSurfaceAccountLifetime.value!.scope.serverId)?.serverIdentityId;
     const packageEntry = (pluginId: string) => ({
         id: pluginId,
         displayName: pluginId === NOTES_PLUGIN_ID ? 'Notes' : 'Journal',
@@ -364,11 +390,10 @@ function daemonProjection(input: Readonly<{
         // deliberately distinct from the aggregate projection generation.
         immutableGenerationId: `${pluginId}-generation-${generation}`,
         occurrenceId: `${pluginId}-generation-${generation}`,
-        sourceCustody: {
-            kind: 'bundled_first_party',
-            packagedRuntime: { kind: 'cli_version_root', versionRootId: 'plugin-app-page-fixture-root' },
-        },
-        ...(input.withoutContributionPoints ? { declaresContributionPoints: false } : {}),
+        sourceCustody,
+        executionOrigin: PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId,
+            sourceRef: { machineId: 'machine-1', pluginId, sourceCustody } }),
+        declaresContributionPoints: input.withoutContributionPoints !== true,
         brand: { state: 'missing' },
     });
     const placementEntry = (pluginId: string) => {
@@ -392,7 +417,8 @@ function daemonProjection(input: Readonly<{
             target: binding.target,
             renderer: { kind: 'reactNative', contributionId: 'notes-renderer' },
             display: { titleKey: 'notes', developerFallback: pluginId === NOTES_PLUGIN_ID ? 'Notes' : 'Journal',
-                ...(input.description === undefined ? {} : { description: input.description }) },
+                ...(input.description === undefined ? {} : { description: input.description }),
+                ...(input.headerStyle === undefined ? {} : { headerStyle: input.headerStyle }) },
             actions: [],
             ...(input.headerActions === undefined ? {} : { headerActions: input.headerActions }),
             availability: input.availability
@@ -476,14 +502,20 @@ function daemonProjection(input: Readonly<{
 
 function composeAppProjection(rawProjection: unknown, serverId = 'server-1'): PluginUiProjectionModel {
     const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse(rawProjection));
+    const serverIdentityId = serverId === 'server-1' ? 'srv_account_one' : 'srv_account_two';
+    // The shell publishes the union after Administration chooses the exact
+    // producer. A declaration-only union deliberately carries no launch authority.
+    const origins = new Map(Object.values(projection.installedPackagesById).map(plugin => [plugin.id,
+        PluginMachineExecutionOriginV1Schema.parse(plugin.executionOrigin),
+    ]));
     return unionPluginUiProjections([{
         machineId: 'machine-1',
         serverId,
-        serverIdentityId: serverId === 'server-1' ? 'srv_account_one' : 'srv_account_two',
+        serverIdentityId,
         projection,
         phase: 'current',
         interactionEnabled: true,
-    }]).pluginUiProjection ?? EMPTY_PLUGIN_UI_PROJECTION;
+    }], origins).pluginUiProjection ?? EMPTY_PLUGIN_UI_PROJECTION;
 }
 
 async function primePageArtifact(pluginId: string) {
@@ -558,8 +590,8 @@ async function createPageRenderer(input: Readonly<{
 
 async function renderPage(input: Parameters<typeof createPageRenderer>[0] = {}) {
     const render = await createPageRenderer(input);
-    // Drain exact target admission and Account-mode disclosure before reading
-    // the admitted renderer rather than its fail-closed interim.
+    // Drain Account-mode disclosure and host effects. Tests of daemon-backed
+    // capabilities await their target admission separately from page rendering.
     return await renderScreen(render(composeAppProjection(input.projection ?? daemonProjection())));
 }
 
@@ -769,6 +801,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
     await standardCleanup();
+    clearPluginAccountAvailabilityProjection();
     await pageConnection?.dispose();
     pageConnection = null;
     pluginSurfaceAccountLifetime.value = null;
@@ -806,7 +839,9 @@ describe('plugin app page host route (EU-5b)', () => {
         expect(reactNativeSurfaceInstanceRefs.at(-1)).toBe(instance);
         expect(context.signal.aborted).toBe(false);
         expect(readRenderContext().signal).toBe(context.signal);
-        expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(false);
+        // The Account page remains interactive; only daemon-backed effects stop.
+        expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(true);
+        await expect(readRenderContext().hostApi.executeAction('refresh', {})).rejects.toMatchObject({ code: 'unavailable' });
         await act(async () => { storage.setState({ endpointStatus: 'online', machines: { 'machine-1': machine },
             machineListByServerId: { 'server-1': [machine] } }); });
         await screen.update(render(model));
@@ -815,43 +850,62 @@ describe('plugin app page host route (EU-5b)', () => {
         expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(true);
     });
 
-    it('supplies the declaration description to the identity header while the surface is loading', async () => {
-        targetedContributionsReadMock.mockImplementation(() => new Promise(() => {}));
-        const screen = await renderPage({ projection: daemonProjection({
-            description: { key: 'notes.purpose', fallback: 'Review incoming work.' },
-        }) });
-        const { PageHeader } = await import('@/components/ui/layout/PageHeader');
-        expect(screen.findByType(PageHeader).props.description).toBe('Review incoming work.');
-        expect(reactNativeSurfaceProps).toHaveLength(0);
+    it('updates Run-on presentation without rendering the page identity again', async () => {
+        const { act } = await import('react-test-renderer');
+        const identity = await import('@/components/plugins/shared/PluginPageIdentityHeader');
+        // Observe real render calls; keep all identity, selection and Machine logic intact.
+        const renderIdentity = vi.spyOn(identity, 'PluginPageIdentityHeaderProvider');
+        storage.setState({ settings: { ...storage.getState().settings,
+            machineAdministrationTargetsLocalV1: { [`plugin.runOn:${NOTES_PLUGIN_ID}`]: {
+                serverIdentityId: 'srv_account_one', machineId: 'machine-1',
+            } } } });
+        await renderPage();
+        const headerRight = stackOptions.at(-1)?.headerRight;
+        const header = await renderScreen((headerRight as () => React.ReactElement)());
+        await vi.waitFor(() => expect(reactNativeSurfaceProps.length).toBeGreaterThan(0));
+        const before = renderIdentity.mock.calls.length;
+        const machine = storage.getState().machines['machine-1']!;
+        const renamed = { ...machine, updatedAt: machine.updatedAt + 1,
+            metadata: { ...machine.metadata!, displayName: 'Renamed execution machine' } };
+        await act(async () => { storage.setState({ machines: { 'machine-1': renamed },
+            machineListByServerId: { 'server-1': [renamed] } }); });
+        await vi.waitFor(() => expect(header.getTextContent()).toContain('Renamed execution machine'));
+        expect(renderIdentity.mock.calls.length).toBe(before);
     });
 
-    it('keeps a described page loading while its execution origin is unresolved', async () => {
-        const { PluginAppPageScreen } = await import('./PluginAppPageScreen');
-        const { AppShellPluginUiProjectionValueProvider } = await import('./AppShellPluginUiProjection');
-        const current = normalizePluginUiProjection(PluginProjectionV2Schema.parse(daemonProjection()));
-        const older = { ...current, installedPackagesById: { ...current.installedPackagesById,
-            [NOTES_PLUGIN_ID]: { ...current.installedPackagesById[NOTES_PLUGIN_ID]!, version: '0.1.0' } } };
-        const selectableOrigin = (machineId: string) => ({ serverIdentityId: 'srv_account_one',
-            sourceRef: { machineId, pluginId: NOTES_PLUGIN_ID,
-                sourceCustody: current.installedPackagesById[NOTES_PLUGIN_ID]!.sourceCustody! } });
-        const union = unionPluginUiProjections([
-            { machineId: 'machine-1', serverId: 'server-1', serverIdentityId: 'srv_account_one',
-                projection: current, phase: 'current', interactionEnabled: true, selectableExecutionOrigins: [selectableOrigin('machine-1')] },
-            { machineId: 'machine-2', serverId: 'server-1', serverIdentityId: 'srv_account_one',
-                projection: older, phase: 'current', interactionEnabled: true, selectableExecutionOrigins: [selectableOrigin('machine-2')] },
-        ]);
-        const screen = await renderScreen(
-            <AppShellPluginUiProjectionValueProvider value={{
-                ...union, pluginBrowserProjection: null, platform: 'web',
-                accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
-                reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {},
-            }}>
-                <PluginAppPageScreen pluginId={NOTES_PLUGIN_ID} localId="notes" subPath="" />
-            </AppShellPluginUiProjectionValueProvider>,
-        );
-        expect(screen.findByTestId('plugin-app-page-loading')).toBeTruthy();
+    it('supplies the declaration description to the identity header while the surface is loading', async () => {
+        // An unread Account mode blocks disclosure. Optional daemon target reads
+        // do not block the Account page and cannot simulate renderer loading.
+        const releaseRead = deferPageAccountEncryptionRead();
+        try {
+            const screen = await renderPage({ projection: daemonProjection({
+                description: { key: 'notes.purpose', fallback: 'Review incoming work.' },
+            }) });
+            const { PageHeader } = await import('@/components/ui/layout/PageHeader');
+            expect(screen.findByType(PageHeader).props.description).toBe('Review incoming work.');
+            expect(reactNativeSurfaceProps).toHaveLength(0);
+        } finally { releaseRead(); }
+    });
+
+    it('says a toolbar page\'s identity as its toolbar row, not a page header, while the surface is loading', async () => {
+        const releaseRead = deferPageAccountEncryptionRead();
+        try {
+            const screen = await renderPage({ projection: daemonProjection({ headerStyle: 'toolbar' }) });
+            const { PageHeader } = await import('@/components/ui/layout/PageHeader');
+            expect(screen.findAllByType(PageHeader)).toHaveLength(0);
+            expect(screen.findByTestId(`plugin-page-identity-toolbar:${NOTES_PLUGIN_ID}`)).toBeTruthy();
+            expect(reactNativeSurfaceProps).toHaveLength(0);
+        } finally { releaseRead(); }
+    });
+
+    it('renders a described Account page without an available execution Machine', async () => {
+        storage.setState({ machines: {}, machineListByServerId: { 'server-1': [] },
+            machineListStatusByServerId: { 'server-1': 'idle' } });
+        const screen = await renderPage({ machineId: null, serverId: null });
+        expect(screen.findByTestId('plugin-app-page-loading')).toBeNull();
         expect(screen.findByTestId('plugin-app-page-unavailable')).toBeNull();
-        expect(reactNativeSurfaceProps).toHaveLength(0);
+        expect(readRenderContext().surface.target).toEqual({ kind: 'app' });
+        await expect(readRenderContext().hostApi.executeAction('refresh', {})).rejects.toMatchObject({ code: 'unavailable' });
     });
 
     it('keeps singleton page mount identity shared when hosted in distinct workspace tabs', async () => {
@@ -1021,9 +1075,11 @@ describe('plugin app page host route (EU-5b)', () => {
         const header = await renderScreen((headerRight as () => React.ReactElement)());
         expect(header.findByTestId('plugin-page-execution.chip')).not.toBeNull();
 
+        await vi.waitFor(() => expect(readRenderContext().surface.targetedContributions).toBeDefined());
+
         const context = readRenderContext();
         const mountedSurface = reactNativeSurfaceInstanceRefs.at(-1);
-        const selectedOrigins = storage.getState().settings.machineAdministrationSelectionsV1;
+        const selectedOrigins = storage.getState().settings.machineAdministrationTargetsLocalV1;
         await header.pressByTestIdAsync('plugin-page-execution.chip');
         expect(header.findHostByTestId('plugin-page-execution.picker-list')).not.toBeNull();
         expect(screen.findByTestId('plugin-app-page-loading')).toBeNull();
@@ -1033,7 +1089,7 @@ describe('plugin app page host route (EU-5b)', () => {
         const chip = header.findHostByTestId('plugin-page-execution.chip');
         expect(chip?.props.accessibilityState?.expanded ?? chip?.props['aria-expanded']).toBe(false);
         expect(reactNativeSurfaceInstanceRefs.at(-1)).toBe(mountedSurface);
-        expect(storage.getState().settings.machineAdministrationSelectionsV1).toBe(selectedOrigins);
+        expect(storage.getState().settings.machineAdministrationTargetsLocalV1).toBe(selectedOrigins);
         expect(context.plugin.id).toBe(NOTES_PLUGIN_ID);
         expect(context.surface.mount).toEqual({
             kind: 'destination',

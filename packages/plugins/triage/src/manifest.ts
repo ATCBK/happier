@@ -599,6 +599,8 @@ function createTriagePlugin() {
         container: 'appPage',
         target: { kind: 'app' },
         renderer: 'list-page',
+        // The list page's Collection toolbar leads with the page's name; the host's loading identity says it the same way.
+        headerStyle: 'toolbar',
         title: TRIAGE_DISPLAY_NAME,
         icon: 'change-open',
         placement: { kind: 'rail' },

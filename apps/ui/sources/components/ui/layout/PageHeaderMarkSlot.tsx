@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 /** The slot's square side: a page header's mark, and a row's. */
-export const PAGE_HEADER_MARK_SLOT_SIZE_PX = Object.freeze({ page: 44, row: 36 } as const);
+export const PAGE_HEADER_MARK_SLOT_SIZE_PX = Object.freeze({ page: HAPPIER_PAGE_METRICS.pageHeaderMarkSlotPx, row: 36 } as const);
 
 /** Bare entity artwork, with stable page/row space and no backing or clipping. */
 export function PageHeaderMarkSlot(props: Readonly<{

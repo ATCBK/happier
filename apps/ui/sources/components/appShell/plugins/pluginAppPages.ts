@@ -41,6 +41,8 @@ export const PLUGIN_APP_PAGE_ROUTE_PREFIX = '/plugins';
 export type PluginAppPage = PluginSurfaceDestination & Readonly<{
     /** Declaration-owned purpose, resolved before the executable page loads. */
     description?: string;
+    /** `toolbar` when the page draws a Collection toolbar as its own header (its name leads it); else a page header. */
+    headerStyle?: 'toolbar';
     /** The page's plugin-local id — the second segment of its generated route. */
     localId: string;
     /** The generated route of the page ROOT (no sub-path). */
@@ -173,6 +175,7 @@ export function resolvePluginAppPages(input: Readonly<{
         return Object.freeze({
             ...destination,
             ...(description === undefined ? {} : { description }),
+            ...(destination.placement.display.headerStyle === 'toolbar' ? { headerStyle: 'toolbar' as const } : {}),
             localId: destination.placement.binding.destination.localId,
             routePath: buildPluginAppPageRoutePath({
                 pluginId: destination.pluginId,

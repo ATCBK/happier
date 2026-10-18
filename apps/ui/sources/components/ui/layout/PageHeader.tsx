@@ -72,6 +72,8 @@ export type PageHeaderProps = Readonly<{
     actionsPlacement?: 'navigation' | 'page';
     /** Prefer the title row, wrapping controls beneath when the title needs its readable width. */
     actionsLayout?: 'wrap' | 'inline';
+    /** Keep a control's height on the title line while it has none yet (controls that arrive after the title). */
+    reserveControlLine?: boolean;
     /**
      * A status line under the actions (a save state and validity readout). It is the actions' own
      * row, as wide as they are, so its changing words never reflow the title.
@@ -201,6 +203,7 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
             leading={props.leading}
             actions={actions}
             actionsLayout={props.actionsLayout}
+            reserveControlLine={props.reserveControlLine}
             status={props.status}
             renderBack={renderBack}
             columnMaxWidthPx={props.columnWidth === 'pane' ? undefined : maxWidth}

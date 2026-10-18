@@ -328,7 +328,7 @@ describe('PluginSurfaceInteractionBoundary.native', () => {
         const { PluginSurfacePageHeaderContext, PluginSurfaceSourceCauseContext } = await import('./pluginSurfaceInteractionAvailability');
         const screen = await renderScreen(
             <PluginSurfaceSourceCauseContext.Provider value={cause}>
-                <PluginSurfacePageHeaderContext.Provider value={<PluginNativeSnapshot testID="host-page-identity" />}>
+                <PluginSurfacePageHeaderContext.Provider value={{ header: <PluginNativeSnapshot testID="host-page-identity" />, loadingFrame: 'column' }}>
                     <PluginSurfaceInteractionBoundary surfaceId="surface-native-empty" snapshotTitle="PRs & Issues" enabled={false}>
                         <PluginNativeSnapshot testID="plugin-native-placeholder" />
                     </PluginSurfaceInteractionBoundary>

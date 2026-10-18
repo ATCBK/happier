@@ -724,6 +724,11 @@ export type PluginUiViewDestinationBindingInputV2 =
         target: { kind: 'app' };
         /** Page purpose available to the host before the executable surface loads. */
         description?: PluginLocalizedStringV2;
+        /**
+         * What the page draws as its own header once loaded: `'page'` (default) a page header, `'toolbar'` a
+         * Collection toolbar that leads with the page's name. The host says the loading identity the same way.
+         */
+        headerStyle?: 'page' | 'toolbar';
         instancePolicy?: 'singleton';
         headerActions?: PluginUiPageHeaderActionV1[];
         placement?: PluginUiDestinationPlacementV1;

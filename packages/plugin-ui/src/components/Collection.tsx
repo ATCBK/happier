@@ -16,6 +16,7 @@ import {
   resolveHappierUiPalette,
   useHappierUiAccessibility,
   useHappierUiTheme,
+  useOptionalHappierUiAccessibility,
   useOptionalHappierUiPalette,
   useOptionalHappierUiPlatform,
   useOptionalHappierUiTypography,
@@ -30,7 +31,7 @@ import { HAPPIER_RADIUS_V1 } from '../environment/radius.js';
 import { HappierStatusDot } from '../presentation/status/StatusDot.js';
 import { PluginUiIconGlyph, type IconName } from './Icon.js';
 import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../presentation/semantics.js';
-import type { HappierTypeRole } from '../environment/types.js';
+import type { HappierTypeRole, HappierUiTheme, HappierUiTypography } from '../environment/types.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { HappierCollectionDetailWidthContext, HappierCollectionLayoutContext, resolveHappierCollectionLayoutState } from '../presentation/collection/collectionLayout.js';
 import { HAPPIER_COLLECTION_LIST_TEXT, HappierCollectionTableRowContext, HappierCollectionTreeRowContext, type HappierCollectionTableRowFacts, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
@@ -561,21 +562,28 @@ function useRowMetrics(described: boolean): RowMetrics {
   const theme = useHappierUiTheme();
   const typography = useOptionalHappierUiTypography();
   const { textScale } = useHappierUiAccessibility();
-  return useMemo(() => {
-    // The host's row anatomy: the row title role over the row meta role (`label` / `body`).
-    const title = readCollectionLineHeight('label', theme, typography, textScale);
-    const meta = readCollectionLineHeight('meta', theme, typography, textScale);
-    const label = readCollectionLineHeight('label', theme, typography, textScale);
-    // A described anatomy's list row adds its description line (the row description role) between the two.
-    const description = described ? readCollectionLineHeight('body', theme, typography, textScale) + LIST_LINE_GAP : 0;
-    return {
-      // One exact height per geometry and text-size bucket, never measured per row (COLLECTION.md §7).
-      tableRow: Math.max(40, title + 2 * TABLE.paddingY) + 2,
-      listRow: title + LIST_LINE_GAP + description + meta + 2 * TABLE.paddingY + 2,
-      groupHeader: label + 18,
-      titleRole: 'label',
-    };
-  }, [described, textScale, theme, typography]);
+  return useMemo(() => resolveRowMetrics(described, theme, typography, textScale), [described, textScale, theme, typography]);
+}
+
+function resolveRowMetrics(
+  described: boolean,
+  theme: HappierUiTheme,
+  typography: HappierUiTypography | null,
+  textScale: number,
+): RowMetrics {
+  // The host's row anatomy: the row title role over the row meta role (`label` / `body`).
+  const title = readCollectionLineHeight('label', theme, typography, textScale);
+  const meta = readCollectionLineHeight('meta', theme, typography, textScale);
+  const label = readCollectionLineHeight('label', theme, typography, textScale);
+  // A described anatomy's list row adds its description line (the row description role) between the two.
+  const description = described ? readCollectionLineHeight('body', theme, typography, textScale) + LIST_LINE_GAP : 0;
+  return {
+    // One exact height per geometry and text-size bucket, never measured per row (COLLECTION.md §7).
+    tableRow: Math.max(40, title + 2 * TABLE.paddingY) + 2,
+    listRow: title + LIST_LINE_GAP + description + meta + 2 * TABLE.paddingY + 2,
+    groupHeader: label + 18,
+    titleRole: 'label',
+  };
 }
 
 function resolveColumns<Item>(
@@ -662,12 +670,15 @@ const COLLECTION_SKELETON_GEOMETRY = Object.freeze({
  * and "empty" is never said early.
  */
 function CollectionSkeletonRows(props: Readonly<{
+  theme: HappierUiTheme;
   rowHeight: number;
   twoLines: boolean;
   viewportHeight: number | null;
   testID?: string;
+  accessibilityLabel?: string;
+  reducedMotion?: boolean;
 }>): ReactElement {
-  const theme = useHappierUiTheme();
+  const { theme } = props;
   const palette = useOptionalHappierUiPalette() ?? resolveHappierUiPalette(theme);
   const count = props.viewportHeight === null ? 1 : Math.max(1, Math.ceil(props.viewportHeight / props.rowHeight));
   return (
@@ -678,10 +689,59 @@ function CollectionSkeletonRows(props: Readonly<{
       lines={props.twoLines ? 2 : 1}
       dividerColor={palette.rowDivider}
       geometry={COLLECTION_SKELETON_GEOMETRY}
+      {...(props.accessibilityLabel === undefined ? {} : { accessibilityLabel: props.accessibilityLabel })}
+      {...(props.reducedMotion === undefined ? {} : { reducedMotion: props.reducedMotion })}
       {...(props.testID === undefined ? {} : { rowTestID: `${props.testID}:skeleton-row` })}
     />
   );
 }
+
+/**
+ * The frame of a Collection page before the page has loaded: the table's ruled column band, its rows
+ * (`CollectionSkeletonRows`) at the table's own height and insets filling the view, and the ruled footer band
+ * the window line will fill. A host stands it under a
+ * page's identity toolbar while the plugin bundle loads, so the first frame already has the loaded page's width,
+ * insets and row rhythm and nothing changes shape when the Collection arrives. It carries its own theme because
+ * it is drawn before any plugin environment exists.
+ */
+export function CollectionLoadingRows(props: Readonly<{
+  theme: HappierUiTheme;
+  /** What is loading; announced once as a busy region. Absent, the placeholder is decoration. */
+  accessibilityLabel?: string;
+  reducedMotion?: boolean;
+  testID?: string;
+}>): ReactElement {
+  const { theme } = props;
+  const typography = useOptionalHappierUiTypography();
+  const textScale = useOptionalHappierUiAccessibility()?.textScale ?? 1;
+  const metrics = useMemo(() => resolveRowMetrics(false, theme, typography, textScale), [textScale, theme, typography]);
+  const palette = useOptionalHappierUiPalette() ?? resolveHappierUiPalette(theme);
+  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
+  const onLayout = useCallback((event: HappierLayoutChangeEvent) => {
+    const { height } = event.nativeEvent.layout;
+    setViewportHeight((current) => (current === height ? current : height));
+  }, []);
+  return (
+    <View testID={props.testID} onLayout={onLayout} style={loadingFrameStyle}>
+      <View style={{ height: TABLE.headerHeight, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }} />
+      <View style={loadingRowsStyle}>
+        <CollectionSkeletonRows
+          theme={theme}
+          rowHeight={metrics.tableRow}
+          twoLines={false}
+          viewportHeight={viewportHeight}
+          {...(props.testID === undefined ? {} : { testID: props.testID })}
+          {...(props.accessibilityLabel === undefined ? {} : { accessibilityLabel: props.accessibilityLabel })}
+          {...(props.reducedMotion === undefined ? {} : { reducedMotion: props.reducedMotion })}
+        />
+      </View>
+      <View style={{ height: TABLE.footerHeight, borderTopWidth: 1, borderTopColor: palette.rowDivider }} />
+    </View>
+  );
+}
+
+const loadingFrameStyle: HappierPortableStyle = { flex: 1, minHeight: 0, width: '100%' };
+const loadingRowsStyle: HappierPortableStyle = { flex: 1, minHeight: 0, overflow: 'hidden' };
 
 function useStage<Item>(): CollectionStage<Item> {
   const stage = useContext(CollectionStageContext);
@@ -2094,6 +2154,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
                 // A board that is still reading stands in the same skeleton rows as the table: nothing is
                 // known yet about its columns, and "empty" would be a lie.
                 <CollectionSkeletonRows
+                  theme={theme}
                   rowHeight={metrics.listRow}
                   twoLines
                   viewportHeight={viewportHeight}
@@ -2142,6 +2203,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
                     header={columnHeader}
                     empty={loadingFirstWindow ? (
                       <CollectionSkeletonRows
+                        theme={theme}
                         rowHeight={rowGeometry === 'table' ? metrics.tableRow : metrics.listRow}
                         twoLines={rowGeometry === 'list'}
                         viewportHeight={viewportHeight}

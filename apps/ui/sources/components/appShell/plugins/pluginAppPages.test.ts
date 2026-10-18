@@ -74,6 +74,18 @@ describe('plugin app page catalog (EU-5b)', () => {
         expect(resolvePluginAppPages({ placements: [createPagePlacement()] })[0]).not.toHaveProperty('description');
     });
 
+    it('carries a declared toolbar header style before any renderer loads, preserving omission', () => {
+        const [toolbarPage] = resolvePluginAppPages({
+            placements: [createPagePlacement({ display: { title: 'Notes', headerStyle: 'toolbar' } })],
+        });
+        expect(toolbarPage?.headerStyle).toBe('toolbar');
+        expect(resolvePluginAppPages({ placements: [createPagePlacement()] })[0]).not.toHaveProperty('headerStyle');
+        const [unknown] = resolvePluginAppPages({
+            placements: [createPagePlacement({ display: { title: 'Notes', headerStyle: 'banner' } })],
+        });
+        expect(unknown).not.toHaveProperty('headerStyle');
+    });
+
     it('projects a declared page into a qualified, host-generated destination', () => {
         const pages = resolvePluginAppPages({ placements: [createPagePlacement()] });
 

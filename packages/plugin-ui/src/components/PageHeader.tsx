@@ -8,6 +8,7 @@ import { usePluginTranslation } from './PluginUiProvider.js';
 import { resolveAuthorText } from './resolveAuthorText.js';
 import { useCollectionDetailHeadingBindingInternal } from './Focus.js';
 import { usePluginUiSurfaceBridge } from './surfaceBridge.js';
+import { PageHeaderMarkSlot } from './pageHeaderMark.js';
 
 /** One fact on the page header's meta line ("v2.4.0", "Personal Home", "End-to-end encrypted"). */
 export type PageHeaderMetaFact = Readonly<{
@@ -78,7 +79,10 @@ export function PageHeader(props: PageHeaderProps): ReactElement {
       titleProminence={props.titleProminence}
       showTitle={headingRef !== undefined || chrome?.showsTitle !== true}
       description={description}
-      leading={props.leading}
+      leading={props.leading ? <PageHeaderMarkSlot>{props.leading}</PageHeaderMarkSlot> : undefined}
+      // Plugin pages get their route controls (Run on) from the host on its own schedule, after the
+      // title: the title line keeps a control's height so they never move it on arrival.
+      reserveControlLine
       details={props.details}
       detailsPlacement={props.detailsPlacement}
       compactPresentation={props.compactPresentation}

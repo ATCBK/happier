@@ -97,6 +97,14 @@ declarations targeting an older strict parser use the existing SDK/toolchain
 engine-compatibility admission; no undeployed 0.3 shape gets a stripping adapter.
 The loaded plugin page should use the same purpose in its own header.
 
+An `appPage` View may also declare `headerStyle: 'toolbar'` when its loaded page draws a Collection toolbar that
+leads with the page's name instead of a page header (the default, `'page'`). The projection carries it in
+`display.headerStyle`; while the surface loads, the plugin page identity is that toolbar row (the name, with the
+route's Run on control trailing it) so the title keeps its size and place when the surface arrives, and the loading
+frame is the Collection's own (`CollectionLoadingRows` in `@happier-dev/plugin-ui`: ruled column band, table rows,
+footer band) filling the whole content area rather than the page column. Where navigation
+chrome already shows the title (a phone) the page header stays the one identity owner.
+
 In 0.3 development source, `registrySources` is a descriptor-only manifest
 family. `definePlugin.registrySources` projects plugin-local declarations;
 the admitted lazy catalog supplies them without activation or a new runtime

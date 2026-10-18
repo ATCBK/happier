@@ -39,6 +39,11 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   paneHeaderUnderNativeChromeHeightPx: 44,
   controlHeightPx: 32,
   /**
+   * A Collection toolbar's row: the inline find capsule (the search field that leads it) is its tallest control,
+   * and the host's loading identity for a toolbar page holds the same height so the title does not move.
+   */
+  collectionToolbarHeightPx: 36,
+  /**
    * From the column's edge to a sheet's edge. On every platform Happier's
    * grouped list container padding plus its card margin sum to this.
    */
@@ -58,6 +63,13 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
    * lines content up under the title (a document's chips and steps) reads the title's edge from it.
    */
   pageHeaderColumnGapPx: 14,
+  /**
+   * A page header's leading mark: a square slot with one stable footprint for the thing the page is
+   * about, and the glyph drawn inside it. Core's identity header and a plugin's own header both use it,
+   * so the title never moves when a loading page swaps one for the other.
+   */
+  pageHeaderMarkSlotPx: 44,
+  pageHeaderMarkGlyphPx: 28,
   sectionGapPx: 28,
   sectionHeaderGapPx: 10,
   /** Sheets are cards: the `xl` step of the one radius base. */

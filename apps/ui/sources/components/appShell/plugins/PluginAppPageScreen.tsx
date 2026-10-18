@@ -10,6 +10,7 @@ import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurface
 import { PluginPageBackStepProvider } from '@/components/plugins/shared/PluginPageBackStep';
 import { PluginPageIdentityHeaderProvider } from '@/components/plugins/shared/PluginPageIdentityHeader';
 import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
+import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
 import { PageNavigationContextActionsProvider } from '@/components/ui/layout/NavigationHeaderActions';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useNativeBackLayerBackHandler } from '@/components/ui/overlays/NativeBackLayerBoundary';
@@ -27,12 +28,14 @@ import { buildPluginDetailRoute } from '@/components/settings/plugins/model/plug
 import {
     useAppShellPluginUiProjection,
     useProjectedPluginLocalizedTextResolver,
+    type AppShellPluginUiProjectionValue,
 } from './AppShellPluginUiProjection';
 import {
     buildPluginAppPageRoutePath,
     resolvePluginAppPageForRoute,
     resolvePluginAppPages,
     selectPluginAppPagePlacements,
+    type PluginAppPage,
 } from './pluginAppPages';
 import {
     usePluginAppPageLaunch,
@@ -71,6 +74,33 @@ const pageContentFrameStyle = {
     paddingHorizontal: resolveItemGroupContentHorizontalInsetPx(),
 } as const;
 
+/** Machine presentation updates belong to route controls, not the page identity. */
+function PluginAppPageRouteActions(props: Readonly<{
+    pluginId: string;
+    page: PluginAppPage | null;
+    projection: AppShellPluginUiProjectionValue['pluginUiProjection'];
+    compact: boolean;
+    headerActions: Omit<React.ComponentProps<typeof PluginAppPageHeaderActions>, 'isDaemonExecutionCurrent'> | null;
+}>): React.ReactElement {
+    const needsMachineExecution = !!props.page && isPluginSurfaceMachineBound({
+        pluginId: props.pluginId,
+        surface: props.page.placement,
+        projection: props.projection,
+    });
+    const execution = usePluginSurfaceExecutionOrigin({
+        pluginId: props.pluginId,
+        projection: props.projection,
+        entry: props.page?.placement,
+        enabled: needsMachineExecution,
+    });
+    return <>
+        {needsMachineExecution ? <PluginMachineExecutionOriginSelectorView selection={execution.selection} presentation="chip" compact={props.compact}
+            groupTitle={t('settingsPlugins.executionOriginTitle')} testIDPrefix="plugin-page-execution" /> : null}
+        {props.headerActions ? <PluginAppPageHeaderActions {...props.headerActions}
+            isDaemonExecutionCurrent={execution.isExecutionOriginCurrent} /> : null}
+    </>;
+}
+
 export function PluginAppPageScreen(props: Readonly<{
     pluginId: string;
     localId: string;
@@ -97,17 +127,6 @@ export function PluginAppPageScreen(props: Readonly<{
     }), [pages, props.localId, props.pluginId]);
 
     const accountLifetime = captureActiveServerAccountScopeLifetime();
-    const needsMachineExecution = !!page && isPluginSurfaceMachineBound({
-        pluginId: props.pluginId,
-        surface: page.placement,
-        projection: projection.pluginUiProjection,
-    });
-    const pageExecution = usePluginSurfaceExecutionOrigin({
-        pluginId: props.pluginId,
-        projection: projection.pluginUiProjection,
-        entry: page?.placement,
-        enabled: needsMachineExecution,
-    });
     // An app-scope projection is a catalog union, so its top-level machine and
     // generation are intentionally absent when more than one contributor is
     // selected. Page chrome belongs to this exact admitted page instead: reuse
@@ -236,6 +255,7 @@ export function PluginAppPageScreen(props: Readonly<{
         subPath: props.subPath,
     });
 
+    const phoneTitleChrome = useNavigationTitleChromeShowsTitle();
     const headerTitle = page?.label ?? t('pluginSurfaces.appPage.title');
     useDestinationPageTitle(page?.label ?? null);
     const pageHeaderActions = React.useMemo(
@@ -243,20 +263,21 @@ export function PluginAppPageScreen(props: Readonly<{
         [page],
     );
     const activePageForHeader = pageIsLive ? page : null;
-    const routeActions = React.useMemo(() => <>
-        {needsMachineExecution ? <PluginMachineExecutionOriginSelectorView selection={pageExecution.selection} presentation="chip"
-            groupTitle={t('settingsPlugins.executionOriginTitle')} testIDPrefix="plugin-page-execution" /> : null}
-        {activePageForHeader && openSurface && pageHeaderActions.length > 0 ? <PluginAppPageHeaderActions
-            actions={pageHeaderActions}
-            page={activePageForHeader}
-            projection={projection.pluginUiProjection}
-            actionAuthority={pageHeaderActionAuthority}
-            openSurface={openSurface}
-            signal={pageHeaderActionScope.signal}
-            isCurrent={isPageHeaderActionCurrent}
-            isDaemonExecutionCurrent={pageExecution.isExecutionOriginCurrent}
-        /> : null}
-    </>, [
+    const routeActions = React.useMemo(() => <PluginAppPageRouteActions
+        pluginId={props.pluginId}
+        page={page}
+        projection={projection.pluginUiProjection}
+        compact={phoneTitleChrome}
+        headerActions={activePageForHeader && openSurface && pageHeaderActions.length > 0 ? {
+            actions: pageHeaderActions,
+            page: activePageForHeader,
+            projection: projection.pluginUiProjection,
+            actionAuthority: pageHeaderActionAuthority,
+            openSurface,
+            signal: pageHeaderActionScope.signal,
+            isCurrent: isPageHeaderActionCurrent,
+        } : null}
+    />, [
         activePageForHeader,
         openSurface,
         pageHeaderActions,
@@ -264,9 +285,9 @@ export function PluginAppPageScreen(props: Readonly<{
         projection.pluginUiProjection,
         pageHeaderActionAuthority,
         isPageHeaderActionCurrent,
-        pageExecution.isExecutionOriginCurrent,
-        pageExecution.selection,
-        needsMachineExecution,
+        page,
+        props.pluginId,
+        phoneTitleChrome,
     ]);
     const headerOptions = React.useMemo(() => ({ headerTitle, headerRight: () => routeActions }), [headerTitle, routeActions]);
     const renderPage = (body: React.ReactNode) => <PageNavigationContextActionsProvider actions={routeActions}>{body}</PageNavigationContextActionsProvider>;
@@ -329,7 +350,7 @@ export function PluginAppPageScreen(props: Readonly<{
                 <DetailsPaneSlotHost testID="plugin-app-page-details">
                 <View testID="plugin-app-page-host" style={pageContentFrameStyle}>
                     <PluginPageBackStepProvider owner={locationOwner}>
-                    <PluginPageIdentityHeaderProvider pluginId={props.pluginId} title={headerTitle} description={page.description}>
+                    <PluginPageIdentityHeaderProvider pluginId={props.pluginId} title={headerTitle} description={page.description} headerStyle={page.headerStyle}>
                     <PluginSurfacePlacementHost
                         placement={page.placement}
                         pluginUiProjection={projection.pluginUiProjection}

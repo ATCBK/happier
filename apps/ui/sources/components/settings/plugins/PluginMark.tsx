@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 import type { PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol';
 
 import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
@@ -76,7 +76,7 @@ function PluginIdentityMark(props: PluginMarkProps) {
     const page = props.size === 'page';
     const mark = <InstalledPluginBrandMark
         brand={props.brand ?? bundledBrand ?? { displayName: props.title }} pluginId={props.pluginId} iconAgentId={props.iconAgentId}
-        pixelSize={28} externallyLabelled testID={props.testID}
+        pixelSize={HAPPIER_PAGE_METRICS.pageHeaderMarkGlyphPx} externallyLabelled testID={props.testID}
     />;
     if (page) {
         return (

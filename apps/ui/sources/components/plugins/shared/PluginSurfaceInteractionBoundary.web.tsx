@@ -46,7 +46,7 @@ export function PluginSurfaceInteractionBoundary(
     // covered snapshot inert; it must not create another focus-return owner.
     const offlineNotice = useOfflineSurfaceNotice(props.enabled, props.snapshotTitle, props.hasContent);
     const companion = React.useContext(PluginSurfaceCompanionContext);
-    const pageHeader = React.useContext(PluginSurfacePageHeaderContext);
+    const pageIdentity = React.useContext(PluginSurfacePageHeaderContext);
     const interactionEnabled = props.enabled && props.focusEligible !== false;
     const wasEnabledRef = React.useRef(props.enabled);
     const wasInteractionEnabledRef = React.useRef(interactionEnabled);
@@ -131,7 +131,7 @@ export function PluginSurfaceInteractionBoundary(
                     )}
                 </div>
             </div>
-            {offlineNotice.nothingLoaded && !companion ? pageHeader : null}
+            {offlineNotice.nothingLoaded && !companion ? pageIdentity?.header : null}
             {offlineNotice.nothingLoaded && companion ? null : offlineNotice.nothingLoaded ? (
                 <SurfaceStateCard
                     testID={`plugin-surface-offline-state:${props.surfaceId}`}

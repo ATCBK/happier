@@ -44,7 +44,7 @@ export function PluginSurfaceInteractionBoundary(
     const focusReturnAccessibilityTargetRef = React.useRef<number | null>(null);
     const offlineNotice = useOfflineSurfaceNotice(props.enabled, props.snapshotTitle, props.hasContent);
     const companion = React.useContext(PluginSurfaceCompanionContext);
-    const pageHeader = React.useContext(PluginSurfacePageHeaderContext);
+    const pageIdentity = React.useContext(PluginSurfacePageHeaderContext);
     const interactionEnabled = props.enabled && props.focusEligible !== false;
     const wasEnabledRef = React.useRef(props.enabled);
     const wasInteractionEnabledRef = React.useRef(interactionEnabled);
@@ -132,7 +132,7 @@ export function PluginSurfaceInteractionBoundary(
             </View>
             {offlineNotice.nothingLoaded && !companion ? (
                 <>
-                    {pageHeader}
+                    {pageIdentity?.header}
                     <SurfaceStateCard
                         testID={`plugin-surface-offline-state:${props.surfaceId}`}
                         kind={offlineNotice.kind}

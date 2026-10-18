@@ -79,6 +79,8 @@ vi.mock('react-native', async () => {
 import type { ReactElement } from 'react';
 import { Text, View } from 'react-native';
 
+import { SURFACE_CONTEXT_THEME_FIXTURE } from '@happier-dev/plugin-sdk/testing';
+
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import {
   createHostApiStub,
@@ -103,6 +105,7 @@ import type { HappierCollectionGrouping } from '../presentation/collection/colle
 import type { HappierLayoutChangeEvent } from '../presentation/portableTypes.js';
 import {
   Collection,
+  CollectionLoadingRows,
   type CollectionAnatomy,
   type CollectionProps,
 } from './Collection.js';
@@ -3084,6 +3087,23 @@ describe('grid', () => {
     await view.update({ items: [], loading: false });
     expect(view.query('empty-state')).not.toBeNull();
     view.unmount();
+  });
+
+  it('stands the table\'s loading frame without a plugin environment: ruled column band, then rows as tall as the table\'s fill the view', () => {
+    // The host draws this before any plugin bundle has loaded, so it carries its own theme and needs no provider.
+    const mount = mountThroughReactNativeWeb(
+      <CollectionLoadingRows testID="loading" theme={SURFACE_CONTEXT_THEME_FIXTURE} accessibilityLabel="Loading" />,
+    );
+    const frame = mount.container.querySelector<HTMLElement>('[data-testid="loading"]')!;
+    const layout = Reflect.get(frame, '__reactLayoutHandler') as (event: HappierLayoutChangeEvent) => void;
+    act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: 1300, height: 420 } } }));
+    const rows = [...mount.container.querySelectorAll<HTMLElement>('[data-testid="loading:skeleton-row"]')];
+    expect(rows.length).toBeGreaterThan(3);
+    // One exact row height, the table's (a plain list placeholder draws four two-line rows).
+    expect(new Set(rows.map((row) => row.style.height)).size).toBe(1);
+    expect(rows[0]!.style.paddingLeft).toBe('20px');
+    expect(mount.container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    mount.unmount();
   });
 
   it('holds the grid geometry with skeleton cards while loading: the last known count, else what fills the view', async () => {

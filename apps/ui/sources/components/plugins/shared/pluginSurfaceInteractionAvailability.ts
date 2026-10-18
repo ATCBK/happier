@@ -27,8 +27,15 @@ export const PluginSurfaceCompanionContext = React.createContext(false);
  * a surface that has loaded nothing. A live plugin page draws its own header; a page that never loaded has
  * no plugin content to draw it, so the boundary shows this one above its cold state instead of leaving the
  * page nameless. The boundary clears it for the surfaces inside, so only the page's own surface uses it.
+ * `loadingFrame` is the frame the loaded page will fill: the page column, or the whole content area for a page
+ * that is a Collection under its own toolbar, so the loading state already stands where the page will.
  */
-export const PluginSurfacePageHeaderContext = React.createContext<React.ReactNode>(null);
+export type PluginSurfacePageIdentity = Readonly<{
+    header: React.ReactNode;
+    loadingFrame: 'column' | 'collection';
+}>;
+
+export const PluginSurfacePageHeaderContext = React.createContext<PluginSurfacePageIdentity | null>(null);
 
 /**
  * Why a machine-backed surface is not live yet, when the cause is not the machine's presence:

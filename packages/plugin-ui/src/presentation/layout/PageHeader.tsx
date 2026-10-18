@@ -59,6 +59,11 @@ export type HappierPageHeaderProps = Readonly<{
   /** Prefer the title row, but wrap controls beneath rather than squeeze the title. */
   actionsLayout?: 'wrap' | 'inline';
   /**
+   * The title line keeps a control's height even while it has no controls, for a page whose controls
+   * arrive after its title (a plugin page's Run on chip), so their arrival never moves the title.
+   */
+  reserveControlLine?: boolean;
+  /**
    * A status line under the actions ("Unsaved changes · Save · Ready"). It is the actions' own row:
    * as wide as the actions above it, wrapping within them and ending on their edge, so its changing
    * words never take width from the title. The slot reserves two normal text
