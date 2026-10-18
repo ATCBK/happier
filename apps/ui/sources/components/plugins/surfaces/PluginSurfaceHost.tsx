@@ -690,6 +690,8 @@ function DeclarativePluginSurfaceDocumentContent(
                     manageAction: props.unavailableAction,
                 }),
             }}
+            documentSourceSnapshot={{ current: document.presentation === 'fresh', digest: document.digest, refresh: document.retry }}
+            captureIsCurrent={props.controller.isCurrent}
             renderTargetedSurface={props.renderTargetedSurface}
             reportUnsupportedNestedTargetedSurface={props.reportUnsupportedNestedTargetedSurface}
             {...(props.renderWidgetArea ? { renderWidgetArea: props.renderWidgetArea } : {})}
@@ -777,6 +779,7 @@ function DeclarativePluginSurfaceWithDocumentSource(
                 environment={presentationEnvironment}
                 pluginId={props.pluginId}
                 model={props.staticModel}
+                captureIsCurrent={props.controller.isCurrent}
                 machineId={props.machineId}
                 serverId={props.serverId}
                 daemonSettingsTarget={props.daemonSettingsTarget}

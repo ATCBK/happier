@@ -91,6 +91,22 @@ describe('frozen widget Board content', () => {
       version: 1, root: { kind: 'action', hostAction: 'session.message.send', label: 'Send', input: { text: 'bad' } },
     } } }).success).toBe(false);
   });
+  it('freezes the rendered normalized document without publishing renderer metadata or executable nodes', () => {
+    const preview = projectWidgetSnapshotPreviewV1({
+      document: { version: 1, root: { kind: 'stack', path: 'root', order: 0, children: [
+        { kind: 'metric', path: 'root.children[0]', order: 1, label: 'Files',
+          data: { kind: 'value', value: { count: 17, private: 'excluded' } }, value: { path: ['count'], type: 'number' } },
+        { kind: 'action', path: 'root.children[1]', order: 2, action: { qualifiedId: 'acme/run' }, label: 'Run' },
+      ] } },
+      frozenByPath: new Map(), asOf: '2026-10-18T10:00:00.000Z', provenance: [],
+    });
+    expect(preview).not.toBeNull();
+    expect(preview?.document.root).toEqual({ kind: 'stack', children: [
+      { kind: 'metric', label: 'Files', data: { kind: 'value', value: 17 }, value: { path: [], type: 'number' } },
+    ] });
+    expect(JSON.stringify(preview)).not.toContain('excluded');
+  });
+
   it('projects the previewed frozen nodes by path, drops executable nodes and refuses a partly current preview', () => {
     const live = { kind: 'resource' as const, resource: { pluginId: 'acme.analytics', localId: 'signups' },
       inputSchema: { type: 'object' as const, additionalProperties: false }, outputSchema: { type: 'object' as const, properties: {

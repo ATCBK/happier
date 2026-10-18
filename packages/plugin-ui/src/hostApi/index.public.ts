@@ -85,11 +85,12 @@ export {
  * The result of a plugin Resource read (§3.6).
  *
  * `resource` is the current independent-dimension snapshot. `refresh` re-reads
- * through the same canonical authority without clearing an admitted value.
+ * through the same canonical authority without clearing an admitted value,
+ * and settles when that owner's refresh completes.
  */
 export type PluginUiResourceResult = Readonly<{
   resource: PluginUiResourceSnapshot;
-  refresh: () => void;
+  refresh: () => Promise<void>;
 }>;
 
 function usePluginResourceResult(
@@ -111,8 +112,8 @@ function usePluginResourceResult(
   );
   const state = useSyncExternalStore(subscribe, entry.getSnapshot, entry.getSnapshot);
 
-  const refresh = useCallback(() => {
-    entry.refresh();
+  const refresh = useCallback(async () => {
+    await entry.refresh();
   }, [entry]);
 
   return useMemo(() => ({ resource: state, refresh }), [refresh, state]);

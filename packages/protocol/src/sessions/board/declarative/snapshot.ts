@@ -3,7 +3,6 @@ import { z } from 'zod/mini';
 import { sameStrictJsonValue } from '../../../json/strictJsonValue.js';
 import { SessionSurfaceDeclarativeDocumentV1Schema } from './authoring.js';
 import { freezePluginDeclarativeDataNodeV1, isPluginDeclarativeDataNodeV1, type PluginDeclarativeDataNodeV1 } from '../../../plugins/contributions/ui/declarativeDataV1.js';
-import type { PluginDeclarativeDocumentV1 } from '../../../plugins/contributions/ui/declarativeDocumentAuthoringV1.js';
 
 export const WidgetSnapshotMetadataV1Schema = lazyZodSchema(() => z.strictObject({
   asOf: z.iso.datetime(),
@@ -44,14 +43,17 @@ export type WidgetSnapshotPreviewV1 = z.infer<typeof WidgetSnapshotPreviewV1Sche
  * frozen counterpart makes the whole preview unavailable rather than partly current.
  */
 export function projectWidgetSnapshotPreviewV1(input: Readonly<{
-  document: PluginDeclarativeDocumentV1;
+  /** Authored or host-normalized rendered tree; publication is validated below. */
+  document: Readonly<{ version: 1; root: unknown }>;
   frozenByPath: ReadonlyMap<string, PluginDeclarativeDataNodeV1>;
   asOf: string;
   provenance: WidgetSnapshotMetadataV1['provenance'];
 }>): WidgetSnapshotPreviewV1 | null {
   let missing = false;
   const project = (node: unknown, path: string): unknown => {
-    const record = node as Readonly<Record<string, unknown>> & { kind: string };
+    // Normalized render trees carry host-only path/order annotations. They
+    // locate displayed nodes, but are never part of shared snapshot content.
+    const { path: _path, order: _order, ...record } = node as Readonly<Record<string, unknown>> & { kind: string };
     if (isPluginDeclarativeDataNodeV1(record)) {
       const data = record;
       if (data.data.kind === 'value') return freezePluginDeclarativeDataNodeV1(data, data.data.value);

@@ -134,6 +134,8 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { createWidgetSnapshotCaptureSlot, WidgetSnapshotCaptureContext } from '@/components/widgets/definitions/widgetSnapshotCapture';
+import { buildWidgetSnapshotPreview } from '@/components/widgets/definitions/WidgetSnapshotConfirmPanel';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { darkTheme, lightTheme } from '@/theme';
@@ -3170,7 +3172,39 @@ describe('PluginSurfacePlacementHost', () => {
         });
     });
 
-    it('keeps a visible unfocused declarative document live and refreshes its retained snapshot after being hidden', async () => {
+    it('captures installed declarative rendered values through the shared widget snapshot slot', async () => {
+        const slot = createWidgetSnapshotCaptureSlot();
+        const projection = declarativeDocumentProjection();
+        const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const renderPlacement = (value: number) => {
+            const placement = declarativeDocumentPlacement();
+            return <WidgetSnapshotCaptureContext.Provider value={slot}>
+                <PluginSurfacePlacementHost placement={{ ...placement, renderer: {
+                    kind: 'declarative', contributionId: 'dashboard', model: admittedDeclarativeModelFixture({
+                        identity: { pluginId: placement.pluginId, localId: 'dashboard', occurrenceId: placement.occurrenceId },
+                        visible: true, root: { kind: 'metric', path: 'root', order: 0, label: 'Files',
+                            data: { kind: 'value', value }, value: { path: [], type: 'number' } },
+                    }),
+                } }} machineId="machine-1" serverId="server-a" sessionId="session-live-dashboard"
+                    mountInstanceKey="snapshot-copy" pluginUiProjection={projection} platform="web" />
+            </WidgetSnapshotCaptureContext.Provider>;
+        };
+        const screen = await renderScreen(renderPlacement(17));
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('17'));
+        expect(slot.isAvailable()).toBe(true);
+        const preview = buildWidgetSnapshotPreview(slot.capture(), 'Files', Date.now());
+        expect(preview?.document.root).toMatchObject({ kind: 'metric', data: { kind: 'value', value: 17 } });
+        await screen.update(renderPlacement(23));
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('23'));
+        expect(buildWidgetSnapshotPreview(slot.capture(), 'Files', Date.now())?.document.root)
+            .toMatchObject({ data: { kind: 'value', value: 23 } });
+        expect(preview?.document.root).toMatchObject({ data: { kind: 'value', value: 17 } });
+        await screen.unmount();
+        expect(slot.isAvailable()).toBe(false);
+    });
+
+    it('keeps a configured visible unfocused declarative document live and refreshes its retained snapshot after being hidden', async () => {
+        const slot = createWidgetSnapshotCaptureSlot();
         // The incumbent declarative renderer initializes its Settings boundary
         // even though this text-only document has no fields.
         declarativeSettingsGetMock.mockResolvedValue({ supported: false, reason: 'error' });
@@ -3186,19 +3220,34 @@ describe('PluginSurfacePlacementHost', () => {
             supported: true,
             result: { ok: true, digest: liveDocument.result.digest },
         });
+        // This case exercises a live watch across hide/show. The suite's
+        // default complete event retires its Resource before baseline adoption.
+        resourceWatchNextMock.mockImplementation(async (_machineId, rawRequest) => {
+            const { signal } = rawRequest as Parameters<typeof import('@/sync/ops/machineContributionRegistryProjection').machinePluginUiResourceWatchNext>[1];
+            if (!signal) throw new Error('The live Resource poll requires its mount cancellation signal');
+            await new Promise<void>(resolve => {
+                if (signal.aborted) resolve();
+                else signal.addEventListener('abort', () => resolve(), { once: true });
+            });
+            return { supported: true, result: { ok: true, status: 'idle' } };
+        });
         const projection = declarativeDocumentProjection();
         const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
         const renderPlacement = (presented: boolean) => (
+            <WidgetSnapshotCaptureContext.Provider value={slot}>
             <PluginSurfaceFocusEligibilityProvider active={false} presentationActive={presented}>
                 <PluginSurfacePlacementHost
                     placement={declarativeDocumentPlacement()}
                     machineId="machine-1"
                     serverId="server-a"
                     sessionId="session-live-dashboard"
+                    mountInstanceKey="inline-copy:document"
+                    launchInput={{ directory: '/repo', filter: 'files' }}
                     pluginUiProjection={projection}
                     platform="web"
                 />
             </PluginSurfaceFocusEligibilityProvider>
+            </WidgetSnapshotCaptureContext.Provider>
         );
         const screen = await renderScreen(renderPlacement(true));
 
@@ -3207,6 +3256,7 @@ describe('PluginSurfacePlacementHost', () => {
             expectedCallerOccurrenceId: 'live-dashboard-generation-7',
             callerPluginId: 'acme.live-dashboard',
             resource: { pluginId: 'acme.live-dashboard', localId: 'live-dashboard' },
+            context: { kind: 'surface', mountInstanceKey: 'inline-copy:document', launchInput: { directory: '/repo', filter: 'files' } },
         })));
         await vi.waitFor(() => {
             const diagnostics = screen.root.findAll((node) => (
@@ -3220,6 +3270,9 @@ describe('PluginSurfacePlacementHost', () => {
             })).toContain('Live dashboard');
             expect(screen.getTextContent()).not.toContain('Static dashboard');
         });
+        const frozen = buildWidgetSnapshotPreview(slot.capture(), 'Dashboard', Date.now());
+        expect(frozen?.document.root).toEqual({ kind: 'text', text: 'Live dashboard' });
+        expect(frozen?.provenance).toEqual([{ label: 'Dashboard', digest: liveDocument.result.digest }]);
         await screen.update(renderPlacement(false));
         expect(screen.getTextContent()).toContain('Live dashboard');
         const updatedDocument = documentResourceRead({
@@ -3233,6 +3286,9 @@ describe('PluginSurfacePlacementHost', () => {
         });
         await screen.update(renderPlacement(true));
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('Updated dashboard'));
+        expect(buildWidgetSnapshotPreview(slot.capture(), 'Dashboard', Date.now())?.document.root)
+            .toEqual({ kind: 'text', text: 'Updated dashboard' });
+        expect(frozen?.document.root).toEqual({ kind: 'text', text: 'Live dashboard' });
     });
 
     it('routes fixed collection row commands through catalog presentation and mounted facades only', async () => {

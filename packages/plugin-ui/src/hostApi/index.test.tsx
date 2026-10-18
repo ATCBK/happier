@@ -842,7 +842,7 @@ describe('plugin host API hooks', () => {
 
   it('re-reads through the snapshot authority on explicit refresh', async () => {
     const host = createHostApiStub();
-    let refresh: (() => void) | undefined;
+    let refresh: (() => unknown) | undefined;
     const digests: string[] = [];
 
     function Probe() {
@@ -861,13 +861,22 @@ describe('plugin host API hooks', () => {
     });
     expect(digests).toEqual([`sha256:${'1'.repeat(64)}`]);
 
-    host.setResource({
+    const nextRead = deferred<ResourceContent>();
+    vi.mocked(host.api.readResource).mockImplementationOnce(() => nextRead.promise);
+    const nextResource: ResourceContent = {
       contentType: 'application/json',
       digest: `sha256:${'2'.repeat(64)}`,
       bytes: new TextEncoder().encode('{"status":"updated"}'),
-    });
+    };
     await act(async () => {
-      refresh?.();
+      const pending = refresh?.();
+      expect(pending).toBeInstanceOf(Promise);
+      let settled = false;
+      void Promise.resolve(pending).then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      nextRead.resolve(nextResource);
+      await pending;
     });
 
     expect(host.api.readResource).toHaveBeenCalledTimes(2);

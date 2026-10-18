@@ -5,7 +5,7 @@ import { act } from 'react-test-renderer';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 
-import { createWidgetSnapshotCaptureSlot } from './widgetSnapshotCapture';
+import { createWidgetSnapshotCaptureSlot, useDeclarativeWidgetSnapshotCapture, WidgetSnapshotCaptureContext } from './widgetSnapshotCapture';
 import { WidgetSnapshotConfirmPanel } from './WidgetSnapshotConfirmPanel';
 import { WidgetFlowPanel } from '../flow/WidgetFlowPanel';
 
@@ -25,6 +25,29 @@ const SURFACE = { serverId: 'home-a', accountId: 'viewer-a', owner: { kind: 'ses
  * current again the frozen preview and Post appear in place.
  */
 describe('WidgetSnapshotConfirmPanel', () => {
+    it('keeps capture available while the mounted document updates its shown value', async () => {
+        const slot = createWidgetSnapshotCaptureSlot();
+        const availability: boolean[] = [];
+        const stop = slot.subscribe(() => availability.push(slot.isAvailable()));
+        function Card({ value }: Readonly<{ value: number }>) {
+            useDeclarativeWidgetSnapshotCapture(() => ({
+                document: { version: 1, root: { kind: 'metric', label: 'Files', data: { kind: 'value', value }, value: { path: [], type: 'number' } } },
+                frozenByPath: new Map(), digests: [], current: true, refresh: async () => {},
+            }));
+            return null;
+        }
+        const renderCard = (value: number) => <WidgetSnapshotCaptureContext.Provider value={slot}><Card value={value} /></WidgetSnapshotCaptureContext.Provider>;
+        const screen = await renderScreen(renderCard(17));
+        expect(slot.isAvailable()).toBe(true);
+        availability.length = 0;
+        await screen.update(renderCard(23));
+        expect(availability).not.toContain(false);
+        expect(slot.capture()?.document.root).toMatchObject({ data: { value: 23 } });
+        await screen.unmount();
+        expect(slot.isAvailable()).toBe(false);
+        stop();
+    });
+
     it('settles a watched failed refresh, permits a stale retry, then freezes only a current capture', async () => {
         const slot = createWidgetSnapshotCaptureSlot();
         const listeners = new Set<() => void>();

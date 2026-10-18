@@ -111,6 +111,7 @@ import {
     type AdmittedDeclarativeSetting,
 } from './declarativeStaticModel';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useDeclarativeWidgetSnapshotCapture, type WidgetSnapshotCapture } from '@/components/widgets/definitions/widgetSnapshotCapture';
 
 /** Private presentation projection; the public environment ABI stays author-safe. */
 const HappierUiEnvironmentProviderWithPresentationActivity: React.ComponentType<
@@ -619,6 +620,10 @@ export function DeclarativePluginSurface(props: Readonly<{
         presentation: PluginSurfaceStatePresentation;
         action?: SurfaceStateAction;
     }> | null;
+    /** The whole-document Resource's facts for the exact rendered model. */
+    documentSourceSnapshot?: Readonly<{ current: boolean; digest?: string; refresh: () => Promise<void> }>;
+    /** Recheck the mounted authority when capture is requested, before disclosure. */
+    captureIsCurrent?: () => boolean;
     /**
      * The one live target-local presentation bridge. A destination parent
      * supplies it; an embedded child intentionally does not, so initial
@@ -674,6 +679,16 @@ export function DeclarativePluginSurface(props: Readonly<{
     const occurrenceId = admittedModel?.occurrenceId ?? null;
     const qualifiedId = admittedModel?.qualifiedId ?? props.pluginId;
     const visible = admittedModel !== null;
+    const readSnapshot = React.useMemo(() => root ? (): WidgetSnapshotCapture => ({
+        document: { version: 1, root },
+        frozenByPath: new Map(),
+        digests: props.documentSourceSnapshot?.digest ? [props.documentSourceSnapshot.digest] : [],
+        current: props.interactionEnabled && props.accountLifetime?.isCurrent() === true
+            && props.captureIsCurrent?.() !== false
+            && (props.documentSourceSnapshot?.current ?? true),
+        refresh: async () => { await props.documentSourceSnapshot?.refresh(); },
+    }) : null, [root, props.interactionEnabled, props.accountLifetime, props.documentSourceSnapshot, props.captureIsCurrent]);
+    useDeclarativeWidgetSnapshotCapture(readSnapshot);
     const collectionCommandCatalog: DeclarativeCollectionCommandCatalog = admittedModel
         ? admittedModel
         : EMPTY_DECLARATIVE_COLLECTION_COMMAND_CATALOG;

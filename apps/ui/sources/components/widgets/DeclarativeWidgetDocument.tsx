@@ -21,7 +21,7 @@ import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/us
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { randomUUID } from '@/platform/randomUUID';
-import { WidgetSnapshotCaptureContext } from './definitions/widgetSnapshotCapture';
+import { useDeclarativeWidgetSnapshotCapture, type WidgetSnapshotCapture } from './definitions/widgetSnapshotCapture';
 import { UnavailableInstalledWidget } from './InstalledWidgetSurface';
 
 export type DeclarativeWidgetDocumentProps = Readonly<{
@@ -192,18 +192,15 @@ export function DeclarativeWidgetDocument(props: DeclarativeWidgetDocumentProps)
         markdownProfile: 'widget', resolveAction: () => null, renderField: () => null, renderCollectionList: () => null };
     const [freshness] = React.useState(createDataFreshnessStore);
     // Post a snapshot reads exactly what this document shows, only when the person asks for it.
-    const snapshotSlot = React.useContext(WidgetSnapshotCaptureContext);
     const document = parsed.success ? parsed.data : null;
-    React.useEffect(() => (snapshotSlot && document ? snapshotSlot.register({
-        read: () => {
+    const readSnapshot = React.useMemo(() => document ? (): WidgetSnapshotCapture => {
             const reports = [...freshness.getSnapshot()];
             return { document, frozenByPath: new Map(reports.map(([path, report]) => [path, report.shown])),
                 digests: reports.flatMap(([, report]) => (report.digest ? [report.digest] : [])),
-                current: reports.every(([, report]) => report.state === 'fresh'),
+                current: props.isCurrent() && props.accountLifetime.isCurrent() && reports.every(([, report]) => report.state === 'fresh'),
                 refresh: () => Promise.all(reports.map(([, report]) => report.refresh())) };
-        },
-        subscribe: freshness.subscribe,
-    }) : undefined), [document, freshness, snapshotSlot]);
+        } : null, [document, freshness, props.isCurrent, props.accountLifetime]);
+    useDeclarativeWidgetSnapshotCapture(readSnapshot, freshness.subscribe);
     const renderDataNode = (value: Readonly<Record<string, unknown>>, path: string): React.ReactNode => {
         const { path: _path, order: _order, ...authored } = value;
         const node = PluginDeclarativeNodeV2Schema.safeParse(authored);
