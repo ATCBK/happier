@@ -27,7 +27,7 @@ import {
     RPC_ERROR_MESSAGES,
     isDelegatedSessionApprovalRpcMethod,
 } from '@happier-dev/protocol/rpc';
-import { isPublicRpcHandlerError, toSocketRpcTargetFailureV1 } from '@happier-dev/protocol/rpcErrors';
+import { isPublicRpcHandlerError, readRpcErrorCode, toSocketRpcTargetFailureV1 } from '@happier-dev/protocol/rpcErrors';
 
 export type RpcHandlerRegistrationReadiness =
     | Readonly<{ status: 'ready' }>
@@ -214,8 +214,10 @@ export class RpcHandlerManager {
             return response;
         } catch (error) {
             this.logger('[RPC] [ERROR] Error handling request', { error });
+            const errorCode = readRpcErrorCode(error);
             const errorResponse = {
-                error: error instanceof Error ? error.message : 'Unknown error'
+                error: error instanceof Error ? error.message : 'Unknown error',
+                ...(errorCode ? { errorCode } : {}),
             };
             return this.encodeTransportResponse(request, errorResponse);
         } finally {

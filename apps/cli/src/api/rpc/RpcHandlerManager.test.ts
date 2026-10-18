@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RpcHandlerManager } from './RpcHandlerManager';
 import { logger } from '@/ui/logger';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { decodeBase64, encodeBase64, encrypt, decrypt } from '@/api/encryption';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import type { Socket } from 'socket.io-client';
@@ -198,6 +199,37 @@ describe('RpcHandlerManager.invokeLocal', () => {
 
     const res = await rpc.invokeLocal('missing.method', {});
     expect(res).toEqual({ error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+  });
+});
+
+describe('RpcHandlerManager.handleRequest error responses', () => {
+  it.each(['plain', 'e2ee'] as const)('preserves only the public typed error fields over %s transport', async (encryptionMode) => {
+    const encryptionKey = new Uint8Array(32).fill(7);
+    const rpc = new RpcHandlerManager({
+      scopePrefix: 'machine-1', encryptionKey, encryptionVariant: 'dataKey', encryptionMode, logger: () => {},
+    });
+    const request = { method: 'machine-1:handoff', params: encryptionMode === 'plain'
+      ? {} : encodeBase64(encrypt(encryptionKey, 'dataKey', {})) };
+    const readResponse = async () => {
+      const response: unknown = await rpc.handleRequest(request);
+      if (encryptionMode === 'plain') return response;
+      expect(typeof response).toBe('string');
+      return decrypt(encryptionKey, 'dataKey', decodeBase64(response as string));
+    };
+    rpc.registerHandler('handoff', async () => {
+      throw Object.assign(new RpcError('Authentication is required', 'not_authenticated'), {
+        privateCredential: 'must-not-cross-transport', cause: new Error('private cause'),
+      });
+    });
+    expect(await readResponse()).toEqual({ error: 'Authentication is required', errorCode: 'not_authenticated' });
+
+    rpc.registerHandler('handoff', async () => {
+      throw Object.assign(new Error('Untyped handler failure'), { code: 'PRIVATE_OS_CODE' });
+    });
+    expect(await readResponse()).toEqual({ error: 'Untyped handler failure' });
+
+    rpc.registerHandler('handoff', async () => { throw 'untyped non-Error failure'; });
+    expect(await readResponse()).toEqual({ error: 'Unknown error' });
   });
 });
 
