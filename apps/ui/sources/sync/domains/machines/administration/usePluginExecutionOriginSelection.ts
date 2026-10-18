@@ -478,8 +478,8 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
         () => enabled ? reader?.readMaterializations() ?? null : null,
         [enabled, reader],
     );
-    const availabilityNotLoaded = materializationAdmission?.kind === 'unavailable'
-        && materializationAdmission.code === 'account_availability_not_loaded';
+    const availabilityNotLoaded = enabled && (reader === null || (materializationAdmission?.kind === 'unavailable'
+        && materializationAdmission.code === 'account_availability_not_loaded'));
     const includeMachineCandidates = params.includeMachineCandidates !== false;
     const materializations = materializationAdmission?.kind === 'available'
         ? materializationAdmission.materializations : EMPTY_EXECUTION_ORIGIN_MATERIALIZATIONS;

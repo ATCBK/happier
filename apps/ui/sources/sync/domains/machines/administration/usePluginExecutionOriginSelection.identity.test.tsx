@@ -364,6 +364,16 @@ describe('execution-origin plugin identity with real Account and machine owners'
         await hook.unmount();
     });
 
+    it('keeps a cold selector pending before its Account reader is bound', async () => {
+        storage.setState({ profileScope: null, settingsScope: null });
+        const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({
+            pluginId: 'acme.cold-account', includeMachineCandidates: false,
+            classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(),
+        }));
+        expect(hook.getCurrent()).toMatchObject({ loading: true, canExecute: false, selectedOrigin: null });
+        await hook.unmount();
+    });
+
     it('keeps rows and ready selection after visiting another plugin while the picker credential read settles', async () => {
         const serverIdentityId = 'srv_return_to_plugin';
         const url = 'https://return-to-plugin.example.test';
