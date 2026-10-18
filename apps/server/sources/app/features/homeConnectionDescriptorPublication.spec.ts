@@ -47,6 +47,7 @@ import {
     readCommittedHomeConnectionDescriptor,
     readHomeConnectionDescriptor,
     readRequiredAuthenticatedHomeConnectionDescriptor,
+    readPreparedHomeCredentialDestination,
     resolvePublishedHomeConnectionDescriptor,
     resetHomeConnectionDescriptorRevisionOwnerForTests,
     type HomeDescriptorPublicationFacts,
@@ -416,6 +417,26 @@ describe("home connection descriptor production read path", () => {
         renameGate.captures.length = 0;
         restart();
         await Promise.all(dataDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+    });
+
+    it("validates live destination authorities after preparation without publishing another revision", async () => {
+        env.HAPPIER_PUBLIC_SERVER_URL = "https://home.example.test";
+        const store = createFileHomeConnectionDescriptorContinuityStore(continuityPath());
+        const prepared = await readRequiredAuthenticatedHomeConnectionDescriptor({ env, continuityStore: store });
+        if (!prepared) throw new Error("Expected prepared Home descriptor");
+        const persisted = await readFile(continuityPath(), "utf8");
+        expect(readPreparedHomeCredentialDestination({ env, prepared })).toEqual(prepared);
+        env.HAPPIER_PUBLIC_SERVER_URL = "https://replacement.test";
+        expect(readPreparedHomeCredentialDestination({ env, prepared })?.endpoints).toEqual([
+            { kind: "https", url: "https://replacement.test" },
+        ]);
+        env.HAPPIER_CANONICAL_SERVER_URL = "https://new-home.test";
+        expect(readPreparedHomeCredentialDestination({ env, prepared })?.canonicalServerUrl).toBe("https://new-home.test");
+        expect(await readFile(continuityPath(), "utf8")).toBe(persisted);
+        restart();
+        expect(() => readPreparedHomeCredentialDestination({ env, prepared })).toThrowError(
+            "Home connection descriptor publication is unavailable",
+        );
     });
 
     it("advances a shared-DB Home's private descriptor across a port change without adopting another publisher's revision", async () => {

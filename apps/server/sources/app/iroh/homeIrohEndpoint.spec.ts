@@ -146,6 +146,18 @@ describe('home Iroh endpoint composition', () => {
         await expect(readFile(continuityPathFor(dataDir), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
+    it('exposes current key retirement to final admission without another native status read', async () => {
+        const owner = await loadOwnerModule();
+        const native = createNativeFake();
+        const prepared = await owner.ensureHomeIrohEndpoint({ env: envFor(dataDir), apiPort: API_PORT, native });
+        native.getEndpointStatus.mockRejectedValue(new Error('Final admission must not perform native IO'));
+        expect(owner.readHomeIrohEndpointLifecycleState()).toEqual(prepared);
+        const stopping = owner.stopHomeIrohEndpoint();
+        expect(owner.readHomeIrohEndpointLifecycleState().snapshot).toBeNull();
+        await stopping;
+        expect(owner.readHomeIrohEndpointLifecycleState().status).not.toBe('active');
+    });
+
     it('materializes fresh relocation endpoint facts without owning the outer descriptor revision', async () => {
         const owner = await loadOwnerModule();
         const native = createNativeFake({

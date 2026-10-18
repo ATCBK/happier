@@ -3,6 +3,7 @@ import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHo
 import { type IrohEndpointDescriptorV1 } from '@happier-dev/protocol/connectivity/iroh/endpointDescriptorV1';
 import {
     getHomeIrohEndpointState,
+    readHomeIrohEndpointLifecycleState,
     type HomeIrohEndpointState,
 } from "@/app/iroh/homeIrohEndpoint";
 import {
@@ -425,6 +426,41 @@ export async function readRequiredAuthenticatedHomeConnectionDescriptor(params: 
     });
     publicationTransactionChain = turn.then(() => undefined, () => undefined);
     return await turn;
+}
+
+/**
+ * Final credential-destination observation after required publication has
+ * prepared native status and durable continuity outside the DB transaction.
+ * Identity/origin and the endpoint key are live lifecycle facts, not descriptor
+ * revision or routing hints. Re-read those authorities at issuance without
+ * re-entering the publication queue, polling native status or doing file IO.
+ * Native key replacement/retirement goes through the endpoint lifecycle owner;
+ * continuity alone cannot change the running Home's credential destination.
+ */
+export function readPreparedHomeCredentialDestination(params: Readonly<{
+    env: NodeJS.ProcessEnv;
+    prepared: HomeConnectionDescriptorV1;
+}>): HomeConnectionDescriptorV1 | undefined {
+    if (continuityPrime?.status !== "ready" || !revisionOwner || supersededLocalCandidate) {
+        throw new HomeConnectionDescriptorPublicationUnavailableError();
+    }
+    const identity = readCachedServerIdentityIdForHotPath(params.env);
+    const canonicalServerUrl = resolveConfiguredCanonicalServerUrl(params.env);
+    if (!identity || !canonicalServerUrl) return undefined;
+    const iroh = readHomeIrohEndpointLifecycleState();
+    if (params.prepared.endpoints.some(endpoint => endpoint.kind === "iroh")
+        && iroh.status !== "active" && iroh.status !== "retired") {
+        throw new HomeConnectionDescriptorPublicationUnavailableError();
+    }
+    const endpoints: HomeConnectionEndpointV1[] = [];
+    const https = httpsEndpointFromIngress(resolveConfiguredPublicServerUrl(params.env) ?? null);
+    if (https) endpoints.push(https);
+    if (iroh.status === "active" && iroh.snapshot) endpoints.push({ kind: "iroh", ...iroh.snapshot.endpoint });
+    const descriptor = HomeConnectionDescriptorV1Schema.safeParse({
+        v: 1, homeServerIdentityId: identity, canonicalServerUrl,
+        revision: params.prepared.revision, endpoints,
+    });
+    return descriptor.success ? descriptor.data : undefined;
 }
 
 /**

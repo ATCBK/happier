@@ -2,12 +2,13 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import tweetnacl from "tweetnacl";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { getOrCreateServerIdentityId, initializeServerIdentityCache, readCachedServerIdentityIdForHotPath } from "@/app/serverIdentity/serverIdentity";
 import { getPublicUrl } from "@/storage/blob/files";
 import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import {
     readRequiredAuthenticatedHomeConnectionDescriptor,
+    readPreparedHomeCredentialDestination,
 } from "@/app/features/homeConnectionDescriptorPublication";
 import { createHomeConnectionDescriptorContinuityStoreForServer } from "@/app/features/homeConnectionDescriptorContinuity";
 import type { HomeApprovalGate } from "@/app/auth/homeApprovalGateContract";
@@ -172,7 +173,7 @@ export async function readAccountDirectoryMe(accountId: string): Promise<Account
 }
 
 export async function listAccountHomeDirectory(accountId: string) {
-    return inTx(async (tx) => {
+    return inReadSnapshot(async (tx) => {
         const account = await tx.account.findUnique({ where: { id: accountId }, select: { preferredHomeServerIdentityId: true } });
         if (!account) throw new AccountDirectoryError("not_found", "Account not found");
         const rows = await tx.accountHomeDirectoryEntry.findMany({
@@ -185,7 +186,7 @@ export async function listAccountHomeDirectory(accountId: string) {
             preferredHomeServerIdentityId: account.preferredHomeServerIdentityId ?? null,
             homes: rows.map((row) => mapHomeRow(row, account.preferredHomeServerIdentityId ?? null)),
         });
-    }, { isolationLevel: "Serializable", /* Directory entries and their preferred Home must come from one snapshot. */ readOnly: true });
+    });
 }
 
 async function upsertAccountHomeDirectoryEntryInTx(
@@ -638,7 +639,9 @@ export type HomeConnectionDescriptorResolver = (tx?: Tx) => Promise<HomeConnecti
 function createCurrentHomeConnectionDescriptorResolver(
     env: NodeJS.ProcessEnv,
 ): HomeConnectionDescriptorResolver {
+    let prepared: HomeConnectionDescriptorV1 | undefined;
     return async (tx) => {
+        if (tx) return prepared ? readPreparedHomeCredentialDestination({ env, prepared }) : undefined;
         // The canonical descriptor publication binds to the server identity
         // primed once at startup. Establish it through the canonical owner so
         // the dual-role classification cannot collapse the recoverable
@@ -647,14 +650,14 @@ function createCurrentHomeConnectionDescriptorResolver(
         // sequence. No-op wherever startup already primed the cache; a
         // storage-less environment still fails soft to null and stays
         // classified not-dual-role.
-        if (!tx) await initializeServerIdentityCache(env);
+        await initializeServerIdentityCache(env);
         const continuityStore = createHomeConnectionDescriptorContinuityStoreForServer(env);
         if (!continuityStore) return undefined;
-        return readRequiredAuthenticatedHomeConnectionDescriptor({
+        prepared = await readRequiredAuthenticatedHomeConnectionDescriptor({
             env,
             continuityStore,
-            tx,
         });
+        return prepared;
     };
 }
 
@@ -823,9 +826,11 @@ export async function redeemHomeLoginAssertion(params: Readonly<{
             currentApprovalExpiresAtMs = currentApproval.expiresAt.getTime();
         }
         // Approval binds the assertion signing bytes, including the destination
-        // digest. Re-read the canonical Home owner after every transactional
+        // digest. Re-read live destination facts at the canonical Home owner after every transactional
         // trust check and immediately before issuance, so a destination change
         // while approval was pending cannot produce a usable Home credential.
+        // Native observation and continuity publication were prepared before
+        // opening this transaction; final validation performs no external IO.
         await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor, tx);
         if (params.nowMs === undefined) {
             const issuanceBoundaryNowMs = Date.now();

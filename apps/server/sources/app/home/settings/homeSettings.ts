@@ -14,8 +14,8 @@ import { authorizeHomeGovernanceMutationInTx } from "@/app/home/governance/homeC
 import { peekInferredPublicServerUrl } from "@/app/integrations/publicUrl/publicServerUrlInference";
 import { SERVER_CONFIG_REGISTRY } from "@/config/serverConfigRegistry";
 import { decryptString, encryptString } from "@/modules/encrypt";
-import { db, getDbProviderFromEnv, isPrismaErrorCode } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { db, isPrismaErrorCode } from "@/storage/db";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 
 import { buildHomeConfigEnv, composeHomeConfigEnv, projectHomeSettings } from "./homeConfigOverlay";
 import { readHomeDeploymentEnv, readStartupHomeEnv, type StoredHomeSettings } from "./startupHomeEnv";
@@ -150,14 +150,9 @@ export function buildHomeConfigEnvFromRecord(
  * the values this process started with. No process cache: every replica reads the same row.
  */
 export async function readHomeConfigEnv(base: ServerConfigEnv = process.env): Promise<ServerConfigEnv> {
-    const [record, policyValues] = await inTx(tx => Promise.all([
+    const [record, policyValues] = await inReadSnapshot(tx => Promise.all([
         readHomeSettingsInTx(tx), readHomeAuthenticationPolicyValues(tx),
-    ]), {
-        // A coherent request/job overlay does not certify serial ordering with
-        // configuration writers; mutation admission keeps its own transaction.
-        isolationLevel: getDbProviderFromEnv(process.env, "postgres") === "postgres" ? "RepeatableRead" : "Serializable",
-        readOnly: true,
-    });
+    ]));
     return buildHomeConfigEnvFromRecord(base, record, SERVER_CONFIG_REGISTRY, policyValues);
 }
 

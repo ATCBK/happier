@@ -17,6 +17,15 @@ export type InTxOptions = Readonly<{
     transactionClass?: string;
 }>;
 
+/** A coherent read view, without certifying a serial ordering with writers. */
+export function inReadSnapshot<T>(read: (tx: Tx) => Promise<T>, options?: Pick<InTxOptions, "transactionClass">): Promise<T> {
+    return inTx(read, {
+        ...options,
+        readOnly: true,
+        isolationLevel: getDbProviderFromEnv(process.env, "postgres") === "postgres" ? "RepeatableRead" : "Serializable",
+    });
+}
+
 export type TransactionReplayReason = "session-account-audience-changed"
     | "pending-activation-target-changed"
     | "transaction-account-audience-changed";
