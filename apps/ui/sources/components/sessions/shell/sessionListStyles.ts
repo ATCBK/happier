@@ -182,6 +182,10 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         borderRadius: 999,
         marginLeft: theme.space.s4,
     },
+    groupHeaderDragHandle: {
+        width: theme.space.s24,
+        height: theme.space.s24,
+    },
     folderHeaderDragHandleIcon: {
         opacity: 0,
     },

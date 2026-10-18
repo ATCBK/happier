@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { AUTHORING_MEMORY_ROUTE_V1 } from '@happier-dev/protocol';
@@ -8,6 +9,8 @@ import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import type { UseSessionListRowInteractionsInput } from './useSessionListRowInteractions';
 import { treeRowId } from './drop-resolution/treeRowId';
+import { useEntityDragDomBinding } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
+import { buildSessionWorkspaceOrderItemKey, buildSessionWorkspaceOrderScopeKey } from '@/sync/domains/session/listing/sessionWorkspaceOrderStateV1';
 import type { UseSessionInlineDragResolvedDrop } from './useSessionInlineDrag';
 import { getStorage } from '@/sync/domains/state/storage';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -24,6 +27,12 @@ vi.mock('socket.io-client', async importOriginal =>
 installDisconnectedServerSocketBoundary();
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+const platform = vi.hoisted(() => ({ os: 'ios' }));
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ Platform: { get OS() { return platform.os; } } });
+});
 
 // Reanimated is the native SDK boundary; keep real row and entity runtime owners.
 vi.mock('react-native-reanimated', async () => {
@@ -67,6 +76,7 @@ describe('useSessionListRowInteractions', () => {
         home.requests.length = 0;
     });
     afterEach(async () => {
+        platform.os = 'ios';
         standardCleanup();
         await connection.dispose();
         await home.reset();
@@ -142,6 +152,94 @@ describe('useSessionListRowInteractions', () => {
     function renderInteractions(overrides: Partial<UseSessionListRowInteractionsInput> = {}) {
         return renderHook(() => useSessionListRowInteractions(buildInteractionsInput(overrides)));
     }
+
+    it.each(['browser', 'keyboard'] as const)('reorders workspaces through the %s boundary with folders disabled', async inputKind => {
+        getStorage().setState({ profileScope: ACTIVE_SCOPE });
+        const projectA: Extract<SessionListIndexItem, { type: 'header' }> = {
+            type: 'header', title: 'Project A', headerKind: 'project', groupKey: 'project-a', workspaceKey: 'project-a',
+            workspace, serverId: ACTIVE_SCOPE.serverId,
+        };
+        const projectB: Extract<SessionListIndexItem, { type: 'header' }> = {
+            ...projectA, title: 'Project B', groupKey: 'project-b', workspaceKey: 'project-b',
+            workspace: { ...workspace, rootPath: '/repo/b' },
+        };
+        let finishWrite = () => {};
+        const write = new Promise<void>(resolve => { finishWrite = resolve; });
+        const setOrder = vi.fn(async (_next: Record<string, string[]>) => { if (inputKind === 'browser') await write; });
+        const hook = await renderInteractions({ listItems: [projectA, projectB], folderActionsEnabled: false,
+            isFolderActionsEnabledForServerId: () => false, setSessionWorkspaceOrderV1: setOrder });
+        const sourceId = treeRowId.workspaceRoot('project-b');
+        const viewport = Object.assign(document.createElement('div'), {
+            // jsdom has no layout; the real measurement owner prefers this DOM boundary.
+            getBoundingClientRect: () => new DOMRect(0, 0, 300, 300),
+            measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 300),
+        });
+        const source = document.createElement('div');
+        document.body.append(viewport, source);
+        const sourceHook = await renderHook(() => useEntityDragDomBinding({
+            runtime: hook.getCurrent().entityDragDrop.runtime, enabled: true,
+            begin: () => hook.getCurrent().handleDragStart(sourceId) ?? null,
+        }));
+        const dispatch = (target: HTMLElement, type: string) => target.dispatchEvent(new MouseEvent(type,
+            { bubbles: true, cancelable: true, clientX: 10, clientY: 51 }));
+        const attachViewport = (node: typeof viewport | null) => {
+            // The DOM ref is the platform boundary; keep the existing native storage harness
+            // underneath the real list/runtime path rather than starting browser persistence.
+            platform.os = 'web';
+            hook.getCurrent().handleTreeViewportMeasure(node);
+            platform.os = 'ios';
+        };
+        act(() => {
+            platform.os = 'web';
+            sourceHook.getCurrent()(source);
+            platform.os = 'ios';
+        });
+        try {
+            await act(async () => {
+                attachViewport(viewport);
+                hook.getCurrent().registerTreeRowBounds(treeRowId.workspaceRoot('project-a'), { measureInWindow: callback => callback(0, 50, 300, 40) });
+                hook.getCurrent().registerTreeRowBounds(sourceId, { measureInWindow: callback => callback(0, 110, 300, 40) });
+            });
+            if (inputKind === 'keyboard') {
+                let committed: Promise<boolean> | undefined;
+                await act(async () => { committed = hook.getCurrent().applyKeyboardMove(sourceId, 'up')?.committed; });
+                expect(await committed).toBe(true);
+            } else {
+                await act(async () => { dispatch(source, 'dragstart'); });
+                await act(async () => { dispatch(viewport, 'dragover'); });
+                expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission?.status).toBe('allowed');
+                // Detaching this receiver makes a browser drop inert; its source can still cancel.
+                act(() => { attachViewport(null); });
+                await act(async () => { dispatch(viewport, 'drop'); });
+                expect(setOrder).not.toHaveBeenCalled();
+                expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).toBe('carrying');
+                act(() => { dispatch(source, 'dragend'); });
+                expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).toBe('idle');
+                await act(async () => {
+                    attachViewport(viewport);
+                    dispatch(source, 'dragstart');
+                });
+                await act(async () => { dispatch(viewport, 'dragover'); });
+                await act(async () => { dispatch(viewport, 'drop'); });
+                await vi.waitFor(() => expect(setOrder).toHaveBeenCalledTimes(1));
+                expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot()).toMatchObject({ phase: 'pending', item: { kind: 'session-workspace' } });
+                act(() => { dispatch(source, 'dragend'); });
+                expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot()).toMatchObject({ phase: 'pending', item: { kind: 'session-workspace' } });
+                await act(async () => { finishWrite(); });
+                await vi.waitFor(() => expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).not.toBe('pending'));
+            }
+            expect(setOrder.mock.calls[0]?.[0]).toEqual({
+                [buildSessionWorkspaceOrderScopeKey(ACTIVE_SCOPE.serverId)]: [
+                    buildSessionWorkspaceOrderItemKey('project-b'), buildSessionWorkspaceOrderItemKey('project-a'),
+                ],
+            });
+            expect(hook.getCurrent().dropOverlayShared.overlayVisible.value).toBe(0);
+        } finally {
+            finishWrite();
+            hook.getCurrent().handleDragCancel();
+            source.remove(); viewport.remove(); await sourceHook.unmount(); await hook.unmount();
+        }
+    });
 
     it('scrolls an offscreen staged destination into view even for a row taller than the viewport and hides a refused step', async () => {
         const scrollToOffset = vi.fn();

@@ -1615,7 +1615,13 @@ export function useSessionListViewStateFromPaneState(
             destinationLabel: resolveDropResultDestinationLabel(move.result),
             result: move.result,
         });
-    }, [resolveDropResultDestinationLabel, rowInteractions, sessionListA11y]);
+    }, [resolveDropResultDestinationLabel, rowInteractions.applyKeyboardMove, sessionListA11y]);
+    const moveWorkspaceUp = React.useCallback((rowId: string, title: string) => {
+        moveTreeRowByKeyboard(rowId, title, 'up');
+    }, [moveTreeRowByKeyboard]);
+    const moveWorkspaceDown = React.useCallback((rowId: string, title: string) => {
+        moveTreeRowByKeyboard(rowId, title, 'down');
+    }, [moveTreeRowByKeyboard]);
     const getRowMoveActionHandlers = useSessionListRowMoveActionHandlers({
         openMoveSheetForTreeRow,
         moveTreeRowToWorkspaceRoot,
@@ -1927,6 +1933,8 @@ export function useSessionListViewStateFromPaneState(
             onRenameWorkspace={handleRenameWorkspace}
             onResetWorkspaceName={handleResetWorkspaceName}
             onToggleCollapse={handleToggleCollapse}
+            onMoveWorkspaceUp={moveWorkspaceUp}
+            onMoveWorkspaceDown={moveWorkspaceDown}
             onFocusFolder={handleFocusSessionFolder}
             onCreateSessionFromFolder={handleCreateSessionFromFolder}
             onAddSubfolder={handleAddSubfolder}
@@ -1986,6 +1994,8 @@ export function useSessionListViewStateFromPaneState(
         handleResetWorkspaceName,
         handleToggleCollapse,
         moveTreeRowByKeyboard,
+        moveWorkspaceUp,
+        moveWorkspaceDown,
         moveTreeRowToWorkspaceRoot,
         openMoveSheetForTreeRow,
         projectHeaderViewModelByGroupKey,

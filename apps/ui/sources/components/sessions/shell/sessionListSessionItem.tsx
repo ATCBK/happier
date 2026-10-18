@@ -6,6 +6,7 @@ import type { TreeDropOverlaySharedValues } from '@/components/ui/treeDragDrop';
 import type { SessionListRowViewModel } from './sessionListRowViewModels';
 import { SessionListRow, type SessionListRowProps } from './sessionListRow';
 import type {
+    UseSessionInlineDragStart,
     UseSessionInlineDragCancelEvent,
     UseSessionInlineDragDropResultEvent,
     UseSessionInlineDragResolvedDrop,
@@ -24,7 +25,7 @@ type SessionListSessionItemProps = Readonly<{
     rowHeight: number;
     dragEnabled: boolean;
     treeRowId: string;
-    onDragStart: (sessionKey: string) => void;
+    onDragStart: UseSessionInlineDragStart;
     resolveDropResult: (event: UseSessionInlineDragResolveDropResultEvent) => UseSessionInlineDragResolvedDrop;
     onDropResult: (event: UseSessionInlineDragDropResultEvent) => void | Promise<void>;
     onDragUpdate?: (event: UseSessionInlineDragDropResultEvent) => void;

@@ -23,6 +23,7 @@ import {
 } from './resolveSessionListHeaderActionHandlers';
 import {
     useSessionInlineDrag,
+    type UseSessionInlineDragStart,
     type UseSessionInlineDragCancelEvent,
     type UseSessionInlineDragDropResultEvent,
     type UseSessionInlineDragResolvedDrop,
@@ -64,6 +65,8 @@ type SessionListHeaderItemProps = Readonly<{
     onMoveFolderToWorkspaceRoot?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void;
     onMoveFolderUp?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void;
     onMoveFolderDown?: (item: Extract<SessionListIndexItem, { type: 'header' }>) => void;
+    onMoveWorkspaceUp?: (rowId: string, title: string) => void;
+    onMoveWorkspaceDown?: (rowId: string, title: string) => void;
     onRegisterSessionFolderDropTarget?: RegisterSessionFolderDropTarget;
     workspaceFaviconsEnabled?: boolean;
     workspaceMachineSubtitlesEnabled?: boolean;
@@ -73,7 +76,7 @@ type SessionListHeaderItemProps = Readonly<{
     overlayShared?: TreeDropOverlaySharedValues;
     onRegisterTreeRowBounds?: RegisterSessionListTreeRowBounds;
     onUnregisterTreeRowBounds?: UnregisterSessionListTreeRowBounds;
-    onFolderDragStart?: (sessionKey: string) => void;
+    onFolderDragStart?: UseSessionInlineDragStart;
     resolveDropResult?: (event: UseSessionInlineDragResolveDropResultEvent) => UseSessionInlineDragResolvedDrop;
     onFolderDragUpdate?: (event: UseSessionInlineDragDropResultEvent) => void;
     onFolderDragCancel?: (event: UseSessionInlineDragCancelEvent) => void;
@@ -182,6 +185,8 @@ export const SessionListHeaderItem = React.memo((props: SessionListHeaderItemPro
                 onAddFolder={() => props.onAddFolderToWorkspace(props.item)}
                 onRename={headerActionHandlers.onRename}
                 onReset={headerActionHandlers.onReset}
+                onMoveUp={props.onMoveWorkspaceUp ? () => props.onMoveWorkspaceUp?.(rowId, headerViewState.displayTitle) : undefined}
+                onMoveDown={props.onMoveWorkspaceDown ? () => props.onMoveWorkspaceDown?.(rowId, headerViewState.displayTitle) : undefined}
                 collapsed={headerViewState.collapsed}
                 onToggleCollapse={headerActionHandlers.onToggleCollapse}
                 onRegisterDropTarget={props.onRegisterSessionFolderDropTarget}
@@ -246,7 +251,7 @@ const DraggableFolderHeaderFrame = React.memo(function DraggableFolderHeaderFram
     groupKey: string;
     dataIndex: number;
     overlayShared: TreeDropOverlaySharedValues;
-    onDragStart?: (sessionKey: string) => void;
+    onDragStart?: UseSessionInlineDragStart;
     onDragUpdate?: (event: UseSessionInlineDragDropResultEvent) => void;
     onDragCancel?: (event: UseSessionInlineDragCancelEvent) => void;
     resolveDropResult: (event: UseSessionInlineDragResolveDropResultEvent) => UseSessionInlineDragResolvedDrop;
@@ -257,7 +262,7 @@ const DraggableFolderHeaderFrame = React.memo(function DraggableFolderHeaderFram
     const organize = useSessionListOrganizeMode();
     const touchPrimary = isTouchPrimaryPointer();
     const enabled = Boolean(props.onDropResult) && (!touchPrimary || organize.active);
-    const { gesture, animatedStyle } = useSessionInlineDrag({
+    const { gesture, animatedStyle, dragSourceRef } = useSessionInlineDrag({
         enabled,
         sessionKey: props.sessionKey,
         groupKey: props.groupKey,
@@ -270,7 +275,7 @@ const DraggableFolderHeaderFrame = React.memo(function DraggableFolderHeaderFram
         onDropResult: props.onDropResult,
     });
     const content = (
-        <Animated.View style={[animatedStyle, { flexDirection: 'row', alignItems: 'center' }]}>
+        <Animated.View ref={dragSourceRef} style={[animatedStyle, { flexDirection: 'row', alignItems: 'center' }]}>
             <Animated.View style={{ flex: 1 }}>{props.children}</Animated.View>
             {touchPrimary && organize.active && gesture ? (
                 <GestureDetector gesture={gesture}>
@@ -280,9 +285,5 @@ const DraggableFolderHeaderFrame = React.memo(function DraggableFolderHeaderFram
             ) : null}
         </Animated.View>
     );
-    return !touchPrimary && gesture ? (
-        <GestureDetector gesture={gesture}>
-            {content}
-        </GestureDetector>
-    ) : content;
+    return content;
 });

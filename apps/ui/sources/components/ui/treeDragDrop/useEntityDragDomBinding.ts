@@ -16,20 +16,26 @@ function blankDragImage(): HTMLImageElement {
     return blankImage;
 }
 
-/** Browser gesture boundary only: the carry handle is the sole lifecycle authority. */
-export function useEntityDragDomBinding(input: Readonly<{
+export type EntityDragDomCarry = Pick<EntityDragCarry, 'move' | 'cancel'>;
+
+type EntityDragDomBindingInput = Readonly<{
     runtime: EntityDragDropRuntime;
-    sourceId: string;
     enabled: boolean;
     canStart?: (event: DragEvent, host: HTMLElement) => boolean;
     describe?: () => string;
-}>): (node: unknown) => void {
+}> & Readonly<
+    | { sourceId: string; begin?: never }
+    | { sourceId?: never; begin: () => EntityDragDomCarry | null }
+>;
+
+/** Browser gesture boundary only: the carry handle is the sole lifecycle authority. */
+export function useEntityDragDomBinding(input: EntityDragDomBindingInput): (node: unknown) => void {
     const latest = React.useRef(input);
     latest.current = input;
     const host = React.useRef<HTMLElement | null>(null);
     const requestedHost = React.useRef<HTMLElement | null>(null);
     const detach = React.useRef<(() => void) | null>(null);
-    const carry = React.useRef<EntityDragCarry | null>(null);
+    const carry = React.useRef<EntityDragDomCarry | null>(null);
     const stopMove = React.useRef<(() => void) | null>(null);
     const retireHost = React.useCallback(() => {
         detach.current?.();
@@ -67,7 +73,7 @@ export function useEntityDragDomBinding(input: Readonly<{
         const start = (event: DragEvent) => {
             const current = latest.current;
             if (!current.enabled || current.canStart?.(event, element) === false) { event.preventDefault(); return; }
-            const handle = current.runtime.begin(current.sourceId, 'pointer');
+            const handle = current.begin ? current.begin() : current.runtime.begin(current.sourceId, 'pointer');
             if (!handle) { event.preventDefault(); return; }
             carry.current = handle;
             window.addEventListener('dragover', move, true);

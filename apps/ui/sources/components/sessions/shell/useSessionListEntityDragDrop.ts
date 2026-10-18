@@ -434,7 +434,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
                 await adapter.end(success, pointer);
                 source.dispose();
             },
-            cancel: () => { adapter.cancel(); source.dispose(); },
+            cancel: () => adapter.cancel(),
         };
     }, [prepareSource, runtime, targetId]);
 

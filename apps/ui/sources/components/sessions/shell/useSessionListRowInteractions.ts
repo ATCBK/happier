@@ -6,6 +6,7 @@ import {
     measureWindowBounds,
     TREE_DROP_OVERLAY_KIND_NONE,
     useEntityDragDropRuntime,
+    useEntityDropDomBinding,
     useTreeDropAutoscroll,
     useTreeDropRegistry,
     windowBoundsToContentBounds,
@@ -113,6 +114,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
     const keyboardScrollTargetRef = React.useRef<string | null>(null);
     // Mounted geometry changes (virtualized rows arriving, scroll, resize) re-select the place under a carry.
     const entityDragRuntime = useEntityDragDropRuntime();
+    const attachTreeDrop = useEntityDropDomBinding(entityDragRuntime);
     const dropGeometryRegistry = useTreeDropRegistry(entityDragRuntime.refresh);
 
     const overlayVisible = useSharedValue(0);
@@ -302,6 +304,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
     }, [autoscrollViewportHeight]);
 
     const handleTreeViewportMeasure = React.useCallback((ref: TreeDropMeasurableRef | null) => {
+        attachTreeDrop(ref);
         void measureWindowBounds(ref).then((bounds) => {
             if (!bounds) return;
             viewportBoundsRef.current = bounds;
@@ -311,7 +314,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
             autoscrollViewportTopY.value = bounds.y;
             autoscrollViewportHeight.value = bounds.height;
         });
-    }, [autoscrollViewportHeight, autoscrollViewportTopY]);
+    }, [attachTreeDrop, autoscrollViewportHeight, autoscrollViewportTopY]);
 
     const buildBaseCommitContext = React.useCallback((scope?: SessionOrganizationMutationScope): SessionListBaseCommitContext => {
         const requireCapturedScope = () => {
@@ -481,6 +484,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
         setNativeContextMenuSessionKey(null);
         setDraggingSessionKey(sessionKey);
         remeasureAllRegisteredRows();
+        return carryRef.current;
     }, [autoscrollActive, autoscrollPointerY, clearDragState, entityDragDrop, input.folderActionsEnabled, remeasureAllRegisteredRows]);
 
     const handleDragUpdate = React.useCallback((_event: UseSessionInlineDragDropResultEvent) => {}, []);

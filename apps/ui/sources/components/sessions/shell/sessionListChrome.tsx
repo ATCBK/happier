@@ -455,6 +455,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     collapsed: boolean;
     onToggleCollapse: () => void;
     onRegisterDropTarget?: RegisterSessionFolderDropTarget;
+    onMoveUp?: () => void;
+    onMoveDown?: () => void;
 }>) {
     const styles = sessionListStyles;
     const { theme } = useUnistyles();
@@ -503,6 +505,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
         canAddFolder: sessionFoldersFeatureEnabled && workspace !== null,
         canRename: Boolean(item.workspaceScopeHint) && item.workspace?.t !== 'managedSessions',
         hasCustomLabel,
+        canMoveUp: typeof props.onMoveUp === 'function',
+        canMoveDown: typeof props.onMoveDown === 'function',
         actionIconColor,
     });
     const menuEnabled = menuItems.length > 0;
@@ -520,6 +524,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
             >
                 <Pressable
                     style={styles.groupHeaderContent}
+                    {...(isWeb ? { dataSet: { entityDragBody: 'true' } } : {})}
                     onPress={onToggleCollapse}
                     onHoverIn={isWeb ? () => setIsRowHovered(true) : undefined}
                     onHoverOut={isWeb ? () => setIsRowHovered(false) : undefined}
@@ -563,36 +568,38 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                     </View>
                 </Pressable>
                 <View style={styles.groupHeaderTrailingActions}>
-                    {showHoverActions && reorderHandleKey ? (
+                    {reorderHandleKey ? (isWeb ? (
+                        <View
+                            style={[styles.groupHeaderActionButton, styles.groupHeaderDragHandle]}
+                            testID={`session-workspace-reorder-handle:${reorderHandleKey}`}
+                            pointerEvents="none"
+                            accessible={false}
+                        >
+                            <Icon name="list" size={14} color={actionIconColor} />
+                        </View>
+                    ) : (
                         <Pressable
                             style={styles.groupHeaderActionButton}
                             testID={`session-workspace-reorder-handle:${reorderHandleKey}`}
-                            onPress={(event) => {
-                                stopPressEventPropagation(event);
-                            }}
-                            onHoverIn={isWeb ? () => setIsActionsHovered(true) : undefined}
-                            onHoverOut={isWeb ? () => setIsActionsHovered(false) : undefined}
+                            onPress={stopPressEventPropagation}
                             accessible={false}
                             hitSlop={8}
                         >
-                            <Icon
-                                name="list"
-                                size={14}
-                                color={actionIconColor}
-                                style={[
-                                    styles.folderHeaderDragHandleIcon,
-                                    showHoverActions ? styles.folderHeaderDragHandleIconActive : null,
-                                ]}
-                            />
+                            <Icon name="list" size={14} color={actionIconColor}
+                                style={[styles.folderHeaderDragHandleIcon, styles.folderHeaderDragHandleIconActive]} />
                         </Pressable>
-                    ) : null}
-                    {showHoverActions && menuEnabled ? (
+                    )) : null}
+                    {menuEnabled ? (
                         <DropdownMenu
                             open={menuOpen}
                             onOpenChange={setMenuOpen}
                             items={menuItems}
                             onSelect={(itemId) => {
-                                if (itemId === 'openProject') {
+                                if (itemId === 'moveUp') {
+                                    props.onMoveUp?.();
+                                } else if (itemId === 'moveDown') {
+                                    props.onMoveDown?.();
+                                } else if (itemId === 'openProject') {
                                     onOpenProject();
                                 } else if (itemId === 'addFolder') {
                                     onAddFolder();
@@ -764,6 +771,8 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
             icon: <Icon name="folder-open" size={16} color={iconColor} />,
             disabled: actionsDisabled,
         }];
+        if (typeof props.onMoveUp === 'function') items.push({ id: 'move-up', title: t('common.moveUp'), disabled: actionsDisabled });
+        if (typeof props.onMoveDown === 'function') items.push({ id: 'move-down', title: t('common.moveDown'), disabled: actionsDisabled });
         if (typeof props.onMove === 'function') {
             items.push({
                 id: 'move',
@@ -785,10 +794,14 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
             disabled: actionsDisabled,
         });
         return items;
-    }, [actionsDisabled, iconColor, props.onMove]);
+    }, [actionsDisabled, iconColor, props.onMove, props.onMoveUp, props.onMoveDown]);
     const handleMenuSelect = React.useCallback(async (itemId: string) => {
         if (actionsDisabled) return;
-        if (itemId === 'new-session') {
+        if (itemId === 'move-up') {
+            props.onMoveUp?.();
+        } else if (itemId === 'move-down') {
+            props.onMoveDown?.();
+        } else if (itemId === 'new-session') {
             props.onNewSession();
         } else if (itemId === 'add-subfolder') {
             await props.onAddSubfolder();
@@ -870,6 +883,7 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
                 </Pressable>
                 <Pressable
                     testID={`${headerTestId}-focus`}
+                    {...(isWeb ? { dataSet: { entityDragBody: 'true' } } : {})}
                     style={styles.headerLabelRow}
                     onPress={actionsDisabled ? undefined : props.onPress}
                     accessibilityRole="button"
@@ -885,7 +899,7 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
                     testID={`session-folder-reorder-handle-${props.item.folderId ?? props.title}`}
                     style={[
                         styles.groupHeaderActionButton,
-                        showActions ? styles.webHoverVisibleChevron : styles.webHoverHiddenChevron,
+                        isWeb ? styles.groupHeaderDragHandle : styles.webHoverVisibleChevron,
                     ]}
                     pointerEvents="none"
                 >
@@ -895,7 +909,7 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
                         color={iconColor}
                         style={[
                             styles.folderHeaderDragHandleIcon,
-                            showActions ? styles.folderHeaderDragHandleIconActive : null,
+                            isWeb || showActions ? styles.folderHeaderDragHandleIconActive : null,
                         ]}
                     />
                 </View>
@@ -919,7 +933,7 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
                                 testID={`session-folder-menu-trigger-${props.item.folderId ?? props.title}`}
                                 style={[
                                     styles.groupHeaderActionButton,
-                                    isWeb && !showActions ? styles.webHoverHiddenChevron : styles.webHoverVisibleChevron,
+                                    styles.webHoverVisibleChevron,
                                 ]}
                                 onPress={(event) => {
                                     stopPressEventPropagation(event);

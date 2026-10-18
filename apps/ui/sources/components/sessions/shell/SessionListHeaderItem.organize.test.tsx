@@ -84,7 +84,7 @@ describe('SessionListHeaderItem Organize source', () => {
         for (let ancestor = header.parent; ancestor; ancestor = ancestor.parent) {
             if (String(ancestor.type) === 'GestureDetector') wholeHeaderGesture = true;
         }
-        expect(wholeHeaderGesture).toBe(platform === 'web');
+        expect(wholeHeaderGesture).toBe(false);
         if (organize) expect(screen.root.findByType(EntityDragGrip).parent?.props.gesture).toBeTruthy();
         await act(async () => header.props.onToggleCollapse());
         expect(onPress).toHaveBeenCalled();

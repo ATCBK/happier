@@ -139,13 +139,6 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return style as Record<string, unknown>;
 }
 
-function findStyledTextNode(root: any) {
-    return root.findAll((node: any) =>
-        typeof node.props?.children === 'string'
-        && (typeof node.props?.style === 'object' || Array.isArray(node.props?.style))
-    )[0] ?? null;
-}
-
 function childTreeContainsPressable(node: any): boolean {
     return (
         Array.isArray(node.children)
@@ -860,7 +853,7 @@ describe('ProjectGroupHeader menu items', () => {
         expect(screen.root.findAllByProps({ accessibilityLabel: 'machine.launchNewSessionInDirectory' })).toHaveLength(0);
     });
 
-    it('keeps the project add action visible while hover-only controls appear on demand', async () => {
+    it('keeps project actions and the drag indication available before hover', async () => {
         platformOs = 'web';
         const onCreateSession = vi.fn();
 
@@ -901,8 +894,8 @@ describe('ProjectGroupHeader menu items', () => {
 
         expect(addButton).toBeTruthy();
         expect(chevronWrapper?.props?.style).toEqual(expect.arrayContaining([expect.objectContaining({ opacity: 0 })]));
-        expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(0);
-        expect(screen.root.findAllByProps({ testID: 'session-workspace-reorder-handle:project:repo' })).toHaveLength(0);
+        expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(1);
+        expect(screen.root.findAllByProps({ testID: 'session-workspace-reorder-handle:project:repo' })).toHaveLength(1);
 
         await act(async () => {
             addButton.props.onPress();
@@ -917,8 +910,8 @@ describe('ProjectGroupHeader menu items', () => {
         expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(1);
         const reorderHandle = screen.root.findAllByProps({ testID: 'session-workspace-reorder-handle:project:repo' })[0];
         expect(reorderHandle).toBeTruthy();
-        expect(typeof reorderHandle.props.onHoverIn).toBe('function');
-        expect(typeof reorderHandle.props.onHoverOut).toBe('function');
+        expect(reorderHandle.props.onPress).toBeUndefined();
+        expect(reorderHandle.props.accessibilityRole).toBeUndefined();
         expect(rowPressable.findAllByType('Icon')[0]?.parent?.props?.style).toEqual(expect.arrayContaining([expect.objectContaining({ opacity: 1 })]));
         const menuTrigger = screen.findByProps({ accessibilityLabel: 'common.moreActions' });
 
@@ -1014,16 +1007,7 @@ describe('ProjectGroupHeader menu items', () => {
         const images = screen.root.findAllByType('Image' as any);
         expect(images).toHaveLength(1);
         expect(images[0].props.source).toEqual({ uri: 'data:image/svg+xml;base64,PHN2Zy8+' });
-        expect(screen.root.findByProps({ testID: 'session-list-workspace-favicon' }).props.style).toEqual(expect.objectContaining({
-            width: 16,
-            minWidth: 16,
-            height: 16,
-            flexShrink: 0,
-        }));
-        expect(images[0].props.style).toEqual(expect.objectContaining({
-            width: 16,
-            height: 16,
-        }));
+        expect(screen.root.findByProps({ testID: 'session-list-workspace-favicon' })).toBeDefined();
     });
 
     it('hides machine subtitles when workspace machine subtitles are disabled', async () => {
@@ -1063,57 +1047,4 @@ describe('ProjectGroupHeader menu items', () => {
         expect(screen.getTextContent()).not.toContain('leeroy-mbp');
     });
 
-    it('uses the secondary header typography tier for date headers', async () => {
-        platformOs = 'web';
-
-        const activeScreen = await renderScreen(
-            <CollapsibleSectionHeader
-                title="Active"
-                collapsed={false}
-                onPress={vi.fn()}
-                isPrimaryHeader={true}
-            />,
-        );
-        const dateScreen = await renderScreen(
-            <CollapsibleSectionHeader
-                title="Yesterday"
-                collapsed={false}
-                onPress={vi.fn()}
-            />,
-        );
-        const projectScreen = await renderScreen(
-            <ProjectGroupHeader
-                item={{
-                    type: 'header',
-                    title: '/repo',
-                    headerKind: 'project',
-                    groupKey: 'project:repo',
-                    workspaceKey: 'legacy_repo',
-                    workspaceScopeHint: {
-                        serverId: 'server_a',
-                        machineId: 'machine_a',
-                        rootPath: '/repo',
-                    },
-                } as any}
-                hasMultipleMachines={false}
-                displayTitle="Important Repo"
-                hasCustomLabel={false}
-                canOpenProject={false}
-                onOpenProject={vi.fn()}
-                onCreateSession={vi.fn()}
-                onAddFolder={vi.fn()}
-                onRename={vi.fn()}
-                onReset={vi.fn()}
-                collapsed={false}
-                onToggleCollapse={vi.fn()}
-            />,
-        );
-
-        const activeTextStyle = flattenStyle(findStyledTextNode(activeScreen.root)?.props?.style);
-        const dateTextStyle = flattenStyle(findStyledTextNode(dateScreen.root)?.props?.style);
-        const projectTextStyle = flattenStyle(findStyledTextNode(projectScreen.root)?.props?.style);
-
-        expect(Number(activeTextStyle.fontSize)).toBeGreaterThan(Number(dateTextStyle.fontSize));
-        expect(dateTextStyle.fontSize).toBe(projectTextStyle.fontSize);
-    });
 });

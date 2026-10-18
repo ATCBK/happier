@@ -1,5 +1,5 @@
 import { useMemo, useRef, useSyncExternalStore } from 'react';
-import type { ViewStyle } from 'react-native';
+import { Platform, type ViewStyle } from 'react-native';
 import { useSharedValue, useAnimatedStyle, type AnimatedStyle } from 'react-native-reanimated';
 import { Gesture, type ComposedGesture, type GestureType } from 'react-native-gesture-handler';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -8,6 +8,8 @@ import { HAPPIER_CARRIED_SOURCE_OPACITY } from '@happier-dev/plugin-ui/presentat
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { treeRowId } from './drop-resolution/treeRowId';
+import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
+import { useEntityDragDomBinding, isSecondaryEntityRowControl, type EntityDragDomCarry } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
 import type { SessionListTreeDropResult } from './drop-resolution/sessionListTreeTypes';
 
 import {
@@ -53,11 +55,13 @@ export type UseSessionInlineDragCancelEvent = Readonly<{
     dataIndex: number;
 }>;
 
+export type UseSessionInlineDragStart = (sessionKey: string) => EntityDragDomCarry | null | void;
+
 export type UseSessionInlineDragParams = Readonly<{
     sessionKey: string | null;
     groupKey: string;
     enabled?: boolean;
-    onDragStart: (sessionKey: string) => void;
+    onDragStart: UseSessionInlineDragStart;
     resolveDropResult: (event: UseSessionInlineDragResolveDropResultEvent) => UseSessionInlineDragResolvedDrop;
     onDropResult: (event: UseSessionInlineDragDropResultEvent) => void;
     onDragUpdate?: (event: UseSessionInlineDragDropResultEvent) => void;
@@ -69,6 +73,7 @@ export type UseSessionInlineDragParams = Readonly<{
 export type UseSessionInlineDragResult = Readonly<{
     gesture: GestureType | ComposedGesture | undefined;
     animatedStyle: AnimatedStyle<ViewStyle>;
+    dragSourceRef: (node: unknown) => void;
 }>;
 
 function pointerFromAbsoluteCoordinates(absoluteX: number | null | undefined, absoluteY: number | null | undefined): WindowPointer | null {
@@ -99,8 +104,8 @@ export function writeSessionListDropOverlayGeometry(target: TreeDropOverlayShare
 }
 
 /**
- * The pointer/touch adapter of a Session-list carry. The host attaches the gesture to the whole row on
- * desktop and to the Organize grip on phones; it never lifts on a long press, which stays the menu's
+ * The pointer/touch adapter of a Session-list carry. Desktop rows use browser drag delivery; phones
+ * attach the native gesture to their Organize grip. Long press stays the menu's
  * (K1). One completed, successful end completes the carry; an unsuccessful end, a finalize without
  * an end, or a cancelled touch cancels it, so the system taking the pointer away never writes.
  */
@@ -132,8 +137,31 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
     const didEnd = useSharedValue(false);
     const didStartDrag = useSharedValue(false);
 
+    const desktopPointer = Platform.OS === 'web' && !isTouchPrimaryPointer();
+    const dragSourceRef = useEntityDragDomBinding({
+        runtime,
+        enabled: desktopPointer && enabled && sessionKey !== null,
+        canStart: (event, host) => {
+            const body = host.querySelector<HTMLElement>('[data-entity-drag-body="true"]') ?? host;
+            return !isSecondaryEntityRowControl(event, body) && !host.ownerDocument.getSelection()?.toString();
+        },
+        begin: () => {
+            if (!sessionKey) return null;
+            const carry = callbacksRef.current.onDragStart(sessionKey);
+            if (!carry) return null;
+            return {
+                move: pointer => {
+                    const resolved = callbacksRef.current.resolveDropResult({ sessionKey, groupKey, dataIndex, pointer });
+                    writeSessionListDropOverlayGeometry(overlayShared, resolved.geometry);
+                    callbacksRef.current.onDragUpdate?.({ sessionKey, groupKey, dataIndex, result: resolved.result });
+                },
+                cancel: () => { carry.cancel(); hideOverlay(overlayShared); },
+            };
+        },
+    });
+
     const gesture = useMemo(() => {
-        if (!sessionKey || enabled === false) return undefined;
+        if (!sessionKey || enabled === false || desktopPointer) return undefined;
 
         const resolveDropForPointer = (
             absoluteX: number | null | undefined,
@@ -214,11 +242,11 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
                 scheduleOnRN(didDrag ? fireDragCancel : clearOverlay);
             });
     // Only recreate when the row's identity changes — callbacks are read through a ref.
-    }, [didEnd, didStartDrag, enabled, groupKey, sessionKey, dataIndex, overlayShared]);
+    }, [didEnd, didStartDrag, enabled, desktopPointer, groupKey, sessionKey, dataIndex, overlayShared]);
 
     const animatedStyle = useAnimatedStyle<ViewStyle>(() => ({
         opacity: enabled && isDragging ? HAPPIER_CARRIED_SOURCE_OPACITY : 1,
     }));
 
-    return { gesture, animatedStyle };
+    return { gesture, animatedStyle, dragSourceRef };
 }

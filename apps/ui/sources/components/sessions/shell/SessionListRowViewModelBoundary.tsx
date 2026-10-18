@@ -26,6 +26,7 @@ import {
     useSessionListRuntimeNowMs,
 } from '@/hooks/session/sessionListRuntimeClock';
 import type {
+    UseSessionInlineDragStart,
     UseSessionInlineDragCancelEvent,
     UseSessionInlineDragDropResultEvent,
     UseSessionInlineDragResolveDropResultEvent,
@@ -69,7 +70,7 @@ export type SessionListRowViewModelBoundaryProps = Readonly<{
     items: ReadonlyArray<SessionListIndexItem>;
     nativeContextMenuSessionKey: string | null;
     onDragCancel?: (event: UseSessionInlineDragCancelEvent) => void;
-    onDragStart: (sessionKey: string) => void;
+    onDragStart: UseSessionInlineDragStart;
     onDropResult: (event: UseSessionInlineDragDropResultEvent) => void | Promise<void>;
     onMoveDown?: () => void;
     onDeleteDraft?: () => void | Promise<void>;
