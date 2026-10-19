@@ -31,7 +31,7 @@ export type SkillsUpdatesTranslation = Readonly<{
     upToDate: string;
     noSources: string;
     updatedTitle: string;
-    upToDateChecked: (params: Readonly<{ time: string }>) => string;
+    checkedAt: (params: Readonly<{ time: string }>) => string;
     checkFailed: string;
     diffFailed: string;
     applyFailed: string;
@@ -97,7 +97,7 @@ const en: SkillsUpdatesTranslation = {
     upToDate: 'Everything is up to date',
     noSources: 'None of your skills come from a source that updates. Skills you add from GitHub or a registry show their newer versions here.',
     updatedTitle: 'Updated',
-    upToDateChecked: ({ time }) => `Everything is up to date · checked ${time}`,
+    checkedAt: ({ time }) => `Checked ${time}`,
     checkFailed: 'Couldn’t check for updates.',
     diffFailed: 'Couldn’t load the changes.',
     applyFailed: 'Couldn’t update it.',
@@ -167,7 +167,7 @@ const de: SkillsUpdatesTranslation = {
     upToDate: 'Alles ist aktuell',
     noSources: 'Keiner deiner Skills stammt aus einer Quelle mit Updates. Skills, die du von GitHub oder aus einer Registry hinzufügst, zeigen ihre neueren Versionen hier.',
     updatedTitle: 'Aktualisiert',
-    upToDateChecked: ({ time }) => `Alles ist aktuell · geprüft ${time}`,
+    checkedAt: ({ time }) => `Geprüft ${time}`,
     checkFailed: 'Updates konnten nicht geprüft werden.',
     diffFailed: 'Die Änderungen konnten nicht geladen werden.',
     applyFailed: 'Konnte nicht aktualisiert werden.',
@@ -239,7 +239,7 @@ const fr: SkillsUpdatesTranslation = {
     upToDate: 'Tout est à jour',
     noSources: 'Aucun de vos skills ne vient d’une source qui se met à jour. Les skills ajoutés depuis GitHub ou un registre montrent ici leurs nouvelles versions.',
     updatedTitle: 'Mis à jour',
-    upToDateChecked: ({ time }) => `Tout est à jour · vérifié à ${time}`,
+    checkedAt: ({ time }) => `Vérifié à ${time}`,
     checkFailed: 'Impossible de vérifier les mises à jour.',
     diffFailed: 'Impossible de charger les changements.',
     applyFailed: 'Impossible de mettre à jour.',
@@ -310,7 +310,7 @@ const es: SkillsUpdatesTranslation = {
     upToDate: 'Todo está al día',
     noSources: 'Ninguna de tus skills viene de una fuente que se actualice. Las skills que añadas desde GitHub o un registro muestran aquí sus versiones nuevas.',
     updatedTitle: 'Actualizadas',
-    upToDateChecked: ({ time }) => `Todo está al día · comprobado ${time}`,
+    checkedAt: ({ time }) => `Comprobado ${time}`,
     checkFailed: 'No se pudieron comprobar las actualizaciones.',
     diffFailed: 'No se pudieron cargar los cambios.',
     applyFailed: 'No se pudo actualizar.',
@@ -381,7 +381,7 @@ const ca: SkillsUpdatesTranslation = {
     upToDate: 'Tot està al dia',
     noSources: 'Cap de les teves skills ve d’una font que s’actualitzi. Les skills que afegeixis des de GitHub o un registre mostren aquí les versions noves.',
     updatedTitle: 'Actualitzades',
-    upToDateChecked: ({ time }) => `Tot està al dia · comprovat ${time}`,
+    checkedAt: ({ time }) => `Comprovat ${time}`,
     checkFailed: 'No s’han pogut comprovar les actualitzacions.',
     diffFailed: 'No s’han pogut carregar els canvis.',
     applyFailed: 'No s’ha pogut actualitzar.',
@@ -452,7 +452,7 @@ const it: SkillsUpdatesTranslation = {
     upToDate: 'È tutto aggiornato',
     noSources: 'Nessuna delle tue skill viene da una fonte che si aggiorna. Le skill aggiunte da GitHub o da un registro mostrano qui le versioni più recenti.',
     updatedTitle: 'Aggiornate',
-    upToDateChecked: ({ time }) => `È tutto aggiornato · controllato ${time}`,
+    checkedAt: ({ time }) => `Controllato ${time}`,
     checkFailed: 'Impossibile controllare gli aggiornamenti.',
     diffFailed: 'Impossibile caricare le modifiche.',
     applyFailed: 'Impossibile aggiornare.',
@@ -523,7 +523,7 @@ const pt: SkillsUpdatesTranslation = {
     upToDate: 'Tudo está atualizado',
     noSources: 'Nenhuma das suas skills vem de uma fonte que se atualiza. Skills adicionadas do GitHub ou de um registro mostram aqui as versões novas.',
     updatedTitle: 'Atualizadas',
-    upToDateChecked: ({ time }) => `Tudo está atualizado · verificado ${time}`,
+    checkedAt: ({ time }) => `Verificado ${time}`,
     checkFailed: 'Não foi possível verificar atualizações.',
     diffFailed: 'Não foi possível carregar as alterações.',
     applyFailed: 'Não foi possível atualizar.',
@@ -592,8 +592,8 @@ const pl: SkillsUpdatesTranslation = {
     upToDate: 'Wszystko jest aktualne',
     noSources: 'Żadna z Twoich umiejętności nie pochodzi ze źródła z aktualizacjami. Umiejętności dodane z GitHuba lub rejestru pokażą tu nowsze wersje.',
     updatedTitle: 'Zaktualizowane',
-    upToDateChecked: ({ time }) =>
-      `Wszystko jest aktualne · sprawdzono ${time}`,
+    checkedAt: ({ time }) =>
+      `Sprawdzono ${time}`,
     checkFailed: 'Nie udało się sprawdzić aktualizacji.',
     diffFailed: 'Nie udało się wczytać zmian.',
     applyFailed: 'Nie udało się zaktualizować.',
@@ -661,7 +661,7 @@ const ru: SkillsUpdatesTranslation = {
     upToDate: 'Всё актуально',
     noSources: 'Ни один ваш навык не пришёл из источника с обновлениями. Навыки из GitHub или реестра показывают здесь новые версии.',
     updatedTitle: 'Обновлены',
-    upToDateChecked: ({ time }) => `Всё актуально · проверено ${time}`,
+    checkedAt: ({ time }) => `Проверено ${time}`,
     checkFailed: 'Не удалось проверить обновления.',
     diffFailed: 'Не удалось загрузить изменения.',
     applyFailed: 'Не удалось обновить.',
@@ -729,7 +729,7 @@ const ja: SkillsUpdatesTranslation = {
     upToDate: 'すべて最新です',
     noSources: '更新元のあるスキルはありません。GitHub やレジストリから追加したスキルは、新しいバージョンがここに表示されます。',
     updatedTitle: '更新済み',
-    upToDateChecked: ({ time }) => `すべて最新です · ${time} に確認`,
+    checkedAt: ({ time }) => `${time} に確認`,
     checkFailed: 'アップデートを確認できませんでした。',
     diffFailed: '変更を読み込めませんでした。',
     applyFailed: '更新できませんでした。',
@@ -794,7 +794,7 @@ const zhHans: SkillsUpdatesTranslation = {
     upToDate: '一切都是最新的',
     noSources: '你的技能都不来自会更新的来源。从 GitHub 或注册表添加的技能会在这里显示新版本。',
     updatedTitle: '已更新',
-    upToDateChecked: ({ time }) => `一切都是最新的 · ${time} 检查`,
+    checkedAt: ({ time }) => `${time} 检查`,
     checkFailed: '无法检查更新。',
     diffFailed: '无法加载改动。',
     applyFailed: '无法更新。',
@@ -859,7 +859,7 @@ const zhHant: SkillsUpdatesTranslation = {
     upToDate: '一切都是最新的',
     noSources: '你的技能都不來自會更新的來源。從 GitHub 或登錄檔新增的技能會在這裡顯示新版本。',
     updatedTitle: '已更新',
-    upToDateChecked: ({ time }) => `一切都是最新的 · ${time} 檢查`,
+    checkedAt: ({ time }) => `${time} 檢查`,
     checkFailed: '無法檢查更新。',
     diffFailed: '無法載入改動。',
     applyFailed: '無法更新。',

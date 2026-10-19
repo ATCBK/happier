@@ -298,6 +298,7 @@ export type SkillAddTranslation = Readonly<{
     reading: string;
     invalidName: (params: Readonly<{ file: string }>) => string;
     unreadable: (params: Readonly<{ file: string }>) => string;
+    found: (params: Count) => string;
     noSkill: string;
     failed: string;
   }>;
@@ -389,6 +390,10 @@ const enSkillAdd: SkillAddTranslation = {
     reading: 'Reading…',
     invalidName: ({ file }) =>
       `“${file}” has a name that can’t be saved on every machine. Rename it and try again.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'One skill in this upload'
+        : `${count} skills in this upload`,
     unreadable: ({ file }) => `Couldn’t read “${file}”.`,
     noSkill: 'No SKILL.md in what you chose.',
     failed: 'Couldn’t read this upload. Try again.',
@@ -669,6 +674,10 @@ const caSkillAdd: SkillAddTranslation = {
     reading: 'Llegint…',
     invalidName: ({ file }) =>
       `«${file}» té un nom que no es pot desar a totes les màquines. Canvia-li el nom i torna-ho a provar.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una habilitat en aquesta càrrega'
+        : `${count} habilitats en aquesta càrrega`,
     unreadable: ({ file }) => `No s’ha pogut llegir «${file}».`,
     noSkill: 'No hi ha cap SKILL.md en el que has triat.',
     failed: 'No s’ha pogut llegir aquesta pujada. Torna-ho a provar.',
@@ -893,6 +902,10 @@ const deSkillAdd: SkillAddTranslation = {
     reading: 'Wird gelesen…',
     invalidName: ({ file }) =>
       `„${file}“ hat einen Namen, der nicht auf jeder Maschine gespeichert werden kann. Benenne sie um und versuche es erneut.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Ein Skill in diesem Upload'
+        : `${count} Skills in diesem Upload`,
     unreadable: ({ file }) => `„${file}“ konnte nicht gelesen werden.`,
     noSkill: 'Keine SKILL.md in deiner Auswahl.',
     failed: 'Dieser Upload konnte nicht gelesen werden. Versuche es erneut.',
@@ -1109,6 +1122,10 @@ const esSkillAdd: SkillAddTranslation = {
     reading: 'Leyendo…',
     invalidName: ({ file }) =>
       `«${file}» tiene un nombre que no se puede guardar en todas las máquinas. Cámbiale el nombre y vuelve a intentarlo.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una habilidad en esta subida'
+        : `${count} habilidades en esta subida`,
     unreadable: ({ file }) => `No se pudo leer «${file}».`,
     noSkill: 'No hay ningún SKILL.md en lo que elegiste.',
     failed: 'No se pudo leer esta subida. Vuelve a intentarlo.',
@@ -1330,6 +1347,10 @@ const frSkillAdd: SkillAddTranslation = {
     reading: 'Lecture…',
     invalidName: ({ file }) =>
       `« ${file} » a un nom qui ne peut pas être enregistré sur toutes les machines. Renommez-le et réessayez.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Un skill dans cet envoi'
+        : `${count} skills dans cet envoi`,
     unreadable: ({ file }) => `Impossible de lire « ${file} ».`,
     noSkill: 'Aucun SKILL.md dans votre sélection.',
     failed: 'Impossible de lire cet import. Réessayez.',
@@ -1544,6 +1565,10 @@ const itSkillAdd: SkillAddTranslation = {
     reading: 'Lettura…',
     invalidName: ({ file }) =>
       `«${file}» ha un nome che non può essere salvato su ogni macchina. Rinominalo e riprova.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una skill in questo caricamento'
+        : `${count} skill in questo caricamento`,
     unreadable: ({ file }) => `Impossibile leggere «${file}».`,
     noSkill: 'Nessun file SKILL.md in ciò che hai scelto.',
     failed: 'Impossibile leggere questo caricamento. Riprova.',
@@ -1758,6 +1783,8 @@ const jaSkillAdd: SkillAddTranslation = {
     reading: '読み込み中…',
     invalidName: ({ file }) =>
       `「${file}」はすべてのマシンで保存できない名前です。名前を変えてからもう一度お試しください。`,
+    found: ({ count }) =>
+      `このアップロードにスキルが ${count} 件あります`,
     unreadable: ({ file }) => `「${file}」を読み込めませんでした。`,
     noSkill: '選択した内容に SKILL.md がありません。',
     failed: 'このアップロードを読み込めませんでした。もう一度お試しください。',
@@ -2006,6 +2033,10 @@ const plSkillAdd: SkillAddTranslation = {
     reading: 'Odczytywanie…',
     invalidName: ({ file }) =>
       `„${file}” ma nazwę, której nie da się zapisać na każdej maszynie. Zmień ją i spróbuj ponownie.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Jedna umiejętność w tym przesłanym pliku'
+        : `${count} umiejętności w tym przesłanym pliku`,
     unreadable: ({ file }) => `Nie udało się odczytać „${file}”.`,
     noSkill: 'W tym, co wybrano, nie ma pliku SKILL.md.',
     failed: 'Nie udało się odczytać tego przesłania. Spróbuj ponownie.',
@@ -2222,6 +2253,10 @@ const ptSkillAdd: SkillAddTranslation = {
     reading: 'Lendo…',
     invalidName: ({ file }) =>
       `“${file}” tem um nome que não pode ser salvo em todas as máquinas. Renomeie e tente de novo.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Uma habilidade neste envio'
+        : `${count} habilidades neste envio`,
     unreadable: ({ file }) => `Não foi possível ler “${file}”.`,
     noSkill: 'Nenhum SKILL.md no que você escolheu.',
     failed: 'Não foi possível ler este envio. Tente de novo.',
@@ -2481,6 +2516,15 @@ const ruSkillAdd: SkillAddTranslation = {
     reading: 'Читаем…',
     invalidName: ({ file }) =>
       `У «${file}» имя, которое нельзя сохранить на всех машинах. Переименуйте и повторите попытку.`,
+    found: ({ count }) =>
+      pickForm(russianForm(count), {
+        one:
+          count === 1
+            ? 'Один скилл в этой загрузке'
+            : `${count} скилл в этой загрузке`,
+        few: `${count} скилла в этой загрузке`,
+        many: `${count} скиллов в этой загрузке`,
+      }),
     unreadable: ({ file }) => `Не удалось прочитать «${file}».`,
     noSkill: 'В выбранном нет файла SKILL.md.',
     failed: 'Не удалось прочитать загрузку. Повторите попытку.',
@@ -2687,6 +2731,8 @@ const zhHansSkillAdd: SkillAddTranslation = {
     reading: '正在读取…',
     invalidName: ({ file }) =>
       `“${file}”的名称无法在所有机器上保存。请重命名后重试。`,
+    found: ({ count }) =>
+      `此上传中有 ${count} 个技能`,
     unreadable: ({ file }) => `无法读取“${file}”。`,
     noSkill: '你选择的内容中没有 SKILL.md。',
     failed: '无法读取此上传内容。请重试。',
@@ -2893,6 +2939,8 @@ const zhHantSkillAdd: SkillAddTranslation = {
     reading: '正在讀取…',
     invalidName: ({ file }) =>
       `「${file}」的名稱無法在所有機器上儲存。請重新命名後重試。`,
+    found: ({ count }) =>
+      `此上傳中有 ${count} 個技能`,
     unreadable: ({ file }) => `無法讀取「${file}」。`,
     noSkill: '你選擇的內容中沒有 SKILL.md。',
     failed: '無法讀取此上傳內容。請重試。',
