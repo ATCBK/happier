@@ -155,6 +155,8 @@ const storageState = vi.hoisted(() => ({
     sessionListRenderables: {} as Record<string, any>,
     sessionMessages: {} as Record<string, any>,
     createSessionActionDraft: createSessionActionDraftMock,
+    // The archive flow records its pending state through this store action.
+    applySessionListRenderablePatches: () => {},
   },
 }));
 

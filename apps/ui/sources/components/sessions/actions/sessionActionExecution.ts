@@ -12,8 +12,10 @@ import {
 } from '@/sync/ops';
 import { sessionSetAttentionStandingWithServerScope } from '@/sync/ops/sessionOrganization';
 import {
+    archiveSessionWithPendingState,
     clearSessionVisibleWhenInactive,
     isSessionActiveArchiveResult,
+    isSessionArchivePending,
     stopSessionAndMaybeArchive,
 } from '@/components/sessions/sessionStopArchiveFlow';
 
@@ -134,6 +136,8 @@ export async function confirmSessionStop(): Promise<boolean> {
 
 async function executeArchiveAction(target: SessionActionTarget, context?: SessionActionExecutionContext): Promise<void | false> {
     const archiveSession = resolveArchiveSession(context);
+    // An archive of this session is already in flight; a second one would race its lifecycle.
+    if (isSessionArchivePending(target.sessionId)) return false;
 
     if (target.isActive || target.hasStoppableTerminalHost) {
         if (!await confirmSessionStop()) return false;
@@ -141,7 +145,10 @@ async function executeArchiveAction(target: SessionActionTarget, context?: Sessi
         return;
     }
 
-    const result = await archiveSession(target.sessionId, { serverId: target.serverId });
+    const result = await archiveSessionWithPendingState(
+        target.sessionId,
+        async () => await archiveSession(target.sessionId, { serverId: target.serverId }),
+    );
     if (!result.success) {
         if (isSessionActiveArchiveResult(result)) {
             // The server may know the session is active before this client does.

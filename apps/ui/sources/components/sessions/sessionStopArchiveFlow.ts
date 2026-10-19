@@ -73,15 +73,6 @@ async function archiveAfterStopWithRetry(params: Readonly<{
     }
 }
 
-export function keepSessionVisibleWhenInactive(sessionId: string): void {
-    storage.getState().applySessionListRenderablePatches([
-        {
-            sessionId,
-            patch: { keepVisibleWhenInactive: true },
-        },
-    ]);
-}
-
 export function clearSessionVisibleWhenInactive(sessionId: string): void {
     storage.getState().applySessionListRenderablePatches([
         {
@@ -91,36 +82,79 @@ export function clearSessionVisibleWhenInactive(sessionId: string): void {
     ]);
 }
 
-export async function stopSessionAndMaybeArchive(params: StopSessionAndMaybeArchiveParams): Promise<void> {
-    const keepVisibleWhenStopping = params.archiveAfterStop === 'always';
+/**
+ * The single owner of the per-session "archiving" pending state. Every archive entry
+ * point (row menu, swipe, header menu, info screen, bulk) commits through this module:
+ * a direct archive via `archiveSessionWithPendingState`, a running session via
+ * `stopSessionAndMaybeArchive`. The state lives on the session-list renderable so it
+ * outlives the menu or sheet that started it; success removes the row through
+ * `archivedAt`, failure reverts it here.
+ */
+function setSessionArchivePending(sessionId: string, pending: boolean, keepVisibleWhenInactive?: boolean): void {
+    storage.getState().applySessionListRenderablePatches([
+        {
+            sessionId,
+            patch: keepVisibleWhenInactive === undefined
+                ? { archiving: pending }
+                : { keepVisibleWhenInactive, archiving: pending },
+        },
+    ]);
+}
 
-    if (keepVisibleWhenStopping) {
-        keepSessionVisibleWhenInactive(params.sessionId);
+export function isSessionArchivePending(sessionId: string): boolean {
+    return storage.getState().sessionListRenderables[sessionId]?.archiving === true;
+}
+
+export async function archiveSessionWithPendingState<T>(
+    sessionId: string,
+    archiveSession: () => Promise<T>,
+): Promise<T> {
+    setSessionArchivePending(sessionId, true);
+    try {
+        return await archiveSession();
+    } finally {
+        setSessionArchivePending(sessionId, false);
     }
+}
 
+function isStopAcceptedAndPending(result: SessionMutationResult): boolean {
+    return result.success === false
+        && result.code === 'session_stop_requested'
+        && result.recovery === 'wait_for_inactive';
+}
+
+/** The runtime is definitively not running the session, so there is nothing left to stop. */
+function isStopTargetNotRunning(result: SessionMutationResult): boolean {
+    return result.success === false && result.code === 'session_stop_not_found';
+}
+
+async function stopSessionOnly(params: StopSessionAndMaybeArchiveParams): Promise<void> {
     const stopResult = await params.stopSession();
-    const stopWasAcceptedAndPending = stopResult.success === false
-        && stopResult.code === 'session_stop_requested'
-        && stopResult.recovery === 'wait_for_inactive';
-    if (!stopResult.success && !stopWasAcceptedAndPending) {
-        if (keepVisibleWhenStopping) {
-            clearSessionVisibleWhenInactive(params.sessionId);
-        }
-        throw new HappyError(resolveSessionStopFailureMessage(stopResult, params.stopErrorMessage), false);
-    }
+    if (stopResult.success || isStopAcceptedAndPending(stopResult)) return;
+    throw new HappyError(resolveSessionStopFailureMessage(stopResult, params.stopErrorMessage), false);
+}
 
+export async function stopSessionAndMaybeArchive(params: StopSessionAndMaybeArchiveParams): Promise<void> {
     if (params.archiveAfterStop === 'never') {
+        await stopSessionOnly(params);
         return;
     }
 
+    // Keep the row visible (it is about to go inactive) and show it archiving until the flow settles.
+    setSessionArchivePending(params.sessionId, true, true);
     try {
+        const stopResult = await params.stopSession();
+        const canArchive = stopResult.success
+            || isStopAcceptedAndPending(stopResult)
+            || isStopTargetNotRunning(stopResult);
+        if (!canArchive) {
+            throw new HappyError(resolveSessionStopFailureMessage(stopResult, params.stopErrorMessage), false);
+        }
         await archiveAfterStopWithRetry({
             archiveSession: params.archiveSession,
             archiveErrorMessage: params.archiveErrorMessage,
         });
     } finally {
-        if (keepVisibleWhenStopping) {
-            clearSessionVisibleWhenInactive(params.sessionId);
-        }
+        setSessionArchivePending(params.sessionId, false, false);
     }
 }

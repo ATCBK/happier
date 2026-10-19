@@ -27,8 +27,8 @@ import {
 } from './sessionActionIds';
 import { executeSessionAction } from './sessionActionExecution';
 
-function createTarget(overrides: Partial<SessionListRenderableSession> = {}) {
-    const session: SessionListRenderableSession = {
+function createSession(overrides: Partial<SessionListRenderableSession> = {}): SessionListRenderableSession {
+    return {
         id: 'session_1',
         active: false,
         archivedAt: null,
@@ -48,6 +48,10 @@ function createTarget(overrides: Partial<SessionListRenderableSession> = {}) {
         presence: 1,
         ...overrides,
     };
+}
+
+function createTarget(overrides: Partial<SessionListRenderableSession> = {}) {
+    const session = createSession(overrides);
     return createSessionActionTarget({
         session,
         serverId: 'server_1',
@@ -363,5 +367,90 @@ describe('executeSessionAction', () => {
             actionId: SESSION_ACTION_PIN_ID,
             target: createTarget(),
         })).rejects.toBeInstanceOf(HappyError);
+    });
+
+    describe('archive pending state', () => {
+        const sessionId = 'session_archive_pending';
+        const readArchiving = () => storage.getState().sessionListRenderables[sessionId]?.archiving === true;
+
+        beforeEach(() => {
+            storage.getState().mergeSessionListRenderables([createSession({ id: sessionId })]);
+        });
+
+        it('marks an inactive session archiving while the archive request is in flight and clears it on success', async () => {
+            const observed: boolean[] = [];
+            const archiveSession = vi.fn(async () => {
+                observed.push(readArchiving());
+                return { success: true };
+            });
+
+            await executeSessionAction({
+                actionId: SESSION_ACTION_ARCHIVE_ID,
+                target: createTarget({ id: sessionId }),
+                context: { operations: { archiveSession } },
+            });
+
+            expect(observed).toEqual([true]);
+            expect(readArchiving()).toBe(false);
+        });
+
+        it('does not start a second archive while one is already in flight for the session', async () => {
+            let release: () => void = () => {};
+            const gate = new Promise<{ success: boolean }>((resolve) => {
+                release = () => resolve({ success: true });
+            });
+            const archiveSession = vi.fn(() => gate);
+            const run = () => executeSessionAction({
+                actionId: SESSION_ACTION_ARCHIVE_ID,
+                target: createTarget({ id: sessionId }),
+                context: { operations: { archiveSession } },
+            });
+
+            const first = run();
+            await vi.waitFor(() => expect(archiveSession).toHaveBeenCalledTimes(1));
+            const second = run();
+            release();
+
+            await expect(second).resolves.toBe(false);
+            await first;
+            expect(archiveSession).toHaveBeenCalledTimes(1);
+            expect(readArchiving()).toBe(false);
+        });
+
+        it('reverts the archiving state when the archive fails', async () => {
+            const observed: boolean[] = [];
+            const archiveSession = vi.fn(async () => {
+                observed.push(readArchiving());
+                return { success: false, message: 'archive boom' };
+            });
+
+            await expect(executeSessionAction({
+                actionId: SESSION_ACTION_ARCHIVE_ID,
+                target: createTarget({ id: sessionId }),
+                context: { operations: { archiveSession } },
+            })).rejects.toMatchObject({ message: 'archive boom' });
+
+            expect(observed).toEqual([true]);
+            expect(readArchiving()).toBe(false);
+        });
+
+        it('keeps a running session archiving from stop through archive and reverts when stop fails', async () => {
+            const observedDuringStop: boolean[] = [];
+            const stopSession = vi.fn(async () => {
+                observedDuringStop.push(readArchiving());
+                return { success: false, message: 'stop boom', code: 'session_stop_failed' };
+            });
+            const archiveSession = vi.fn(async () => ({ success: true }));
+
+            await expect(executeSessionAction({
+                actionId: SESSION_ACTION_ARCHIVE_ID,
+                target: createTarget({ id: sessionId, active: true }),
+                context: { operations: { stopSession, archiveSession } },
+            })).rejects.toMatchObject({ message: 'stop boom' });
+
+            expect(observedDuringStop).toEqual([true]);
+            expect(archiveSession).not.toHaveBeenCalled();
+            expect(readArchiving()).toBe(false);
+        });
     });
 });

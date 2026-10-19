@@ -1260,6 +1260,7 @@ export const ca: TranslationStructure = {
         working: 'treballant...',
         workingRetained: 'treballant, esperant actualitzacions…',
         keptInAttention: 'mantinguda en atenció',
+        archiving: 'arxivant…',
         backgroundActive: ({ count }: { count: number }) => `${count} en execució en segon pla`,
         activityUnknown: "l'estat de l'activitat no està disponible",
         readyForReview: 'a punt per revisar',

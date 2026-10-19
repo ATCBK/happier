@@ -1,5 +1,9 @@
 import { runTasksWithLimit } from '@/sync/runtime/orchestration/runTasksWithLimit';
-import { resolveSessionStopFailureMessage } from '@/components/sessions/sessionStopArchiveFlow';
+import {
+    archiveSessionWithPendingState,
+    isSessionArchivePending,
+    resolveSessionStopFailureMessage,
+} from '@/components/sessions/sessionStopArchiveFlow';
 
 import {
     createSessionBulkActionProgressTracker,
@@ -385,6 +389,14 @@ async function executeArchiveAction(params: Readonly<{
                 });
             }
 
+            // An archive of this session is already in flight; a second one would race its lifecycle.
+            if (isSessionArchivePending(target.sessionId)) {
+                return createTargetResult(target, 'skipped', {
+                    reasonCode: 'archive_in_progress',
+                    reason: 'Session is already being archived',
+                });
+            }
+
             if (target.active === true) {
                 if (!stopSession || !stopSessionAndMaybeArchive) {
                     return createTargetResult(target, 'failed', {
@@ -409,7 +421,7 @@ async function executeArchiveAction(params: Readonly<{
 
             return resultFromMutation(
                 target,
-                await archiveSession(target),
+                await archiveSessionWithPendingState(target.sessionId, async () => await archiveSession(target)),
                 DEFAULT_ARCHIVE_ERROR_MESSAGE,
             );
         },

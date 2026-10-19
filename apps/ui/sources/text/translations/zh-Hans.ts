@@ -1297,6 +1297,7 @@ export const zhHans: TranslationStructure = {
     working: "正在工作...",
     workingRetained: "工作中，等待更新…",
     keptInAttention: "已保留在需要注意",
+    archiving: "正在归档…",
     backgroundActive: ({ count }: { count: number }) => `后台运行 ${count} 项`,
     activityUnknown: "活动状态不可用",
     readyForReview: "已可审核",

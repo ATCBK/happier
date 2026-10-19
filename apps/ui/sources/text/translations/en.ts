@@ -1159,6 +1159,7 @@ export const en = {
         working: 'working...',
         workingRetained: 'working, awaiting updates…',
         keptInAttention: 'Kept in attention',
+        archiving: 'archiving…',
         backgroundActive: ({ count }: { count: number }) => `${count} running in background`,
         activityUnknown: 'activity status unavailable',
         readyForReview: 'ready for review',

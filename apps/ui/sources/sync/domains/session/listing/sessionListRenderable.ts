@@ -138,6 +138,11 @@ export interface SessionListRenderableSession {
      */
     unreadSince?: number | null;
     keepVisibleWhenInactive?: boolean;
+    /**
+     * Local-only: an archive this client committed is in flight (stop, then archive).
+     * Owned by `sessionStopArchiveFlow`; never persisted or server-materialized.
+     */
+    archiving?: boolean;
     metadataUnavailable?: boolean;
 }
 
@@ -412,6 +417,7 @@ export function preserveSessionListRenderableTransientState(
     return {
         ...next,
         keepVisibleWhenInactive: previous?.keepVisibleWhenInactive === true,
+        ...(previous?.archiving === true ? { archiving: true } : {}),
         unreadSince: resolveSessionListRenderableUnreadSince(previous, next),
     };
 }
@@ -579,6 +585,7 @@ export function areSessionListRenderablesEqual(
         && (previous.hasUnreadMessages === true) === (next.hasUnreadMessages === true)
         && (previous.unreadSince ?? null) === (next.unreadSince ?? null)
         && (previous.keepVisibleWhenInactive === true) === (next.keepVisibleWhenInactive === true)
+        && (previous.archiving === true) === (next.archiving === true)
         && (previous.metadataUnavailable === true) === (next.metadataUnavailable === true)
         && areSessionListRenderableMetadataEqual(previous.metadata, next.metadata);
 }

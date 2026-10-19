@@ -83,13 +83,13 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(1, [
             {
                 sessionId: 'session_2',
-                patch: { keepVisibleWhenInactive: true },
+                patch: { keepVisibleWhenInactive: true, archiving: true },
             },
         ]);
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(2, [
             {
                 sessionId: 'session_2',
-                patch: { keepVisibleWhenInactive: false },
+                patch: { keepVisibleWhenInactive: false, archiving: false },
             },
         ]);
         expect(modalConfirmSpy).not.toHaveBeenCalled();
@@ -221,13 +221,13 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(1, [
             {
                 sessionId: 'session_4',
-                patch: { keepVisibleWhenInactive: true },
+                patch: { keepVisibleWhenInactive: true, archiving: true },
             },
         ]);
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(2, [
             {
                 sessionId: 'session_4',
-                patch: { keepVisibleWhenInactive: false },
+                patch: { keepVisibleWhenInactive: false, archiving: false },
             },
         ]);
     });
@@ -263,13 +263,13 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(1, [
             {
                 sessionId: 'session_retry',
-                patch: { keepVisibleWhenInactive: true },
+                patch: { keepVisibleWhenInactive: true, archiving: true },
             },
         ]);
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(2, [
             {
                 sessionId: 'session_retry',
-                patch: { keepVisibleWhenInactive: false },
+                patch: { keepVisibleWhenInactive: false, archiving: false },
             },
         ]);
     });
@@ -309,13 +309,13 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(1, [
             {
                 sessionId: 'session_long_retry',
-                patch: { keepVisibleWhenInactive: true },
+                patch: { keepVisibleWhenInactive: true, archiving: true },
             },
         ]);
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(2, [
             {
                 sessionId: 'session_long_retry',
-                patch: { keepVisibleWhenInactive: false },
+                patch: { keepVisibleWhenInactive: false, archiving: false },
             },
         ]);
     });
@@ -392,7 +392,7 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(2, [
             {
                 sessionId: 'session_timeout',
-                patch: { keepVisibleWhenInactive: false },
+                patch: { keepVisibleWhenInactive: false, archiving: false },
             },
         ]);
     });
@@ -419,14 +419,73 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(1, [
             {
                 sessionId: 'session_5',
-                patch: { keepVisibleWhenInactive: true },
+                patch: { keepVisibleWhenInactive: true, archiving: true },
             },
         ]);
         expect(applySessionListRenderablePatchesSpy).toHaveBeenNthCalledWith(2, [
             {
                 sessionId: 'session_5',
-                patch: { keepVisibleWhenInactive: false },
+                patch: { keepVisibleWhenInactive: false, archiving: false },
             },
+        ]);
+    });
+
+    it('shows the session as archiving for the whole stop-then-archive flow', async () => {
+        const patchesSeenDuringStop: unknown[] = [];
+        const patchesSeenDuringArchive: unknown[] = [];
+        const stopSpy = vi.fn(async () => {
+            patchesSeenDuringStop.push(...applySessionListRenderablePatchesSpy.mock.calls.map((call) => call[0]));
+            return { success: true };
+        });
+        const archiveSpy = vi.fn(async () => {
+            patchesSeenDuringArchive.push(...applySessionListRenderablePatchesSpy.mock.calls.map((call) => call[0]));
+            return { success: true };
+        });
+
+        const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
+
+        await stopSessionAndMaybeArchive({
+            sessionId: 'session_pending',
+            hideInactiveSessions: false,
+            isPinned: false,
+            archiveAfterStop: 'always',
+            stopSession: stopSpy,
+            archiveSession: archiveSpy,
+            stopErrorMessage: 'stop failed',
+            archiveErrorMessage: 'archive failed',
+        });
+
+        const marked = [{ sessionId: 'session_pending', patch: expect.objectContaining({ archiving: true }) }];
+        expect(patchesSeenDuringStop).toEqual([marked]);
+        expect(patchesSeenDuringArchive).toEqual([marked]);
+        expect(applySessionListRenderablePatchesSpy).toHaveBeenLastCalledWith([
+            { sessionId: 'session_pending', patch: expect.objectContaining({ archiving: false }) },
+        ]);
+    });
+
+    it('archives when stop reports the session process is definitively not running', async () => {
+        const stopSpy = vi.fn(async () => ({
+            success: false,
+            message: 'Session not found',
+            code: 'session_stop_not_found',
+        }));
+        const archiveSpy = vi.fn(async () => ({ success: true }));
+
+        const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
+
+        await expect(stopSessionAndMaybeArchive({
+            sessionId: 'session_not_found',
+            hideInactiveSessions: false,
+            isPinned: false,
+            archiveAfterStop: 'always',
+            stopSession: stopSpy,
+            archiveSession: archiveSpy,
+            stopErrorMessage: 'stop failed',
+            archiveErrorMessage: 'archive failed',
+        })).resolves.toBeUndefined();
+        expect(archiveSpy).toHaveBeenCalledTimes(1);
+        expect(applySessionListRenderablePatchesSpy).toHaveBeenLastCalledWith([
+            { sessionId: 'session_not_found', patch: { keepVisibleWhenInactive: false, archiving: false } },
         ]);
     });
 });

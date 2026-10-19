@@ -329,13 +329,17 @@ export function buildSessionListRowModel(input: BuildSessionListRowModelInput): 
     // indicator without animation) unless a more alerting state applies —
     // otherwise the user sees a session in the working group with no
     // indicator at all.
-    const presentsRetainedWorking = item.workingPlacementReason === 'working-retained'
+    // A committed archive in flight speaks through the working indicator and the
+    // status line ("archiving…" from `getSessionStatus`), whatever the session was doing.
+    const presentsArchiving = status.state === 'archiving';
+    const presentsRetainedWorking = !presentsArchiving
+        && item.workingPlacementReason === 'working-retained'
         && (
             derivedRowAttentionState === 'quiet'
             || derivedRowAttentionState === 'unread'
             || derivedRowAttentionState === 'pending'
         );
-    const rowAttentionState = presentsRetainedWorking
+    const rowAttentionState = presentsArchiving || presentsRetainedWorking
         ? 'working'
         : derivedRowAttentionState;
     // Attention standing is the person's own instruction to keep a read, idle

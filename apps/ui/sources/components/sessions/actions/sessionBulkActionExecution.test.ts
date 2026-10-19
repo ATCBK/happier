@@ -8,6 +8,8 @@ import {
     type SessionBulkActionTarget,
 } from './sessionBulkActionExecution';
 import { buildSessionBulkActionResultSummary } from './sessionActionResultMessages';
+import { storage } from '@/sync/domains/state/storage';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 function target(input: Partial<SessionBulkActionTarget> & Pick<SessionBulkActionTarget, 'key' | 'sessionId'>): SessionBulkActionTarget {
     return {
@@ -276,6 +278,49 @@ describe('executeSessionBulkAction', () => {
         expect(stopResult.skipped.map((entry) => entry.reasonCode)).toEqual(['permission_denied']);
         expect(archiveResult.skipped.map((entry) => entry.reasonCode)).toEqual(['permission_denied']);
         expect(unarchiveResult.skipped.map((entry) => entry.reasonCode)).toEqual(['permission_denied']);
+    });
+
+    it('skips archive for sessions whose archive is already in flight', async () => {
+        const seed = (id: string, active: boolean): void => {
+            storage.getState().mergeSessionListRenderables([{
+                id,
+                active,
+                archivedAt: null,
+                owner: 'user_1',
+                accessLevel: undefined,
+                seq: 1,
+                lastViewedSessionSeq: 1,
+                latestTurnStatus: 'completed',
+                createdAt: 1,
+                updatedAt: 1,
+                activeAt: 1,
+                metadataVersion: 1,
+                agentStateVersion: 1,
+                metadata: null,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 1,
+            } satisfies SessionListRenderableSession]);
+            storage.getState().applySessionListRenderablePatches([{ sessionId: id, patch: { archiving: true } }]);
+        };
+        seed('pending-inactive', false);
+        seed('pending-active', true);
+        const archiveSession = vi.fn(async () => ({ success: true }));
+        const stopSession = vi.fn(async () => ({ success: true }));
+        const stopSessionAndMaybeArchive = vi.fn(async () => undefined);
+
+        const result = await executeSessionBulkAction({
+            action: { id: SESSION_BULK_ACTION_IDS.archive },
+            targets: [
+                target({ key: 'server-a:pending-inactive', sessionId: 'pending-inactive' }),
+                target({ key: 'server-a:pending-active', sessionId: 'pending-active', active: true }),
+            ],
+            context: { archiveSession, stopSession, stopSessionAndMaybeArchive },
+        });
+
+        expect(archiveSession).not.toHaveBeenCalled();
+        expect(stopSessionAndMaybeArchive).not.toHaveBeenCalled();
+        expect(result.skipped.map((entry) => entry.reasonCode)).toEqual(['archive_in_progress', 'archive_in_progress']);
     });
 
     it('fails bulk move-to-folder closed when the sessions.folders feature is unavailable', async () => {

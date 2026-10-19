@@ -1122,6 +1122,7 @@ const SessionItemContent = React.memo(
                 setTagMenuOpen(true);
             },
             reminder,
+            archiving: sessionStatus.state === 'archiving',
         });
 
         const handleSwipeAction = React.useCallback(async () => {
