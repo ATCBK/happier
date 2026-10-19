@@ -72,6 +72,20 @@ describe("migrateMachineAccountEncryptionInTx (SQLite integration)", () => {
         ]);
     });
 
+    it("rejects a Machine DEK changed at unchanged content versions before replacing any blob", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id,
+            metadata: "old-metadata", daemonState: "old-state", metadataVersion: 2, daemonStateVersion: 3,
+            dataEncryptionKey: Uint8Array.of(7, 8, 9) } });
+        const result = await inTx(tx => migrateMachineAccountEncryptionInTx({ tx, accountId: account.id, toMode: "plain",
+            directive: { action: "migrate", items: [{ machineId: machine.id, expectedMetadataVersion: 2, expectedDaemonStateVersion: 3,
+                expectedDataEncryptionKey: Buffer.from([1, 2, 3]).toString("base64"),
+                metadata: encodePlainMachineStoredContent({ host: "retained" }), daemonState: encodePlainMachineStoredContent({ status: "running" }),
+                dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, contentPublicKeyFingerprint: null }] } }));
+        expect(result).toEqual({ status: "migration_incomplete" });
+        expect(await db.machine.findUniqueOrThrow({ where: { id: machine.id } })).toEqual(machine);
+    });
+
     it("preserves finite Machine policy and user edits through the existing whole-inventory Plain/E2EE conversion", async () => {
         const account = await db.account.create({ data: { encryptionMode: "plain" } });
         // Plan30's finitePolicy projection is carried by metadata, never a separate Account KV writer.
@@ -92,6 +106,7 @@ describe("migrateMachineAccountEncryptionInTx (SQLite integration)", () => {
         })).toString("base64");
         const items = machines.map((machine) => ({
             machineId: machine.id, expectedMetadataVersion: 2, expectedDaemonStateVersion: 3,
+            expectedDataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
             metadata: Buffer.from(encryptWithDataKey(metadata, key)).toString("base64"),
             daemonState: Buffer.from(encryptWithDataKey({ status: "running" }, key)).toString("base64"),
             dataEncryptionKey: envelope, contentPublicKeyFingerprint: null,
@@ -112,6 +127,7 @@ describe("migrateMachineAccountEncryptionInTx (SQLite integration)", () => {
         expect(await inTx((tx) => migrateMachineAccountEncryptionInTx({
             tx, accountId: account.id, toMode: "plain", directive: { action: "migrate", items: items.map((item) => ({
                 ...item, expectedMetadataVersion: 3, expectedDaemonStateVersion: 4,
+                expectedDataEncryptionKey: envelope,
                 metadata: encodePlainMachineStoredContent(metadata), daemonState: encodePlainMachineStoredContent({ status: "running" }),
                 dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
             })) },
@@ -201,6 +217,7 @@ describe("migrateMachineAccountEncryptionInTx (SQLite integration)", () => {
                         action: "migrate",
                         items: [{
                             machineId: runner.id,
+                            expectedDataEncryptionKey: Buffer.from(runner.dataEncryptionKey!).toString("base64"),
                             expectedMetadataVersion:
                                 runner.metadataVersion,
                             expectedDaemonStateVersion:

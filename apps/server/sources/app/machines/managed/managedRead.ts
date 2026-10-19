@@ -3,14 +3,15 @@ import { ManagedResourceDependencyV1Schema, type ManagedResourceDependencyV1, ty
 import { SharedSavedSecretRefV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { SHARED_SAVED_SECRET_REF_V1_PREFIX } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { sameQualifiedConnectedAccountRef, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { listSavedSecretReferenceCarrierPathsV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";
-import { listMachineCandidatesInTx, resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
+import { listMachineCandidatesInTx, resolveEffectiveMachineAccessForMachinesInTx, resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
 import {
     ManagedMachineError, readManagedMachineInTx, projectManagedMachineInTx,
     invalidateManagedMachineInTx, projectManagedMachine, readManagedLaunchSnapshot, sameManagedInput, type StoredManagedMachine,
     inManagedMachinePublicationTx,
+    projectManagedMachinesInTx,
 } from "./managedRows";
 
 type ManagedResourceDependencyTarget =
@@ -97,17 +98,17 @@ export async function getManagedMachine(params: Readonly<{ actorAccountId: strin
 }
 export async function listManagedMachines(params: Readonly<{ actorAccountId: string; input: ManagedMachineActionInputV1<"machines.managed.list"> }>) {
     const input = ManagedListInputV1Schema.parse(params.input);
-    return await inTx(async tx => {
+    return await inReadSnapshot(async tx => {
         await requireHome(tx, input.homeId);
         // Retiring a controller must not conceal the custodian's retained managed
         // resources, including archived history and outstanding native cleanup.
         const candidates = await listMachineCandidatesInTx(tx, params.actorAccountId, { includeRevokedOwned: true });
         const rows = await tx.managedMachine.findMany({ where: { homeId: input.homeId, controllerMachineId: { in: candidates }, archivedAt: input.archived ? { not: null } : null }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
-        const machines = [];
-        for (const row of rows) {
-            if (await resolveEffectiveMachineRoleInTx(tx, { actorAccountId: params.actorAccountId, machineId: row.controllerMachineId })) machines.push(await projectManagedMachineInTx(tx, row));
-        }
-        return { machines };
+        const access = await resolveEffectiveMachineAccessForMachinesInTx(tx, {
+            machineIds: rows.map(row => row.controllerMachineId), accountIds: [params.actorAccountId],
+        });
+        const accessible = rows.filter(row => access.get(row.controllerMachineId)?.get(params.actorAccountId));
+        return { machines: await projectManagedMachinesInTx(tx, accessible) };
     });
 }
 /** Cancellation retires creation; only the existing intent owner can perform native cleanup. */

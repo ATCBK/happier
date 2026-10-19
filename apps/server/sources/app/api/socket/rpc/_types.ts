@@ -1,7 +1,7 @@
 export type RpcAckResponseEmitter = Readonly<{
     id: string;
     data?: Record<string, unknown>;
-    timeout: (ms: number) => Readonly<{
+    timeout: (ms: number, ackLifetime?: Readonly<{ rejectOnDisconnect?: boolean; signal?: AbortSignal }>) => Readonly<{
         emitWithAck: (event: string, payload: unknown) => Promise<unknown>;
     }>;
 }>;

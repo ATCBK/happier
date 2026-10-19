@@ -9,11 +9,11 @@ import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/i
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { ManagedPolicyAdmissionInputV1Schema, ManagedPolicyAdmissionOutputV1Schema, MANAGED_POLICY_PROOF_HEADER, decodeManagedPolicyProofV1, managedPolicyDigestV1, managedPolicyPurposeDigestV1, ManagedPolicyCensusInputV1Schema, ManagedPolicyCensusOutputV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import { ManagedPendingActivationFailureRequestV1Schema, PendingActivationFailureResponseV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { readTeamOperationAuthenticationFromRequest } from "@/app/teams/actorContext";
 import { admitManagedAcquire } from "./managedAcquire";
 import { submitManagedAcquire, reportManagedAcquire, createManagedBootstrapCredential, requireManagedEnrollmentInTx, admitManagedControl, submitManagedIntent, reportManagedIntent, admitManagedPolicy, prepareManagedPolicy, requireManagedPolicyPurposeInTx } from "./managedMutations";
-import { ManagedMachineError, readManagedMachineInTx, requireCurrentManagedMachineInTx, projectManagedMachineInTx, requireManagedControllerInTx, sameManagedInput, readManagedCurrentRequestId } from "./managedRows";
+import { ManagedMachineError, readManagedMachineInTx, requireCurrentManagedMachineInTx, projectManagedMachineInTx, projectManagedMachinesInTx, requireManagedControllerInTx, sameManagedInput, readManagedCurrentRequestId } from "./managedRows";
 import { getManagedMachine, listManagedMachines, cancelManagedCreation } from "./managedRead";
 import { readManagedWakeTargets } from './managedWake';
 import { markPendingActivationFailed } from '@/app/session/pending/pendingMessageService';
@@ -108,7 +108,7 @@ export function registerManagedMachineRoutes(app: Fastify): void {
         async (request, reply) => respond(reply, () => skipManagedMachineSetup({ actorAccountId: request.userId, input: request.body })));
     app.post('/v1/machines/managed/controller/policies', { preHandler: app.authenticate, schema: { body: ManagedPolicyCensusInputV1Schema, response: { 200: ManagedPolicyCensusOutputV1Schema } } }, async (request, reply) => respond(reply, async () => {
         const { homeId, controller, proof } = request.body;
-        const machines = await inTx(async tx => {
+        const machines = await inReadSnapshot(async tx => {
             await requireManagedControllerInTx(tx, { homeId, controller, custodianAccountId: request.userId });
             const current = await tx.machine.findUniqueOrThrow({ where: { id: controller.machineId } });
             if (!current.installationPublicKey || !verifyMachineInstallationProof({ payload: { version: 1, machineId: controller.machineId,
@@ -118,7 +118,7 @@ export function registerManagedMachineRoutes(app: Fastify): void {
                 controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId,
                 archivedAt: null, OR: [{ allocation: 'bound', creationState: 'active' },
                     { allocation: { in: ['bound', 'may-exist'] }, creationState: 'canceled', desired: 'delete', desiredWhen: 'now' }] } });
-            return Promise.all(rows.map(row => projectManagedMachineInTx(tx, row)));
+            return projectManagedMachinesInTx(tx, rows);
         });
         const { targets } = await readManagedWakeTargets({ actorAccountId: request.userId, request: { homeId, controller } });
         return { machines, targets };
@@ -156,6 +156,8 @@ export function registerManagedMachineRoutes(app: Fastify): void {
             const result = await markPendingActivationFailed({ actorUserId: request.userId,
                 sessionId: target.origin.session.sessionId, requestId: target.origin.pendingRequestId,
                 requestedAt: target.origin.requestedAt, failureCode: request.body.failureCode,
+                diagnosticContext: { route: '/v1/machines/managed/controller/activation-failed', callerMachineId: verified.carrier.payload.machineId,
+                    callerInstallationId: verified.carrier.payload.installationId },
                 managedController: { target, custodianAccountId: verified.custodianAccountId } });
             if (!result.ok) return reply.code(result.error === 'session-not-found' ? 404
                 : result.error === 'forbidden' ? 403 : result.error === 'invalid-params' ? 400 : 500).send({ error: result.error });

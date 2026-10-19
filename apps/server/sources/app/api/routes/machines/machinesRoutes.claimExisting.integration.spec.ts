@@ -1,192 +1,84 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
-import { createDbMocks, installDbModuleMock } from "../../testkit/dbMocks";
-import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
-import { createInTxHarness } from "../../testkit/txHarness";
+import type { FastifyInstance } from "fastify";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from "@happier-dev/protocol";
+import { db } from "@/storage/db";
+import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
-
-const markAccountChanged = vi.fn(async () => 123);
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-
-vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
-
-// Keep event routing out of scope for this behavior test.
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate: vi.fn() },
-    buildNewMachineUpdate: vi.fn(),
-    buildUpdateMachineUpdate: vi.fn(),
-}));
-vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked: vi.fn(() => "upd") }));
-
-const dbMocks = createDbMocks({
-    account: ["findUnique"],
-    machine: ["findFirst"],
-    accessKey: ["deleteMany"],
-} as const);
-const txDbMocks = createDbMocks({
-    accessKey: ["deleteMany"],
-    machine: ["create", "update"],
-} as const);
-
-installDbModuleMock(() => ({
-    db: dbMocks.db,
-    isPrismaErrorCode: (e: any, code: string) => e?.code === code,
-}));
-
-const harness = createInTxHarness(() => ({
-    accessKey: txDbMocks.db.accessKey,
-    machine: txDbMocks.db.machine,
-}));
-
-vi.mock("@/storage/inTx", () => ({
-    afterTx: harness.afterTx,
-    inTx: harness.inTx,
-}));
+import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
+import { machinesRoutes } from "./machinesRoutes";
 
 describe("machinesRoutes (machine id conflict)", () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        dbMocks.reset();
-        txDbMocks.reset();
-        const accountContentBinding = createSignedAccountContentBinding();
-        dbMocks.db.account.findUnique.mockResolvedValue({
-            ...accountContentBinding,
-            encryptionMode: "e2ee",
-        });
-        dbMocks.db.machine.findFirst.mockResolvedValue(null);
-        dbMocks.db.accessKey.deleteMany.mockResolvedValue({ count: 0 });
-        txDbMocks.db.accessKey.deleteMany.mockResolvedValue({ count: 0 });
-        txDbMocks.db.machine.create.mockImplementation(async () => {
-            throw new Error("unexpected create");
-        });
-        txDbMocks.db.machine.update.mockImplementation(async (args: any) => ({
-            id: args.where.id,
-            accountId: args.data.accountId,
-            metadata: args.data.metadata,
-            metadataVersion: args.data.metadataVersion ?? 1,
-            daemonState: args.data.daemonState ?? null,
-            daemonStateVersion: args.data.daemonStateVersion ?? 0,
-            dataEncryptionKey: args.data.dataEncryptionKey ?? null,
-            active: args.data.active ?? true,
-            lastActiveAt: new Date(),
-            createdAt: new Date(1),
-            updatedAt: new Date(),
-        }));
-    });
+    let harness: LightSqliteHarness;
+    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: "happier-machine-route-conflicts-", initAuth: false }); }, 120_000);
+    afterEach(async () => { await db.machine.deleteMany(); await db.accountChange.deleteMany(); await db.account.deleteMany(); });
+    afterAll(async () => { if (harness) await harness.close(); });
 
     it("returns 409 when create races (P2002) and the machine id belongs to a different account", async () => {
-        const { machinesRoutes } = await import("./machinesRoutes");
-        const route = createRouteTestBuilder({
-            method: "POST",
-            path: "/v1/machines",
-            registerRoutes(app) {
-                machinesRoutes(app as any);
-            },
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" } });
+        const foreign = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" } });
+        const winner = await db.machine.create({ data: { id: "m1", accountId: foreign.id, metadata: "foreign-private-metadata" } });
+        await withAuthenticatedTestApp(machinesRoutes, async app => {
+            const response = await app.inject({ method: "POST", url: "/v1/machines", headers: { "x-test-user-id": account.id },
+                payload: { id: "m1", metadata: "proposal", dataEncryptionKey: null } });
+            expect(response.statusCode).toBe(409);
+            expect(response.json()).toMatchObject({ error: "machine_id_conflict" });
+            expect(response.body).not.toContain(winner.metadata);
         });
-
-        txDbMocks.db.machine.create.mockRejectedValueOnce(Object.assign(new Error("P2002"), { code: "P2002" }));
-        const { response, reply } = await route.invoke(
-            {
-                userId: "u_new",
-                body: { id: "m1", metadata: "meta-new", daemonState: "state-new", dataEncryptionKey: null },
-            },
-        );
-
-        expect(reply.code).toHaveBeenCalledWith(409);
-        expect(response).toEqual({
-            error: "machine_id_conflict",
-            message: expect.any(String),
-        });
-
-        expect(markAccountChanged).not.toHaveBeenCalled();
-        expect(txDbMocks.db.machine.update).not.toHaveBeenCalled();
+        expect(await db.machine.findUniqueOrThrow({ where: { id: "m1" } })).toEqual(winner);
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
     });
 
-    it("returns the existing machine when create races (P2002) and the machine id belongs to the same account", async () => {
-        const { machinesRoutes } = await import("./machinesRoutes");
-        const route = createRouteTestBuilder({
-            method: "POST",
-            path: "/v1/machines",
-            registerRoutes(app) {
-                machinesRoutes(app as any);
-            },
+    async function observeWinner(plainWinner: boolean) {
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" } });
+        await withAuthenticatedTestApp(machinesRoutes, async (app: FastifyInstance) => {
+            let observed!: () => void;
+            let release!: () => void;
+            const missed = new Promise<void>(resolve => { observed = resolve; });
+            const proceed = new Promise<void>(resolve => { release = resolve; });
+            const original = db.machine.findFirst.bind(db.machine);
+            let paused = false;
+            // Keep the real DB result; change only the interleaving at the persistence boundary.
+            const readWithBarrier = async (args: Parameters<typeof original>[0]) => {
+                const result = await original(args);
+                if (!paused && args?.where?.id === "m1" && args.where.accountId === account.id) {
+                    paused = true;
+                    observed();
+                    await proceed;
+                }
+                return result;
+            };
+            // This DB boundary is awaited; the barrier retains the row, not Prisma's unused fluent relations.
+            const barrier = vi.spyOn(db.machine, "findFirst").mockImplementation(readWithBarrier as unknown as typeof original);
+            const pending = app.inject({ method: "POST", url: "/v1/machines", headers: { "x-test-user-id": account.id },
+                payload: { id: "m1", metadata: "proposal", dataEncryptionKey: null } }).then(response => response);
+            let winner;
+            try {
+                await Promise.race([missed, pending.then(response => { throw new Error(`Registration missed the DB barrier: ${response.statusCode} ${response.body}`); })]);
+                // A contradictory historical plain winner must still never escape to an unsupported reader.
+                winner = await db.machine.create({ data: { id: "m1", accountId: account.id,
+                    metadata: plainWinner ? encodePlainMachineStoredContent({ host: "private-winner" }) : "winning-ciphertext",
+                    dataEncryptionKey: plainWinner ? Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, "base64") : null } });
+            } finally {
+                release();
+                await pending;
+                barrier.mockRestore();
+                // Prisma synthesizes delegate properties; restore its captured real method explicitly.
+                db.machine.findFirst = original;
+            }
+            const response = await pending;
+            if (plainWinner) {
+                expect(response.statusCode, response.body).toBe(426);
+                expect(response.json()).toMatchObject({ error: "client-upgrade-required", requirement: { kind: "account-stored-content" } });
+                expect(response.json()).not.toHaveProperty("machine");
+            } else {
+                expect(response.statusCode, response.body).toBe(200);
+                expect(response.json().machine).toMatchObject({ id: "m1", metadata: winner!.metadata, dataEncryptionKey: null });
+            }
+            expect(await db.machine.findUniqueOrThrow({ where: { id: "m1" } })).toEqual(winner);
+            expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
         });
+    }
 
-        const existingSameAccount = {
-            id: "m1",
-            accountId: "u_new",
-            metadata: "old",
-            metadataVersion: 1,
-            daemonState: null,
-            daemonStateVersion: 0,
-            dataEncryptionKey: null,
-            seq: 1,
-            active: true,
-            lastActiveAt: new Date(1),
-            createdAt: new Date(1),
-            updatedAt: new Date(1),
-        };
-        // First lookup misses, then the P2002 handler finds the row for this account.
-        dbMocks.db.machine.findFirst.mockResolvedValueOnce(null as any);
-        dbMocks.db.machine.findFirst.mockResolvedValueOnce(existingSameAccount as any);
-        txDbMocks.db.machine.create.mockRejectedValueOnce(Object.assign(new Error("P2002"), { code: "P2002" }));
-
-        const { response, reply } = await route.invoke(
-            { userId: "u_new", body: { id: "m1", metadata: "meta-new", daemonState: undefined, dataEncryptionKey: null } },
-        );
-
-        expect(reply.code).not.toHaveBeenCalledWith(409);
-        expect((response as any)?.machine?.id).toBe("m1");
-    });
-
-    it("does not serialize a marked race winner to a legacy caller", async () => {
-        const { machinesRoutes } = await import("./machinesRoutes");
-        const route = createRouteTestBuilder({
-            method: "POST",
-            path: "/v1/machines",
-            registerRoutes(app) {
-                machinesRoutes(app as any);
-            },
-        });
-        const markedWinner = {
-            id: "m1",
-            accountId: "u_new",
-            metadata: "plain-metadata",
-            metadataVersion: 1,
-            daemonState: null,
-            daemonStateVersion: 0,
-            dataEncryptionKey: new Uint8Array(
-                Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, "base64"),
-            ),
-            seq: 1,
-            active: true,
-            lastActiveAt: new Date(1),
-            createdAt: new Date(1),
-            updatedAt: new Date(1),
-            revokedAt: null,
-        };
-        dbMocks.db.machine.findFirst
-            .mockResolvedValueOnce(null as any)
-            .mockResolvedValueOnce(markedWinner as any);
-        txDbMocks.db.machine.create.mockRejectedValueOnce(
-            Object.assign(new Error("P2002"), { code: "P2002" }),
-        );
-
-        const { reply } = await route.invoke({
-            userId: "u_new",
-            accountStoredContentCompatibility: {
-                supportsCurrentProtocol: false,
-                outcome: "legacy-missing",
-            },
-            body: {
-                id: "m1",
-                metadata: "encrypted-metadata",
-                daemonState: undefined,
-                dataEncryptionKey: null,
-            },
-        });
-
-        expect(reply.code).toHaveBeenCalledWith(426);
-        expect(markAccountChanged).not.toHaveBeenCalled();
-    });
+    it("returns the existing machine when create races (P2002) and the machine id belongs to the same account", async () => { await observeWinner(false); });
+    it("does not serialize a marked race winner to a legacy caller", async () => { await observeWinner(true); });
 });

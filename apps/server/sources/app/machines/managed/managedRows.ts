@@ -20,7 +20,6 @@ import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGua
 import { resolveCurrentClaimablePluginMachineMaterializationsTx } from "@/app/plugins/availability/operations";
 import { resolveCurrentPluginDeclarationTx } from "@/app/plugins/availability/currentDeclaration";
 import { afterTx, inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
-import { db } from "@/storage/db";
 import { buildUpdateMachineUpdate, eventRouter } from '@/app/events/eventRouter';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 
@@ -98,9 +97,9 @@ export async function resolveManagedDeclarationInTx(tx: Tx, input: Readonly<{
     const occurrences = await resolveCurrentClaimablePluginMachineMaterializationsTx({
         tx, accountId: input.custodianAccountId, serverIdentityId: input.homeId,
         machineId: input.controller.machineId, machineInstallationId: input.controller.installationId,
+        pluginId: input.provider.pluginId,
     });
     for (const occurrence of occurrences) {
-        if (occurrence.pluginId !== input.provider.pluginId) continue;
         const declaration = await resolveCurrentPluginDeclarationTx({ tx, accountId: input.custodianAccountId, pluginId: occurrence.pluginId, version: occurrence.version });
         const contribution = declaration?.manifest.contributes?.machineProvisioners?.find((entry) => entry.id === input.provider.localId);
         if (contribution && declaration) {
@@ -147,10 +146,27 @@ export function projectManagedMachine(row: StoredManagedMachine, declaration?: M
     return ManagedMachineV1Schema.parse(createStoredReadSchema(schema).parse(value));
 }
 export async function projectManagedMachineInTx(tx: Tx, row: StoredManagedMachine): Promise<ManagedMachineV1> {
-    const launch = readManagedLaunchSnapshot(row.launch);
-    const declaration = await resolveManagedDeclarationInTx(tx, { homeId: row.homeId, custodianAccountId: row.custodianAccountId,
-        controller: { machineId: row.controllerMachineId, installationId: row.controllerInstallationId }, provider: launch.provider });
-    return projectManagedMachine(row, declaration?.schemaVersion === launch.schemaVersion ? declaration : null);
+    return (await projectManagedMachinesInTx(tx, [row]))[0];
+}
+
+/** Resolve each controller/provider once within this projection's coherent read view. */
+export async function projectManagedMachinesInTx(tx: Tx, rows: readonly StoredManagedMachine[]): Promise<ManagedMachineV1[]> {
+    const declarations = new Map<string, ManagedDeclaration | null>();
+    const machines: ManagedMachineV1[] = [];
+    for (const row of rows) {
+        const launch = readManagedLaunchSnapshot(row.launch);
+        const key = JSON.stringify([row.homeId, row.custodianAccountId, row.controllerMachineId,
+            row.controllerInstallationId, launch.provider.pluginId, launch.provider.localId]);
+        if (!declarations.has(key)) {
+            declarations.set(key, await resolveManagedDeclarationInTx(tx, {
+                homeId: row.homeId, custodianAccountId: row.custodianAccountId,
+                controller: { machineId: row.controllerMachineId, installationId: row.controllerInstallationId }, provider: launch.provider,
+            }));
+        }
+        const declaration = declarations.get(key);
+        machines.push(projectManagedMachine(row, declaration?.schemaVersion === launch.schemaVersion ? declaration : null));
+    }
+    return machines;
 }
 
 export async function readManagedMachineInTx(tx: Tx, input: Readonly<{ homeId: string; managedId: string }>): Promise<StoredManagedMachine> {
@@ -159,11 +175,24 @@ export async function readManagedMachineInTx(tx: Tx, input: Readonly<{ homeId: s
     return row;
 }
 
+/** Reuse publication's ordered locks; an expanded audience restarts the owning transaction. */
+async function fenceManagedMachinePublicationInTx<T extends Readonly<{ accountIds: readonly string[] }>>(
+    tx: Tx, read: () => Promise<T>,
+): Promise<T> {
+    const captured = await read();
+    await acquireAccountChangePublicationLocksInTx(tx, captured.accountIds, { includeSingleAccount: true });
+    const current = await read();
+    const locked = new Set(captured.accountIds);
+    if (current.accountIds.some(accountId => !locked.has(accountId))) {
+        throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+    }
+    return current;
+}
+
 /**
- * Discover only a lock hint outside the transaction, then fence before the first
- * Serializable snapshot. Reading the row/audience first lets an unrelated Account
- * cursor update invalidate the snapshot at the fence itself. All authority and
- * domain reads remain inside the transaction, after audience revalidation.
+ * ReadCommitted writers share the ordered Account publication fence. Discover
+ * the audience afresh on each attempt, then recheck it before authority/domain
+ * reads; growth replays instead of extending an acquired lock set out of order.
  */
 export async function inManagedMachinePublicationTx<T>(
     target: Readonly<{ homeId: string; managedId: string; nextControllerMachineId?: string }> | Readonly<{ controllerMachineId: string }>,
@@ -180,16 +209,10 @@ export async function inManagedMachinePublicationTx<T>(
         const audiences = await Promise.all(machineIds.map(machineId => resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId)));
         return [...new Set(audiences.flat())];
     };
-    let audience = await readAudience(db);
     return inTx(async tx => {
-        await acquireAccountChangePublicationLocksInTx(tx, audience, { includeSingleAccount: true });
-        const current = await readAudience(tx);
-        if (current.some(accountId => !audience.includes(accountId))) {
-            audience = current;
-            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
-        }
+        await fenceManagedMachinePublicationInTx(tx, async () => ({ accountIds: await readAudience(tx) }));
         return write(tx);
-    }, { isolationLevel: 'Serializable' });
+    });
 }
 
 /** The existing unique enrollment association is the ordinary Machine fact owner. */
@@ -289,19 +312,21 @@ export function sameManagedInput(left: unknown, right: unknown): boolean {
 }
 
 export async function invalidateManagedMachineInTx(tx: Tx, row: StoredManagedMachine): Promise<void> {
-    const accountIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, row.controllerMachineId);
-    const fresh = await tx.managedMachine.findUnique({ where: { id: row.id } });
-    const previous = readStoredManagedDevcontainerChild(row);
-    const machineIds = new Set([row.enrolledMachineId, fresh?.enrolledMachineId].filter((id): id is string => typeof id === 'string'));
-    const children: Array<{ machineId: string; child: Awaited<ReturnType<typeof readMachineDevcontainerChildInTx>>; accountIds: string[] }> = [];
-    for (const machineId of machineIds) {
-        const child = await readMachineDevcontainerChildInTx(tx, machineId);
-        const before = row.enrolledMachineId === machineId ? previous : null;
-        if (managedDevcontainerChildProjectionsEqualV1(before ?? undefined, child ?? undefined)) continue;
-        children.push({ machineId, child, accountIds: await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId) });
-    }
-    await acquireAccountChangePublicationLocksInTx(tx, [...accountIds, ...children.flatMap(child => child.accountIds)]);
-    await markAccountsChanged(tx, { accountIds, kind: "account", entityId: row.id });
+    const { controllerAccountIds, children } = await fenceManagedMachinePublicationInTx(tx, async () => {
+        const controllerAccountIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, row.controllerMachineId);
+        const fresh = await tx.managedMachine.findUnique({ where: { id: row.id } });
+        const previous = readStoredManagedDevcontainerChild(row);
+        const machineIds = new Set([row.enrolledMachineId, fresh?.enrolledMachineId].filter((id): id is string => typeof id === 'string'));
+        const children: Array<{ machineId: string; child: Awaited<ReturnType<typeof readMachineDevcontainerChildInTx>>; accountIds: string[] }> = [];
+        for (const machineId of machineIds) {
+            const child = await readMachineDevcontainerChildInTx(tx, machineId);
+            const before = row.enrolledMachineId === machineId ? previous : null;
+            if (managedDevcontainerChildProjectionsEqualV1(before ?? undefined, child ?? undefined)) continue;
+            children.push({ machineId, child, accountIds: await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId) });
+        }
+        return { accountIds: [...controllerAccountIds, ...children.flatMap(child => child.accountIds)], controllerAccountIds, children };
+    });
+    await markAccountsChanged(tx, { accountIds: controllerAccountIds, kind: "account", entityId: row.id });
     for (const { machineId, child, accountIds: childAccountIds } of children) {
         const cursors = await markAccountsChanged(tx, { accountIds: childAccountIds, kind: 'machine', entityId: machineId });
         for (const { accountId, cursor } of cursors) {

@@ -178,6 +178,7 @@ export async function migrateMachineAccountEncryptionInTx(params: Readonly<{
         const item = itemsById.get(row.id);
         if (
             !item
+            || item.expectedDataEncryptionKey !== serializeMachineKeyBasis(row).dataEncryptionKey
             || item.expectedMetadataVersion !== row.metadataVersion
             || item.expectedDaemonStateVersion !== row.daemonStateVersion
         ) {
@@ -203,16 +204,13 @@ export async function migrateMachineAccountEncryptionInTx(params: Readonly<{
             }
         });
 
-    const rowsById = new Map(rows.map((row) => [row.id, row]));
     for (const item of params.directive.items) {
-        const current = rowsById.get(item.machineId);
-        if (!current) throw new MachineAccountEncryptionMigrationConflictError();
         const updated = await compareAndSwapMachineContentInTx({
             tx: params.tx,
             accountId: params.accountId,
             machineId: item.machineId,
             expected: {
-                dataEncryptionKey: serializeMachineKeyBasis(current).dataEncryptionKey,
+                dataEncryptionKey: item.expectedDataEncryptionKey,
                 metadataVersion: item.expectedMetadataVersion,
                 daemonStateVersion: item.expectedDaemonStateVersion,
             },

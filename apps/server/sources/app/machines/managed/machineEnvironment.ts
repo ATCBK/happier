@@ -11,7 +11,7 @@ import { getMachinePresetInTx } from './machinePresetService';
 import { requireManagedMachineAccessInTx } from './managedRead';
 import {
     ManagedMachineError, readManagedMachineInTx, projectManagedMachineInTx,
-    invalidateManagedMachineInTx, type StoredManagedMachine,
+    invalidateManagedMachineInTx, inManagedMachinePublicationTx, type StoredManagedMachine,
     readManagedJsonEqualityOperand,
 } from './managedRows';
 
@@ -89,7 +89,7 @@ export async function reportMachineEnvironment(params: Readonly<{
 }>): Promise<Readonly<{ machine: ManagedMachineV1 }>> {
     const input = MachineEnvironmentReportInputV1Schema.parse(params.input);
     if (input.state !== 'failed' && input.errorCode !== undefined) throw new ManagedMachineError('invalid_request');
-    return inTx(async tx => {
+    return inManagedMachinePublicationTx(input, async tx => {
         await requireTargetInTx(tx, { ...params, input });
         const row = await readManagedMachineInTx(tx, input);
         await requireManagedMachineAccessInTx(tx, row, params.actorAccountId, true);
@@ -119,7 +119,7 @@ export async function skipManagedMachineSetup(params: Readonly<{
     actorAccountId: string; input: ManagedMachineActionInputV1<'machines.managed.setup.skip'>;
 }>): Promise<ManagedMachineV1> {
     const input = ManagedMutationInputV1Schema.parse(params.input);
-    return inTx(async tx => {
+    return inManagedMachinePublicationTx(input, async tx => {
         if (await readCurrentServerIdentityId(process.env, tx) !== input.homeId) throw new ManagedMachineError('permission_denied');
         const row = await readManagedMachineInTx(tx, input);
         await requireManagedMachineAccessInTx(tx, row, params.actorAccountId, true);

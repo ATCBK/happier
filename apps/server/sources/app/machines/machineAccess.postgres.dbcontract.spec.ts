@@ -1,0 +1,249 @@
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { decodeBase64, encodeBase64 } from 'privacy-kit';
+import tweetnacl from 'tweetnacl';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, computeContentPublicKeyFingerprint, encodePlainMachineStoredContent, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
+import { MachineAccessMutationResultV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { db, getDbProviderFromEnv, initDbPostgres } from '@/storage/db';
+import { inTx, type Tx } from '@/storage/inTx';
+import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
+import { registerMachineAccessRoutes } from '@/app/api/routes/machines/machineAccessRoutes';
+import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
+import { readMachineRecipientCensusInTx, resolveMachineAdmissionInTx, resolveMachineAdmissionsInTx } from './machineAccess';
+
+async function fixture() {
+    const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+    const recipient = await db.account.create({ data: { encryptionMode: 'plain' } });
+    const machine = await db.machine.create({ data: {
+        id: randomUUID(), accountId: owner.id, installationId: randomUUID(),
+        metadata: encodePlainMachineStoredContent({ host: 'shared', platform: 'linux', happyCliVersion: 'test',
+            homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+        daemonState: encodePlainMachineStoredContent({ status: 'offline' }),
+        dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
+    } });
+    await db.machineAccountGrant.create({ data: { machineId: machine.id, accountId: recipient.id,
+        accessLevel: 'view', createdByAccountId: owner.id } });
+    return { owner, recipient, machine };
+}
+
+/** Interleave only at the Prisma transport; all access decisions and SQL remain real. */
+function beforePublicationFence(interleave: () => Promise<void>) {
+    const original = db.$transaction;
+    let advanced = false;
+    db.$transaction = new Proxy(original, {
+        apply(target, thisArg, args) {
+            const [run, options] = args;
+            return Reflect.apply(target, thisArg, [async (tx: Tx) => run(new Proxy(tx, {
+                get(transaction, property, receiver) {
+                    const value = Reflect.get(transaction, property, receiver);
+                    if (property !== '$queryRawUnsafe') return typeof value === 'function' ? value.bind(transaction) : value;
+                    return async (...queryArgs: unknown[]) => {
+                        const sql = typeof queryArgs[0] === 'string' ? queryArgs[0] : '';
+                        if (!advanced && sql.includes('Account') && sql.includes('FOR NO KEY UPDATE')) {
+                            advanced = true;
+                            await interleave();
+                        }
+                        return Reflect.apply(value, transaction, queryArgs);
+                    };
+                },
+            })), options]);
+        },
+    });
+    return () => { db.$transaction = original; };
+}
+
+describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('Machine access publication (PostgreSQL)', () => {
+    beforeAll(async () => {
+        if (!process.env.HAPPIER_TEST_POSTGRES_DATABASE_URL
+            || process.env.DATABASE_URL !== process.env.HAPPIER_TEST_POSTGRES_DATABASE_URL) {
+            throw new Error('Run only through the disposable PostgreSQL DB-contract harness');
+        }
+        initDbPostgres();
+        await db.$connect();
+    });
+    afterAll(async () => { await db.$disconnect(); });
+
+    it('admits owned Machines without waiting for the unrelated foreign-grant graph', async () => {
+        const f = await fixture();
+        let finished = false;
+        let finishedBeforeGrantRelease = false;
+        let admissions: Promise<unknown> | undefined;
+        try {
+            // A real database boundary makes an unnecessary grant read observable
+            // without an elapsed-time threshold or an internal policy mock.
+            await db.$transaction(async holder => {
+                await holder.$executeRawUnsafe('LOCK TABLE "MachineAccountGrant" IN ACCESS EXCLUSIVE MODE');
+                const [{ pid }] = await holder.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                admissions = Promise.all([
+                    inTx(tx => resolveMachineAdmissionInTx(tx, { actorAccountId: f.owner.id, machineId: f.machine.id })),
+                    inTx(tx => resolveMachineAdmissionsInTx(tx, { actorAccountId: f.owner.id, machineIds: [f.machine.id] })),
+                ]).then(([point, batch]) => {
+                    expect(point).toMatchObject({ kind: 'admitted', machineId: f.machine.id, role: 'manage' });
+                    expect(batch.get(f.machine.id)).toEqual(point);
+                }).finally(() => { finished = true; });
+                void admissions.catch(() => undefined);
+                while (!finished) {
+                    const [{ blocked }] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                        SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+                            WHERE ${pid}::int = ANY(pg_blocking_pids(pid))) AS blocked`;
+                    if (blocked) break;
+                }
+                finishedBeforeGrantRelease = finished;
+            });
+            await admissions;
+            expect(finishedBeforeGrantRelease).toBe(true);
+        } finally {
+            await admissions;
+            await db.machine.delete({ where: { id: f.machine.id } });
+            await db.account.deleteMany({ where: { id: { in: [f.owner.id, f.recipient.id] } } });
+        }
+    });
+
+    it.each(['upgrade', 'revoke'] as const)('%s commits under continuous short recipient publications', async phase => {
+        const f = await fixture();
+        // Exercise the default transaction owner policy, independent of inherited operator settings.
+        for (const prefix of ['HAPPIER', 'HAPPY']) for (const key of ['MAX_RETRIES', 'RETRY_BASE_DELAY_MS',
+            'RETRY_MAX_DELAY_MS', 'RETRY_JITTER_FACTOR', 'TOTAL_RETRY_BUDGET_MS', 'TIMEOUT_MS', 'MAX_WAIT_MS']) {
+            vi.stubEnv(`${prefix}_DB_TX_${key}`, undefined);
+        }
+        let stop = false;
+        let publications = 0;
+        let maximumHoldMs = 0;
+        let ready!: () => void;
+        const started = new Promise<void>(resolve => { ready = resolve; });
+        const began = Date.now();
+        // QB67's three independent short holders, without coordination with write attempts.
+        const publishers = Promise.allSettled(Array.from({ length: 3 }, (_, index) => (async () => {
+            while (!stop) await inTx(async tx => {
+                await tx.$queryRaw`SELECT id FROM "Account" WHERE id = ${f.recipient.id} FOR NO KEY UPDATE`;
+                const acquired = Date.now();
+                await markAccountChanged(tx, { accountId: f.recipient.id, kind: 'account', entityId: `hot-${index}` });
+                await tx.$executeRaw`SELECT pg_sleep(0.02)`;
+                publications++;
+                maximumHoldMs = Math.max(maximumHoldMs, Date.now() - acquired);
+                if (publications === 15) ready();
+            });
+        })()));
+        try {
+            await Promise.race([started, publishers.then(() => { throw new Error('Publishers missed rendezvous'); })]);
+            const writeAt = Date.now();
+            const rateBeforeWrite = publications * 1000 / (writeAt - began);
+            await withAuthenticatedTestApp(registerMachineAccessRoutes, async app => {
+                const response = await app.inject({ method: phase === 'upgrade' ? 'PUT' : 'DELETE',
+                    url: `/v1/machines/${f.machine.id}/access`, headers: { 'x-test-user-id': f.owner.id },
+                    payload: { principal: { kind: 'account', accountId: f.recipient.id }, ...(phase === 'upgrade' ? { level: 'admin' } : {}) } });
+                console.info('qb81-hot-recipient', { phase, elapsedMs: Date.now() - writeAt, rateBeforeWrite,
+                    publicationsPerSecond: publications * 1000 / (Date.now() - began), publications, maximumHoldMs });
+                expect(response.statusCode, response.body).toBe(200);
+                expect(MachineAccessMutationResultV1Schema.parse(response.json())).toMatchObject(
+                    phase === 'upgrade' ? { kind: 'saved', grant: { level: 'admin' } } : { kind: 'removed', effectiveAccess: 'none' });
+            });
+            expect(await db.machineAccountGrant.findUnique({ where: { machineId_accountId: { machineId: f.machine.id, accountId: f.recipient.id } } }))
+                .toEqual(phase === 'upgrade' ? expect.objectContaining({ accessLevel: 'admin' }) : null);
+            expect(await db.accountChange.findMany({ where: { kind: 'machine', entityId: f.machine.id },
+                select: { accountId: true }, orderBy: { accountId: 'asc' } }))
+                .toEqual([f.owner.id, f.recipient.id].sort().map(accountId => ({ accountId })));
+        } finally {
+            stop = true;
+            const outcomes = await publishers;
+            vi.unstubAllEnvs();
+            for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
+        }
+    });
+
+    it.each(['authority', 'currentness', 'audience'] as const)('revalidates %s after the publication fence', async change => {
+        const f = await fixture();
+        const manager = await db.account.create({ data: { id: `a-${randomUUID()}`, encryptionMode: 'plain' } });
+        const restore = beforePublicationFence(async () => {
+            if (change === 'authority') await db.account.update({ where: { id: f.owner.id }, data: { status: 'suspended' } });
+            else if (change === 'currentness') await db.machine.update({ where: { id: f.machine.id }, data: { revokedAt: new Date() } });
+            else await db.machineAccountGrant.create({ data: { machineId: f.machine.id, accountId: manager.id,
+                accessLevel: 'admin', createdByAccountId: f.owner.id } });
+        });
+        try {
+            await withAuthenticatedTestApp(registerMachineAccessRoutes, async app => {
+                const response = await app.inject({ method: 'PUT', url: `/v1/machines/${f.machine.id}/access`,
+                    headers: { 'x-test-user-id': f.owner.id },
+                    payload: { principal: { kind: 'account', accountId: f.recipient.id }, level: 'admin' } });
+                expect(response.statusCode, response.body).toBe(200);
+                expect(MachineAccessMutationResultV1Schema.parse(response.json())).toMatchObject(
+                    change === 'audience' ? { kind: 'saved' } : { kind: 'refused', code: 'access_denied' });
+            });
+            expect(await db.machineAccountGrant.findUniqueOrThrow({ where: { machineId_accountId: { machineId: f.machine.id, accountId: f.recipient.id } } }))
+                .toMatchObject({ accessLevel: change === 'audience' ? 'admin' : 'view' });
+            expect(await db.accountChange.count({ where: { kind: 'machine', entityId: f.machine.id, accountId: manager.id } }))
+                .toBe(change === 'audience' ? 1 : 0);
+        } finally { restore(); }
+    });
+
+    it.each([
+        { kind: 'team', retries: '0' }, { kind: 'team', retries: '1' },
+        { kind: 'group', retries: '0' }, { kind: 'group', retries: '1' },
+    ] as const)('replays prospective $kind audience growth with retries=$retries', async ({ kind, retries }) => {
+        const f = await fixture();
+        const member = await db.account.create({ data: { id: `a-${randomUUID()}`, encryptionMode: 'plain' } });
+        const team = await db.team.create({ data: { name: 'Prospective audience' } });
+        const group = await db.teamGroup.create({ data: { teamId: team.id, name: 'Prospective group', nameKey: randomUUID() } });
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', retries);
+        const restore = beforePublicationFence(async () => {
+            const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: member.id, role: 'member' } });
+            if (kind === 'group') await db.teamGroupMembership.create({ data: { teamId: team.id,
+                teamGroupId: group.id, teamMembershipId: membership.id, nativeContribution: true } });
+        });
+        try {
+            await withAuthenticatedTestApp(registerMachineAccessRoutes, async app => {
+                const response = await app.inject({ method: 'PUT', url: `/v1/machines/${f.machine.id}/access`,
+                    headers: { 'x-test-user-id': f.owner.id }, payload: { level: 'view', principal: kind === 'team'
+                        ? { kind, teamId: team.id } : { kind, teamId: team.id, groupId: group.id } } });
+                expect(response.statusCode, response.body).toBe(retries === '0' ? 503 : 200);
+                expect(response.json()).toMatchObject(retries === '0'
+                    ? { error: 'database_transaction_conflict_exhausted' } : { kind: 'saved' });
+            });
+            const where = { machineId: f.machine.id };
+            expect(kind === 'team' ? await db.machineTeamGrant.count({ where }) : await db.machineGroupGrant.count({ where }))
+                .toBe(retries === '0' ? 0 : 1);
+            expect(await db.accountChange.count({ where: { accountId: member.id, kind: 'machine', entityId: f.machine.id } }))
+                .toBe(retries === '0' ? 0 : 1);
+        } finally { restore(); vi.unstubAllEnvs(); }
+    });
+
+    it.each(['content', 'recipient', 'grant'] as const)('refuses stale %s material after the key-commit fence', async change => {
+        const ownerKeys = tweetnacl.box.keyPair();
+        const recipientKeys = tweetnacl.box.keyPair();
+        const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(ownerKeys.publicKey) } });
+        const recipient = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(recipientKeys.publicKey) } });
+        const dataKey = tweetnacl.randomBytes(32);
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, installationId: randomUUID(),
+            metadata: 'opaque', dataEncryptionKey: new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ dataKey,
+                recipientPublicKey: ownerKeys.publicKey, randomBytes: tweetnacl.randomBytes })) } });
+        await db.machineAccountGrant.create({ data: { machineId: machine.id, accountId: recipient.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
+        const census = await inTx(tx => readMachineRecipientCensusInTx(tx, { machineId: machine.id, actorAccountId: owner.id }));
+        if ('kind' in census) throw new Error(census.code);
+        const restore = beforePublicationFence(async () => {
+            if (change === 'content') await db.machine.update({ where: { id: machine.id }, data: { metadataVersion: { increment: 1 } } });
+            else if (change === 'recipient') await db.account.update({ where: { id: recipient.id }, data: createSignedAccountContentBinding() });
+            else await db.machineAccountGrant.delete({ where: { machineId_accountId: { machineId: machine.id, accountId: recipient.id } } });
+        });
+        try {
+            await withAuthenticatedTestApp(registerMachineAccessRoutes, async app => {
+                const response = await app.inject({ method: 'PATCH', url: `/v1/machines/${machine.id}/data-key-envelopes`,
+                    headers: { 'x-test-user-id': owner.id }, payload: {
+                        expectedMachineOwnerEnvelopeFingerprint: census.machineOwnerEnvelopeFingerprint,
+                        expectedCallerDataEncryptionKey: census.callerDataEncryptionKey,
+                        expectedMetadataVersion: census.content.metadataVersion, expectedDaemonStateVersion: census.content.daemonStateVersion,
+                        recipientKeyEnvelopes: [{ recipientAccountId: recipient.id,
+                            encryptedDataKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey,
+                                recipientPublicKey: recipientKeys.publicKey, randomBytes: tweetnacl.randomBytes })),
+                            recipientContentPublicKeyFingerprint: computeContentPublicKeyFingerprint(recipientKeys.publicKey) }],
+                    } });
+                expect(response.statusCode, response.body).toBe(200);
+                expect(response.json()).toEqual({ kind: 'refused', code: change === 'content' ? 'machine_key_changed'
+                    : change === 'recipient' ? 'recipient_binding_changed' : 'access_denied' });
+            });
+            expect(await db.machineKeyEnvelope.count({ where: { machineId: machine.id } })).toBe(0);
+            expect(await db.accountChange.count({ where: { kind: 'machine', entityId: machine.id } })).toBe(0);
+        } finally { restore(); }
+    });
+});

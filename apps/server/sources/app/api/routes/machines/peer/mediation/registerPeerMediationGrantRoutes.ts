@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { RouteShorthandOptions } from "fastify";
 import { DIRECT_ROUTE_GRANT_TTL_MS, clampDirectRouteGrantTtlMs } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
 import { DirectRouteGrantScopeV1Schema, VoiceMediaGrantScopeV1Schema, LiveStreamGrantScopeV1Schema, TcpTunnelGrantScopeV1Schema, type DirectRouteGrantScopeV1, type LiveStreamGrantScopeV1 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantScopesV1';
@@ -67,58 +67,58 @@ export type RegisterPeerMediationGrantRoutesOptions = Readonly<{
     verifyViewerSocketOwnership?: PeerMediationViewerSocketOwnershipVerifier;
 }>;
 
-const LoopbackPeerMediationGrantRequestSchema = z.object({
-    machineId: z.string().min(1),
+const LoopbackPeerMediationGrantRequestSchema = z.strictObject({
+    machineId: z.string().check(z.minLength(1)),
     flowKind: z.enum(["bounded_transfer", "tcp_tunnel", "voice_media", "live_stream", "machine_rpc"]),
     routeKind: z.literal("loopback_direct"),
-    endpointFingerprint: z.string().min(1),
-    ttlMs: z.number().int().positive(),
+    endpointFingerprint: z.string().check(z.minLength(1)),
+    ttlMs: z.number().check(z.int(), z.positive()),
     scope: DirectRouteGrantScopeV1Schema,
-}).strict();
+});
 
 // Native machine/1 grants use the same signed grant authority as loopback
 // mediation, but are admitted only for the endpoint-bound Iroh route. The
 // machine/1 binding (initiator, target, both endpoint ids, operation
 // kind) is required here; the payload-level invariants (target aliases, flow
 // compatibility) are owned by the protocol grant schema and enforced at mint.
-const LiveStreamServerRelayAuthorizationRequestSchema = z.object({
-    machineId: z.string().min(1),
-    targetMachineId: z.string().min(1),
+const LiveStreamServerRelayAuthorizationRequestSchema = z.strictObject({
+    machineId: z.string().check(z.minLength(1)),
+    targetMachineId: z.string().check(z.minLength(1)),
     flowKind: z.literal("live_stream"),
     routeKind: z.literal("server_relay"),
-    ttlMs: z.number().int().positive(),
-    maxFramesPerSecond: z.number().int().positive().optional(),
-    maxFrameBytes: z.number().int().positive().optional(),
+    ttlMs: z.number().check(z.int(), z.positive()),
+    maxFramesPerSecond: z.optional(z.number().check(z.int(), z.positive())),
+    maxFrameBytes: z.optional(z.number().check(z.int(), z.positive())),
     codecId: z.optional(MachineLiveStreamCodecIdV1Schema),
-    viewerCodecs: z.array(MachineLiveStreamCodecIdV1Schema).optional(),
+    viewerCodecs: z.optional(z.array(MachineLiveStreamCodecIdV1Schema)),
     // Optional per-tab viewer socket id (C1). When the watcher is a user-scoped browser socket the
     // grant is minted bound to it so the relay delivers frames to exactly that tab. It is part of
     // the signed payload, so it must round-trip mint → start-request → handler-verify unchanged.
-    viewerSocketId: z.string().min(1).optional(),
+    viewerSocketId: z.optional(z.string().check(z.minLength(1))),
     scope: LiveStreamGrantScopeV1Schema,
-}).strict();
+});
 
-const TcpTunnelServerRelayAuthorizationRequestSchema = z.object({
+const TcpTunnelServerRelayAuthorizationRequestSchema = z.strictObject({
     v: z.literal(2),
-    machineId: z.string().min(1),
+    machineId: z.string().check(z.minLength(1)),
     flowKind: z.literal("tcp_tunnel"),
     routeKind: z.literal("server_relay"),
-    ttlMs: z.number().int().positive(),
+    ttlMs: z.number().check(z.int(), z.positive()),
     destination: PeerTcpTunnelDestinationV1Schema,
-    relaySocketId: z.string().min(1).max(PEER_TCP_TUNNEL_RELAY_SOCKET_ID_MAX_LENGTH),
+    relaySocketId: z.string().check(z.minLength(1), z.maxLength(PEER_TCP_TUNNEL_RELAY_SOCKET_ID_MAX_LENGTH)),
     scope: TcpTunnelGrantScopeV1Schema,
-}).strict();
+});
 
-const VoiceMediaServerRelayAuthorizationRequestSchema = z.object({
+const VoiceMediaServerRelayAuthorizationRequestSchema = z.strictObject({
     v: z.literal(2),
-    machineId: z.string().min(1),
+    machineId: z.string().check(z.minLength(1)),
     flowKind: z.literal("voice_media"),
     routeKind: z.literal("server_relay"),
-    ttlMs: z.number().int().positive(),
+    ttlMs: z.number().check(z.int(), z.positive()),
     destination: PeerTcpTunnelDestinationV1Schema,
-    relaySocketId: z.string().min(1).max(PEER_TCP_TUNNEL_RELAY_SOCKET_ID_MAX_LENGTH),
+    relaySocketId: z.string().check(z.minLength(1), z.maxLength(PEER_TCP_TUNNEL_RELAY_SOCKET_ID_MAX_LENGTH)),
     scope: VoiceMediaGrantScopeV1Schema,
-}).strict();
+});
 
 const PeerMediationGrantRequestSchema = z.union([
     DirectRouteGrantRequestV2Schema,

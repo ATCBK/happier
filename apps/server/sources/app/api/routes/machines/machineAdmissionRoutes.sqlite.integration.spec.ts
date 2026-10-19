@@ -14,8 +14,74 @@ describe('Machine receiver current admission on SQLite', () => {
     let harness: LightSqliteHarness | undefined;
     beforeAll(async () => { harness = await createLightSqliteHarness({
         tempDirPrefix: 'happier-machine-receiver-currentness-', initAuth: false, initEncrypt: false, initFiles: false,
+        env: { HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: '1' },
     }); }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('rechecks an owner-hosted approval requester independently of Machine access and refuses revoked Session invocation', async () => {
+        const alice = await db.account.create({ data: { publicKey: `alice-${randomUUID()}`, encryptionMode: 'plain' } });
+        const bob = await db.account.create({ data: { publicKey: `bob-${randomUUID()}`, encryptionMode: 'plain' } });
+        const key = tweetnacl.sign.keyPair();
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: alice.id, active: true,
+            metadata: encodePlainMachineStoredContent({ host: 'bot', platform: 'linux', happyCliVersion: 'test',
+                homeDir: '/home/bot', happyHomeDir: '/home/bot/.happier' }),
+            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
+            installationId: randomUUID(), installationPublicKey: new Uint8Array(key.publicKey),
+        } });
+        const session = await db.session.create({ data: { id: randomUUID(), accountId: alice.id, tag: randomUUID(),
+            metadata: '{}', encryptionMode: 'plain', active: true } });
+        const share = await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: alice.id,
+            sharedWithUserId: bob.id, accessLevel: 'edit', canApprovePermissions: false } });
+        const context = { actorAccountId: alice.id, custodianAccountId: alice.id, machineId: machine.id,
+            installationId: machine.installationId!, role: 'manage' as const, encryptionMode: 'plain' as const };
+        const sessionDecision = { sessionId: session.id,
+            authentication: { tokenEpoch: bob.tokenEpoch },
+            actor: { kind: 'accountUser' as const, accountId: bob.id, relationship: 'sharedApprover' as const } };
+        const method = `${session.id}:approval.request.decide`;
+        const proof = signMachineInstallationProof({ payload: { version: 1, machineId: machine.id,
+            installationId: context.installationId, accountId: alice.id, rpcAdmission: { context, method, sessionDecision } },
+            privateKey: key.secretKey });
+        const app = createAuthenticatedTestApp();
+        let hostingMachineId: string | null = machine.id;
+        app.decorate('resolveCurrentSessionMachine', async (input: Readonly<{ accountId: string; sessionId: string }>) =>
+            input.accountId === alice.id && input.sessionId === session.id ? hostingMachineId : null);
+        machinesRoutes(app);
+        try {
+            const verify = (body: unknown) => app.inject({ method: 'POST',
+                url: `/v1/machines/${machine.id}/admission/verify`,
+                headers: { authorization: 'Bearer authenticated-test', 'x-test-user-id': alice.id }, payload: body });
+            const body = { v: 1, context, method, sessionDecision, proof };
+            expect((await verify(body)).statusCode).toBe(200);
+            expect((await verify({ ...body, sessionDecision: { ...sessionDecision,
+                actor: { ...sessionDecision.actor, accountId: alice.id } } })).statusCode).toBe(403);
+            await db.sessionShare.update({ where: { id: share.id }, data: { accessLevel: 'view' } });
+            expect((await verify(body)).statusCode).toBe(403);
+            await db.sessionShare.update({ where: { id: share.id }, data: { accessLevel: 'edit' } });
+            await db.account.update({ where: { id: bob.id }, data: { tokenEpoch: { increment: 1 } } });
+            expect((await verify(body)).statusCode).toBe(403);
+            await db.account.update({ where: { id: bob.id }, data: { tokenEpoch: bob.tokenEpoch } });
+            await db.sessionShare.delete({ where: { id: share.id } });
+            const team = await db.team.create({ data: { name: `Bot Team ${randomUUID()}`,
+                authenticationPolicy: { v: 1, mode: 'restricted', accepted: [{ kind: 'home_method', methodId: 'key_challenge' }] } } });
+            await db.teamMembership.create({ data: { teamId: team.id, accountId: bob.id, role: 'member' } });
+            await db.sessionTeamGrant.create({ data: { sessionId: session.id, teamId: team.id,
+                accessLevel: 'edit', canApprovePermissions: false, effectiveAt: new Date() } });
+            await db.account.update({ where: { id: bob.id }, data: { encryptionMode: 'e2ee' } });
+            expect((await verify(body)).statusCode).toBe(403);
+            const qualifiedDecision = { ...sessionDecision, authentication: { ...sessionDecision.authentication,
+                evidence: { v: 1 as const, evidence: [{ kind: 'home_method' as const, methodId: 'key_challenge' }] } } };
+            const qualifiedProof = signMachineInstallationProof({ payload: { version: 1, machineId: machine.id,
+                installationId: context.installationId, accountId: alice.id,
+                rpcAdmission: { context, method, sessionDecision: qualifiedDecision } }, privateKey: key.secretKey });
+            const qualifiedBody = { ...body, sessionDecision: qualifiedDecision, proof: qualifiedProof };
+            expect((await verify(qualifiedBody)).statusCode).toBe(200);
+            await db.account.update({ where: { id: bob.id }, data: { encryptionMode: 'plain' } });
+            expect((await verify(qualifiedBody)).statusCode).toBe(403);
+            await db.account.update({ where: { id: bob.id }, data: { encryptionMode: 'e2ee' } });
+            hostingMachineId = null;
+            expect((await verify(qualifiedBody)).statusCode).toBe(403);
+        } finally { await app.close(); }
+    });
 
     it('verifies the exact custodian installation and refuses a forged actor or replaced installation before effect', async () => {
         const custodian = await db.account.create({ data: { publicKey: `custodian-${randomUUID()}`, encryptionMode: 'plain' } });

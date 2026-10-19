@@ -7,7 +7,8 @@ import type { Server, Socket } from "socket.io";
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readProjectServiceMoveChildEffectV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
-import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS, parseSocketRpcAuthorizationContext, isSocketRpcSessionAuthorizationNamespace, resolveSocketRpcSessionAuthorization, type SocketRpcAuthorizationContext, type SocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
+import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS, parseSocketRpcAuthorizationContext, isSocketRpcSessionAuthorizationNamespace, resolveSocketRpcSessionAuthorization, type SocketRpcAuthorizationContext, type SocketRpcCurrentSessionPresentationOriginAuthorizationContext, type SessionPermissionDecisionAuthenticationV1 } from '@happier-dev/protocol/socketRpc';
+import { AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '@happier-dev/protocol/auth/authToken';
 import { AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/automations/event';
 import { CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import { ExternalActionMachineRpcExecutionV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -15,6 +16,7 @@ import { SESSION_SERVER_START_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol
 import { SessionFollowSourceKeyPrepareAuthorizationV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
 import { resolveEphemeralRunnerMachineRpcAuthority, type EphemeralRunnerMachineRpcAuthority } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import { isUiBrowserAutomationDispatchMethod, UI_BROWSER_AUTOMATION_DISPATCH_KEY_MAX_LENGTH } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
+import { isCurrentUiContextClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { type SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 import { MANAGED_FINITE_WAKE_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import { VerifiedEphemeralSessionRunnerPrincipalSchema } from "@happier-dev/protocol/ephemeralRunner/principal";
@@ -100,6 +102,14 @@ const MACHINE_VISIBLE_CLIENT_RPC_METHODS = new Set<string>([
     RPC_METHODS.UI_ACTION_EXECUTE,
 ]);
 
+function isMachineVisibleClientRpcMethod(method: string): boolean {
+    return MACHINE_VISIBLE_CLIENT_RPC_METHODS.has(method)
+        || isUiBrowserAutomationDispatchMethod(method)
+        || isWorkflowDraftClientRpcMethod(method)
+        || isMountedWorkReadClientRpcMethod(method)
+        || isCurrentUiContextClientRpcMethod(method);
+}
+
 type SessionPublisherPresenceForRpc = Pick<
     ReturnType<typeof createSessionPublisherPresence>,
     | "captureExplicitMachineStop"
@@ -173,9 +183,7 @@ function parseMachineScopedRpcMethod(method: string): MachineScopedRpcMethod | n
     if (separatorIndex <= 0 || separatorIndex === method.length - 1) return null;
     const machineId = method.slice(0, separatorIndex).trim();
     const rpcMethod = method.slice(separatorIndex + 1).trim();
-    if (!machineId || (!MACHINE_VISIBLE_CLIENT_RPC_METHODS.has(rpcMethod)
-        && !isUiBrowserAutomationDispatchMethod(rpcMethod) && !isWorkflowDraftClientRpcMethod(rpcMethod)
-        && !isMountedWorkReadClientRpcMethod(rpcMethod))) return null;
+    if (!machineId || !isMachineVisibleClientRpcMethod(rpcMethod)) return null;
     return { machineId, rpcMethod };
 }
 
@@ -378,13 +386,14 @@ async function hasCurrentSessionActionRpcSource(params: Readonly<{
     const machineId = readMachineScopedSocketMachineId(params.socket);
     const installationId = readVerifiedMachineSocketInstallationIdFromSocketData(data);
     if (!machineId || !installationId || params.socket.connected !== true
-        || data.authTokenKind !== "account" || data.ephemeralRunnerAdmission != null
+        || (data.authTokenKind !== "account" && data.authTokenKind !== "terminal") || data.ephemeralRunnerAdmission != null
         || data.apiTokenPrincipal != null
         || !await hasCurrentSocketCredential(params.credentialAccountId ?? params.accountId, params.socket)) return false;
-    return hasCurrentSessionActionRpcSourceBinding({ accountId: params.accountId, machineId, installationId,
+    const currentSource = await hasCurrentSessionActionRpcSourceBinding({ accountId: params.accountId, machineId, installationId,
         sourceSessionId: params.sourceSessionId, targetSessionId: params.targetSessionId,
         resolveCurrentSessionMachine: input => resolveCurrentSessionMachineFromServer({ io: params.io, presence: params.presence, ...input }),
     });
+    return currentSource && await hasCurrentSocketCredential(params.credentialAccountId ?? params.accountId, params.socket);
 }
 
 function readMachineIdPrefix(method: string): string | null {
@@ -669,6 +678,7 @@ function createSessionFollowSourceKeyPreparationTargetGuard(params: Readonly<{
     accountId: string;
     sourceSessionId: string;
     destinationSessionId: string;
+    localInputId?: string;
     machineId: string;
     authentication: ReturnType<typeof readSessionAccessAuthenticationFromSocket>;
 }>): RpcForwardTargetGuard {
@@ -683,6 +693,7 @@ function createSessionFollowSourceKeyPreparationTargetGuard(params: Readonly<{
             accountId: params.accountId,
             sourceSessionId: params.sourceSessionId,
             destinationSessionId: params.destinationSessionId,
+            ...(params.localInputId !== undefined ? { localInputId: params.localInputId } : {}),
             principal,
             authentication: params.authentication,
         });
@@ -766,6 +777,17 @@ function emitMachineScopedRpcAvailability(params: Readonly<{
 }>): void {
     const parsed = parseMachineScopedRpcMethod(params.method);
     if (!parsed) return;
+    if (isCurrentUiContextClientRpcMethod(parsed.rpcMethod)) {
+        log({
+            module: "websocket-rpc",
+            level: "warn",
+            event: "current-ui-rpc-availability-emitted",
+            userId: params.userId,
+            machineId: parsed.machineId,
+            method: parsed.rpcMethod,
+            availabilityEvent: params.event,
+        }, "Current UI RPC availability emitted to the Machine room");
+    }
     params.io.to(getMachineSocketRoom(params.userId, parsed.machineId)).emit(params.event, { method: params.method });
 }
 
@@ -1017,13 +1039,22 @@ export function registerSocketRpcHandlers(params: Readonly<{
             if (ownedMethods.has(method)) {
                 ownedMethods.delete(method);
                 writeSocketRegisteredRpcMethods(params.socket, ownedMethods);
-                await params.socket.leave(buildRpcMethodRoom({ userId: params.userId, method }));
-                recordRpcUnregistration(method);
-                await emitMachineScopedRpcUnregisteredWhenUnavailable({
-                    userId: params.userId,
-                    io: params.io,
-                    method,
-                });
+                const room = buildRpcMethodRoom({ userId: params.userId, method });
+                await params.socket.leave(room);
+                if (!disconnected && ownedMethods.has(method)) {
+                    // Socket.IO awaits register/unregister listeners independently. A replacement
+                    // registration can therefore finish before this older leave does; restore that
+                    // current owner instead of letting the stale leave retire its room membership.
+                    await params.socket.join(room);
+                    writeSocketRegisteredRpcMethods(params.socket, ownedMethods);
+                } else {
+                    recordRpcUnregistration(method);
+                    await emitMachineScopedRpcUnregisteredWhenUnavailable({
+                        userId: params.userId,
+                        io: params.io,
+                        method,
+                    });
+                }
             }
 
             params.socket.emit(SOCKET_RPC_EVENTS.UNREGISTERED, { method });
@@ -1114,6 +1145,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
             const timeoutMs = parsedTimeout.data;
             let authorization: SocketRpcAuthorizationContext | undefined;
             let sessionWriteTargetUserId: string | null = null;
+            let requesterApprovalMachine: Readonly<{ machineId: string; sessionId: string; accountId: string }> | null = null;
             let sessionActionOrigin: SessionActionRpcOriginV1 | undefined;
             let sessionActionSourceGuard: RpcForwardTargetGuard | null = null;
 
@@ -1127,10 +1159,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
             const rawTransferRouting = (data as { transferRouting?: unknown } | undefined)?.transferRouting;
             const reverseAutomationSeparator = method.indexOf(':');
             const reverseClientContinuation = reverseAutomationSeparator > 0
-                && (MACHINE_VISIBLE_CLIENT_RPC_METHODS.has(method.slice(reverseAutomationSeparator + 1))
-                    || isMountedWorkReadClientRpcMethod(method.slice(reverseAutomationSeparator + 1))
-                    || isWorkflowDraftClientRpcMethod(method.slice(reverseAutomationSeparator + 1))
-                    || isUiBrowserAutomationDispatchMethod(method.slice(reverseAutomationSeparator + 1)));
+                && isMachineVisibleClientRpcMethod(method.slice(reverseAutomationSeparator + 1));
             if (answeringClient && !reverseClientContinuation) {
                 callback?.(buildForbiddenRpcResponse());
                 return;
@@ -1285,7 +1314,11 @@ export function registerSocketRpcHandlers(params: Readonly<{
             if (originalActionEnvelope) {
                 const binding = verifiedExternalAction?.binding;
                 const moveChild = binding?.actionId === 'projects.service.relocate'
-                    && verifiedExternalAction?.effectActionId === readProjectServiceMoveChildEffectV1(originalActionMethod);
+                    && verifiedExternalAction?.effectActionId === readProjectServiceMoveChildEffectV1(originalActionMethod)
+                    || binding?.actionId === 'discussion.second_opinion.start'
+                        && verifiedExternalAction?.effectActionId === 'session.spawn_new'
+                        && (originalActionMethod === RPC_METHODS.SESSION_SPAWN_NEW
+                          || originalActionMethod === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT);
                 const socketData = readSocketData(params.socket);
                 const plainParams = originalActionEnvelope.v === 1 && typeof callParams !== 'string'
                     ? StrictJsonValueSchema.safeParse(callParams) : null;
@@ -1315,7 +1348,11 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 callback?.(buildForbiddenRpcResponse());
                 return;
             }
-            const moveChildExecution = originalActionEnvelope && verifiedExternalAction?.binding.actionId === 'projects.service.relocate'
+            const moveChildExecution = originalActionEnvelope && (verifiedExternalAction?.binding.actionId === 'projects.service.relocate'
+                || verifiedExternalAction?.binding.actionId === 'discussion.second_opinion.start'
+                    && verifiedExternalAction.effectActionId === 'session.spawn_new'
+                    && (originalActionMethod === RPC_METHODS.SESSION_SPAWN_NEW
+                      || originalActionMethod === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT))
                 && externalActionExecution?.success ? WorkspaceSyncSourceExecutionV1Schema.parse({ method,
                     requestId: callerRequestId, ...(callParams === undefined ? {} : { params: callParams }),
                     externalActionExecution: externalActionExecution.data, originalActionEnvelope }) : null;
@@ -1385,6 +1422,26 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 };
             }
             const isPermissionDecisionMethod = methodSessionAuthorization?.serverMintedContext === "session.permission.respond";
+            // The question owner validates the narrow manager exception. An
+            // explicit token input grant is re-admitted below by its own owner.
+            const delegatesQuestionAnswer = methodSessionAuthorization?.method === RPC_METHODS.SESSION_USER_ACTION_ANSWER
+                && (sessionActionOrigin !== undefined || viewer !== null);
+            const isRequesterApprovalDecision = methodSessionAuthorization?.method === RPC_METHODS.APPROVAL_REQUEST_DECIDE;
+            let requesterDecisionAuthentication: SessionPermissionDecisionAuthenticationV1 | undefined;
+            if (isRequesterApprovalDecision && !detachedMachine) {
+                const token = (params.socket.handshake?.auth as { token?: unknown } | undefined)?.token;
+                const verified = typeof token === 'string' ? await auth.verifyTokenForRoute(token) : null;
+                if (!verified || verified.userId !== actorAccountId || verified.authority !== 'present_user'
+                    || verified.tokenEpoch === undefined) { callback?.(buildForbiddenRpcResponse()); return; }
+                requesterDecisionAuthentication = { tokenEpoch: verified.tokenEpoch,
+                    ...(verified.authenticationEvidence?.length ? { evidence: AuthTokenAuthenticationEvidenceSnapshotV1Schema.parse({
+                        v: 1, evidence: verified.authenticationEvidence,
+                    }) } : {}) };
+            }
+            const sessionRequestAuthentication = requesterDecisionAuthentication ? { ...requestAuthentication,
+                tokenEpoch: requesterDecisionAuthentication.tokenEpoch,
+                authenticationEvidence: requesterDecisionAuthentication.evidence?.evidence,
+            } : requestAuthentication;
             if (viewer && isTransferMethod && !transferRouting) {
                 callback?.(buildForbiddenRpcResponse());
                 return;
@@ -1395,12 +1452,13 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 callback?.(buildForbiddenRpcResponse());
                 return;
             }
-            if ((isPermissionDecisionMethod || method.endsWith(`:${RPC_METHODS.DAEMON_EXECUTION_RUN_PERMISSION_RESPOND}`))
+            if ((isRequesterApprovalDecision && requestAuthentication.authority !== 'present_user')
+                || ((isPermissionDecisionMethod && !delegatesQuestionAnswer || method.endsWith(`:${RPC_METHODS.DAEMON_EXECUTION_RUN_PERMISSION_RESPOND}`))
                 && !canCredentialDecideV1({
                     authority: requestAuthentication.authority,
                     grant: verifiedExternalAction && 'grant' in verifiedExternalAction.principal
                         ? verifiedExternalAction.principal.grant : viewer?.principal.grant ?? null,
-                })) {
+                }))) {
                 callback?.(buildForbiddenRpcResponse());
                 return;
             }
@@ -1461,6 +1519,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     accountId: actorAccountId,
                     sourceSessionId: parsedAuthorization.data.sourceSessionId,
                     destinationSessionId: parsedAuthorization.data.destinationSessionId,
+                    ...(parsedAuthorization.data.localInputId !== undefined ? { localInputId: parsedAuthorization.data.localInputId } : {}),
                     authentication: requestAuthentication,
                 });
                 if (!admission.ok) {
@@ -1474,6 +1533,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     machineId: sourceKeyPreparationMachineId,
                     sourceSessionId: parsedAuthorization.data.sourceSessionId,
                     destinationSessionId: parsedAuthorization.data.destinationSessionId,
+                    ...(parsedAuthorization.data.localInputId !== undefined ? { localInputId: parsedAuthorization.data.localInputId } : {}),
                     authentication: requestAuthentication,
                 });
             } else if (
@@ -1541,7 +1601,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     : await resolveSessionAccessForOperation(db, {
                     accountId: actorAccountId,
                     sessionId,
-                    authentication: requestAuthentication,
+                    authentication: sessionRequestAuthentication,
                     ...(sessionAuthorization.authority === "sessionOwner"
                         ? {}
                         : { capability: sessionAuthorization.authority }),
@@ -1570,6 +1630,12 @@ export function registerSocketRpcHandlers(params: Readonly<{
                         return;
                     }
                     sessionWriteTargetUserId = session.accountId;
+                    if (isRequesterApprovalDecision) {
+                        const machineId = await resolveCurrentSessionMachineFromServer({ io: params.io,
+                            presence: params.sessionPublisherPresence, accountId: session.accountId, sessionId });
+                        if (!machineId) { callback?.(buildForbiddenRpcResponse()); return; }
+                        requesterApprovalMachine = { machineId, sessionId, accountId: session.accountId };
+                    }
                 }
                 authorization = sessionAuthorization.serverMintedContext === "session.presentation.origin"
                     ? {
@@ -1589,12 +1655,13 @@ export function registerSocketRpcHandlers(params: Readonly<{
                                 ? "owner"
                                 : "sharedApprover",
                         },
+                        ...(requesterDecisionAuthentication ? { authentication: requesterDecisionAuthentication } : {}),
                     }
                     : { kind: "session.write", sessionId };
                 sessionAccessTargetGuard = createSessionAccessTargetGuard({
                     accountId: actorAccountId,
                     sessionId,
-                    authentication: requestAuthentication,
+                    authentication: sessionRequestAuthentication,
                     authority: sessionAuthorization.authority,
                     ...(apiTokenAction ? { apiTokenAction } : {}),
                 });
@@ -1681,7 +1748,10 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 const readCurrent = async () => {
                     const socketData = readSocketData(params.socket);
                     const root = packet.externalActionExecution.authorization.binding;
-                    if (params.socket.connected !== true || socketData.authTokenKind !== 'account'
+                    // Pairing gives installed daemons terminal credentials. That
+                    // credential proves transport custody; the signed root and
+                    // SOURCE verifier below authorize this exact Project effect.
+                    if (params.socket.connected !== true || (socketData.authTokenKind !== 'account' && socketData.authTokenKind !== 'terminal')
                         || socketData.ephemeralRunnerAdmission != null || socketData.apiTokenPrincipal != null
                         || params.userId !== root.custodianAccountId || !await hasCurrentSocketCredential(params.userId, params.socket)
                         || readMachineScopedSocketMachineId(params.socket) !== root.machineId
@@ -1852,8 +1922,10 @@ export function registerSocketRpcHandlers(params: Readonly<{
             }
             const targetUserId = sessionWriteTargetUserId ?? machineAdmission?.custodianAccountId ?? actorAccountId;
             const admittedMethod = method;
-            const callerInputViewer = viewer && method.endsWith(`:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`)
-                ? viewer : null;
+            const callerInputActionId = methodSessionAuthorization?.method === SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND
+                || methodSessionAuthorization?.method === RPC_METHODS.SESSION_USER_ACTION_ANSWER
+                ? methodSessionAuthorization.actionId : undefined;
+            const callerInputViewer = viewer && callerInputActionId ? viewer : null;
 
             const explicitMachineStopRequest = readExplicitMachineStopRequest(method, authorization);
             if (method.endsWith(`:${RPC_METHODS.STOP_SESSION}`) && !explicitMachineStopRequest) {
@@ -1901,8 +1973,11 @@ export function registerSocketRpcHandlers(params: Readonly<{
             const isTransitionRoot = verifiedExternalAction?.binding.actionId === 'session.agent.transition';
             const transitionSessionTarget = isTransitionRoot && methodSessionAuthorization?.routeToSessionOwnerDaemon
                 && verifiedExternalAction.target.kind === 'session' ? verifiedExternalAction.target : null;
+            const decisionMachine = requesterApprovalMachine;
             const targetSpecificGuard = explicitMachineStopRequest
                 ? createExactMachineRpcTargetGuard(explicitMachineStopRequest)
+                : requesterApprovalMachine
+                    ? createExactMachineRpcTargetGuard(requesterApprovalMachine)
                 : sourceKeyPreparationTargetGuard
                     ? sourceKeyPreparationTargetGuard
                     : ephemeralRunnerMachineRequest
@@ -1928,6 +2003,14 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 sessionAccessTargetGuard,
                 sessionActionSourceGuard,
                 machineAdmissionGuard,
+                ...(decisionMachine ? [{
+                    filterTargets: async targets => targets,
+                    runOperation: async ({ operation }) => await resolveCurrentSessionMachineFromServer({ io: params.io,
+                        presence: params.sessionPublisherPresence, accountId: decisionMachine.accountId,
+                        sessionId: decisionMachine.sessionId }) === decisionMachine.machineId
+                        ? { status: 'current' as const, value: await operation() }
+                        : { status: 'refused' as const, response: buildForbiddenRpcResponse() },
+                } satisfies RpcForwardTargetGuard] : []),
                 ...(reverseAutomationSeparator > 0 && isWorkflowDraftClientRpcMethod(method.slice(reverseAutomationSeparator + 1)) ? [{
                     // A mounted draft must have one answering client. Exclude
                     // the caller exactly as the canonical target selector does.
@@ -1967,6 +2050,9 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 targetUserId,
                 method,
                 callParams,
+                ...(requesterApprovalMachine ? {
+                    sessionDecisionTargetMethod: `${requesterApprovalMachine.machineId}:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`,
+                } : {}),
                 timeoutMs,
                 ...(finiteWake?.kind === 'ready' && cancellation
                     ? { callerLifetime: { signal: cancellation.controller.signal, isCurrent: finiteWake.isCurrent } } : {}),
@@ -1998,7 +2084,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     && externalActionExecution?.success
                     ? { createCallerInputAuthorization: async () => externalActionExecution.data.authorization }
                     : {}),
-                ...(callerInputViewer ? { createCallerInputAuthorization: async ({ target, requestId }) => {
+                ...(callerInputViewer && callerInputActionId ? { createCallerInputAuthorization: async ({ target, requestId }) => {
                     const projection = readSessionPublisherAuthorityProjection(target.data);
                     if (!projection || projection.accountId !== targetUserId || projection.sessionId !== callerInputViewer.sessionId) {
                         throw new Error('Current Session publisher identity is unavailable');
@@ -2009,7 +2095,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                         serverIdentityId: await getOrCreateServerIdentityId(),
                         accountId: principal.accountId, principalId: principal.principalId,
                         credentialId: principal.credentialId, grant: principal.grant,
-                        machineId: projection.machineId, actionId: 'session.message.send', requestId,
+                        machineId: projection.machineId, actionId: callerInputActionId, requestId,
                         requestEnvelopeDigest: computeExternalActionSocketRpcRequestDigestV1({
                             method: admittedMethod, params: callParams, requestId, target: sessionTarget,
                         }),

@@ -111,6 +111,8 @@ export async function forwardRpcCall(params: Readonly<{
     targetUserId: string;
     method: string;
     callParams: unknown;
+    /** Existing Machine registration carrying an unchanged Session-bound encrypted decision. */
+    sessionDecisionTargetMethod?: string;
     timeoutMs?: number | null;
     authorization?: SocketRpcAuthorizationContext;
     /** Home-owned current Machine routing facts; never copied from inbound fields. */
@@ -166,7 +168,7 @@ export async function forwardRpcCall(params: Readonly<{
             const targets = await discoverRpcTargets({
                 io: params.io,
                 userId: params.targetUserId,
-                method: params.method,
+                method: params.sessionDecisionTargetMethod ?? params.method,
                 fetchTimeoutMs: resolveRpcClusterFetchTimeoutMs(params.method),
             });
             return params.targetGuard
@@ -208,7 +210,7 @@ export async function forwardRpcCall(params: Readonly<{
             targetUnavailable: await isMachineRpcTargetUnavailable({
                 io: params.io,
                 userId: params.targetUserId,
-                method: params.method,
+                method: params.sessionDecisionTargetMethod ?? params.method,
                 fetchTimeoutMs: resolveRpcClusterFetchTimeoutMs(params.method),
             }),
         });
@@ -324,11 +326,18 @@ export async function forwardRpcCall(params: Readonly<{
             // Socket.IO 4.8.3 cluster ACKs call Node setTimeout directly. Keep
             // its real 2^31-1 ms adapter boundary separate from the authored
             // deadline, which is forwarded verbatim to the target owner.
-            const targetEmitter = selection.target.timeout(Math.min(timeoutMs ?? 2_147_483_647, 2_147_483_647));
             const callerInputAuthorization = params.createCallerInputAuthorization && targetRequestId
                 ? await params.createCallerInputAuthorization({ target: selection.target, requestId: targetRequestId })
                 : null;
             if (params.cancellation?.signal.aborted) throw new Error("RPC request cancelled by caller");
+            // Socket.IO's local Socket stores emit flags on the socket itself,
+            // so configure the ACK immediately before dispatch, after async auth.
+            // Caller cancellation retires ACK custody for finite and unbounded
+            // waits alike; submission still leaves admission uncertain.
+            const targetEmitter = selection.target.timeout(Math.min(timeoutMs ?? 2_147_483_647, 2_147_483_647), {
+                rejectOnDisconnect: true,
+                ...(params.cancellation ? { signal: params.cancellation.signal } : {}),
+            });
             requestSubmitted = true;
             const response = targetEmitter.emitWithAck(
                 SOCKET_RPC_EVENTS.REQUEST,
@@ -341,32 +350,7 @@ export async function forwardRpcCall(params: Readonly<{
                     } } : {}),
                 } : request,
             );
-            const cancellationSignal = params.cancellation?.signal;
-            // Caller-lifecycle operations forward cancellation to their exact
-            // target and let that owner return the correlated terminal result.
-            // Ending the relay locally after submission would discard a V2
-            // Action's authenticated cancellation/outcome-unknown response.
-            if (!cancellationSignal || timeoutMs === null) {
-                return await response;
-            }
-
-            let removeAbortListener: (() => void) | undefined;
-            const aborted = new Promise<never>((_resolve, reject) => {
-                const onAbort = (): void => {
-                    reject(new Error('RPC request cancelled by caller'));
-                };
-                cancellationSignal.addEventListener('abort', onAbort, { once: true });
-                removeAbortListener = () => {
-                    cancellationSignal.removeEventListener('abort', onAbort);
-                };
-                if (cancellationSignal.aborted) onAbort();
-            });
-
-            try {
-                return await Promise.race([response, aborted]);
-            } finally {
-                removeAbortListener?.();
-            }
+            return await response;
         };
         const guarded = params.targetGuard
             ? await params.targetGuard.runOperation({
@@ -433,7 +417,11 @@ export async function forwardRpcCall(params: Readonly<{
         });
         return {
             ok: false,
-            ...(params.method.endsWith(`:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`)
+            ...(requestSubmitted && params.cancellation?.signal.aborted
+                ? { error: 'RPC request cancelled after request submission', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN }
+                : error instanceof Error && 'code' in error && error.code === 'SOCKET_DISCONNECTED'
+                ? { error: 'RPC target disconnected after request submission', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN }
+                : params.method.endsWith(`:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`)
                 ? { error: 'confidential_continuation_failed', errorCode: 'confidential_continuation_failed' }
                 : { error: error instanceof Error ? error.message : "RPC call failed" }),
         };

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
@@ -8,7 +8,7 @@ import { qualifyManagedAcquisitionPolicy } from "./managedAcquire";
 import { admitManagedAcquire } from "./managedAcquire";
 import { buildManagedConfigurationFactsV1, ManagedConfigurationFactsV1Schema } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
-import { ManagedAcquireInputV1Schema, PluginManifestV2Schema, signMachineInstallationProof, createManagedPolicyCensusProofV1, createManagedPolicyProofV1, encodeManagedPolicyProofV1, MANAGED_POLICY_PROOF_HEADER, ManagedWakeTargetV1Schema, type ManagedCommittedIdleEvidenceV1 } from "@happier-dev/protocol";
+import { createActionExecutor, ManagedAcquireInputV1Schema, PluginManifestV2Schema, signMachineInstallationProof, createManagedPolicyCensusProofV1, createManagedPolicyProofV1, encodeManagedPolicyProofV1, MANAGED_POLICY_PROOF_HEADER, ManagedWakeTargetV1Schema, type ActionExecutorDeps, type ManagedCommittedIdleEvidenceV1 } from "@happier-dev/protocol";
 import tweetnacl from 'tweetnacl';
 import { defineProtocolObject, defineProtocolString } from "@happier-dev/protocol/plugins/actions/protocol-composable-schema";
 import { defineMachineProvisionerSchemas, defineMachineProvisionerReconciliationSchemas, MachineProvisionerCheckResultProtocolV1Schema, MachineProvisionerBootstrapCarrierV1Schema, MachineProvisionerObservationV1Schema, MachineProvisionerPowerResultV1Schema } from "@happier-dev/protocol/plugins/contributions/machineProvisioners";
@@ -1400,12 +1400,37 @@ describe("managed acquisition durable authority", () => {
         const manager = await db.account.create({ data: { publicKey: "managed-reader-manager" } });
         const controller = await db.machine.create({ data: { id: "managed-reader-controller", accountId: owner.id, metadata: "ciphertext", installationId: "reader-installation" } });
         await db.machineAccountGrant.createMany({ data: [{ machineId: controller.id, accountId: viewer.id, accessLevel: "view", createdByAccountId: owner.id }, { machineId: controller.id, accountId: manager.id, accessLevel: "admin", createdByAccountId: owner.id }] });
-        const row = await db.managedMachine.create({ data: { homeId, custodianAccountId: owner.id, controllerMachineId: controller.id, controllerInstallationId: "reader-installation", admittedActionRequestId: "reader-request", admittedInput: {}, launch: { provider: { pluginId: "fixture.compute", localId: "compute" }, schemaVersion: 1, name: "reviewed", choices: {} }, retention: { kind: "until-delete" }, wakeOnAcceptedMessage: false } });
+        const row = await db.managedMachine.create({ data: { homeId, custodianAccountId: owner.id, controllerMachineId: controller.id, controllerInstallationId: "reader-installation", admittedActionRequestId: "reader-request", admittedInput: { futureStoredMember: true }, launch: { provider: { pluginId: "fixture.compute", localId: "compute" }, schemaVersion: 1, name: "reviewed", choices: {}, futureStoredMember: true }, retention: { kind: "until-delete", futureStoredMember: true }, wakeOnAcceptedMessage: false } });
         expect(await getManagedMachine({ actorAccountId: viewer.id, input: { homeId, managedId: row.id } })).toMatchObject({ id: row.id });
-        expect(await listManagedMachines({ actorAccountId: manager.id, input: { homeId } })).toMatchObject({ machines: [{ id: row.id }] });
         const cancel = { homeId, managedId: row.id, expectedIntentRevision: 0 };
         await expect(cancelManagedCreation({ actorAccountId: viewer.id, input: cancel })).rejects.toMatchObject({ code: "permission_denied" });
-        expect(await cancelManagedCreation({ actorAccountId: manager.id, input: cancel })).toMatchObject({ machine: { id: row.id, creationState: "canceled", allocation: "confirmed-absent", intentRevision: 1 } });
+        const app = fastify().withTypeProvider<ZodTypeProvider>();
+        // Runtime composition keeps each host's source aliases and compiler root
+        // with its owner, as in the shared cross-program testkit loaders.
+        const { createAccountServerActionDeps } = await vi.importActual<{
+            createAccountServerActionDeps(input: Readonly<{ token: string; serverId: string;
+                serverIdentityId: string; serverHttpBaseUrl: string }>): Pick<ActionExecutorDeps, 'managedMachineAction'>;
+        }>('../../../../../cli/src/api/accountServerActionDeps');
+        const { installAxiosFastifyAdapter } = await vi.importActual<{
+            installAxiosFastifyAdapter(input: Readonly<{ app: typeof app; origin: string }>): () => void;
+        }>('../../../../../cli/src/testkit/http/axiosAdapter');
+        app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+        // Only credential authentication and HTTP delivery are substituted.
+        // The CLI port, protocol executor, route, stored reader and mutation stay real.
+        app.decorate('authenticate', async (request: FastifyRequest) => { request.userId = manager.id; });
+        registerManagedMachineRoutes(app);
+        const restoreHttp = installAxiosFastifyAdapter({ app, origin: 'http://managed-reader.test' });
+        try {
+            const executor = createActionExecutor(createAccountServerActionDeps({ token: 'interactive',
+                serverId: 'managed-reader', serverIdentityId: homeId, serverHttpBaseUrl: 'http://managed-reader.test' }) as Parameters<typeof createActionExecutor>[0]);
+            const context = { surface: 'cli', authority: 'present_user', bypassApprovals: true } as const;
+            const listed = await executor.execute('machines.managed.list', { homeId }, context);
+            expect(listed).toMatchObject({ ok: true, result: { machines: [{ id: row.id,
+                allocation: 'unsubmitted', creationState: 'active', desired: 'start', intentRevision: 0 }] } });
+            expect(JSON.stringify(listed)).not.toContain('futureStoredMember');
+            expect(await executor.execute('machines.managed.cancel', cancel, context)).toMatchObject({ ok: true,
+                result: { machine: { id: row.id, creationState: 'canceled', allocation: 'confirmed-absent', intentRevision: 1 } } });
+        } finally { restoreHttp(); await app.close(); }
         expect((await db.managedMachine.findUniqueOrThrow({ where: { id: row.id } })).admittedActionRequestId).toBe("reader-request");
         await expect(cancelManagedCreation({ actorAccountId: manager.id, input: cancel })).rejects.toMatchObject({ code: "intent_changed" });
         expect((await db.account.findUniqueOrThrow({ where: { id: viewer.id } })).seq).toBeGreaterThan(0);

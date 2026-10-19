@@ -8,7 +8,7 @@ import { hasExactMachineReadiness } from "@/app/machines/machineSocketReadiness"
 import { validateMachineReplacement } from "@/app/machines/validateMachineReplacement";
 import { inTx } from "@/storage/inTx";
 import { isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { Fastify } from "../../types";
 
 export function registerMachineReplacementRoutes(app: Fastify): void {
@@ -20,7 +20,7 @@ export function registerMachineReplacementRoutes(app: Fastify): void {
             }),
             body: z.object({
                 replacementMachineId: z.string(),
-                confirmActiveOldMachine: z.boolean().optional(),
+                confirmActiveOldMachine: z.optional(z.boolean()),
             }),
         },
     }, async (request, reply) => {

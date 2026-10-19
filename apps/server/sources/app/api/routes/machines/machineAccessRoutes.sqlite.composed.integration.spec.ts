@@ -4,8 +4,14 @@ import axios from 'axios';
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
-import { MACHINE_PLAIN_DATA_KEY_MARKER, MachineAccessGrantsListResponseV1Schema, MachineAccessRecipientCensusResponseV1Schema, computeContentPublicKeyFingerprint, encodePlainMachineStoredContent, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, MachineAccessGrantsListResponseV1Schema, MachineAccessMutationResultV1Schema, MachineAccessRecipientCensusResponseV1Schema, computeContentPublicKeyFingerprint, encodePlainMachineStoredContent, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
+import { symbols, type DestinationStream } from 'pino';
+import { logger } from '@/utils/logging/log';
+import { inTx } from '@/storage/inTx';
+import { createSessionMachineAccessKeyInTx } from '@/app/accessKeys/sessionMachineAccessKeyMutations';
+import { enqueuePendingMessage, updatePendingRequestedAction, markPendingActivationFailed } from '@/app/session/pending/pendingMessageService';
+import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import * as privacyKit from 'privacy-kit';
 import { db } from '@/storage/db';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
@@ -105,10 +111,14 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
         await withAuthenticatedTestApp(machinesRoutes, async (app) => {
             const base = `/v1/machines/${machine.id}`;
             const principal = { kind: 'account', accountId: recipient.id };
-            for (let attempt = 0; attempt < 2; attempt++) {
-                const response = await app.inject({ method: 'PUT', url: `${base}/access`, headers: headers(owner.id), payload: { principal, level: 'view' } });
+            for (const level of ['view', 'view', 'admin', 'view'] as const) {
+                const response = await app.inject({ method: 'PUT', url: `${base}/access`, headers: headers(owner.id), payload: { principal, level } });
                 expect(response.statusCode, response.body).toBe(200);
-                expect(response.json(), response.body).toMatchObject({ kind: 'saved', readiness: 'ready' });
+                expect(MachineAccessMutationResultV1Schema.parse(response.json()), response.body)
+                    .toMatchObject({ kind: 'saved', grant: { machineId: machine.id, principal, level }, readiness: 'ready' });
+                expect(await db.machineAccountGrant.findUniqueOrThrow({ where: { machineId_accountId: {
+                    machineId: machine.id, accountId: recipient.id,
+                } } })).toMatchObject({ accessLevel: level });
             }
             const recipientAccess = await app.inject({ method: 'GET', url: `${base}/access`, headers: headers(recipient.id) });
             expect(recipientAccess.statusCode, recipientAccess.body).toBe(200);
@@ -130,6 +140,88 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
             expect(left.json()).toMatchObject({ kind: 'left', effectiveAccess: 'none' });
             const revoked = await app.inject({ method: 'GET', url: base, headers: headers(recipient.id) });
             expect(revoked.statusCode).toBe(404);
+        });
+    });
+
+    it.each(['waiting', 'failed'] as const)('reverts a controller grant from a stale Use draft with an active guest binding and %s activation', async status => {
+        const { owner, machine: original } = await fixture();
+        const requester = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const controller = await db.machine.create({ data: { ...original, id: randomUUID(),
+            installationId: randomUUID(), installationPublicKey: tweetnacl.sign.keyPair().publicKey, active: true,
+        } });
+        const guest = await db.machine.create({ data: { ...controller, id: randomUUID(), installationId: randomUUID(), active: false,
+            operationProtocolCapabilitiesRevision: 1, operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
+        } });
+        const managed = await db.managedMachine.create({ data: {
+            homeId: await getOrCreateServerIdentityId(), custodianAccountId: owner.id,
+            controllerMachineId: controller.id, controllerInstallationId: controller.installationId!, enrolledMachineId: guest.id,
+            admittedActionRequestId: randomUUID(), admittedInput: {}, allocation: 'bound', creationState: 'active',
+            launch: { provider: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
+            resource: { contributionRef: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+            desired: 'stop', retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true,
+            observation: { observedAt: 1, availability: 'present', power: 'stopped', storage: 'retained' },
+        } });
+        await withAuthenticatedTestApp(machinesRoutes, async app => {
+            const base = `/v1/machines/${controller.id}/access`;
+            const principal = { kind: 'account' as const, accountId: requester.id };
+            const write = (machineId: string, level: 'view' | 'admin') => app.inject({ method: 'PUT',
+                url: `/v1/machines/${machineId}/access`, headers: headers(owner.id), payload: { principal, level } });
+            for (const target of [guest, controller]) expect((await write(target.id, 'view')).json()).toMatchObject({ kind: 'saved' });
+            const initial = await app.inject({ method: 'GET', url: base, headers: headers(owner.id) });
+            const staleGrant = MachineAccessGrantsListResponseV1Schema.parse(initial.json()).grants[0]!;
+            expect(staleGrant).toMatchObject({ principal, level: 'view' });
+            // Retain the real client's pre-upgrade draft; the PUT contract has no read revision.
+            const staleDraft = { principal: staleGrant.principal, level: staleGrant.level };
+            for (const target of [guest, controller]) expect((await write(target.id, 'admin')).json()).toMatchObject({ kind: 'saved' });
+            const session = await db.session.create({ data: { accountId: requester.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain', active: false } });
+            expect(await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: requester.id, sessionId: session.id,
+                machineId: guest.id, data: 'fixture-key' }))).toMatchObject({ ok: true });
+            const input = { actorUserId: requester.id, authentication: createPresentUserSessionAccessAuthentication(), sessionId: session.id,
+                localId: randomUUID(), targetMachineId: guest.id, requestedAction: { v: 1, kind: 'enqueue' },
+                content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained input' } } } } as const;
+            expect(await enqueuePendingMessage(input)).toMatchObject({ ok: true });
+            expect(await updatePendingRequestedAction({ ...input, resumeWhenAvailable: true })).toMatchObject({ ok: true });
+            const waiting = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            expect(waiting.pendingActivationStatus).toBe('waiting');
+            expect(waiting.pendingActivationManagedTarget).toMatchObject({ managedId: managed.id, enrolledMachineId: guest.id,
+                controller: { machineId: controller.id, installationId: controller.installationId } });
+            if (status === 'failed') expect(await markPendingActivationFailed({ actorUserId: requester.id, sessionId: session.id,
+                requestId: input.localId, requestedAt: waiting.pendingActivationRequestedAt!.getTime(), failureCode: 'managed_start_failed' }))
+                .toMatchObject({ ok: true, didFail: true });
+            const revert = () => app.inject({ method: 'PUT', url: base, headers: headers(owner.id), payload: staleDraft });
+            const response = await revert();
+            expect(response.statusCode, response.body).toBe(200);
+            expect(MachineAccessMutationResultV1Schema.parse(response.json())).toMatchObject({ kind: 'saved', grant: { level: 'view' }, readiness: 'ready' });
+            expect(await db.managedMachine.findUniqueOrThrow({ where: { id: managed.id } })).toMatchObject({ enrolledMachineId: guest.id, creationState: 'active' });
+            expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ pendingCount: 1, pendingActivationStatus: status });
+            expect(await db.accessKey.count({ where: { sessionId: session.id, machineId: guest.id } })).toBe(1);
+            if (status !== 'failed') return;
+
+            // Diagnostic fallback only: a real SQLite constraint exception is NOT
+            // claimed as the historical 500's cause. Prove the real route logs it safely.
+            expect((await write(controller.id, 'admin')).json()).toMatchObject({ kind: 'saved' });
+            const records: Record<string, unknown>[] = [];
+            const stream = Reflect.get(logger, symbols.streamSym) as DestinationStream;
+            const sink = vi.spyOn(stream, 'write').mockImplementation(chunk => { records.push(JSON.parse(String(chunk))); });
+            try {
+                await db.$executeRawUnsafe(`CREATE TRIGGER qb106_reject_downgrade BEFORE UPDATE ON MachineAccountGrant
+                    WHEN NEW.accessLevel = 'view' BEGIN SELECT RAISE(ABORT, 'private-fixture-failure'); END`);
+                const failed = await revert();
+                expect(failed.statusCode).toBe(500);
+                expect(failed.json()).toMatchObject({ code: 'internal_error' });
+                expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ module: 'fastify-error',
+                    httpRequestId: expect.any(String), errorClass: 'PrismaClientKnownRequestError', errorCode: 'P2003',
+                    stackFrames: expect.arrayContaining([expect.objectContaining({ file: expect.stringContaining('machineAccess.ts'), line: expect.any(Number) })]),
+                })]));
+                expect(JSON.stringify(records)).not.toContain('private-fixture-failure');
+                const committed = await app.inject({ method: 'GET', url: base, headers: headers(owner.id) });
+                expect(MachineAccessGrantsListResponseV1Schema.parse(committed.json()).grants[0]?.level).toBe('admin');
+                await db.$executeRawUnsafe('DROP TRIGGER qb106_reject_downgrade');
+                expect((await revert()).json()).toMatchObject({ kind: 'saved', grant: { level: 'view' } });
+            } finally {
+                sink.mockRestore();
+                await db.$executeRawUnsafe('DROP TRIGGER IF EXISTS qb106_reject_downgrade');
+            }
         });
     });
 

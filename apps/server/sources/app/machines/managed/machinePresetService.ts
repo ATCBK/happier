@@ -259,7 +259,7 @@ export async function resolveMachinePresetForAcquireInTx(tx: Tx, params: PresetC
     if (row.revision !== params.revision) return { kind: "conflict", currentRevision: row.revision };
     if (row.archivedAt) return { kind: "refused", code: "preset_archived" };
     if (row.teamId && (await tx.team.findUnique({ where: { id: row.teamId }, select: { archivedAt: true } }))?.archivedAt) return { kind: "refused", code: "permission_denied" };
-    // The caller's canonical admission transaction owns serializable read/count/create and retries.
+    // Admission's controller Account fence serializes this preset's count/create.
     if (row.simultaneousMaximum !== null && await tx.managedMachine.count({ where: { homeId: row.homeId, presetId: row.id, allocation: { not: "confirmed-absent" } } }) >= row.simultaneousMaximum) return { kind: "refused", code: "preset_limit_reached" };
     const preset = await projectPresetInTx(tx, row);
     return { kind: "ready", preset, ...await validateManagedRecipeInTx(tx, params, preset) };

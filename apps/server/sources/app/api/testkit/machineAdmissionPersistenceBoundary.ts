@@ -17,6 +17,16 @@ export const TEST_MACHINE_INSTALLATION_ID = 'test-machine-installation';
 export function createMachineAdmissionPersistenceBoundary(custodian: string | (() => string)) {
     let readAvailability = async (_machineId: string): Promise<'available' | 'revoked' | 'replaced' | 'missing'> => 'available';
     const persistence = {
+        // Transaction-local settings are database commands, not admission decisions.
+        $executeRaw: async (_query: TemplateStringsArray, ..._values: unknown[]): Promise<number> => 0,
+        $queryRaw: async (query: TemplateStringsArray) => {
+            if (query.join('') === 'SHOW statement_timeout') return [{ statement_timeout: '0' }];
+            throw new Error('Unexpected Machine-admission database query');
+        },
+        $executeRawUnsafe: async (query: string): Promise<number> => {
+            if (/^SET LOCAL statement_timeout = \d+$/.test(query)) return 0;
+            throw new Error('Unexpected Machine-admission database command');
+        },
         machine: {
             findUnique: async ({ where }: { where: { id: string } }) => {
                 const availability = await readAvailability(where.id);

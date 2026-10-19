@@ -1,116 +1,32 @@
-import { describe, expect, it, vi } from "vitest";
-
-import { createDbMocks, installDbModuleMock } from "../../testkit/dbMocks";
-import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
-import { createInTxHarness } from "../../testkit/txHarness";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { db } from "@/storage/db";
+import { eventRouter } from "@/app/events/eventRouter";
+import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
-
-const emitUpdate = vi.fn();
-const buildNewMachineUpdate = vi.fn((_created: any, updSeq: number, updId: string) => ({
-    id: updId,
-    seq: updSeq,
-    body: { t: "new-machine" },
-}));
-const buildUpdateMachineUpdate = vi.fn((_machineId: string, updSeq: number, updId: string) => ({
-    id: updId,
-    seq: updSeq,
-    body: { t: "update-machine" },
-}));
-
-const dbMocks = createDbMocks({
-    account: ["findUnique"],
-    machine: ["findFirst"],
-} as const);
-
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate },
-    buildNewMachineUpdate,
-    buildUpdateMachineUpdate,
-}));
-
-const randomKeyNaked = vi.fn()
-    .mockReturnValueOnce("upd-1")
-    .mockReturnValueOnce("upd-2");
-vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked }));
-
-const markAccountChanged = vi.fn(async () => 123);
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
-
-installDbModuleMock(() => ({
-    db: dbMocks.db,
-    isPrismaErrorCode: () => false,
-}));
-
-vi.mock("@/storage/inTx", () => {
-    const harness = createInTxHarness(() => ({
-            machine: {
-                create: vi.fn(async (args: any) => ({
-                    ...args.data,
-                    seq: 0,
-                    lastActiveAt: new Date(1),
-                    createdAt: new Date(1),
-                    updatedAt: new Date(1),
-                })),
-            },
-        }));
-    return { afterTx: harness.afterTx, inTx: harness.inTx };
-});
+import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
+import { machinesRoutes } from "./machinesRoutes";
 
 describe("machinesRoutes (AccountChange integration)", () => {
+    let harness: LightSqliteHarness;
+    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: "happier-machine-route-changes-", initAuth: false }); }, 120_000);
+    afterEach(async () => { vi.restoreAllMocks(); await db.machine.deleteMany(); await db.accountChange.deleteMany(); await db.account.deleteMany(); });
+    afterAll(async () => { if (harness) await harness.close(); });
+
     it("marks machine create once and emits new-machine + update-machine using the same cursor", async () => {
-        const accountContentBinding = createSignedAccountContentBinding();
-        dbMocks.db.account.findUnique.mockResolvedValue({
-            ...accountContentBinding,
-            encryptionMode: "e2ee",
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" } });
+        // Observe transport publication without replacing cursor allocation or event builders.
+        const emitted = vi.spyOn(eventRouter, "emitUpdate");
+        await withAuthenticatedTestApp(machinesRoutes, async app => {
+            const response = await app.inject({ method: "POST", url: "/v1/machines", headers: { "x-test-user-id": account.id },
+                payload: { id: "m1", metadata: "meta", daemonState: "state", dataEncryptionKey: null } });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json().machine).toMatchObject({ id: "m1", metadata: "meta", metadataVersion: 1, daemonState: "state", daemonStateVersion: 1 });
         });
-        dbMocks.db.machine.findFirst.mockResolvedValue(null);
-        const { machinesRoutes } = await import("./machinesRoutes");
-        const route = createRouteTestBuilder({
-            method: "POST",
-            path: "/v1/machines",
-            registerRoutes(app) {
-                machinesRoutes(app as any);
-            },
-        });
-        const { response, reply } = await route.invoke(
-            {
-                userId: "u1",
-                body: { id: "m1", metadata: "meta", daemonState: "state", dataEncryptionKey: null },
-            },
-        );
-
-        expect(markAccountChanged).toHaveBeenCalledTimes(1);
-        expect(markAccountChanged).toHaveBeenCalledWith(
-            expect.anything(),
-            expect.objectContaining({ accountId: "u1", kind: "machine", entityId: "m1" }),
-        );
-
-        expect(emitUpdate).toHaveBeenCalledTimes(2);
-        expect(emitUpdate).toHaveBeenNthCalledWith(
-            1,
-            expect.objectContaining({
-                payload: expect.objectContaining({
-                    seq: 123,
-                    body: expect.objectContaining({ t: "new-machine" }),
-                }),
-            }),
-        );
-        expect(emitUpdate).toHaveBeenNthCalledWith(
-            2,
-            expect.objectContaining({
-                payload: expect.objectContaining({
-                    seq: 123,
-                    body: expect.objectContaining({ t: "update-machine" }),
-                }),
-            }),
-        );
-
-        expect(reply.send).toHaveBeenCalled();
-        expect(response).toEqual(
-            expect.objectContaining({
-                machine: expect.objectContaining({ id: "m1", metadata: "meta", metadataVersion: 1, daemonState: "state", daemonStateVersion: 1 }),
-            }),
-        );
+        const changes = await db.accountChange.findMany({ where: { accountId: account.id, kind: "machine", entityId: "m1" } });
+        expect(changes).toHaveLength(1);
+        const updates = emitted.mock.calls.map(([event]) => event.payload).filter(payload => payload.body.t === "new-machine" || payload.body.t === "update-machine");
+        expect(updates.map(update => update.body.t)).toEqual(["new-machine", "update-machine"]);
+        expect(updates.map(update => update.seq)).toEqual([changes[0].cursor, changes[0].cursor]);
+        expect(new Set(updates.map(update => update.id)).size).toBe(2);
     });
 });

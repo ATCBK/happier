@@ -1,5 +1,5 @@
 import { MachinePresetActionInputSchemasV1, MachinePresetActionOutputSchemasV1, machinePresetActionEndpointPathV1, type MachinePresetActionIdV1 } from '@happier-dev/protocol/machines/managed/machinePresetActionsV1';
-import type { z } from "zod";
+import type { z } from "zod/mini";
 
 import type { Fastify } from "../../../types";
 import { readTeamOperationAuthenticationFromRequest, type TeamOperationAuthenticationContext } from "@/app/teams/actorContext";

@@ -1,5 +1,7 @@
 import { removeAutomationMachineAssignmentsTx } from "@/app/automations/automationMachineAssignmentRemoval";
 import { type MachineKind, isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
+import { isPlainMachineDataKeyMarker, machineStoredContentMatchesAccountMode } from "@happier-dev/protocol/machines/machineStoredContent";
+import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     buildNewMachineUpdate,
@@ -28,6 +30,23 @@ function copyToArrayBufferBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
     return copy;
 }
 
+export class MachineStorageModeMismatchError extends Error {
+    readonly code = "machine_storage_mode_mismatch";
+
+    constructor() {
+        super("Machine content does not match the persisted Account encryption mode");
+        this.name = "MachineStorageModeMismatchError";
+    }
+}
+
+/** Normalize persistence only; callers must verify the complete signed proof first. */
+export function resolveMachineContentPublicKeyFingerprintForStorage(params: Readonly<{
+    dataEncryptionKey: string | Uint8Array | null | undefined;
+    contentPublicKeyFingerprint: string | null;
+}>): string | null {
+    return isPlainMachineDataKeyMarker(params.dataEncryptionKey) ? null : params.contentPublicKeyFingerprint;
+}
+
 export async function createMachineWithInstallationIdentityInTx(
     tx: Tx,
     params: Readonly<{
@@ -48,6 +67,24 @@ export async function createMachineWithInstallationIdentityInTx(
     machine: Awaited<ReturnType<Tx["machine"]["create"]>>;
     machineReplacement: MachineRegistrationReplacementResult | null;
 }>> {
+    // Persistent registration must recheck Account mode in its creation transaction;
+    // Runner content is admitted separately against its signed activation facts.
+    if (isPersistentMachine(params)) {
+        const account = await tx.account.findUnique({
+            where: { id: params.accountId },
+            select: { publicKey: true, encryptionMode: true, contentPublicKey: true, contentPublicKeySig: true },
+        });
+        const currentness = account ? deriveAccountEncryptionCurrentnessFromRow(account) : null;
+        if (currentness?.status !== "ready" || !machineStoredContentMatchesAccountMode({
+            mode: currentness.currentness.encryptionMode,
+            metadata: params.metadata,
+            ...(typeof params.daemonState === "string" ? { daemonState: params.daemonState } : {}),
+            dataEncryptionKey: params.dataEncryptionKey,
+        })) {
+            throw new MachineStorageModeMismatchError();
+        }
+    }
+
     const machine = await tx.machine.create({
         data: {
             id: params.machineId,
@@ -67,11 +104,14 @@ export async function createMachineWithInstallationIdentityInTx(
                 ? {
                     installationId: params.installationIdentity.installationId,
                     installationPublicKey: params.installationIdentity.installationPublicKey,
-                    contentPublicKeyFingerprint: params.installationIdentity.contentPublicKeyFingerprint,
                 }
-                : params.contentPublicKeyFingerprint
-                    ? { contentPublicKeyFingerprint: params.contentPublicKeyFingerprint }
-                    : {}),
+                : {}),
+            contentPublicKeyFingerprint: resolveMachineContentPublicKeyFingerprintForStorage({
+                dataEncryptionKey: params.dataEncryptionKey,
+                contentPublicKeyFingerprint: params.installationIdentity
+                    ? params.installationIdentity.contentPublicKeyFingerprint
+                    : params.contentPublicKeyFingerprint,
+            }),
             active: false,
         },
     });

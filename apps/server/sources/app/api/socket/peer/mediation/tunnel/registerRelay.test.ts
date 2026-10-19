@@ -9,11 +9,16 @@ import {
 import tweetnacl from 'tweetnacl';
 import { describe, expect, it, vi } from 'vitest';
 import * as registerRelayModule from './registerRelay';
+import * as logBoundary from '@/utils/logging/log';
 import { TEST_MACHINE_INSTALLATION_ID } from '../../../../testkit/machineAdmissionPersistenceBoundary';
+
+const admissionPersistence = vi.hoisted(() => ({ readAvailability: async (_machineId: string): Promise<'available'> => 'available' }));
 
 vi.mock('@/storage/db', async () => {
     const { createMachineAdmissionPersistenceBoundary } = await import('../../../../testkit/machineAdmissionPersistenceBoundary');
-    return { db: createMachineAdmissionPersistenceBoundary('user_1').db };
+    const boundary = createMachineAdmissionPersistenceBoundary('user_1');
+    boundary.setAvailabilityReader(machineId => admissionPersistence.readAvailability(machineId));
+    return { db: boundary.db };
 });
 
 import {
@@ -321,6 +326,75 @@ function findBinaryFrame(
 }
 
 describe('registerPeerTcpTunnelRelaySocketHandler', () => {
+    it('forwards a queued burst after one fresh read but rechecks arrivals during that read', async () => {
+        const socket = createSocket();
+        const io = createIo();
+        registerRelayModule.registerPeerTcpTunnelRelaySocketHandler('user_1', socket, {
+            io, coordinator: createRelayTestCoordinator(io), serverRoutedEnabled: true,
+            allowedPorts: [3000], relayAuthorizationTrustRoots,
+        });
+        const tunnelId = 'fresh-batched-admission';
+        await socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope(tunnelId));
+        const gates = Array.from({ length: 3 }, () => {
+            let release!: () => void;
+            let started!: () => void;
+            const pending = new Promise<void>(resolve => { release = resolve; });
+            const entered = new Promise<void>(resolve => { started = resolve; });
+            return { pending, entered, release, started };
+        });
+        let read = 0;
+        // Delay only the database boundary. Real Machine admission and the
+        // registered relay handler still enforce every currentness decision.
+        admissionPersistence.readAvailability = async () => {
+            const gate = gates[read++];
+            if (gate) { gate.started(); await gate.pending; }
+            return 'available';
+        };
+        const forwarded = () => io.roomEmit.mock.calls.flatMap(([, payload]) => {
+            if (!payload || typeof payload !== 'object' || !('frame' in payload) || !(payload.frame instanceof Uint8Array)) return [];
+            const decoded = decodePeerTcpTunnelBinaryFrameV2({ frame: payload.frame, maxHeaderBytes: 1024, maxPayloadBytes: 1024 });
+            return decoded.ok && decoded.header.kind === 'data' ? [decoded.header.sequence] : [];
+        });
+        const sends: Array<Promise<unknown>> = [];
+        const send = (seq: number) => { const result = Promise.resolve(socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createDataEnvelope(tunnelId, 'pcm', seq))); sends.push(result); return result; };
+        const trace = vi.spyOn(logBoundary, 'log').mockImplementation(() => undefined);
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        try {
+            const first = send(0);
+            await gates[0]!.entered;
+            // A slow database boundary must remain distinguishable from native
+            // recognition or a missing relay response, without logging PCM.
+            await new Promise(resolve => setTimeout(resolve, 30));
+            send(1); send(2); send(3);
+            gates[0]!.release();
+            await first;
+            await gates[1]!.entered;
+            send(4);
+            gates[1]!.release();
+            await vi.waitFor(() => expect(forwarded()).toEqual([0, 1, 2, 3]));
+            gates[2]!.release();
+            await Promise.all(sends);
+            expect(forwarded()).toEqual([0, 1, 2, 3, 4]);
+            expect(trace.mock.calls).toContainEqual([
+                expect.objectContaining({ event: 'peer-relay-frame-admission', tunnelId,
+                    sequence: 0, sender: 'user', admitted: true,
+                    elapsedMs: expect.any(Number),
+                }),
+                '[peer-relay-frame-admission]',
+            ]);
+            const admission = trace.mock.calls.find(([fields]) =>
+                fields.event === 'peer-relay-frame-admission' && fields.sequence === 0);
+            expect(admission?.[0].elapsedMs).toBeGreaterThanOrEqual(20);
+        } finally {
+            trace.mockRestore();
+            vi.unstubAllEnvs();
+            admissionPersistence.readAvailability = async () => 'available';
+            for (const gate of gates) gate.release();
+            await Promise.all(sends);
+            await socket.trigger('disconnect');
+        }
+    });
+
     it('fails duplicate tunnel handler registration on one socket', async () => {
         const mod = await loadRegisterRelayModule();
         const socket = createSocket();
@@ -945,7 +1019,7 @@ describe('registerPeerTcpTunnelRelaySocketHandler', () => {
         void socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope('tun_pending_2', 3001));
         void socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope('tun_pending_1', 3000));
 
-        expect(admittedTunnelKeys).toHaveLength(1);
+        await vi.waitFor(() => expect(admittedTunnelKeys).toHaveLength(1));
         expect(io.roomEmit).toHaveBeenCalledWith(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, expect.objectContaining({
             frame: expect.objectContaining({
                 kind: 'abort',
@@ -1965,6 +2039,7 @@ describe('registerPeerTcpTunnelRelaySocketHandler', () => {
         const io = createIo();
         const emitted: unknown[] = [];
         let checkedPostCloseState = false;
+        let postCloseCheck = Promise.resolve<unknown>(undefined);
         mod.registerPeerTcpTunnelRelaySocketHandler('user_1', socket, {
             io,
             serverRoutedEnabled: true,
@@ -1975,7 +2050,7 @@ describe('registerPeerTcpTunnelRelaySocketHandler', () => {
                     emitted.push(event);
                     if (event.kind === 'flow.closed' && !checkedPostCloseState) {
                         checkedPostCloseState = true;
-                        void socket.trigger('peer:tunnel:v1', createDataEnvelope('tun_disconnect_receipt', 'after-disconnect'));
+                        postCloseCheck = Promise.resolve(socket.trigger('peer:tunnel:v1', createDataEnvelope('tun_disconnect_receipt', 'after-disconnect')));
                     }
                 },
             },
@@ -1985,6 +2060,7 @@ describe('registerPeerTcpTunnelRelaySocketHandler', () => {
         await socket.trigger('peer:tunnel:v1', createOpenEnvelope('tun_disconnect_receipt'));
         await socket.trigger('disconnect');
         await socket.trigger('disconnect');
+        await postCloseCheck;
 
         expect(emitted).toEqual(expect.arrayContaining([
             expect.objectContaining({
@@ -2268,6 +2344,7 @@ describe('registerPeerTcpTunnelRelaySocketHandler', () => {
         const io = createIo();
         const emitted: unknown[] = [];
         let checkedPostCloseState = false;
+        let postCloseCheck = Promise.resolve<unknown>(undefined);
         mod.registerPeerTcpTunnelRelaySocketHandler('user_1', socket, {
             io,
             serverRoutedEnabled: true,
@@ -2278,7 +2355,7 @@ describe('registerPeerTcpTunnelRelaySocketHandler', () => {
                     emitted.push(event);
                     if (event.kind === 'flow.closed' && !checkedPostCloseState) {
                         checkedPostCloseState = true;
-                        void socket.trigger('peer:tunnel:v1', createDataEnvelope('tun_voice_encrypted', 'after-close'));
+                        postCloseCheck = Promise.resolve(socket.trigger('peer:tunnel:v1', createDataEnvelope('tun_voice_encrypted', 'after-close')));
                     }
                 },
             },
@@ -2317,6 +2394,7 @@ describe('registerPeerTcpTunnelRelaySocketHandler', () => {
             }),
         }));
         await socket.trigger('peer:tunnel:v1', createCloseEnvelope('tun_voice_encrypted'));
+        await postCloseCheck;
 
         expect(emitted).toEqual(expect.arrayContaining([
             expect.objectContaining({
