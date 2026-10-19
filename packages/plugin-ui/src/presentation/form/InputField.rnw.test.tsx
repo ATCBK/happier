@@ -7,6 +7,7 @@ import {
   HappierInputField,
   type HappierInputFieldDescriptor,
 } from './InputField.js';
+import { HappierInputPickerProvider, type HappierInputPickerPort } from './inputPicker.js';
 
 const theme = createSurfaceContext().theme;
 const metric: HappierInputFieldDescriptor = {
@@ -34,6 +35,27 @@ describe('one typed field decides how a fixed choice is drawn, for every form', 
       expect(view.container.querySelector('[aria-live="polite"]')).toBeNull();
       await view.render(<HappierInputField {...props} optionsStatus="ready" options={[{ value: 'session', label: 'Project session' }]} />);
       expect(view.container.querySelector('[aria-live="polite"]')).toBeNull();
+    } finally { view.unmount(); }
+  });
+  it('does not offer a picker whose choices failed to load: Browse waits for Retry', async () => {
+    const port: HappierInputPickerPort = {
+      describe: () => ({ label: 'Browse…' }),
+      pick: async () => ({ status: 'cancelled' }),
+    };
+    const field = { path: 'participant', title: 'Participant', widget: 'select' as const,
+      inputType: { pluginId: 'com.acme.inputs', localId: 'participant' } };
+    const render = (status: 'ready' | 'failed') => <HappierInputPickerProvider port={port}>
+      <HappierInputField field={field} value={undefined} options={[]} optionsStatus={status}
+        optionsNotice={<></>} onChange={() => {}} frame="none" theme={theme} testID="participant" />
+    </HappierInputPickerProvider>;
+    const trigger = (view: ReturnType<typeof mountThroughReactNativeWeb>) =>
+      view.container.querySelector('[data-testid="participant-picker"]');
+    const view = mountThroughReactNativeWeb(render('ready'));
+    try {
+      expect(trigger(view)?.textContent).toContain('Browse…');
+      expect(trigger(view)?.getAttribute('aria-disabled')).not.toBe('true');
+      await view.render(render('failed'));
+      expect(trigger(view)?.getAttribute('aria-disabled')).toBe('true');
     } finally { view.unmount(); }
   });
   it('reads a declared "all" answer without an empty-options notice when nothing is there to narrow by', () => {
