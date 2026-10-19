@@ -74,11 +74,12 @@ export type CodexRolloutCandidateSelection = Readonly<
  * would restart the whole multi-chunk build on any live Codex turn.
  *
  * `sourceGeneration` is scoped to exactly what THIS resume point depends on: the
- * single day container the cursor resumes inside, whose entry set decides
- * whether `fileName` is still the right anchor. A rollout created in any other
- * container cannot move that anchor, so it must not discard an in-progress
- * build — a corpus-wide generation makes an actively used Codex install restart
- * its build faster than the build advances, and it never converges.
+ * single day container the cursor resumes inside. The filename anchor is stable
+ * when files are added or appended, including inside that same container. New
+ * files below the frontier can be visited; files above it wait for the next scan.
+ * Only container replacement/removal invalidates the resume point — fencing
+ * directory entry changes makes an active Codex install restart faster than the
+ * build advances, and it never converges.
  */
 export type CodexRolloutCandidateScanBoundary = Readonly<{
   sourceGeneration: string;
@@ -514,9 +515,6 @@ async function describeDirectoryGeneration(
       String(metadata.dev),
       String(metadata.ino),
       String(metadata.birthtimeNs),
-      String(metadata.mtimeNs),
-      String(metadata.ctimeNs),
-      String(metadata.size),
     ].join(':');
   } catch {
     throwIfCodexExternalSessionInvocationStopped(bounds);
@@ -590,9 +588,8 @@ async function listCandidateContainersForHome(params: Readonly<{
 
 /**
  * Fingerprints exactly what one resume point depends on: the container the
- * cursor resumes inside. Its entry set is what decides whether the boundary's
- * `fileName` anchor is still correct, so a mutation there must invalidate the
- * cursor and a mutation anywhere else must not.
+ * cursor resumes inside. Its physical identity must remain intact; changes to
+ * its children cannot move the filename anchor and must not invalidate it.
  */
 async function resolveResumeContainerGeneration(params: Readonly<{
   containers: readonly CandidateContainer[];
@@ -754,9 +751,8 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
     if (after && compareCodexRolloutCandidateCodeUnits(container.key, after.containerKey) > 0) {
       continue;
     }
-    // Captured BEFORE this container's entries are listed, so a rollout created
-    // between the two is either consumed by this chunk or invalidates the next
-    // one — never silently skipped by an anchor that already accounts for it.
+    // Capture physical identity before listing. Directory growth preserves the
+    // filename frontier; replacement/removal must still fence its continuation.
     const containerGeneration = container.key === after?.containerKey
       ? resumeGeneration
       : await resolveResumeContainerGeneration({
