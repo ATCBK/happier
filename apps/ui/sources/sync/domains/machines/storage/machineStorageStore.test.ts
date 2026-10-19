@@ -82,6 +82,39 @@ function harness() {
 
 describe('machine storage subscription owner', () => {
     afterEach(() => { for (const store of stores.splice(0)) store.reset(); vi.useRealTimers(); });
+    it('rearms a changed Storage watch before notifying the summary or refreshing category pages', async () => {
+        type WatchAnswer = Awaited<ReturnType<MachineStorageClients['watchClient']>>;
+        const watches: Array<ReturnType<typeof createDeferred<WatchAnswer>>> = [];
+        const order: string[] = [];
+        let changed = false;
+        const store = createMachineStorageStore({
+            summaryClient: async () => ({ ok: true, value: summary() }),
+            categoryClient: async () => {
+                if (changed) order.push(`category:${watches.length}`);
+                return { ok: true, value: category(changed ? 2 : 1) };
+            },
+            refreshClient: async () => ({ ok: true, value: summary() }),
+            watchClient: () => {
+                const answer = createDeferred<WatchAnswer>();
+                watches.push(answer); return answer.promise;
+            },
+        });
+        stores.push(store);
+        const release = store.demandCategory({ ...key, categoryId: 'logs' });
+        const unobserve = store.observe(key, () => {
+            if (store.getState(key).summary?.revision === 2) order.push(`summary:${watches.length}`);
+        });
+        try {
+            await vi.waitFor(() => expect(watches).toHaveLength(1));
+            changed = true;
+            watches[0]!.resolve({ ok: true, value: { changed: true, summary: summary(2) } });
+            await vi.waitFor(() => expect(store.getCategory({ ...key, categoryId: 'logs' }).page?.revision).toBe(2));
+            expect(order).toContain('summary:2');
+            expect(order).toContain('category:2');
+            expect(order).not.toContain('summary:1');
+            expect(order).not.toContain('category:1');
+        } finally { release(); unobserve(); }
+    });
     it('retains daemon per-volume Safe totals and distinguishes an absent total from measured zero', async () => {
         const h = harness();
         const volume = { volume: { volumeId: 'main', label: 'Main', mountPath: '/' }, totalBytes: 1000,

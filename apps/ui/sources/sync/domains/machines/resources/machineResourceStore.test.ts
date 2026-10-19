@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
 import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 import type { MachineVitalsHistoryV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
 import type {
@@ -650,6 +651,31 @@ describe('machine resources subscription owner', () => {
       releaseObserver();
       h.store.reset();
     }
+  });
+
+  it('dispatches timeout recovery before a slow listener and keeps the reporting cursor without a timer', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(60_000);
+    const h = harness(Date.now);
+    const publications: boolean[] = [];
+    const release = h.store.demand(key, () => {
+      if (h.store.getState(key).status !== 'slow') return;
+      publications.push(h.watches[1]?.dispatchedAt !== undefined);
+      vi.advanceTimersByTime(2_600);
+    });
+    try {
+      await settle();
+      h.watches[0]!.answer.resolve({ ok: false, reason: 'request_failed', errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE });
+      await settle();
+      expect(publications).toEqual([true]);
+      expect(h.watches).toHaveLength(2);
+      expect(h.watches[1]!.input.sinceSampledAt).toBe(60_000);
+      expect(h.watches[1]!.dispatchedAt).toBe(60_000);
+      expect(vi.getTimerCount()).toBe(0);
+      h.watches[1]!.answer.resolve({ ok: true, value: { changed: true, samples: [sample(75_000)] } });
+      await settle();
+      expect(h.store.getState(key)).toMatchObject({ status: 'ready', snapshot: { sample: { sampledAt: 75_000 } } });
+    } finally { release(); h.store.reset(); }
   });
 
   it('publishes a successful reply to the sibling even when its next watch fails before dispatch', async () => {

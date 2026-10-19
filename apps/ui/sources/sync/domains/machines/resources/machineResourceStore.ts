@@ -299,12 +299,15 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
                     }
                     const current = getHeldState(input);
                     const kind = current.status === 'slow' || current.status === 'error' ? 'error' : 'slow';
-                    store.publish(input, { kind, ...('errorCode' in result && result.errorCode ? { errorCode: result.errorCode } : {}) });
+                    const update: ResourceUpdate = { kind, ...('errorCode' in result && result.errorCode ? { errorCode: result.errorCode } : {}) };
                     // A deadline can expire while the renderer is blocked or the daemon is slow.
                     // The existing transport budget paces retries; presentation failure is not
                     // retirement while this reporting machine still has demand.
-                    if ('errorCode' in result && result.errorCode === MACHINE_RPC_TIMEOUT_ERROR_CODE) return { status: 'retry' };
-                    return { status: kind === 'slow' ? 'idle' : 'unavailable' };
+                    if (kind === 'slow' || ('errorCode' in result && result.errorCode === MACHINE_RPC_TIMEOUT_ERROR_CODE)) {
+                        return { status: 'changed', snapshot: update };
+                    }
+                    store.publish(input, update);
+                    return { status: 'unavailable' };
                 }
                 return { status: 'changed', snapshot: result.value.changed
                     ? { kind: 'samples', samples: result.value.samples } : { kind: 'freshness' } };
