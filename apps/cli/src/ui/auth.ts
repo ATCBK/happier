@@ -6,6 +6,7 @@ import { displayQRCode } from "./qrcode";
 import { delay, delayUnrefAbortable } from "@/utils/time";
 import {
     readStoredCredentials,
+    readStoredCredentialsForServerId,
     readSettings,
     updateSettings,
     type StoredCredentials,
@@ -727,7 +728,9 @@ async function waitForAuthentication(
                             return null;
                         }
                         await writeCredentialsTokenOnly({ token });
-                        return { encryption: null, token };
+                        const persisted = await readStoredCredentialsForServerId(configuration.activeServerId);
+                        if (!persisted || persisted.token !== token) throw new Error('Stored credential changed during terminal enrollment');
+                        return persisted;
                     }
 
                     const publicKeyBytes = tweetnacl.box.keyPair.fromSecretKey(opened.key).publicKey;

@@ -26,6 +26,7 @@ const root = resolve(process.cwd(), '../..');
 const guestEnv = { ...process.env, HAPPIER_HOME_DIR: String(input.guestHome), HAPPIER_SERVER_URL: undefined,
   HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_LOCAL_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined,
   HAPPIER_ACTIVE_SERVER_ID: undefined };
+let pendingRequest: { publicKey: string; remoteProfileId: string } | undefined;
 const executor = createHappierJsonExecutorFromTextRunner(async (args, options) => await new Promise((resolveResult, reject) => {
   const startedAt = Date.now();
   console.error(`qb73 subprocess start: ${args[0]} ${args[1]}`);
@@ -44,7 +45,9 @@ const executor = createHappierJsonExecutorFromTextRunner(async (args, options) =
   child.on('error', reject);
   child.on('close', status => {
     console.error(`qb73 subprocess close: ${args[0]} ${args[1]} ${status} ${Date.now() - startedAt}ms`);
-    resolveResult({ status: status ?? 1, stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') });
+    const output = Buffer.concat(stdout).toString('utf8');
+    if (args[1] === 'request' && status === 0) pendingRequest = JSON.parse(output);
+    resolveResult({ status: status ?? 1, stdout: output, stderr: Buffer.concat(stderr).toString('utf8') });
   });
   child.stdin.on('error', () => {});
   child.stdin.end(options?.input);
@@ -73,8 +76,8 @@ await operations.observe({ actionId: 'machines.managed.acquire', scope, execute:
   if (!result.ok) throw new SystemTaskExecutionError(result.error?.code ?? 'system_task_failed', result.error?.message ?? 'Managed guest setup failed.');
   return { ok: true, result: result.data ?? null };
 } });
-async function publishOutcome(result: SystemTaskResult): Promise<void> {
-  await writeJsonStdout({ task: result, operation: await operations.waitForTerminal(scope, 'qb73-operation') });
+async function publishOutcome(result: SystemTaskResult, lateConsent?: { rejected: boolean; waitStatus: number; waitCode?: string }): Promise<void> {
+  await writeJsonStdout({ task: result, operation: await operations.waitForTerminal(scope, 'qb73-operation'), ...(lateConsent ? { lateConsent } : {}) });
   process.exitCode = result.ok ? 0 : 1;
 }
 process.once('SIGTERM', () => { void runner.cancel({ taskId }); });
@@ -91,6 +94,23 @@ try {
       const capability = input.misbind
         ? createSystemTasksCapability(createProtocolSystemTasksRunnerAdapter(createSystemTasksRunner({ kinds: {} })))
         : systemTasksCapability;
+      if (typeof input.approvalDelayMs === 'number') {
+        await delay(input.approvalDelayMs);
+        const expired = await runner.poll({ taskId, cursor: 0 });
+        if (!expired || typeof expired !== 'object') throw new Error('invalid_task_poll');
+        if ('result' in expired && expired.result && pendingRequest) {
+          let rejected = false;
+          try { await capability.invoke!({ method: 'respond', params: { taskId, answer: { approved: true } } }); }
+          catch { rejected = true; }
+          // Exercise the original late guest invocation too, against the same
+          // real request and Home. Only its safe typed code leaves the fixture.
+          const waited = await executor.runHappierText(['auth', 'wait', '--json', '--remote-enrollment', '--server',
+            pendingRequest.remoteProfileId, '--no-persist', '--public-key', pendingRequest.publicKey]);
+          const failure = JSON.parse(waited.stdout);
+          await publishOutcome(SystemTaskResultSchema.parse(expired.result), { rejected, waitStatus: waited.status, waitCode: failure.error?.code });
+          break;
+        }
+      }
       await capability.invoke!({ method: 'respond', params: {
         taskId, answer: { approved: true },
       } });

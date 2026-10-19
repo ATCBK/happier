@@ -222,6 +222,10 @@ describe('protected local state publication', () => {
     await mkdir(directory, { recursive: true, mode: 0o755 });
     const path = join(directory, 'secret.json');
     await writeFile(path, 'stale', { mode: 0o644 });
+    // Creation modes are masked by the executor's umask; establish the older
+    // release's loose permissions explicitly before exercising admission.
+    await chmod(directory, 0o755);
+    await chmod(path, 0o644);
 
     await expect(writeProtectedLocalStateFileAtomic(path, 'fresh'))
       .rejects.toThrow('Protected local state has unsafe group/world permissions');

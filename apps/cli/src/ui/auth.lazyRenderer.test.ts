@@ -56,8 +56,11 @@ it('keeps the interactive renderer and protocol root barrel unloaded through dae
       'machines', 'providers/safety', 'runtime/catalog', 'rpc',
       'plugins/ui', 'devices/simulator', 'runtime/input', 'installables/definitions',
       'plugins/manifest', 'actions/executor', 'widgets', 'workflows',
-      'sessions/organization', 'sessions/authoring', 'plugins/contributions/ui',
+      'sessions/organization', 'plugins/contributions/ui',
     ]);
+    // sessions/authoring/index constructs the canonical authoring value schemas
+    // consumed by resume requests and Runner launch manifests; it is a schema
+    // owner, not an unrelated forwarding facade.
     const unrelatedBarrels = scripts.filter(({ url }) => {
       const owner = url.match(/(?:packages\/protocol\/(?:src|dist)|node_modules\/@happier-dev\/protocol\/dist)\/(.+)\/index\.(?:ts|js)$/u)?.[1];
       return owner !== undefined && startupBarrelFacades.has(owner);

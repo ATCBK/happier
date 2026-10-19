@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import tweetnacl from 'tweetnacl';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import {
   deriveAccountMachineKeyFromRecoverySecret,
   openTerminalProvisioningV3Response,
@@ -11,17 +12,22 @@ import {
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 
-const { mockPost } = vi.hoisted(() => ({
+const { mockPost, mockGet } = vi.hoisted(() => ({
   mockPost: vi.fn(),
+  mockGet: vi.fn(),
 }));
 
 vi.mock('axios', () => ({
   default: {
     post: mockPost,
+    get: mockGet,
   },
 }));
 
+const currentness = (mode: 'plain' | 'e2ee', key: Uint8Array = new Uint8Array(32).fill(2)) => ({ mode, version: 1, signingKeyFingerprint: null, contentKeyFingerprint: mode === 'plain' ? null : computeAccountEncryptionMigrateKeyFingerprintV1(tweetnacl.box.keyPair.fromSecretKey(key).publicKey), updatedAt: 0 });
+
 describe('approveTerminalAuthRequest', () => {
+  beforeEach(() => { mockGet.mockResolvedValue({ status: 200, data: currentness('e2ee') }); });
   const envKeys = [
     'HAPPIER_HOME_DIR',
     'HAPPIER_SERVER_URL',
@@ -37,11 +43,12 @@ describe('approveTerminalAuthRequest', () => {
     envScope.restore();
     envScope = createEnvKeyScope(envKeys);
     mockPost.mockReset();
+    mockGet.mockReset();
     vi.unstubAllGlobals();
     vi.resetModules();
   });
 
-  it('posts approval response to apiServerUrl when local override is present', async () => {
+  it('posts default approval through the published endpoint without changing the configured Home', async () => {
     await withTempDir('happier-cli-terminal-auth-approval-', async (homeDir) => {
       envScope.patch({
         HAPPIER_HOME_DIR: homeDir,
@@ -100,6 +107,9 @@ describe('approveTerminalAuthRequest', () => {
       configMod.reloadConfiguration();
       expect(configMod.configuration.serverUrl).toBe('http://host.lima.internal:53288');
       expect(configMod.configuration.apiServerUrl).toBe('http://127.0.0.1:53288');
+      const { publishServerHttpRuntimeOrigin } = await import('@/api/client/serverHttpBaseUrl');
+      const release = publishServerHttpRuntimeOrigin('http://127.0.0.1:53289', 'iroh');
+      try {
 
       mockPost.mockResolvedValueOnce({ status: 200, data: {} });
 
@@ -117,7 +127,7 @@ describe('approveTerminalAuthRequest', () => {
 
       expect(mockPost).toHaveBeenCalledTimes(1);
       const [url, body] = mockPost.mock.calls[0] ?? [];
-      expect(url).toBe('http://127.0.0.1:53288/v1/auth/response');
+      expect(url).toBe('http://127.0.0.1:53289/v1/auth/response');
       expect(body).not.toHaveProperty('authorizeUnattendedTeamAccess');
 
       mockPost.mockRejectedValueOnce({
@@ -143,6 +153,7 @@ describe('approveTerminalAuthRequest', () => {
         code: 'CREDENTIAL_AUTHENTICATION_EVIDENCE_UNAVAILABLE',
         message: expect.not.stringContaining('DO_NOT_DISCLOSE'),
       });
+      } finally { release(); }
     });
   });
 
@@ -184,6 +195,7 @@ describe('approveTerminalAuthRequest', () => {
       const target = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: 'home-b' });
       mockPost.mockResolvedValueOnce({ status: 200, data: {} });
 
+      mockGet.mockResolvedValue({ status: 200, data: currentness('plain') });
       const approval = await import('./terminalAuthApproval');
       await approval.approveTerminalAuthRequest({
         publicKey: Buffer.alloc(32, 3).toString('base64'),
@@ -246,6 +258,7 @@ describe('approveTerminalAuthRequest', () => {
       const profileDir = join(homeDir, 'servers', 'home-loopback');
       mkdirSync(profileDir, { recursive: true });
       writeFileSync(join(profileDir, 'access.key'), JSON.stringify({ token: 'token-loopback', encryption: null }), 'utf8');
+      mockGet.mockResolvedValue({ status: 200, data: currentness('plain') });
       const featuresBody = JSON.stringify({
         features: {},
         capabilities: { serverIdentity: { serverIdentityId: 'srv_route_alias_home' } },
@@ -333,6 +346,7 @@ describe('approveTerminalAuthRequest', () => {
       const profileDir = join(homeDir, 'servers', 'home-loopback');
       mkdirSync(profileDir, { recursive: true });
       writeFileSync(join(profileDir, 'access.key'), JSON.stringify({ token: 'token-loopback', encryption: null }), 'utf8');
+      mockGet.mockResolvedValue({ status: 200, data: currentness('plain') });
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
         features: {},
         capabilities: { serverIdentity: { serverIdentityId: 'srv_other_home' } },
@@ -421,6 +435,7 @@ describe('approveTerminalAuthRequest', () => {
       configMod.reloadConfiguration();
       const persistence = await import('@/persistence');
       await persistence.writeCredentialsTokenOnly({ token: 'token-only-1' });
+      mockGet.mockResolvedValue({ status: 200, data: currentness('plain') });
 
       const approval = await import('./terminalAuthApproval');
       const terminalPublicKey = Buffer.alloc(32, 3).toString('base64');
@@ -456,6 +471,7 @@ describe('approveTerminalAuthRequest', () => {
       configMod.reloadConfiguration();
       const persistence = await import('@/persistence');
       await persistence.writeCredentialsTokenOnly({ token: 'token-only-1' });
+      mockGet.mockResolvedValue({ status: 200, data: currentness('plain') });
 
       mockPost.mockResolvedValueOnce({ status: 200, data: {} });
 
@@ -502,6 +518,7 @@ describe('approveTerminalAuthRequest', () => {
       configMod.reloadConfiguration();
       const persistence = await import('@/persistence');
       await persistence.writeCredentialsTokenOnly({ token: 'token-only-1' });
+      mockGet.mockResolvedValue({ status: 200, data: currentness('plain') });
 
       const approval = await import('./terminalAuthApproval');
       const terminalKeypair = tweetnacl.box.keyPair();
@@ -522,7 +539,7 @@ describe('approveTerminalAuthRequest', () => {
     });
   });
 
-  it('seals an authenticated v3 data-key response when the approver holds data-key material and pairing context', async () => {
+  it.each([false, true])('seals a v3 data-key response only for current E2EE material (obsolete=%s)', async (obsolete) => {
     await withTempDir('happier-cli-terminal-auth-approval-data-key-v3-', async (homeDir) => {
       envScope.patch({
         HAPPIER_HOME_DIR: homeDir,
@@ -536,6 +553,7 @@ describe('approveTerminalAuthRequest', () => {
       const configMod = await import('@/configuration');
       configMod.reloadConfiguration();
       const machineKey = new Uint8Array(32).fill(7);
+      mockGet.mockResolvedValue({ status: 200, data: currentness('e2ee', obsolete ? new Uint8Array(32).fill(8) : machineKey) });
       const persistence = await import('@/persistence');
       await persistence.writeCredentialsDataKey({
         publicKey: tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey,
@@ -550,7 +568,7 @@ describe('approveTerminalAuthRequest', () => {
       const pairingSecret = new Uint8Array(32).fill(11);
       const createdAtMs = Date.now() - 60_000;
       const expiresAtMs = Date.now() + 3_600_000;
-      await approval.approveTerminalAuthRequest({
+      const completion = approval.approveTerminalAuthRequest({
         publicKey: Buffer.from(terminalKeypair.publicKey).toString('base64'),
         pairing: {
           secretB64Url: Buffer.from(pairingSecret).toString('base64url'),
@@ -560,6 +578,12 @@ describe('approveTerminalAuthRequest', () => {
         supportsTokenOnly: true,
       });
 
+      if (obsolete) {
+        await expect(completion).rejects.toMatchObject({ code: 'TERMINAL_PROVISIONING_MATERIAL_INVALID' });
+        expect(mockPost).not.toHaveBeenCalled();
+        return;
+      }
+      await completion;
       const opened = openTerminalProvisioningV3Response({
         payload: decodePostedResponse(),
         recipientSecretKeyOrSeed: terminalKeypair.secretKey,
@@ -587,6 +611,7 @@ describe('approveTerminalAuthRequest', () => {
       const configMod = await import('@/configuration');
       configMod.reloadConfiguration();
       const machineKey = new Uint8Array(32).fill(7);
+      mockGet.mockResolvedValue({ status: 200, data: currentness('e2ee', machineKey) });
       const persistence = await import('@/persistence');
       await persistence.writeCredentialsDataKey({
         publicKey: tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey,
@@ -623,6 +648,7 @@ describe('approveTerminalAuthRequest', () => {
       configMod.reloadConfiguration();
       const persistence = await import('@/persistence');
       const legacySecret = new Uint8Array(32).fill(9);
+      mockGet.mockResolvedValue({ status: 200, data: currentness('e2ee', deriveAccountMachineKeyFromRecoverySecret(legacySecret)) });
       await persistence.writeCredentialsLegacy({
         secret: legacySecret,
         token: 'token-1',
@@ -673,6 +699,7 @@ describe('approveTerminalAuthRequest', () => {
       const configMod = await import('@/configuration');
       configMod.reloadConfiguration();
       const machineKey = new Uint8Array(32).fill(7);
+      mockGet.mockResolvedValue({ status: 200, data: currentness('e2ee', machineKey) });
       const persistence = await import('@/persistence');
       await persistence.writeCredentialsDataKey({
         // Deliberately unrelated public key: must not match the machine key.
@@ -714,6 +741,7 @@ describe('approveTerminalAuthRequest', () => {
       const configMod = await import('@/configuration');
       configMod.reloadConfiguration();
       const machineKey = new Uint8Array(32).fill(7);
+      mockGet.mockResolvedValue({ status: 200, data: currentness('e2ee', machineKey) });
       const persistence = await import('@/persistence');
       await persistence.writeCredentialsDataKey({
         publicKey: tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey,
@@ -758,6 +786,7 @@ describe('approveTerminalAuthRequest', () => {
       const configMod = await import('@/configuration');
       configMod.reloadConfiguration();
       const machineKey = new Uint8Array(32).fill(7);
+      mockGet.mockResolvedValue({ status: 200, data: currentness('e2ee', machineKey) });
       const persistence = await import('@/persistence');
       await persistence.writeCredentialsDataKey({
         publicKey: tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey,
@@ -786,7 +815,7 @@ describe('approveTerminalAuthRequest', () => {
     });
   });
 
-  it('material decisions follow the canonical protocol resolver for every persisted credential shape', async () => {
+  it('material decisions follow authenticated Account mode for every persisted credential shape', async () => {
     const terminalKeypair = tweetnacl.box.keyPair();
     const pairingSecret = new Uint8Array(32).fill(11);
     const pairing = {
@@ -798,17 +827,18 @@ describe('approveTerminalAuthRequest', () => {
     const legacySecret = new Uint8Array(32).fill(9);
     const shapeSetups: Array<{
       label: string;
+      mode: 'plain' | 'e2ee';
       persist: (persistence: typeof import('@/persistence')) => Promise<void>;
       // Authoritative persisted credential shape inputs for the resolver.
       encryption: null | { type: 'legacy'; secret: Uint8Array } | { type: 'dataKey'; machineKey: Uint8Array };
     }> = [
       {
-        label: 'token-only',
+        label: 'token-only', mode: 'plain',
         persist: (persistence) => persistence.writeCredentialsTokenOnly({ token: 'token-only-1' }),
         encryption: null,
       },
       {
-        label: 'data-key',
+        label: 'data-key', mode: 'e2ee',
         persist: async (persistence) => {
           const machineKey = new Uint8Array(32).fill(7);
           await persistence.writeCredentialsDataKey({
@@ -820,9 +850,14 @@ describe('approveTerminalAuthRequest', () => {
         encryption: { type: 'dataKey', machineKey: new Uint8Array(32).fill(7) },
       },
       {
-        label: 'legacy-secret',
+        label: 'legacy-secret', mode: 'e2ee',
         persist: (persistence) =>
           persistence.writeCredentialsLegacy({ secret: legacySecret, token: 'token-1' }),
+        encryption: { type: 'legacy', secret: legacySecret },
+      },
+      {
+        label: 'plain-retained-history', mode: 'plain',
+        persist: (persistence) => persistence.writeCredentialsLegacy({ secret: legacySecret, token: 'token-1' }),
         encryption: { type: 'legacy', secret: legacySecret },
       },
     ];
@@ -842,13 +877,12 @@ describe('approveTerminalAuthRequest', () => {
         configMod.reloadConfiguration();
         const persistence = await import('@/persistence');
         await setup.persist(persistence);
+        mockGet.mockResolvedValue({ status: 200, data: currentness(setup.mode, setup.encryption?.type === 'legacy' ? deriveAccountMachineKeyFromRecoverySecret(setup.encryption.secret) : setup.encryption?.machineKey) });
 
-        // The canonical owner decides the variant from the authoritative
-        // persisted credential shape; the CLI must not re-derive it. Legacy
-        // recovery-secret credentials resolve the same derived content key
-        // through the protocol derivation owner.
+        // This fixture Account mode is authenticated by the GET boundary;
+        // retained material never selects the Account mode.
         const expectedVariant = resolveTerminalProvisioningVariantV2({
-          encryptionMode: setup.encryption ? 'e2ee' : 'plain',
+          encryptionMode: setup.mode,
         });
 
         mockPost.mockResolvedValueOnce({ status: 200, data: {} });

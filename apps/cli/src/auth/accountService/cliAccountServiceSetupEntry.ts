@@ -677,19 +677,13 @@ export async function runCliAccountServiceSetupEntry(
                 ? 'invalid'
                 : 'missing'
             : 'ready';
-          const storedCredential = mode.mode === 'plain' && committed.encryption
-            ? { token: committed.token, encryption: null } as const
-            : committed;
-          if (storedCredential !== committed) {
-            await writeStoredCredentialsForServerId(inputValue.profileId, storedCredential);
-          }
           if (material !== 'ready') {
             return { profileId: inputValue.profileId, material, machineRegistered: false };
           }
           try {
             await runWithServerProfileSelection(inputValue.profileId, async () => {
               await registerMachineWithAuthenticatedHomeRuntime({
-                credentials: storedCredential,
+                credentials: committed,
                 forceNew: true,
                 runtimeOrigin: inputValue.runtimeOrigin,
               });

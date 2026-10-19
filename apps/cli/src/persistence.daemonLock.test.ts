@@ -7,6 +7,38 @@ import { readProcessIdentityByPid } from '@/daemon/processIdentity';
 import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from '@/testkit/env/envSnapshot';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 
+async function denyCurrentProcessCommandRead(): Promise<void> {
+  if (process.platform !== 'linux') {
+    const custody = await import('@/subprocess/supervision/processCustody');
+    const createInvoker = custody.createProcessCustodySamplingInvoker;
+    // Preserve the real native identity response, withholding only command evidence.
+    vi.spyOn(custody, 'createProcessCustodySamplingInvoker').mockImplementation((options) => {
+      const invoke = createInvoker(options);
+      return async (input) => {
+        const result = await invoke(input);
+        if (input.command !== 'process-census' || result.state !== 'ready') return result;
+        const snapshot: unknown = JSON.parse(result.stdout);
+        if (!snapshot || typeof snapshot !== 'object' || !('rows' in snapshot) || !Array.isArray(snapshot.rows)) return result;
+        return { ...result, stdout: JSON.stringify({ ...snapshot, rows: snapshot.rows.map((row: unknown) => {
+          if (!row || typeof row !== 'object' || !('pid' in row) || row.pid !== process.pid) return row;
+          const { argv: _argv, commandLine: _commandLine, ...identity } = row as Record<string, unknown>;
+          return identity;
+        }) }) };
+      };
+    });
+    return;
+  }
+  const procfs = await import('@/processes/census/linuxProcfs');
+  const read = procfs.readLinuxProcFile;
+  // Leave liveness and generation real; only the OS command-line read is denied.
+  vi.spyOn(procfs, 'readLinuxProcFile').mockImplementation((path, encoding) => {
+    if (path === `/proc/${process.pid}/cmdline`) {
+      return Promise.reject(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    }
+    return read(path, encoding);
+  });
+}
+
 describe('acquireDaemonLock', () => {
   const envBackup = snapshotEnvValues(['HAPPIER_HOME_DIR']);
   let homeDir: string;
@@ -18,6 +50,7 @@ describe('acquireDaemonLock', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     restoreEnvValues(envBackup);
     vi.resetModules();
     vi.unmock('@/daemon/doctor');
@@ -137,9 +170,7 @@ describe('acquireDaemonLock', () => {
   }, 120_000);
 
   it('does not replace a fresh live unclassified lock holder', async () => {
-    vi.doMock('@/daemon/doctor', () => ({
-      classifyDaemonLifecycleProcessByPid: async () => ({ kind: 'unknown' as const }),
-    }));
+    await denyCurrentProcessCommandRead();
 
     const { configuration } = await import('@/configuration');
     await mkdir(dirname(configuration.daemonLockFile), { recursive: true });
@@ -172,9 +203,7 @@ describe('acquireDaemonLock', () => {
   });
 
   it('does not replace an old live unclassified lock holder', async () => {
-    vi.doMock('@/daemon/doctor', () => ({
-      classifyDaemonLifecycleProcessByPid: async () => ({ kind: 'unknown' as const }),
-    }));
+    await denyCurrentProcessCommandRead();
 
     const { configuration } = await import('@/configuration');
     await mkdir(dirname(configuration.daemonLockFile), { recursive: true });
@@ -225,9 +254,7 @@ describe('acquireDaemonLock', () => {
   });
 
   it('default stale-state cleanup preserves a live unclassified singleton lock', async () => {
-    vi.doMock('@/daemon/doctor', () => ({
-      classifyDaemonLifecycleProcessByPid: async () => ({ kind: 'unknown' as const }),
-    }));
+    await denyCurrentProcessCommandRead();
 
     const { configuration } = await import('@/configuration');
     await mkdir(dirname(configuration.daemonStateFile), { recursive: true });

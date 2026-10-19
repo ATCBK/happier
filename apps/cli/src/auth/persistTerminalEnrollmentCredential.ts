@@ -2,10 +2,14 @@ import tweetnacl from 'tweetnacl';
 import type { ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 
 import { ApiClient } from '@/api/api';
+import { configuration } from '@/configuration';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { initialMachineMetadata } from '@/daemon/machine/metadata';
 import {
+  prepareCredentialsTokenOnlyForServerId,
+  readSettings,
+  readStoredCredentialsForServerId,
   writeCredentialsDataKey,
   writeCredentialsTokenOnly,
   type StoredCredentials,
@@ -16,6 +20,7 @@ import { ensureMachineIdForCredentials } from '@/ui/auth';
 export async function persistTerminalEnrollmentCredential(params: Readonly<{
   token: string;
   opened: OpenTerminalProvisioningResponseResult;
+  previousAccountId?: string | null;
 }>): Promise<Readonly<{
   credentials: StoredCredentials;
   encryptionType: 'dataKey' | 'tokenOnly';
@@ -25,9 +30,11 @@ export async function persistTerminalEnrollmentCredential(params: Readonly<{
   if (encryption?.type === 'dataKey') {
     await writeCredentialsDataKey({ publicKey: encryption.publicKey, machineKey: encryption.machineKey, token: params.token });
   } else {
-    await writeCredentialsTokenOnly({ token: params.token });
+    await writeCredentialsTokenOnly({ token: params.token }, { previousAccountId: params.previousAccountId });
   }
-  return prepared;
+  const credentials = await readStoredCredentialsForServerId(configuration.activeServerId);
+  if (!credentials || credentials.token !== params.token) throw new Error('Stored credential changed during terminal enrollment');
+  return { ...prepared, credentials };
 }
 
 export function createTerminalEnrollmentCredential(params: Readonly<{
@@ -61,10 +68,18 @@ export async function registerAndPersistManagedTerminalEnrollmentCredential(para
   assertCurrent(): void;
 }>): Promise<Readonly<{ machineId: string; encryptionType: 'dataKey' | 'tokenOnly' }>> {
   params.assertCurrent();
-  const prepared = createTerminalEnrollmentCredential(params);
-  const machineId = await registerTerminalEnrollmentMachine(prepared.credentials, params.runtimeOrigin, params.managedEnrollment);
+  // Machine registration updates lastTokenSub. Capture the predecessor's scope
+  // first so a tokenless historical key can never be rebound to a new Account.
+  const previousAccountId = (await readSettings()).lastTokenSubByServerId?.[configuration.activeServerId] ?? null;
   params.assertCurrent();
-  await persistTerminalEnrollmentCredential(params);
+  const prepared = createTerminalEnrollmentCredential(params);
+  const credentials = prepared.encryptionType === 'tokenOnly'
+    ? await prepareCredentialsTokenOnlyForServerId(configuration.activeServerId, { token: params.token }, { previousAccountId })
+    : prepared.credentials;
+  params.assertCurrent();
+  const machineId = await registerTerminalEnrollmentMachine(credentials, params.runtimeOrigin, params.managedEnrollment);
+  params.assertCurrent();
+  await persistTerminalEnrollmentCredential({ ...params, previousAccountId });
   return { machineId, encryptionType: prepared.encryptionType };
 }
 

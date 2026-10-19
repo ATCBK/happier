@@ -54,6 +54,7 @@ describe('persistence file permissions (posix)', () => {
     await expect(readStoredCredentials()).resolves.toEqual({
       token: 'plain-account-token',
       encryption: null,
+      credentialProvenance: 'stored_session',
     });
   });
 
