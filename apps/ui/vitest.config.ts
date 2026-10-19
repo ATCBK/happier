@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs'
 
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating'
 import { resolveVitestWorkers } from '../../scripts/testing/vitestWorkers'
@@ -208,11 +209,13 @@ export default defineConfig({
             },
         },
         env: {
+            ...createTestHomeEnvironment().env,
             HAPPIER_FEATURE_POLICY_ENV: '',
             NODE_ENV: 'test',
             VITEST_UI_SOURCES_DIR: resolve('./sources'),
         },
-        setupFiles: [resolve('./sources/dev/vitestSetup.ts')],
+        setupFiles: [resolve('../../scripts/testing/vitestHomeSetup.mjs'), resolve('./sources/dev/vitestSetup.ts')],
+        sequence: { setupFiles: 'list' },
         include: [
             'sources/**/*.{spec,test}.{ts,tsx}',
             'tools/**/*.{spec,test}.{ts,tsx}',

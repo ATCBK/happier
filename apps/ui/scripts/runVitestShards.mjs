@@ -11,6 +11,7 @@ import {
   resolveSignalExitCode,
   runManagedChildCommand,
 } from '../../../scripts/testing/process/managedChildLifecycle.mjs';
+import { resolveVitestNodeCommand } from '../../../scripts/testing/vitestNodeCommand.mjs';
 import {
   parseVitestListJson,
   shouldVitestShardRunProceedWithoutFiles,
@@ -202,17 +203,6 @@ export function createVitestShardRunPlan({
     });
   }
   return plan;
-}
-
-function resolveVitestNodeCommand() {
-  return {
-    command: process.execPath,
-    argsPrefix: [
-      require.resolve('vitest/vitest.mjs', {
-        paths: [packageRoot],
-      }),
-    ],
-  };
 }
 
 async function resolveVitestTestFiles({ vitestCommand, configPath, env, passthroughArgs }) {
@@ -442,7 +432,7 @@ async function main(argv) {
     delete vitestEnv.VITEST_MIN_FORKS;
     delete vitestEnv.VITEST_MIN_THREADS;
   }
-  const vitestCommand = resolveVitestNodeCommand();
+  const vitestCommand = resolveVitestNodeCommand(packageRoot);
   // The list pass keeps the caller's filters (they are what selects the files); the shard runs
   // drop exactly those filters, because the resolved file list already carries them.
   const positionalFilters = await resolveVitestPositionalFilters(passthroughArgs);
