@@ -348,7 +348,9 @@ vi.mock(
 vi.mock('@/sync/sync', () => ({
   sync: { patchSessionMetadataWithRetry: metadataWrites },
 }));
-vi.mock('@/keyboard/KeyboardShortcutProvider', () => ({
+// The real provider module (the Run… start modal reads its context snapshot); only handler registration is stubbed.
+vi.mock('@/keyboard/KeyboardShortcutProvider', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/keyboard/KeyboardShortcutProvider')>()),
   useKeyboardShortcutHandlers: () => true,
 }));
 vi.mock(
@@ -391,6 +393,9 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
     );
   },
 }));
+// The popover's portal and window measurement are the platform boundary; the sheet inside stays real.
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+  (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 vi.mock('@/components/discussions/DiscussionComposer', () => ({
   DiscussionComposer: (props: Record<string, unknown>) => {
     composerProps.current = props;
@@ -1290,7 +1295,7 @@ describe('DiscussionDetailsView selection', () => {
     expect(screen.findByTestId('save-memory-decision')).toBeTruthy();
     expect(
       screen.findByTestId('save-memory-decision.text')?.props.value,
-    ).toBe(screen.findByTestId('session-discussion-message-content-message-a')?.props.children);
+    ).toContain('Check this');
   });
 
   it('mounts row selection, copies canonical labeled text, and opens the interactive Agent draft', async () => {

@@ -26,6 +26,21 @@ afterEach(() => {
 });
 
 describe('useDiscussionDraft', () => {
+    it('retains only the selected model slot identity across editing and remount before any Send', async () => {
+        writeDiscussionSessionDraft({ scope, address: existingAddress, patch: {
+            text: '@Model', mentions: [{ start: 0, end: 6, participantSlotId: 'saved-model-slot' }],
+        } });
+        const first = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        expect(first.getCurrent().mentions).toEqual([{ start: 0, end: 6, participantSlotId: 'saved-model-slot' }]);
+        act(() => first.getCurrent().setText('Ask @Model'));
+        await first.unmount();
+        const restored = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        expect(restored.getCurrent().mentions).toEqual([{ start: 4, end: 10, participantSlotId: 'saved-model-slot' }]);
+        expect(getSessionComposerDraftSnapshot(scope, existingAddress)?.composer.mentions.value)
+            .toEqual([{ start: 4, end: 10, participantSlotId: 'saved-model-slot' }]);
+        expect(restored.getCurrent().pendingMutationAttempt).toBeNull();
+        await restored.unmount();
+    });
     it('switches keyed route drafts without borrowing subscriptions or clearing another draft submission', async () => {
         const firstAddress = { kind: 'newDiscussion' as const, draftId: '00000000-0000-5000-8000-000000000001' };
         const secondAddress = { kind: 'newDiscussion' as const, draftId: '00000000-0000-5000-8000-000000000002' };

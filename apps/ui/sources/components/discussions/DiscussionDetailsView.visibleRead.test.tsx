@@ -77,7 +77,11 @@ vi.mock('react-native', async () => {
         useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
     });
 });
-vi.mock('@/keyboard/KeyboardShortcutProvider', () => ({ useKeyboardShortcutHandlers: () => true }));
+// The real provider module (the Run… start modal reads its context snapshot); only handler registration is stubbed.
+vi.mock('@/keyboard/KeyboardShortcutProvider', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/keyboard/KeyboardShortcutProvider')>()),
+  useKeyboardShortcutHandlers: () => true,
+}));
 vi.mock('@/sync/sync', () => ({ sync: { patchSessionMetadataWithRetry: vi.fn() } }));
 vi.mock('@/components/discussions/useDiscussionDraft', () => ({ useDiscussionDraft: () => draftState }));
 vi.mock('@/components/discussions/DiscussionComposer', () => ({ DiscussionComposer: (props: Readonly<{ onSend: (content: DiscussionMessageContentV1) => void }>) => { composerProps.current = props; return null; } }));

@@ -112,7 +112,8 @@ function mentionValues(mentions: readonly DiscussionMentionSpan[]): readonly Str
     return mentions.map((mention) => ({
         start: mention.start,
         end: mention.end,
-        ...(typeof mention.accountId === 'string' ? { accountId: mention.accountId } : { sessionId: mention.sessionId }),
+        ...(typeof mention.accountId === 'string' ? { accountId: mention.accountId }
+            : typeof mention.sessionId === 'string' ? { sessionId: mention.sessionId } : { participantSlotId: mention.participantSlotId }),
     }));
 }
 

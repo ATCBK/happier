@@ -407,6 +407,13 @@ excludes already admitted people and backing Sessions; candidate labels and read
 display facts, not permission to invite, start work or disclose content. The hook runs only
 when selection is demanded and retires with its captured Account lifetime.
 
+Session invite/reviewer candidates retain the ordinary Session display `label` and
+expose `titleReadable`, derived by the existing Home-qualified
+`readableSessionDisplayTitle` owner. A locked placeholder is not a readable title;
+the flag lets the presenting surface group or hide unreadable choices without
+comparing translated strings or retaining a second title store. It is display
+availability, never permission to invite or disclose content.
+
 Operational `discussion.invite` accepts a SessionTarget in `participant.sessionId`;
 `discussion.create` accepts independently-one SessionTarget operands in Session entries
 of `participants`. The shared Action SessionTarget front door resolves these before
@@ -426,12 +433,27 @@ existing invitation owner inside the create transaction, and a refusal rolls bac
 resource, initial grants, bindings and first post. Account recipient-envelope preparation
 remains separate from executable Session admission.
 
-The ordinary Discussion `@` picker uses the shared Session-reference suggestion kind.
-Its current roster admits existing Sessions/Bots and bound model backing Sessions; a
-cached Session title supplies display only and cannot admit an outsider. An unbound model
-slot is not addressable yet, while an invited idle/offline Session remains addressable.
-Selection emits the existing typed Session mention through the shared range/application
-owner, and the server rechecks membership when committing the message.
+A refused initial audience fails only that proposed creation, retaining its mutation
+and draft recovery plus unrelated loaded Discussions. A refused creation-local-id
+reconciliation read remains uncertain; it cannot prove that the whole Home was revoked.
+Known-resource refusal remains resource-scoped, and actual Account retirement uses the
+existing Account lifetime owner. The separate Doc-comment delegation has no configurable
+initial-audience operand and rejects nonempty participants before writing, rather than
+silently discarding them.
+
+The ordinary Discussion `@` picker uses its current admitted roster: existing
+Sessions/Bots, bound model backing Sessions, and invited model slots whose Session
+has not started yet. Cached titles supply display only and cannot admit an outsider.
+An unstarted model is named by the existing Agent/model/Machine display owner;
+selecting it retains its real slot reference in the existing Discussion draft and
+does not launch anything. On explicit Send, the Discussion owner rereads current
+membership and resolves that exact slot through the existing invitation/rejoin
+and ordinary Session-birth path, preserving the saved launch and answer policy.
+An already-bound slot uses its real Session without another start. Only confirmed
+backing identities become the existing typed Session mentions in posted content;
+pending, approval or failed birth leaves the question drafted rather than posting
+a fabricated Session reference. The server still rechecks membership at commit,
+and invited idle/offline Sessions remain addressable.
 
 Summary `latestMessage.content` carries the original stored envelope, not a server-readable
 preview copy. `createDiscussionActionAdapter` opens it through the same resource key and
@@ -677,7 +699,9 @@ identity. Human invitations remain grants, outside this executable selection.
 
 The existing participant owner reserves a stable `participantSlotId` and launch
 selection. An unresolved start retries that slot rather than selecting another
-creation identity. Ordinary Session birth carries the strict `discussion`
+creation identity. An unstarted slot selected in the Discussion composer is also
+resolved through that same owner on explicit Ask/Send, never through a composer-local
+launcher; editing or opening/selecting a mention alone does not start it. Ordinary Session birth carries the strict `discussion`
 origin and exact Discussion/slot correspondence; the server validates the
 current reservation, creator and launch before committing its backing Session.
 An authenticated creation-tag retry also revalidates current participation
@@ -851,6 +875,11 @@ composed SQLite coverage; package and loaded native integration remain unverifie
 The protected Pending request, receipt and native admission witness retain the
 question/participant/cutoff tuple. Happier-supplied context and `discussion.read`
 cannot exceed that cutoff, and provider dispatch rechecks the original custody.
+That recheck reads the original's settled authority and exact admission receipt:
+initial settlement deliberately removes the untrusted request metadata. It
+retains the original authority and encrypted content while revalidating current
+permissions, mute, participation and Pending admission. It does not restore a
+request into the transcript or treat authority-free held custody as admitted.
 Two queued questions retain separate contexts rather than merging their
 cutoffs. These checks cannot erase content already ingested by a retained native
 continuation; the composed native-independence live proof remains open.

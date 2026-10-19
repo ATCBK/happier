@@ -34,7 +34,6 @@ export const DiscussionWorkflowRunRow = React.memo(
       metadata: WorkflowRunPrivateMetadataV1 | null | undefined;
       supportsAnotherRound: boolean | undefined;
       canEdit: boolean;
-      attention: boolean;
       accountLifetime: ServerAccountScopeLifetime;
       /** The new round stays here: the list re-reads and shows it under its message. */
       onStarted: (result: WorkflowRunStartResultV1) => void;
@@ -65,16 +64,12 @@ export const DiscussionWorkflowRunRow = React.memo(
         verb: formatWorkflowRunDisplayName(
           resolveWorkflowRunDisplayName(props.metadata),
         ),
-        details: [
-          props.attention
-            ? t('workflows.run.review')
-            : controls.lifecycle.label,
-          ...(progress ? [progress] : []),
-        ],
+        // The lifecycle word already says "Needs you" while the Run waits on the person.
+        details: [controls.lifecycle.label, ...(progress ? [progress] : [])],
         meta: null,
         purpose: null,
       }),
-      [controls.lifecycle.label, progress, props.attention, props.metadata],
+      [controls.lifecycle.label, progress, props.metadata],
     );
     const pending =
       controls.start.pendingRunId !== null &&

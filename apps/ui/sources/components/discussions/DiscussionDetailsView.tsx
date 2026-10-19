@@ -59,7 +59,9 @@ import { useSessionAgentActivityRoster } from '@/hooks/session/useSessionAgentAc
 import { useSessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { randomUUID } from '@/platform/randomUUID';
-import { createDiscussionClient, type DiscussionClientOutcome } from '@/sync/api/discussions/discussionActions';
+import { createDiscussionClient, type DiscussionClientOutcome, type DiscussionExecutableParticipantInviteOutcome } from '@/sync/api/discussions/discussionActions';
+import { prepareDiscussionParticipantMentions } from './prepareDiscussionParticipantMentions';
+import type { DiscussionComposerValue } from './DiscussionComposer';
 import {
     useServerCredentialAccountScopeBindings,
     type ServerCredentialAccountScopeBinding,
@@ -192,8 +194,12 @@ function discussionFailureLabel(errorCode: string | undefined): string {
 }
 
 function discussionLifecycleFailureLabel(
-    outcome: Exclude<DiscussionClientOutcome<DiscussionDetailsResultV1>, { kind: 'succeeded' }>,
+    outcome: Exclude<DiscussionClientOutcome<DiscussionDetailsResultV1> | DiscussionExecutableParticipantInviteOutcome, { kind: 'succeeded' }>,
+    operation: 'rename' | 'archive' | 'restore' | 'invite',
 ): string {
+    if (outcome.kind === 'approval_request_created') return t('approvals.status.open');
+    if (outcome.kind === 'checking') return t(operation === 'invite'
+        ? 'session.collaboration.discussion.manage.checking' : 'session.collaboration.discussion.deliveryUnknown');
     return outcome.kind === 'failed' && outcome.errorCode === 'outcome_unknown'
         ? t('session.collaboration.discussion.deliveryUnknown')
         : discussionFailureLabel(outcome.kind === 'failed' ? outcome.errorCode : undefined);
@@ -229,7 +235,8 @@ function discussionMentionText(part: Extract<DiscussionMessagePartV1, { t: 'ment
     const sessionLabel = part.participant.kind === 'session' ? resolveSessionLabel(part.participant.sessionId) : null;
     return part.participant.kind === 'account'
         ? `@${resolveAccountLabel(part.participant.accountId) ?? t('session.collaboration.discussion.collaborator')}`
-        : sessionLabel ? `@${sessionLabel}` : t('session.collaboration.discussion.contentUnavailable');
+        // An unnamed Session is still a mention, worded as the list preview words it, never "Message unavailable".
+        : `@${sessionLabel ?? t('session.collaboration.discussion.heldParticipant')}`;
 }
 
 /**
@@ -480,8 +487,12 @@ type DiscussionSource = Readonly<{
 const NO_SOURCE_SUBAGENTS: ReturnType<typeof useSessionAgentActivityRoster>['subagents'] = Object.freeze([]);
 const readNoSourceExecutionRunEntry: ReturnType<typeof useSessionAgentActivityRoster>['readExecutionRunEntry'] = () => null;
 
-/** Source-only subscriptions mount only when the resource actually has a Session anchor. */
-function DiscussionSourceObserver(props: Readonly<{ scope: ServerAccountScope; address: SessionAddress; onChange: (source: DiscussionSource | null) => void }>) {
+/**
+ * Source-only subscriptions mount only when the resource actually has a Session anchor. A memoized leaf: it
+ * renders for its own subscriptions, never because publishing its source re-rendered the parent (that loop
+ * re-published a fresh source on every render of a Session-anchored Discussion).
+ */
+const DiscussionSourceObserver = React.memo(function DiscussionSourceObserver(props: Readonly<{ scope: ServerAccountScope; address: SessionAddress; onChange: (source: DiscussionSource | null) => void }>) {
     const session = useSessionViewShellSession(props.address.sessionId, props.address.serverId);
     const { canLaunchExecutionRuns } = useSessionExecutionRunLaunchability(props.address.sessionId, session, props.address.serverId);
     const { subagents, readExecutionRunEntry } = useSessionAgentActivityRoster({ sessionId: props.address.sessionId, serverId: props.address.serverId });
@@ -493,7 +504,7 @@ function DiscussionSourceObserver(props: Readonly<{ scope: ServerAccountScope; a
         return () => props.onChange(null);
     }, [activity, agentConversation, canLaunchExecutionRuns, canSendToSession, props.address, props.onChange, props.scope]);
     return null;
-}
+});
 
 function Discussion(props: DiscussionProps) {
     const [repository, snapshot] = useRepository(props.scope, props.target.address, props.accountLifetime);
@@ -680,9 +691,18 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     }, [accessRevoked, draft, sourceRefused]);
     const [rename, setRename] = React.useState<string | null>(null);
     const [lifecycleFailure, setLifecycleFailure] = React.useState<Readonly<{
-        operation: 'rename' | 'archive' | 'restore';
-        outcome: Exclude<DiscussionClientOutcome<DiscussionDetailsResultV1>, { kind: 'succeeded' }>;
+        operation: 'rename' | 'archive' | 'restore' | 'invite';
+        outcome: Exclude<DiscussionClientOutcome<DiscussionDetailsResultV1> | DiscussionExecutableParticipantInviteOutcome, { kind: 'succeeded' }>;
     }> | null>(null);
+    const inviteExecutable = participantManagement.inviteExecutable;
+    const prepareParticipantMentions = React.useCallback(async (document: DiscussionComposerValue, isCurrent: () => boolean) => {
+        setLifecycleFailure(null);
+        const result = await prepareDiscussionParticipantMentions({ document, discussionId: props.target.discussionId,
+            repository, inviteExecutable, isCurrent: () => props.accountLifetime.isCurrent() && isCurrent() });
+        if (result.kind === 'ready') return result.content;
+        if (props.accountLifetime.isCurrent() && isCurrent()) setLifecycleFailure({ operation: 'invite', outcome: result.outcome });
+        return null;
+    }, [inviteExecutable, props.accountLifetime, props.target.discussionId, repository]);
     React.useEffect(() => {
         if (props.target.messageId) void repository.openMessage({ kind: 'discussion', discussion: {
             serverId: props.target.address.serverId, discussionId: props.target.discussionId,
@@ -752,12 +772,18 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         if (outcome.kind === 'checking') return { messageId: await observeCommittedPost(repository, props.target.discussionId, request.localId) };
         throw new Error(outcome.kind === 'failed' ? outcome.errorCode : 'discussion_post_approval_pending');
     }, [composerBlocked, discussion?.capabilities.postMessages, dismissRefusal, draft, mutation, props.target.discussionId, repository]);
+    // The Run… chip reads the current post owner and draft only when pressed, so the chip keeps one identity.
+    const prepareAddressingMessageRef = React.useRef(prepareAddressingMessage);
+    prepareAddressingMessageRef.current = prepareAddressingMessage;
+    const prepareRunAddressingMessage = React.useCallback((request: Readonly<{ localId: string; submittedDraft: string }>) => prepareAddressingMessageRef.current(request), []);
     const discussionAddress = React.useMemo(() => ({ serverId: props.target.address.serverId, discussionId: props.target.discussionId }), [props.target.address.serverId, props.target.discussionId]);
     const managedRuns = useDiscussionManagedWorkflowRuns({ discussion: discussionAddress, accountLifetime: props.accountLifetime,
-        enabled: props.active && !accessRevoked && thread?.status !== 'revoked' });
-    const readComposerDraft = React.useCallback(() => draft.text, [draft.text]);
+        enabled: props.active && !accessRevoked });
+    const draftTextRef = React.useRef(draft.text);
+    draftTextRef.current = draft.text;
+    const readComposerDraft = React.useCallback(() => draftTextRef.current, []);
     const runChips = useDiscussionRunChips({ discussion: discussionAddress, accountLifetime: props.accountLifetime,
-        readDraft: readComposerDraft, prepareAddressingMessage, onStarted: managedRuns.retry,
+        readDraft: readComposerDraft, prepareAddressingMessage: prepareRunAddressingMessage, onStarted: managedRuns.retry,
         disabled: !discussion?.capabilities.postMessages || composerBlocked || mutationsDisabled || discussion?.archivedAt !== null });
     const lifecycle = React.useCallback(async (kind: 'rename' | 'archive' | 'restore') => {
         if (!discussion) return; setLifecycleFailure(null);
@@ -998,7 +1024,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 ? t('session.collaboration.discussion.loadError')
                 : null;
     const operationNotice = lifecycleFailure
-        ? discussionLifecycleFailureLabel(lifecycleFailure.outcome)
+        ? discussionLifecycleFailureLabel(lifecycleFailure.outcome, lifecycleFailure.operation)
         : threadStaleLabel === null && draft.status === 'offline'
             ? t('session.collaboration.discussion.offline')
             : draft.status === 'unsupported'
@@ -1114,7 +1140,6 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             return <DiscussionWorkflowRunRow run={item.run} metadata={managedRuns.metadataByRunId?.[item.run.id]}
                                 supportsAnotherRound={managedRuns.supportsAnotherRoundByRunId?.[item.run.id]}
                                 canEdit={managedRuns.callerAccessByRunId?.[item.run.id]?.canEdit === true}
-                                attention={managedRuns.attentionRunIds.has(item.run.id)}
                                 accountLifetime={props.accountLifetime} onStarted={managedRuns.retry} />;
                         }
                         if (item.kind === 'agent_activity_reference') {
@@ -1177,7 +1202,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
             {discussion.archivedAt !== null
                 ? <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-archived" size="line" kind="unavailable" iconName="archive" title={t('session.collaboration.discussion.archivedNotice')} /></View>
                 : discussion.capabilities.postMessages
-                    ? <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} discussionId={props.target.discussionId} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={composerBlocked || mutationsDisabled} onSend={(content) => void send(content)} extraActionChips={runChips} />
+                    ? <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} discussionId={props.target.discussionId} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={composerBlocked || mutationsDisabled} onSend={(content) => void send(content)} prepareParticipantMentions={prepareParticipantMentions} extraActionChips={runChips} />
                     : <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-read-only" size="line" kind="denied" title={t('session.collaboration.discussion.locked')} /></View>}
         </View>
     </TranscriptMessageSelectionBoundary>;
