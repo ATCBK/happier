@@ -3,6 +3,7 @@ import { HappierInputPickerProvider, useHappierInputPickerPort, type HappierInpu
 import type { InputFieldHint } from '@happier-dev/protocol/inputs';
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { qualifyPluginContributionReferenceV1 } from '@happier-dev/protocol/plugins/contribution-identity';
+import { normalizeExecutableParticipantSelectionV1, type ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
 
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { readReusableDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
@@ -38,7 +39,21 @@ type HostProps = InputTypePickerHostContext & Readonly<{
     children: React.ReactNode;
     enabled: boolean;
     isCurrent?: () => boolean;
+    /** Supplied only by the demanded participant control; selection itself never starts a Session. */
+    pickAgentParticipant?: (request: Readonly<{
+        selected?: ExecutableParticipantSelectionV1 | readonly ExecutableParticipantSelectionV1[];
+        multiple: boolean;
+        serverId: string;
+        accountLifetime: ActiveServerAccountScopeLifetime;
+        signal: AbortSignal;
+    }>) => Promise<ExecutableParticipantSelectionV1 | readonly ExecutableParticipantSelectionV1[] | null>;
 }>;
+
+function normalizeParticipantChoice(value: unknown): ExecutableParticipantSelectionV1 | readonly ExecutableParticipantSelectionV1[] | null {
+    if (!Array.isArray(value)) return normalizeExecutableParticipantSelectionV1(value);
+    const selections = value.map(normalizeExecutableParticipantSelectionV1);
+    return selections.every((selection): selection is ExecutableParticipantSelectionV1 => selection !== null) ? selections : null;
+}
 
 /** A leaf-only adapter over the daemon's existing admitted input-type projection. */
 export function InputTypePickerHostProvider(props: HostProps): React.ReactElement {
@@ -100,9 +115,26 @@ export function InputTypePickerHostProvider(props: HostProps): React.ReactElemen
             return now && entry?.occurrenceId && plugin?.enabled === true ? { now, entry } : null;
         };
         return createInputTypePickerPort({
-            openHostPicker: async (request) => {
+            canOpenHostPicker: (reference) => reference.hostType === 'agentParticipant'
+                && readHost()?.props.pickAgentParticipant !== undefined,
+            openHostPicker: async (request, field) => {
                 const admitted = readHost();
-                if (!admitted || request.signal.aborted || request.reference.hostType !== 'usageQuery') return { kind: 'cancelled' };
+                if (!admitted?.accountLifetime?.isCurrent() || request.signal.aborted) return { kind: 'cancelled' };
+                if (request.reference.hostType === 'agentParticipant') {
+                    const pick = admitted.props.pickAgentParticipant;
+                    if (!pick) return { kind: 'cancelled' };
+                    const selected = request.value === undefined ? undefined : normalizeParticipantChoice(request.value);
+                    if (request.value !== undefined && selected === null) return { kind: 'cancelled' };
+                    const choice = await pick({ ...(selected === undefined ? {} : { selected: selected! }),
+                        multiple: field.widget === 'multiselect',
+                        serverId: admitted.accountLifetime.scope.serverId, accountLifetime: admitted.accountLifetime,
+                        signal: request.signal });
+                    if (!readHost()?.accountLifetime?.isCurrent() || request.signal.aborted || choice === null) return { kind: 'cancelled' };
+                    const normalized = normalizeParticipantChoice(choice);
+                    // Let the canonical field validator report a miswired picker result.
+                    return { kind: 'completed', input: normalized ?? choice };
+                }
+                if (request.reference.hostType !== 'usageQuery') return { kind: 'cancelled' };
                 // Reuse the incumbent generic form; host inputs do not require a daemon/plugin mount.
                 const { presentActionInputForm } = await import('@/components/plugins/actions/presentActionInputForm');
                 if (!readHost() || request.signal.aborted) return { kind: 'cancelled' };

@@ -61,6 +61,52 @@ describe('native reference input picker projection', () => {
     expect(await port.pick({ field, value: undefined, options: [{ value: { metric: 'tokens' }, label: 'Tokens' }],
       signal: new AbortController().signal })).toMatchObject({ status: 'error' });
   });
+  it('offers the shared executable participant picker and rejects a miswired selected value', async () => {
+    const calls: unknown[] = [];
+    const port = createInputTypePickerPort({
+      resolveType: () => { throw new Error('A host participant must not resolve a plugin'); },
+      canOpenPicker: () => { throw new Error('A host participant has no plugin renderer'); },
+      openPicker: async () => { throw new Error('A host participant has no plugin renderer'); },
+      canOpenHostPicker: reference => reference.hostType === 'agentParticipant',
+      openHostPicker: async request => {
+        calls.push(request.reference);
+        return { kind: 'completed', input: { kind: 'session', session: { serverId: 'home-b', sessionId: 'reviewer' } } };
+      },
+    });
+    const field = { path: 'reviewer', title: 'Reviewer', widget: 'select' as const,
+      inputType: { hostType: 'agentParticipant' as const } };
+    const signal = new AbortController().signal;
+    expect(port.describe(field)).not.toBeNull();
+    expect(await port.pick({ field, value: undefined, signal })).toEqual({ status: 'selected',
+      value: { kind: 'session', session: { serverId: 'home-b', sessionId: 'reviewer' } },
+    });
+    expect(calls).toEqual([{ hostType: 'agentParticipant' }]);
+
+    const listPort = createInputTypePickerPort({
+      resolveType: () => null, canOpenPicker: () => false, openPicker: async () => ({ kind: 'cancelled' }),
+      canOpenHostPicker: reference => reference.hostType === 'agentParticipant',
+      openHostPicker: async (_request, requestedField) => requestedField?.widget === 'multiselect' ? ({ kind: 'completed', input: [
+        { kind: 'session', session: { serverId: 'home-b', sessionId: 'reviewer' } },
+        { kind: 'session', session: { serverId: 'home-a', sessionId: 'planner' } },
+      ] }) : ({ kind: 'cancelled' }),
+    });
+    expect(await listPort.pick({ field: { ...field, widget: 'multiselect' }, value: undefined, signal })).toEqual({
+      status: 'selected', value: [
+        { kind: 'session', session: { serverId: 'home-b', sessionId: 'reviewer' } },
+        { kind: 'session', session: { serverId: 'home-a', sessionId: 'planner' } },
+      ],
+    });
+
+    const wrongHome = createInputTypePickerPort({
+      resolveType: () => null, canOpenPicker: () => false, openPicker: async () => ({ kind: 'cancelled' }),
+      canOpenHostPicker: reference => reference.hostType === 'agentParticipant',
+      openHostPicker: async () => ({ kind: 'completed', input: { kind: 'session', session: { serverId: '', sessionId: 'reviewer' } } }),
+    });
+    expect(await wrongHome.pick({ field, value: undefined, signal })).toMatchObject({ status: 'error' });
+    expect(createInputTypePickerPort({ resolveType: () => null, canOpenPicker: () => false,
+      openPicker: async () => ({ kind: 'cancelled' }), openHostPicker: async () => ({ kind: 'cancelled' }),
+    }).describe(field)).toBeNull();
+  });
   it('offers no plugin picker for host Session and Workspace fields', () => {
     const port = createInputTypePickerPort({
       resolveType: () => { throw new Error('Host references must not resolve a plugin'); },

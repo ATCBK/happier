@@ -20,7 +20,9 @@ export type InputTypePickerPortHost = Readonly<{
     canOpenPicker: (picker: PluginContributionIdentityV1, type: ResolvedInputTypeV1, field?: Pick<InputFieldHint, 'path'>) => boolean;
     /** The incumbent ephemeral plugin-surface mount; it owns the renderer, its lifetime and disposal. */
     openPicker: (request: Parameters<InputTypePickerHostV1['openPicker']>[0], field?: Pick<InputFieldHint, 'path'>) => ReturnType<InputTypePickerHostV1['openPicker']>;
-    openHostPicker?: InputTypePickerHostV1['openHostPicker'];
+    openHostPicker?: (request: Parameters<NonNullable<InputTypePickerHostV1['openHostPicker']>>[0], field: InputFieldHint) => ReturnType<NonNullable<InputTypePickerHostV1['openHostPicker']>>;
+    /** A host reference is only offered when its demanded picker surface exists. */
+    canOpenHostPicker?: (reference: Extract<InputTypeReferenceV1, { hostType: string }>) => boolean;
 }>;
 
 /**
@@ -44,8 +46,10 @@ export function createInputTypePickerPort(host: InputTypePickerPortHost): Happie
             // A Usage field (the Period, the Session) offers its choices in place from its type's own
             // source; only a whole Usage query opens the host's dialog. The field is named by its type,
             // because a group saved before its choices were declared still carries the older hint.
-            ? field.inputType.hostType === 'usageQuery' && host.openHostPicker !== undefined
-                && field.inputType.field === undefined && field.optionsSourceId === undefined && field.options === undefined
+            ? host.openHostPicker !== undefined && (
+                field.inputType.hostType === 'agentParticipant' && host.canOpenHostPicker?.(field.inputType) === true
+                || field.inputType.hostType === 'usageQuery' && field.inputType.field === undefined
+                    && field.optionsSourceId === undefined && field.options === undefined)
             : pickerFor(field.inputType, field) !== null) ? {
             label: t('inputPicker.browse'),
             accessibilityLabel: t('inputPicker.browseField', { field: field.title }),
@@ -53,7 +57,7 @@ export function createInputTypePickerPort(host: InputTypePickerPortHost): Happie
         pick: async (request): Promise<HappierInputPickerResult> => {
             const inputType = request.field.inputType;
             if (inputType === undefined) return { status: 'error', message: describePickerError('input_type_unavailable') };
-            const field = { ...request.field, widget: 'select' as const };
+            const field = { ...request.field, widget: request.field.widget === 'multiselect' ? 'multiselect' as const : 'select' as const };
             const options = request.options?.flatMap((option): InputOption[] => {
                 const value = readActionInputOptionValue(option.value);
                 return value === undefined ? [] : [{
@@ -77,7 +81,7 @@ export function createInputTypePickerPort(host: InputTypePickerPortHost): Happie
                     resolveType: async (identity) => host.resolveType(identity, field),
                     resolveOptions: async () => options ?? { errorCode: 'input_type_options_unavailable' },
                     openPicker: picker => host.openPicker(picker, field),
-                    ...(host.openHostPicker ? { openHostPicker: host.openHostPicker } : {}),
+                    ...(host.openHostPicker ? { openHostPicker: (pickerRequest: Parameters<NonNullable<InputTypePickerHostV1['openHostPicker']>>[0]) => host.openHostPicker!(pickerRequest, field) } : {}),
                 },
             });
             if (result.status === 'selected') return { status: 'selected', value: result.value };
