@@ -730,6 +730,39 @@ describe('model-pack transfer intents from PR 560', () => {
     expect(progress.at(-1)).toEqual({ loaded: bytes.length, verified: bytes.length, filesDone: 1 });
   });
 
+  it('keeps verification progress monotonic when a retry rehashes the kept prefix', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const url = 'https://example.com/model.onnx';
+    memory.serveFile(url, bytes);
+    let opened = 0;
+    const verified: number[] = [];
+    await installModelPackWithHost({
+      host: { ...memory.host, beginStaging: async (packId, plan) => {
+        const handle = await memory.host.beginStaging(packId, plan);
+        // Real hosts read the kept prefix back in bounded chunks rather than in one buffer.
+        return { ...handle, streamPartial: (filePath, onChunk) => handle.streamPartial(filePath, async (chunk) => {
+          for (let offset = 0; offset < chunk.byteLength; offset += 1) await onChunk(chunk.slice(offset, offset + 1));
+        }) };
+      }, openDownload: async (request) => {
+        opened += 1;
+        if (opened > 1) return memory.host.openDownload({ ...request, url });
+        const chunks = [bytes.slice(0, 2), bytes.slice(2, 4)];
+        return { contentLength: bytes.length, isPartial: false, read: async () => {
+          const chunk = chunks.shift();
+          if (!chunk) throw new Error('model_pack_download_failed:503');
+          return chunk;
+        } };
+      } },
+      packId: 'example', manifest: manifestFor([{ path: 'model.onnx', url, sha256: sha256Hex(bytes), sizeBytes: bytes.length }]),
+      signal: new AbortController().signal,
+      onProgress: (p) => { verified.push(p.verified); },
+    });
+    expect(opened).toBe(2);
+    expect(verified).toEqual([...verified].sort((a, b) => a - b));
+    expect(verified.at(-1)).toBe(bytes.length);
+  });
+
   it('starts the largest files first so they transfer alongside the small ones', async () => {
     const memory = createMemoryModelPackInstallerHost();
     const small = new Uint8Array([1]);

@@ -544,10 +544,10 @@ export async function installModelPackWithHost(opts: {
               const nextLoaded = Math.max(loadedThisFile, loadedForFile);
               loadedTotal += nextLoaded - loadedThisFile;
               loadedThisFile = nextLoaded;
-              if (verifiedForFile !== undefined) {
-                verifiedTotal += verifiedForFile - verifiedThisFile;
-                verifiedThisFile = verifiedForFile;
-              }
+              // A retry rehashes the kept prefix from zero; keep the bar from sliding back.
+              const nextVerified = Math.max(verifiedThisFile, verifiedForFile ?? 0);
+              verifiedTotal += nextVerified - verifiedThisFile;
+              verifiedThisFile = nextVerified;
               report(entry.path);
             },
           });
