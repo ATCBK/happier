@@ -159,6 +159,8 @@ export type SessionId = string;
 `, 'utf8'),
         writeFile(join(sdkRoot, 'scm.d.ts'), `
 import type { ProtocolComposableSchema, ProtocolJsonValue } from './protocol.js';
+export type ProtocolScmHostingProviderKind =
+    | 'github' | 'gitlab' | 'bitbucket' | 'azure-devops' | 'custom' | 'unknown';
 export type ScmComparisonSource =
     | Readonly<{ kind: 'workingTree' }>
     | Readonly<{ kind: 'session'; sessionId: string }>
