@@ -196,7 +196,8 @@ export function createLimaProvider<TResult extends LimaCommandResult>(executor: 
         const status = native ? String(limaInstanceField(native, 'status')).toLowerCase() : 'absent';
         return {
           observedAt, availability: native ? 'present' as const : 'absent' as const,
-          ...(native ? { power: status === 'running' ? 'running' as const : status === 'stopped' ? 'stopped' as const : 'unknown' as const } : {}),
+          ...(native ? { power: status === 'running' ? 'running' as const : status === 'stopped' ? 'stopped' as const : 'unknown' as const,
+            storage: 'retained' as const } : {}),
           billing: { location: 'local' as const, stoppedBilling: 'not-billed' as const },
         };
       } catch (error) { return { observedAt, availability: 'unavailable' as const, reason: refusalCode(error) }; }
