@@ -1,17 +1,17 @@
 import type { MessageMeta } from "@happier-dev/session-core/messages";
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 export const VOICE_TRANSCRIPT_NOTE_META_KIND = 'voice_note.v1';
 
-const nonBlank = z.string().refine((value) => value.trim().length > 0 && value === value.trim());
-const continuationSchema = z.object({
+const nonBlank = z.string().check(z.refine((value) => value.trim().length > 0 && value === value.trim()));
+const continuationSchema = z.strictObject({
     v: z.literal(1),
     deviceId: nonBlank,
-    deviceDisplayName: nonBlank.nullable().optional(),
-    conversation: z.object({ serverId: nonBlank, sessionId: nonBlank }).strict(),
-}).strict();
-export const VoiceTranscriptNotePayloadSchema = z.object({ v: z.literal(1), continuation: continuationSchema.optional() }).strict();
+    deviceDisplayName: z.optional(z.nullable(nonBlank)),
+    conversation: z.strictObject({ serverId: nonBlank, sessionId: nonBlank }),
+});
+export const VoiceTranscriptNotePayloadSchema = z.strictObject({ v: z.literal(1), continuation: z.optional(continuationSchema) });
 export type VoiceContinuationProvenance = z.infer<typeof continuationSchema>;
 
 export function buildVoiceTranscriptNoteMeta(input?: Readonly<{ continuation: VoiceContinuationProvenance }>): MessageMeta {

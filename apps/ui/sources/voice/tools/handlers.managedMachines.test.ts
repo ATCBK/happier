@@ -18,6 +18,10 @@ import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchest
 import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { createVoiceToolHandlers } from './handlers';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
+import nacl from 'tweetnacl';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 vi.mock('socket.io-client', async original =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -74,6 +78,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       { key: 'compute', serverUrl: `https://par-${journey}.test`, accountId: 'owner', settings },
       { key: 'focused', serverUrl: `https://par-focused-${journey}.test`, accountId: 'other' },
     ], route: request => request.path === '/v1/features' ? Response.json(features)
+      : request.home === 'compute' && request.path === '/v1/machines' ? Response.json([machine])
       : request.home === 'compute' && request.path === '/v1/machines/machine' ? Response.json({ machine }) : undefined });
     const previousSettings = storage.getState().settings;
     const requests: Array<{ serverUrl: string | undefined; method: string; input: unknown }> = [];
@@ -113,6 +118,52 @@ describe('Machines advertised UI and eligible Voice execution', () => {
       resetScopedMachineTransportCacheForTests();
       installDisconnectedServerSocketBoundary();
       storage.setState({ settings: previousSettings });
+    }
+  });
+
+  it('keeps Voice automation authority through foreign terminal-list admission', async () => {
+    const homeId = 'srv_voice_foreign_terminals';
+    const settings = { experiments: true, featureToggles: { voice: true } };
+    const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(9));
+    const machine = { ...createPlainMachineRowFixture({ id: 'machine', accountId: 'custodian' }),
+      installationPublicKey: encodeBase64(installation.publicKey) };
+    const output = { ok: true, terminals: [] };
+    const home = await serveActionHomes({ homes: [
+      { key: 'compute', serverUrl: 'https://voice-foreign-terminals.test', serverIdentityId: homeId,
+        accountId: 'requester', settings, currentAccount: true },
+    ], route: request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
+        capabilities: { serverIdentity: { serverIdentityId: homeId } },
+      }));
+      if (request.path === '/v1/machines') return Response.json([machine]);
+      if (!request.path.startsWith('/v1/actions/')) return undefined;
+      expect(request.headers.get(AUTHORITY_CEILING_HEADER_V1)).toBe('account_automation');
+      const body = ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.body);
+      if (body.envelope.v !== 1) throw new Error('Expected the Plain Account terminal envelope');
+      expect(body.machineId).toBe(machine.id);
+      expect(body.envelope.input).toEqual({ serverId: homeId, machineId: machine.id });
+      if (request.path.endsWith('/execution-authorization')) {
+        return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-signed-origin', binding: {
+          accountId: 'requester', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: homeId,
+          machineId: machine.id, installationId: machine.installationId, custodianAccountId: 'custodian', accountEncryptionMode: 'plain',
+          actionId: 'machines.terminal.list', requestId: body.envelope.requestId, target: body.envelope.target,
+          requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(body.envelope),
+        } }));
+      }
+      expect(request.path).toBe('/v1/actions/machines.terminal.list');
+      expect(body.executionAuthorization?.requesterAccountContext).toBeDefined();
+      return Response.json({ v: 1, actionId: 'machines.terminal.list', requestId: body.envelope.requestId,
+        execution: { ok: true, result: output } });
+    } });
+    try {
+      expect(await getServerFeaturesSnapshot({ serverId: home.homes.compute!.id })).toMatchObject({ status: 'ready', serverIdentityId: homeId });
+      const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+      expect(JSON.parse(await handlers.machines_terminal_list!({ serverId: homeId, machineId: machine.id }, { serverId: homeId })))
+        .toEqual(output);
+      expect(home.requests.filter(request => request.path.startsWith('/v1/actions/')).map(request => request.path))
+        .toEqual(['/v1/actions/machines.terminal.list/execution-authorization', '/v1/actions/machines.terminal.list']);
+    } finally {
+      await home.dispose();
     }
   });
 

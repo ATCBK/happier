@@ -120,6 +120,16 @@ describe('voice session target actions', () => {
         expect(replacementRequests()).toEqual([{ serverId: a, sessionIds: ['s2'] }]);
         expect(persistedInclusions.get(a)).toEqual(['s2']);
     });
+    it('publishes only the effective Voice inclusions returned by the Home', async () => {
+        home.answer(a, `PUT ${SESSION_FOLLOW_HTTP_PATHS_V1.voiceInclusions}`, {
+            body: ReplaceSessionVoiceInclusionsResponseSchema.parse({ changed: true, sessionIds: [] }),
+        });
+        const result = await setTrackedSessionIds({ sessionIds: ['s2'], serverId: a,
+            corpus: corpus([{ serverId: a, sessionId: 's2' }]),
+        });
+        expect(result).toMatchObject({ ok: true, sessionIds: [], sessionAddresses: [], sessions: [] });
+        expect(useVoiceTargetStore.getState().voiceLiveContextSessionAddresses).toEqual([]);
+    });
     it('replaces the synchronized Include in Voice set after an attempt-local restart', async () => {
         includeProjection(a, 's1');
         expect(useVoiceTargetStore.getState().voiceLiveContextSessionAddresses).toEqual([]);

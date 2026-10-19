@@ -47,7 +47,6 @@ async function restoreVoiceModelHome() {
             },
         }),
     });
-    await refreshProviderCatalog(scope);
     // A genuine previous Machine observation belongs to the incumbent cache;
     // this test does not replace model discovery, policy or the catalog owner.
     const key = buildDynamicModelProbeCacheKey({ machineId, targetKey, providerConnectionId: null, serverId: scope.serverId, cwd: null });
@@ -61,7 +60,7 @@ async function restoreVoiceModelHome() {
 }
 
 describe('Voice Agent model catalog at its admitted Account Home', () => {
-    it('honors rootless Provider catalog visibility through the actual model-list owner', async () => {
+    it('loads rootless Provider catalog visibility on first demand through the actual model-list owner', async () => {
         const scope = await restoreVoiceModelHome();
         const result = await listAgentModelsForVoiceTool({ agentId: 'claude', machineId, serverId: scope.serverId });
         expect(result).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ modelId: 'native-visible' })]) });

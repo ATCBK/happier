@@ -4,6 +4,8 @@ import { SessionAwarenessListResultV1Schema, projectLegacySessionAccessCapabilit
 import { V2SessionListResponseSchema, V2SessionRecordSchema, type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
+import { SessionListActionResultV1Schema } from '@happier-dev/protocol/sessions/awareness/action';
+import { PluginUiJsonValueV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { createDeferred, createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -128,6 +130,9 @@ beforeEach(async () => {
     request: (url, init) => home.request(url, init) });
   installHomeGovernanceBoundaries(home);
   setRuntimeFetch(home.request);
+  // Join the real bootstrap before a case publishes newer mounted membership.
+  const { sync } = await import('@/sync/sync');
+  await sync.resumeSync('manual');
   serverId = connection.home.id;
   storage.setState({ socketStatus: 'connected', sessions: {}, sessionMessages: {},
     sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {},
@@ -147,6 +152,81 @@ afterEach(async () => {
 });
 
 describe('listSessionsForVoiceTool privacy', () => {
+  it('lists Session candidates through the mounted plugin Action dispatcher', async () => {
+    seedSession({ shareSessionSummary: false });
+    const { dispatchPluginSurfaceAction } = await import('@/components/plugins/surfaces/pluginSurfaceActionDispatch');
+    const executor = createDefaultActionExecutor();
+    const result = await dispatchPluginSurfaceAction({
+      action: 'session.list',
+      input: { view: 'awareness', limit: 100 },
+      callerPluginId: 'acme.session-picker',
+      callerContributionLocalId: 'picker',
+      callerBinding: {
+        pluginId: 'acme.session-picker', contributionLocalId: 'picker', occurrenceId: 'picker-current',
+        materializationRef: { pluginId: 'acme.session-picker', machineId: 'machine-1', materializationId: 'picker-installed' },
+      },
+      hostAction: { execute: executor.execute, context: { serverId } },
+    });
+    if (!result.ok) throw new Error(`Mounted Session listing refused: ${JSON.stringify(result)}`);
+    expect(result).toMatchObject({ ok: true, result: {
+      view: 'awareness', projectionVersion: 1,
+      sessions: [{ sessionId: 's1', title: 'Confidential billing rewrite' }],
+    } });
+    const autonomous = await dispatchPluginSurfaceAction({
+      action: 'session.list', input: { limit: 100, includeLastMessagePreview: false },
+      callerPluginId: 'acme.session-picker', invocationSurface: 'agent',
+      invocation: { kind: 'clientPluginAction', clientActionBinding: {
+        pluginId: 'acme.session-picker', contributionLocalId: 'picker', occurrenceId: 'picker-current',
+        materializationRef: { pluginId: 'acme.session-picker', machineId: 'machine-1', materializationId: 'picker-installed' },
+      } },
+      hostAction: { execute: executor.execute, context: { serverId } },
+    });
+    expect(autonomous).toMatchObject({ ok: false, reason: 'unsupported_action' });
+  });
+
+  it('pages the selected Home at its server cursor and retries a failed older page without changing mounted membership', async () => {
+    seedSession({ shareSessionSummary: true });
+    seedMountedMembership();
+    home.answer(serverId, '/v2/sessions?limit=1', {
+      body: ordinaryPage([row('recent')], { hasNext: true, nextCursor: 'older-page' }),
+    });
+    const before = storage.getState();
+    const first = await listSessionsForVoiceTool({ serverId, limit: 1, includeLastMessagePreview: false });
+    SessionListActionResultV1Schema.parse(first);
+    PluginUiJsonValueV1Schema.parse(first);
+    expect(first).toMatchObject({ sessions: [{ id: 'recent' }], nextCursor: 'older-page', hasNext: true });
+    home.answer(serverId, '/v2/sessions?limit=1&cursor=older-page', { status: 503, body: {} });
+    await expect(listSessionsForVoiceTool({ serverId, limit: 1, cursor: 'older-page' }))
+      .resolves.toMatchObject({ ok: false });
+    home.answer(serverId, '/v2/sessions?limit=1&cursor=older-page', { body: ordinaryPage([row('older')]) });
+    const second = await listSessionsForVoiceTool({ serverId, limit: 1, cursor: 'older-page' });
+    SessionListActionResultV1Schema.parse(second);
+    PluginUiJsonValueV1Schema.parse(second);
+    expect(second).toMatchObject({ sessions: [{ id: 'older' }], nextCursor: null, hasNext: false });
+    expect(storage.getState().ordinarySessionListMembershipByServerId).toEqual(before.ordinarySessionListMembershipByServerId);
+    expect(storage.getState().archivedSessionListMembershipByServerId).toEqual(before.archivedSessionListMembershipByServerId);
+    expect(storage.getState().sessionListQueryMembershipByKey).toEqual(before.sessionListQueryMembershipByKey);
+  });
+
+  it('publishes a valid scoped Session summary when presence and a requested retained preview are unavailable', async () => {
+    seedSession({ shareSessionSummary: true });
+    const result = await listSessionsForVoiceTool({ serverId, includeLastMessagePreview: true });
+    const parsed = SessionListActionResultV1Schema.parse(result);
+    expect(parsed).toMatchObject({ sessions: [{ id: 's1', presence: null }] });
+    expect(PluginUiJsonValueV1Schema.parse(result)).toMatchObject({ sessions: [{ id: 's1' }] });
+    expect(parsed.sessions[0]).not.toHaveProperty('lastMessagePreview');
+  });
+
+  it('publishes numeric last-seen presence as the canonical offline state through the Action boundary', async () => {
+    seedSession({ shareSessionSummary: true });
+    storage.getState().applySessions([createSessionFixture({ id: 's1', serverId, presence: 0 })]);
+    const result = await createDefaultActionExecutor().execute('session.list',
+      { view: 'summary', includeLastMessagePreview: false }, { serverId });
+    expect(result).toMatchObject({ ok: true, result: { sessions: [{ id: 's1', presence: 'offline' }] } });
+    if (!result.ok) throw new Error(`Numeric Session presence was refused: ${JSON.stringify(result)}`);
+    SessionListActionResultV1Schema.parse(result.result);
+  });
+
   it('offers canonical names and puts unopened Project Sessions first while retaining other Home choices', async () => {
     const sessionId = 'project-services';
     expect(storage.getState().sessions[sessionId]).toBeUndefined();

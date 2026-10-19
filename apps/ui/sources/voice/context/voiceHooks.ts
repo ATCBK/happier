@@ -360,8 +360,10 @@ export const voiceHooks = {
     // cannot disclose a stale, previously authorized Brief context.
     const brief = buildVoiceBrief({ inbox, settings: storage.getState().settings,
       currentTarget: useVoiceTargetStore.getState().primaryActionSessionAddress });
-    sink.sendContextualUpdate(controlSessionId, `INBOX BRIEF\n\n${brief.context}`, 'session_context');
-    sink.sendTextMessage(controlSessionId, 'Brief me on this known Inbox work: needs-you, failures, then ready work. Say when information is incomplete. Approvals are tap-only in the canonical UI; do not approve or deny a request.');
+    // This is one explicit user request, not an ambient Session/Follow update.
+    // Local Agent channels deliberately discard ambient session_context, so
+    // keep the privacy-projected facts with the request that consumes them.
+    sink.sendTextMessage(controlSessionId, `INBOX BRIEF\n\n${brief.context}\n\nBrief me on this known Inbox work: needs-you, failures, then ready work. Say when information is incomplete. Approvals are tap-only in the canonical UI; do not approve or deny a request.`);
     return true;
   },
 

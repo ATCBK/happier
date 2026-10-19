@@ -7,6 +7,7 @@ import { isVoiceTurnInterrupted, voiceTurnInterruptionVersion } from './voiceTur
 import { resolveVoiceContinuationNoteText } from './voiceTranscriptNotePresentation';
 import { getDeviceAnalyticsId } from '@/track/settingsAnalytics/deviceAnalyticsIdentity';
 import { getPreferredLanguage } from '@/text';
+import { readVoiceTranscriptMessageText } from './voiceTranscriptMessageText';
 
 export type VoiceTranscriptEntry = Readonly<{
     id: string;
@@ -83,37 +84,12 @@ function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
     return value as Readonly<Record<string, unknown>>;
 }
 
-function extractMessageText(message: unknown): string | null {
-    const record = readRecord(message);
-    if (!record) return null;
-    if (record.kind === 'user-text' || record.kind === 'agent-text') {
-        return typeof record.text === 'string'
-            ? normalizeNonEmptyString(record.text)
-            : null;
-    }
-    if (record.role === 'user') {
-        const content = readRecord(record.content);
-        return content?.type === 'text' && typeof content.text === 'string'
-            ? normalizeNonEmptyString(content.text)
-            : null;
-    }
-    if (record.role === 'agent') {
-        if (!Array.isArray(record.content)) return null;
-        for (const entry of record.content) {
-            const textEntry = readRecord(entry);
-            if (!textEntry || textEntry.type !== 'text' || typeof textEntry.text !== 'string') continue;
-            return normalizeNonEmptyString(textEntry.text);
-        }
-    }
-    return null;
-}
-
 function projectTranscriptEntry(message: unknown, viewerDeviceId: string | null, entryId?: string): VoiceTranscriptEntry | null {
     const record = readRecord(message);
     if (!record) return null;
     const id = entryId ?? resolveVoiceTranscriptEntryId(message);
     if (!id) return null;
-    const text = extractMessageText(record);
+    const text = readVoiceTranscriptMessageText(record);
     if (!text) return null;
     const kind =
         record.kind === 'user-text' || record.role === 'user'

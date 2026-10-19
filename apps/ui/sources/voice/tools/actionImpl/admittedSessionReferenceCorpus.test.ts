@@ -119,7 +119,12 @@ describe('acquireAdmittedSessionReferenceCorpusOptions', () => {
         home.answer(a, '/v2/sessions', { body: page('deploy') });
         const socket = sockets.get('https://voice-corpus-b.test');
         if (!socket) throw new Error('Mounted Home Socket boundary missing');
-        socket.disconnect();
+        // A client-requested disconnect is intentional and does not prove the
+        // Home is offline. Deliver the lost transport plus failed health probe.
+        home.answer(b, '/health', { status: 503, body: {} });
+        home.answer(b, '/v1/auth/ping', { status: 503, body: {} });
+        socket.connected = false;
+        for (const listener of socket.listeners('disconnect')) listener('transport close');
         await waitForHomeGovernance(() => expect(isSessionListQueryHomeOnline(b)).toBe(false));
         expect(resolveOrdinarySessionListHomeOwner(b)).toBe('concurrent');
         await expect(acquireAdmittedSessionReferenceCorpusOptions(NO_ORDINARY_MEMBERSHIP)).resolves.toEqual({

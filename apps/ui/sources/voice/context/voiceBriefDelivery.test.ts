@@ -32,8 +32,8 @@ describe('explicit Voice Brief delivery', () => {
         scope = 'session_context';
         expect(voiceHooks.onBriefRequested('wrong-control', inbox)).toBe(false);
         expect(voiceHooks.onBriefRequested('control', inbox)).toBe(true);
-        expect(delivered).toHaveLength(1);
-        expect(delivered[0]).toContain(brief.context);
+        expect(delivered).toHaveLength(0);
         expect(text).toHaveLength(1);
+        expect(text[0]).toContain(brief.context);
     });
 });
