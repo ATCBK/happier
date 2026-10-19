@@ -32,13 +32,35 @@ const personGrant = {
 };
 
 describe('readDocAudience', () => {
+  it('retains only the actual admitted principals and independent public-link fact', async () => {
+    const audience = await readDocAudience({ current: { ...owner, publicAudience: 'retained' },
+      readGrants: async () => roster([personGrant, teamGrant]),
+    });
+    expect(audience).toMatchObject({ shared: true, team: 'Payments team',
+      grants: [personGrant, teamGrant], publicLink: true });
+  });
+
+  it('does not disclose a foreign roster when a public link already proves sharing', async () => {
+    const audience = await readDocAudience({ current: { ...owner, publicAudience: 'retained' },
+      readGrants: async () => ({ ...roster([teamGrant]), artifactId: 'another-doc' }),
+    });
+    expect(audience).toMatchObject({ shared: true, team: null, grants: null, publicLink: true });
+  });
+
+  it('does not invent a public-link or recipient list for a reader without roster access', async () => {
+    const audience = await readDocAudience({ current: { ...owner, access: 'view', publicAudience: 'unknown' },
+      readGrants: async () => { throw new Error('forbidden'); },
+    });
+    expect(audience).toMatchObject({ shared: true, team: null, grants: null, publicLink: null });
+  });
+
   it('names the Team a document is shared with', async () => {
     await expect(
       readDocAudience({
         current: owner,
         readGrants: async () => roster([personGrant, teamGrant]),
       }),
-    ).resolves.toEqual({ shared: true, team: 'Payments team' });
+    ).resolves.toMatchObject({ shared: true, team: 'Payments team' });
   });
 
   it('says shared without a Team when only people have it', async () => {
@@ -47,13 +69,13 @@ describe('readDocAudience', () => {
         current: owner,
         readGrants: async () => roster([personGrant]),
       }),
-    ).resolves.toEqual({ shared: true, team: null });
+    ).resolves.toMatchObject({ shared: true, team: null });
   });
 
   it('says only you when nobody else has it', async () => {
     await expect(
       readDocAudience({ current: owner, readGrants: async () => roster([]) }),
-    ).resolves.toEqual({ shared: false, team: null });
+    ).resolves.toMatchObject({ shared: false, team: null });
   });
 
   it('is unknown, never private, when the roster cannot be read', async () => {
@@ -75,6 +97,6 @@ describe('readDocAudience', () => {
           throw new Error('artifact_access_forbidden');
         },
       }),
-    ).resolves.toEqual({ shared: true, team: null });
+    ).resolves.toMatchObject({ shared: true, team: null });
   });
 });

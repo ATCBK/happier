@@ -40,11 +40,10 @@ import { MemorySearchPanel } from './MemorySearchPanel';
 
 /**
  * The Project this memory belongs to, when the page is that Project's Memory page (lab K2 `A`): the
- * header names it and its Team, search covers its memory and sessions, and facts open on its route.
+ * header names it, search covers its memory and sessions, and facts open on its route.
  */
 export type MemoryDocumentProjectPage = Readonly<{
   name: string;
-  teamName: string | null;
   searchScope: MemorySearchScope;
   href: (options: Readonly<{ factId?: string; editFactId?: string }>) => string;
 }>;
@@ -90,9 +89,9 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
   const { theme } = useUnistyles();
   const { fontScale } = useWindowDimensions();
   const openSession = React.useCallback(
-    (target: Readonly<{ serverId: string; sessionId: string }>) => {
+    (target: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => {
       fireAndForget(
-        navigateToSession(target.sessionId, { serverId: target.serverId }),
+        navigateToSession(target.sessionId, { serverId: target.serverId, messageId: target.messageId }),
         { tag: 'MemoryDocumentScreen.source' },
       );
     },
@@ -131,13 +130,13 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
         testID: 'memory-document.scope',
       });
     if (!view) return facts;
-    // The Team is named only when the admitted audience says it is shared and the Project has one.
+    // Project placement says nothing about which principals hold Artifact grants.
     if (view.shared === true)
       facts.push({
         key: 'audience',
         icon: 'users',
-        text: project?.teamName
-          ? t('memoryContext.memory.sharedWithTeam', { team: project.teamName })
+        text: view.audience?.team
+          ? t('memoryContext.memory.sharedWithTeam', { team: view.audience.team })
           : t('memoryContext.memory.accessShared'),
         testID: 'memory-document.audience',
       });

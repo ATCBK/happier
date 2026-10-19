@@ -71,7 +71,6 @@ export const ProjectMemoryBody = React.memo(function ProjectMemoryBody(
   const page = React.useMemo(
     (): MemoryDocumentProjectPage => ({
       name: projectName,
-      teamName: model.teamName,
       searchScope: { type: 'project', projectRef },
       href: (options) => {
         const routeParams: Record<string, string | string[] | undefined> = {};
@@ -88,7 +87,6 @@ export const ProjectMemoryBody = React.memo(function ProjectMemoryBody(
       },
     }),
     [
-      model.teamName,
       params,
       projectName,
       projectRef,

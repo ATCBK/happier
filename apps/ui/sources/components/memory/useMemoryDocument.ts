@@ -4,7 +4,7 @@ import type {
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import type { ArtifactCallerAccessV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
-import { readArtifactSharedAudienceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import { readArtifactAudience, type ArtifactAudience } from '@/sync/domains/artifacts/artifactAudience';
 import { MemoryDocReadResultV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import * as React from 'react';
 
@@ -37,6 +37,7 @@ export type MemoryDocumentView = Readonly<{
   access: ArtifactCallerAccessV1 | null;
   /** Current admitted granted/public audience; null cannot establish privacy. */
   shared: boolean | null;
+  audience: ArtifactAudience | null;
   title: string;
   revision: MemoryDocumentRevision;
   /** The facts of this page: the index's key facts, or the open topic's facts. */
@@ -193,9 +194,10 @@ export function useMemoryDocument(
         const access = artifact.access ?? null;
         // Finite observations must not prepare/publish the Artifact and invalidate their own read.
         const accessGrants = createArtifactAccessApi(account.credentials, { request: account.request });
-        const shared = await readArtifactSharedAudienceV1({ current: artifact, signal: controller.signal,
+        const audience = await readArtifactAudience({ current: artifact, signal: controller.signal,
           readGrants: () => accessGrants.list({ artifactId }, controller.signal),
         }).catch(() => null);
+        const shared = audience?.shared ?? null;
         if (!currentness.isCurrent()) return null;
         if (controller.signal.aborted) return await successorRead();
         const view: MemoryDocumentView =
@@ -205,6 +207,7 @@ export function useMemoryDocument(
                 ref: { kind: 'doc', artifactId, serverId: homeId },
                 access,
                 shared,
+                audience,
                 title: read.header.title,
                 revision: read.revision,
                 facts: read.topic.facts,
@@ -216,6 +219,7 @@ export function useMemoryDocument(
                 ref: { kind: 'doc', artifactId, serverId: homeId },
                 access,
                 shared,
+                audience,
                 title: read.header.title,
                 revision: read.revision,
                 facts: read.body.index,
