@@ -1,462 +1,255 @@
+import 'fake-indexeddb/auto';
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
-import { flushHookEffects, renderScreen as renderTestScreen } from '@/dev/testkit';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonExecutionRunEntry } from '@happier-dev/protocol';
-import { installMachineDetailsCommonModuleMocks } from './machineDetailsTestHelpers';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { flushHookEffects, renderScreen as renderTestScreen, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installBrowserStorageLockBoundary } from '@/dev/testkit/harness/browserStorageLockBoundary';
 
-const fixedNow = 1_700_000_000_000;
+const { route, routerPush, breadcrumb, originalSentryDsn } = vi.hoisted(() => {
+    const originalSentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN;
+    // Telemetry's external SDK is enabled for the refresh diagnostic assertion.
+    process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://fixture@example.test/1';
+    return { route: { params: {} as Record<string, string> }, routerPush: vi.fn(), breadcrumb: vi.fn(), originalSentryDsn };
+});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('react-native-keyboard-controller', () => ({ useFocusedInputHandler: () => {} }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    params: () => route.params, router: { push: routerPush },
+}).module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@sentry/react-native', () => ({ addBreadcrumb: breadcrumb }));
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as any).expo = { EventEmitter: class { } };
+const { JSDOM } = await import('jsdom');
+const browser = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://machine-runs.test' });
+function installBrowserBoundary() {
+    for (const name of ['window', 'document', 'HTMLElement', 'Node', 'MutationObserver', 'CustomEvent', 'navigator'] as const) {
+        vi.stubGlobal(name, name === 'window' ? browser.window : browser.window[name]);
+    }
+}
+installBrowserBoundary();
+afterAll(() => {
+    browser.window.close();
+    if (originalSentryDsn === undefined) delete process.env.EXPO_PUBLIC_SENTRY_DSN;
+    else process.env.EXPO_PUBLIC_SENTRY_DSN = originalSentryDsn;
+});
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+let runs: readonly DaemonExecutionRunEntry[] = [];
+let pendingRuns: Promise<unknown> | undefined;
+let releaseRuns: (() => void) | undefined;
+const rpcRequests = installSessionActionRpcBoundary(request => {
+    if (request.method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST || request.method.endsWith(`:${RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST}`)) {
+        return pendingRuns ?? { runs };
+    }
+    // This daemon serves run inventory, but no optional capability/plugin methods.
+    // Let their real owners classify the protocol's unsupported-method result.
+    throw Object.assign(new Error('Fixture daemon method is unavailable'), { code: 'RPC_METHOD_NOT_AVAILABLE' });
+});
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
+const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { ModalProvider } = await import('@/modal');
+const { Item } = await import('@/components/ui/lists/Item');
+const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { sync } = await import('@/sync/sync');
+const initialState = getStorage().getState();
+const initialTelemetry = { initialized: globalThis.__HAPPIER_SENTRY_INIT__, optedOut: globalThis.__HAPPIER_CRASH_REPORTS_OPTOUT__ };
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let releaseLocks: (() => void) | undefined;
+let serverA = '';
+let serverB = '';
 
-const {
-    activeServerIdRef,
-    machineExecutionRunsListSpy,
-    modalSpies,
-    routeParamsRef,
-    routerPushSpy,
-    runRefreshDiagnosticActionSpy,
-    stopDaemonSpy,
-} = vi.hoisted(() => ({
-    activeServerIdRef: { current: 'server-a' },
-    machineExecutionRunsListSpy: vi.fn(async () => ({ ok: true, runs: [] as any[] })),
-    modalSpies: {
-        alert: vi.fn(),
-        confirm: vi.fn(),
-        prompt: vi.fn(),
-        show: vi.fn(),
-    },
-    routeParamsRef: { current: { id: 'machine-1' } as Record<string, string> },
-    routerPushSpy: vi.fn(),
-    runRefreshDiagnosticActionSpy: vi.fn(async (_context: unknown, action: () => Promise<unknown>) => action()),
-    stopDaemonSpy: vi.fn<(machineId: string, options?: Record<string, unknown>) => Promise<{ message: string }>>(
-        async () => ({ message: 'noop' }),
-    ),
-}));
-
-installMachineDetailsCommonModuleMocks({
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({
-            router: { back: vi.fn(), push: routerPushSpy, replace: vi.fn() },
-            params: () => routeParamsRef.current,
-        }).module;
-    },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: modalSpies,
-        }).module;
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSessions: () => [],
-            useMachine: () => ({
-                id: 'machine-1',
-                activeAt: fixedNow,
-                metadata: { platform: 'darwin', windowsRemoteSessionConsole: 'visible' },
-                metadataVersion: 1,
-                daemonStateVersion: 1,
-            }),
-            useSetting: createUseSettingMock({
-                fallback: () => false,
-            }),
-            useSettingMutable: () => [null, vi.fn()],
-            useSettings: () => ({}),
-        });
-    },
+function AccountBoundary({ children }: React.PropsWithChildren) {
+    if (!connection) throw new Error('Machine Account is not restored');
+    return <InjectedAuthProvider credentials={connection.credentials}><ModalProvider><AppPaneProvider>{children}</AppPaneProvider></ModalProvider></InjectedAuthProvider>;
+}
+function renderScreen(element: React.ReactElement) {
+    return renderTestScreen(element, { wrapper: AccountBoundary, createNodeMock: element => Object.assign(
+        document.createElement(element.type === 'TextInput' ? 'textarea' : 'div'), {
+            setNativeProps() {}, measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+        }) });
+}
+type Screen = Awaited<ReturnType<typeof renderScreen>>;
+function runRows(screen: Screen, runId: string) { return screen.findAll(row => row.props.run?.runId === runId); }
+function runGroups(screen: Screen) { return screen.findAllByType(ItemGroup).filter(group => group.props.title === 'runs.title'); }
+function finishedFilters(screen: Screen) { return screen.findAllByType(Item).filter(item => item.props.title === 'runs.showFinished'); }
+function listRequests() { return rpcRequests.filter(request => request.method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST || request.method.endsWith(`:${RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST}`)); }
+function machineRequests() { return homes.requests.filter(request => new URL(request.path, request.serverUrl).pathname === '/v1/machines'); }
+async function renderRuns() {
+    const screen = await renderScreen(<MachineSubPageScreen />);
+    await waitForHomeGovernance(() => expect(runGroups(screen)).toHaveLength(1));
+    if (!pendingRuns) await waitForHomeGovernance(() => expect(screen.findByTestId('machine-runs-loading')).toBeNull());
+    return screen;
+}
+function createExecutionRun(overrides: Partial<DaemonExecutionRunEntry> & Pick<DaemonExecutionRunEntry, 'runId'>): DaemonExecutionRunEntry {
+    return { happyHomeDir: '/tmp/happier-test-home', pid: 123, happySessionId: 'sess-1', callId: 'call-1', sidechainId: 'side-1',
+        intent: 'review', backendTarget: { kind: 'backend', backendId: 'codex' }, runClass: 'bounded', ioMode: 'request_response',
+        retentionPolicy: 'ephemeral', status: 'running', startedAtMs: 1_700_000_000_000, updatedAtMs: 1_700_000_000_000, ...overrides };
+}
+beforeEach(async () => {
+    installBrowserBoundary();
+    releaseLocks = installBrowserStorageLockBoundary();
+    await homes.reset();
+    getStorage().setState(initialState, true);
+    runs = []; pendingRuns = undefined; releaseRuns = undefined; rpcRequests.length = 0;
+    routerPush.mockClear(); breadcrumb.mockClear();
+    globalThis.__HAPPIER_SENTRY_INIT__ = true;
+    globalThis.__HAPPIER_CRASH_REPORTS_OPTOUT__ = false;
+    serverB = await homes.addHome({ name: 'Machine B', serverUrl: 'https://machine-runs-b.test', accountId: 'account-b', currentAccount: true, active: false });
+    serverA = await homes.addHome({ name: 'Machine A', serverUrl: 'https://machine-runs.test', accountId: 'account-a', currentAccount: true });
+    for (const [serverId, accountId] of [[serverA, 'account-a'], [serverB, 'account-b']]) {
+        homes.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'machine-1', accountId })] });
+    }
+    const credentials = await TokenStorage.getCredentialsForServerUrl('https://machine-runs.test');
+    if (!credentials) throw new Error('Machine Home credentials are missing');
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://machine-runs.test', accountId: 'account-a', credentials,
+        additionalRequestOrigins: ['https://machine-runs-b.test'], request: homes.request });
+    await sync.awaitBootstrapForegroundAcquisition();
+    const machine = createMachineFixture({ activeAt: Date.now() });
+    getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverA]: [machine], [serverB]: [machine] } });
+    route.params = { id: 'machine-1', page: 'work' };
+});
+afterEach(async () => {
+    standardCleanup();
+    releaseRuns?.();
+    await connection?.dispose(); connection = undefined;
+    await homes.reset();
+    releaseLocks?.(); releaseLocks = undefined;
+    getStorage().setState(initialState, true);
+    if (initialTelemetry.initialized === undefined) delete globalThis.__HAPPIER_SENTRY_INIT__;
+    else globalThis.__HAPPIER_SENTRY_INIT__ = initialTelemetry.initialized;
+    if (initialTelemetry.optedOut === undefined) delete globalThis.__HAPPIER_CRASH_REPORTS_OPTOUT__;
+    else globalThis.__HAPPIER_CRASH_REPORTS_OPTOUT__ = initialTelemetry.optedOut;
 });
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement(
-            'Pressable',
-            {
-                testID: `item:${props.title}`,
-                onPress: props.onPress,
-            },
-            React.isValidElement(props.rightElement)
-                ? React.cloneElement(props.rightElement, { testID: `item-right:${props.title}` })
-                : props.rightElement ?? null,
-        ),
-}));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ title, children }: any) => React.createElement('View', { testID: `item-group:${title}` }, children),
-}));
-vi.mock('@/components/ui/lists/ItemGroupTitleWithAction', () => ({ ItemGroupTitleWithAction: () => null }));
-vi.mock('@/components/ui/lists/ItemList', () => ({ ItemList: ({ children }: any) => React.createElement(React.Fragment, null, children) }));
-vi.mock('@/components/ui/forms/MultiTextInput', () => ({ MultiTextInput: () => null }));
-vi.mock('@/components/ui/pathBrowser/PathInputBrowseButton', () => ({
-    PathInputBrowseButton: () => null,
-}));
-vi.mock('@/components/ui/pathBrowser/openMachinePathBrowserModal', () => ({
-    openMachinePathBrowserModal: vi.fn(async () => null),
-}));
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: any) => React.createElement('Pressable', {
-        testID: props.testID ?? 'switch',
-        onPress: () => props.onValueChange?.(!props.value),
-    }),
-}));
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
-vi.mock('@/components/machines/InstallableDepInstaller', () => ({ InstallableDepInstaller: () => null }));
-vi.mock('@/components/sessions/runs/ExecutionRunRow', () => ({
-    ExecutionRunRow: (props: any) => React.createElement(
-            'Pressable',
-            {
-                testID: `execution-run-row:${props.run.runId}`,
-                onPress: props.onPress,
-            },
-            React.isValidElement(props.rightAccessory)
-                ? React.cloneElement(props.rightAccessory, { testID: `execution-run-stop:${props.run.runId}` })
-                : props.rightAccessory ?? null,
-        ),
-}));
-
-vi.mock('@/sync/ops', () => ({
-    machineSpawnNewSession: vi.fn(async () => ({ type: 'error', errorCode: 'unexpected', errorMessage: 'noop' })),
-    machineStopDaemon: (machineId: string, options?: Record<string, unknown>) => stopDaemonSpy(machineId, options),
-    machineUpdateMetadata: vi.fn(async () => ({})),
-    machineExecutionRunsList: machineExecutionRunsListSpy,
-}));
-
-vi.mock('@/hooks/session/useNavigateToSession', () => ({ useNavigateToSession: () => () => { } }));
-vi.mock('@/hooks/ui/useMountedShouldContinue', () => ({
-    useMountedShouldContinue: () => () => true,
-}));
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({ useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: vi.fn() }) }));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    areServerProfileIdentifiersEquivalent: (left: unknown, right: unknown) => String(left ?? '').trim() === String(right ?? '').trim(),
-    getActiveServerId: () => activeServerIdRef.current,
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        refreshMachinesThrottled: vi.fn(),
-        refreshMachines: vi.fn(),
-        retryNow: vi.fn(),
-    },
-}));
-vi.mock('@/utils/system/fireAndForget', () => ({
-    fireAndForget: (promise: Promise<unknown>, options?: { onError?: (error: unknown) => void }) => {
-        void promise.catch((error) => {
-            options?.onError?.(error);
-        });
-    },
-}));
-vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({
-    tryShowDaemonUnavailableAlertForRpcError: () => false,
-    tryShowDaemonUnavailableAlertForRpcFailure: () => false,
-}));
-vi.mock('@/utils/system/userInteractionDiagnostics', () => ({
-    runRefreshDiagnosticAction: (context: unknown, action: () => Promise<unknown>) =>
-        runRefreshDiagnosticActionSpy(context, action),
-}));
-
-const machineOnlineState = vi.hoisted(() => ({ value: true }));
-vi.mock('@/utils/sessions/machineUtils', () => ({ isMachineOnline: () => machineOnlineState.value }));
-// Ask an agent mounts the whole new-session composer; its own tests own it. This file is about the runs and the rows.
-vi.mock('@/components/machines/resources/ask/MachineResourcesAskBlock', () => ({ MachineResourcesAskBlock: () => null }));
-// The page asks the presence owner (the store plus the request clock), not `isMachineOnline`; follow the same switch.
-vi.mock('@/components/sessions/model/useMachinePresenceSummary', () => ({
-    useMachinePresenceSummary: () => ({ name: null, homeDir: null, reachability: machineOnlineState.value ? 'reachable' : 'unreachable' }),
-}));
-vi.mock('@/utils/sessions/sessionUtils', () => ({ formatOSPlatform: (platform?: string) => platform ?? '', formatPathRelativeToHome: () => '', getSessionName: () => '', getSessionSubtitle: () => '' }));
-vi.mock('@/utils/path/pathUtils', () => ({ resolveAbsolutePath: () => '' }));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionConsole', () => ({ resolveWindowsRemoteSessionConsoleFromMachineMetadata: () => 'visible' }));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode', () => ({
-    readMachineWindowsRemoteSessionLaunchMode: () => undefined,
-    resolveEffectiveWindowsRemoteSessionLaunchMode: () => ({ mode: 'visible' }),
-}));
-vi.mock('@/capabilities/installablesRegistry', () => ({ getInstallablesRegistryEntries: () => [] }));
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-    setActiveServerAndSwitch: vi.fn(async () => true),
-}));
-vi.mock('@/agents/catalog/catalog', () => ({
-    AGENT_IDS: ['codex'],
-    DEFAULT_AGENT_ID: 'codex',
-    getAgentCore: () => ({ cli: { detectKey: 'codex' } }),
-    isBundledAgentId: () => true,
-}));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: () => null,
-}));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchModeOptions', () => ({
-    WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS: [],
-}));
-vi.mock('@/sync/ops/sessionMachineTarget', () => ({
-    readMachineTargetForSession: () => null,
-}));
-vi.mock('@/agents/backendCatalog/resolvePreferredBackendTargetFromProjection', () => ({
-    resolvePreferredBackendTargetFromProjection: () => ({ kind: 'backend', backendId: 'codex' }),
-}));
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => ({
-        phase: 'ready',
-        inputs: {
-            discoveredBackendIds: [],
-            mergedBackendProjectionById: {},
-            mergedProviderProjectionById: {},
-            pluginProjectionById: {},
-            registryDiagnostics: [],
-        },
-    }),
-}));
-
 describe('MachineDetailScreen (execution runs section)', () => {
-    // The route's cold import includes the live workspace/pane graph. Load it once,
-    // outside behavior-test timeouts, like the adjacent navigation screen harnesses.
-    beforeAll(async () => {
-        await import('@/components/machines/page/MachinePageScreen');
-        await import('@/components/appShell/panes/AppPaneProvider');
-    }, 240_000);
-
-    async function renderScreen(element: React.ReactElement) {
-        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
-        return renderTestScreen(React.createElement(AppPaneProvider, null, element));
-    }
-
-    function createExecutionRun(overrides: Partial<DaemonExecutionRunEntry> & Pick<DaemonExecutionRunEntry, 'runId'>): DaemonExecutionRunEntry {
-        const { runId, ...rest } = overrides;
-        return {
-            happyHomeDir: '/tmp/happier-test-home',
-            pid: 123,
-            happySessionId: 'sess-1',
-            runId,
-            callId: 'call-1',
-            sidechainId: 'side-1',
-            intent: 'review',
-            backendTarget: { kind: 'backend', backendId: 'codex' },
-            runClass: 'bounded',
-            ioMode: 'request_response',
-            retentionPolicy: 'ephemeral',
-            status: 'running',
-            startedAtMs: fixedNow,
-            updatedAtMs: fixedNow,
-            ...rest,
-        };
-    }
-
-    beforeEach(() => {
-        activeServerIdRef.current = 'server-a';
-        // Runs live on the machine's Project work page (lab `R`: the Overview keeps one row for it).
-        routeParamsRef.current = { id: 'machine-1', page: 'work' };
-        machineExecutionRunsListSpy.mockClear();
-        machineOnlineState.value = true;
-        stopDaemonSpy.mockClear();
-        routerPushSpy.mockClear();
-        runRefreshDiagnosticActionSpy.mockClear();
-        modalSpies.alert.mockClear();
-        modalSpies.confirm.mockClear();
-    });
-
     it('keeps runs off the Overview, which leads to them through its Project work row', async () => {
-        routeParamsRef.current = { id: 'machine-1' };
-        const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
-
-        const screen = await renderScreen(React.createElement(MachinePageScreen));
+        route.params = { id: 'machine-1' };
+        const screen = await renderScreen(<MachinePageScreen />);
         await flushHookEffects();
-
-        expect(screen.tree.root.findAll((node) => node.props?.testID === 'item-group:runs.title')).toHaveLength(0);
-        expect(machineExecutionRunsListSpy).not.toHaveBeenCalled();
+        expect(runGroups(screen)).toHaveLength(0);
+        expect(listRequests()).toHaveLength(0);
         expect(screen.findByTestId('machine-page-row-work')).toBeTruthy();
     });
-
     it('loads daemon execution runs for online machines', async () => {
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+        const screen = await renderRuns();
         await flushHookEffects();
-
-        expect(machineExecutionRunsListSpy).toHaveBeenCalledWith('machine-1', { serverId: 'server-a' });
-        expect(screen.findByTestId('item-group:runs.title')).toBeTruthy();
+        expect(listRequests().map(request => request.method)).toContain(`machine-1:${RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST}`);
+        expect(getActiveServerSnapshot().serverId).toBe(serverA);
+        expect(runGroups(screen)).toHaveLength(1);
     });
-
     it('does not leave the runs section loading when the machine goes offline before they arrive', async () => {
-        machineExecutionRunsListSpy.mockImplementationOnce(() => new Promise(() => {}));
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const element = React.createElement(MachineDetailScreen);
-        const screen = await renderScreen(element);
+        pendingRuns = new Promise(resolve => { releaseRuns = () => resolve({ runs: [] }); });
+        const screen = await renderRuns();
         await flushHookEffects();
-        expect(screen.findByTestId('item-group:runs.title')).toBeTruthy();
-
-        machineOnlineState.value = false;
-        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
-        await act(async () => screen.tree.update(React.createElement(AppPaneProvider, null, React.createElement(MachineDetailScreen))));
-        await flushHookEffects();
-
-        const runsGroup = screen.findByTestId('item-group:runs.title');
-        const loadingInRuns = runsGroup
-            ? runsGroup.findAll((node) => node.props?.title === 'common.loading')
-            : [];
-        expect(loadingInRuns).toHaveLength(0);
-    });
-
-    it('wraps pull-to-refresh in refresh diagnostics', async () => {
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
-        await flushHookEffects();
-        const scrollView = screen.tree.root.findAll((node) => Boolean(node.props.refreshControl))[0];
-        expect(scrollView).toBeTruthy();
-        const refreshControl = scrollView.props.refreshControl;
-
+        expect(runGroups(screen)).toHaveLength(1);
+        expect(screen.findByTestId('machine-runs-loading')).toBeTruthy();
         await act(async () => {
-            await refreshControl.props.onRefresh();
+            const machine = createMachineFixture({ active: false, activeAt: 0 });
+            getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverA]: [machine], [serverB]: [machine] } });
         });
-
-        expect(runRefreshDiagnosticActionSpy).toHaveBeenCalledWith({
-            action: 'pull_to_refresh',
-            screen: 'machine_detail',
-        }, expect.any(Function));
+        await flushHookEffects();
+        expect(screen.findByTestId('machine-runs-loading')).toBeNull();
     });
-
+    it('wraps pull-to-refresh in refresh diagnostics', async () => {
+        const screen = await renderRuns();
+        await flushHookEffects();
+        const scrollView = screen.findAll(node => Boolean(node.props.refreshControl))[0];
+        expect(scrollView).toBeTruthy();
+        await act(async () => { await scrollView!.props.refreshControl.props.onRefresh(); });
+        expect(breadcrumb).toHaveBeenCalledWith(expect.objectContaining({ category: 'ui.refresh', data: expect.objectContaining({
+            action: 'pull_to_refresh', screen: 'machine_detail', phase: 'start',
+        }) }));
+        expect(breadcrumb).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ phase: 'success' }) }));
+    });
     it('uses the requested route server when loading execution runs', async () => {
-        routeParamsRef.current = { id: 'machine-1', serverId: 'server-b', page: 'work' };
-        activeServerIdRef.current = 'server-a';
-
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        await renderScreen(React.createElement(MachineDetailScreen));
+        route.params = { id: 'machine-1', serverId: serverB, page: 'work' };
+        await renderRuns();
         await flushHookEffects();
-
-        expect(machineExecutionRunsListSpy).toHaveBeenCalledWith('machine-1', { serverId: 'server-b' });
+        expect(getActiveServerSnapshot().serverId).toBe(serverB);
+        expect(listRequests().length).toBeGreaterThan(0);
+        expect(machineRequests().some(request => request.serverId === serverB)).toBe(true);
     });
-
     it('renders an execution runs group when enabled', async () => {
-        machineExecutionRunsListSpy.mockResolvedValueOnce({
-            ok: true,
-            runs: [createExecutionRun({ runId: 'run-1' })],
-        });
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+        runs = [createExecutionRun({ runId: 'run-1' })];
+        const screen = await renderRuns();
         await flushHookEffects();
-
-        expect(screen.findByTestId('item-group:runs.title')).toBeTruthy();
+        expect(runGroups(screen)).toHaveLength(1);
+        expect(runRows(screen, 'run-1')).toHaveLength(1);
     });
-
     it('opens every former inline section from This machine, inside the door the page is in', async () => {
-        routerPushSpy.mockClear();
-        routeParamsRef.current = { id: 'machine-1' };
-        const { MachinePageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachinePageScreen');
-
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+        route.params = { id: 'machine-1' };
+        const screen = await renderScreen(<MachinePageScreen />);
         await flushHookEffects();
-
         for (const page of ['work', 'sharing', 'agents', 'terminal', 'connection', 'installables', 'doctor', 'details']) {
             expect(screen.findByTestId(`machine-page-row-${page}`)).toBeTruthy();
         }
-        // Inline sections are gone from the Overview: each is reached through its row.
         expect(screen.findByTestId('machine-detail-stop-daemon')).toBeNull();
         expect(screen.findByTestId('machine-detail-remove')).toBeNull();
         expect(screen.findByTestId('machine-terminal-effective-host')).toBeNull();
         await screen.pressByTestIdAsync('machine-page-row-installables');
-
-        expect(routerPushSpy).toHaveBeenCalledWith('/settings/machines/machine-1/installables?serverId=server-a');
+        expect(routerPush).toHaveBeenCalledWith(`/settings/machines/machine-1/installables?serverId=${encodeURIComponent(serverA)}`);
     });
-
     it('shows only running runs by default and includes finished when toggled', async () => {
-        machineExecutionRunsListSpy.mockResolvedValueOnce({
-            ok: true,
-            runs: [
-                createExecutionRun({ runId: 'run-running' }),
-                createExecutionRun({
-                    runId: 'run-finished',
-                    callId: 'call-2',
-                    sidechainId: 'side-2',
-                    status: 'succeeded',
-                    finishedAtMs: fixedNow,
-                }),
-            ],
-        });
-
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+        runs = [createExecutionRun({ runId: 'run-running' }), createExecutionRun({ runId: 'run-finished', callId: 'call-2', sidechainId: 'side-2', status: 'succeeded', finishedAtMs: 1_700_000_000_000 })];
+        const screen = await renderRuns();
         await flushHookEffects();
-
-        // Default: finished runs are filtered out.
-        expect(screen.findByTestId('execution-run-row:run-running')).toBeTruthy();
-        expect(screen.findByTestId('execution-run-row:run-finished')).toBeNull();
-
-        await screen.pressByTestIdAsync('item-right:runs.showFinished');
+        expect(runRows(screen, 'run-running')).toHaveLength(1);
+        expect(runRows(screen, 'run-finished')).toHaveLength(0);
+        const filter = finishedFilters(screen)[0];
+        expect(filter).toBeTruthy();
+        await act(async () => { filter!.props.rightElement.props.onValueChange(true); });
         await flushHookEffects();
-
-        expect(screen.findByTestId('execution-run-row:run-running')).toBeTruthy();
-        expect(screen.findByTestId('execution-run-row:run-finished')).toBeTruthy();
+        expect(runRows(screen, 'run-running')).toHaveLength(1);
+        expect(runRows(screen, 'run-finished')).toHaveLength(1);
     });
-
     it('offers the finished-run filter only when finished runs exist', async () => {
-        machineExecutionRunsListSpy.mockResolvedValueOnce({ ok: true, runs: [] });
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const empty = await renderScreen(React.createElement(MachineDetailScreen));
+        const empty = await renderRuns();
         await flushHookEffects();
-        expect(empty.findByTestId('item:runs.showFinished')).toBeNull();
+        expect(finishedFilters(empty)).toHaveLength(0);
         await act(async () => empty.tree.unmount());
-
-        machineExecutionRunsListSpy.mockResolvedValueOnce({ ok: true, runs: [createExecutionRun({ runId: 'running' })] });
-        const running = await renderScreen(React.createElement(MachineDetailScreen));
+        runs = [createExecutionRun({ runId: 'running' })];
+        const running = await renderRuns();
         await flushHookEffects();
-        expect(running.findByTestId('execution-run-row:running')).toBeTruthy();
-        expect(running.findByTestId('item:runs.showFinished')).toBeNull();
+        expect(runRows(running, 'running')).toHaveLength(1);
+        expect(finishedFilters(running)).toHaveLength(0);
     });
-
     it('offers a stop control for running runs', async () => {
-        machineExecutionRunsListSpy.mockResolvedValueOnce({
-            ok: true,
-            runs: [createExecutionRun({ runId: 'run-running' })],
-        });
-
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+        runs = [createExecutionRun({ runId: 'run-running' })];
+        const screen = await renderRuns();
         await flushHookEffects();
-
-        expect(screen.findByTestId('execution-run-stop:run-running')).toBeTruthy();
+        expect(runRows(screen, 'run-running')).toHaveLength(1);
+        expect(runRows(screen, 'run-running')[0]?.props.rightAccessory?.props.onPress).toEqual(expect.any(Function));
     });
-
     it('navigates to run details when pressing an execution run row', async () => {
-        routerPushSpy.mockClear();
-        machineExecutionRunsListSpy.mockResolvedValueOnce({
-            ok: true,
-            runs: [createExecutionRun({ runId: 'run-1' })],
-        });
-
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+        runs = [createExecutionRun({ runId: 'run-1' })];
+        const screen = await renderRuns();
         await flushHookEffects();
-
-        expect(screen.findByTestId('execution-run-row:run-1')).toBeTruthy();
-        await screen.pressByTestIdAsync('execution-run-row:run-1');
-
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/sess-1/runs/run-1?serverId=server-a');
+        expect(runRows(screen, 'run-1')).toHaveLength(1);
+        await act(async () => { runRows(screen, 'run-1')[0]!.props.onPress(); });
+        expect(routerPush).toHaveBeenCalledWith(`/session/sess-1/runs/run-1?serverId=${encodeURIComponent(serverA)}`);
     });
-
     it('keeps detached daemon runs unlinked and without Session stop controls', async () => {
-        machineExecutionRunsListSpy.mockResolvedValueOnce({
-            ok: true,
-            runs: [createExecutionRun({ runId: 'run-detached', happySessionId: null })],
-        });
-
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+        runs = [createExecutionRun({ runId: 'run-detached', happySessionId: null })];
+        const screen = await renderRuns();
         await flushHookEffects();
-
-        const row = screen.findByTestId('execution-run-row:run-detached');
-        expect(row).toBeTruthy();
-        if (!row) {
-            throw new Error('Expected the detached execution run row to render.');
-        }
-        expect(screen.findByTestId('item:runs.sessionTitle')).toBeNull();
-        expect(row.props.onPress).toBeUndefined();
-        expect(screen.findByTestId('execution-run-stop:run-detached')).toBeNull();
+        const rows = runRows(screen, 'run-detached');
+        expect(rows).toHaveLength(1);
+        expect(screen.findAllByType(Item).filter(item => item.props.title === 'runs.sessionTitle')).toHaveLength(0);
+        expect(rows[0]?.props.onPress).toBeUndefined();
+        expect(rows[0]?.props.rightAccessory).toBeFalsy();
     });
 });
