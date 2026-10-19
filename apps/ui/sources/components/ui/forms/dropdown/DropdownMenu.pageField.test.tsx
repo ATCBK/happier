@@ -28,6 +28,10 @@ vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 vi.mock('@/components/ui/popover', async (importOriginal) =>
     (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
+// Collect the real component graph before the interaction-test deadline starts.
+await import('./DropdownMenu');
+await import('@/components/ui/lists/listPresentation');
+
 afterEach(() => {
     standardCleanup();
     viewport.width = 1280;

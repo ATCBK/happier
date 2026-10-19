@@ -12,6 +12,12 @@ vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
 }));
 
+// Collect the real component graph once; presentation is supplied through its provider.
+await import('../Item');
+await import('../ItemGroup');
+await import('../SegmentedChoiceItem');
+await import('@/components/ui/buttons/RoundButton');
+
 afterEach(() => {
     standardCleanup();
 });
@@ -76,7 +82,6 @@ describe('Item page accessory layout', () => {
         const ordinaryAccessory = flattenTestStyle(ordinarySection.props.style);
         const ordinaryRow = flattenTestStyle(nearestHostView(ordinarySection).props.style);
 
-        vi.resetModules();
         const split = await renderPageRow({ split: true, accessoryLayout: 'stacked' });
         const splitAccessory = flattenTestStyle(accessorySection(hostByTestID(split, 'control')).props.style);
 
@@ -237,14 +242,12 @@ describe('Item leading mark on a page', () => {
     });
 
     it('fits an oversized identity mark outside page presentation when its caller declares the leading slot size', async () => {
-        vi.resetModules();
         const box = await leadingBox('grouped', 36);
         expect(box.width).toBe(36);
         expect(box.height).toBe(36);
     });
 
     it('keeps the fixed glyph box outside page presentation when no slot size is declared', async () => {
-        vi.resetModules();
         const box = await leadingBox('grouped');
         const { ITEM_ICON_BOX_SIZE } = await import('../itemDensityMetrics');
         expect(box.width).toBe(ITEM_ICON_BOX_SIZE.cozy);

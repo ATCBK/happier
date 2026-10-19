@@ -35,6 +35,12 @@ vi.mock('react-native-unistyles', async () => {
     return { ...light, useUnistyles: () => themeMode.dark ? dark.useUnistyles() : light.useUnistyles() };
 });
 
+// Collect the real component graph before the setup-hook deadline starts.
+await import('@/sync/domains/state/storage');
+await import('./GlassSurface');
+await import('./glassSurfacePaint');
+await import('./glassMaterial');
+
 let GlassSurface: typeof import('./GlassSurface')['GlassSurface'];
 let glassSurfacePlaneStyle: typeof import('./glassSurfacePaint')['glassSurfacePlaneStyle'];
 let storage: typeof import('@/sync/domains/state/storage')['storage'];

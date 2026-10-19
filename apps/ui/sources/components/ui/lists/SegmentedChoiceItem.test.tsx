@@ -23,9 +23,11 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: any) => React.createElement('Text', props, props.children),
 }));
 
+// Platform is read at render time; keep one real component graph across cases.
+await import('./SegmentedChoiceItem');
+
 afterEach(() => {
     standardCleanup();
-    vi.resetModules();
 });
 
 const OPTIONS = [

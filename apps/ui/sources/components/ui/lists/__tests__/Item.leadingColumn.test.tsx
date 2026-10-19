@@ -30,9 +30,14 @@ vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({});
 });
+// Collect the real component graph once; cases only vary rendered props.
+await import('../Item');
+await import('../ItemGroup');
+await import('@/components/settings/connectedServices/ConnectedServiceMark');
+await import('@/agents/registry/AgentIcon');
+
 afterEach(() => {
     standardCleanup();
-    vi.resetModules();
 });
 
 type Screen = Awaited<ReturnType<typeof renderScreen>>;

@@ -65,6 +65,9 @@ vi.mock('@/sync/ops/machineWorkspaceFileList', () => ({
     machineWorkspaceFileList: async () => ({ ok: true, paths: [], truncated: false }),
 }));
 
+// Collect the real component graph before the interaction-test deadline starts.
+await import('./MachinePathBrowserModal');
+
 describe('MachinePathBrowserModal native chrome stability', () => {
     it('does not republish card chrome after the host applies the first chrome update', async () => {
         const { MachinePathBrowserModal } = await import('./MachinePathBrowserModal');
