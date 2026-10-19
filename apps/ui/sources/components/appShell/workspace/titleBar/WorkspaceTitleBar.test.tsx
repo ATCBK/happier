@@ -15,6 +15,10 @@ import { createWorkspaceBarGeometry, WorkspaceBarGeometryContext } from './works
 import { createWorkspaceNavigationAdapter } from '../workspaceNavigationAdapter';
 import { createWorkspaceActionAdapter } from '../workspaceActions';
 import { registerMountedWorkspaceAction } from '../workspaceActionRuntime';
+import { AppShellMaterialFrame } from '@/components/navigation/shell/AppShellMaterialFrame';
+import { AppShellTitleStrip } from '@/components/navigation/shell/appRail/AppShellTitleStrip';
+import { invokeTestInstanceHandler } from '@/dev/testkit/render/renderScreen';
+import { View } from 'react-native';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -53,7 +57,7 @@ function tab(id: string, overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
     return { id, target: { kind: `removed:${id}`, params: {} }, pinned: false, preview: false, ...overrides };
 }
 
-function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number; trailingStartPx?: number }>) {
+function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number; trailingStartPx?: number; chromeActive?: boolean }>) {
     const [state, dispatch] = React.useReducer(reduceWorkspaceState, props.initial);
     const canvasControlsRef = React.useRef<SplitCanvasHostControls | null>(null);
     const currentState = React.useRef(state);
@@ -82,8 +86,15 @@ function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number
     return <WorkspaceNavigationContext.Provider value={value}>
         <WorkspaceBarGeometryContext.Provider value={geometry}>
             {React.createElement('WorkspaceStateProbe', { state })}
-            <WorkspaceTitleBar catalog={[]} clusterEndPx={props.clusterEndPx} stripHeightPx={40} trailingStartPx={props.trailingStartPx} />
-            <WorkspaceShell catalog={[]} />
+            {props.chromeActive === undefined ? <>
+                <WorkspaceTitleBar catalog={[]} clusterEndPx={props.clusterEndPx} stripHeightPx={40} trailingStartPx={props.trailingStartPx} />
+                <WorkspaceShell catalog={[]} />
+            </> : <AppShellMaterialFrame showChrome={props.chromeActive} dragEnabled={false} leftOffsetPx={0}
+                sidebarWidth={320} rail={null} column={null} peek={null}
+                titleStrip={<AppShellTitleStrip columnVisible={false} columnToggleAvailable={false}
+                    onToggleColumn={() => {}} navigation={value} workspaceCatalog={[]} trailing={<View />} />}>
+                <WorkspaceShell catalog={[]} />
+            </AppShellMaterialFrame>}
         </WorkspaceBarGeometryContext.Provider>
     </WorkspaceNavigationContext.Provider>;
 }
@@ -109,6 +120,35 @@ function threePanes(): WorkspaceState {
 }
 
 describe('WorkspaceTitleBar', () => {
+    it('retains its document tabs when hidden strip measurements report zero width', async () => {
+        const initial = createWorkspaceState(tab('kept'));
+        const body = (chromeActive: boolean) => <Harness initial={initial} clusterEndPx={200} chromeActive={chromeActive} />;
+        const screen = await renderScreen(body(true), { createNodeMock: windowMeasurement({
+            'workspace-title-bar': { x: 0, width: 1440 },
+            'workspace-group-group_1': { x: 300, width: 1100 },
+        }) });
+        const measure = async (width: number) => act(async () => {
+            invokeTestInstanceHandler(screen.findHostByTestId('app-shell-title-strip')!, 'onLayout', {
+                nativeEvent: { layout: { x: 0, y: 0, width, height: 40 } },
+            });
+            invokeTestInstanceHandler(screen.findHostByTestId('app-shell-title-strip-trailing')!, 'onLayout', {
+                nativeEvent: { layout: { x: 0, y: 0, width: width === 0 ? 0 : 40, height: 40 } },
+            });
+        });
+        try {
+            await measure(1440);
+            const document = screen.findHostByTestId('workspace-tab-kept');
+            expect(document).not.toBeNull();
+            await screen.update(body(false));
+            await measure(0);
+            expect(screen.findHostByTestId('workspace-tab-kept')).toBe(document);
+            await screen.update(body(true));
+            await measure(1440);
+            expect(screen.findHostByTestId('workspace-tab-kept')).toBe(document);
+        } finally {
+            await screen.unmount();
+        }
+    });
     it('honors UI Require over a waiver before closing a tab, then closes when Require is removed', async () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const initialSettings = storage.getState().settings;

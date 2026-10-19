@@ -12,7 +12,7 @@ import type { NativeStackNavigationOptions } from '@react-navigation/native-stac
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { DefaultBackButton, Header, NavigationHeaderTitle, PageHeaderActionsHost } from '@/components/navigation/Header';
-import { HeaderActionsScope } from '@/components/navigation/stackHeaderActions';
+import { HeaderActionsScope, useEnclosingHeaderActionsScope } from '@/components/navigation/stackHeaderActions';
 import { NavigationTitleChromeProvider, useNavigationChromeShowsBack, useNavigationTitleChromePublisher, useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
 import { useRootStackRouteOptions } from '@/components/navigation/root/useRootStackRouteOptions';
 import { resolveRootStackRouteOptions } from '@/components/navigation/root/rootStackRouteOptions';
@@ -157,11 +157,14 @@ function DestinationNavigationChrome(props: Readonly<{
     const canGoBack = props.navigation?.canGoBack?.() ?? false;
     const tintColor = options.headerTintColor ?? theme.colors.chrome.header.foreground;
     const chromeShown = props.phone && options.headerShown !== false;
-    const renderActions = React.useMemo(() => !chromeShown && (options.headerLeft || options.headerRight)
-        ? () => <>
-            {options.headerLeft?.({ tintColor, canGoBack }) ?? null}
-            {options.headerRight?.({ tintColor, canGoBack }) ?? null}
-        </> : null, [canGoBack, chromeShown, options.headerLeft, options.headerRight, tintColor]);
+    // Only the trailing actions are lent: `headerLeft` is the hidden header's way back, which the page header's
+    // own Back (or the page's crumb) already is. Lent, it would stand a second Back among the actions.
+    const renderActions = React.useMemo(() => !chromeShown && options.headerRight
+        ? () => options.headerRight?.({ tintColor, canGoBack }) ?? null
+        : null, [canGoBack, chromeShown, options.headerRight, tintColor]);
+    // Hosted inside a pane that lends its controls (a Work peek, the Inbox's detail), a route with no
+    // actions of its own hands the pane's scope through, so the page's header draws those controls.
+    const enclosingScope = useEnclosingHeaderActionsScope();
     const declaredTitle = typeof options.headerTitle === 'string' ? options.headerTitle : options.title;
     // headerTitle belongs to navigation chrome; title and PageHeader supply
     // screen identity. A page's explicit null withdraws its previous identity.
@@ -190,7 +193,7 @@ function DestinationNavigationChrome(props: Readonly<{
                         ? <DefaultBackButton tintColor={tintColor} onPress={() => props.navigation?.back()} /> : null)}
                     headerRight={options.headerRight ? () => options.headerRight!({ tintColor, canGoBack }) : undefined} />
             </View> : null}
-            <HeaderActionsScope scopeKey={chromeShown ? null : props.scopeKey}>
+            <HeaderActionsScope scopeKey={chromeShown ? null : renderActions === null && typeof enclosingScope === 'string' ? enclosingScope : props.scopeKey}>
                 <PageHeaderActionsHost scopeKey={props.scopeKey} render={renderActions} />
                 {props.children}
             </HeaderActionsScope>

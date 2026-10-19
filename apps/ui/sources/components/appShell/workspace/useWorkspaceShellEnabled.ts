@@ -27,7 +27,7 @@ export function useWorkspacePresentation(): 'shell' | 'phone' | 'entry' | 'defer
     const isTablet = useIsTablet();
     const overlay = isDesktopActivityOverlayWindowContext();
     const onboarding = useOnboardingJourneySessionActive();
-    const normalized = segments.filter((segment) => !(segment.startsWith('(') && segment.endsWith(')')));
+    const normalized: readonly string[] = segments.filter((segment) => !(segment.startsWith('(') && segment.endsWith(')')));
     const publicNonHome = normalized.length > 0 && normalized[0] !== 'index'
         && isPublicRouteForUnauthenticated([...segments]);
     const bypass = Platform.OS === 'web' && (isTerminalConnectWebPathname(pathname) || publicNonHome);

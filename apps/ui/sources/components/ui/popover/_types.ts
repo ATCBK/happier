@@ -13,7 +13,7 @@ type WindowRect = Readonly<{ x: number; y: number; width: number; height: number
 export type PopoverWindowRect = WindowRect;
 
 export type PopoverAnchor =
-    | { readonly kind: 'view'; readonly ref: React.RefObject<View | null> }
+    | { readonly kind: 'view'; readonly ref: React.RefObject<View | HTMLElement | null> }
     | {
         readonly kind: 'rect';
         readonly rect: Readonly<{

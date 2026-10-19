@@ -1,9 +1,10 @@
 import type { WorkspaceActionId } from '@happier-dev/protocol';
 import { workspaceActionFailure, type WorkspaceActionOutcome } from './workspaceActions';
-import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { captureActiveServerAccountScopeCurrentness, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import type { Href } from 'expo-router';
 import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 
@@ -46,8 +47,8 @@ export async function executeWorkspaceUiAction(request: Parameters<MountedWorksp
         if (result.ok) {
             const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
             if (pending.success && scope && lifetime.isCurrent()) openApproval(buildApprovalHref(pending.data.artifactId, scope.serverId));
-        } else if (lifetime.isCurrent() && !['workspace_navigation_cancelled', 'action_cancelled', 'approval_rejected', 'approval_cancelled'].includes(result.errorCode)) {
-            await Modal.alertAsync(t('common.error'), result.errorCode === 'action_disabled' ? t('common.disabled') : t('common.unavailable'));
+        } else if (lifetime.isCurrent() && !isActionApprovalDeclinedErrorCode(result.errorCode) && !['workspace_navigation_cancelled', 'action_cancelled'].includes(result.errorCode)) {
+            if (!presentActionTurnedOffNoticeIfOff(result, request.actionId)) await Modal.alertAsync(t('common.error'), t('common.unavailable'));
         }
         return result;
     } catch {

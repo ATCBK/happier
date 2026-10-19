@@ -30,8 +30,9 @@ function hostedLayout(key: string) {
     }
     return Layout;
 }
-const PluginAppPageScreen = retryableLazy(() => import('@/components/appShell/plugins/PluginAppPageScreen')
-    .then((module) => ({ default: module.PluginAppPageScreen })));
+const PluginAppPageScreen = retryableLazy(async () => ({
+    default: (await import('@/components/appShell/plugins/PluginAppPageScreen')).PluginAppPageScreen,
+}));
 
 /** Renders the catalog-admitted identity; the Expo entrypoint is only its URL sink. */
 export function WorkspaceDestinationBody(props: Readonly<{

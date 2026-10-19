@@ -18,6 +18,9 @@ installPopoverCommonModuleMocks({
     },
 });
 
+// Collect the real UI graph outside the first keyboard interaction's deadline.
+await import('./Popover');
+
 function readStyleNumber(style: Record<string, unknown>, key: string): number {
     const value = style[key];
     if (typeof value !== 'number') {
@@ -142,7 +145,6 @@ describe('Popover (native keyboard)', () => {
                         flip={false}
                         gap={0}
                         maxHeightCap={320}
-                        flip={false}
                         onRequestClose={() => {}}
                     >
                         {() => React.createElement('PopoverChild')}

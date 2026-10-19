@@ -355,7 +355,7 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
                         height: maximized ? hostSize?.height ?? 0 : rect.height,
                         minWidth: 0, minHeight: 0,
                     }}>
-                        <RetainedPanelSurface isActive={visible} mode="flow">{renderLeafNode(leaf)}</RetainedPanelSurface>
+                        <RetainedPanelSurface isActive={visible} mode="flow" suspendWhenHidden={false}>{renderLeafNode(leaf)}</RetainedPanelSurface>
                     </View>;
                 })}
                 {props.retainedLeafContents?.map(member => {
@@ -374,7 +374,7 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
                             height: Math.max(0, (maximized ? hostSize?.height ?? 0 : rect.height) - y),
                             minWidth: 0, minHeight: 0, overflow: 'hidden',
                         }}>
-                        <RetainedPanelSurface isActive={visible} mode="flow">
+                        <RetainedPanelSurface isActive={visible} mode="flow" suspendWhenHidden={false}>
                             <SplitCanvasRetainedMemberRenderer id={member.id} leafId={member.leafId}
                                 isFocused={props.state.focusedLeafId === member.leafId} isVisible={visible}
                                 render={member.render} dispatch={props.dispatch} />

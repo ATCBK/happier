@@ -20,6 +20,12 @@ import { GlassRuntimeEnvironmentProvider } from '@/components/ui/glass/glassRunt
 import { GlassMaterialSettingsProvider } from '@/components/ui/glass/useGlassMaterialSettings';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { StyleSheet, View } from 'react-native';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+
+function ChromeLifetimeProbe() {
+    const [identity] = React.useState(() => ({}));
+    return React.createElement('ChromeLifetimeBoundary', { identity, active: useLayoutPresentationActive() });
+}
 
 function alphaAt(leaf: ReactTestInstance, doc: Document) {
     let remaining = 1;
@@ -44,6 +50,27 @@ function alphaAt(leaf: ReactTestInstance, doc: Document) {
 }
 
 describe('real shell material planes', () => {
+    it('parks the document chrome without replacing its lifetime when the phone hides it', async () => {
+        const frame = (wide: boolean) => <AppShellMaterialFrame showChrome={wide} dragEnabled={false}
+            leftOffsetPx={0} sidebarWidth={320} titleStrip={<ChromeLifetimeProbe />} rail={null} column={null} peek={null}>
+            <View testID="responsive-route" />
+        </AppShellMaterialFrame>;
+        const screen = await renderScreen(frame(true));
+        try {
+            const identity = screen.root.findByType('ChromeLifetimeBoundary').props.identity;
+            const route = screen.findHostByTestId('responsive-route');
+            await screen.update(frame(false));
+            expect(screen.root.findByType('ChromeLifetimeBoundary').props).toMatchObject({ identity, active: false });
+            expect(screen.root.findByType('ChromeLifetimeBoundary').props.identity).toBe(identity);
+            expect(screen.findHostByTestId('responsive-route')).toBe(route);
+            await screen.update(frame(true));
+            expect(screen.root.findByType('ChromeLifetimeBoundary').props).toMatchObject({ identity, active: true });
+            expect(screen.root.findByType('ChromeLifetimeBoundary').props.identity).toBe(identity);
+            expect(screen.findHostByTestId('responsive-route')).toBe(route);
+        } finally {
+            await screen.unmount();
+        }
+    });
     it('blurs wallpaper beside chrome/sidebar content without making either plane a popover backdrop root', async () => {
         const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper' }}>
             <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('clear') }}>

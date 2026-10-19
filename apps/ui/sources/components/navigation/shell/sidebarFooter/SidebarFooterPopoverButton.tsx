@@ -60,7 +60,7 @@ export function SidebarFooterPopoverButton(props: Readonly<{
     renderIcon?: (open: boolean) => React.ReactNode;
     /** Shows the button selected while its destination is open (the Machines page's rail door), as well as while its popover is. */
     selected?: boolean;
-    /** The person asked to open it (a press, Enter/Space, or an app-wide opener): user intent, never a mount effect. */
+    /** The person asked to open it (a press, Enter/Space, an app-wide opener, or a hover preview that opened): user intent, never a mount effect. */
     onOpenIntent?: () => void;
     /** The pointer rests on it or keyboard focus reaches it: a chance to warm what the popover's first frame shows. */
     onWarmIntent?: () => void;
@@ -81,6 +81,14 @@ export function SidebarFooterPopoverButton(props: Readonly<{
         intents.current.open?.();
         open();
     }), [open, registerOpener]);
+    // A hover preview is the person opening it too: record it once, when it opens. A press that later
+    // pins the same preview moves `preview` to `open` and is not a second opening.
+    const previousModeRef = React.useRef(mode);
+    React.useEffect(() => {
+        const previous = previousModeRef.current;
+        previousModeRef.current = mode;
+        if (previous === 'closed' && mode === 'preview') intents.current.open?.();
+    }, [mode]);
     const onPress = React.useCallback((event?: unknown) => {
         focusReturnRef.current = readPressFocusReturnTarget(event);
         if (mode === 'closed') intents.current.open?.();

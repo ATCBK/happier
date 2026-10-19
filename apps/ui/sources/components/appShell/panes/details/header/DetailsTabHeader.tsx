@@ -6,6 +6,7 @@ import { HAPPIER_ICON_BUTTON_SIZE, useHappierMaterialColorResolver } from '@happ
 import { PaneHeader, type PaneHeaderLineSegment } from '@/components/appShell/panes/PaneHeader';
 import { useClaimedStackHeaderActions } from '@/components/navigation/stackHeaderActions';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
+import type { IconName } from '@/components/ui/icons/Icon';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { Text } from '@/components/ui/text/Text';
@@ -18,7 +19,9 @@ import { DETAILS_TAB_HEADER_METRICS } from './detailsTabHeaderMetrics';
  * (a branch, an author); a `diffStat` reads as one fact (`+4 −2`).
  */
 export type DetailsTabHeaderMetaFact =
-    | Readonly<{ key: string; kind?: 'text'; text: string; tone?: 'default' | 'muted' | 'strong' | 'mono'; shrink?: boolean; testID?: string }>
+    | Readonly<{ key: string; kind?: 'text'; text: string; tone?: 'default' | 'muted' | 'strong' | 'mono'; shrink?: boolean; testID?: string;
+        /** A glyph leading the fact (the task a conversation hangs off, a lock before who can read it). */
+        icon?: IconName }>
     | Readonly<{ key: string; kind: 'diffStat'; added: number; removed: number; testID?: string }>;
 
 export type DetailsTabHeaderAction = Readonly<{
@@ -41,6 +44,11 @@ export type DetailsTabHeaderProps = Readonly<{
     meta?: readonly DetailsTabHeaderMetaFact[];
     /** A live status or presence leaf; its own subscription keeps ticking out of the header owner. */
     metaLeading?: React.ReactNode;
+    /**
+     * `mark`: the leading leaf is a mark (a stack of faces) that the facts follow directly, as a glyph
+     * does; `text` (default) is words, joined to the facts by the line's " · ".
+     */
+    metaLeadingKind?: 'text' | 'mark';
     metaTrailing?: React.ReactNode;
     /** A short paragraph under the header (a commit body, what Restore will do). */
     body?: React.ReactNode;
@@ -67,7 +75,7 @@ function toLineSegments(meta: readonly DetailsTabHeaderMetaFact[] | undefined): 
             if (fact.removed > 0) segments.push({ text: `−${fact.removed}`, tone: 'removed' });
             continue;
         }
-        segments.push(fact.tone === 'strong' ? { text: fact.text, emphasis: true } : fact.text);
+        segments.push(fact.icon ? { text: fact.text, icon: fact.icon } : fact.tone === 'strong' ? { text: fact.text, emphasis: true } : fact.text);
     }
     return segments;
 }
@@ -78,7 +86,8 @@ function toLineSegments(meta: readonly DetailsTabHeaderMetaFact[] | undefined): 
  * is for (quiet toggles, the buttons, `⋯`). Only what is Details' own sits beneath it — one thin row of
  * view controls, an optional body, one notice line — so a header never eats the code's height.
  *
- * On a phone the band takes the pane header's large step and the controls stay on their own row.
+ * On a phone the band takes the pane header's large step and the controls stay on their own row; quiet
+ * toggles join `⋯` in the band when the header has no controls or buttons for that row.
  */
 export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: DetailsTabHeaderProps) {
     const { theme } = useUnistyles();
@@ -212,8 +221,11 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
             {buttons}
         </View>
     ) : null;
+    // A phone keeps quiet toggles beside `⋯` when they are all the header carries: a row beneath the
+    // band holding only a toggle or two reads as an afterthought and costs the content a band of height.
+    const phoneIconsInBand = phone && Boolean(iconActions) && !props.controls && buttonList.length === 0;
     const bandActions = phone
-        ? (menu ?? undefined)
+        ? (phoneIconsInBand ? <View style={styles.bandActions}>{iconActions}{menu}</View> : (menu ?? undefined))
         : wideActions || menu || paneControls ? (
             <View style={styles.bandActions}>
                 {actionsBelow ? null : wideActions}
@@ -225,11 +237,11 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                 ) : null}
             </View>
         ) : undefined;
-    const phoneToolbar = phone && (props.controls || props.actions || buttons || paneControls) ? (
+    const phoneToolbar = phone && (props.controls || (props.actions && !phoneIconsInBand) || buttons || paneControls) ? (
         <View style={styles.controls}>
             {controls}
             <View style={styles.grow} />
-            {iconActions}
+            {phoneIconsInBand ? null : iconActions}
             {buttons}
             {paneControls}
         </View>
@@ -256,7 +268,7 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                     segments,
                     leading: props.metaLeading ? <View style={styles.liveFacts}>
                         {props.metaLeading}
-                        {segments.length > 0 ? <Text style={[styles.metaSeparator, metrics.meta]}>·</Text> : null}
+                        {segments.length > 0 && props.metaLeadingKind !== 'mark' ? <Text style={[styles.metaSeparator, metrics.meta]}>·</Text> : null}
                     </View> : undefined,
                 } : null}
                 actions={bandActions}

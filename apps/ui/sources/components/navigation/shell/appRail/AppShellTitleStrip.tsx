@@ -26,6 +26,7 @@ import { AppShellThemeToggle } from './AppShellThemeToggle';
 import type { CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { WorkspaceTitleBar } from '@/components/appShell/workspace/titleBar/WorkspaceTitleBar';
 import { WORKSPACE_BAR_CONTROL_GAP_PX } from '@/components/appShell/workspace/titleBar/workspaceBarGeometry';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 /**
  * The strip across the top of the window (lab `xrail-R1`): the window's own controls where the host
@@ -58,6 +59,9 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const router = useRouter();
+    const presentationActive = useLayoutPresentationActive();
+    const presentationActiveRef = React.useRef(presentationActive);
+    presentationActiveRef.current = presentationActive;
     const dragProps = useDesktopWindowDragMouseProps();
     const history = useDesktopSidebarHistoryNavigationAvailability();
     const windowControls = useResolvedDesktopWindowControls({ variant: 'expanded', desktopWindowControls: undefined, hasDesktopWindowControlsOverride: false });
@@ -84,16 +88,19 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
     const [stripWidthPx, setStripWidthPx] = React.useState<number | undefined>(undefined);
     const [trailingWidthPx, setTrailingWidthPx] = React.useState<number | undefined>(undefined);
     const onStripLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+        if (!presentationActiveRef.current) return;
         const next = Math.round(event.nativeEvent.layout.width);
         setStripWidthPx((current) => current === next ? current : next);
     }, []);
     const onTrailingLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+        if (!presentationActiveRef.current) return;
         const next = Math.round(event.nativeEvent.layout.width);
         setTrailingWidthPx((current) => current === next ? current : next);
     }, []);
     const trailingStartPx = stripWidthPx === undefined || trailingWidthPx === undefined ? undefined
         : Math.max(0, stripWidthPx - TITLE_STRIP_END_PADDING_PX - trailingWidthPx - WORKSPACE_BAR_CONTROL_GAP_PX);
     const onClusterLayout = React.useCallback((event: { nativeEvent: { layout: { x: number; width: number } } }) => {
+        if (!presentationActiveRef.current) return;
         const { x, width } = event.nativeEvent.layout;
         const next = Math.round(x + width);
         setClusterEndPx((current) => (current === next ? current : next));

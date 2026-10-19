@@ -759,6 +759,42 @@ describe('consumed workspace navigation owner', () => {
         const group = navigation().state.groups[navigation().state.focusedGroupId];
         expect(navigation().state.tabs[group.activeTabId].target.params.newSessionDraftSeedId).toBe('local-handoff');
     });
+    it('readmits a previously mirrored Run URL after an external Home-qualified visit', async () => {
+        boundary.platform = 'web'; boundary.pathname = '/workflows'; boundary.params = {};
+        const location = { pathname: '/workflows', search: '', hash: '' };
+        const history = { state: null as unknown,
+            replaceState: (state: unknown, _unused: string, href?: string | URL | null) => {
+                history.state = state;
+                if (!href) return;
+                const next = new URL(href, 'https://happier.invalid');
+                location.pathname = next.pathname; location.search = next.search; location.hash = next.hash;
+            },
+            pushState: (state: unknown, unused: string, href: string) => history.replaceState(state, unused, href), go: () => {},
+        };
+        installBrowserBoundary({ location, history, sessionStorage: { getItem: () => 'main' } });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>
+            {navigation => React.createElement('WorkspaceOwner', { navigation })}
+        </WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const target = () => {
+            const state = navigation().state;
+            return state.tabs[state.groups[state.focusedGroupId].activeTabId].target;
+        };
+        const { createWorkflowRunRoute } = await import('@/sync/domains/workflows/workflowRunRoute');
+        const run = { kind: 'occurrence' as const, automationId: 'automation-one', runId: 'run-one' };
+        const unqualified = createWorkflowRunRoute(run);
+        await act(async () => { navigation().openHref(unqualified); });
+        expect(boundary.mirrors.at(-1)).toBe(unqualified);
+
+        // Expo's imperative router changes native history before its query hooks publish.
+        await act(async () => { history.pushState({}, '', createWorkflowRunRoute(run, 'unknown-home')); });
+        expect(target().params.serverId).toBe('unknown-home');
+        await act(async () => { history.pushState({}, '', unqualified); });
+
+        expect(target()).toEqual(resolveDestinationRefFromHref(catalog, unqualified));
+        expect(target().params.serverId).toBeUndefined();
+    });
     it.each([[true, '/workflows/new'], [false, '/workflows/new'],
         [false, '/settings/prompts/skills'], [false, '/settings/prompts/templates'],
         [true, '/settings/session/runtime'], [true, '/settings/session/new-session-wizard']] as const)(

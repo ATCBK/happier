@@ -68,6 +68,8 @@ describe('Project terminal private presentation at the existing pane Account bou
         const otherHome = await harness.addHome({ name: 'Other Home', serverUrl: 'https://pane-other.test', accountId: 'dana', active: false });
         const serverId = await harness.addHome({ name: 'Bob Home', serverUrl: 'https://pane-bob.test', accountId: 'bob' });
         await harness.requireUiApproval(serverId, 'machines.terminal.open');
+        storage.getState().activateProfileScope({ serverId, accountId: 'bob' });
+        await storage.getState().activateSettingsScope({ serverId, accountId: 'bob' });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const ref = { id: 'accepted', serverId, machineId: 'machine', rootPath: '/accepted', createdAtMs: 1 };
         applyProjectAccountRowsFixture(storage, { workspaceRefs: [ref] });

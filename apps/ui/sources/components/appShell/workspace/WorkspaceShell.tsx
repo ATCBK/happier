@@ -30,9 +30,14 @@ import { executeWorkspaceUiAction } from './workspaceActionRuntime';
 import { resolveWorkspaceTopRowGroupIds, WorkspaceBarGeometryContext } from './titleBar/workspaceBarGeometry';
 // The body selector shares Expo's already-loaded context, not a second lazy graph.
 import { WorkspaceDestinationBody as DestinationBody } from './WorkspaceDestinationBody';
+import { getDeviceType } from '@/utils/platform/responsive';
 
-const SessionBody = retryableLazy(() => import('@/components/sessions/shell/SessionDestinationBody').then((module) => ({ default: module.SessionDestinationBody })));
-const SessionDetailsBody = retryableLazy(() => import('@/components/sessions/shell/SessionDetailsDestinationBody').then((module) => ({ default: module.SessionDetailsDestinationBody })));
+const SessionBody = retryableLazy(async () => ({
+    default: (await import('@/components/sessions/shell/SessionDestinationBody')).SessionDestinationBody,
+}));
+const SessionDetailsBody = retryableLazy(async () => ({
+    default: (await import('@/components/sessions/shell/SessionDetailsDestinationBody')).SessionDetailsDestinationBody,
+}));
 const renderSession = () => <SessionBody />;
 const renderSessionDetails = () => <SessionDetailsBody />;
 const leafMinimum = () => WORKSPACE_VIEW_MINIMUM;
@@ -195,8 +200,9 @@ function WorkspaceGroupView(props: Readonly<{
     const safeGroup = toTestIdSafeValue(group.id);
     const geometry = React.useContext(WorkspaceBarGeometryContext);
     const frameRef = React.useRef<View | null>(null);
+    // Hidden title chrome retains its last real wide geometry; phone measurements cannot retire tabs.
     const publishFrame = React.useCallback(() => {
-        if (!geometry || !props.tabsInTitleBar) return;
+        if (!geometry || !props.tabsInTitleBar || getDeviceType() === 'phone') return;
         frameRef.current?.measureInWindow?.((x, _y, width) => {
             if (Number.isFinite(x) && Number.isFinite(width) && width > 0) geometry.setGroupFrame(group.id, { x, width });
         });

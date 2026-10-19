@@ -11,8 +11,20 @@ export function isWorkspaceSingletonDestination(catalog: readonly CompactAppDest
     return workspaceSingletonDestinationIds(catalog).includes(target.kind);
 }
 
+/** Catalog-declared resource identity; an index has no resource or Home qualifier. */
+export function workspaceDestinationNavigationIdentity(target: DestinationRef, catalog: readonly CompactAppDestination[]): string | null {
+    const destination = catalog.find(item => item.id === target.kind);
+    const policy = destination?.kind === 'builtin' ? destination.workspaceNavigationIdentity : undefined;
+    if (!policy) return null;
+    const resource = target.params[policy.resourceParam];
+    return JSON.stringify(resource === undefined ? [target.kind] : [target.kind, resource,
+        policy.scopeParams.map(key => [key, target.params[key] ?? null])]);
+}
+
 /** Identity of an admitted merge, also used to validate retained and pending sync aliases. */
-export function workspaceDestinationAdmissionIdentity(target: DestinationRef): string {
+export function workspaceDestinationAdmissionIdentity(target: DestinationRef, catalog: readonly CompactAppDestination[] = []): string {
+    const navigationIdentity = workspaceDestinationNavigationIdentity(target, catalog);
+    if (navigationIdentity !== null) return navigationIdentity;
     if (target.kind !== 'workflow' && target.kind !== 'workflowRun') return target.kind;
     return JSON.stringify([target.kind, Object.keys(target.params).sort().map(key => [key, target.params[key]])]);
 }

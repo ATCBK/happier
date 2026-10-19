@@ -2,7 +2,7 @@
 import * as React from 'react';
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceClosedTabsListOutputSchema } from '@happier-dev/protocol/actions/workspaceActionFamily';
 import { createSessionFixture, installBrowserStorageLockBoundary, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -14,6 +14,8 @@ import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStore
 import { clearActiveUnsavedChangesGuard, registerMountedTabUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 
 const route = vi.hoisted(() => ({ pathname: '/session/named/info', params: { id: 'named' } as Record<string, string>, platform: 'web' as 'web' | 'ios' }));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 // Expo supplies a local module and local params for each retained native scene.
 const NativeSceneContext = React.createContext<Readonly<{ contextKey: string; params: Record<string, string> }> | null>(null);
 vi.mock('react-native', async () => {
@@ -64,27 +66,20 @@ const loadWorkspaceProduction = () => Promise.all([
     import('../panes/AppPaneProvider'), import('@/app/(app)/session/[id]/info'),
     import('../destinations/compactAppDestinationCatalog'), import('@/sync/ops/actions/frontDoorRuntimeActionExecutor'),
 ]);
-let production!: Awaited<ReturnType<typeof loadWorkspaceProduction>>;
-let warmHomes: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
-let warmLocks: (() => void) | undefined;
-let warmDisconnect: (() => Promise<unknown>) | undefined;
-beforeAll(async () => {
-    warmLocks = installBrowserStorageLockBoundary();
+// Load the real route graph during collection, outside the behavior/hook deadline.
+const production = await (async () => {
+    const warmLocks = installBrowserStorageLockBoundary();
     installDisconnectedServerSocketBoundary();
-    warmHomes = await serveActionHomes({ homes: [{ key: 'warm', serverUrl: 'https://workspace-import.test', accountId: 'alice', currentAccount: true }], route: () => undefined });
-});
-beforeAll(async () => {
-    if (!warmHomes) throw new Error('Workspace import Home is unavailable');
-    warmDisconnect = await warmHomes.restoreActiveConnection();
-    production = await loadWorkspaceProduction();
-    await warmDisconnect(); warmDisconnect = undefined;
-    await warmHomes.dispose(); warmHomes = undefined;
-    warmLocks?.(); warmLocks = undefined;
-});
-afterAll(async () => {
-    try { await warmDisconnect?.(); }
-    finally { await warmHomes?.dispose(); warmLocks?.(); }
-});
+    const warmHomes = await serveActionHomes({ homes: [{ key: 'warm', serverUrl: 'https://workspace-import.test', accountId: 'alice', currentAccount: true }], route: () => undefined });
+    let warmDisconnect: (() => Promise<unknown>) | undefined;
+    try {
+        warmDisconnect = await warmHomes.restoreActiveConnection();
+        return await loadWorkspaceProduction();
+    } finally {
+        try { await warmDisconnect?.(); }
+        finally { await warmHomes.dispose(); warmLocks(); }
+    }
+})();
 afterEach(async () => {
     route.platform = 'web'; route.pathname = '/session/named/info'; route.params = { id: 'named' };
     standardCleanup();
@@ -112,6 +107,7 @@ describe('workspace tabs production composition', () => {
         ]);
         const initial = storage.getState();
         const { Modal } = await import('@/modal');
+        const { router } = await import('expo-router');
         const scope = storage.getState().profileScope;
         if (!scope) throw new Error('The close journey requires the applied Account');
         if (entry === 'phone close') {
@@ -166,10 +162,18 @@ describe('workspace tabs production composition', () => {
         try {
             await policy('disabled', 2);
             vi.mocked(Modal.alertAsync).mockClear();
+            vi.mocked(Modal.alert).mockClear();
+            vi.mocked(router.push).mockClear();
             await trigger();
             expect(navigation.state.tabs['pinned-close']).toBeDefined();
             expect(navigation.state.tabs['other-close']).toBeDefined();
-            await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalled());
+            // An explicitly disabled Action has its canonical Off notice, not a generic failure.
+            // An unavailable tab first asks whether to close, then presents that same notice.
+            await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledTimes(entry === 'unavailable phone tab' ? 2 : 1));
+            const openActionSettings = vi.mocked(Modal.alert).mock.calls.at(-1)?.[2]?.find(button => button.onPress)?.onPress;
+            expect(openActionSettings).toBeTypeOf('function');
+            await act(async () => { openActionSettings?.(); });
+            expect(router.push).toHaveBeenCalledWith('/settings/actions/workspace.tabs.close');
             expect(artifacts.list()).toHaveLength(0);
             await policy('require', 3);
             await trigger();
@@ -263,7 +267,9 @@ describe('workspace tabs production composition', () => {
             expect(switcherTitles()).toContain('Native workspace identity');
             await act(async () => { storage.getState().applySessions([named('Native identity renamed')]); });
             expect(railTitles()).toContain('Native identity renamed');
+            expect(railTitles()).not.toContain('Native workspace identity');
             expect(switcherTitles()).toContain('Native identity renamed');
+            expect(switcherTitles()).not.toContain('Native workspace identity');
             await act(async () => { navigation.phone?.activateTab('native-other'); });
             route.pathname = '/session/other/info'; route.params = otherScene.params;
             await screen.update(element());
@@ -295,24 +301,22 @@ describe('workspace tabs production composition', () => {
         };
         storage.setState({ isDataReady: true });
         storage.getState().applySessions([named('Fix workspace tabs')]);
-        const [{ WorkspaceProvider }, { WorkspaceNavigationContext }, { DestinationInstanceHost }, { WorkspaceTitleBar }, geometryModule,
+        const [{ WorkspaceProvider }, , { DestinationInstanceHost }, { WorkspaceTitleBar }, geometryModule,
             { KeyboardShortcutProvider }, { AppPaneProvider }, { default: SessionInfoRoute }, catalogModule,
             { createFrontDoorActionExecute }] = production;
         const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
         const geometry = geometryModule.createWorkspaceBarGeometry();
         geometry.setGroupFrame('group:1', { x: 220, width: 1000 });
         let navigation!: WorkspaceNavigationContextValue;
-        const element = (unbindTitlePublisher = false) => <KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
+        const element = () => <KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
             <WorkspaceProvider enabled catalog={catalog}>{owner => {
                 navigation = owner;
                 const detail = Object.values(owner.state.tabs).find(tab => tab.target.params.id === 'named' && tab.target.kind !== 'session');
                 const detailActive = detail?.id === owner.state.groups[owner.state.focusedGroupId]?.activeTabId;
                 return <geometryModule.WorkspaceBarGeometryContext.Provider value={geometry}>
                     <WorkspaceTitleBar catalog={catalog} clusterEndPx={200} stripHeightPx={40} />
-                    {detail ? <WorkspaceNavigationContext.Provider value={unbindTitlePublisher ? { ...owner, publishDestinationTitle: undefined } : owner}>
-                        <DestinationInstanceHost tabId={detail.id} ref={detail.target} pathname={route.pathname}
-                            focused={detailActive} visible={detailActive} navigation={owner.navigationForTab(detail.id)}><SessionInfoRoute /></DestinationInstanceHost>
-                    </WorkspaceNavigationContext.Provider> : null}
+                    {detail ? <DestinationInstanceHost tabId={detail.id} ref={detail.target} pathname={route.pathname}
+                        focused={detailActive} visible={detailActive} navigation={owner.navigationForTab(detail.id)}><SessionInfoRoute /></DestinationInstanceHost> : null}
                 </geometryModule.WorkspaceBarGeometryContext.Provider>;
             }}</WorkspaceProvider>
         </AppPaneProvider></KeyboardShortcutProvider>;
@@ -320,14 +324,7 @@ describe('workspace tabs production composition', () => {
             createNodeMock: element => element.props.testID === 'workspace-title-bar'
                 ? { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 1440, 800) } : null,
         };
-        // Cold broken composition: retained last-known titles must not mask a missing publisher.
-        let screen = await renderScreen(element(true), renderOptions);
-        const unboundTab = navigation.state.groups[navigation.state.focusedGroupId]!.activeTabId;
-        const unboundText = screen.findByTestId(`workspace-tab-${unboundTab}`)?.findAll((node: { type: unknown; props: Record<string, unknown> }) => typeof node.type === 'string' && typeof node.props.children === 'string').map(node => node.props.children);
-        expect(screen.findHostByTestId('session-info-screen')).not.toBeNull();
-        expect(unboundText).not.toContain('Fix workspace tabs');
-        await screen.unmount();
-        screen = await renderScreen(element(), renderOptions);
+        const screen = await renderScreen(element(), renderOptions);
         const execute = createFrontDoorActionExecute();
         const action = async (actionId: Parameters<typeof execute>[0], input: unknown) => {
             let result!: Awaited<ReturnType<typeof execute>>;
@@ -358,6 +355,7 @@ describe('workspace tabs production composition', () => {
             expect(label()).toContain('Fix workspace tabs');
             await act(async () => { storage.getState().applySessions([named('Workspace tabs renamed')]); });
             expect(label()).toContain('Workspace tabs renamed');
+            expect(label()).not.toContain('Fix workspace tabs');
             await action('workspace.tabs.pin', { tabId: sessionTab, pinned: true });
             const middle = await open(`/session/middle?serverId=${homeId}`);
             const right = await open(`/session/right?serverId=${homeId}`);

@@ -282,7 +282,12 @@ export function WorkspaceProvider(props: Readonly<{
         if (!runtime.initialized) {
             runtime.adapter.initialize(routeHref);
             runtime.initialized = true;
-        } else if (projectedHref.current !== routeHref) runtime.adapter.acceptUrl(routeHref);
+        } else if (projectedHref.current !== routeHref) {
+            // A different browser URL retires the preceding Expo mirror. Returning
+            // to that old URL is fresh navigation and must update the retained Home.
+            projectedHref.current = null;
+            runtime.adapter.acceptUrl(routeHref);
+        }
     }, [eligible, owner.isReady, hostsRoute, routeHref, runtime]);
 
     React.useLayoutEffect(() => {

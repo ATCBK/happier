@@ -106,11 +106,6 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
     resolvePreferredServerIdForSessionId: () => null,
 }));
 
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplyLocalSettings: () => vi.fn(),
-    useApplySettings: () => vi.fn(),
-}));
-
 vi.mock('@/utils/platform/desktopHost', () => ({
     isDesktopHost: () => false,
 }));

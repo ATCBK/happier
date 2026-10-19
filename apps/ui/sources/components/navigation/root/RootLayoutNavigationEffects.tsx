@@ -1,5 +1,6 @@
 import { installDesktopDeepLinks } from '@/desktop/deepLinks/installDesktopDeepLinks';
 import { router, useGlobalSearchParams, usePathname, useSegments } from 'expo-router';
+import { admitInternalRouteHref } from '@/utils/path/routeUtils';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { useAuth } from '@/auth/context/AuthContext';
@@ -34,13 +35,13 @@ import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol/crypto/pub
 export function RootLayoutNavigationEffects(): React.ReactElement | null {
     React.useEffect(() => {
         if (Platform.OS === 'web' && desktopHostKind() === 'tauri') {
-            return installDesktopDeepLinks((href) => router.push(href));
+            return installDesktopDeepLinks((href) => router.push(admitInternalRouteHref(href)));
         }
     }, []);
     const auth = useAuth();
     const isAuthenticated = auth.isAuthenticated;
     const refreshAuth = auth.refreshFromActiveServer;
-    const segments = useSegments();
+    const segments: readonly string[] = useSegments();
     const pathname = usePathname();
     const { serverId: routerServerId } = useGlobalSearchParams<{ serverId?: string | string[] }>();
     const debugRouterEnabled = process.env.EXPO_PUBLIC_DEBUG === '1';

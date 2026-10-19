@@ -210,22 +210,19 @@ const AppStackHeader = React.memo(function AppStackHeader(props: NativeStackHead
 });
 
 /**
- * The actions a route put in its stack header, where that header is not drawn: handed to the page's
+ * The trailing actions a route put in its stack header, where that header is not drawn: handed to the page's
  * own header (`PageHeader` claims them), or, on a page without one, kept in a slim actions-only bar
  * so nothing a route offers is lost.
  */
 const ShellPageHeaderActions = React.memo(function ShellPageHeaderActions(props: NativeStackHeaderProps) {
-    const { headerLeft, headerRight, headerTintColor } = props.options;
+    const { headerRight, headerTintColor } = props.options;
     const canGoBack = Boolean(props.back);
+    // Only the trailing actions are lent. `headerLeft` is the undrawn header's way back; in the shell the page
+    // header's Back, the rail and the history arrows are that way, so lending it would add a second Back.
     const render = React.useMemo(() => {
-        if (!headerLeft && !headerRight) return null;
-        return () => (
-            <>
-                {headerLeft?.({ tintColor: headerTintColor, canGoBack, label: undefined, href: undefined }) ?? null}
-                {headerRight?.({ tintColor: headerTintColor, canGoBack }) ?? null}
-            </>
-        );
-    }, [canGoBack, headerLeft, headerRight, headerTintColor]);
+        if (!headerRight) return null;
+        return () => headerRight({ tintColor: headerTintColor, canGoBack }) ?? null;
+    }, [canGoBack, headerRight, headerTintColor]);
     return <PageHeaderActionsHost scopeKey={props.route.key} render={render} />;
 });
 
@@ -294,9 +291,15 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         justifyContent: Platform.OS === 'ios' ? 'center' : 'flex-start',
         paddingHorizontal: theme.space.s12,
     },
+    // The page title is the page's identity; its trailing controls are secondary. They take what they
+    // need up to three fifths of the bar (a page's one filled action, its overflow and a glyph chip
+    // side by side) and shrink their own text beyond that, so a long control (a machine name) never
+    // squeezes the title down to its first letters.
     rightContainer: {
         flexGrow: 0,
-        flexShrink: 0,
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '60%',
         alignItems: 'flex-end',
     },
     title: {

@@ -40,7 +40,7 @@ afterEach(() => {
  */
 async function renderPanel(
   fit: 'shrink' | 'shift' | undefined,
-  over: Readonly<{ placement?: 'top' | 'bottom'; anchorTop?: number; flip?: boolean; contentHeight?: number }> = {},
+  over: Readonly<{ placement?: 'top' | 'bottom'; anchorTop?: number; flip?: boolean; contentHeight?: number; cap?: number | 'default' }> = {},
 ) {
   const { Popover } = await import('./Popover');
   const { OverlayPortalProvider, OverlayPortalHost } =
@@ -70,7 +70,7 @@ async function renderPanel(
           placement={over.placement ?? 'bottom'}
           {...(over.flip === undefined ? {} : { flip: over.flip })}
           gap={8}
-          maxHeightCap={600}
+          {...(over.cap === 'default' ? {} : { maxHeightCap: over.cap ?? 600 })}
           maxWidthCap={900}
           {...(fit ? { fit } : {})}
         >
@@ -121,5 +121,18 @@ describe('Popover: a designed panel keeps its size when neither side of its trig
     const { maxHeight } = await renderPanel(undefined);
     // Above the trigger: 400 - 8.
     expect(maxHeight).toBe(392);
+  });
+
+  it('lets a popover with no explicit cap use the room its window gives, so tall content scrolls instead of hiding', async () => {
+    // Below a trigger at 100 an 800-high window leaves 800 - 132 - 8 = 660; the old fixed 400 cap hid the rest.
+    const { maxHeight } = await renderPanel(undefined, { cap: 'default', anchorTop: 100 });
+    expect(maxHeight).toBe(660);
+  });
+
+  it('still prefers the side with the usual 400 of room when no cap is given', async () => {
+    // Auto placement: below the trigger there is 660 and above 92 - 8; the roomy side is chosen as before.
+    const { maxHeight } = await renderPanel(undefined, { cap: 'default', placement: 'bottom', anchorTop: 600, flip: true });
+    // Above the trigger: 600 - 8, not the 160 left below.
+    expect(maxHeight).toBe(592);
   });
 });

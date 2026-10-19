@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Animated, Platform, View, type LayoutChangeEvent } from 'react-native';
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
+import { admitInternalRouteHref } from '@/utils/path/routeUtils';
 
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { SessionSwitcherBand } from '@/components/navigation/mobile/chrome/lateralSwipe/SessionSwitcherBand';
@@ -58,7 +59,7 @@ const MAIN_TAB_DEFAULT_ROUTES = {
     projects: '/',
     friends: '/',
     settings: '/settings',
-} satisfies Record<TabType, string>;
+} as const satisfies Record<TabType, string>;
 
 function createInitialMainTabRoutes(): Record<TabType, string> {
     return { ...MAIN_TAB_DEFAULT_ROUTES };
@@ -137,7 +138,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
 }>) {
     const pathname = usePathname();
     const router = useRouter();
-    const params = useGlobalSearchParams<Record<string, string | string[] | undefined>>();
+    const params = useGlobalSearchParams<Record<string, string | string[]>>();
     const auth = useAuth();
     const deviceType = useDeviceType();
     const reduceMotion = useReducedMotionPreference();
@@ -230,7 +231,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
 
         const targetRoute = resolveRememberedMainTabRoute(tab, mainTabRoutesRef.current[tab]);
         if (targetRoute !== '/' || routeOwnedMainTab) {
-            router.navigate(targetRoute);
+            router.navigate(admitInternalRouteHref(targetRoute));
         }
         if (tab !== 'settings') {
             void setActiveTab(tab);

@@ -3,6 +3,7 @@ import { act } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
+import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 import {
     createPluginSurfaceLaunchAuthority,
@@ -657,12 +658,14 @@ describe('pluginDetailsDestination', () => {
         const { hostOrigin: _hostOrigin, ...directPlacement } = placement;
         const direct = {
             ...directPlacement,
-            serverIdentityId: 'srv_account_one',
-            materializationRef: {
-                pluginId: 'com.example.viewer',
-                machineId: 'machine-1',
-                materializationId: 'viewer-install-1',
-            },
+            executionOrigin: PluginMachineExecutionOriginV1Schema.parse({
+                serverIdentityId: 'srv_account_one',
+                materializationRef: {
+                    pluginId: 'com.example.viewer',
+                    machineId: 'machine-1',
+                    materializationId: 'viewer-install-1',
+                },
+            }),
         } satisfies PluginUiSurfacePlacementProjection;
         const scopedLaunchFacts = {
             serverId: runtime.serverId,

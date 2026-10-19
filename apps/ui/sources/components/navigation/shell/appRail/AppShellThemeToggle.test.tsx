@@ -4,12 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup, pressTestInstanceAsync } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 import { installNavigationShellCommonModuleMocks } from '../navigationShellTestHelpers';
 
 const routeParams = vi.hoisted(() => ({ setting: undefined as string | undefined }));
 const osLinking = vi.hoisted(() => ({ openSettings: vi.fn(async () => {}), sendIntent: vi.fn(async (_action: string) => {}) }));
 const osFeedback = vi.hoisted(() => ({ alertAsync: vi.fn(async (_title: string, _message: string) => {}), desktop: false }));
+
+installDisconnectedServerSocketBoundary();
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 // The real local-settings store: hiding the switch is a device-local preference the strip must obey.
 installNavigationShellCommonModuleMocks({
@@ -35,9 +44,8 @@ vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
     invokeDesktopHost: async () => false,
 }));
 
-vi.mock('@/components/inbox/actionOperations/ActionOperationActivityButton', () => ({
-    ActionOperationActivityButton: () => null,
-}));
+// The real optional pane context and activity entry remain under their canonical owners.
+vi.doUnmock('@/components/appShell/panes/AppPaneProvider');
 // Native OS appearance paints are outside the renderer; keep the theme mutation real beneath them.
 vi.mock('expo-status-bar', () => ({ setStatusBarStyle: vi.fn() }));
 vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: vi.fn(async () => {}) }));
@@ -50,9 +58,9 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
 // Warm the real sync graph during collection; each fixture retains its own require bridge.
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
-const { settingsDefaults } = await import('@/sync/domains/settings/settings');
 
 let previousState: ReturnType<typeof storage.getState>;
+let home: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
 beforeEach(async () => {
     routeParams.setting = undefined;
     osLinking.openSettings.mockClear();
@@ -61,12 +69,23 @@ beforeEach(async () => {
     osFeedback.desktop = false;
     await loadSyncSingletonForTests();
     previousState = storage.getState();
-    act(() => storage.setState({ settingsScope: { serverId: 'glass-test-server', accountId: 'glass-test-account' }, settingsVersion: 0, settings: settingsDefaults }));
+    home = await serveActionHomes({
+        homes: [{ key: 'appearance', serverUrl: 'https://appearance.test', accountId: 'appearance-account', currentAccount: true }],
+        route: ({ path, method }) => path === '/v1/features' || path === '/v1/features/authenticated'
+            ? Response.json(createRootLayoutFeaturesResponse())
+            : createEmptyAccountBootstrapHttpResponse(path, { method }) ?? undefined,
+    });
+    await waitForHomeGovernance(() => {
+        expect(storage.getState().settingsScope?.accountId).toBe('appearance-account');
+        expect(storage.getState().settingsVersion).toBeTypeOf('number');
+    });
 });
 
 afterEach(async () => {
     const { storage } = await import('@/sync/domains/state/storage');
     standardCleanup();
+    await home?.dispose();
+    home = undefined;
     act(() => storage.setState(previousState, true));
 });
 
@@ -144,7 +163,7 @@ describe('AppShellThemeToggle', () => {
             const { GlassAppearanceControls } = await import('@/components/settings/appearance/GlassAppearanceControls');
             const screen = await renderScreen(<GlassAppearanceControls presentation={presentation} />);
             expect(screen.findByTestId('appearance-material:everywhere')).not.toBeNull();
-            expect(screen.findAll(node => typeof node.type === 'string' && String(node.props.testID ?? '').startsWith('appearance-tint:')).length).toBeGreaterThan(0);
+            expect(screen.findByTestId('appearance-tint-track')).not.toBeNull();
             expect(screen.findByTestId('appearance-blur:regular')).toBeNull();
         } finally {
             Platform.OS = previousOS;
@@ -159,7 +178,7 @@ describe('AppShellThemeToggle', () => {
             const { GlassAppearanceControls } = await import('@/components/settings/appearance/GlassAppearanceControls');
             const screen = await renderScreen(<GlassAppearanceControls presentation="compact" />);
             expect(screen.findByTestId('appearance-material:everywhere')).not.toBeNull();
-            expect(screen.findAll(node => typeof node.type === 'string' && String(node.props.testID ?? '').startsWith('appearance-tint:')).length).toBeGreaterThan(0);
+            expect(screen.findByTestId('appearance-tint-track')).not.toBeNull();
             expect(screen.findByTestId('appearance-blur:regular')).not.toBeNull();
         } finally {
             Platform.OS = previousOS;
@@ -232,6 +251,18 @@ describe('AppShellThemeToggle', () => {
         await screen.pressByTestIdAsync('appearance-sidebar:solid');
         expect(readGlassPreset(storage.getState().settings)).toBe('custom');
         expect(readGlassMaterials(storage.getState().settings).sidebar).toEqual({ blur: 'off', opacity: 1 });
+    });
+
+    it('sets Tint as a whole number from the slider (default 12 + one step) and keeps it disabled for Solid', async () => {
+        const { GlassAppearanceSection } = await import('@/components/settings/appearance/GlassAppearanceControls');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const screen = await renderScreen(<GlassAppearanceSection />);
+        const slider = screen.findByTestId('appearance-tint');
+        await act(async () => { slider?.props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } }); });
+        expect(storage.getState().settings.glassTintIntensity).toBe(13);
+        await screen.pressByTestIdAsync('appearance-material:solid');
+        await act(async () => { screen.findByTestId('appearance-tint')?.props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } }); });
+        expect(storage.getState().settings.glassTintIntensity).toBe(13);
     });
 
     it('shows the Window layer only in a desktop app', async () => {

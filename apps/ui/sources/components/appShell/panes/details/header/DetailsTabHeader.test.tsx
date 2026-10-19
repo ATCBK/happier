@@ -100,6 +100,30 @@ describe('DetailsTabHeader', () => {
         }
     });
 
+    it('keeps a phone header in one band when its quiet toggles are all it carries', async () => {
+        const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
+        const { Text } = await import('@/components/ui/text/Text');
+        const iconsInBand = (screen: Awaited<ReturnType<typeof renderScreen>>) =>
+            (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === 'people').length ?? 0) > 0;
+        const alone = await renderScreen(
+            <SurfaceStateSizeProvider size="phone">
+                <DetailsTabHeader testID="hdr" title="Retry cap during deploys" actions={<Text testID="people">people</Text>}
+                    menuActions={[{ id: 'rename', title: 'Rename', onSelect: () => {} }]} />
+            </SurfaceStateSizeProvider>,
+        );
+        expect(iconsInBand(alone)).toBe(true);
+        await alone.unmount();
+        // With view controls the toggles still share the row beneath with them.
+        const withControls = await renderScreen(
+            <SurfaceStateSizeProvider size="phone">
+                <DetailsTabHeader testID="hdr" title="SettingsModal.tsx" actions={<Text testID="people">people</Text>}
+                    controls={<Text testID="ctl">Diff | File</Text>} />
+            </SurfaceStateSizeProvider>,
+        );
+        expect(iconsInBand(withControls)).toBe(false);
+        await withControls.unmount();
+    });
+
     it('moves the view controls beneath the band when they would collide with its actions', async () => {
         const { act } = await import('react-test-renderer');
         const { Text } = await import('@/components/ui/text/Text');

@@ -179,6 +179,7 @@ const CLIENT_ACTION_TARGET = Object.freeze({
     platform: 'ios' as const,
 });
 const CLIENT_ACTION_GENERATION = 41;
+const CLIENT_ACTION_OCCURRENCE_ID = `current-ui-client-action-occurrence-${CLIENT_ACTION_GENERATION}`;
 const CLIENT_ACTION_EXECUTION_ORIGIN = Object.freeze({
     serverIdentityId: 'srv_current_ui_client_action',
     materializationRef: Object.freeze({
@@ -211,9 +212,9 @@ const CLIENT_ACTION_ARTIFACT_GRAPH = PluginUiArtifactsManifestEntryV2Schema.pars
 });
 const CLIENT_ACTION_AUTHORIZATION = Object.freeze({
     generation: Object.freeze({
-        targetGeneration: String(CLIENT_ACTION_GENERATION),
-        desiredGeneration: String(CLIENT_ACTION_GENERATION),
-        appliedGeneration: String(CLIENT_ACTION_GENERATION),
+        targetGeneration: CLIENT_ACTION_OCCURRENCE_ID,
+        desiredGeneration: CLIENT_ACTION_OCCURRENCE_ID,
+        appliedGeneration: CLIENT_ACTION_OCCURRENCE_ID,
     }),
     resourceSelections: Object.freeze([]),
     scopedGrants: Object.freeze([]),
@@ -222,6 +223,7 @@ const CLIENT_ACTION_AUTHORIZATION = Object.freeze({
 });
 
 const PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION = 52;
+const PUBLIC_AUTHORING_CLIENT_ACTION_OCCURRENCE_ID = `public-authoring-client-action-occurrence-${PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION}`;
 const PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN = Object.freeze({
     serverIdentityId: 'srv_public_authoring_client_action',
     materializationRef: Object.freeze({
@@ -290,15 +292,14 @@ function createPublicAuthoringClientActionFixture(input: Readonly<{
     const action = PluginProjectedActionV2Schema.parse({
         ...projectedDeclaration,
         pluginId: publicAuthoringManifest.id,
-        occurrenceId: `public-authoring-client-action-occurrence-${PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION}`,
-        serverIdentityId: PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN.serverIdentityId,
-        materializationRef: PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN.materializationRef,
+        occurrenceId: PUBLIC_AUTHORING_CLIENT_ACTION_OCCURRENCE_ID,
+        executionOrigin: PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN,
         available: true,
         authorization: {
             generation: {
-                targetGeneration: String(PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION),
-                desiredGeneration: String(PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION),
-                appliedGeneration: String(PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION),
+                targetGeneration: PUBLIC_AUTHORING_CLIENT_ACTION_OCCURRENCE_ID,
+                desiredGeneration: PUBLIC_AUTHORING_CLIENT_ACTION_OCCURRENCE_ID,
+                appliedGeneration: PUBLIC_AUTHORING_CLIENT_ACTION_OCCURRENCE_ID,
             },
             resourceSelections: [],
             scopedGrants: [],
@@ -442,7 +443,7 @@ function createCurrentUiClientActionFixture(input: Readonly<{
     const action = PluginProjectedActionV2Schema.parse({
         id: CLIENT_ACTION_ID.localId,
         pluginId: CLIENT_ACTION_ID.pluginId,
-        occurrenceId: `current-ui-client-action-occurrence-${CLIENT_ACTION_GENERATION}`,
+        occurrenceId: CLIENT_ACTION_OCCURRENCE_ID,
         title: 'Retiring client action',
         scopes: input.scopes ?? ['global'],
         surfaces: input.surfaces ?? ['voice'],
@@ -454,8 +455,7 @@ function createCurrentUiClientActionFixture(input: Readonly<{
             },
             platforms: [CLIENT_ACTION_TARGET.platform],
         },
-        serverIdentityId: CLIENT_ACTION_EXECUTION_ORIGIN.serverIdentityId,
-        materializationRef: CLIENT_ACTION_EXECUTION_ORIGIN.materializationRef,
+        executionOrigin: CLIENT_ACTION_EXECUTION_ORIGIN,
         dangerLevel: input.dangerLevel ?? 'safe',
         ...(input.dangerLevel && input.dangerLevel !== 'safe' ? { confirmation: { title: 'Confirm client mutation' } } : {}),
         available: true,
@@ -616,6 +616,107 @@ function requireActionInvoker(port: ReturnType<typeof createCurrentUiContextVoic
 }
 
 describe('current UI context Voice tool port', () => {
+    it('delivers contributed Actions through the real Machine reverse registration and refuses a mis-bound receiver', async () => {
+        const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://current-ui-client.test',
+            accountId: 'current-ui-account', request: homes.request });
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const answeringServerId = getActiveServerSnapshot().serverId;
+        const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
+        const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiProjection } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const { createClientActionMachineRpcExecutor } = await import('../../../../../cli/src/plugins/runtime/invocation/actions/clientActionMachineRpc');
+        const machineId = CLIENT_ACTION_HOST_ORIGIN.machineId;
+        let fixture = createCurrentUiClientActionFixture({ serverId: answeringServerId,
+            surfaces: ['agent', 'mcp', 'cli'], handler: async (_input, context) => ({ surface: context.invocationSurface }) });
+        const unregisterPort = registerCurrentUiContextActionPort((invocationSurface, hostAction) => createCurrentUiContextVoiceToolPort({
+            invocationSurface, hostAction,
+            reader: { readCurrentUiContext: () => null, resolveCurrentUiCommand: () => null, subscribe: () => () => {} },
+            readProjection: () => fixture.projection, readNavigationBinding: () => null,
+        }));
+        await fixture.composition.unload();
+        await fixture.composition.reconcile([fixture.activation]);
+        const machine = createMachineFixture({ id: machineId, storageMode: 'plain' });
+        getStorage().setState(state => ({ ...state, profile: { ...state.profile!, id: 'current-ui-account' },
+            machines: { [machineId]: machine }, machineListByServerId: {} }));
+        const socket = transportSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
+        if (!socket) throw new Error('Real Account transport did not install its reverse receiver');
+        const methods = new Set<string>();
+        const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
+            const payload: unknown = args[0];
+            if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
+                if (event === SOCKET_RPC_EVENTS.REGISTER) methods.add(payload.method);
+                if (event === SOCKET_RPC_EVENTS.UNREGISTER) methods.delete(payload.method);
+            }
+            return socket;
+        });
+        let deliveries = 0;
+        const dispatch = createClientActionMachineRpcExecutor(() => ({
+            hasConnectedClientRpcHandler: method => methods.has(`${machineId}:${method}`),
+            callConnectedClientRpc: async (method, payload, options) => {
+                options.onIssued(); deliveries += 1;
+                const result = await new Promise<unknown>(resolve => {
+                    for (const receive of socket.listeners(SOCKET_RPC_EVENTS.REQUEST)) {
+                        receive({ method: `${machineId}:${method}`, params: JSON.parse(JSON.stringify(payload)) }, resolve);
+                    }
+                });
+                return { ok: true, result };
+            },
+        }));
+        function Runtime({ projection }: Readonly<{ projection: PluginUiProjectionModel | null }>) {
+            const defaults = useAppShellPluginUiProjection();
+            return React.createElement(AppShellPluginUiProjectionValueProvider, { value: { ...defaults,
+                pluginUiProjection: projection, phase: projection ? 'current' : 'unavailable',
+                interactionEnabled: projection !== null, serverId: answeringServerId,
+                accountLifetime: captureActiveServerAccountScopeLifetime(),
+            }, children: React.createElement(ClientActionReverseRuntime) });
+        }
+        const runtime = await renderScreen(React.createElement(Runtime, { projection: null }));
+        try {
+            expect(methods.has(`${machineId}:${RPC_METHODS.UI_ACTION_EXECUTE}`)).toBe(true);
+            // An app with no current contributed client declaration is not an
+            // answering receiver merely because it sees the Machine census.
+            expect(methods.has(`${machineId}:${RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE}`)).toBe(false);
+            await runtime.update(React.createElement(Runtime, { projection: fixture.projection }));
+            const { readCurrentAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
+            expect(readCurrentAppShellPluginUiProjection()).toBe(fixture.projection);
+            expect(resolvePluginUiClientActionRegistration({ action: fixture.projection.actionsById[`${CLIENT_ACTION_ID.pluginId}/${CLIENT_ACTION_ID.localId}`]!, platform: CLIENT_ACTION_TARGET.platform })).not.toBeNull();
+            for (const surface of ['agent', 'mcp', 'cli'] as const) {
+                expect(await dispatch({ v: 1, action: CLIENT_ACTION_ID, input: null, surface,
+                    expectedContributorOccurrenceId: fixture.action.occurrenceId }, {}))
+                    .toEqual({ ok: true, result: { surface } });
+            }
+            await fixture.composition.unload();
+            const dangerousHandler = vi.fn(async () => ({ applied: true }));
+            fixture = createCurrentUiClientActionFixture({ serverId: answeringServerId,
+                surfaces: ['cli'], dangerLevel: 'writesRemote', handler: dangerousHandler });
+            await fixture.composition.reconcile([fixture.activation]);
+            await runtime.update(React.createElement(Runtime, { projection: fixture.projection }));
+            let dangerous!: ReturnType<typeof dispatch>;
+            await act(async () => { dangerous = dispatch({ v: 1, action: CLIENT_ACTION_ID, input: null, surface: 'cli',
+                expectedContributorOccurrenceId: fixture.action.occurrenceId }, {}); });
+            await vi.waitFor(() => expect(modalScreen.findByTestId('app-shell-confirmation-decline')).not.toBeNull());
+            let settled = false;
+            void dangerous.then(() => { settled = true; });
+            await runtime.update(React.createElement(Runtime, { projection: { ...fixture.projection,
+                actionsById: { ...fixture.projection.actionsById } } }));
+            expect(modalScreen.findByTestId('app-shell-confirmation-decline')).not.toBeNull();
+            expect(settled).toBe(false);
+            expect(dangerousHandler).not.toHaveBeenCalled();
+            await modalScreen.pressByTestIdAsync('app-shell-confirmation-decline');
+            await expect(dangerous).resolves.toMatchObject({ ok: false });
+            expect(dangerousHandler).not.toHaveBeenCalled();
+            methods.delete(`${machineId}:${RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE}`);
+            expect(await dispatch({ v: 1, action: CLIENT_ACTION_ID, input: null, surface: 'cli',
+                expectedContributorOccurrenceId: fixture.action.occurrenceId }, {}))
+                .toMatchObject({ ok: false, errorCode: 'plugin_action_client_target_unavailable' });
+            expect(deliveries).toBe(4);
+        } finally {
+            await runtime.unmount(); emit.mockRestore(); unregisterPort();
+            await fixture.composition.unload(); await connection.dispose();
+        }
+    });
     it('keeps a known reverse client Action result when its own navigation changes the viewed Session', async () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -707,6 +808,33 @@ describe('current UI context Voice tool port', () => {
                 expect(outcome).toEqual({ ok: true, result: { surface } });
             }
             expect(visibleModalCount).toBe(0);
+        } finally { unregister(); await fixture.composition.unload(); }
+    });
+
+    it('asks before executing a dangerous reverse client Action from an ordinary CLI caller', async () => {
+        const handler = vi.fn(async () => ({ applied: true }));
+        const fixture = createCurrentUiClientActionFixture({ handler, surfaces: ['cli'], dangerLevel: 'writesRemote' });
+        await fixture.composition.unload();
+        const unregister = registerCurrentUiContextActionPort((invocationSurface, hostAction) => createCurrentUiContextVoiceToolPort({
+            invocationSurface, hostAction,
+            reader: { readCurrentUiContext: () => null, resolveCurrentUiCommand: () => null, subscribe: () => () => {} },
+            readProjection: () => fixture.projection, readNavigationBinding: () => null,
+        }));
+        try {
+            await fixture.composition.reconcile([fixture.activation]);
+            const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+            const receive = createCurrentUiContributedActionRpcHandler({
+                machineId: CLIENT_ACTION_HOST_ORIGIN.machineId, serverId: clientHomeId,
+                readProjection: () => fixture.projection, isCurrent: () => true,
+                execute: createDefaultActionExecutor().execute,
+            });
+            let pending!: ReturnType<typeof receive>;
+            await act(async () => { pending = receive({ v: 1, action: CLIENT_ACTION_ID, input: null, surface: 'cli',
+                expectedContributorOccurrenceId: fixture.action.occurrenceId }); });
+            await vi.waitFor(() => expect(modalScreen.findByTestId('app-shell-confirmation-confirm')).not.toBeNull());
+            expect(handler).not.toHaveBeenCalled();
+            await modalScreen.pressByTestIdAsync('app-shell-confirmation-confirm');
+            await expect(pending).resolves.toEqual({ ok: true, result: { applied: true } });
         } finally { unregister(); await fixture.composition.unload(); }
     });
 
@@ -1598,9 +1726,11 @@ describe('current UI context Voice tool port', () => {
         await act(async () => { pending = requireCommandInvoker(port)({ commandId: COMMAND_ID }); });
         await vi.waitFor(() => expect(modalScreen.findByTestId('app-shell-confirmation-confirm')).not.toBeNull());
         current = null;
-        await act(async () => { retirement.abort(new Error('the exact command retired before dispatch')); });
-        await modalScreen.pressByTestIdAsync('app-shell-confirmation-confirm');
-        await expect(pending).resolves.toEqual({ ok: false, code: 'unavailable' });
+        await act(async () => {
+            retirement.abort(new Error('the exact command retired before dispatch'));
+            await expect(pending).resolves.toEqual({ ok: false, code: 'unavailable' });
+        });
+        await vi.waitFor(() => expect(visibleModalCount).toBe(0));
         expect(daemonRequests).toEqual([]);
     });
 

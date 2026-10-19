@@ -20,7 +20,7 @@ import {
   resolveSessionActionDefaultTarget,
 } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { t } from '@/text';
-import { readSessionDisplayTitleField } from '@/sync/state/selectors';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
 import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
@@ -54,9 +54,7 @@ function extractRecentSessionIds(sessionsById: Record<string, any>): string[] {
 
 function readSessionLabel(session: any): Readonly<{ title: string; subtitle: string }> {
   const metadata = readSessionOwnerMetadataView(session);
-  const legacyName = typeof metadata?.name === 'string' ? metadata.name.trim() : '';
-  const title = readSessionDisplayTitleField(session).value
-    ?? (legacyName || t('commandPalette.commands.sessionFallbackTitle', { id: String(session?.id ?? '').slice(0, 6) }));
+  const title = getSessionName(session);
   const path = typeof metadata?.path === 'string' && readSessionDirectoryKind(metadata) !== 'managed' ? metadata.path.trim() : '';
   const subtitle = path || t('commandPalette.commands.sessionFallbackSubtitle');
   return { title, subtitle };

@@ -8,11 +8,7 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createServerScopedMachineRpcBoundaryMock } from '@/dev/testkit/mocks/serverScopedRpc';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { storage } from '@/sync/domains/state/storage';
-import { createPluginContributedActionController } from '@/components/plugins/actions/pluginContributedActionController';
 import type { PluginProjectionAction, PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
-import { buildCommandPaletteCommands } from './buildCommandPaletteCommands';
 
 installDisconnectedServerSocketBoundary();
 const machineRpc = vi.hoisted(() => vi.fn<Parameters<typeof createServerScopedMachineRpcBoundaryMock>[0]>());
@@ -28,6 +24,11 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock().module;
 });
 
+// Runtime consumers must bind to the disconnected transport installed above.
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { storage } = await import('@/sync/domains/state/storage');
+const { createPluginContributedActionController } = await import('@/components/plugins/actions/pluginContributedActionController');
+const { buildCommandPaletteCommands } = await import('./buildCommandPaletteCommands');
 const initialStorageState = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;

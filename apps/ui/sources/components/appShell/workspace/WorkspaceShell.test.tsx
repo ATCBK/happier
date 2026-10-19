@@ -208,7 +208,7 @@ describe('WorkspaceShell', () => {
         const screen = await renderWorkspace(initialState());
         const button = screen.findHostByTestId('workspace-new-tab-group_1');
         expect(button?.props.accessibilityLabel).toBe('workspaceBar.newTab');
-        expect(button?.props.accessibilityRole).toBe('button');
+        expect(button?.props.role).toBe('button');
         await screen.pressByTestIdAsync('workspace-new-tab-group_1');
         await settle(() => { expect(stateOf(screen).groups['group:1'].tabIds).toHaveLength(3); });
         expect(stateOf(screen).tabs[stateOf(screen).groups['group:1'].activeTabId].target.kind).toBe('newTab');

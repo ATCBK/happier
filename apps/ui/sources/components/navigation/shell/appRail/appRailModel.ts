@@ -33,6 +33,7 @@ export type AppShellShownColumn = Exclude<AppShellColumn, Readonly<{ kind: 'none
 const NO_COLUMN: AppShellColumn = Object.freeze({ kind: 'none' });
 const BUILTIN_COLUMNS: Readonly<Record<BuiltinAppShellColumnId, Extract<AppShellColumn, { kind: 'builtin' }>>> = {
     sessions: Object.freeze({ kind: 'builtin', id: 'sessions' }),
+    discussions: Object.freeze({ kind: 'builtin', id: 'discussions' }),
     projects: Object.freeze({ kind: 'builtin', id: 'projects' }),
     workflows: Object.freeze({ kind: 'builtin', id: 'workflows' }),
     boards: Object.freeze({ kind: 'builtin', id: 'boards' }),

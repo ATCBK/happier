@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installConnectedServicesCommonModuleMocks } from '@/components/settings/connectedServices/connectedServicesTestHelpers';
@@ -8,11 +8,17 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 installConnectedServicesCommonModuleMocks();
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 setRuntimeFetch(home.request);
+await loadSyncSingletonForTests();
 // Load the real composition once, after its network boundary. Cold module
 // transformation belongs to collection, rather than an interaction's timeout.
 const { SidebarUsagePopoverContent, SidebarUsagePopoverView } = await import('./SidebarUsagePopoverContent');
@@ -33,14 +39,16 @@ describe('Usage identity privacy through real Action wiring', () => {
         setRuntimeFetch(home.request);
         const serverId = await home.addHome({ name: 'Usage privacy', serverUrl: 'https://usage-privacy-admission.test',
             accountId: 'privacy-owner', currentAccount: true });
+        const credentials = await TokenStorage.getCredentialsForServerUrl('https://usage-privacy-admission.test', { serverId });
+        if (!credentials) throw new Error('Expected the admitted Home credentials');
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://usage-privacy-admission.test',
+            accountId: 'privacy-owner', credentials, request: home.request });
         await home.requireUiApproval(serverId, 'connectedServices.identityPrivacy.set');
         const previousRuntime = getAppliedActiveServerSnapshot();
         const previousAvailable = isAppliedActiveServerRuntimeAvailable();
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const previousHidden = storage.getState().localSettings.hideConnectedAccountIdentities;
         storage.getState().applyLocalSettings({ hideConnectedAccountIdentities: false }, { source: 'ui' });
-        const credentials = await TokenStorage.getCredentialsForServerUrl('https://usage-privacy-admission.test');
-        if (!credentials) throw new Error('Expected the admitted Home credentials');
         const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}>
             {surface === 'rail' ? <SidebarUsagePopoverContent close={() => {}} maxHeight={520} /> : renderUsageFrame('U1')}
         </InjectedAuthProvider>);
@@ -69,6 +77,7 @@ describe('Usage identity privacy through real Action wiring', () => {
             await screen.unmount();
             storage.getState().applyLocalSettings({ hideConnectedAccountIdentities: previousHidden }, { source: 'ui' });
             publishAppliedActiveServerSnapshot(previousRuntime, previousAvailable);
+            await connection.dispose();
         }
     });
 });

@@ -20,7 +20,7 @@ function Content(props: Readonly<{ close: () => void }>) {
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
-async function renderButton(hoverPreview = false) {
+async function renderButton(hoverPreview = false, intents: Readonly<{ onOpenIntent?: () => void; onWarmIntent?: () => void }> = {}) {
     await act(async () => {
         root.render(
             <SidebarFooterPopoverButton
@@ -28,6 +28,7 @@ async function renderButton(hoverPreview = false) {
                 iconName="speedometer"
                 label="Usage"
                 hoverPreview={hoverPreview}
+                {...intents}
                 renderContent={({ close }) => <Content close={close} />}
             />,
         );
@@ -112,5 +113,30 @@ describe('SidebarFooterPopoverButton', () => {
         await act(async () => { pointerLeave(button); });
         await act(async () => { vi.advanceTimersByTime(1000); });
         expect(popover()).toBeNull();
+    });
+
+    it('records a hover preview as one opening intent, warms on pointer-enter, and a later press does not record again', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const onOpenIntent = vi.fn();
+        const onWarmIntent = vi.fn();
+        const button = await renderButton(true, { onOpenIntent, onWarmIntent });
+
+        await act(async () => { pointerEnter(button); });
+        expect(onWarmIntent).toHaveBeenCalledTimes(1);
+        expect(onOpenIntent).not.toHaveBeenCalled();
+        await act(async () => { vi.advanceTimersByTime(motionTokens.overlay.popover.hoverOpenDelayMs + 10); });
+        expect(popover()).not.toBeNull();
+        expect(onOpenIntent).toHaveBeenCalledTimes(1);
+
+        await act(async () => { button.click(); });
+        expect(onOpenIntent).toHaveBeenCalledTimes(1);
+    });
+
+    it('records a press on a button without hover preview as the opening intent', async () => {
+        const onOpenIntent = vi.fn();
+        const button = await renderButton(false, { onOpenIntent });
+        await act(async () => { button.click(); });
+        expect(popover()).not.toBeNull();
+        expect(onOpenIntent).toHaveBeenCalledTimes(1);
     });
 });

@@ -57,7 +57,8 @@ export type AppPaneScopeApi = {
     detailsOverlayFocusReturnRef?: FocusReturnMutableRef;
     /** Ephemeral command-time focus for a Bottom overlay presentation. */
     bottomOverlayFocusReturnRef?: FocusReturnMutableRef;
-    openRight: (options?: Readonly<{ tabId?: string }>) => void;
+    /** URL hydration updates retained state without requesting navigation. */
+    openRight: (options?: Readonly<{ tabId?: string; present?: boolean }>) => void;
     closeRight: () => void;
     setRightTab: (tabId: string) => void;
     selectRightDestination: (destination: SelectedPaneDestinationV1) => void;
@@ -67,7 +68,7 @@ export type AppPaneScopeApi = {
     setBottomTab: (tabId: string) => void;
     selectBottomDestination: (destination: SelectedPaneDestinationV1) => void;
     setBottomTabState: (tabId: string, nextState: unknown) => void;
-    openDetailsTab: (tab: DetailsTab, options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview' }>) => void;
+    openDetailsTab: (tab: DetailsTab, options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview'; present?: boolean }>) => void;
     replaceDetailsTab: (tabKey: string, tab: DetailsTab, options?: Readonly<{
         intent?: 'default' | 'pinned' | 'preview';
         restoreSourceOnRehydrate?: boolean;
@@ -138,10 +139,10 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         detailsTabsRef.current = scopeState?.details?.tabs ?? null;
     }, [scopeState?.details?.tabs]);
 
-    const openRight = React.useCallback((options?: Readonly<{ tabId?: string }>) => {
+    const openRight = React.useCallback((options?: Readonly<{ tabId?: string; present?: boolean }>) => {
         if (options?.tabId) selectedRightDestinationRef.current = createBuiltinPaneDestination(options.tabId);
         dispatch({ type: 'openRight', scopeId, tabId: options?.tabId });
-        presentPane?.({ scopeId, pane: 'right', destination: selectedRightDestinationRef.current });
+        if (options?.present !== false) presentPane?.({ scopeId, pane: 'right', destination: selectedRightDestinationRef.current });
     }, [dispatch, presentPane, scopeId]);
 
     const closeRight = React.useCallback(() => {
@@ -185,7 +186,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         dispatch({ type: 'setBottomTabState', scopeId, tabId, nextState });
     }, [dispatch, scopeId]);
 
-    const openDetailsTab = React.useCallback((tab: DetailsTab, options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview' }>) => {
+    const openDetailsTab = React.useCallback((tab: DetailsTab, options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview'; present?: boolean }>) => {
         const intent = options?.intent ?? 'default';
         const behavior = detailsPaneTabsBehavior === 'persistent' ? 'persistent' : 'preview';
         const nowMs = Date.now();
@@ -202,7 +203,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         lastPreviewOpenRef.current = decision.nextLastPreviewOpen;
         const openAs = decision.openAs;
         dispatch({ type: 'openDetailsTab', scopeId, tab, openAs, origin: paneRegion });
-        presentPane?.({ scopeId, pane: 'details', tab });
+        if (options?.present !== false) presentPane?.({ scopeId, pane: 'details', tab });
     }, [detailsPaneTabsBehavior, dispatch, paneRegion, presentPane, scopeId]);
 
     const setDetailsTabState = React.useCallback((tabKey: string, nextState: unknown) => {

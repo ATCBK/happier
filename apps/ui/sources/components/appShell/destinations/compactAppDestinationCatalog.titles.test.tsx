@@ -7,7 +7,11 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { WorkflowDefinitionArtifactHeaderV1Schema } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
+import { readApprovalActionTitle } from '@/components/approvals/approvalRequestTitle';
+import { formatApprovalStatusLabel } from '@/components/approvals/approvalStatusLabel';
+
 import { projectArtifactHeaderForDisplay } from '@/sync/encryption/artifactEncryption';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 import { storage } from '@/sync/domains/state/storage';
@@ -101,7 +105,7 @@ describe('Project destination instance titles', () => {
         expect(hook.getCurrent().size).toBe(0);
         await act(async () => {
             applyProjectAccountRowsFixture(storage, { workspaceRefs: [lumen, atlas] });
-            storage.getState().applyArtifacts([]);
+            storage.getState().applyArtifacts([], storage.getState().artifacts);
         });
         const expected = [t('projects.detail.notFoundTitle'), t('artifacts.notFound'), t('common.unavailable')];
         expect(entries.map(entry => readDestinationInstanceTitle(catalog, entry.ref))).toEqual(expected);
@@ -114,6 +118,58 @@ describe('Project destination instance titles', () => {
         expect(readDestinationInstanceTitle(catalog, destination('/settings/profiles/azure-openai')))
             .toBe(getProfileDisplayName(builtin));
     });
+    it('reads an executed Approval whose Action refused its effect as Failed, like its detail page', async () => {
+        const request = { v: 2 as const, status: 'executed' as const, createdAtMs: 1, updatedAtMs: 3,
+            createdBy: { surface: 'system' as const, sessionId: 'session-1' }, requestedSurface: 'ui' as const,
+            executionOriginV1: { v: 1 as const, authority: 'present_user' as const, surface: 'ui' as const,
+                caller: { kind: 'host' as const }, serverId: scope.serverId, sessionId: 'session-1',
+                target: { kind: 'session' as const, sessionId: 'session-1' },
+                actionId: 'machines.presets.archive' as const, requestId: 'request-refused' },
+            actionId: 'machines.presets.archive' as const,
+            actionArgs: { homeId: 'home-1', id: 'preset-1', expectedRevision: 0 }, summary: 'Archive preset',
+            decision: { kind: 'approve' as const, decidedAtMs: 2 },
+            execution: { executedAtMs: 3, ok: true as const, result: { kind: 'refused', code: 'provider_unavailable' } } };
+        const stored = { id: 'refused-approval', isDecrypted: true, title: 'Archive preset',
+            header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
+            createdAt: 1, updatedAt: 3, headerVersion: 1, bodyVersion: 1, seq: 1 } as unknown as DecryptedArtifact;
+        const before = storage.getState().artifacts;
+        try {
+            storage.setState((state) => ({ ...state, artifacts: { ...state.artifacts, [stored.id]: stored } }));
+            const ref = destination(`/inbox/approvals/${stored.id}`);
+            expect(readDestinationInstanceTitle(catalog, ref)).toMatch(new RegExp(`${t('approvals.status.failed')}$`));
+            // Without its body this device can only read the stored header's status.
+            storage.setState((state) => ({ ...state, artifacts: { ...state.artifacts, [stored.id]: { ...stored, body: undefined } } }));
+            expect(readDestinationInstanceTitle(catalog, ref)).toMatch(new RegExp(`${t('approvals.status.executed')}$`));
+        } finally {
+            storage.setState((state) => ({ ...state, artifacts: before }));
+        }
+    });
+
+    it('titles an Approval tab by the same rule as its page when the stored summary is the request\'s own older generated sentence', () => {
+        const generated = 'Synchronize this linked workspace relationship now.';
+        const request = { v: 2 as const, status: 'open' as const, createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'system' as const, sessionId: 'session-1' }, requestedSurface: 'ui' as const,
+            executionOriginV1: { v: 1 as const, authority: 'present_user' as const, surface: 'ui' as const,
+                caller: { kind: 'host' as const }, serverId: scope.serverId, sessionId: 'session-1',
+                target: { kind: 'session' as const, sessionId: 'session-1' },
+                actionId: 'workspace.sync.relationship.flush' as const, requestId: 'request-flush' },
+            actionId: 'workspace.sync.relationship.flush' as const,
+            actionArgs: { controllerMachineId: 'machine-1', relationshipId: 'relationship-1' }, summary: generated,
+            preview: { summary: generated } };
+        const stored = { id: 'flush-approval', isDecrypted: true, title: generated,
+            header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
+            createdAt: 1, updatedAt: 1, headerVersion: 1, bodyVersion: 1, seq: 1 } as unknown as DecryptedArtifact;
+        const before = storage.getState().artifacts;
+        try {
+            storage.setState((state) => ({ ...state, artifacts: { ...state.artifacts, [stored.id]: stored } }));
+            const title = readDestinationInstanceTitle(catalog, destination(`/inbox/approvals/${stored.id}`));
+            expect(title).not.toContain(generated);
+            expect(title).toBe(`${readApprovalActionTitle('workspace.sync.relationship.flush')} \u00b7 ${formatApprovalStatusLabel('open')}`);
+        } finally {
+            storage.setState((state) => ({ ...state, artifacts: before }));
+        }
+    });
+
     it('names inactive settings entities from their scoped catalogs and Approvals from their route owner', async () => {
         const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_saved',
             source: { kind: 'contribution', contributionKey: 'acme/provider' }, role: 'named',
@@ -150,11 +206,11 @@ describe('Project destination instance titles', () => {
         const workflow: DecryptedArtifact = { id: definitionId, title: header.title,
             header, rawHeader, isDecrypted: true,
             headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
-        storage.getState().applyArtifacts([workflow]);
+        storage.getState().applyArtifacts([workflow], storage.getState().artifacts);
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(
             createWorkflowRunSummaryFixture({ id: 'saved-run', ownerAccountId: scope.accountId }),
             { kind: 'available', value: { title: 'Check the release' } },
-        )]);
+        )], scope);
         const entries = [`/workflows/${definitionId}`, '/workflows/runs/saved-run', '/workflows/removed-workflow'].map((href, index) => ({
             key: `inactive-${index}`, ref: destination(href),
         }));

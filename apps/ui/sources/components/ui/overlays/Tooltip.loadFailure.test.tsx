@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -58,7 +59,10 @@ describe('tooltip chunk recovery', () => {
             default: (props: { testID?: string; label: string }) => React.createElement('View', { testID: props.testID }, props.label),
         }));
         if (kind === 'action') {
-            await act(async () => { screen.findHostByTestId('tooltip-trigger')?.props.onFocus?.(); });
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+            await act(async () => { screen.findHostByTestId('tooltip-trigger')?.props.onFocus?.({
+                target: { matches: (selector: string) => selector === ':focus-visible' },
+            }); });
         } else {
             await act(async () => { screen.findHostByTestId('tooltip-trigger')?.props.onHoverOut?.(); });
             await act(async () => { screen.findHostByTestId('tooltip-trigger')?.props.onHoverIn?.(); });

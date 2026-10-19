@@ -3,18 +3,17 @@ import type { Href } from 'expo-router';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 // Dialog presentation is the external boundary; the real Action decision remains in-process.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
-// This local navigation journey cannot use the recipient-envelope HTTP/process APIs.
-vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
-    const unused = () => { throw new Error('Workspace Action reached recipient-envelope API'); };
-    return { createSessionDataKeyEnvelopeClient: unused, readSessionDataKeyEnvelopeCollectionPage: unused,
-        prepareSessionDataKeyEnvelopesForScope: unused, prepareSessionDataKeyEnvelopesDetached: unused };
-});
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
+await loadSyncSingletonForTests();
 const { executeWorkspaceUiAction, registerMountedWorkspaceAction } = await import('./workspaceActionRuntime');
 const { createWorkspaceState, reduceWorkspaceState } = await import('./workspaceState');
 const { createWorkspaceNavigationAdapter } = await import('./workspaceNavigationAdapter');
@@ -24,9 +23,15 @@ const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRu
 const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
 let unregister: (() => void) | undefined;
+const connections: Awaited<ReturnType<typeof restoreServerAccountForTest>>[] = [];
 
 async function activateApprovalHome(name: string, accountId: string) {
-    const serverId = await homes.addHome({ name, accountId, serverUrl: `https://${name}.test` });
+    const serverId = await homes.addHome({ name, accountId, serverUrl: `https://${name}.test`, currentAccount: true });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(`https://${name}.test`, { serverId });
+    if (!credentials) throw new Error('Expected the saved Home credentials');
+    connections.push(await restoreServerAccountForTest({ serverUrl: `https://${name}.test`, accountId,
+        credentials, request: homes.request }));
     await homes.requireUiApproval(serverId, 'workspace.tabs.close_all');
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const scope = getActiveServerAccountScope();
@@ -52,7 +57,13 @@ function mountWorkspace(serverId: string) {
 
 describe('workspace UI Action approval presentation', () => {
     beforeEach(async () => { await homes.reset(); });
-    afterEach(() => { unregister?.(); unregister = undefined; publishAppliedActiveServerRuntimeAvailability(false); standardCleanup(); });
+    afterEach(async () => {
+        unregister?.(); unregister = undefined;
+        standardCleanup();
+        for (const connection of connections.reverse()) await connection.dispose();
+        connections.length = 0;
+        publishAppliedActiveServerRuntimeAvailability(false);
+    });
 
     it('opens the authenticated approval on its Home while retaining the tabs the pending close has not removed', async () => {
         const { serverId, scope } = await activateApprovalHome('workspace-approval', 'alice');

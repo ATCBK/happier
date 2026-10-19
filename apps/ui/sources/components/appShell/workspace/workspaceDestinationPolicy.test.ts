@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { admitWorkspaceSingletonState, normalizeWorkspaceSingletonTabs } from './workspaceDestinationPolicy';
+import { admitWorkspaceSingletonState, normalizeWorkspaceSingletonTabs, workspaceDestinationAdmissionIdentity } from './workspaceDestinationPolicy';
+import type { CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import { reconcileWorkspaceSyncedTabs, type SharedWorkspaceTabs } from './workspaceSyncedTabs';
 
 describe('workspace destination admission', () => {
+    it('uses the catalog resource identity for navigation and portable rebase, excluding in-tab state and index qualifiers', () => {
+        const catalog = [{ id: 'resources', kind: 'builtin', title: 'Resources', icon: 'desktop', order: 0,
+            placement: { kind: 'rail', region: 'account' }, activation: 'navigate', availability: 'available', routePath: '/resources',
+            workspaceNavigationIdentity: { resourceParam: 'id', scopeParams: ['serverId'] },
+        }] satisfies readonly CompactAppDestination[];
+        const identity = (params: Record<string, string>) => workspaceDestinationAdmissionIdentity({ kind: 'resources', params }, catalog);
+        expect(identity({ id: 'a', serverId: 'home', page: 'agents', workspacePathname: '/resources/a/agents' }))
+            .toBe(identity({ id: 'a', serverId: 'home', page: 'details' }));
+        expect(identity({ id: 'a', serverId: 'home' })).not.toBe(identity({ id: 'b', serverId: 'home' }));
+        expect(identity({ id: 'a', serverId: 'home' })).not.toBe(identity({ id: 'a', serverId: 'other-home' }));
+        expect(identity({})).toBe(identity({ serverId: 'home' }));
+        expect(identity({})).not.toBe(identity({ id: 'a', serverId: 'home' }));
+    });
+
     it('contracts identical workflow destinations while retaining other definitions, runs, Homes and non-workflow tabs', () => {
         const record: SharedWorkspaceTabs = { v: 1, order: ['first', 'other', 'duplicate', 'run', 'other-home', 'session'], pairs: [['duplicate', 'other']], tabsById: {
             first: { id: 'first', target: { kind: 'workflow', params: { id: 'workflow-1', serverId: 'home-a' } }, pinned: false },

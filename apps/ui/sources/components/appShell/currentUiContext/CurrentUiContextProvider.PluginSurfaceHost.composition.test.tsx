@@ -9,6 +9,7 @@ import type { PluginClientActionHandler } from '@happier-dev/plugin-sdk/actions'
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
 import {
     PluginProjectionV2Schema,
+    DaemonPluginUiComposerSurfaceCatalogEntryV1Schema,
     PluginProjectionInstalledPackageV2Schema,
     PluginProjectedActionV2Schema,
     DaemonPluginActionSchemasReadRequestSchema,
@@ -17,6 +18,8 @@ import {
 } from '@happier-dev/protocol';
 import {
     computePluginUiArtifactSha256DigestV1,
+    ComposerSnapshotV1Schema,
+    CurrentUiContextSnapshotV1Schema,
     normalizePluginUiDestinationBindingV1,
     PluginUiArtifactsManifestEntryV2Schema,
     type CurrentUiContextSnapshotV1,
@@ -39,6 +42,10 @@ import { MainAppTabStateProvider } from '@/components/navigation/mobile/chrome/M
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { PluginSurfacePlacementHost } from '@/components/plugins/surfaces/PluginSurfaceHost';
+import { Modal } from '@/modal';
+import { ModalProvider } from '@/modal/ModalProvider';
+import { useComposerScopePluginPresentation, type ComposerScopePluginPresentation } from '@/components/sessions/presentation/useComposerScopePluginPresentation';
+import { registerComposerPresentationTarget } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import type { PluginSurfaceHostApiV1 } from '@/components/plugins/surfaces/createPluginSurfaceHostApi';
 import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
 import { createCanonicalPluginReactNativeHostApiAdapter } from '@/components/plugins/reactNative/hostApi';
@@ -117,6 +124,7 @@ const hostedRenderer = vi.hoisted(() => ({
     currentUiReader: null as CurrentUiContextReader | null,
     currentUiLabelBeforeBPublication: undefined as string | null | undefined,
     hostApi: null as PluginSurfaceHostApiV1 | null,
+    focusEligible: false,
     packedRenderSurface: null as ((context: RenderContext) => React.ReactElement | null) | null,
     surfaceContext: null as PluginUiSurfaceContextV1 | null,
     responses: [] as Array<Readonly<{ subPath: string; response: unknown }>>,
@@ -156,6 +164,7 @@ type HostedWebPaneBoundaryProps = Readonly<{
     hostApi: PluginSurfaceHostApiV1;
     surfaceContext: PluginUiSurfaceContextV1;
     subPath?: string;
+    focusEligible?: boolean;
 }>;
 
 /**
@@ -182,7 +191,13 @@ vi.mock('@/components/plugins/hostedWeb/PluginHostedWebPane', async () => {
             surface,
             requestSurface: props.surfaceContext,
             requestIdPrefix: `packed-current-context:${props.subPath ?? ''}`,
-            handleRequest: props.hostApi.handleRequest,
+            handleRequest: async (request, options) => {
+                const response = await props.hostApi.handleRequest(request, options);
+                if (request.method === 'publishCurrentUiContext') {
+                    hostedRenderer.responses.push(Object.freeze({ subPath: props.subPath ?? '', response }));
+                }
+                return response;
+            },
             installedMethods: props.hostApi.installedMethods,
             getInstalledMethods: () => props.hostApi.installedMethods,
             getAdmissionMethods: () => props.hostApi.admissionMethods,
@@ -202,6 +217,7 @@ vi.mock('@/components/plugins/hostedWeb/PluginHostedWebPane', async () => {
     const PluginHostedWebPane = (props: HostedWebPaneBoundaryProps): React.ReactElement => {
         ReactModule.useLayoutEffect(() => {
             hostedRenderer.hostApi = props.hostApi;
+            hostedRenderer.focusEligible = props.focusEligible === true;
             hostedRenderer.surfaceContext = props.surfaceContext;
             const subPath = props.subPath ?? '';
             if (hostedRenderer.packedRenderSurface) return;
@@ -250,7 +266,7 @@ vi.mock('@/components/plugins/hostedWeb/PluginHostedWebPane', async () => {
                     hostedRenderer.responses.push(Object.freeze({ subPath, response: 'rejected' }));
                 },
             );
-        }, [props.hostApi, props.subPath, props.surfaceContext]);
+        }, [props.focusEligible, props.hostApi, props.subPath, props.surfaceContext]);
         if (hostedRenderer.packedRenderSurface) {
             return ReactModule.createElement(PackedArtifactSurface, props);
         }
@@ -359,9 +375,9 @@ const CLIENT_ACTION_ORIGIN_PROJECTION = Object.freeze({
 });
 const CLIENT_ACTION_AUTHORIZATION = Object.freeze({
     generation: Object.freeze({
-        targetGeneration: String(projectionGeneration),
-        desiredGeneration: String(projectionGeneration),
-        appliedGeneration: String(projectionGeneration),
+        targetGeneration: PLUGIN_OCCURRENCE_ID,
+        desiredGeneration: PLUGIN_OCCURRENCE_ID,
+        appliedGeneration: PLUGIN_OCCURRENCE_ID,
     }),
     resourceSelections: Object.freeze([]),
     scopedGrants: Object.freeze([]),
@@ -390,8 +406,6 @@ function createMountedClientActionFixture(handler: PluginClientActionHandler): R
             },
             platforms: [CLIENT_ACTION_TARGET.platform],
         },
-        serverIdentityId: CLIENT_ACTION_ORIGIN.serverIdentityId,
-        materializationRef: CLIENT_ACTION_ORIGIN.materializationRef,
         dangerLevel: 'safe',
         available: true,
         authorization: CLIENT_ACTION_AUTHORIZATION,
@@ -616,6 +630,7 @@ beforeEach(async () => {
     hostedRenderer.currentUiReader = null;
     hostedRenderer.currentUiLabelBeforeBPublication = undefined;
     hostedRenderer.hostApi = null;
+    hostedRenderer.focusEligible = false;
     hostedRenderer.packedRenderSurface = null;
     hostedRenderer.surfaceContext = null;
     hostedRenderer.responses.length = 0;
@@ -677,6 +692,7 @@ afterEach(async () => {
     hostedRenderer.currentUiReader = null;
     hostedRenderer.currentUiLabelBeforeBPublication = undefined;
     hostedRenderer.hostApi = null;
+    hostedRenderer.focusEligible = false;
     hostedRenderer.packedRenderSurface = null;
     hostedRenderer.surfaceContext = null;
     hostedRenderer.responses.length = 0;
@@ -684,6 +700,79 @@ afterEach(async () => {
 });
 
 describe('CurrentUiContextProvider + PluginSurfaceHost composition', () => {
+    it.each([false, true])('keeps the canonical current context Host API when a Composer picker is reparented into the modal host (installed artifact=%s)', async (packed) => {
+        const profile = await upsertServerProfile({ serverUrl: 'https://composer-context-modal.test', name: 'Composer context modal' });
+        await establishActiveServer(profile.id, 'composer-context-modal-account');
+        storage.getState().activateProfileScope({ serverId: profile.id, accountId: 'composer-context-modal-account' });
+        const composer = { kind: 'newSession', instanceId: 'current-context-picker' } as const;
+        const snapshot = ComposerSnapshotV1Schema.parse({
+            ref: composer, revision: 1, text: '', references: [], attachments: [], layout: 'wrap',
+            capabilities: { text: true, references: true, attachments: true, submit: true },
+            state: { focused: false, editable: true, submittable: true, submitting: false, running: false },
+        });
+        const unregister = registerComposerPresentationTarget(composer, {
+            readRevision: () => snapshot.revision, replace: () => snapshot.revision, readSnapshot: () => snapshot,
+        });
+        const contribution = { pluginId: placement.pluginId, localId: 'entry' };
+        const catalogEntry = DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse({
+            contribution, occurrenceId: PLUGIN_OCCURRENCE_ID, projectionGeneration,
+            role: 'attachmentPicker', rendererChain: [{ pluginId: placement.pluginId, localId: 'panel' }],
+            selectedRenderer: {
+                identity: { pluginId: placement.pluginId, localId: 'panel' },
+                renderer: { kind: 'hostedWeb', contributionId: 'panel', source: { kind: 'artifact', artifact: 'panel' }, requiredHostMethods: [] },
+                artifactProjection: projection.hostedWebById[`hostedWeb:${placement.pluginId}:panel`],
+                availability: { state: 'available', reason: 'available', diagnostics: [] },
+            },
+            executionOrigin: CLIENT_ACTION_ORIGIN,
+            resourceCapability: { readable: true, dynamic: true },
+            contributorTargetedContributions: { target: { pluginId: placement.pluginId, occurrenceId: PLUGIN_OCCURRENCE_ID,
+                sourceCustody: { kind: 'managed', immutableGenerationId: 'external-composer-generation', installSource: 'archive' } }, points: [] },
+        });
+        const projectionInputs = { pluginProjectionById: {}, pluginProjectionV2: PluginProjectionV2Schema.parse({ v: 2, generation: projectionGeneration, familiesById: {} }), composerSurfaceCatalog: [catalogEntry] };
+        let presentation: ComposerScopePluginPresentation | null = null;
+        let reader: CurrentUiContextReader | null = null;
+        const isScopeCurrent = () => true;
+        if (packed) hostedRenderer.packedRenderSurface = await loadPackedExternalVoiceFixtureRenderSurface();
+        function ComposerScope(): null {
+            presentation = useComposerScopePluginPresentation({ composer, physicalTarget: { kind: 'app' }, resourceContext: { kind: 'global' },
+                machineId: CLIENT_ACTION_ORIGIN.materializationRef.machineId, serverId: profile.id, projectionPhase: 'ready', projectionInputs,
+                accountLifetime: captureActiveServerAccountScopeLifetime(), isScopeCurrent, attachmentsEnabled: true, includeSessionActions: false });
+            return null;
+        }
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection?.credentials ?? null}>
+            <MainAppTabStateProvider><AppPaneProvider><ModalProvider>
+                <CurrentUiContextProvider><PluginSurfaceFocusEligibilityProvider active currentUiContextActive>
+                    <ComposerScope /><CurrentUiReaderProbe onReader={next => { reader = next; }} />
+                </PluginSurfaceFocusEligibilityProvider></CurrentUiContextProvider>
+            </ModalProvider></AppPaneProvider></MainAppTabStateProvider>
+        </InjectedAuthProvider>);
+        try {
+            if (!presentation) throw new Error('Expected the real Composer scope presentation.');
+            const interaction = (presentation as ComposerScopePluginPresentation).resolveAttachmentInteraction({
+                attachment: { v: 1, instanceId: 'entry-42', attachment: contribution, key: '42', value: { id: 42 },
+                    presentation: { typeLabel: 'Issue', label: 'Issue 42' }, availability: { status: 'ready' } },
+                catalog: { identity: contribution, occurrenceId: PLUGIN_OCCURRENCE_ID, picker: { renderer: 'panel' } },
+            });
+            expect(interaction?.onPress).toBeTypeOf('function');
+            await act(async () => { interaction?.onPress?.(); });
+            await vi.waitFor(() => expect(hostedRenderer.hostApi).not.toBeNull());
+            expect(hostedRenderer.hostApi!.installedMethods).toContain('publishCurrentUiContext');
+            expect(hostedRenderer.focusEligible).toBe(true);
+            await vi.waitFor(() => expect(hostedRenderer.responses.at(-1)?.response).toBeNull());
+            // Modal precedence intentionally withholds enrichment from the
+            // public snapshot even though its real Host API accepts it.
+            expect(requireReader(reader).readCurrentUiContext()?.navigation.area).toBe('modal');
+            expect(requireReader(reader).readCurrentUiContext()?.entity).toBeUndefined();
+            expect(CurrentUiContextSnapshotV1Schema.safeParse(requireReader(reader).readCurrentUiContext()).success).toBe(true);
+            await act(async () => { Modal.hideAll(); });
+            await vi.waitFor(() => expect(requireReader(reader).readCurrentUiContext()?.entity).toBeUndefined());
+        } finally {
+            await screen.unmount();
+            unregister();
+            hostedRenderer.packedRenderSurface = null;
+        }
+    });
+
     it('lends the current provider snapshot to a registered client Action through the real mounted Host API', async () => {
         const profile = await upsertServerProfile({
             serverUrl: 'https://acme.current-ui-client-action.test',
@@ -872,6 +961,19 @@ describe('CurrentUiContextProvider + PluginSurfaceHost composition', () => {
             input: { issueNumber: 2 },
         });
 
+        const signalA = currentReader.resolveCurrentUiCommand(commandA)!.retirementSignal;
+        await act(async () => {
+            expect(await hostedRenderer.hostApi!.handleRequest({
+                version: 1, requestId: 'acme.current-ui-composition:refresh',
+                surface: hostedRenderer.surfaceContext!, method: 'publishCurrentUiContext', payload: { enrichment: {
+                    entity: { kind: 'issue', label: 'Issue A', reference: { number: 1 } },
+                    commands: [{ title: 'Open issue B', command: { kind: 'openSurface', destination: 'notes', input: { issueNumber: 2 } } }],
+                } },
+            })).toBeNull();
+        });
+        expect(currentReader.readCurrentUiContext()?.commands[0]?.id).toBe(commandA);
+        expect(signalA.aborted).toBe(false);
+
         await screen.update(renderComposedSurface({
             serverId: profile.id,
             subPath: 'notes/b',
@@ -889,6 +991,7 @@ describe('CurrentUiContextProvider + PluginSurfaceHost composition', () => {
         const commandB = currentReader.readCurrentUiContext()?.commands[0]?.id ?? '';
         expect(commandB).toMatch(/^current-ui-command:/);
         expect(hostedRenderer.currentUiLabelBeforeBPublication).toBeNull();
+        expect(signalA.aborted).toBe(true);
         expect(currentReader.resolveCurrentUiCommand(commandA)).toBeNull();
         expect(voicePort.resolveCurrentUiCommand(commandA)).toBeNull();
         expect(voicePort.readCurrentUiContext()?.entity?.label).toBe('Issue B');

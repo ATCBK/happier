@@ -41,8 +41,8 @@ describe('native History launch input at the chat handoff owner', () => {
             agentId: 'claude', remoteSessionId: 'native', sourceItemId: 'item' } };
         handoff.stageChat(destination, seed, authority);
         expect(handoff.takeChatCurrent(destination)?.seed).toEqual({ query: 'needle', options: { matchCase: false, regex: false },
-            target: { kind: 'route-message-id', routeMessageId: makeExternalSessionHistoricalImportLocalId({
-                agentId: 'claude', remoteSessionId: 'native', directItemId: 'item' }) } });
+            target: { kind: 'route-message-id', routeMessageId: `server:${makeExternalSessionHistoricalImportLocalId({
+                agentId: 'claude', remoteSessionId: 'native', directItemId: 'item' })}` } });
         expect(handoff.takeChatCurrent(destination)).toBeNull();
         handoff.stageChat(destination, seed, authority);
         await connection?.dispose();

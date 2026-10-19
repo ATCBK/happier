@@ -32,8 +32,9 @@ it('qualifies a cold Session through its mounted parent while the leaf navigator
     const replaced = router.getStateForAction(current, { type: 'REPLACE', target: selected.navigationState.key,
         payload: { name: payload.screen, params: payload.params },
     }, options);
-    expect(replaced?.routes[replaced.index].name).toBe('session/[id]');
-    expect(replaced?.routes[replaced.index].params).toMatchObject(params);
+    if (!replaced || typeof replaced.index !== 'number') throw new Error('Installed StackRouter rejected the Session replacement');
+    expect(replaced.routes[replaced.index].name).toBe('session/[id]');
+    expect(replaced.routes[replaced.index].params).toMatchObject(params);
 });
 
 it('still targets the admitted Session navigator when its child is mounted', async () => {
@@ -56,7 +57,7 @@ it.each([
     }],
     ['machine/[id]/index', '/machine/machine-a?serverId=home-a', { id: 'machine-a', serverId: 'home-a' }, undefined],
     ['machine/[id]/installables', '/machine/machine-a/installables?serverId=home-a', { id: 'machine-a', serverId: 'home-a' }, undefined],
-] as const)('preserves the cold parsed %s leaf and Home before its lazy navigator registers', async (name, href, params, state) => {
+] satisfies ReadonlyArray<readonly [string, string, { id: string; serverId?: string }, { routes: { name: string; params: { id: string; serverId: string } }[] } | undefined]>)('preserves the cold parsed %s leaf and Home before its lazy navigator registers', async (name, href, params, state) => {
     const navigation = createNavigationContainerRef();
     const serializer = await loadInstalledExpoPathSerializer();
     const getPathFromState = serializer.getPathFromState;

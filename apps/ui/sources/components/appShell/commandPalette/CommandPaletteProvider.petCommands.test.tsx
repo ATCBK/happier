@@ -74,12 +74,15 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     useFeatureDecision: () => null,
 }));
 
-vi.mock('@/sync/store/settingsWriters', () => ({
+vi.mock('@/sync/store/settingsWriters', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/store/settingsWriters')>(),
+    // Keep the real scope reader; these two probes preserve the pet write-intent assertions.
     useApplySettings: () => applySettingsMock,
     useApplyLocalSettings: () => applyLocalSettingsMock,
 }));
 
-vi.mock('@/utils/platform/desktopHost', () => ({
+vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/platform/desktopHost')>(),
     isDesktopHost: () => true,
 }));
 

@@ -61,6 +61,7 @@ import { buildWorkflowAgentAuthoringSeed } from '@/sync/domains/workflows/workfl
 import { registerCommandPaletteActionCatalog } from './commandPaletteActionRuntime';
 import { KeyboardShortcutProvider, buildKeyboardShortcutLabels, resolveKeyboardPlatform, type KeyboardShortcutHandlers } from '@/keyboard';
 import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import { readCurrentUiContextActionReader } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
 import { usePluginSurfaceDestinationNavigationBinding } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { projectParameterFreeRoute } from '@/track/parameterFreeRouteProjection';
@@ -258,7 +259,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
     const petsCompanionEnabled = useFeatureEnabled('pets.companion');
     const { available: workflowsEnabled } = useWorkflowsAvailability();
     const openWorkflowAgentDraft = useWorkflowAgentAuthoring();
-    const startAskHappier = useAskHappierStarter();
+    const { start: startAskHappier } = useAskHappierStarter();
     const openNewWorkflow = useCallback(() => { router.push('/workflows/new' as never); }, [router]);
     const openWorkflowAgentAuthoring = useCallback(() => {
         openWorkflowAgentDraft(buildWorkflowAgentAuthoringSeed({ kind: 'create' }));
@@ -382,7 +383,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             ? pluginActionPresentation
             : null;
         const askHappierLifetime = captureActiveServerAccountScopeLifetime();
-        const askHappierCurrentContext = currentUiContextReader?.readCurrentUiContext() ?? null;
+        const askHappierCurrentContext = readCurrentUiContextActionReader({ surface: 'ui' })?.readCurrentUiContext() ?? null;
         return buildCommandPaletteCommands({
             sessionsById: storage.getState().sessions,
             isDev: __DEV__ === true,
@@ -493,15 +494,17 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         }
         if (openUniversalSearchModalRef.current) return;
         let modalId = '';
+        const clearOpenPalette = () => {
+            if (openUniversalSearchModalRef.current?.id === modalId) {
+                openUniversalSearchModalRef.current = null;
+                setPaletteOpen(false);
+            }
+        };
         modalId = Modal.show({
             component: UniversalSearchModal,
             webPlacement: COMMAND_SURFACE_WEB_PLACEMENT,
-            onRequestClose: () => {
-                if (openUniversalSearchModalRef.current?.id === modalId) {
-                    openUniversalSearchModalRef.current = null;
-                    setPaletteOpen(false);
-                }
-            },
+            onRequestClose: clearOpenPalette,
+            onHostUnmount: clearOpenPalette,
             props: {
                 commands: buildCommands(invocationScope.sessionId, invocationScope),
                 ...(initialQuery ? { initialQuery } : {}),

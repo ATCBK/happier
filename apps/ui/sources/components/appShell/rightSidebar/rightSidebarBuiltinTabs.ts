@@ -175,8 +175,9 @@ export const RIGHT_SIDEBAR_BUILTIN_TABS: readonly RightSidebarBuiltinTabDefiniti
         icon: 'users',
         order: 32,
         scopes: ['session'],
+        // People (coordination lab P1p): who hears about this session and what it follows, on every
+        // session; sharing and Discussions inside it say for themselves when this Home doesn't offer them.
         mobileSurfaces: { session: 'collaboration' },
-        available: (input) => input.sessionSharingAvailable === true,
     },
     {
         id: 'navigation',

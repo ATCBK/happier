@@ -94,7 +94,7 @@ describe('pane drop presentation (lab C2)', () => {
 
     it('leaves effects it does not own to their owner', () => {
         const relation: EntityDropAdmissionV1 = { status: 'allowed', effect: {
-            actionId: 'session.reports_to.set', input: { sessionId: 'a', leadSessionId: 'b' },
+            actionId: 'session.manager.set', input: { sessionId: 'a', managerSessionId: 'b' },
             preview: { verb: 'Nest', target: 'Lead', glyph: 'nest' },
         } };
         expect(presentPaneDropAdmission(relation, scene())).toBe(relation);

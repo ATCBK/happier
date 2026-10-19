@@ -174,8 +174,7 @@ describe('Popover (native portal)', () => {
             },
         } as any;
 
-        let tree: ReturnType<typeof renderer.create> | undefined;
-        tree = (await renderScreen(React.createElement(
+        const screen = await renderScreen(React.createElement(
             OverlayPortalProvider,
             null,
             React.createElement(Popover, {
@@ -188,7 +187,8 @@ describe('Popover (native portal)', () => {
                 children: () => React.createElement(PopoverChild),
             } as any),
             React.createElement(OverlayPortalHost),
-        ))).tree;
+        ));
+        const tree = screen.tree;
 
         await act(async () => {
             await flushInitialPositioning();
@@ -196,7 +196,7 @@ describe('Popover (native portal)', () => {
         expect(tree?.root.findAllByType('PopoverChild' as any)).toHaveLength(1);
 
         await act(async () => {
-            tree?.update(React.createElement(
+            await screen.update(React.createElement(
                 OverlayPortalProvider,
                 null,
                 React.createElement(Popover, {
@@ -239,8 +239,7 @@ describe('Popover (native portal)', () => {
             },
         } as any;
 
-        let tree: ReturnType<typeof renderer.create> | undefined;
-        tree = (await renderScreen(React.createElement(
+        const screen = await renderScreen(React.createElement(
             OverlayPortalProvider,
             null,
             React.createElement(Popover, {
@@ -253,7 +252,8 @@ describe('Popover (native portal)', () => {
                 children: () => React.createElement(PopoverChild),
             } as any),
             React.createElement(OverlayPortalHost),
-        ))).tree;
+        ));
+        const tree = screen.tree;
 
         await act(async () => {
             await flushInitialPositioning();
@@ -270,7 +270,7 @@ describe('Popover (native portal)', () => {
         expect(findNativePortalBackdropPressable(tree)?.props.pointerEvents).toBe('auto');
 
         await act(async () => {
-            tree?.update(React.createElement(
+            await screen.update(React.createElement(
                 OverlayPortalProvider,
                 null,
                 React.createElement(Popover, {

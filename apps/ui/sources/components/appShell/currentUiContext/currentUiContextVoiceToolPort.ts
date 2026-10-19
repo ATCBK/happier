@@ -47,10 +47,6 @@ import { getPreferredLanguage } from '@/text';
 import { registerCurrentUiContextActionPort } from './currentUiContextActionRuntime';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { unavailable } from './currentUiContextVoiceToolBinding';
-import { apiSocket } from '@/sync/api/session/apiSocket';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 export { bindCurrentUiContextVoiceToolPortToAdmission } from './currentUiContextVoiceToolBinding';
 
@@ -704,31 +700,6 @@ export function createCurrentUiContributedActionRpcHandler(input: Readonly<{
 /** Binds ordinary host Actions to the same provider-local reader and dispatcher. */
 export function CurrentUiContextActionHost(): null {
     const createPort = useCurrentUiContextToolPortFactory();
-    const appShellProjection = useAppShellPluginUiProjection();
-    const server = useActiveServerSnapshot();
-    const projectionRef = React.useRef(appShellProjection.pluginUiProjection);
-    projectionRef.current = appShellProjection.pluginUiProjection;
-    const machineIds = [...new Set(Object.values(appShellProjection.pluginUiProjection?.actionsById ?? {}).flatMap((action) => {
-        const origin = readPluginUiContributionOrigin(action);
-        return action.execution.target === 'client' && origin?.phase === 'current' && origin.interactionEnabled
-            && origin.serverId === server.serverId ? [origin.machineId] : [];
-    }))].sort().join('\u0000');
     React.useLayoutEffect(() => registerCurrentUiContextActionPort(createPort), [createPort]);
-    React.useLayoutEffect(() => {
-        if (!machineIds || !server.serverId) return;
-        const disposers = machineIds.split('\u0000').map((machineId) => apiSocket.registerMachineScopedRpcHandler(
-            machineId, RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE,
-            createCurrentUiContributedActionRpcHandler({
-                machineId, serverId: server.serverId,
-                readProjection: () => projectionRef.current,
-                isCurrent: () => getActiveServerSnapshot().serverId === server.serverId && getActiveServerSnapshot().generation === server.generation,
-                execute: async (...args) => {
-                    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-                    return await createDefaultActionExecutor().execute(...args);
-                },
-            }),
-        ));
-        return () => { for (const dispose of disposers) dispose(); };
-    }, [createPort, machineIds, server.serverId, server.generation]);
     return null;
 }

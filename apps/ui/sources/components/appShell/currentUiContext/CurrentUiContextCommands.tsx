@@ -78,40 +78,65 @@ export function useCurrentUiContextMountedCommand(command: CurrentUiContextMount
     }, [command, composition, reader]);
 }
 
+/** One declaration lifecycle for mounted host controls and page-owned command publications. */
+export function useCurrentUiContextLocalCommandDefinitions(
+    commands: readonly CurrentUiContextLocalCommand[],
+    isCurrent: () => boolean,
+    contextKey?: string,
+) {
+    const latest = React.useRef(commands);
+    React.useLayoutEffect(() => { latest.current = commands; }, [commands]);
+    type Definition = Readonly<{
+        key: string;
+        title: string;
+        description?: string;
+        command: CurrentUiContextMountedCommand;
+        lifetime: { mounted: boolean };
+    }>;
+    const previous = React.useRef<Readonly<{ isCurrent: () => boolean; contextKey?: string; rows: readonly Definition[] }> | null>(null);
+    const definitionKey = JSON.stringify(commands.map(({ key, title, description }) => ({ key, title, description })));
+    const definitions = React.useMemo(() => {
+        const prior = previous.current?.isCurrent === isCurrent && previous.current.contextKey === contextKey ? previous.current.rows : [];
+        const rows = commands.map(({ key, title, description }) => {
+            const kept = prior.find(row => row.key === key && row.title === title && row.description === description);
+            if (kept) return kept;
+            const lifetime = { mounted: false };
+            return { key, title, lifetime, ...(description === undefined ? {} : { description }), command: {
+                kind: 'hostLocal' as const,
+                invoke: async ({ signal }: Readonly<{ signal: AbortSignal }>) => {
+                    const current = latest.current.find(candidate => candidate.key === key);
+                    if (signal.aborted || !lifetime.mounted || !isCurrent() || !current) {
+                        return { ok: false as const, code: 'stale_surface' as const };
+                    }
+                    const applied = await current.invoke();
+                    return applied === false ? { ok: false as const, code: 'stale_surface' as const } : { ok: true as const };
+                },
+            } };
+        });
+        return { isCurrent, contextKey, rows };
+    }, [isCurrent, contextKey, definitionKey]);
+    React.useLayoutEffect(() => {
+        previous.current = definitions;
+        for (const row of definitions.rows) row.lifetime.mounted = true;
+        return () => { for (const row of definitions.rows) row.lifetime.mounted = false; };
+    }, [definitions]);
+    return definitions.rows;
+}
+
 export function useCurrentUiContextLocalCommands(commands: readonly CurrentUiContextLocalCommand[]): Readonly<{
     invoke(key: string): Promise<boolean>;
 }> {
     const composition = React.useContext(CompositionContext);
     const reader = useOptionalCurrentUiContextReader();
     const { execute } = useMountedActionExecution(composition?.authority?.scope);
-    const latest = React.useRef(commands);
-    React.useLayoutEffect(() => { latest.current = commands; }, [commands]);
-    // Callback updates do not republish opaque descriptors or cause a registration/render loop.
-    const definitionKey = JSON.stringify(commands.map(({ key, title, description }) => ({ key, title, description })));
-    const definitions = React.useMemo(() => {
-        const lifetime = { mounted: false };
-        const rows = commands.map(({ key, title, description }) => ({ key, title,
-            ...(description === undefined ? {} : { description }), command: {
-                kind: 'hostLocal' as const,
-                invoke: async ({ signal }: Readonly<{ signal: AbortSignal }>) => {
-                    const current = latest.current.find(candidate => candidate.key === key);
-                    if (signal.aborted || !lifetime.mounted || !composition?.isCurrent() || !current) {
-                        return { ok: false as const, code: 'stale_surface' as const };
-                    }
-                    const applied = await current.invoke();
-                    return applied === false ? { ok: false as const, code: 'stale_surface' as const } : { ok: true as const };
-                },
-            } }));
-        return { lifetime, rows };
-    }, [composition, definitionKey]);
+    const isCurrent = React.useCallback(() => composition?.isCurrent() === true, [composition]);
+    const definitions = useCurrentUiContextLocalCommandDefinitions(commands, isCurrent);
     React.useLayoutEffect(() => {
-        definitions.lifetime.mounted = true;
-        const unregister = composition?.register(definitions, definitions.rows);
-        return () => { definitions.lifetime.mounted = false; unregister?.(); };
+        return composition?.register(definitions, definitions);
     }, [composition, definitions]);
     const invoke = React.useCallback(async (key: string): Promise<boolean> => {
-        if (!definitions.lifetime.mounted || !composition?.isCurrent()) return false;
-        const command = definitions.rows.find(candidate => candidate.key === key)?.command;
+        if (!composition?.isCurrent()) return false;
+        const command = definitions.find(candidate => candidate.key === key)?.command;
         return (await executeMountedCurrentUiContextCommand({ reader, command, execute })).ok;
     }, [composition, definitions, execute, reader]);
     return React.useMemo(() => ({ invoke }), [invoke]);

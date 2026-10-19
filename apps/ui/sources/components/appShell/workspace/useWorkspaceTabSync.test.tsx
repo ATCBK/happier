@@ -24,6 +24,10 @@ import { randomUUID } from '@/platform/randomUUID';
 import { workspaceLayoutScopeKey } from './workspacePersistence';
 import type { CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+
 const boundary = vi.hoisted(() => ({ enabled: true, ready: true, layouts: {} as Record<string, unknown>, scope: { serverId: 'home', accountId: 'alice' },
     observations: [] as { accountId: string; ids: readonly string[] | null }[],
     catalog: [] as readonly CompactAppDestination[],
@@ -114,7 +118,7 @@ describe('live workspace tab sync hook', () => {
     it.each(['workflows', 'plugin:acme.notes:notes'])('keeps retained %s contents while pin and later close reach the shared singleton', async kind => {
         const home = await mountHome('https://workspace-retained-singleton.test');
         boundary.scope = { serverId: home.id, accountId: 'alice' };
-        boundary.catalog = kind === 'workflows' ? [{ id: kind, kind: 'builtin', title: 'Workflows', icon: 'layers-outline', order: 40,
+        boundary.catalog = kind === 'workflows' ? [{ id: kind, kind: 'builtin', title: 'Workflows', icon: 'tree-structure', order: 40,
             placement: { kind: 'rail', region: 'app' }, activation: 'navigate', availability: 'available', routePath: '/workflows' }]
             : [{ id: kind, kind: 'plugin', container: 'appPage', destination: { pluginId: 'acme.notes', localId: 'notes' }, title: 'Notes', icon: 'file', order: 40,
                 placement: { kind: 'rail', region: 'plugins' }, activation: 'navigate', availability: 'available', routePath: '/plugins/acme.notes/notes' }];

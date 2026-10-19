@@ -47,8 +47,7 @@ describe('MultiPaneHost (docked main region)', () => {
         const tracker = createMountTracker();
         const main = <Tracked tracker={tracker} name="main" />;
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(
+        const screen = await renderScreen(
             <MultiPaneHost
                 main={main}
                 rightPane={null}
@@ -61,13 +60,12 @@ describe('MultiPaneHost (docked main region)', () => {
                 onCommitRightDockWidthPx={() => {}}
                 onCommitDetailsDockWidthPx={() => {}}
             />,
-        )).tree;
+        );
 
         expect(tracker.mounts.main).toBe(1);
         expect(tracker.unmounts.main ?? 0).toBe(0);
 
-        act(() => {
-            tree!.update(
+        await screen.update(
                 <MultiPaneHost
                     main={main}
                     rightPane={<Right />}
@@ -80,14 +78,12 @@ describe('MultiPaneHost (docked main region)', () => {
                     onCommitRightDockWidthPx={() => {}}
                     onCommitDetailsDockWidthPx={() => {}}
                 />,
-            );
-        });
+        );
 
         expect(tracker.mounts.main).toBe(1);
         expect(tracker.unmounts.main ?? 0).toBe(0);
 
-        act(() => {
-            tree!.update(
+        await screen.update(
                 <MultiPaneHost
                     main={main}
                     rightPane={null}
@@ -100,8 +96,7 @@ describe('MultiPaneHost (docked main region)', () => {
                     onCommitRightDockWidthPx={() => {}}
                     onCommitDetailsDockWidthPx={() => {}}
                 />,
-            );
-        });
+        );
 
         expect(tracker.mounts.main).toBe(1);
         expect(tracker.unmounts.main ?? 0).toBe(0);

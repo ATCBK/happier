@@ -1,5 +1,5 @@
 import { WORKSPACE_ACTION_INPUT_SCHEMAS, type WorkspaceActionId, type WorkspaceTabsListOutput, type WorkspaceClosedTabsListOutput } from '@happier-dev/protocol/actions/workspaceActionFamily';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCanvasHost';
 import { createWorkspaceEmptyTab, selectWorkspaceClosableTabIds, type ClosedWorkspaceTab, type WorkspaceState } from './workspaceState';
 import type { createWorkspaceNavigationAdapter } from './workspaceNavigationAdapter';

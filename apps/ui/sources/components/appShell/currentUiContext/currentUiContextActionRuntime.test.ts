@@ -52,6 +52,8 @@ describe('current UI context Action adapter', () => {
 
     it('requires microphone approval for an exact mounted Dictation command and rejects retired fields', async () => {
         let captures = 0;
+        let allowMicrophone = false;
+        let requestedMicrophoneConsent = false;
         const retirement = new AbortController();
         const scope = { serverId: 'dictation-home', accountId: 'dictation-account' };
         const command: CurrentUiContextResolvedCommand = {
@@ -70,6 +72,12 @@ describe('current UI context Action adapter', () => {
         }));
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({
             uiCurrentContextAction: request => executeCurrentUiContextAction(request, { execute: executor.execute, context: request.context }),
+            presentUserActionConfirmation: async request => {
+                expect(request.actionId).toBe('ui.voice_global.dictation.start');
+                expect(request.input).toEqual({ commandId: command.id });
+                requestedMicrophoneConsent = true;
+                return allowMicrophone;
+            },
             voiceConversationAction: async request => {
                 const result = await executeCurrentUiContextAction(request);
                 return result.ok ? result.result : result;
@@ -79,6 +87,12 @@ describe('current UI context Action adapter', () => {
             { surface: 'agent', authority: 'account_automation', ...scope, expectedAccountId: scope.accountId }))
             .toMatchObject({ ok: false });
         expect(captures).toBe(0);
+        expect(await executor.execute('ui.current_context.command.invoke', { commandId: command.id },
+            { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId }))
+            .toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+        expect(requestedMicrophoneConsent).toBe(true);
+        expect(captures).toBe(0);
+        allowMicrophone = true;
         expect(await executor.execute('ui.current_context.command.invoke', { commandId: command.id },
             { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId }))
             .toEqual({ ok: true, result: { status: 'completed', dictationStatus: 'listening', inserted: false } });

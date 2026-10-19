@@ -36,7 +36,7 @@ export type RetainedPresentationSlotEntry = Readonly<{
     slotId: string;
     /** The webview-bearing subtree to keep mounted above the router. */
     node: React.ReactNode;
-    /** Where the panel placeholder is, so the portal overlay paints over it. */
+    /** Last valid placeholder placement; visibility separately parks the retained body. */
     geometry: RetainedPresentationRect | null;
     /** Whether the panel placeholder is currently on-screen (hidden ⇒ kept mounted off-screen). */
     visible: boolean;
@@ -56,7 +56,7 @@ export type RetainedPresentationSlotsStore = Readonly<{
      * (that is the keep-alive) and is removed only by `removePortalEntry` or a `closed` lifecycle.
      */
     upsertPortalEntry: (entry: RetainedPresentationSlotEntry) => void;
-    /** Preserve a retained webview but park it off-screen while no binder owns the visible route. */
+    /** Preserve the body and last placement, but park it off-screen without a visible binder. */
     parkPortalEntry: (slotId: string) => void;
     /** Explicitly tear down a slot's portal-hosted webview (real close, not a route change). */
     removePortalEntry: (slotId: string) => void;
@@ -109,7 +109,6 @@ export function createRetainedPresentationSlotsStore(): RetainedPresentationSlot
         if (!existing) return;
         const next = {
             ...existing,
-            geometry: null,
             visible: false,
         };
         if (portalEntriesEqual(existing, next)) return;
@@ -121,6 +120,13 @@ export function createRetainedPresentationSlotsStore(): RetainedPresentationSlot
     return {
         upsertPortalEntry(entry) {
             const existing = portalBySlot.get(entry.slotId);
+            const rect = entry.geometry;
+            // Responsive binders can hand off before the replacement has been measured.
+            // Visibility still parks a retired route; only valid placement replaces placement.
+            const placed = rect && Number.isFinite(rect.x) && Number.isFinite(rect.y)
+                && Number.isFinite(rect.width) && Number.isFinite(rect.height)
+                && rect.width > 0 && rect.height > 0;
+            if (!placed && existing?.geometry) entry = { ...entry, geometry: existing.geometry };
             if (existing && portalEntriesEqual(existing, entry)) {
                 return;
             }
@@ -186,14 +192,25 @@ export function RetainedPresentationPortalHost(): React.ReactElement | null {
 
 function RetainedPresentationPortalSlot({ entry }: Readonly<{ entry: RetainedPresentationSlotEntry }>) {
     const motion = entry.nativeMotion;
+    // Keep React overlay elements and JS custody callbacks out of animated worklet closures.
+    const x = motion?.x;
+    const y = motion?.y;
+    const width = motion?.width;
+    const height = motion?.height;
+    const anchorX = motion?.anchorX ?? 0;
+    const anchorY = motion?.anchorY ?? 0;
+    const chromeHeight = motion?.chromeHeight ?? 0;
+    const body = <PluginSurfaceFocusEligibilityProvider active={entry.visible}>
+        {entry.node}
+    </PluginSurfaceFocusEligibilityProvider>;
     const animatedStyle = useAnimatedStyle(() => ({
-        ...(motion?.width && motion?.height ? {
-            width: motion.width.value,
-            height: Math.max(0, motion.height.value - (motion.chromeHeight ?? 0)),
+        ...(width && height ? {
+            width: width.value,
+            height: Math.max(0, height.value - chromeHeight),
         } : {}),
         transform: [
-            { translateX: motion ? motion.x.value - motion.anchorX : 0 },
-            { translateY: motion ? motion.y.value - motion.anchorY : 0 },
+            { translateX: x ? x.value - anchorX : 0 },
+            { translateY: y ? y.value - anchorY : 0 },
         ],
     }));
     return <Animated.View
@@ -201,11 +218,8 @@ function RetainedPresentationPortalSlot({ entry }: Readonly<{ entry: RetainedPre
         style={Platform.OS === 'web' ? resolvePortalSlotStyle(entry) : [resolvePortalSlotStyle(entry), animatedStyle]}
         pointerEvents={entry.visible && motion?.overlay ? 'box-none' : entry.visible && !entry.inputPassthrough ? 'auto' : 'none'}
     >
-        <View style={{ flex: 1 }} pointerEvents={entry.visible && !entry.inputPassthrough ? 'auto' : 'none'}>
-            <PluginSurfaceFocusEligibilityProvider active={entry.visible}>
-                {entry.node}
-            </PluginSurfaceFocusEligibilityProvider>
-        </View>
+        {Platform.OS === 'web' ? body : <View style={{ flex: 1 }}
+            pointerEvents={entry.visible && !entry.inputPassthrough ? 'auto' : 'none'}>{body}</View>}
         {entry.visible ? motion?.overlay : null}
     </Animated.View>;
 }
@@ -217,11 +231,7 @@ const EMPTY_PORTAL_ENTRIES: readonly RetainedPresentationSlotEntry[] = [];
  * geometry yet) is kept MOUNTED but parked off-screen so its native/DOM webview is preserved without
  * painting over the active route.
  */
-function resolvePortalSlotStyle(entry: RetainedPresentationSlotEntry): ViewStyle & {
-    transitionProperty?: string;
-    transitionDuration?: string;
-    transitionTimingFunction?: string;
-} {
+function resolvePortalSlotStyle(entry: RetainedPresentationSlotEntry): ViewStyle {
     const rect = entry.geometry;
     if (!entry.visible || !rect || rect.width <= 0 || rect.height <= 0) {
         return { position: 'absolute', left: -100000, top: 0, width: 1, height: 1, opacity: 0 };
@@ -304,12 +314,12 @@ export function useRetainedPresentationSlot(
     const layoutActive = useLayoutPresentationActive();
     const visible = layoutActive && (input.visible ?? true);
 
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
         if (!enabled || !store) return;
         store.upsertPortalEntry({
             slotId: input.slotId,
             node: input.node,
-            geometry: visible ? input.geometry ?? null : null,
+            geometry: input.geometry ?? null,
             visible,
             transition: input.transition ?? null,
             inputPassthrough: input.inputPassthrough ?? false,
@@ -317,7 +327,7 @@ export function useRetainedPresentationSlot(
         });
     });
 
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
         if (!enabled || !store) return undefined;
         return () => {
             // Do not remove the entry: keep the webview mounted, but make it non-interactive while no
