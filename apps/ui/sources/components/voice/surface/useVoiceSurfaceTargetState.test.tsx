@@ -42,6 +42,31 @@ describe('useVoiceSurfaceTargetState', () => {
         registerVoiceAdapters([]);
     });
 
+    it('keeps the failed Session target in the default glance after focus moves', async () => {
+        const previous = storage.getState();
+        const store = await import('@/voice/session/voiceSessionStore');
+        const accountScope = { serverId: 'server-a', accountId: 'account-a' };
+        const targetSessionAddress = { serverId: 'server-a', sessionId: 'failed-session' };
+        storage.setState({ profileScope: accountScope });
+        registerVoiceAdapters([createLocalConversationVoiceAdapter()]);
+        const snapshot = { adapterId: 'local_conversation', sessionId: '__voice_agent__', status: 'connected' as const,
+            mode: 'listening' as const, canStop: true };
+        store.setVoiceSessionSnapshot(snapshot, null, { accountScope, targetSessionAddress, conversationScope: null });
+        store.setVoiceSessionSnapshot({ ...snapshot, status: 'disconnected', mode: 'idle', canStop: false, errorCode: 'provider_error' });
+        setFocusedSessionId('other-session', 'server-b');
+        const { useVoiceSurfaceTargetState } = await import('./useVoiceSurfaceTargetState');
+        const hook = await renderHook(() => useVoiceSurfaceTargetState({ pathname: '/', providerId: 'local_conversation',
+            sessionId: null, variant: 'sidebar', voice: localVoiceSettings(true) }));
+        try {
+            expect(hook.getCurrent().startSessionAddress).toEqual(targetSessionAddress);
+            expect(hook.getCurrent().bindingScope).toBe('session');
+        } finally {
+            await hook.unmount();
+            store.resetVoiceSessionStoreForTests();
+            storage.setState(previous, true);
+        }
+    });
+
     it('keeps an explicitly placed in-session surface bound to its exact session when Global is the default', async () => {
         registerVoiceAdapters([createLocalConversationVoiceAdapter()]);
         const { useVoiceSurfaceTargetState } = await import('./useVoiceSurfaceTargetState');

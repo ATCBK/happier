@@ -330,7 +330,7 @@ describe('mounted Voice Brief request', () => {
         expect(speech.starts).toHaveLength(1);
         await act(async () => speech.connect());
         expect(speech.spoken).toHaveLength(1);
-        expect(speech.contexts[0]).toContain('"approval":"tap_only"');
+        expect(speech.spoken[0]).toContain('"approval":"tap_only"');
         await act(async () => { outcome = executeVoiceBriefOperation('close'); });
         expect(outcome).toEqual({ ok: true, result: { status: 'closed', attemptId: getVoiceSessionPresentedAttemptId() } });
         expect(screen.findByTestId('voice-brief')).toBeNull();
@@ -358,7 +358,7 @@ describe('mounted Voice Brief request', () => {
         await act(async () => { outcome = executeVoiceBriefOperation('request', { expectedAttemptId: attemptId! }); });
         expect(outcome).toEqual({ ok: true, result: { status: 'sent', attemptId } });
         expect(speech.spoken).toHaveLength(2);
-        expect(speech.contexts[1]).toContain('"approval":"tap_only"');
+        expect(speech.spoken[1]).toContain('"approval":"tap_only"');
         await act(async () => speech.startOutput());
         await act(async () => { outcome = executeVoiceBriefOperation('stop', { expectedAttemptId: attemptId! }); });
         expect(outcome).toEqual({ ok: true, result: { status: 'stopped', attemptId } });
@@ -436,6 +436,22 @@ describe('mounted Voice Brief request', () => {
         await act(async () => speech.connect());
         expect(speech.spoken).toHaveLength(2);
     });
+    it('keeps Retry after a pending start ends without an error and delivers the retried Brief once', async () => {
+        const speech = await installTransport();
+        await selectService();
+        screen = await renderScreen(render());
+        await speech.waitForStarts(1);
+        await act(async () => lifecycle?.stop(VOICE_AGENT_GLOBAL_SESSION_ID));
+        expect(lifecycle?.getSnapshot().status).toBe('disconnected');
+        expect(speech.spoken).toHaveLength(0);
+        expect(screen.findByTestId('voice-brief.retry')).toBeTruthy();
+        await screen.pressByTestIdAsync('voice-brief.retry');
+        await speech.waitForStarts(2);
+        await act(async () => speech.connect());
+        expect(speech.spoken).toHaveLength(1);
+        expect(speech.spoken[0]).toContain('"approval":"tap_only"');
+    });
+
     it('keeps the list with setup recovery, then explicitly retries one global start and delivers once on connect', async () => {
         const speech = await installTransport();
         screen = await renderScreen(render());
@@ -461,7 +477,7 @@ describe('mounted Voice Brief request', () => {
         await act(async () => screen?.update(render()));
         await act(async () => speech.connect());
         expect(speech.spoken).toHaveLength(1);
-        expect(speech.contexts).toHaveLength(1);
+        expect(speech.spoken[0]).toContain('"approval":"tap_only"');
     });
 
     it('offers terminal failure recovery on the same global target and delivers once on reconnect', async () => {

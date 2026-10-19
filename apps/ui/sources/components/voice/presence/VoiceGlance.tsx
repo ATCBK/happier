@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -27,6 +28,10 @@ import { formatVoiceElapsed, readVoiceElapsedStartedAt, VoiceElapsed, VoiceStatu
 
 /** How many of the latest turns the glance reads back; the full history is the conversation itself. */
 const GLANCE_TURNS = 3;
+/** Narrowest row (px) that holds Unmute · Send · End as labelled pills; between the Companion column (~232) and the phone row (~282). */
+const LABELLED_CONTROLS_MIN_WIDTH = 260;
+/** The compact Mute well matches the small pills' height, so the row stays level. */
+const COMPACT_WELL_SIZE = 26;
 
 export type VoiceGlancePresentation = 'companion' | 'popover' | 'sheet';
 
@@ -145,7 +150,7 @@ const VoiceGlanceBody = React.memo(function VoiceGlanceBody(props: Readonly<{
                 <VoiceNeedsYouPrompts address={voice.pendingRequestSessionAddress} testID={`${props.testID}-needs-you`} />
             ) : null}
             {model.delegatedWork ? <VoiceGlanceHandoff model={model} testID={`${props.testID}-handoff`} /> : null}
-            <VoiceGlanceControls model={model} sheet={sheet} testID={props.testID} />
+            <VoiceGlanceControls model={model} sheet={sheet} narrowByDefault={props.presentation === 'companion'} testID={props.testID} />
         </View>
     );
 });
@@ -276,6 +281,8 @@ const VoiceGlanceHandoff = React.memo(function VoiceGlanceHandoff(props: Readonl
 const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Readonly<{
     model: VoiceSurfaceViewModel;
     sheet: boolean;
+    /** The Companion column is narrow; it assumes the compact row until the row's own width says otherwise. */
+    narrowByDefault: boolean;
     testID: string;
 }>) {
     const styles = stylesheet;
@@ -283,6 +290,15 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
     const voice = props.model.attemptControl;
     const size = props.sheet ? 'normal' : 'small';
     const iconSize = props.sheet ? 18 : 14;
+    // Below this row width Unmute · Send · End no longer fit one line as labelled pills (the Companion
+    // column is ~232 px; the phone glance row is ~282 px), so Mute steps down to its icon well and the
+    // row keeps one line. The container's own measured width decides, not the window's.
+    const [rowWidth, setRowWidth] = React.useState<number | null>(null);
+    const onRowLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const next = Math.round(event.nativeEvent.layout.width);
+        setRowWidth((current) => current === next ? current : next);
+    }, []);
+    const compact = !props.sheet && (rowWidth === null ? props.narrowByDefault : rowWidth < LABELLED_CONTROLS_MIN_WIDTH);
     // Lab `.vo-sheet .vo-cb`: on the sheet the row's controls share its full width.
     const control = props.sheet ? styles.sheetControl : undefined;
     const recover = voice.recoveryAvailable && voice.recoveryLabel ? (
@@ -297,7 +313,21 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
                 : undefined}
         />
     ) : null;
-    const mute = voice.canStop && !recover ? (
+    const muteLabel = voice.muted ? t('voiceSurface.a11y.unmute') : t('voiceSurface.a11y.mute');
+    const mute = voice.canStop && !recover ? (compact ? (
+        // The same icon-only Mute the island and pill use (VoiceTransport): a labelled well with a tooltip.
+        <IconButton
+            testID={`${props.testID}-mute`}
+            iconName={voice.muted ? 'microphone-slash' : 'microphone'}
+            accessibilityLabel={muteLabel}
+            tooltip={muteLabel}
+            size={COMPACT_WELL_SIZE}
+            iconSize={iconSize}
+            selected={voice.muted}
+            disabled={!voice.canMute}
+            onPress={voice.onToggleMute}
+        />
+    ) : (
         <RoundButton
             testID={`${props.testID}-mute`}
             display="secondary"
@@ -305,9 +335,20 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
             style={control}
             disabled={!voice.canMute}
             title={voice.muted ? t('voicePresence.unmute') : t('voicePresence.mute')}
-            accessibilityLabel={voice.muted ? t('voiceSurface.a11y.unmute') : t('voiceSurface.a11y.mute')}
+            accessibilityLabel={muteLabel}
             onPress={voice.onToggleMute}
             leading={<Icon name={voice.muted ? 'microphone-slash' : 'microphone'} size={iconSize} color={theme.colors.text.secondary} />}
+        />
+    )) : null;
+    const send = voice.canCommitInput && voice.commitInputLabel && voice.onCommitInput ? (
+        <RoundButton
+            testID={`${props.testID}-send`}
+            display="secondary"
+            size={size}
+            style={control}
+            title={voice.commitInputLabel}
+            onPress={voice.onCommitInput}
+            leading={<Icon name="arrow-up" size={iconSize} color={theme.colors.text.secondary} />}
         />
     ) : null;
     const interrupt = props.model.canBargeIn ? (
@@ -338,7 +379,7 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
             testID={`${props.testID}-end`}
             display="destructive"
             size={size}
-            style={control}
+            style={props.sheet ? control : styles.endTrailing}
             title={t('voicePresence.end')}
             accessibilityLabel={t('voiceAssistant.endVoice')}
             onPress={voice.onToggle}
@@ -346,11 +387,11 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
         />
     ) : null;
     return (
-        <View style={[styles.controls, props.sheet ? styles.controlsSheet : null]}>
+        <View testID={`${props.testID}-controls`} onLayout={onRowLayout} style={[styles.controls, props.sheet ? styles.controlsSheet : null]}>
             {recover ?? mute}
+            {send}
             {interrupt}
             {cancelReply}
-            {props.sheet ? null : <View style={styles.grow} />}
             {end}
         </View>
     );
@@ -387,10 +428,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     handoffStatus: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, flexShrink: 1 },
     handoffStatusTrailing: { marginLeft: 'auto', flexShrink: 0, maxWidth: '60%' },
     handoffLabel: {  flexShrink: 1, ...Typography.variant('meta'),  color: theme.colors.text.secondary },
-    controls: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
+    // Wraps instead of clipping: the Companion column is narrower than the popover, and Send adds a third control.
+    controls: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.s6 },
     controlsSheet: { gap: theme.space.s8 },
     sheetControl: { flex: 1 },
     endedControls: { gap: theme.space.s8, justifyContent: 'flex-start' },
     startAgain: { color: theme.colors.text.secondary },
-    grow: { flex: 1 },
+    endTrailing: { marginLeft: 'auto' },
 }));

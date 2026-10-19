@@ -6,7 +6,7 @@ import {
     collectHostText,
     createSessionFixture,
     invokeTestInstanceHandler,
-    renderScreen,
+    renderScreen as renderAppScreen,
     standardCleanup,
 } from '@/dev/testkit';
 import { resolveBuiltInPetPackage } from '@/components/pets/builtIns/builtInPetRegistry';
@@ -15,7 +15,9 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { StorageState } from '@/sync/store/types';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 
 type PetAppShellCompanionTestState = {
     account: {
@@ -50,7 +52,6 @@ const settingsState = vi.hoisted((): PetAppShellCompanionTestState => ({
         petsDismissedCompanionTrayItemKeys: [],
     },
 }));
-const applyLocalSettingsSpy = vi.hoisted(() => vi.fn());
 const executePetCompanionActionSpy = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const reducedMotionState = vi.hoisted(() => ({ enabled: false }));
 const useActivityAttentionSourceSpy = vi.hoisted(() => vi.fn());
@@ -92,6 +93,33 @@ function enableAccountPetsForTest(petId = 'milo') {
     };
 }
 
+const initialStorageState = storage.getState();
+
+function applyFixtureState() {
+    storage.setState({
+        settings: { ...settingsDefaults, ...settingsState.account },
+        localSettings: { ...localSettingsDefaults, ...settingsState.local },
+        sessionMessages: {},
+        sessionPending: {},
+        sessionListRowsByServerId: {
+            'server-a': Object.fromEntries(activityState.sessions.map(session => [session.id, buildSessionListRenderableFromSession(session)])),
+        },
+        ordinarySessionListMembershipByServerId: { 'server-a': activityState.sessions.map(session => session.id) },
+    });
+}
+
+async function renderScreen(element: React.ReactElement) {
+    applyFixtureState();
+    const screen = await renderAppScreen(element);
+    return {
+        ...screen,
+        update: async (next: React.ReactElement) => {
+            await act(async () => { applyFixtureState(); });
+            await screen.update(next);
+        },
+    };
+}
+
 function createActivitySource(sessions: readonly Session[]): ActivityAttentionSource {
     return {
         isDataReady: true,
@@ -113,7 +141,17 @@ function createActivitySource(sessions: readonly Session[]): ActivityAttentionSo
             })),
         },
         concurrentSessionListCacheByServerId: {},
-        serverProfilesById: {},
+        serverProfilesById: {
+            'server-a': {
+                id: 'server-a',
+                name: 'Server A',
+                serverUrl: 'https://a.example.test',
+                createdAt: 1,
+                updatedAt: 1,
+                lastUsedAt: 1,
+                source: 'manual',
+            },
+        },
         activeServer: null,
     };
 }
@@ -159,67 +197,6 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     },
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
-    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-    const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
-    const { buildSessionListRenderableFromSession } = await import('@/sync/domains/session/listing/sessionListRenderable');
-    const readAccountSettings = (): typeof settingsDefaults => ({
-        ...settingsDefaults,
-        ...settingsState.account,
-    });
-    const readLocalSettings = (): typeof localSettingsDefaults => ({
-        ...localSettingsDefaults,
-        ...settingsState.local,
-    });
-    const createStorageSnapshot = (): StorageState => ({
-        ...actual.storage.getInitialState(),
-        sessionMessages: {},
-        sessionPending: {},
-        sessionListRowsByServerId: {
-            'server-a': Object.fromEntries(
-                activityState.sessions.map((session) => [
-                    session.id,
-                    buildSessionListRenderableFromSession(session),
-                ]),
-            ),
-        },
-        ordinarySessionListMembershipByServerId: {
-            'server-a': activityState.sessions.map((session) => session.id),
-        },
-    });
-    const storage = Object.assign(
-        (selector?: (state: StorageState) => unknown) => {
-            const snapshot = createStorageSnapshot();
-            return typeof selector === 'function' ? selector(snapshot) : snapshot;
-        },
-        {
-            getState: createStorageSnapshot,
-            getInitialState: createStorageSnapshot,
-            setState: () => undefined,
-            subscribe: () => () => undefined,
-            destroy: () => undefined,
-        },
-    ) as typeof actual.storage;
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: {
-            ...actual,
-            storage,
-            useSettings: readAccountSettings,
-            useSetting: ((name) => readAccountSettings()[name]) as typeof actual.useSetting,
-            useLocalSettings: readLocalSettings,
-            useLocalSetting: ((name) => readLocalSettings()[name]) as typeof actual.useLocalSetting,
-            useAllSessions: () => activityState.sessions,
-        },
-    });
-});
-
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplyLocalSettings: () => applyLocalSettingsSpy,
-}));
-
 vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
     createDefaultActionExecutor: () => ({
         execute: executePetCompanionActionSpy,
@@ -231,6 +208,7 @@ describe('PetAppShellCompanionMount', () => {
         vi.restoreAllMocks();
         vi.useRealTimers();
         standardCleanup();
+        storage.setState(initialStorageState, true);
         platformState.os = 'web';
         platformState.tauri = false;
         featureState.companion = { state: 'enabled' };
@@ -245,7 +223,6 @@ describe('PetAppShellCompanionMount', () => {
             petsCompanionSizeScale: 1,
             petsDismissedCompanionTrayItemKeys: [],
         };
-        applyLocalSettingsSpy.mockReset();
         reducedMotionState.enabled = false;
         useActivityAttentionSourceSpy.mockClear();
         activityState.sessions = [];
@@ -336,11 +313,11 @@ describe('PetAppShellCompanionMount', () => {
         });
 
         expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-dismiss-web')).toBeNull();
-        expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
-            petsDismissedCompanionTrayItemKeys: expect.arrayContaining([
+        expect(storage.getState().localSettings.petsDismissedCompanionTrayItemKeys).toEqual(
+            expect.arrayContaining([
                 JSON.stringify(['waiting', 'server-a', 'session-dismiss-web', '1']),
             ]),
-        });
+        );
     });
 
     it('opens and replies to a secondary-Home activity item with its exact Home context', async () => {
@@ -445,9 +422,7 @@ describe('PetAppShellCompanionMount', () => {
             petsSelectedPetRef: { kind: 'builtIn', petId: 'fury' },
         };
 
-        await act(async () => {
-            screen.tree.update(<PetAppShellCompanionMount />);
-        });
+        await screen.update(<PetAppShellCompanionMount />);
 
         expect(screen.root.findAllByType('Image')[0]?.props.source).toBe(
             resolveBuiltInPetPackage('fury').spritesheetSource,

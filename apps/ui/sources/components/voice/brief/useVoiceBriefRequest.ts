@@ -20,7 +20,7 @@ type PendingBrief = { attemptId: string | null; accountLifetime: ReturnType<type
 
 function briefNeedsRecovery(delivery: Delivery, voice: Pick<VoiceAttemptControlProjection, 'availability' | 'live'>,
     status: VoiceSessionStatus, retryRequired: boolean, started: boolean): boolean {
-    return (delivery !== 'stopped' && status === 'error')
+    return (delivery !== 'stopped' && (status === 'error' || retryRequired))
         || (delivery === 'waiting' && (voice.availability !== 'ready' || (!voice.live && (retryRequired || started))));
 }
 

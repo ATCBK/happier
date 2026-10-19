@@ -1758,7 +1758,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
                 stopPropagation: vi.fn(),
             });
         });
-        expect(setPointerCapture).toHaveBeenCalledWith(41);
+        expect(setPointerCapture).not.toHaveBeenCalled();
 
         await act(async () => {
             fakeWindow.dispatchEvent(new TestPointerEvent('pointermove', {
@@ -1769,6 +1769,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
             }));
         });
 
+        expect(setPointerCapture).toHaveBeenCalledWith(41);
         expect(applyDesktopPetOverlayDragDeltaMock).toHaveBeenCalledWith({
             pointerId: 41,
             dx: 48,

@@ -9,6 +9,8 @@ import {
     type VoiceAssistantScope,
 } from '@/voice/runtime/voiceTargetStore';
 import { resolveVoiceAdapterSurfaceCapabilities } from '@/voice/session/voiceAdapterRegistry';
+import { getVoiceSessionRestartTarget } from '@/voice/session/voiceSessionStore';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 
 import type { VoiceSurfaceVariant } from './voiceSurfaceTypes';
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -30,6 +32,7 @@ export function useVoiceSurfaceTargetState(params: Readonly<{
     voice: any;
 }>) {
     const ui = params.voice?.ui ?? {};
+    const accountScope = useActiveServerAccountScope();
     const scopeDefault = ui.scopeDefault === 'session' ? 'session' : 'global';
     const activityFeedEnabled = params.voice?.ui?.activityFeedEnabled === true;
     const exactFocusedSessionAddress = useFocusedSessionAddress();
@@ -47,6 +50,7 @@ export function useVoiceSurfaceTargetState(params: Readonly<{
                 ? statedSessionAddress : normalizeSessionAddress(params.serverId, params.sessionId) }
             : { kind: 'default' },
         scopeDefault, allowsGlobalStart,
+        restartTarget: getVoiceSessionRestartTarget(params.providerId, accountScope),
         focusedSessionAddress: exactFocusedSessionAddress, lastFocusedSessionAddress,
     });
     const bindingScope: VoiceAssistantScope = target.kind;

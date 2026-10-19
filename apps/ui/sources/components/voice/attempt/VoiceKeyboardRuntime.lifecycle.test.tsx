@@ -145,8 +145,15 @@ describe('Voice default-target lifecycle', () => {
         const controller = createVoiceSessionLifecycleController({ captureAdmission: createVoiceCaptureAdmissionController() });
         controller.setConfiguredProviderId(entry.providerId);
         setVoiceSessionLifecycleController(controller);
-        const unsubscribe = controller.subscribe(() => setVoiceSessionSnapshot(controller.getSnapshot()));
-        setVoiceSessionSnapshot(controller.getSnapshot());
+        const publish = () => {
+            const snapshot = controller.getSnapshot();
+            const binding = snapshot.sessionId ? voiceSessionBindingStore.getState().getByControlSessionId(snapshot.sessionId) : null;
+            const accountScope = getStorage().getState().profileScope;
+            setVoiceSessionSnapshot(snapshot, binding, accountScope ? { accountScope,
+                targetSessionAddress: controller.getAttemptTargetSessionAddress(), conversationScope: null } : null);
+        };
+        const unsubscribe = controller.subscribe(publish);
+        publish();
         dismissVoiceSessionEndedAttempt();
         let toggle: () => boolean = () => false;
         let glanceToggle = () => {};
@@ -184,6 +191,34 @@ describe('Voice default-target lifecycle', () => {
             await act(async () => { glanceToggle(); });
             await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
             expect(starts).toEqual([expected, expected, expected]);
+            // An explicitly targeted composer attempt keeps its target when the
+            // app-level shortcut ends and restarts it, even with Global as the idle default.
+            await act(async () => { expect(toggle()).toBe(true); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            const explicitTarget = { serverId: account.home.id, sessionId: 'session-a' };
+            await act(async () => { await controller.toggle(explicitTarget); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            await act(async () => { expect(toggle()).toBe(true); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            await act(async () => { setFocusedSessionId('session-b', 'server-b'); expect(toggle()).toBe(true); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            expect(starts.slice(-2)).toEqual([explicitTarget, explicitTarget]);
+            // A provider failure is still the admitted Session attempt. The
+            // rebound keyboard command must not apply the idle Global default.
+            await act(async () => { expect(toggle()).toBe(true); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            sdk.startSession.mockRejectedValueOnce(Object.assign(new Error('provider unavailable'), { code: 'provider_unavailable' }));
+            await act(async () => { await expect(controller.toggle(explicitTarget)).rejects.toMatchObject({ code: 'provider_unavailable' }); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().errorRecoveryAction).toBe('retry')));
+            await act(async () => { expect(toggle()).toBe(true); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            expect(starts.at(-1)).toEqual(explicitTarget);
+            await act(async () => { expect(toggle()).toBe(true); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            await act(async () => { dismissVoiceSessionEndedAttempt(); setFocusedSessionId('session-a', account.home.id); });
+            await act(async () => { expect(toggle()).toBe(true); });
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            expect(starts.at(-1)).toEqual(expected);
             // Remove the runtime while keeping the command provider and its caller alive.
             // Calling a hook closure after its entire provider unmounted is not a product flow.
             await screen.update(<KeyboardShortcutProvider handlers={{}}><Invoke /></KeyboardShortcutProvider>);

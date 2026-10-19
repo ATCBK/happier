@@ -33,6 +33,7 @@ import {
     getVoiceSessionArrivedAttemptId,
     getVoiceSessionEndedAttempt,
     subscribeToVoiceSessionEndedAttempt,
+    getVoiceSessionRestartTarget,
     type VoiceSessionEndedAttempt,
 } from '@/voice/session/voiceSessionStore';
 import { useNavigationFocusReturn } from '@/utils/navigation/useNavigationFocusReturn';
@@ -188,6 +189,13 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     const providerId = resolveVoicePresentedProviderId(snap, canonicalVoice, voiceProviderRegistry) ?? 'off';
     const capabilities = resolveVoiceAdapterSurfaceCapabilities(providerId, voice);
     const voiceAgentFeatureEnabled = useFeatureEnabled('voice.agent');
+    const ended = React.useSyncExternalStore(
+        subscribeToVoiceSessionEndedAttempt,
+        getVoiceSessionEndedAttempt,
+        getVoiceSessionEndedAttempt,
+    );
+    const presentedEnded = snap.status === 'disconnected' ? ended : null;
+    const currentAccountScope = useActiveServerAccountScope();
     const surfaceState = resolveVoiceSurfaceState({
         status: snap.status,
         mode: snap.mode,
@@ -223,11 +231,12 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     const lastFocusedSessionAddress = useVoiceTargetStore((state) => explicitIntent.kind === 'default' ? state.lastFocusedSessionAddress : null);
     const resolvedIdleTarget = React.useMemo(() => resolveVoiceIdleTarget({
         intent: explicitIntent,
+        restartTarget: getVoiceSessionRestartTarget(providerId, currentAccountScope),
         scopeDefault: canonicalVoice.ui.scopeDefault,
         allowsGlobalStart: capabilities?.allowsGlobalStart === true,
         focusedSessionAddress,
         lastFocusedSessionAddress,
-    }), [explicitIntent, canonicalVoice.ui.scopeDefault, capabilities?.allowsGlobalStart, focusedSessionAddress, lastFocusedSessionAddress]);
+    }), [explicitIntent, presentedEnded, expectedAttempt, snap, providerId, currentAccountScope, canonicalVoice.ui.scopeDefault, capabilities?.allowsGlobalStart, focusedSessionAddress, lastFocusedSessionAddress]);
     const bindingScope = resolvedIdleTarget.kind;
     const startSessionAddress = resolvedIdleTarget.kind === 'session' ? resolvedIdleTarget.sessionAddress : null;
     const startSessionId = startSessionAddress?.sessionId ?? null;
@@ -379,18 +388,11 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
      * three reference comparisons instead of a walk over every persisted binding.
      */
     const snapAdapterId = snap.adapterId ?? null;
-    const ended = React.useSyncExternalStore(
-        subscribeToVoiceSessionEndedAttempt,
-        getVoiceSessionEndedAttempt,
-        getVoiceSessionEndedAttempt,
-    );
-    const presentedEnded = snap.status === 'disconnected' ? ended : null;
     const arrivedAttemptId = React.useSyncExternalStore(
         subscribeToVoiceSessionEndedAttempt,
         getVoiceSessionArrivedAttemptId,
         getVoiceSessionArrivedAttemptId,
     );
-    const currentAccountScope = useActiveServerAccountScope();
     const presentedTarget = presentedEnded
         ? areServerAccountScopesEqual(presentedEnded.accountScope, currentAccountScope)
             ? presentedEnded.targetSessionAddress : null

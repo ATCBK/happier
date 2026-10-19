@@ -1,15 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture as createBaseSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { Message } from "@happier-dev/session-core/messages";
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createReducer } from "@happier-dev/session-core/reducer";
 import type { SessionMessages } from '@/sync/store/domains/messages';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import { usePetCompanionActivityModel } from './usePetCompanionActivityModel';
 import { PET_COMPANION_ACTIVITY_EXPIRY_MS } from './petCompanionActivityConstants';
+
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+installDisconnectedServerSocketBoundary();
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+let serverId = '';
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+
+function createSessionFixture(...args: Parameters<typeof createBaseSessionFixture>) {
+    // Runtime-fallback cases retain the canonical owner's supported pre-viewer input shape.
+    return { ...createBaseSessionFixture(...args), serverId };
+}
 
 function createSessionMessages(messages: readonly Message[]): SessionMessages {
     const messagesById: Record<string, Message> = {};
@@ -38,13 +55,13 @@ function buildSessionListProjection(sessions: readonly ReturnType<typeof createS
         sessions.map((session) => [session.id, buildSessionListRenderableFromSession(session)]),
     );
     return {
-        sessionListRowsByServerId: { 'server-a': rows },
-        ordinarySessionListMembershipByServerId: { 'server-a': sessions.map((session) => session.id) },
+        sessionListRowsByServerId: { [serverId]: rows },
+        ordinarySessionListMembershipByServerId: { [serverId]: sessions.map((session) => session.id) },
         sessionListIndexByServerId: {
-            'server-a': sessions.map((session) => ({
+            [serverId]: sessions.map((session) => ({
                 type: 'session' as const,
                 sessionId: session.id,
-                serverId: 'server-a',
+                serverId: serverId,
                 serverName: 'Server A',
             })),
         },
@@ -52,13 +69,22 @@ function buildSessionListProjection(sessions: readonly ReturnType<typeof createS
 }
 
 describe('usePetCompanionActivityModel', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         vi.spyOn(Date, 'now').mockReturnValue(4_000);
+        await homes.reset();
+        serverId = await homes.addHome({ name: 'Server A', serverUrl: 'https://pet-activity.test',
+            accountId: 'pet-owner', currentAccount: true });
+        await loadSyncSingletonForTests();
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://pet-activity.test',
+            accountId: 'pet-owner', request: homes.request });
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
+    afterEach(async () => {
         standardCleanup();
+        await connection?.dispose();
+        connection = undefined;
+        await homes.reset();
+        vi.restoreAllMocks();
     });
 
     it.each([
@@ -67,13 +93,14 @@ describe('usePetCompanionActivityModel', () => {
         { encryptionMode: 'plain' as const, encryptedContentAvailability: undefined, readable: true },
     ])('gates retained pet copy by canonical availability: $encryptionMode/$encryptedContentAvailability', async ({ encryptionMode, encryptedContentAvailability, readable }) => {
         const previousState = storage.getState();
-        const session = createSessionFixture({
+        const base = createSessionFixture({
             id: 'private-pet', encryptionMode, encryptedContentAvailability,
             active: true, presence: 'online', seq: 2, lastViewedSessionSeq: 0,
             createdAt: 1_000, updatedAt: 2_000, activeAt: 2_000,
             pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0, pendingRequestObservedAt: 2_000,
             metadata: { path: '/private/path', host: 'private-host', name: 'Private retained title' },
         });
+        const session = { ...base, viewer: createSessionOwnerViewerFixture(base) };
         const message: Message = {
             kind: 'agent-text', id: 'private-message', localId: null, createdAt: 2_000,
             text: 'Private retained transcript', isThinking: false,
@@ -90,7 +117,7 @@ describe('usePetCompanionActivityModel', () => {
             const model = hook.getCurrent();
             await hook.unmount();
             expect(model.trayItems).toHaveLength(1);
-            expect(model.trayItems[0]?.address).toEqual({ serverId: 'server-a', sessionId: session.id });
+            expect(model.trayItems[0]?.address).toEqual({ serverId: serverId, sessionId: session.id });
             if (readable) {
                 expect(model.trayItems[0]?.title).toBe('Private retained title');
                 expect(model.trayItems[0]?.subtitle).toBe(model.trayItems[0]?.contextLine);
@@ -329,7 +356,7 @@ describe('usePetCompanionActivityModel', () => {
             seq: 1,
             createdAt: 1_000,
             updatedAt: 2_000,
-            activeAt: 2_000,
+            activeAt: 129_000,
             lastViewedSessionSeq: 1,
             latestTurnStatus: 'in_progress',
             latestTurnStatusObservedAt: 129_000,
@@ -410,7 +437,7 @@ describe('usePetCompanionActivityModel', () => {
             seq: 1,
             createdAt: 1_000,
             updatedAt: 2_000,
-            activeAt: 2_000,
+            activeAt: 129_000,
             lastViewedSessionSeq: 1,
             latestTurnStatus: 'in_progress',
             latestTurnStatusObservedAt: 129_000,
@@ -426,14 +453,14 @@ describe('usePetCompanionActivityModel', () => {
                 isDataReady: true,
                 sessions: {},
                 sessionListRowsByServerId: {
-                    'server-a': {
+                    [serverId]: {
                         [session.id]: buildSessionListRenderableFromSession(session),
                     },
                 },
-                ordinarySessionListMembershipByServerId: { 'server-a': [session.id] },
+                ordinarySessionListMembershipByServerId: { [serverId]: [session.id] },
                 sessionListIndexByServerId: {
-                    'server-a': [
-                        { type: 'session', sessionId: session.id, serverId: 'server-a', serverName: 'Server A' },
+                    [serverId]: [
+                        { type: 'session', sessionId: session.id, serverId: serverId, serverName: 'Server A' },
                     ],
                 },
                 sessionMessages: {},
@@ -459,7 +486,7 @@ describe('usePetCompanionActivityModel', () => {
                     ...state,
                     sessionListRowsByServerId: {
                         ...state.sessionListRowsByServerId,
-                        'server-a': {
+                        [serverId]: {
                             [bookkeepingSession.id]: buildSessionListRenderableFromSession(bookkeepingSession),
                         },
                     },
@@ -479,7 +506,7 @@ describe('usePetCompanionActivityModel', () => {
                     ...state,
                     sessionListRowsByServerId: {
                         ...state.sessionListRowsByServerId,
-                        'server-a': {
+                        [serverId]: {
                             [meaningfulSession.id]: buildSessionListRenderableFromSession(meaningfulSession),
                         },
                     },
@@ -760,14 +787,14 @@ describe('usePetCompanionActivityModel', () => {
                 isDataReady: true,
                 sessions: {},
                 sessionListRowsByServerId: {
-                    'server-a': {
+                    [serverId]: {
                         [session.id]: buildSessionListRenderableFromSession(session),
                     },
                 },
-                ordinarySessionListMembershipByServerId: { 'server-a': [session.id] },
+                ordinarySessionListMembershipByServerId: { [serverId]: [session.id] },
                 sessionListIndexByServerId: {
-                    'server-a': [
-                        { type: 'session', sessionId: session.id, serverId: 'server-a', serverName: 'Server A' },
+                    [serverId]: [
+                        { type: 'session', sessionId: session.id, serverId: serverId, serverName: 'Server A' },
                     ],
                 },
                 sessionMessages: {},
