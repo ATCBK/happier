@@ -83,7 +83,7 @@ import { resolveSessionActionDefaultBackendTitle } from '@/sync/domains/session/
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
-import { SessionFollowSourcesEditor } from '@/components/sessions/follow/SessionFollowSourcesEditor';
+import { SessionSetupSections } from '@/components/sessions/work/SessionSetupSections';
 import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
 import {
     SESSION_ACTION_ARCHIVE_ID,
@@ -1053,25 +1053,14 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                     </View>
                 ))}
 
-                {/* Activity: what the agent is doing, and whether you hear about it. */}
-                {!contentUnavailable ? followEditor.editor : null}
+                {/* How this agent is set up (coordination lab P1i): Role, Instructions, Memory, Context, Voice,
+                    Triggers, Roles and Notes. Who hears about it, and what it follows, is its People pane. */}
+                {!contentUnavailable && scopedMutationServerId ? (
+                    <SessionSetupSections session={session} serverId={scopedMutationServerId} />
+                ) : null}
+
+                {/* Activity: what the agent is doing. */}
                 {!contentUnavailable ? <ItemGroup title={t('sessionInfo.activity')} description={t('sessionPages.info.activityDescription')}>
-                    {visibleSessionActionIds.has('ui.session.follow') ? (
-                        <View ref={followEditor.anchorRef} collapsable={false}>
-                            <Item
-                                pressableRef={followEditor.triggerRef}
-                                testID="session-info-follow"
-                                title={t('session.follow.editor.title')}
-                                onPress={() => {
-                                    void executeSessionAction({
-                                        actionId: 'ui.session.follow',
-                                        target: sessionActionTarget,
-                                        context: { operations: { openFollowEditor: followEditor.openEditor } },
-                                    });
-                                }}
-                            />
-                        </View>
-                    ) : null}
                     <Item
                         title={t('sessionInfo.sessionStatus')}
                         detail={sessionStatus.statusText}
@@ -1094,11 +1083,6 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         </>
                     ) : null}
                 </ItemGroup> : null}
-                {!contentUnavailable ? <SessionFollowSourcesEditor
-                    destination={session}
-                    serverId={scopedMutationServerId}
-                    destinationMachineId={currentExecutionMachineId}
-                /> : null}
 
                 {/* Continue: new work from where this session is. */}
                 {!contentUnavailable ? <ItemGroup title={t('sessionPages.info.continueTitle')} description={t('sessionPages.info.continueDescription')}>
