@@ -45,10 +45,9 @@ try {
   // 1. Post to an existing human-readable discussion through the generated
   //    Action tree. Discussion creation remains an interactive present-user
   //    operation and is intentionally absent from the PAT SDK. Content is the
-  //    authored document; the daemon owns the Session cipher, so an external
-  //    caller never handles Session keys.
-  const posted = await happier.actions.session.discussion.post({
-    sessionId,
+  //    authored document; the host owns the Discussion key, so an external
+  //    caller never handles Discussion keys.
+  const posted = await happier.actions.discussion.post({
     discussionId,
     localId: 'external-plugin-thread-1-followup',
     content: { v: 1, parts: [{ t: 'text', text: 'Starting a contextual run for this discussion.' }] },
