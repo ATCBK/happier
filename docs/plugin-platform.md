@@ -3748,6 +3748,11 @@ resolver owns this selection; scaffold output and SDK policy fixtures exercise
 the same rule. Other specifiers retain normal package-manager resolution, and an
 explicit SDK registry origin retains registry resolution. Selected packages must
 still satisfy the existing bundled public-author package classification.
+The selected packages' satisfying public runtime dependencies and peers follow
+the same rule, so a declared helper package can bring its public UI dependency
+without asking npmjs for an unpublished version. Explicit bundled dependencies
+keep their existing nested package closure; package development tools do not
+become author dependencies.
 
 Prepublication dependency preparation uses a content-addressed file override
 for the complete SDK package closure. When the CLI runs from the source
@@ -3757,11 +3762,6 @@ prepare the requested public packages and their dependencies; copying an older
 Packaged hosts and admitted source bundles use their supplied package closure.
 Repeated preparations reuse its pnpm
 virtual-store identity; the transient workspace config selects pnpm's native
-The selected packages' satisfying public runtime dependencies and peers follow
-the same rule, so a declared helper package can bring its public UI dependency
-without asking npmjs for an unpublished version. Explicit bundled dependencies
-keep their existing nested package closure; package development tools do not
-become author dependencies.
 immediate orphan pruning when the closure changes. Both temporary package roots
 and the workspace config are released after preparation. Published registry
 resolution keeps its existing policy.
