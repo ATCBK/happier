@@ -209,7 +209,7 @@ export function HappierDataTable(props: HappierDataRowsProps) {
                 ...(position === 0 && props.marks?.[rowIndex] ? { flexDirection: 'row', alignItems: 'baseline', columnGap: HAPPIER_DATA_METRICS.columnGapPx } : {}) }}>
                 {position === 0 && props.marks?.[rowIndex] ? <RowMark mark={props.marks[rowIndex]!} theme={props.theme}
                   styles={text} testID={props.testID ? `${props.testID}-mark-${rowIndex}` : undefined} /> : null}
-                <HappierText style={{ ...(position === 0 ? text.body : { ...text.body, color: props.theme.colors.secondaryText }),
+                <HappierText style={{ ...(position === 0 || typeof value === 'number' ? text.body : { ...text.body, color: props.theme.colors.secondaryText }),
                   ...align(index, position), ...(position === 0 ? { flexShrink: 1 } : {}) }} numberOfLines={1} tabularNumbers={typeof value === 'number' || index === lastVisible}>
                   {value === undefined ? '' : formatHappierDataValue(value, text.locale)}
                 </HappierText>

@@ -77,7 +77,9 @@ export function useHappierDataTextStyles(theme: HappierUiTheme): HappierDataText
   return useMemo(() => {
     const body = resolveHappierTypeRoleStyle('meta', theme, typography);
     const caption = resolveHappierTypeRoleStyle('micro', theme, typography);
-    const label = resolveHappierTypeRoleStyle('label', theme, typography);
+    // A column header sits at the cell's size with the label's weight: it names the column without
+    // outweighing the widget title above it or the cells below it.
+    const header = resolveHappierTypeRoleStyle('meta', theme, typography, 'medium');
     const semiBold = (role: HappierPortableStyle) => ({ ...role, ...resolveHappierTextStepStyle({ weight: 'semiBold',
       fontSize: role.fontSize ?? theme.typography.body.fontSize, lineHeight: role.lineHeight ?? theme.typography.body.lineHeight }, typography) });
     return {
@@ -86,7 +88,7 @@ export function useHappierDataTextStyles(theme: HappierUiTheme): HappierDataText
       strong: { ...semiBold(body), color: theme.colors.text },
       caption: { ...caption, color: theme.colors.mutedText },
       captionStrong: { ...semiBold(caption), color: theme.colors.text },
-      header: { ...label, color: theme.colors.secondaryText },
+      header: { ...header, color: theme.colors.secondaryText },
       locale: localization?.locale,
     };
   }, [localization?.locale, theme, typography]);

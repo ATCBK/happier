@@ -124,6 +124,27 @@ describe('public data nodes through React Native Web', () => {
       mount.unmount();
     }
   });
+  it('sets a column header at the cell size so it never outweighs the cells, and reads the figures in primary ink', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <DataTable testID="hier" label="Orders by channel" columns={[{ label: 'Channel' }, { label: 'Orders' }]} rows={[['Web', 12]]} />
+      </PluginUiProvider>,
+    );
+    try {
+      const header = query(mount.container, 'hier-header-1')!;
+      const figure = Array.from(query(mount.container, 'hier-row-0')!.querySelectorAll<HTMLElement>('div')).find((node) => node.textContent === '12' && node.children.length === 0)!;
+      const rgb = (hex: string) => {
+        const n = Number.parseInt(hex.slice(1), 16);
+        return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+      };
+      expect(header.style.fontSize).toBe(figure.style.fontSize);
+      expect(Number(header.style.fontWeight)).toBeGreaterThan(Number(figure.style.fontWeight));
+      expect(figure.style.color).toBe(rgb(context.theme.colors.text));
+    } finally {
+      mount.unmount();
+    }
+  });
   it('draws a funnel step as a share of the largest step', () => {
     const context = createSurfaceContext();
     const mount = mountThroughReactNativeWeb(
