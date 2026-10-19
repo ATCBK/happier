@@ -34,11 +34,15 @@ export interface MachineAccessFacts {
 }
 const refusal = (code: MachineAccessRefusalCode): MachineAccessRefusalV1 => ({ kind: 'refused', code });
 
-const MACHINE_ACCESS_FACTS_SELECT = {
+const MACHINE_RESOURCE_FACTS_SELECT = {
         id: true, kind: true, accountId: true, metadata: true, metadataVersion: true,
         daemonState: true, daemonStateVersion: true, dataEncryptionKey: true,
         installationId: true, active: true, revokedAt: true, replacedByMachineId: true,
         account: { select: { ...ACCOUNT_DISPLAY_PROFILE_SELECT, encryptionMode: true, status: true } },
+    } as const;
+
+const MACHINE_ACCESS_FACTS_SELECT = {
+        ...MACHINE_RESOURCE_FACTS_SELECT,
         accountGrants: { select: { accountId: true, accessLevel: true, account: { select: { status: true, ...ACCOUNT_DISPLAY_PROFILE_SELECT } } } },
         teamGrants: { select: { teamId: true, accessLevel: true, team: { select: { name: true, archivedAt: true,
             memberships: { select: { accountId: true, status: true, account: { select: { status: true } } } },
@@ -203,8 +207,25 @@ export interface MachineAdmissionInput extends MachineActor {
     actionId?: string;
 }
 export async function resolveMachineAdmissionInTx(tx: Tx, input: MachineAdmissionInput): Promise<MachineAdmission> {
-    const row = await readFactsInTx(tx, input.machineId);
-    return resolveMachineAdmissionFromFactsInTx(tx, row, input);
+    const rows = await readMachineAdmissionFactsInTx(tx, input.actorAccountId, [input.machineId]);
+    return resolveMachineAdmissionFromFactsInTx(tx, rows.get(input.machineId) ?? null, input);
+}
+
+/** Ownership decides the role without reading unrelated foreign grant graphs. */
+async function readMachineAdmissionFactsInTx(tx: Tx, actorAccountId: string, machineIds: readonly string[]): Promise<ReadonlyMap<string, MachineFacts>> {
+    const rows = await tx.machine.findMany({ where: { id: { in: [...machineIds] } }, select: MACHINE_RESOURCE_FACTS_SELECT });
+    const result = new Map<string, MachineFacts>();
+    for (const row of rows) if (row.accountId === actorAccountId) {
+        // Account status, mode, content, installation and lifecycle still reach
+        // the same admission policy. Grants cannot change an owner's role.
+        result.set(row.id, { ...row, accountGrants: [], teamGrants: [], groupGrants: [] });
+    }
+    const foreignIds = rows.filter(row => row.accountId !== actorAccountId).map(row => row.id);
+    if (foreignIds.length > 0) {
+        const foreignRows = await tx.machine.findMany({ where: { id: { in: foreignIds } }, select: MACHINE_ACCESS_FACTS_SELECT });
+        for (const row of foreignRows) result.set(row.id, row);
+    }
+    return result;
 }
 
 /** Set-oriented default-use admission; point and batch readers share every policy decision. */
@@ -213,8 +234,7 @@ export async function resolveMachineAdmissionsInTx(tx: Tx, input: Readonly<{
 }>): Promise<ReadonlyMap<string, MachineAdmission>> {
     const machineIds = [...new Set(input.machineIds)];
     if (machineIds.length === 0) return new Map();
-    const rows = await tx.machine.findMany({ where: { id: { in: machineIds } }, select: MACHINE_ACCESS_FACTS_SELECT });
-    const byId = new Map(rows.map(row => [row.id, row]));
+    const byId = await readMachineAdmissionFactsInTx(tx, input.actorAccountId, machineIds);
     const result = new Map<string, MachineAdmission>();
     for (const machineId of machineIds) result.set(machineId, await resolveMachineAdmissionFromFactsInTx(tx, byId.get(machineId) ?? null,
         { actorAccountId: input.actorAccountId, machineId }));

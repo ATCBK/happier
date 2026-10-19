@@ -28,6 +28,10 @@ export function createMachineAdmissionPersistenceBoundary(custodian: string | ((
             throw new Error('Unexpected Machine-admission database command');
         },
         machine: {
+            findMany: async ({ where }: { where: { id: { in: readonly string[] } } }): Promise<PersistedAdmissionMachineRow[]> => {
+                const rows = await Promise.all(where.id.in.map(id => persistence.machine.findUnique({ where: { id } })));
+                return rows.filter(row => row !== null);
+            },
             findUnique: async ({ where }: { where: { id: string } }) => {
                 const availability = await readAvailability(where.id);
                 if (availability === 'missing') return null;
