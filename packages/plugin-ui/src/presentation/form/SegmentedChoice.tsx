@@ -127,6 +127,11 @@ export type HappierSegmentedChoiceProps = Readonly<{
    */
   scrollable?: boolean;
   /**
+   * A track that takes its container's whole width, its segments sharing it equally (a panel's
+   * level choice above what it means). Without it the track is content-sized.
+   */
+  fill?: boolean;
+  /**
    * Where the chosen value comes from. `set` (default): the person chose it, drawn on the filled thumb.
    * `inherited`: it follows a default (a tool on its server's default), drawn as an outlined thumb with
    * the label in secondary ink, and announced with a "default" suffix. Selection semantics are unchanged.
@@ -191,6 +196,7 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
   // spreads them across the width it has (a narrow pane, an enlarged text size), instead of clipping.
   // The natural width is measured only while it is roomy, so the two states never fight over a size.
   const fitsContainer = !props.wrap && !scrollable;
+  const fill = fitsContainer && props.fill === true;
   const fit = useRef({ available: 0, natural: 0 });
   const [tight, setTight] = useState(false);
   const labelSignature = `${size}\u0000${props.segments.map((segment) => segment.label).join('\u0000')}`;
@@ -203,12 +209,14 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
     if (available === 0 || natural === 0) return;
     setTight(natural + HAPPIER_SEGMENTED_METRICS.trackPaddingPx * 2 > available + 0.5);
   };
-  const segmentPadding = tight ? HAPPIER_SEGMENTED_METRICS.segmentPaddingTightPx : horizontalPadding;
+  // A filled track spreads its segments over the width it is given, so it never needs the roomy padding.
+  const stretch = tight || fill;
+  const segmentPadding = stretch ? HAPPIER_SEGMENTED_METRICS.segmentPaddingTightPx : horizontalPadding;
   const fitRow = (segments: ReactNode) => fitsContainer ? (
     <View
-      style={tight ? { flexDirection: 'row', flexGrow: 1, minWidth: 0 } : { flexDirection: 'row', flexShrink: 0, alignSelf: 'flex-start' }}
+      style={stretch ? { flexDirection: 'row', flexGrow: 1, minWidth: 0 } : { flexDirection: 'row', flexShrink: 0, alignSelf: 'flex-start' }}
       onLayout={(event) => {
-        if (!tight) fit.current.natural = event.nativeEvent.layout.width;
+        if (!stretch) fit.current.natural = event.nativeEvent.layout.width;
         refit();
       }}
     >{segments}</View>
@@ -224,7 +232,7 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
       style={{
         flexDirection: 'row',
         flexWrap: props.wrap ? 'wrap' : 'nowrap',
-        alignSelf: tight ? 'stretch' : 'flex-start',
+        alignSelf: stretch ? 'stretch' : 'flex-start',
         ...(scrollable ? undefined : { maxWidth: '100%' }),
         padding: HAPPIER_SEGMENTED_METRICS.trackPaddingPx,
         borderRadius: HAPPIER_SEGMENTED_METRICS.trackRadiusPx[size],
@@ -278,7 +286,8 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
               justifyContent: 'center',
               paddingVertical: verticalPadding,
               paddingHorizontal: segmentPadding,
-              ...(tight ? { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 } : undefined),
+              ...(fill ? { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 }
+                : tight ? { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 } : undefined),
               borderRadius: HAPPIER_SEGMENTED_METRICS.segmentRadiusPx[size],
               ...happierFocusRingStyle({ visible: state.focused, color: props.colors.focusRing }),
               backgroundColor: segment.selected && !inherited ? paintColor(props.colors.thumb, undefined, 'solidControl') : 'transparent',
@@ -321,7 +330,7 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
       }))}
     </View>
   );
-  if (!scrollable) return fitsContainer ? <View style={{ alignSelf: tight ? 'stretch' : 'flex-start', maxWidth: '100%' }} onLayout={(event) => { fit.current.available = event.nativeEvent.layout.width; refit(); }}>{track}</View> : track;
+  if (!scrollable) return fitsContainer ? <View style={{ alignSelf: stretch ? 'stretch' : 'flex-start', maxWidth: '100%' }} onLayout={(event) => { fit.current.available = event.nativeEvent.layout.width; refit(); }}>{track}</View> : track;
   return (
     <ScrollView
       ref={scrollRef}

@@ -9727,7 +9727,15 @@ const sessionFollowTranslations: Pick<Record<
             "title": "Dieser Sitzung folgen",
             "subtitle": "Erhalte die Updates, die dir wichtig sind.",
             "ownerSubtitle": "Dir gehört diese Sitzung, daher erreichen dich ihre Updates immer.",
-            "externalAttachedOnly": "Die Hintergrundsynchronisierung ist aus, daher kommen Updates möglicherweise nur an, während diese Sitzung verbunden ist."
+            "externalAttachedOnly": "Die Hintergrundsynchronisierung ist aus, daher kommen Updates möglicherweise nur an, während diese Sitzung verbunden ist.",
+            "sheetTitle": ({ name }) => `Folgen: ${name}`,
+            "sheetSubtitle": "Wie viel du davon mitbekommst",
+            "ownerNote": "Sie gehört dir, also folgst du ihr immer",
+            "alsoFollow": ({ facts, count }) => `${facts} ${count === 1 ? "folgt ihr auch" : "folgen ihr auch"}`,
+            "people": "Personen",
+            "quietHours": ({ range }) => `Ruhezeiten ${range} · Nichts wird gepusht; alles landet trotzdem im Eingang`,
+            "quietHoursOn": "Ruhezeiten sind aktiv · Nichts wird gepusht; alles landet trotzdem im Eingang",
+            "notFollowing": "Du folgst ihr noch nicht. Folge ihr, um zu erfahren, wenn sie dich braucht."
         },
         "level": {
             "none": "Keine Benachrichtigungen",

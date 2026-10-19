@@ -9724,7 +9724,15 @@ const sessionFollowTranslations: Pick<Record<
             "title": "關注此工作階段",
             "subtitle": "接收對你重要的更新。",
             "ownerSubtitle": "這個工作階段屬於你，因此它的更新一定會送達。",
-            "externalAttachedOnly": "背景同步已關閉，因此只有在此工作階段處於連線狀態時才可能收到更新。"
+            "externalAttachedOnly": "背景同步已關閉，因此只有在此工作階段處於連線狀態時才可能收到更新。",
+            "sheetTitle": ({ name }) => `關注${name}`,
+            "sheetSubtitle": "你會收到多少消息",
+            "ownerNote": "這是你的工作階段，因此你始終關注它",
+            "alsoFollow": ({ facts, count }) => `${facts}也在關注`,
+            "people": "成員",
+            "quietHours": ({ range }) => `勿擾時段 ${range} · 不會推播；一切仍會進入收件匣`,
+            "quietHoursOn": "勿擾時段已開啟 · 不會推播；一切仍會進入收件匣",
+            "notFollowing": "你還沒有關注它。關注後，它需要你時會通知你。"
         },
         "level": {
             "none": "不通知",

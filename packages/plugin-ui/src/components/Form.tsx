@@ -315,6 +315,11 @@ export type SelectProps = Readonly<{
    * keeps its label. The control keeps its height, its radio-group semantics and its keys.
    */
   compact?: boolean;
+  /**
+   * Segmented only: take the container's whole width, the options sharing it equally (a panel's
+   * level choice that leads what follows). Without it the track is as wide as its labels.
+   */
+  fill?: boolean;
   /** Logical focus target transferred to the first enabled option in this field. */
   focusTarget?: PluginUiFocusTarget;
   testID?: string;
@@ -478,6 +483,7 @@ function SelectSegmented(props: SelectProps): ReactElement {
       }}
       disabled={props.disabled}
       iconOnly={props.compact === true}
+      fill={props.fill === true}
       colors={{
         track: palette.segmentTrack,
         thumb: palette.segmentThumb,

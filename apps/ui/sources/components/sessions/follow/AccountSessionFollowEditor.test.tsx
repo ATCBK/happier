@@ -8,7 +8,7 @@ import { installSettingsViewCommonModuleMocks } from '@/components/settings/sett
 import { t } from '@/text';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 
-import { AccountSessionFollowEditor } from './AccountSessionFollowEditor';
+import { AccountSessionFollowEditor, type AccountSessionFollowEditorParts } from './AccountSessionFollowEditor';
 import { createAccountSessionFollowController, type AccountSessionFollowEditorSnapshot, type AccountSessionFollowTransport } from './accountSessionFollowController';
 
 installSettingsViewCommonModuleMocks();
@@ -36,7 +36,7 @@ describe('Account Follow editor', () => {
         }} voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}}
             onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}} />);
         expect(screen.getTextContent()).toContain(t('errors.permissionDenied'));
-        expect(screen.findByTestId('session-follow-enabled')?.props.disabled).toBe(true);
+        expect(screen.findByTestId('session-follow-follow')?.props.disabled).toBe(true);
         await screen.unmount();
     });
     it('claims no Follow state while the first read is pending', async () => {
@@ -46,8 +46,9 @@ describe('Account Follow editor', () => {
         }} voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}}
             onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}} />);
         // An owner is tracked; a disabled Off switch before the read would say the opposite.
-        expect(screen.findByTestId('session-follow-enabled')).toBeNull();
-        expect(screen.findByTestId('session-follow-owner-row')).toBeNull();
+        expect(screen.findByTestId('session-follow-follow')).toBeNull();
+        expect(screen.findByTestId('session-follow-unfollow')).toBeNull();
+        expect(screen.findByTestId('session-follow-owner-note')).toBeNull();
         expect(screen.getTextContent()).toContain(t('common.loading'));
         await screen.unmount();
     });
@@ -100,13 +101,15 @@ describe('Account Follow editor', () => {
         }
         const screen = await renderSettingsView(<Editor />);
 
-        await act(async () => { screen.findByTestId('session-follow-enabled')?.props.onValueChange(true); });
+        await act(async () => { screen.findByTestId('session-follow-follow')?.props.onPress(); });
         expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
         await act(async () => { presetSegment(screen, 'everything')?.props.onPress(); });
         expect(presetSegment(screen, 'everything')?.props.checked).toBe(true);
-        await act(async () => { screen.findByTestId('session-follow-enabled')?.props.onValueChange(false); });
-        expect(screen.findByTestId('session-follow-enabled')?.props.value).toBe(false);
-        await act(async () => { screen.findByTestId('session-follow-enabled')?.props.onValueChange(true); });
+        // Unfollow stays in the editor, which then offers Follow again (its own undo).
+        await act(async () => { screen.findByTestId('session-follow-unfollow')?.props.onPress(); });
+        expect(screen.findByTestId('session-follow-unfollow')).toBeNull();
+        expect(presetSegment(screen, 'important')).toBeUndefined();
+        await act(async () => { screen.findByTestId('session-follow-follow')?.props.onPress(); });
         expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
         expect(writes).toEqual(['set:important', 'policy:everything', 'remove', 'set:important']);
         await screen.unmount();
@@ -199,8 +202,10 @@ describe('Account Follow editor', () => {
             }}
             voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={onEditPolicy}
         />);
-        expect(screen.findByTestId('session-follow-enabled')).toBeNull();
-        expect(screen.findByTestId('session-follow-owner-row')).not.toBeNull();
+        // An owner always follows: no Follow or Unfollow, and the place Unfollow takes says why.
+        expect(screen.findByTestId('session-follow-follow')).toBeNull();
+        expect(screen.findByTestId('session-follow-unfollow')).toBeNull();
+        expect(screen.findByTestId('session-follow-owner-note')).not.toBeNull();
         expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
         // The editor is the owner's override, and it writes a real policy through the controller.
         expect(presetSegment(screen, 'quiet')?.props.disabled).not.toBe(true);
@@ -217,7 +222,8 @@ describe('Account Follow editor', () => {
             }}
             voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
-        expect(screen.findByTestId('session-follow-enabled')?.props.value).toBe(false);
+        expect(screen.findByTestId('session-follow-follow')?.props.disabled).toBe(false);
+        expect(screen.findByTestId('session-follow-unfollow')).toBeNull();
         expect(presetSegment(screen, 'important')).toBeUndefined();
         await screen.unmount();
     });
@@ -235,7 +241,7 @@ describe('Account Follow editor', () => {
             }}
             voiceReadiness="eligible" archived onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
-        expect(screen.findByTestId('session-follow-enabled')?.props.disabled).toBe(false);
+        expect(screen.findByTestId('session-follow-unfollow')?.props.disabled).toBe(false);
         expect(screen.findByTestId('session-follow-voice')?.props.disabled).toBe(true);
         expect(presetSegment(screen, 'important')?.props.disabled).toBe(true);
         await screen.unmount();
@@ -261,10 +267,9 @@ describe('Account Follow editor', () => {
             onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
 
-        const toggle = screen.findByTestId('session-follow-enabled');
-        expect(toggle?.props.value).toBe(false);
-        expect(toggle?.props.disabled).toBe(true);
-        await act(async () => { toggle?.props.onValueChange(true); });
+        const follow = screen.findByTestId('session-follow-follow');
+        expect(follow?.props.disabled).toBe(true);
+        await act(async () => { follow?.props.onPress(); });
         expect(onSet).not.toHaveBeenCalled();
         await screen.unmount();
     });
@@ -282,7 +287,7 @@ describe('Account Follow editor', () => {
             }}
             voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
-        expect(screen.findByTestId('session-follow-enabled')?.props.disabled).toBe(true);
+        expect(screen.findByTestId('session-follow-unfollow')?.props.disabled).toBe(true);
         expect(presetSegment(screen, 'important')?.props.disabled).toBe(true);
         await screen.unmount();
     });
@@ -397,7 +402,7 @@ describe('Account Follow editor', () => {
         expect(screen.getTextContent()).toContain(t('session.follow.editor.externalAttachedOnly'));
         // It explains a consequence of the external source's acquisition; it is
         // not a second Follow control and changes nothing the person chose.
-        expect(screen.findByTestId('session-follow-enabled')?.props.value).toBe(true);
+        expect(screen.findByTestId('session-follow-unfollow')).not.toBeNull();
         expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
         await screen.unmount();
     });
@@ -423,5 +428,49 @@ describe('Account Follow editor', () => {
         await act(async () => { everything.props.onPress(); });
         expect(onEditPolicy).toHaveBeenCalledWith({ kind: 'preset', preset: 'everything' });
         await screen.unmount();
+    });
+    it('hands its host the P2-A parts: "Follow <session>", what Done does, and who else follows it', async () => {
+        const onClose = vi.fn();
+        const onOpenPeople = vi.fn();
+        let parts: AccountSessionFollowEditorParts | null = null;
+        const screen = await renderSettingsView(<AccountSessionFollowEditor
+            state={{
+                projection: {
+                    follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: false },
+                    isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false,
+                },
+                draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
+            }}
+            voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}}
+            onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
+            sessionTitle="Idempotent retries" onClose={onClose}
+            alsoFollowing={{ people: 3, sessions: 2 }} onOpenPeople={onOpenPeople} quietHours="22:00–07:00"
+            frame={(next) => { parts = next; return <>{next.body}{next.footer}</>; }}
+        />);
+        expect(parts!.title).toBe(t('session.follow.editor.sheetTitle', { name: 'Idempotent retries' }));
+        expect(parts!.subtitle).toBe(t('session.follow.editor.sheetSubtitle'));
+        expect(screen.getTextContent()).toContain(t('session.follow.editor.quietHours', { range: '22:00–07:00' }));
+        await act(async () => { screen.findByTestId('session-follow-people')?.props.onPress(); });
+        expect(onOpenPeople).toHaveBeenCalledTimes(1);
+        await act(async () => { screen.findByTestId('session-follow-done')?.props.onPress(); });
+        expect(onClose).toHaveBeenCalledTimes(1);
+        await screen.unmount();
+    });
+
+    it('claims no one else follows it while the census is unknown or empty', async () => {
+        const state = {
+            projection: {
+                follow: { sessionId: 'session-a', following: true, notificationLevel: 'important' as const, includeInVoice: false },
+                isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false,
+            },
+            draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
+        };
+        for (const alsoFollowing of [null, { people: 0, sessions: 0 }]) {
+            const screen = await renderSettingsView(<AccountSessionFollowEditor state={state}
+                voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}}
+                onOpenNotificationSettings={() => {}} onEditPolicy={() => {}} alsoFollowing={alsoFollowing} onOpenPeople={() => {}} />);
+            expect(screen.findByTestId('session-follow-people')).toBeNull();
+            await screen.unmount();
+        }
     });
 });

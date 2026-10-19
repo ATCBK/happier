@@ -9754,7 +9754,15 @@ const sessionFollowTranslations: Pick<Record<
             "title": "Obserwuj tę sesję",
             "subtitle": "Otrzymuj aktualizacje, które są dla Ciebie ważne.",
             "ownerSubtitle": "Ta sesja należy do Ciebie, więc jej aktualizacje zawsze do Ciebie docierają.",
-            "externalAttachedOnly": "Synchronizacja w tle jest wyłączona, więc aktualizacje mogą docierać tylko wtedy, gdy ta sesja jest podłączona."
+            "externalAttachedOnly": "Synchronizacja w tle jest wyłączona, więc aktualizacje mogą docierać tylko wtedy, gdy ta sesja jest podłączona.",
+            "sheetTitle": ({ name }) => `Obserwuj: ${name}`,
+            "sheetSubtitle": "Ile o niej słyszysz",
+            "ownerNote": "Jest Twoja, więc zawsze ją obserwujesz",
+            "alsoFollow": ({ facts, count }) => `${facts} ${count === 1 ? "też ją obserwuje" : "też ją obserwują"}`,
+            "people": "Osoby",
+            "quietHours": ({ range }) => `Godziny ciszy ${range} · nic nie wysyła powiadomień; wszystko i tak trafia do Skrzynki`,
+            "quietHoursOn": "Godziny ciszy są włączone · nic nie wysyła powiadomień; wszystko i tak trafia do Skrzynki",
+            "notFollowing": "Jeszcze jej nie obserwujesz. Obserwuj, aby wiedzieć, kiedy Cię potrzebuje."
         },
         "level": {
             "none": "Bez powiadomień",

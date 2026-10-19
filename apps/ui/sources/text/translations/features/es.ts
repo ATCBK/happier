@@ -9744,7 +9744,15 @@ const sessionFollowTranslations: Pick<Record<
             "title": "Seguir esta sesión",
             "subtitle": "Recibe las novedades que te importan.",
             "ownerSubtitle": "Esta sesión es tuya, así que siempre recibirás sus novedades.",
-            "externalAttachedOnly": "La sincronización en segundo plano está desactivada, así que las actualizaciones pueden llegar solo mientras esta sesión esté conectada."
+            "externalAttachedOnly": "La sincronización en segundo plano está desactivada, así que las actualizaciones pueden llegar solo mientras esta sesión esté conectada.",
+            "sheetTitle": ({ name }) => `Seguir ${name}`,
+            "sheetSubtitle": "Cuánto te enteras",
+            "ownerNote": "Es tuya, así que siempre la sigues",
+            "alsoFollow": ({ facts, count }) => `${facts} ${count === 1 ? "también la sigue" : "también la siguen"}`,
+            "people": "Personas",
+            "quietHours": ({ range }) => `Horas de silencio ${range} · nada envía avisos; todo llega igualmente a la Bandeja`,
+            "quietHoursOn": "Las horas de silencio están activas · nada envía avisos; todo llega igualmente a la Bandeja",
+            "notFollowing": "Aún no la sigues. Síguela para saber cuándo te necesita."
         },
         "level": {
             "none": "Sin notificaciones",

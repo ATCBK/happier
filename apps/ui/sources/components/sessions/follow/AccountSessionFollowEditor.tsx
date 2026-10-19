@@ -1,18 +1,34 @@
 import * as React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
 import { projectAccountSessionFollowEditorStateV1, type PersonalFollowOnceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import type { SetSessionFollowRequest } from '@happier-dev/protocol/sessions/follow/api';
 import type { FollowPolicyEditorEditV1 } from '@happier-dev/protocol/sessions/follow/followPolicyEditorV1';
 
+import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
+
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Switch } from '@/components/ui/forms/Switch';
+import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
+import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
 import { FollowPolicyEditorBinding } from './FollowPolicyEditorBinding';
 import { projectAccountSessionFollowPolicyEditor, type AccountSessionFollowEditorSnapshot } from './accountSessionFollowController';
 import type { AccountVoiceFollowReadiness } from './accountVoiceFollowReadiness';
+
+/** What the editor hands its host: the header's words and mark, the scrolling body and the fixed footer. */
+export type AccountSessionFollowEditorParts = Readonly<{
+    title: string;
+    subtitle: string;
+    mark: React.ReactNode;
+    body: React.ReactNode;
+    footer: React.ReactNode;
+}>;
 
 export type AccountSessionFollowEditorProps = Readonly<{
     state: AccountSessionFollowEditorSnapshot;
@@ -38,10 +54,28 @@ export type AccountSessionFollowEditorProps = Readonly<{
         sourceTurnId: string | null;
         onOnce(once: PersonalFollowOnceV1 | null): Promise<void> | void;
     }>;
+    /** The followed Session's name and identity mark, for the header ("Follow <session>"). */
+    sessionTitle?: string;
+    sessionMark?: React.ReactNode;
+    /** Done: the host closes the popover or leaves the page. */
+    onClose?(): void;
+    /** Who else follows it (you excluded); null while unknown, so nothing is claimed. */
+    alsoFollowing?: Readonly<{ people: number; sessions: number }> | null;
+    onOpenPeople?(): void;
+    /** The quiet-hours window in effect ("22:00–07:00"), `on` when it has several, null when off. */
+    quietHours?: string | null;
+    /** Places the parts: a popover panel or a page. Absent, they are stacked in place. */
+    frame?(parts: AccountSessionFollowEditorParts): React.ReactNode;
 }>;
 
+/**
+ * The one personal Follow editor (lab P2-A): "Follow <session>" and how much you hear about it, the
+ * shared level editor and what each level means, Voice and Notify me once, quiet hours and who else
+ * follows it, then Unfollow · Done. The popover and the phone page place the same parts.
+ */
 export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProps) {
     const { state } = props;
+    const { theme } = useUnistyles();
     const isSessionOwner = state.projection?.isSessionOwner === true;
     // Effective state, not the raw row: a Session owner with no stored choice is
     // permanently tracked and Important-eligible at the Home.
@@ -56,6 +90,8 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
     const canManage = state.projection?.capabilities.manageFollow === true;
     const canEdit = canManage && !props.archived;
     const disabled = !state.online || state.saving || !canEdit;
+    // Nothing is claimed before the first read: an owner is tracked, so "Follow" would be false.
+    const pending = state.loading && !state.projection;
     const voiceReadiness = props.voiceReadiness;
     // `eligible` is the nominal case the row subtitle already describes, so it has
     // no status line: repeating that sentence directly beneath itself would spend a
@@ -84,36 +120,11 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
     const onceRow = props.notifyOnce && state.projection && !props.archived
         ? <NotifyOnceRow once={state.projection.follow?.once ?? null} disabled={disabled} {...props.notifyOnce} />
         : null;
+    const also = props.alsoFollowing;
+    const alsoCount = also ? also.people + also.sessions : 0;
 
-    return <>
-        {/* Nothing is claimed before the first read: an owner is tracked, so an Off switch would be false. */}
-        {state.loading && !state.projection ? null : <ItemGroup description={t('session.follow.footer')}>
-            {isSessionOwner ? <Item
-                testID="session-follow-owner-row"
-                title={t('session.follow.following')}
-                subtitle={props.archived ? t('session.follow.archived') : t('session.follow.editor.ownerSubtitle')}
-                titleLines={0}
-                showChevron={false}
-                mode="info"
-            /> : <Item
-                testID="session-follow-enabled-row"
-                title={t('session.follow.editor.title')}
-                subtitle={props.archived ? t('session.follow.archived') : t('session.follow.editor.subtitle')}
-                titleLines={0}
-                showChevron={false}
-                rightElement={<Switch
-                    testID="session-follow-enabled"
-                    value={following}
-                    disabled={!state.online || state.saving || !state.projection || !canManage || (props.archived && !following)}
-                    onValueChange={(enabled) => {
-                        if (props.archived && enabled) return;
-                        if (enabled) props.onSet({ notificationLevel: 'important', includeInVoice: false });
-                        else props.onRemove();
-                    }}
-                />}
-            />}
-        </ItemGroup>}
-        {state.loading && !state.projection ? <ItemGroup>
+    const body = <>
+        {pending ? <ItemGroup>
             <Item title={t('common.loading')} loading showChevron={false} mode="info" />
         </ItemGroup> : null}
         {!state.online || state.error ? <ItemGroup>
@@ -126,6 +137,9 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
                 showChevron={false}
             />
             {state.online ? <Item testID="session-follow-retry" title={t('common.retry')} onPress={props.onRetry} showChevron={false} /> : null}
+        </ItemGroup> : null}
+        {props.archived && !pending ? <ItemGroup surface="none">
+            <Item testID="session-follow-archived" title={t('session.follow.archived')} mode="info" titleLines={0} showChevron={false} />
         </ItemGroup> : null}
         {following && policyModel ? <>
             {/* The scope sits outside the bare section, so the public sections take the column's own inset once. */}
@@ -156,7 +170,7 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
                 /> : null}
                 {onceRow}
             </ItemGroup>
-            {props.externalBackgroundSyncOff ? <ItemGroup>
+            {props.externalBackgroundSyncOff ? <ItemGroup surface="none">
                 <Item
                     testID="session-follow-external-attached-only"
                     title={t('session.follow.editor.externalAttachedOnly')}
@@ -166,11 +180,73 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
                 />
             </ItemGroup> : null}
         </> : null}
-        {!following && onceRow ? <ItemGroup>{onceRow}</ItemGroup> : null}
-        <ItemGroup>
-            <Item title={t('session.follow.settingsLink')} onPress={props.onOpenNotificationSettings} />
+        {!following && state.projection && !props.archived ? <>
+            <ItemGroup surface="none">
+                <Item testID="session-follow-not-following" title={t('session.follow.editor.notFollowing')} mode="info" titleLines={0} showChevron={false} />
+            </ItemGroup>
+            {onceRow ? <ItemGroup>{onceRow}</ItemGroup> : null}
+        </> : null}
+        {/* Quiet facts that change what reaches you, each leading where it is changed. */}
+        <ItemGroup surface="none">
+            <Item
+                testID="session-follow-quiet-hours"
+                density="compact"
+                icon={<Icon name={props.quietHours ? 'moon' : 'bell'} />}
+                title={props.quietHours === 'on' ? t('session.follow.editor.quietHoursOn')
+                    : props.quietHours ? t('session.follow.editor.quietHours', { range: props.quietHours })
+                        : t('session.follow.settingsLink')}
+                titleLines={0}
+                onPress={props.onOpenNotificationSettings}
+            />
+            {alsoCount > 0 && also && props.onOpenPeople ? <Item
+                testID="session-follow-people"
+                density="compact"
+                icon={<Icon name="users" />}
+                title={t('session.follow.editor.alsoFollow', {
+                    facts: joinHappierFacts(
+                        also.people > 0 ? t('session.collaboration.pane.followersPeople', { count: also.people }) : null,
+                        also.sessions > 0 ? t('session.collaboration.pane.followersSessions', { count: also.sessions }) : null,
+                    ),
+                    count: alsoCount,
+                })}
+                titleLines={0}
+                detail={t('session.follow.editor.people')}
+                onPress={props.onOpenPeople}
+            /> : null}
         </ItemGroup>
     </>;
+
+    // Unfollow is quiet and leads; Done is the one primary. An owner always follows, so the place
+    // Unfollow would take says why instead. Nothing is offered before the first read.
+    const footer = pending ? null : <SectionButtonRow
+        trailing={!following && !isSessionOwner ? <RoundButton
+            testID="session-follow-follow"
+            title={t('session.follow.follow')}
+            disabled={!state.online || state.saving || !state.projection || !canManage || props.archived}
+            onPress={() => {
+                if (props.archived) return;
+                props.onSet({ notificationLevel: 'important', includeInVoice: false });
+            }}
+        /> : <RoundButton testID="session-follow-done" title={t('common.done')} onPress={() => props.onClose?.()} />}
+    >
+        {isSessionOwner ? <Text testID="session-follow-owner-note" variant="meta" style={{ color: theme.colors.text.secondary }}>{t('session.follow.editor.ownerNote')}</Text>
+            : following ? <RoundButton
+                testID="session-follow-unfollow"
+                display="inverted"
+                title={t('session.follow.unfollow')}
+                disabled={!state.online || state.saving || !canManage}
+                onPress={props.onRemove}
+            /> : null}
+    </SectionButtonRow>;
+
+    const parts: AccountSessionFollowEditorParts = {
+        title: props.sessionTitle ? t('session.follow.editor.sheetTitle', { name: props.sessionTitle }) : t('session.follow.editor.title'),
+        subtitle: t('session.follow.editor.sheetSubtitle'),
+        mark: props.sessionMark ?? null,
+        body,
+        footer,
+    };
+    return <>{props.frame ? props.frame(parts) : <>{parts.body}{parts.footer}</>}</>;
 }
 
 type OnceChoice = 'off' | 'turn' | 'attention';

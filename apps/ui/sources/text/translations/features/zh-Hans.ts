@@ -9724,7 +9724,15 @@ const sessionFollowTranslations: Pick<Record<
             "title": "关注此会话",
             "subtitle": "接收对你重要的更新。",
             "ownerSubtitle": "这个会话属于你，因此它的更新始终会送达。",
-            "externalAttachedOnly": "后台同步已关闭，因此只有在此会话处于连接状态时才可能收到更新。"
+            "externalAttachedOnly": "后台同步已关闭，因此只有在此会话处于连接状态时才可能收到更新。",
+            "sheetTitle": ({ name }) => `关注${name}`,
+            "sheetSubtitle": "你会收到多少消息",
+            "ownerNote": "这是你的会话，因此你始终关注它",
+            "alsoFollow": ({ facts, count }) => `${facts}也在关注`,
+            "people": "成员",
+            "quietHours": ({ range }) => `免打扰时段 ${range} · 不会推送；一切仍会进入收件箱`,
+            "quietHoursOn": "免打扰时段已开启 · 不会推送；一切仍会进入收件箱",
+            "notFollowing": "你还没有关注它。关注后，它需要你时会通知你。"
         },
         "level": {
             "none": "不通知",

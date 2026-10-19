@@ -9729,7 +9729,15 @@ const sessionFollowTranslations: Pick<Record<
             "title": "このセッションをフォロー",
             "subtitle": "大切な更新を受け取ります。",
             "ownerSubtitle": "このセッションはあなたのものなので、更新は常に届きます。",
-            "externalAttachedOnly": "バックグラウンド同期がオフのため、このセッションが接続されている間のみ更新が届く場合があります。"
+            "externalAttachedOnly": "バックグラウンド同期がオフのため、このセッションが接続されている間のみ更新が届く場合があります。",
+            "sheetTitle": ({ name }) => `フォロー：${name}`,
+            "sheetSubtitle": "どれだけ知らせるか",
+            "ownerNote": "あなたのセッションなので、常にフォローしています",
+            "alsoFollow": ({ facts, count }) => `${facts}もフォローしています`,
+            "people": "メンバー",
+            "quietHours": ({ range }) => `おやすみ時間 ${range} · プッシュはしません。すべて受信トレイに届きます`,
+            "quietHoursOn": "おやすみ時間が有効です · プッシュはしません。すべて受信トレイに届きます",
+            "notFollowing": "まだフォローしていません。フォローすると、あなたが必要なときに知らせます。"
         },
         "level": {
             "none": "通知なし",

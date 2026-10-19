@@ -18,7 +18,15 @@ export const en = {
         "title": "Follow this session",
         "subtitle": "Get the updates that matter to you.",
         "ownerSubtitle": "You own this session, so its updates always reach you.",
-        "externalAttachedOnly": "Background sync is off, so updates may arrive only while this session is attached."
+        "externalAttachedOnly": "Background sync is off, so updates may arrive only while this session is attached.",
+            "sheetTitle": ({ name }: { name: string }) => `Follow ${name}`,
+            "sheetSubtitle": "How much you hear about it",
+            "ownerNote": "You own it, so you always follow it",
+            "alsoFollow": ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? "also follows it" : "also follow it"}`,
+            "people": "People",
+            "quietHours": ({ range }: { range: string }) => `Quiet hours ${range} · nothing pushes; it still lands in Inbox`,
+            "quietHoursOn": "Quiet hours are on · nothing pushes; it still lands in Inbox",
+            "notFollowing": "You don’t follow it yet. Follow it to hear when it needs you."
     },
     "level": {
         "none": "No notifications",

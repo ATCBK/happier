@@ -8,10 +8,12 @@ import { openFollowNotificationSettings } from '@/components/sessions/follow/ope
 import { AccountSessionFollowControl } from '@/components/sessions/follow/AccountSessionFollowControl';
 import { SessionFollowUnavailableNotice } from '@/components/sessions/follow/SessionFollowUnavailableNotice';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
+import { RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { PagePinnedBar } from '@/components/ui/layout/PagePinnedBar';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { buildScopedSessionRouteHref, readSessionRouteServerId } from '@/hooks/session/sessionRouteServerScope';
@@ -21,6 +23,7 @@ import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
 const styles = StyleSheet.create(() => ({
     pending: { flex: 1 },
+    page: { flex: 1 },
 }));
 
 export function SessionFollowScreen() {
@@ -78,23 +81,30 @@ export function SessionFollowScreen() {
     }
     return <>
         {followingHeader}
-        <ItemList style={{ paddingTop: 0 }}>
-            <PageHeader title={t('session.follow.editor.title')} description={t('sessionPages.follow.description')} />
-            <AccountSessionFollowControl
-                address={address}
-                archived={params.archived === '1'}
-                onClose={() => {
-                    if (!openingSettings.current) backToSession();
-                }}
-                onOpenNotificationSettings={() => {
-                    openingSettings.current = true;
-                    void openFollowNotificationSettings({
-                        serverId,
-                        navigate: () => router.replace('/settings/notifications'),
-                    }).finally(() => { openingSettings.current = false; });
-                }}
-            />
-        </ItemList>
+        <AccountSessionFollowControl
+            address={address}
+            archived={params.archived === '1'}
+            onClose={() => {
+                if (!openingSettings.current) backToSession();
+            }}
+            onOpenNotificationSettings={() => {
+                openingSettings.current = true;
+                void openFollowNotificationSettings({
+                    serverId,
+                    navigate: () => router.replace('/settings/notifications'),
+                }).finally(() => { openingSettings.current = false; });
+            }}
+            // The page scrolls; Unfollow · Done stay in thumb reach under it (lab P2-Ap).
+            frame={(parts) => <View style={styles.page}>
+                <ItemList style={{ paddingTop: 0 }}>
+                    <PageHeader leading={parts.mark} title={parts.title} description={parts.subtitle} />
+                    {parts.body}
+                </ItemList>
+                {parts.footer ? <PagePinnedBar testID="session-follow-footer">
+                    <RoundButtonSizeScope size="normal" presentation="uniform">{parts.footer}</RoundButtonSizeScope>
+                </PagePinnedBar> : null}
+            </View>}
+        />
     </>;
 }
 

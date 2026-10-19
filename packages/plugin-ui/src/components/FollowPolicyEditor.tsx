@@ -181,6 +181,7 @@ export function FollowPolicyEditor(
         <Select
           label={presetLabel}
           presentation="segmented"
+          fill
           options={props.presets.map((preset) => ({
             value: preset,
             label: translate(
