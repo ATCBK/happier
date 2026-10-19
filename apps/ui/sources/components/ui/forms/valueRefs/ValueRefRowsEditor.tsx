@@ -591,54 +591,54 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
             />
           )}
         </View>
-        {special ? (
-          <Text
-            variant="meta"
-            style={[styles.typeFixed, { color: theme.colors.text.secondary }]}
-          >
-            {typeTitle(type)}
-          </Text>
-        ) : (
-          <View style={styles.type}>
+        {/* The source and ⋯ stay together at their own width: a row too narrow for them under the value wraps them below it, never truncating the chosen source. */}
+        <View style={styles.trailing}>
+          {special ? (
+            <Text
+              variant="meta"
+              style={[styles.typeFixed, { color: theme.colors.text.secondary }]}
+            >
+              {typeTitle(type)}
+            </Text>
+          ) : (
             <ToolbarSelect
               testID={`${props.testID}.type`}
               label={t('capabilities.valueRows.typeLabel')}
               items={typeItems}
               selectedId={type}
               onSelect={chooseType}
-              fill
-            />
-          </View>
-        )}
-        <DropdownMenu
-          testID={`${props.testID}.more`}
-          open={menuOpen}
-          onOpenChange={setMenuOpen}
-          items={moreItems}
-          onSelect={(id) => {
-            setMenuOpen(false);
-            if (id === 'remove') props.onRemove();
-            else props.onEditInModal();
-          }}
-          placement="bottom"
-          popoverAnchorAlign="end"
-          variant="slim"
-          matchTriggerWidth={false}
-          popoverPortalWebTarget="body"
-          trigger={({ toggle }) => (
-            <IconButton
-              testID={`${props.testID}.more.trigger`}
-              iconName="dots-three"
-              variant="plain"
-              accessibilityLabel={t('capabilities.valueRows.more', {
-                name: name || t('capabilities.valueRows.name'),
-              })}
-              tooltip={t('common.more')}
-              tooltipHidden={menuOpen}
-              onPress={toggle}
             />
           )}
-        />
+          <DropdownMenu
+            testID={`${props.testID}.more`}
+            open={menuOpen}
+            onOpenChange={setMenuOpen}
+            items={moreItems}
+            onSelect={(id) => {
+              setMenuOpen(false);
+              if (id === 'remove') props.onRemove();
+              else props.onEditInModal();
+            }}
+            placement="bottom"
+            popoverAnchorAlign="end"
+            variant="slim"
+            matchTriggerWidth={false}
+            popoverPortalWebTarget="body"
+            trigger={({ toggle }) => (
+              <IconButton
+                testID={`${props.testID}.more.trigger`}
+                iconName="dots-three"
+                variant="plain"
+                accessibilityLabel={t('capabilities.valueRows.more', {
+                  name: name || t('capabilities.valueRows.name'),
+                })}
+                tooltip={t('common.more')}
+                tooltipHidden={menuOpen}
+                onPress={toggle}
+              />
+            )}
+          />
+        </View>
       </View>
       {error ? (
         <Text
@@ -662,27 +662,29 @@ const styles = StyleSheet.create((theme) => ({
   },
   row: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: theme.space.s8,
   },
+  // The bases are the narrowest a name and a value read whole; the trailing source + ⋯ cluster wraps beneath them
+  // when the row cannot hold all three.
   name: {
     flexGrow: 2,
     flexShrink: 1,
-    flexBasis: 0,
+    flexBasis: 110,
     minWidth: 0,
   },
   value: {
     flexGrow: 3,
     flexShrink: 1,
-    flexBasis: 0,
+    flexBasis: 170,
     minWidth: 0,
   },
-  // A column of its own, so name and value line up from row to row whatever the type's label.
-  type: {
-    flexGrow: 2.2,
-    flexShrink: 1,
-    flexBasis: 0,
-    minWidth: 0,
+  trailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: theme.space.s8,
   },
   typeFixed: {
     flexShrink: 0,
@@ -693,7 +695,7 @@ const styles = StyleSheet.create((theme) => ({
   nameLabel: {
     flexGrow: 2,
     flexShrink: 1,
-    flexBasis: 0,
+    flexBasis: 110,
     minWidth: 0,
     minHeight: FIELD_BOX_METRICS.minHeightPx,
     justifyContent: 'center',
