@@ -1,7 +1,8 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import type { AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import type {
@@ -10,6 +11,8 @@ import type {
 } from '@/components/sessions/external/browse/ExternalSessionsBrowseScreen';
 import {
     createNavigationMock,
+    createConfiguredAcpBackendCatalogSettings,
+    createConfiguredAgentRouteParams,
     createProjectionDescribeMock,
     createReviewBotPluginProjectionContributions,
     createRouterMock,
@@ -39,6 +42,7 @@ const featureDecisionState = vi.hoisted(() => ({
 }));
 const featureDecisionSpy = vi.hoisted(() => vi.fn());
 const machineContributionRegistryProjectionDescribeMock = createProjectionDescribeMock();
+let acpDefinitions: AcpBackendDefinitionV1[] = [];
 type ExternalSessionsBrowseScreenProps = Readonly<{
     interaction?: ExternalSessionsBrowseInteraction;
     lockScope?: ExternalSessionsBrowseScopeLock | null;
@@ -47,83 +51,7 @@ type ExternalSessionsBrowseScreenProps = Readonly<{
 
 const browseScreenPropsRef = { current: null as ExternalSessionsBrowseScreenProps | null };
 
-function createReviewBotProjection() {
-    return PluginProjectionV2Schema.parse({
-        v: 2,
-        generation: 1,
-        installedPackagesById: {
-            'happier.agent.claude': {
-                id: 'happier.agent.claude',
-                displayName: 'Claude',
-                enabled: true,
-                source: { kind: 'bundled', locator: 'happier.agent.claude' },
-            },
-            'acme.review-bot': {
-                id: 'acme.review-bot',
-                displayName: 'Review Bot',
-                enabled: true,
-                source: { kind: 'local', locator: 'acme.review-bot' },
-            },
-        },
-        agentsById: {
-            claude: {
-                id: 'claude',
-                title: 'Claude',
-                catalogAgentId: 'claude',
-                iconAgentId: 'claude',
-                identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
-            },
-            'plugin:review-bot': {
-                id: 'plugin:review-bot',
-                title: 'Review Bot Plugin',
-                subtitle: 'plugin agent',
-                channel: 'plugin',
-                isBuiltIn: false,
-                catalogAgentId: 'claude',
-                iconAgentId: 'claude',
-                identity: { pluginId: 'acme.review-bot', localId: 'review-bot' },
-                externalSessions: {
-                    agent: { pluginId: 'acme.review-bot', localId: 'review-bot' },
-                    generation: 1,
-                    operations: {
-                        listCandidates: true,
-                        resolveLinkIdentity: true,
-                        pageTranscript: true,
-                        readAfterTranscript: true,
-                    },
-                    sources: [{
-                        sourceKind: 'reviewBotConfig',
-                        schema: {
-                            fields: [
-                                { name: 'kind', kind: 'literal', value: 'reviewBotConfig' },
-                                { name: 'configDir', kind: 'string', min: 1, max: 10_000, nullish: true },
-                            ],
-                        },
-                        key: {
-                            segments: [
-                                { kind: 'literal', value: 'reviewBotConfig' },
-                                { kind: 'field', field: 'configDir' },
-                            ],
-                        },
-                        instances: [{ kind: 'default', constants: {} }],
-                    }],
-                },
-            },
-        },
-        backendsById: {
-            'plugin-review-bot': {
-                id: 'plugin-review-bot',
-                agentId: 'plugin:review-bot',
-                title: 'Review Bot (plugin)',
-                subtitle: 'plugin backend',
-                catalogAgentId: 'claude',
-                iconAgentId: 'claude',
-            },
-        },
-    });
-}
-
-installPickerCommonModuleMocks({
+const picker = installPickerCommonModuleMocks({
     reactNative: async () =>
         (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
             Platform: { OS: 'ios' },
@@ -151,11 +79,10 @@ installPickerCommonModuleMocks({
             }).module,
             useNavigation: () => navigationMock,
         }),
-    storage: async () =>
-        (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({
-            useSettings: () => settingsState.value as any,
-        }),
-    projectionSeam: { describe: machineContributionRegistryProjectionDescribeMock },
+    projectionSeam: {
+        describe: machineContributionRegistryProjectionDescribeMock,
+        serverProfiles: [{ id: 'server-2', serverUrl: 'https://server-2.example.test' }],
+    },
 });
 
 vi.mock('@/components/sessions/external/browse/ExternalSessionsBrowseScreen', () => ({
@@ -174,11 +101,21 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     },
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
-    useProfile: () => ({ id: 'account-1' }),
-    useLocalSetting: () => undefined,
-}));
-
+async function renderResumeBrowsePicker() {
+    const scope = picker.accountScope;
+    picker.homeBoundary.answer(scope.serverId, ACP_CATALOG_ROWS_ROUTE_V1, {
+        body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: acpDefinitions } },
+        }),
+    });
+    const { storage } = await import('@/sync/domains/state/storageStore');
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    storage.getState().applySettingsLocal(settingsParse(settingsState.value));
+    const { refreshAcpCatalog } = await import('@/sync/engine/settings/acpCatalogEngine');
+    await refreshAcpCatalog(scope);
+    const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
+    return renderScreen(React.createElement(ResumeBrowsePickerScreen));
+}
 
 describe('ResumeBrowsePickerScreen replace fallback', () => {
     beforeEach(async () => {
@@ -196,6 +133,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
             spawnServerId: 'server-2',
         };
         settingsState.value = {};
+        acpDefinitions = [];
         featureDecisionState.state = 'enabled';
         featureDecisionSpy.mockReset();
         browseScreenPropsRef.current = null;
@@ -230,9 +168,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
         ['missing', null, 'external-sessions-browse-route-gate-checking'],
     ] as const)('fails closed for a %s sessions.direct decision before resolving daemon projection or mounting Browse', async (_label, state, expectedGateTestId) => {
         featureDecisionState.state = state;
-        const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
-
-        const screen = await renderScreen(React.createElement(ResumeBrowsePickerScreen));
+        const screen = await renderResumeBrowsePicker();
 
         // Failing closed is not the same as a blank screen: the gate owns one accessible
         // state with a working exit for every non-available arm.
@@ -253,9 +189,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
             supported: true,
             projection: createSupportedClaudeProjection(),
         });
-        const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
-
-        await renderScreen(React.createElement(ResumeBrowsePickerScreen));
+        await renderResumeBrowsePicker();
         await flushHookEffects({ cycles: 40 });
 
         const props = browseScreenPropsRef.current;
@@ -281,7 +215,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
                     identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
                 }),
                 backendTargetKey: 'agent:happier.agent.claude/claude',
-                dataId: 'draft-1',
+                dataId: routeParamsState.value.dataId,
                 machineId: 'machine-2',
                 spawnServerId: 'server-2',
                 resumeSessionId: 'session-picked',
@@ -298,35 +232,10 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
             machineId: 'machine-2',
             spawnServerId: 'server-2',
         };
-        settingsState.value = {
-            acpCatalogSettingsV1: {
-                v: 2,
-                backends: [
-                    {
-                        id: 'review-bot',
-                        name: 'review-bot',
-                        title: 'Review Bot',
-                        launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
-                        env: {},
-                        transportProfile: 'generic',
-                        capabilities: {
-                            supportsLoadSession: false,
-                            supportsModes: 'unknown',
-                            supportsModels: 'unknown',
-                            supportsConfigOptions: 'unknown',
-                            promptImageSupport: 'unknown',
-                        },
-                        createdAt: 1,
-                        updatedAt: 1,
-                    },
-                ],
-            },
-        };
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends;
 
-        const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
-
-        await renderScreen(React.createElement(ResumeBrowsePickerScreen));
-        await Promise.resolve();
+        await renderResumeBrowsePicker();
+        await vi.waitFor(() => expect(routerMock.replace).toHaveBeenCalled());
 
         expect(browseScreenPropsRef.current).toBeNull();
         // Closing the picker keeps the new-session context it was opened with
@@ -334,8 +243,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                backendTarget: JSON.stringify({ kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' }),
-                backendTargetKey: 'backend:review-bot:configured:review-bot',
+                ...createConfiguredAgentRouteParams('review-bot'),
                 dataId: 'draft-1',
                 machineId: 'machine-2',
                 spawnServerId: 'server-2',
@@ -352,33 +260,11 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
         settingsState.value = {
             lastUsedAgent: 'codex',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' },
-            acpCatalogSettingsV1: {
-                v: 2,
-                backends: [
-                    {
-                        id: 'review-bot',
-                        name: 'review-bot',
-                        title: 'Review Bot',
-                        launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
-                        env: {},
-                        transportProfile: 'generic',
-                        capabilities: {
-                            supportsLoadSession: false,
-                            supportsModes: 'unknown',
-                            supportsModels: 'unknown',
-                            supportsConfigOptions: 'unknown',
-                            promptImageSupport: 'unknown',
-                        },
-                        createdAt: 1,
-                        updatedAt: 1,
-                    },
-                ],
-            },
         };
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends;
 
-        const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
-
-        await renderScreen(React.createElement(ResumeBrowsePickerScreen));
+        await renderResumeBrowsePicker();
+        await vi.waitFor(() => expect(routerMock.replace).toHaveBeenCalled());
         expect(browseScreenPropsRef.current).toBeNull();
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
@@ -400,15 +286,14 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
         // The daemon projection is the only authority that can prove which
         // qualified Agent contribution owns the settings-backed plugin backend:
         // the V2 projection carries the contribution identity, so the real
-        // carrier resolution maps the backend onto `plugin:review-bot` instead
+        // carrier resolution maps the backend onto its qualified Agent instead
         // of falling back to the bundled claude carrier.
         machineContributionRegistryProjectionDescribeMock.mockResolvedValue({
             supported: true,
             projection: createSupportedClaudeProjection(createReviewBotPluginProjectionContributions()),
         });
 
-        const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
-        await renderScreen(React.createElement(ResumeBrowsePickerScreen));
+        await renderResumeBrowsePicker();
         // The route candidate only becomes available once the merged projection
         // is ready (account-scope binding → describe → catalog adaptation), so
         // wait for the full async chain to settle before capturing props.
@@ -417,7 +302,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
         expect(browseScreenPropsRef.current?.lockScope).toEqual(expect.objectContaining({
             machineId: 'machine-plugin-2',
             serverId: 'server-2',
-            providerId: 'plugin:review-bot',
+            providerId: 'acme.review-bot/review-bot',
             source: expect.objectContaining({ kind: 'reviewBotConfig' }),
         }));
     });
@@ -434,8 +319,7 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
             resolveProjection = resolve;
         }));
 
-        const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
-        await renderScreen(React.createElement(ResumeBrowsePickerScreen));
+        await renderResumeBrowsePicker();
         // Settle the account-scope binding that precedes the describe call so
         // the pending projection is the only thing the route is waiting on.
         await flushHookEffects({ cycles: 10 });
@@ -456,6 +340,6 @@ describe('ResumeBrowsePickerScreen replace fallback', () => {
 
         expect(routerMock.back).not.toHaveBeenCalled();
         expect(routerMock.replace).not.toHaveBeenCalled();
-        expect(browseScreenPropsRef.current?.lockScope?.providerId).toBe('plugin:review-bot');
+        expect(browseScreenPropsRef.current?.lockScope?.providerId).toBe('acme.review-bot/review-bot');
     });
 });

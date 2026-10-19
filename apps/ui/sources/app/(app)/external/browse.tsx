@@ -10,6 +10,8 @@ import {
     resolveExternalSessionBrowseLockedSource,
 } from '@/components/sessions/external/browse/resolveExternalSessionBrowseLockedSourceOption';
 import { useSettings } from '@/sync/domains/state/storage';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { getConnectedMetadataCatalog } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
 import { useProfile } from '@/sync/store/hooks';
 import { resolveExternalSessionsAgentBrowseRouteScope } from '@/components/sessions/external/browse/externalSessionBrowseNavigation';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -59,11 +61,15 @@ const ExternalSessionsBrowseRouteContent = React.memo(function ExternalSessionsB
         ) {
             return null;
         }
+        const accountScope = getActiveServerAccountScope();
         const source = resolveExternalSessionBrowseLockedSource({
+            accountScope,
+            serverId: serverId ?? null,
             providerId: agentId,
             machineId,
             profile,
-            settings,
+            agentSettings: settings,
+            labelsByKey: getConnectedMetadataCatalog(accountScope).labelsByKey,
             projection,
         });
         if (!source) return null;

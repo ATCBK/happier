@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 
-import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import {
     createNavigationMock,
     createProjectionDescribeMock,
@@ -56,10 +56,6 @@ installPickerCommonModuleMocks({
             }).module,
             useNavigation: () => navigationMock,
         }),
-    storage: async () =>
-        (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({
-            useSettings: () => ({} as any),
-        }),
     projectionSeam: {
         describe: machineContributionRegistryProjectionDescribeMock,
         serverProfiles: [{ id: 'server-cold', serverUrl: 'https://server-cold.example.test' }],
@@ -75,11 +71,6 @@ vi.mock('@/components/sessions/external/browse/ExternalSessionsBrowseScreen', ()
 
 vi.mock('@/hooks/server/useFeatureDecision', () => ({
     useFeatureDecision: () => ({ state: 'enabled' }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useProfile: () => ({ id: 'account-1' }),
-    useLocalSetting: () => undefined,
 }));
 
 /**
@@ -104,6 +95,9 @@ describe('ResumeBrowsePickerScreen cold projection', () => {
             machineId: 'machine-cold',
             spawnServerId: 'server-cold',
         };
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { settingsParse } = await import('@/sync/domains/settings/settings');
+        storage.getState().applySettingsLocal(settingsParse({}));
         browseScreenPropsRef.current = null;
         routerMock.push.mockClear();
         routerMock.back.mockClear();
@@ -127,17 +121,20 @@ describe('ResumeBrowsePickerScreen cold projection', () => {
     });
 
     it('retains the picker while the bundled-Agent projection is still loading', async () => {
-        machineContributionRegistryProjectionDescribeMock.mockImplementation(() => new Promise(() => {}));
+        const projection = createDeferred<MachineContributionRegistryProjectionDescribeResult>();
+        machineContributionRegistryProjectionDescribeMock.mockImplementation(() => projection.promise);
 
         const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
         const screen = await renderScreen(React.createElement(ResumeBrowsePickerScreen));
-        await flushHookEffects({ cycles: 1, turns: 2 });
+        await vi.waitFor(() => expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalled());
 
         expect(routerMock.back).not.toHaveBeenCalled();
         expect(routerMock.replace).not.toHaveBeenCalled();
         expect(navigationMock.goBack).not.toHaveBeenCalled();
         expect(browseScreenPropsRef.current).toBeNull();
         expect(screen.findByTestId('external-sessions-browse-route-loading')).not.toBeNull();
+        await screen.unmount();
+        await act(async () => { projection.resolve({ supported: false, reason: 'not-supported' }); });
     });
 
     it('dismisses once the projection authoritatively answers that browse is unavailable', async () => {
@@ -148,7 +145,7 @@ describe('ResumeBrowsePickerScreen cold projection', () => {
 
         const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
         await renderScreen(React.createElement(ResumeBrowsePickerScreen));
-        await flushHookEffects({ cycles: 1, turns: 2 });
+        await vi.waitFor(() => expect(resolveProjection).toBeTypeOf('function'));
         expect(routerMock.replace).not.toHaveBeenCalled();
 
         const projectionResolver = resolveProjection;
@@ -165,7 +162,7 @@ describe('ResumeBrowsePickerScreen cold projection', () => {
             pathname: '/new',
             params: expect.objectContaining({
                 agentType: 'claude',
-                dataId: 'draft-1',
+                dataId: routeParamsState.value.dataId,
                 machineId: 'machine-cold',
                 spawnServerId: 'server-cold',
             }),
@@ -225,16 +222,14 @@ describe('ResumeBrowsePickerScreen cold projection', () => {
 
         const ResumeBrowsePickerScreen = (await import('@/app/(app)/new/pick/resume-browse')).default;
         await renderScreen(React.createElement(ResumeBrowsePickerScreen));
-        await flushHookEffects({ cycles: 4, turns: 2 });
-
-        expect(browseScreenPropsRef.current).toEqual(expect.objectContaining({
+        await vi.waitFor(() => expect(browseScreenPropsRef.current).toEqual(expect.objectContaining({
             interaction: 'pickRemoteSessionId',
             lockScope: expect.objectContaining({
                 machineId: 'machine-cold',
                 providerId: 'claude',
                 source: expect.objectContaining({ kind: 'claudeAcpSessionList' }),
             }),
-        }));
+        })));
         expect(routerMock.replace).not.toHaveBeenCalled();
         expect(routerMock.back).not.toHaveBeenCalled();
     });
