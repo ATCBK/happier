@@ -494,8 +494,27 @@ describe('Account Profile transfer (SQLite)', () => {
             const signingInput = createAccountEncryptionMigrateProofSigningInputV1({ request: unsigned, accountId: account.id, sourceMode: 'plain' });
             const request = attachAccountEncryptionMigrateProofSignatureV1({ request: unsigned,
                 signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(signingInput, signing.secretKey))) });
-            const converted = await app.inject({ method: 'POST', url: '/v1/account/encryption/migrate', headers, payload: request });
-            expect(converted.statusCode, converted.body).toBe(200);
+            // Observe the real database boundary without replacing the transaction or its domain logic.
+            // The route's catch otherwise hides the originating exception behind { error: 'internal' }.
+            const migrationErrors: string[] = [];
+            const executeTransaction = db.$transaction;
+            db.$transaction = new Proxy(executeTransaction, {
+                apply(target, receiver, args) {
+                    const result: Promise<unknown> = Reflect.apply(target, receiver, args);
+                    return result.catch((error: unknown) => {
+                        migrationErrors.push(error instanceof Error ? error.stack ?? error.message : String(error));
+                        throw error;
+                    });
+                },
+            });
+            const converted = await (async () => {
+                try {
+                    return await app.inject({ method: 'POST', url: '/v1/account/encryption/migrate', headers, payload: request });
+                } finally {
+                    db.$transaction = executeTransaction;
+                }
+            })();
+            expect(converted.statusCode, [converted.body, ...migrationErrors].join('\n')).toBe(200);
             expect(converted.json().profileRows).toMatchObject({ referenceGuardRevision: 0, transferControl: { status: 'present', revision: 1 },
                 rows: [{ id: record.id, revision: 1 }] });
             expect(openProfileTransferContentV1({ mode: 'e2ee', material, content: converted.json().profileRows.transferControl.content })).toEqual({ status: 'opened', record: prepared });
