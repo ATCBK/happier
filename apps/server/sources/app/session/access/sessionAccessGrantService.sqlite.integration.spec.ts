@@ -1014,7 +1014,7 @@ describe("Session access grant service (SQLite integration)", () => {
         if (!removal.ok) return;
         expect(removal.effects.revokedAccountIds).toEqual([]);
         expect(removal.effects.changedAccountIds).toEqual([fixture.collaborator.id]);
-        expect(removal.effects.accountCursors.get(fixture.collaborator.id)).toBeGreaterThan(0);
+        expect(removal.effects.accountCursors.get(fixture.collaborator.id)?.resolveCursor()).toBeGreaterThan(0);
     });
 
     it("revokes and tombstones only when the final source is removed", async () => {

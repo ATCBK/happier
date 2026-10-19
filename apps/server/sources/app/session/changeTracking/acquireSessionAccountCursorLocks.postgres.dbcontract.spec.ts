@@ -4,9 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { encodeAutomationSessionLifecycleConfiguration } from "@/app/automations/automationSessionLifecycleConfigurationCodec";
-import { prepareSessionAccountCursorLocks } from "./acquireSessionAccountCursorLocksInTx";
+import { acquireSessionAccountCursorLocksInTx, prepareSessionAccountCursorLocks } from "./acquireSessionAccountCursorLocksInTx";
 import { markSessionProjectionRecipientsChanged } from "./markSessionProjectionRecipientsChanged";
 import { sourceKeyForSessionFollowSourceV1 } from "@/app/session/follow/sessionFollowSourceIdentity";
+import { markAccountChangesForSessionAccounts } from "./markAccountChangesForSessionAccounts";
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("Prepared Session cursor audience", () => {
     let connected = false;
@@ -20,6 +21,37 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
         connected = true;
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
+
+    it("replays an audience that grows after domain admission before terminal publication", async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const recipient = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain",
+        } });
+        let attempts = 0;
+        try {
+            await inTx(async tx => {
+                attempts += 1;
+                const recipients = await acquireSessionAccountCursorLocksInTx(tx, [session.id]);
+                if (attempts === 1) {
+                    await db.sessionShare.create({ data: {
+                        sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: recipient.id,
+                    } });
+                }
+                await tx.session.update({ where: { id: session.id }, data: { seq: { increment: 1 } } });
+                await markAccountChangesForSessionAccounts({ tx, sessionId: session.id, accountIds: recipients });
+            }, { isolationLevel: "ReadCommitted" });
+            expect(attempts).toBe(2);
+            expect(await db.session.findUniqueOrThrow({ where: { id: session.id }, select: { seq: true } }))
+                .toEqual({ seq: 1 });
+            expect(await db.accountChange.findMany({ where: { sessionId: session.id },
+                orderBy: { accountId: "asc" }, select: { accountId: true, cursor: true } }))
+                .toEqual([owner.id, recipient.id].sort().map(accountId => ({ accountId, cursor: 1 })));
+        } finally {
+            await db.session.delete({ where: { id: session.id } });
+            await db.account.deleteMany({ where: { id: { in: [owner.id, recipient.id] } } });
+        }
+    });
 
     it.each(["Serializable", "ReadCommitted"] as const)("replays a changed follower audience and fences outgoing, incoming and Archive lifecycle Accounts at %s", async isolationLevel => {
         const accounts = await Promise.all(Array.from({ length: 6 }, () => db.account.create({
@@ -66,16 +98,19 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
                 // checking a union would hide a missing later audience member.
                 for (const account of accounts) {
                     await expect(db.$queryRaw`
-                        SELECT id FROM "Account" WHERE id = ${account.id} FOR NO KEY UPDATE NOWAIT
+                        SELECT id FROM "Account" WHERE id = ${account.id} FOR UPDATE NOWAIT
                     `).rejects.toMatchObject({ code: "P2010", meta: { code: "55P03" } });
+                    await expect(db.$queryRaw`
+                        SELECT id FROM "Account" WHERE id = ${account.id} FOR NO KEY UPDATE NOWAIT
+                    `).resolves.toEqual([{ id: account.id }]);
                 }
                 await tx.session.update({ where: { id: source.id }, data: { seq: { increment: 1 } } });
                 await markSessionProjectionRecipientsChanged({ tx, sessionId: source.id });
                 expect(await tx.accountChange.findMany({ where: { sessionId: follower.id },
                     orderBy: { accountId: 'asc' }, select: { accountId: true, hint: true } }))
-                    .toEqual([followerOwner.id, recipient.id].sort().map(accountId => ({ accountId, hint: null })));
+                    .toEqual([]);
                 expect(await tx.account.findUniqueOrThrow({ where: { id: leadOwner.id }, select: { seq: true } }))
-                    .toEqual({ seq: 1 });
+                    .toEqual({ seq: 0 });
             }, {
                 isolationLevel,
                 prepare: async () => {
@@ -91,6 +126,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
                     return fence;
                 },
             });
+            expect(await db.accountChange.findMany({ where: { sessionId: follower.id },
+                orderBy: { accountId: 'asc' }, select: { accountId: true, hint: true } }))
+                .toEqual([followerOwner.id, recipient.id].sort().map(accountId => ({ accountId, hint: null })));
+            expect(await db.account.findUniqueOrThrow({ where: { id: leadOwner.id }, select: { seq: true } }))
+                .toEqual({ seq: 1 });
         } finally {
             await db.session.deleteMany({ where: { accountId: { in: accounts.map(account => account.id) } } });
             await db.account.deleteMany({ where: { id: { in: accounts.map(account => account.id) } } });

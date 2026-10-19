@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
-import { getDbProviderFromEnv } from "@/storage/prisma";
+import { inTx, TransactionReplayRequiredError, type ResolvedTransactionResult, type Tx } from "@/storage/inTx";
+import { assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication } from "@/app/changes/markAccountChanged";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { readPendingActivationControllerAccountIdsInTx } from "./pendingActivationAuthorization";
 import { readCurrentCommittedSessionInputMachineTargetInTx } from "@/app/session/messages/sessionInputAdmission";
@@ -10,15 +10,14 @@ export async function inPendingQueuePositionTx<T>(
     fn: (tx: Tx) => Promise<T>,
     targetMachineId?: string,
     readAdditionalPublicationAccountsInTx?: (tx: Tx) => Promise<readonly string[]>,
-): Promise<T> {
+): Promise<ResolvedTransactionResult<T>> {
     return inTx(async (tx) => {
         const committedTarget = targetMachineId === undefined
             ? await readCurrentCommittedSessionInputMachineTargetInTx(tx, sessionId) : undefined;
         const candidateMachineId = targetMachineId ?? committedTarget?.machineId;
         const controllerAccountIds = await readPendingActivationControllerAccountIdsInTx(tx, candidateMachineId);
-        // Publication and mode-bound writers share Account→Session order.
-        // Keep every recipient cursor fenced before admission begins, including
-        // a different Session's heartbeat on the same Account.
+        // Admit the complete Account audience, then serialize Pending work at
+        // the canonical Session resource fence. Publication remains terminal.
         const additionalAccountIds = await readAdditionalPublicationAccountsInTx?.(tx) ?? [];
         await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [...controllerAccountIds, ...additionalAccountIds]);
         const currentCommittedTarget = targetMachineId === undefined
@@ -34,9 +33,14 @@ export async function inPendingQueuePositionTx<T>(
             || !isDeepStrictEqual(additionalAccountIds, await readAdditionalPublicationAccountsInTx?.(tx) ?? [])) {
             throw new TransactionReplayRequiredError("pending-activation-target-changed");
         }
-        if (getDbProviderFromEnv(process.env, "postgres") === "postgres") {
-            await tx.$queryRawUnsafe('SELECT "id" FROM "Session" WHERE "id" = $1 FOR NO KEY UPDATE', sessionId);
-        }
+        const admittedExtraAccounts = new Set([...controllerAccountIds, ...additionalAccountIds]);
+        beforeAccountChangePublication(tx, [...admittedExtraAccounts], async client => {
+            const target = targetMachineId === undefined
+                ? await readCurrentCommittedSessionInputMachineTargetInTx(client, sessionId) : undefined;
+            const controllers = await readPendingActivationControllerAccountIdsInTx(client, targetMachineId ?? target?.machineId);
+            const additional = await readAdditionalPublicationAccountsInTx?.(client) ?? [];
+            assertAccountChangePublicationAudienceInTx(client, [...controllers, ...additional]);
+        });
         return fn(tx);
     }, { transactionClass: "pending-input-admission" });
 }

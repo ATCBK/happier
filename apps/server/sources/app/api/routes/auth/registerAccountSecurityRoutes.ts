@@ -32,6 +32,7 @@ import { db, isPrismaUniqueConstraintError } from "@/storage/db";
 import { afterTx, inTx } from "@/storage/inTx";
 import {
     acquireAccountSessionOwnerMetadataFenceInTx,
+    acquireAccountSessionOwnerMetadataFencesInTx,
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
 } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import type { Fastify } from "../../types";
@@ -163,7 +164,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
             result = await inTx(async (tx) => {
                 const operation = await readNativeAuthOneTimeOperation(tx, { purpose: "reset_plain_password", token: request.body.token });
                 if (operation?.purpose !== "reset_plain_password") return "invalid" as const;
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, operation.accountId);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, operation.accountId, "exclusive");
                 const account = await tx.account.findUnique({ where: { id: operation.accountId }, select: { status: true, encryptionMode: true } });
                 if (!account) return "invalid" as const;
                 const identity = await tx.accountIdentity.findUnique({ where: { accountId_provider: { accountId: operation.accountId, provider: "email" } }, select: { id: true, providerUserId: true } });
@@ -236,6 +237,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
         if (request.validationError) return reply.code(400).send({ error: "invalid_request" });
         const policy = request.body.policy;
         const result = await inTx(async (tx) => {
+            await acquireAccountSessionOwnerMetadataFencesInTx(tx, [request.userId], "exclusive");
             const account = await tx.account.findUnique({
                 where: { id: request.userId },
                 select: { status: true, terminalPresentUserPolicy: true },
@@ -301,7 +303,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
         const normalized = normalizeVerifiedEmail(body.email);
         if (!normalized) return reply.code(400).send({ error: "invalid_request" });
         const outcome = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId, "exclusive");
             const account = await tx.account.findUnique({ where: { id: request.userId }, select: { status: true, encryptionMode: true, publicKey: true } });
             if (!account || account.status !== "active" || account.encryptionMode !== body.kind) return "inconsistent" as const;
             if (body.kind === "e2ee"
@@ -393,7 +395,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
         const email = snapshot.AccountIdentity[0]?.providerUserId ?? null;
         const passwordMutation = mutation({ action: body.kind === "e2ee" ? body.action : "change", accountId: request.userId, revision: body.expectedCredentialRevision, email, credential: prepared.credential });
         const outcome = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId, "exclusive");
             const current = await tx.account.findUnique({ where: { id: request.userId }, select: { status: true, encryptionMode: true, publicKey: true, AccountIdentity: { where: { provider: "email" }, select: { id: true, providerUserId: true } }, AccountPasswordCredential: { select: { revision: true, credential: true } } } });
             if (!current || current.status !== "active" || current.encryptionMode !== body.kind || current.AccountIdentity[0]?.providerUserId !== email || current.AccountIdentity[0]?.id !== snapshot.AccountIdentity[0]?.id || current.AccountPasswordCredential?.revision !== body.expectedCredentialRevision) return "conflict" as const;
             const parsedCurrent = parseAccountPasswordCredentialV1(current.encryptionMode, current.AccountPasswordCredential.credential);
@@ -434,7 +436,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
         const email = snapshot.AccountIdentity[0]?.providerUserId ?? null;
         const passwordMutation = mutation({ action: "remove", accountId: request.userId, revision: body.expectedCredentialRevision, email, credential: null });
         const outcome = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId, "exclusive");
             const account = await tx.account.findUnique({ where: { id: request.userId }, select: { status: true, encryptionMode: true, publicKey: true, homeRole: true } });
             const identity = await tx.accountIdentity.findUnique({ where: { accountId_provider: { accountId: request.userId, provider: "email" } }, select: { id: true, providerUserId: true } });
             const current = await tx.accountPasswordCredential.findUnique({ where: { accountId: request.userId }, select: { revision: true, credential: true } });
@@ -500,7 +502,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
             // Serialize the identity mutation with password reset and every other
             // Account Security writer. In particular, a reset bearer bound to the
             // former native identity cannot race past a committed email change.
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId, "exclusive");
             const account = await tx.account.findUnique({ where: { id: request.userId }, select: { status: true } });
             const identity = await tx.accountIdentity.findUnique({ where: { accountId_provider: { accountId: request.userId, provider: "email" } }, select: { id: true, providerUserId: true } });
             if (!account || account.status !== "active" || !identity

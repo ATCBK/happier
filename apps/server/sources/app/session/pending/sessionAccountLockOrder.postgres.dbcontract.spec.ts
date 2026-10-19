@@ -457,9 +457,6 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
         const peerMayWait = new Promise<void>(resolve => { allowRevalidation = resolve; });
         const rawDriverFailures: unknown[] = [];
         let interceptInitialLock = true;
-        let pendingPid = -1;
-        let peerPid = -1;
-        let peerFinished = false;
         const transaction = db.$transaction.bind(db);
         let pendingResult: Promise<PromiseSettledResult<unknown>[]> | undefined;
         let peerResult: Promise<PromiseSettledResult<unknown>[]> | undefined;
@@ -510,13 +507,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             const execute = async <T>(fn: (tx: Tx) => Promise<T>, options?: { maxWait?: number; timeout?: number }) => transaction(async tx => {
                 const observed = new Proxy(tx, { get(boundary, key) {
                     if (key === "$queryRawUnsafe") return async <R>(query: string, ...values: unknown[]): Promise<R> => {
+                        const queriedAccountIds = Array.isArray(values[0]) ? values[0] : values;
                         const pause = interceptInitialLock && query.includes('FROM "Account"')
-                            && query.includes("FOR NO KEY UPDATE") && Array.isArray(values[0])
-                            && values[0].includes(requester.id) && !values[0].includes(custodian.id);
+                            && query.includes("FOR KEY SHARE")
+                            && queriedAccountIds.includes(requester.id) && !queriedAccountIds.includes(custodian.id);
                         if (pause) {
                             interceptInitialLock = false;
-                            const [backend] = await boundary.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
-                            pendingPid = backend.pid;
                             discovered();
                             await targetMayChange;
                         }
@@ -550,19 +546,13 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             allowInitialLock();
             await Promise.race([requesterLocked, pendingResult.then(() => { throw new Error("Pending ended before Account acquisition"); })]);
             const peer = inTx(async tx => {
-                const [backend] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
-                peerPid = backend.pid;
                 await acquireSessionAccountCursorLocksInTx(tx, [], [custodian.id, requester.id]);
                 await markAccountChanged(tx, { accountId: requester.id, kind: "account", entityId: stem });
             }, { isolationLevel: "ReadCommitted" });
-            peerResult = Promise.allSettled([peer]).finally(() => { peerFinished = true; });
-            while (!peerFinished) {
-                const [blocking] = await db.$queryRawUnsafe<{ waiting: boolean }[]>(
-                    "SELECT $1::int = ANY(pg_blocking_pids($2::int)) AS waiting", pendingPid, peerPid,
-                );
-                if (blocking.waiting) break;
-            }
-            expect(peerFinished).toBe(false);
+            peerResult = Promise.allSettled([peer]);
+            // Ordinary content admission must let an unrelated cursor writer
+            // finish while this attempt is still revalidating its placement.
+            for (const outcome of await peerResult) if (outcome.status === "rejected") throw outcome.reason;
             allowRevalidation();
             const outcomes = [...await pendingResult, ...await peerResult];
             expect(rawDriverFailures).toEqual([]);
@@ -654,7 +644,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             // exercises RC without changing the product's global default.
             db.$transaction = execute as typeof db.$transaction;
             const holder = inTx(async tx => {
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, custodian.id);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, custodian.id, "exclusive");
                 const [row] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
                 controllerPid = row.pid;
                 controllerReady();
@@ -688,8 +678,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             if (outcome.status === "rejected") throw outcome.reason;
             if (targetSource === "explicit-unenrolled") expect(outcome.value?.machinePublication)
                 .toMatchObject({ target: admittedTarget, custodianAccountId: custodian.id });
-            else expect(outcome.value?.managedControllerPublication)
-                .toMatchObject({ accountId: custodian.id, cursor: expect.any(Number) });
+            else {
+                expect(outcome.value?.managedControllerPublication).toMatchObject({ accountId: custodian.id });
+                expect(outcome.value?.managedControllerPublication?.resolveCursor()).toBeGreaterThan(0);
+            }
         } finally {
             releaseController?.();
             db.$transaction = transaction;
@@ -732,7 +724,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             let ownerReady!: () => void;
             const ownerHasAccount = new Promise<void>(resolve => { ownerReady = resolve; });
             const owner = inTx(async tx => {
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
                 ownerReady();
                 await ownerMayContinue;
                 expect(await fenceExactCurrentPublisherAuthorityInTx(tx, authority, account.id, session.id)).toBe(true);

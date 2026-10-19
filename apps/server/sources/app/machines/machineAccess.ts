@@ -17,7 +17,7 @@ import { isEffectiveTeamGroupMembership } from '@/app/teams/groups/effectiveGrou
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from '@/app/encryption/accountRecipientEnvelopeReadiness';
 import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT } from '@/app/session/encryption/sessionDataKeyRecipientProjection';
 import { resolveAccountDisplayLabelV1, ACCOUNT_DISPLAY_PROFILE_SELECT } from '@/app/account/profile/accountDisplayProfile';
-import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from '@/app/changes/markAccountChanged';
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from '@/app/changes/markAccountChanged';
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
 import { captureMachineAccessImpactsInTx, applyMachineAccessImpactsInTx } from './machineAccessEffects';
 
@@ -322,7 +322,7 @@ async function publishMutationInTx(tx: Tx, impacts: Awaited<ReturnType<typeof mu
     await applyMachineAccessImpactsInTx(tx, { impacts: impacts.values(), grantRosterChanged: true, ...(changedAccountId ? { directGrantChangedAccountId: changedAccountId } : {}) });
 }
 /** Fence existing and prospective recipients before authority, key or grant reads. */
-async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId: string, principal?: PrincipalRefV1): Promise<void> {
+export async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId: string, principal?: PrincipalRefV1): Promise<void> {
     if (getDbProviderFromEnv(process.env, 'postgres') === 'sqlite') return;
     const readAudience = async () => {
         const accountIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
@@ -345,6 +345,9 @@ async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId: strin
     if ((await readAudience()).some(accountId => !captured.has(accountId))) {
         throw new TransactionReplayRequiredError('transaction-account-audience-changed');
     }
+    beforeAccountChangePublication(tx, [...captured], async () => {
+        assertAccountChangePublicationAudienceInTx(tx, await readAudience());
+    });
 }
 /** Idempotent per-principal grants; Manage can delegate Manage without replacing custody. */
 export async function setMachineAccessGrantInTx(tx: Tx, input: MachineActor & Readonly<{ principal: PrincipalRefV1; level: 'view' | 'admin' }>): Promise<MachineAccessMutationResultV1> {

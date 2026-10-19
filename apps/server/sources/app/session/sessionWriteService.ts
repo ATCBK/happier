@@ -7,12 +7,14 @@ import { assertSessionCapabilityInTx, assertSessionOwnerInTx, resolveSessionAcce
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { resolveCurrentSessionRecipientAccountIdsInTx } from "@/app/session/access/sessionRecipients";
-import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor, type SessionRecipientPublication } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { sessionRecipientPublicationResult, type SessionRecipientPublicationResult } from "@/app/session/changeTracking/sessionRecipientPublicationResult";
+import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { acquireSessionAccountCursorLocksInTx, prepareSessionAccountCursorLocks } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { reconcileAutonomousExchangeAcceptedTurnInTx } from "@/app/session/pending/reconcileAutonomousExchangeAcceptedTurnInTx";
 import { observeCreateSessionMessageStage } from "@/app/monitoring/metrics/sessionWriteMetrics";
 import { db } from "@/storage/db";
-import { afterTx, inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inReadSnapshot, inTx, transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime } from "@/storage/prisma";
 import type { SessionTranscriptSurfaceItemReferenceInputV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { log, warn } from "@/utils/logging/log";
@@ -85,7 +87,7 @@ import {
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     parsePersistedSessionOwnerMetadataEnvelopeV1,
 } from "@/app/session/metadata/sessionOwnerMetadataPersistence";
@@ -114,6 +116,7 @@ export {
 } from "./sessionTranscriptWrite";
 
 type RecipientCursor = SessionRecipientCursor;
+type SessionWriteInTxResult<T> = T | SessionRecipientPublicationResult<T>;
 const JSON_PARSE_FAILED = Symbol("json-parse-failed");
 
 function scheduleSessionLifecycleAdmissionDiagnostics(params: Readonly<{
@@ -181,6 +184,16 @@ export type SessionAccountEncryptionMigrationResult =
 export type SessionAccountEncryptionMigrationPostStateResult =
     | Readonly<{ status: "matched" }>
     | Readonly<{ status: "mismatch" }>;
+
+export type SessionAccountEncryptionMigrationInTxResult =
+    | Exclude<SessionAccountEncryptionMigrationResult, { status: "applied" }>
+    | (Readonly<{
+        status: "applied";
+        sessions: readonly Readonly<{
+            session: AccountEncryptionMigrationSessionRow;
+            ownerCursor: AccountChangePublication;
+        }>[];
+    }> & TransactionResult<Extract<SessionAccountEncryptionMigrationResult, { status: "applied" }>>);
 
 async function readAccountEncryptionMigrationSessionRows(
     tx: Tx,
@@ -356,7 +369,7 @@ export async function migrateSessionAccountEncryptionInTx(
         toMode: "plain" | "e2ee";
         directive: unknown;
     }>,
-): Promise<SessionAccountEncryptionMigrationResult> {
+): Promise<SessionAccountEncryptionMigrationInTxResult> {
     const directiveResult =
         AccountEncryptionMigrateSessionsDirectiveSchema.safeParse(
             params.directive,
@@ -381,7 +394,7 @@ export async function migrateSessionAccountEncryptionInTx(
         return sourceInventory;
     }
     if (directive.action === "assert_empty") {
-        return { status: "applied", sessions: [] };
+        return { status: "applied", sessions: [], ...transactionResult(() => ({ status: "applied" as const, sessions: [] })) };
     }
     for (const item of directive.items) {
         if (!validateSessionOwnerMetadataEnvelopeForAccountModeV1({
@@ -397,7 +410,7 @@ export async function migrateSessionAccountEncryptionInTx(
     );
     const sessions: Array<{
         session: AccountEncryptionMigrationSessionRow;
-        ownerCursor: number;
+        ownerCursor: AccountChangePublication;
     }> = [];
     for (const item of directive.items) {
         const row = rowsById.get(item.sessionId);
@@ -447,7 +460,14 @@ export async function migrateSessionAccountEncryptionInTx(
             ownerCursor,
         });
     }
-    return { status: "applied", sessions };
+    return {
+        status: "applied",
+        sessions,
+        ...transactionResult(() => ({
+            status: "applied" as const,
+            sessions: sessions.map(({ session, ownerCursor }) => ({ session, ownerCursor: ownerCursor.resolveCursor() })),
+        })),
+    };
 }
 
 /**
@@ -972,7 +992,7 @@ type TrustedLocalIdReconciliation =
       }
     | {
         status: "reconciled";
-        result: CreateSessionMessageResult;
+        result: SessionWriteInTxResult<CreateSessionMessageResult>;
       };
 
 function resolveSessionMessageRoleForWrite(params: Readonly<{
@@ -1200,7 +1220,7 @@ async function reconcileExistingTrustedLocalIdInTx(params: Readonly<{
         });
         return {
             status: "reconciled",
-            result: {
+            result: sessionRecipientPublicationResult({
                 ok: true,
                 didWrite: false,
                 didUpdate: true,
@@ -1208,7 +1228,7 @@ async function reconcileExistingTrustedLocalIdInTx(params: Readonly<{
                 attentionImpact,
                 message: toSessionMessageWriteRow(updated),
                 recipientCursors,
-            },
+            }),
         };
     }
 
@@ -1237,7 +1257,7 @@ async function reconcileExistingTrustedLocalIdInTx(params: Readonly<{
     });
     return {
         status: "reconciled",
-        result: {
+        result: sessionRecipientPublicationResult({
             ok: true,
             didWrite: false,
             didUpdate: true,
@@ -1245,7 +1265,7 @@ async function reconcileExistingTrustedLocalIdInTx(params: Readonly<{
             attentionImpact,
             message: toSessionMessageWriteRow(updated),
             recipientCursors,
-        },
+        }),
     };
 }
 
@@ -1328,7 +1348,7 @@ async function createSessionMessageAttempt(
     }
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx): Promise<SessionWriteInTxResult<CreateSessionMessageResult>> => {
             let access: SuccessfulSessionEditAccess;
             let resolvedRole: SessionMessageRole | null;
             let attentionImpact: SessionMessageAttentionImpact;
@@ -1536,7 +1556,7 @@ async function createSessionMessageAttempt(
                 result: "ok",
             });
 
-            return {
+            return sessionRecipientPublicationResult({
                 ok: true,
                 didWrite: true,
                 didUpdate: false,
@@ -1545,7 +1565,7 @@ async function createSessionMessageAttempt(
                 message: toSessionMessageWriteRow(created),
                 recipientCursors,
                 ...(readyProjection ? { readyProjection } : {}),
-            };
+            });
         }, { isolationLevel: "ReadCommitted" });
     } catch (e) {
         if (e instanceof SessionMessageRowRevisionRaceError && retryOnRowRevisionRace) {
@@ -1568,7 +1588,7 @@ async function createSessionMessageAttempt(
             }
             if (hasTrustedProvenance) {
                 try {
-                    return await inTx(async (tx) => {
+                    return await inTx(async (tx): Promise<SessionWriteInTxResult<CreateSessionMessageResult>> => {
                         if (
                             !sourceCreatedAt
                             || !sourceUpdatedAt
@@ -1603,7 +1623,7 @@ async function createSessionMessageAttempt(
                 }
             }
             try {
-                return await inTx(async (tx) => {
+                return await inTx(async (tx): Promise<SessionWriteInTxResult<CreateSessionMessageResult>> => {
                     const accessStartedAt = Date.now();
                     const access = params.inputAdmission === "authenticatedAccount"
                         ? await loadSessionInputMutationContextInTx(tx, {
@@ -1833,7 +1853,7 @@ async function createSessionMessageAttempt(
                         result: "ok",
                     });
 
-                    return {
+                    return sessionRecipientPublicationResult({
                         ok: true as const,
                         didWrite: false as const,
                         didUpdate: true as const,
@@ -1841,7 +1861,7 @@ async function createSessionMessageAttempt(
                         attentionImpact,
                         message: toSessionMessageWriteRow(updated),
                         recipientCursors,
-                    };
+                    });
                 }, { isolationLevel: "ReadCommitted" });
             } catch (error) {
                 if (error instanceof SessionMessageRowRevisionRaceError && retryOnRowRevisionRace) {
@@ -1891,7 +1911,7 @@ export async function updateSessionMetadata(params: {
     }
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx): Promise<UpdateSessionMetadataResult | TransactionResult<UpdateSessionMetadataResult>> => {
             const operationAccess = await resolveSessionAccessForOperation(tx, {
                 accountId: actorUserId,
                 sessionId,
@@ -1966,11 +1986,11 @@ export async function updateSessionMetadata(params: {
                 encryptionMode: session.encryptionMode,
             })) {
                 const privateReadCursor = await applyReadHint();
-                return {
-                    ok: true, version: expectedVersion, metadata: session.metadata,
+                return transactionResult(() => ({
+                    ok: true as const, version: expectedVersion, metadata: session.metadata,
                     recipientCursors: [], badgeAttentionChanged: false,
-                    ...(privateReadCursor ? { privateReadCursor } : {}),
-                };
+                    ...(privateReadCursor ? { privateReadCursor: privateReadCursor.resolveResult() } : {}),
+                }));
             }
 
             const { count } = await tx.session.updateMany({
@@ -2023,14 +2043,14 @@ export async function updateSessionMetadata(params: {
                 recipientAccountIds: access.recipientAccountIds,
             });
             const privateReadCursor = await applyReadHint();
-            return {
-                ok: true,
+            return transactionResult(() => ({
+                ok: true as const,
                 version: expectedVersion + 1,
                 metadata: metadataCiphertext,
-                recipientCursors,
+                recipientCursors: resolveSessionAccountChangePublications(recipientCursors),
                 badgeAttentionChanged: false,
-                ...(privateReadCursor ? { privateReadCursor } : {}),
-            };
+                ...(privateReadCursor ? { privateReadCursor: privateReadCursor.resolveResult() } : {}),
+            }));
         });
     } catch {
         return { ok: false, error: "internal" };
@@ -2312,7 +2332,7 @@ export async function updateSessionRuntimeActivityProjection(params: SessionRunt
         }) ? { status: "unchanged", projection, recipientCursors: [] } : null;
     }, { transactionClass: "session.runtime-activity" });
     if (unchanged) return unchanged;
-    return await inTx(async (tx): Promise<AuthorizedSessionRuntimeActivityProjectionResult> => {
+    return await inTx(async (tx): Promise<SessionWriteInTxResult<AuthorizedSessionRuntimeActivityProjectionResult>> => {
         // Serialize with publisher replacement and Account publication before
         // reading admission. RC then observes the writer that released the fence
         // instead of retrying an obsolete Serializable snapshot of that Account.
@@ -2328,7 +2348,7 @@ export async function updateSessionRuntimeActivityProjection(params: SessionRunt
         if (activity.status === "rejected") return activity;
         if (activity.status === "unchanged") return { ...activity, recipientCursors: [] };
         const recipientCursors = await markSessionProjectionRecipientsChanged({ tx, sessionId: params.sessionId });
-        return { ...activity, recipientCursors };
+        return sessionRecipientPublicationResult({ ...activity, recipientCursors });
     }, { isolationLevel: "ReadCommitted", transactionClass: "session.runtime-activity" });
 }
 
@@ -2449,7 +2469,7 @@ export async function updateSessionAgentState(params: {
     }
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx): Promise<SessionWriteInTxResult<UpdateSessionAgentStateResult>> => {
             if (parsedUserActionRequiredOccurrences.data.length > 0) {
                 await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [], { includeLifecyclePublications: true });
             }
@@ -2486,6 +2506,7 @@ export async function updateSessionAgentState(params: {
                 const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
                     tx,
                     access.sessionOwnerId,
+                    "content",
                 );
                 if (accountFence.status !== "ready") {
                     return { ok: false, error: "internal" };
@@ -2601,7 +2622,7 @@ export async function updateSessionAgentState(params: {
                         : {}),
                 },
             );
-            return {
+            return sessionRecipientPublicationResult({
                 ok: true,
                 version: expectedVersion + 1,
                 agentState: agentStateCiphertext,
@@ -2616,7 +2637,7 @@ export async function updateSessionAgentState(params: {
                 ...(settledPendingRequestObservedAt !== undefined
                     ? { pendingRequestObservedAt: settledPendingRequestObservedAt }
                     : {}),
-            };
+            });
         });
     } catch {
         return { ok: false, error: "internal" };
@@ -3125,11 +3146,11 @@ function createSessionTurnAppliedResult(params: {
     turn: SessionTurnApplicationRow;
     receipt: SessionTurnMutationReceiptV1;
     state?: ReturnType<typeof materializedSessionTurnState>;
-    recipientCursors: RecipientCursor[];
+    recipientCursors: SessionRecipientPublication[];
     badgeAttentionChanged: boolean;
     rollbackEligibleTurnStarts?: number[];
-}): Extract<ApplySessionTurnMutationResult, { ok: true }> {
-    return {
+}): SessionWriteInTxResult<Extract<ApplySessionTurnMutationResult, { ok: true }>> {
+    const result = {
         ok: true,
         didApply: true,
         receipt: params.receipt,
@@ -3142,7 +3163,10 @@ function createSessionTurnAppliedResult(params: {
         ...(params.rollbackEligibleTurnStarts !== undefined
             ? { rollbackEligibleTurnStarts: params.rollbackEligibleTurnStarts }
             : {}),
-    };
+    } as const;
+    return params.recipientCursors.length > 0
+        ? sessionRecipientPublicationResult(result)
+        : { ...result, recipientCursors: [] };
 }
 
 export type ReassertSessionLatestTurnStatusResult =
@@ -3179,7 +3203,7 @@ export async function reassertSessionLatestTurnStatus(params: {
     }
 
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx): Promise<SessionWriteInTxResult<ReassertSessionLatestTurnStatusResult>> => {
             const access = await loadSessionOwnerMutationContextInTx(tx, { actorUserId, sessionId });
             if (!access.ok) return { ok: false, error: access.error };
 
@@ -3251,7 +3275,7 @@ export async function reassertSessionLatestTurnStatus(params: {
                 sessionId,
                 recipientAccountIds: access.recipientAccountIds,
             });
-            return {
+            return sessionRecipientPublicationResult({
                 ok: true,
                 didApply: true,
                 latestTurnId: turn.turnId,
@@ -3263,7 +3287,7 @@ export async function reassertSessionLatestTurnStatus(params: {
                     toSessionActivityBadgeInputs(session),
                     nextActivityInputs,
                 ),
-            };
+            });
         });
     } catch {
         return { ok: false, error: "internal" };
@@ -3279,7 +3303,7 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
         | Readonly<{ kind: "credential"; authentication: SessionAccessAuthentication }>
         | Readonly<{ kind: "session_owner_runtime" }>;
     runtimeComposition?: SubmitSessionActivityRemoteAlertsParams["runtimeComposition"];
-}): Promise<ApplySessionTurnMutationResult> {
+}): Promise<SessionWriteInTxResult<ApplySessionTurnMutationResult>> {
     const tx = params.tx;
     const sessionId = params.turnMutation.sessionId;
     // These annotations change only SessionTurn and its durable receipt. They
@@ -3357,6 +3381,7 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
             const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
                 tx,
                 writeAuthority.accountId,
+                "content",
             );
             if (accountFence.status !== "ready") {
                 return { ok: false, error: "internal" };
@@ -3819,7 +3844,7 @@ export async function applyLatestSessionTurnEndInTx(params: Readonly<{
     });
     if (!session?.latestTurnId) return null;
 
-    return await applySessionTurnMutationWithOwnerAccessInTx({
+    const result = await applySessionTurnMutationWithOwnerAccessInTx({
         tx: params.tx,
         actorUserId: params.actorUserId,
         turnMutation: ExactSessionTurnEndMutationV1Schema.parse({
@@ -3833,6 +3858,10 @@ export async function applyLatestSessionTurnEndInTx(params: Readonly<{
         markParticipants: false,
         principal: { kind: "session_owner_runtime" },
     });
+    if ("resolveResult" in result) {
+        throw new Error("Turn settlement without participant publication returned deferred cursors");
+    }
+    return result;
 }
 
 export async function applySessionTurnMutation(params: {
@@ -3979,7 +4008,7 @@ export async function patchSession(params: {
     sessionExpectation?: SessionMetadataInactiveModelIntentExpectationV1;
 }): Promise<PatchSessionResult> {
     try {
-        return await inTx(async (tx) => {
+        return await inTx(async (tx): Promise<SessionWriteInTxResult<PatchSessionResult>> => {
             const operationAccess = await resolveSessionAccessForOperation(tx, {
                 accountId: params.actorUserId,
                 sessionId: params.sessionId,
@@ -4008,7 +4037,7 @@ export async function patchSessionInTx(tx: Tx, params: {
     metadata?: { ciphertext: string; expectedVersion: number };
     agentState?: { ciphertext: string | null; expectedVersion: number };
     sessionExpectation?: SessionMetadataInactiveModelIntentExpectationV1;
-}, preconditions?: SessionMetadataWritePreconditionsV1): Promise<PatchSessionResult> {
+}, preconditions?: SessionMetadataWritePreconditionsV1): Promise<SessionWriteInTxResult<PatchSessionResult>> {
     const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
     const actorUserId = typeof params.actorUserId === "string" ? params.actorUserId : "";
     const metadata = params.metadata;
@@ -4228,7 +4257,7 @@ export async function patchSessionInTx(tx: Tx, params: {
         sessionId,
         recipientAccountIds: access.recipientAccountIds,
     });
-    return {
+    return sessionRecipientPublicationResult({
         ok: true,
         recipientCursors,
         ...(metadata
@@ -4255,7 +4284,7 @@ export async function patchSessionInTx(tx: Tx, params: {
                 },
             }
             : {}),
-    };
+    });
 }
 
 export type UpdateSessionMetadataEnvelopeTupleInput =
@@ -4391,11 +4420,11 @@ function isExactOwnerMigrationRetry(
 
 function toOwnerMigrationSuccess(
     current: StoredSessionMetadataEnvelopeTuple,
-    recipientCursors: RecipientCursor[],
+    recipientCursors: SessionRecipientPublication[],
     sessionOwnerId: string,
     ownerAccountMode: "plain" | "e2ee",
-): UpdateSessionMetadataEnvelopeTupleResult {
-    return {
+): SessionRecipientPublicationResult<Extract<UpdateSessionMetadataEnvelopeTupleResult, { ok: true }>> {
+    return sessionRecipientPublicationResult({
         ok: true,
         recipientCursors,
         sessionOwnerId,
@@ -4412,7 +4441,7 @@ function toOwnerMigrationSuccess(
             version: current.agentStateVersion,
             value: current.agentState,
         },
-    };
+    });
 }
 
 function toOwnerMigrationConflict(
@@ -4450,11 +4479,11 @@ function toOwnerMigrationConflict(
 function toMetadataEnvelopeTupleSuccess(
     current: StoredSessionMetadataEnvelopeTuple,
     params: ActiveSessionMetadataEnvelopeTupleInput,
-    recipientCursors: RecipientCursor[],
+    recipientCursors: SessionRecipientPublication[],
     sessionOwnerId: string,
     ownerAccountMode: "plain" | "e2ee",
-): UpdateSessionMetadataEnvelopeTupleResult {
-    return {
+): SessionRecipientPublicationResult<Extract<UpdateSessionMetadataEnvelopeTupleResult, { ok: true }>> {
+    return sessionRecipientPublicationResult({
         ok: true,
         recipientCursors,
         sessionOwnerId,
@@ -4470,7 +4499,7 @@ function toMetadataEnvelopeTupleSuccess(
             version: current.agentStateVersion,
             value: current.agentState,
         },
-    };
+    });
 }
 
 function toMetadataEnvelopeTupleVersionMismatch(
@@ -4774,7 +4803,7 @@ export async function updateSessionMetadataEnvelopeTupleInTx(
     tx: Tx,
     params: UpdateSessionMetadataEnvelopeTupleInput,
     preconditions?: SessionMetadataWritePreconditionsV1,
-): Promise<UpdateSessionMetadataEnvelopeTupleResult> {
+): Promise<SessionWriteInTxResult<UpdateSessionMetadataEnvelopeTupleResult>> {
     if (!isValidSessionMetadataEnvelopeTupleInput(params)) {
         return { ok: false, error: "invalid-params" };
     }
@@ -4789,7 +4818,7 @@ async function updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(
     tx: Tx,
     params: UpdateSessionMetadataEnvelopeTupleInput,
     preconditions?: SessionMetadataWritePreconditionsV1,
-): Promise<UpdateSessionMetadataEnvelopeTupleResult> {
+): Promise<SessionWriteInTxResult<UpdateSessionMetadataEnvelopeTupleResult>> {
     // Same metadata CAS, independent contribution: owner Agent-state refreshes
     // and shared-confirmation settlement cannot replace each other's counts.
     const sharedConfirmationSummary = "sharedActionConfirmationSummaryV1" in params && params.sharedActionConfirmationSummaryV1
@@ -4851,6 +4880,7 @@ async function updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(
         await acquireAccountSessionOwnerMetadataFenceInTx(
             tx,
             params.actorUserId,
+            "content",
         );
     }
 

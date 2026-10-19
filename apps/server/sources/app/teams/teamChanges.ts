@@ -1,7 +1,7 @@
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from "@happier-dev/protocol/changes";
-import { reconcileDiscussionGrantAudienceForTeamsInTx } from "@/app/discussions/accessService";
+import { readDiscussionGrantAudienceForTeamsInTx, reconcileDiscussionGrantAudienceForTeamsInTx } from "@/app/discussions/accessService";
 
 /**
  * The stable coalescing identity for Team invalidation.
@@ -15,17 +15,16 @@ import { reconcileDiscussionGrantAudienceForTeamsInTx } from "@/app/discussions/
  */
 export const TEAM_CHANGE_ENTITY_ID = TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1;
 
-async function publishTeamsChangedInTx(
+async function readTeamsChangedAudienceInTx(
     tx: Tx,
     input: Readonly<{
         teamIds: readonly string[];
         additionalAccountIds?: readonly string[];
         excludeAccountIds?: readonly string[];
     }>,
-): Promise<number> {
+): Promise<readonly string[]> {
     const teamIds = [...new Set(input.teamIds)].sort();
-    if (teamIds.length === 0) return 0;
-    await reconcileDiscussionGrantAudienceForTeamsInTx(tx, { teamIds, additionalAccountIds: input.additionalAccountIds });
+    if (teamIds.length === 0) return [];
     const excluded = new Set(input.excludeAccountIds ?? []);
     const memberships = await tx.teamMembership.findMany({
         where: { teamId: { in: teamIds } },
@@ -38,7 +37,21 @@ async function publishTeamsChangedInTx(
     const audience = new Set<string>(memberships.map(({ accountId }) => accountId));
     for (const administrator of administrators) audience.add(administrator.id);
     for (const accountId of input.additionalAccountIds ?? []) audience.add(accountId);
-    const recipients = [...audience].filter((accountId) => !excluded.has(accountId));
+    return [...audience].filter((accountId) => !excluded.has(accountId)).sort();
+}
+
+async function publishTeamsChangedInTx(
+    tx: Tx,
+    input: Readonly<{ teamIds: readonly string[]; additionalAccountIds?: readonly string[]; excludeAccountIds?: readonly string[] }>,
+): Promise<number> {
+    const teamIds = [...new Set(input.teamIds)].sort();
+    if (teamIds.length === 0) return 0;
+    await reconcileDiscussionGrantAudienceForTeamsInTx(tx, { teamIds, additionalAccountIds: input.additionalAccountIds });
+    const recipients = await readTeamsChangedAudienceInTx(tx, { ...input, teamIds });
+    beforeAccountChangePublication(tx, recipients, async () => {
+        const current = await readTeamsChangedAudienceInTx(tx, { ...input, teamIds });
+        assertAccountChangePublicationAudienceInTx(tx, current);
+    });
     return (await markAccountsChanged(tx, {
         accountIds: recipients,
         entityId: TEAM_CHANGE_ENTITY_ID,
@@ -115,16 +128,30 @@ export async function publishAccountTeamMembershipsChangedInTx(
         excludeAccountIds?: readonly string[];
     }>,
 ): Promise<number> {
-    const memberships = await tx.teamMembership.findMany({
-        where: { accountId: input.accountId },
-        select: { teamId: true },
-    });
-    const teamIds = [...new Set(memberships.map(({ teamId }) => teamId))].sort();
+    const teamIds = await readAccountTeamIdsInTx(tx, input.accountId);
     return await publishTeamsChangedInTx(tx, {
         teamIds,
         additionalAccountIds: input.additionalAccountIds,
         excludeAccountIds: input.excludeAccountIds,
     });
+}
+
+async function readAccountTeamIdsInTx(tx: Tx, accountId: string): Promise<readonly string[]> {
+    const memberships = await tx.teamMembership.findMany({ where: { accountId }, select: { teamId: true } });
+    return [...new Set(memberships.map(({ teamId }) => teamId))].sort();
+}
+
+/** Lifecycle admission includes Team projections and their Discussion grant effects. */
+export async function readAccountTeamMembershipsChangeAudienceInTx(
+    tx: Tx,
+    input: Readonly<{ accountId: string; additionalAccountIds?: readonly string[]; excludeAccountIds?: readonly string[] }>,
+): Promise<readonly string[]> {
+    const teamIds = await readAccountTeamIdsInTx(tx, input.accountId);
+    const [teamAccountIds, discussionAccountIds] = await Promise.all([
+        readTeamsChangedAudienceInTx(tx, { ...input, teamIds }),
+        readDiscussionGrantAudienceForTeamsInTx(tx, { teamIds, additionalAccountIds: input.additionalAccountIds }),
+    ]);
+    return [...new Set([...teamAccountIds, ...discussionAccountIds])].sort();
 }
 
 /**

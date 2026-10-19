@@ -7,7 +7,7 @@ import { db } from "@/storage/db";
 import { Socket } from "socket.io";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { afterTx, inReadSnapshot, inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
-import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { recordMachineAlive } from "@/app/presence/presenceRecorder";
 import { submitMachineRemoteAlerts } from '@/app/activity/remoteAlerts/submitMachineRemoteAlerts';
 import { EXTERNAL_SESSION_OPERATION_SOCKET_EVENT_V1, type ExternalSessionOperationSocketBatchLimitResolutionV1 } from '@happier-dev/protocol/sessions/external/operationActionsV1';
@@ -75,6 +75,10 @@ async function acquireMachinePublicationLocksInTx(tx: Tx, machineId: string): Pr
     if (currentAccountIds.some(accountId => !lockedAccountIds.has(accountId))) {
         throw new TransactionReplayRequiredError("transaction-account-audience-changed");
     }
+    beforeAccountChangePublication(tx, hintedAccountIds, async () => {
+        const recipients = await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
+        assertAccountChangePublicationAudienceInTx(tx, recipients);
+    });
     return currentAccountIds;
 }
 
@@ -1118,7 +1122,7 @@ export function machineUpdateHandler(
                     const devcontainerChild = access?.accessState === 'ready' ? child : null;
                     const cursor = await markAccountChanged(tx, { accountId, kind: 'machine', entityId: machineId });
                     afterTx(tx, () => {
-                        const updatePayload = buildUpdateMachineUpdate(machineId, cursor, randomKeyNaked(12), metadataUpdate, undefined, {
+                        const updatePayload = buildUpdateMachineUpdate(machineId, cursor.resolveCursor(), randomKeyNaked(12), metadataUpdate, undefined, {
                             keyBasis: serializeMachineKeyBasis({ ...machine, metadataVersion: expectedVersion + 1 }),
                             devcontainerChild,
                         });
@@ -1293,7 +1297,7 @@ export function machineUpdateHandler(
                     const cursor = await markAccountChanged(tx, { accountId, kind: 'machine', entityId: machineId });
                     afterTx(tx, () => {
                         const updatePayload = buildUpdateMachineUpdate(
-                            machineId, cursor, randomKeyNaked(12), undefined, daemonStateUpdate,
+                            machineId, cursor.resolveCursor(), randomKeyNaked(12), undefined, daemonStateUpdate,
                             { active: true, activeAt, keyBasis: serializeMachineKeyBasis({ ...machine, daemonStateVersion: expectedVersion + 1 }), devcontainerChild },
                         );
                         eventRouter.emitUpdate({
