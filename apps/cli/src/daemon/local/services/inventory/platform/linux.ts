@@ -9,6 +9,8 @@ type ProcNetInput = Readonly<{
 }>;
 
 export type LinuxProcfsBoundary = Readonly<{
+    /** Listener summaries do not consume process provenance or ownership. */
+    includeProcessFacts?: boolean;
     procRoot?: string;
     readFile(path: string, encoding: 'utf8'): Promise<string | Buffer>;
     readdir(path: string): Promise<readonly string[]>;
@@ -26,6 +28,7 @@ export type LinuxProcfsBoundary = Readonly<{
 export type LinuxLocalServiceScanResult = Readonly<{
     listeners: readonly LocalServiceListenerFact[];
     processes: ReadonlyMap<number, LocalServiceProcessFact>;
+    readProcessFacts?: () => Promise<ReadonlyMap<number, LocalServiceProcessFact>>;
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
     /** Actual unreadable FD owners while kernel listening inodes remain unattributed. */
     socketOwnerReadFailures: readonly number[];
@@ -272,7 +275,7 @@ export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBounda
         const listenerPids = [...new Set([...listeners
             .map((listener) => listener.pid)
             .filter((pid): pid is number => typeof pid === 'number'), ...owners.unreadablePids])];
-        const processes = listenerPids.length > 0
+        const readProcessFacts = async (): Promise<ReadonlyMap<number, LocalServiceProcessFact>> => listenerPids.length > 0
             ? await projectLocalServiceProcessFacts({
                 seedPids: listenerPids,
                 onReadFailure: () => {
@@ -285,7 +288,9 @@ export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBounda
             })
             : new Map<number, LocalServiceProcessFact>();
 
-        return { listeners, processes, diagnostics, socketOwnerReadFailures: owners.unreadablePids };
+        return { listeners, processes: boundary.includeProcessFacts === false ? new Map<number, LocalServiceProcessFact>() : await readProcessFacts(),
+            ...(boundary.includeProcessFacts === false ? { readProcessFacts } : {}),
+            diagnostics, socketOwnerReadFailures: owners.unreadablePids };
     } catch (error) {
         return {
             listeners: [],

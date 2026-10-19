@@ -11,6 +11,7 @@ export type WindowsExecFileBoundary = (
 export type WindowsLocalServiceScanResult = Readonly<{
     listeners: readonly LocalServiceListenerFact[];
     processes: ReadonlyMap<number, LocalServiceProcessFact>;
+    readProcessFacts?: () => Promise<ReadonlyMap<number, LocalServiceProcessFact>>;
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
 }>;
 
@@ -112,6 +113,7 @@ function stdoutToString(stdout: string | Buffer): string {
 
 export async function readWindowsLocalServiceListeners(input: Readonly<{
     execFile: WindowsExecFileBoundary;
+    includeProcessFacts?: boolean;
 }>): Promise<WindowsLocalServiceScanResult> {
     let listeners: readonly LocalServiceListenerFact[];
     try {
@@ -144,7 +146,7 @@ export async function readWindowsLocalServiceListeners(input: Readonly<{
     }
 
     const diagnostics: LocalServiceInventoryDiagnostic[] = [];
-    const processes = await projectLocalServiceProcessFacts({
+    const readProcessFacts = async () => await projectLocalServiceProcessFacts({
         seedPids: pids,
         onReadFailure: () => {
             diagnostics.push({
@@ -157,7 +159,8 @@ export async function readWindowsLocalServiceListeners(input: Readonly<{
 
     return {
         listeners,
-        processes,
+        processes: input.includeProcessFacts === false ? new Map<number, LocalServiceProcessFact>() : await readProcessFacts(),
+        ...(input.includeProcessFacts === false ? { readProcessFacts } : {}),
         diagnostics,
     };
 }
