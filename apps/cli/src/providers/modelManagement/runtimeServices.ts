@@ -373,7 +373,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(accountContext, operationLifetime.signal), operationLifetime);
     } catch (error) {
       if (error instanceof ProviderOperationAbandonedError) {
-        return { status: 'error', error: createProviderErrorV1('provider_endpoint_unavailable', { machineId: request.machineId }) };
+        return { status: 'error', error: createProviderErrorV1('provider_catalog_unavailable', { machineId: request.machineId }) };
       }
       throw error;
     }
@@ -393,7 +393,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       if (error instanceof ProviderOperationAbandonedError) {
         return {
           status: 'error',
-          error: createProviderErrorV1('provider_endpoint_unavailable', {
+          error: createProviderErrorV1('agent_timeout', {
             machineId: request.machineId,
           }),
         };
@@ -404,7 +404,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       if (typeof lease.registry.generation !== 'number') {
         return {
           status: 'error',
-          error: createProviderErrorV1('provider_endpoint_unavailable', {
+          error: createProviderErrorV1('agent_unavailable', {
             machineId: request.machineId,
           }),
         };
@@ -413,7 +413,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       if (!agentId) {
         return {
           status: 'error',
-          error: createProviderErrorV1('provider_endpoint_unavailable', {
+          error: createProviderErrorV1('agent_unavailable', {
             machineId: request.machineId,
           }),
         };
@@ -427,7 +427,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         if (error instanceof ProviderOperationAbandonedError) {
           return {
             status: 'error',
-            error: createProviderErrorV1('provider_endpoint_unavailable', {
+            error: createProviderErrorV1('agent_timeout', {
               machineId: request.machineId,
             }),
           };

@@ -407,6 +407,11 @@ describe('runtime provider model-management composition', () => {
       modelSettingsMutation,
     });
 
+    // Native discovery can reach this shared projection before its Agent has
+    // been admitted. No Provider endpoint has been contacted in that case.
+    await expect(services.projectModels({ machineId: 'machine-a', agentTargetKey: 'agent:acme.missing/missing' }))
+      .resolves.toMatchObject({ status: 'error', error: { code: 'agent_unavailable' } });
+
     if (custody === 'ambient') {
       // A different client completed this row write; this daemon has no hint yet.
       observedCatalog = { ...observedCatalog, connections: observedCatalog.connections.map(connection => ({
