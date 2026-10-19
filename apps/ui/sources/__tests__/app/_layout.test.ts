@@ -101,6 +101,17 @@ vi.mock('react-native-reanimated', async () => {
     return createReanimatedModuleMock();
 });
 
+// Native navigation is an SDK boundary; loading its ESM entry in Node bypasses
+// Vitest's React Native substitute and attempts to parse the native Flow source.
+vi.mock('@react-navigation/native', async () =>
+    (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
+
+// Expo's CJS fork requires the native entry outside Vitest. These root tests
+// use ordinary navigation, so its pure SDK serializer is the relevant boundary.
+vi.mock('expo-router/build/fork/getPathFromState', async () => ({
+    getPathFromState: (await import('@react-navigation/core')).getPathFromState,
+}));
+
 vi.mock('socket.io-client', () => {
     const socket = {
         connected: false,
@@ -155,6 +166,7 @@ vi.mock('@/onboarding/showcase', () => ({
 vi.mock('@/constants/Typography', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/constants/Typography')>();
     return {
+        ...actual,
         FontWeights: {
             regular: '400',
             semiBold: '500',
@@ -262,9 +274,18 @@ vi.mock('expo-router', async () => {
     });
     const BaseStack = expoRouterMock.module.Stack;
     const Stack = Object.assign(
-        (props: React.PropsWithChildren<{ screenOptions?: unknown }>) => {
-            stackNavigatorScreenOptionsHistory.push(props.screenOptions);
-            return React.createElement(React.Fragment, null, props.children ?? null);
+        (props: React.PropsWithChildren<{
+            screenOptions?: unknown;
+            layout?: (props: { children: React.ReactNode }) => React.ReactElement;
+        }>) => {
+            // Only the app root owns this capture; runtime descendants may mount other stacks.
+            const isRootStack = React.Children.toArray(props.children).some((child) =>
+                React.isValidElement<{ name?: string }>(child) && child.props.name === 'terminal/connect');
+            if (isRootStack) stackNavigatorScreenOptionsHistory.push(props.screenOptions);
+            // Expo applies layout around the active scene. Keep the real redirect gate mounted.
+            return props.layout
+                ? props.layout({ children: props.children })
+                : React.createElement(React.Fragment, null, props.children ?? null);
         },
         {
             Screen: BaseStack.Screen,
@@ -283,6 +304,7 @@ vi.mock('@/auth/context/AuthContext', () => {
             React.useMemo(() => 0, [isAuthenticated]);
             return { isAuthenticated };
         },
+        useOptionalAuth: () => ({ isAuthenticated }),
     };
 });
 
@@ -323,14 +345,7 @@ vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-                    colors: {
-                        surface: '#fff',
-                        header: { background: '#fff', tint: '#000' },
-                    },
-                },
-    });
+    return createUnistylesMock();
 });
 
 vi.mock('@/utils/platform/platform', () => {
@@ -344,11 +359,29 @@ vi.mock('@/utils/platform/desktopHost', () => ({
     listenDesktopHostEvent: vi.fn(async () => () => {}),
 }));
 
-const { default: RootLayout } = await import('@/app/(app)/_layout');
+// Import once under the unavailable-native-module scenario. Resetting the whole graph after
+// each case forks the live root/testkit singletons while these component references survive.
+platformState.os = 'ios';
+notificationNativeState.unavailable = true;
+const nativeUnavailableRootLayoutImport = import('@/app/(app)/_layout');
+const { default: RootLayout } = await nativeUnavailableRootLayoutImport;
+platformState.os = 'web';
+notificationNativeState.unavailable = false;
+
+function sessionScreenOptionsForChild(
+    screen: renderer.ReactTestInstance,
+    childRouteName: string,
+): Record<string, unknown> {
+    const route = {
+        key: 'session-root',
+        name: 'session/[id]',
+        state: { index: 0, routes: [{ key: `session-${childRouteName}`, name: childRouteName }] },
+    };
+    return screen.props.options({ route });
+}
 
 afterEach(() => {
     vi.unstubAllGlobals();
-    vi.resetModules();
     router.replace.mockReset();
     router.push.mockReset();
     invokeDesktopHostSpy.mockReset();
@@ -375,16 +408,13 @@ describe('RootLayout hooks order', () => {
 
         let tree: renderer.ReactTestRenderer | undefined;
         try {
-            tree = (await renderScreen(React.createElement(RootLayout))).tree;
+            const screen = await renderScreen(React.createElement(RootLayout));
+            tree = screen.tree;
 
             isAuthenticated = false;
             segments = ['(app)', 'settings'];
 
-            expect(() => {
-                act(() => {
-                    tree!.update(React.createElement(RootLayout));
-                });
-            }).not.toThrow();
+            await expect(screen.update(React.createElement(RootLayout))).resolves.toBeUndefined();
         } finally {
             if (tree) {
                 act(() => {
@@ -424,16 +454,16 @@ describe('RootLayout stack options', () => {
 
         let tree: renderer.ReactTestRenderer | undefined;
         try {
-            tree = (await renderScreen(React.createElement(RootLayout))).tree;
+            const screen = await renderScreen(React.createElement(RootLayout));
+            tree = screen.tree;
             const initialScreenOptions = stackNavigatorScreenOptionsHistory.at(-1);
+            expect(initialScreenOptions).toBeDefined();
             const initialTerminalConnectOptions = tree.root
                 .findAllByType('StackScreen')
                 .find((node) => node.props?.name === 'terminal/connect')
                 ?.props?.options;
 
-            act(() => {
-                tree!.update(React.createElement(RootLayout));
-            });
+            await screen.update(React.createElement(RootLayout));
 
             expect(stackNavigatorScreenOptionsHistory.at(-1)).toBe(initialScreenOptions);
             const updatedTerminalConnectOptions = tree.root
@@ -486,21 +516,19 @@ describe('RootLayout stack options', () => {
         let tree: renderer.ReactTestRenderer | undefined;
         try {
             tree = (await renderScreen(React.createElement(RootLayout))).tree;
-            const sessionSurfaceRouteNames = new Set([
-                'session/[id]/files',
-                'session/[id]/git',
-                'session/[id]/details',
-                'session/[id]/terminal',
-                'session/[id]/index',
-            ]);
-            const sessionSurfaceScreens = tree.root
+            const sessionSurfaceRouteNames = new Set(['files', 'git', 'details', 'terminal', 'index']);
+            const sessionParentScreens = tree.root
                 .findAllByType('StackScreen')
-                .filter((node) => sessionSurfaceRouteNames.has(node.props?.name));
+                .filter((node) => node.props?.name === 'session/[id]');
+            expect(sessionParentScreens).toHaveLength(1);
+            const sessionSurfaceScreens = [...sessionSurfaceRouteNames].map((name) => ({
+                options: sessionScreenOptionsForChild(sessionParentScreens[0], name),
+            }));
 
             expect(sessionSurfaceScreens).toHaveLength(sessionSurfaceRouteNames.size);
             for (const screen of sessionSurfaceScreens) {
-                expect(screen.props?.options).toMatchObject({ animation: 'none' });
-                expect(screen.props?.options).toMatchObject({ headerShown: false });
+                expect(screen.options).toMatchObject({ animation: 'none' });
+                expect(screen.options).toMatchObject({ headerShown: false });
             }
         } finally {
             if (tree) {
@@ -552,7 +580,7 @@ describe('RootLayout notification routing', () => {
         platformState.os = 'ios';
         notificationNativeState.unavailable = true;
 
-        await expect(import('@/app/(app)/_layout')).resolves.toHaveProperty('default');
+        await expect(nativeUnavailableRootLayoutImport).resolves.toHaveProperty('default');
     });
 
     it('ignores absolute URLs from notification payloads', async () => {
@@ -606,8 +634,9 @@ describe('RootLayout restore navigation', () => {
             const lostAccess = screens.find((s) => s.props?.name === 'restore/lost-access');
             expect(lostAccess?.props?.options?.headerShown).toBe(false);
 
-            const sessionTerminal = screens.find((s) => s.props?.name === 'session/[id]/terminal');
-            expect(sessionTerminal?.props?.options?.headerShown).toBe(false);
+            const sessionParent = screens.find((s) => s.props?.name === 'session/[id]');
+            expect(sessionParent).toBeDefined();
+            expect(sessionScreenOptionsForChild(sessionParent!, 'terminal').headerShown).toBe(false);
         } finally {
             if (tree) {
                 act(() => {
@@ -622,7 +651,6 @@ describe('RootLayout public capability entry routes', () => {
     it('gives invitation and native-auth links the same full-viewport public shell as OAuth and restore', async () => {
         stubFeatureFetch();
 
-        const { default: RootLayout } = await import('@/app/(app)/_layout');
         const screen = await renderScreen(React.createElement(RootLayout));
 
         const screens = screen.findAllByType('StackScreen' as any);

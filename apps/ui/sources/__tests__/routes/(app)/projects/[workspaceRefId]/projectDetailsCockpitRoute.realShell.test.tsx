@@ -7,6 +7,7 @@ import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { installSessionRouteCommonModuleMocks } from '../../session/[id]/sessionRouteTestHelpers';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { storage } from '@/sync/domains/state/storageStore';
+import { buildProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,7 +23,9 @@ installSessionRouteCommonModuleMocks({
         });
     },
 });
-const runtime = installSessionPaneRuntimeTestHarness({ scopeId: 'project:wr_1' });
+const runtime = installSessionPaneRuntimeTestHarness({
+    scopeId: ({ serverId }) => buildProjectPaneScopeId('wr_1', serverId),
+});
 beforeEach(() => {
     storage.getState().applySettingsLocal({
         mobileWorkspaceExperienceV1: 'cockpit',

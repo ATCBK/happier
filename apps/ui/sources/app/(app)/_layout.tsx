@@ -19,7 +19,6 @@ import { NavigationTitleChromeProvider } from '@/components/ui/layout/PageHeader
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import { MobileBottomChromeHost } from '@/components/navigation/mobile/chrome/MobileBottomChromeHost';
 import { tryRenderWebPortal } from '@/components/ui/popover/portal';
-import { BrowserPresentationRetentionProvider } from '@/components/browser/surfaces/browserPresentationRetention';
 import { AuthenticatedAppRuntimeMounts } from '@/components/appShell/runtime/AuthenticatedAppRuntimeMounts';
 import { DesktopMainWindowRuntimes } from '@/desktop/DesktopMainWindowRuntimes';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
@@ -220,7 +219,6 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
     }), [preferredLanguage]);
 
     return (
-        <BrowserPresentationRetentionProvider>
             <ActivityPersonalSessionMembershipProvider enabled={isAuthenticated}>
             {/*
               * The one automatic Voice announcer for the whole app (§5.4a). It sits
@@ -265,6 +263,18 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 <Stack.Screen
                     name="friends/index"
                     options={rootStackRouteOptions['friends/index']}
+                />
+                <Stack.Screen
+                    name="discussions/index"
+                    options={rootStackRouteOptions['discussions/index']}
+                />
+                <Stack.Screen
+                    name="discussions/new"
+                    options={rootStackRouteOptions['discussions/new']}
+                />
+                <Stack.Screen
+                    name="discussions/[discussionId]"
+                    options={rootStackRouteOptions['discussions/[discussionId]']}
                 />
                 <Stack.Screen
                     name="oauth/[provider]"
@@ -602,7 +612,6 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
             </NavigationTitleChromeProvider>
             <MobileBottomChromeMountGate newSessionRendersFloatingComposer={newSessionRendersFloatingComposer} />
             </ActivityPersonalSessionMembershipProvider>
-        </BrowserPresentationRetentionProvider>
     );
 });
 
