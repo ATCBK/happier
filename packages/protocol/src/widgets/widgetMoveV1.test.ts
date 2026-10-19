@@ -12,7 +12,7 @@ import type { WidgetInstanceV1 } from './widgetInstanceV1.js';
 import { ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
 import { AccountProfileSchema } from '../account/profile.js';
 import { resolveWidgetViewerPurposeValuesV1 } from './widgetViewerPurposeV1.js';
-import type { WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
+import { validateWidgetWorkspaceInputV1, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import { buildWidgetSurfaceArtifactIdV1, createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from './widgetSurfaceArtifactV1.js';
 import { flattenWidgetLayoutWidgetsV1, type WidgetLayoutItemV1 } from './widgetLayoutItemV1.js';
 import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
@@ -108,6 +108,27 @@ async function fixture(candidate: WidgetInstanceV1 = instance, widgetInputs?: Ac
 }
 
 describe('destination-aware widget move through canonical owners', () => {
+  it('adds and moves a checkout-backed builtin through the same authorized target admission', async () => {
+    const checkout = { id: 'checkout', serverId: home.serverId, machineId: 'checkout-machine', rootPath: '/repo', createdAtMs: 1 };
+    let workspaceRefs = [checkout];
+    const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'project_code' })!;
+    const native: WidgetInstanceV1 = { v: 1, id: 'checkout-copy', definition: descriptor.definition,
+      bindings: { checkout: { kind: 'value', value: checkout } } };
+    const widgetInputs = createWidgetActionInputResolverV1({ readDescriptor: async () => descriptor,
+      readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+      validateValue: async (_field, value) => validateWidgetWorkspaceInputV1({ value, serverId: home.serverId, workspaceRefs }),
+      resolveOptions: async () => { throw new Error('Checkout admission does not query plugin options'); } });
+    const f = await fixture(native, widgetInputs);
+    const add = (id: string) => f.executor.execute('widgets.item.add', { surface: home, instance: { ...native, id } },
+      { surface: 'mcp', bypassApprovals: true });
+    expect(await add('second-checkout')).toMatchObject({ ok: true });
+    expect(await f.move()).toMatchObject({ ok: true });
+    expect(f.boardItem()).toMatchObject({ source: { kind: 'widget', instance: native } });
+    workspaceRefs = [];
+    const before = await f.homeHubArtifacts.read();
+    expect(await add('revoked-checkout')).toMatchObject({ ok: false, errorCode: 'widget_inputs_invalid' });
+    expect(await f.homeHubArtifacts.read()).toEqual(before);
+  });
   it('writes a single Group by pin on Home and reads existing array pins through the same widget owner', async () => {
     const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_flow' })!;
     const query = UsageQuerySchema.parse({ breakdown: ['source', 'machine'] });
