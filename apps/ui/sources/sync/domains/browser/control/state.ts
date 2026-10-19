@@ -9,6 +9,8 @@ import type {
     BrowserViewTargetV1,
 } from '@happier-dev/protocol';
 
+import type { BrowserAgentPoint } from '../automation/copresence';
+
 export type BrowserAdapterRefreshStatus = 'idle' | 'refreshing' | 'error';
 
 export type BrowserControlSessionState = Readonly<{
@@ -43,6 +45,8 @@ export type BrowserControlViewState = Readonly<{
     adapterRefreshStatus: BrowserAdapterRefreshStatus;
     adapterRefreshError: string | null;
     automationController?: BrowserAutomationControllerStateV1;
+    /** The agent's latest pointer action on this daemon-owned view; see `BrowserAgentPoint`. */
+    agentPoint?: BrowserAgentPoint;
 }>;
 
 /**

@@ -107,6 +107,22 @@ describe('browser control reducer', () => {
         expect(state.viewsById.view_1?.navigationGeneration).toBe(4);
         expect(applyBrowserControlEvent(state, { ...event, eventId: 'old', currentUrl: 'https://old.test/', navigationGeneration: 3 })).toBe(state);
     });
+    it('keeps the agent\'s latest pointer action after the controller settles, replaced by the next one', async () => {
+        const { applyBrowserControlEvent, createBrowserControlState } = await import('./reducer');
+        const changed = (eventId: string, state: Record<string, unknown>) => ({ kind: 'controllerChanged' as const, eventId,
+            browserSessionId: 'browser_session_1', viewId: 'view_1', occurredAt: 20,
+            state: { browserSessionId: 'browser_session_1', viewId: 'view_1', controlEpoch: 0, ...state } }) as BrowserEventV1;
+        const target = { x: 0.5, y: 0.5, width: 0.2, height: 0.1 };
+        let state = openLocalPreviewEvents().reduce(applyBrowserControlEvent, createBrowserControlState());
+        state = applyBrowserControlEvent(state, changed('a1', { controller: 'agent', activeAutomationRequestId: 'req_1', activeActionKind: 'click', activeTarget: target }));
+        state = applyBrowserControlEvent(state, changed('a2', { controller: 'none' }));
+        expect(state.viewsById.view_1?.automationController?.activeTarget).toBeUndefined();
+        expect(state.viewsById.view_1?.agentPoint).toEqual({ id: 'req_1', controlEpoch: 0, target });
+        state = applyBrowserControlEvent(state, changed('a3', { controller: 'agent', activeAutomationRequestId: 'req_2', activeActionKind: 'click' }));
+        expect(state.viewsById.view_1?.agentPoint?.id).toBe('req_1');
+        state = applyBrowserControlEvent(state, changed('a4', { controller: 'agent', activeAutomationRequestId: 'req_2', activeActionKind: 'click', activeTarget: { ...target, x: 0.1 } }));
+        expect(state.viewsById.view_1?.agentPoint).toMatchObject({ id: 'req_2', target: { x: 0.1 } });
+    });
     it('projects browser sessions, views, focus, and current target from events', async () => {
         const mod = await import('./reducer').catch(() => null);
 

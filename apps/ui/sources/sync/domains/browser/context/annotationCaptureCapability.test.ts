@@ -3,30 +3,29 @@ import { describe, expect, it } from 'vitest';
 import { resolveBrowserAnnotationCaptureCapability } from './annotationCaptureCapability';
 
 describe('resolveBrowserAnnotationCaptureCapability (ANNO-6 engine matrix)', () => {
-    it('desktop Wry webview with capture support is full', () => {
+    it('does not admit desktop capture without a bound capture source', () => {
         const cap = resolveBrowserAnnotationCaptureCapability({
             adapterKind: 'localPreview',
             primaryEngine: 'desktopWebView',
-            desktopCaptureSupported: true,
+            captureSourceAvailable: false,
+        });
+        expect(cap).toEqual({ available: false, disabledReason: 'browser_context_annotation_capture_unavailable' });
+    });
+
+    it('admits desktop capture with a bound capture source', () => {
+        const cap = resolveBrowserAnnotationCaptureCapability({
+            adapterKind: 'localPreview',
+            primaryEngine: 'desktopWebView',
+            captureSourceAvailable: true,
         });
         expect(cap).toEqual({ available: true, fidelity: 'nativeCallback' });
     });
 
-    it('desktop Wry webview WITHOUT capture support is disabled with a reason', () => {
-        const cap = resolveBrowserAnnotationCaptureCapability({
-            adapterKind: 'localPreview',
-            primaryEngine: 'desktopWebView',
-            desktopCaptureSupported: false,
-        });
-        expect(cap.available).toBe(false);
-        expect(cap.available === false && cap.disabledReason).toBe('browser_context_annotation_capture_unavailable');
-    });
-
-    it('managed Chromium sidecar is gated: available only when the managed-capture gate is on', () => {
+    it('admits managed Chromium capture only with its bound capture source', () => {
         const gatedOff = resolveBrowserAnnotationCaptureCapability({
             adapterKind: 'chromiumSidecar',
             primaryEngine: 'unavailable',
-            managedCaptureGateEnabled: false,
+            captureSourceAvailable: false,
         });
         expect(gatedOff.available).toBe(false);
         expect(gatedOff.available === false && gatedOff.disabledReason).toBe('browser_context_annotation_capture_unavailable');
@@ -34,7 +33,7 @@ describe('resolveBrowserAnnotationCaptureCapability (ANNO-6 engine matrix)', () 
         const gatedOn = resolveBrowserAnnotationCaptureCapability({
             adapterKind: 'chromiumSidecar',
             primaryEngine: 'unavailable',
-            managedCaptureGateEnabled: true,
+            captureSourceAvailable: true,
         });
         expect(gatedOn).toEqual({ available: true, fidelity: 'cdp' });
     });
@@ -43,15 +42,17 @@ describe('resolveBrowserAnnotationCaptureCapability (ANNO-6 engine matrix)', () 
         const cap = resolveBrowserAnnotationCaptureCapability({
             adapterKind: 'externalUrl',
             primaryEngine: 'webIframe',
+            captureSourceAvailable: false,
         });
         expect(cap.available).toBe(false);
-        expect(cap.available === false && cap.disabledReason).toBe('browser_context_annotation_capture_unavailable');
+        expect(cap.available === false && cap.disabledReason).toBe('browser_context_annotation_iframe_capture_unavailable');
     });
 
     it('react-native native webview engine is disabled with an explicit reason', () => {
         const cap = resolveBrowserAnnotationCaptureCapability({
             adapterKind: 'localPreview',
             primaryEngine: 'nativeWebView',
+            captureSourceAvailable: false,
         });
         expect(cap.available).toBe(false);
         expect(cap.available === false && cap.disabledReason).toBe('browser_context_annotation_capture_unavailable');
@@ -62,6 +63,7 @@ describe('resolveBrowserAnnotationCaptureCapability (ANNO-6 engine matrix)', () 
             const cap = resolveBrowserAnnotationCaptureCapability({
                 adapterKind: 'simulatorPreview',
                 primaryEngine,
+                captureSourceAvailable: false,
             });
             expect(cap.available).toBe(false);
         }

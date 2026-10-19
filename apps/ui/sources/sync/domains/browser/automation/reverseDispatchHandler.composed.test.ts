@@ -7,6 +7,14 @@ import { registerBrowserRuntimeControlAdapter, clearBrowserRuntimeControlRegistr
 import { applyBrowserControlEvent, createBrowserControlState } from '../control/reducer';
 import { buildBrowserAdapterCapabilities } from '../adapters/capabilities';
 import { createInjectedPageAutomationOwner } from '@/components/browser/adapters/automation/injectedPageRuntime';
+import { createActionExecutor, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
+import { createDaemonRuntimeActionExecutor } from '../../../../../../cli/src/daemon/runtimeActionExecutor';
+import { createBrowserAutomationReverseDispatcher } from '../../../../../../cli/src/daemon/browser/automation/reverseDispatch';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
+
+// The system browser is the only effect substituted in this composed route.
+vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: vi.fn(async () => true) }));
 
 const view = { browserSessionId: 'visible-session', viewId: 'visible-view' };
 const boundView = { ...view, sessionId: 'happier-session' };
@@ -14,7 +22,7 @@ const request = { v: 1, ...view, automationRequestId: 'click-1', actionKind: 'cl
 const args: RuntimeActionExecuteArgs = { actionId: 'browser.automation.click', input: request,
   context: { surface: 'agent', authority: 'account_automation', defaultSessionId: 'happier-session' } };
 
-function mountView(executePageAction?: (signal: AbortSignal) => Promise<Readonly<{ status: 'succeeded' }>>) {
+function mountView(executePageAction?: (signal: AbortSignal) => Promise<Readonly<{ status: 'succeeded' }>>, withAutomation = true) {
   const controlService = createBrowserAutomationControlService({ nowMs: () => Date.now() });
   let clicks = 0;
   // The page transport is the real system boundary; controller and Action internals stay real.
@@ -26,7 +34,8 @@ function mountView(executePageAction?: (signal: AbortSignal) => Promise<Readonly
     target: { kind: 'externalUrl', targetId: 'page', url: 'https://example.test', display: { title: 'Page', addressLabel: 'example.test' } },
     adapterCapabilities: buildBrowserAdapterCapabilities({ adapterKind: 'localPreview', supportedTargetKinds: ['externalUrl'], supportedRenderEngines: ['webIframe'] }),
   });
-  const dispose = registerBrowserRuntimeControlAdapter({ browserSessionId: view.browserSessionId, control: { readState: () => state, applyDispatchResult: () => {} }, automation: { controlService } });
+  const dispose = registerBrowserRuntimeControlAdapter({ browserSessionId: view.browserSessionId, control: { readState: () => state, applyDispatchResult: () => {} },
+    ...(withAutomation ? { automation: { controlService } } : {}) });
   return { dispose, controlService, clicks: () => clicks };
 }
 
@@ -36,6 +45,35 @@ afterEach(() => {
 });
 
 describe('daemon to exact mounted UI browser Action', () => {
+  it.each([true, false])('opens the mounted page through the real Machine-targeted Action with its canonical kindless input (automation=%s)', async withAutomation => {
+    const mounted = mountView(undefined, withAutomation);
+    const runtimeActionExecute = createDaemonRuntimeActionExecutor({ env: { NODE_ENV: 'test' },
+      resolveRouteOwners: () => ({ browserUiAutomation: {
+        ownsAutomationView: () => false,
+        uiAutomation: createBrowserAutomationReverseDispatcher({ getMachineClient: () => ({
+          hasConnectedClientRpcHandler: () => true,
+          callConnectedClientRpc: async (_method, payload) => ({ ok: true,
+            result: await handleUiBrowserAutomationDispatchRequest(payload, boundView) }),
+        }) }),
+      } }),
+      resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {
+        browser: { enabled: true, viewTargets: { enabled: true }, internal: { enabled: true }, sidecar: { enabled: true } },
+      } }) }),
+    });
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({ runtimeActionExecute }));
+    const input = { ...view, commandId: 'open-external' };
+    try {
+      const result = await executor.execute('browser.view.openExternal', input, { ...args.context, bypassApprovals: true,
+        externalActionTarget: { kind: 'machine', machineId: 'machine-1' } });
+      expect(result, !result.ok ? result.errorCode : undefined)
+        .toMatchObject({ ok: true, result: { status: 'dispatched', commandId: input.commandId, adapterKind: 'externalUrl' } });
+      expect(openExternalUrl).toHaveBeenCalledWith('https://example.test');
+      mounted.dispose();
+      expect(await executor.execute('browser.view.openExternal', input, { ...args.context, bypassApprovals: true,
+        externalActionTarget: { kind: 'machine', machineId: 'machine-1' } })).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+    } finally { mounted.dispose(); }
+  });
+
   it.each(['snapshot', 'queryElements', 'semanticSnapshot'] as const)('returns full redacted %s data through the real injected reverse route', async (actionKind) => {
     const mounted = mountView();
     mounted.controlService.unregisterOwner({ ownerId: 'mounted-owner', reasonCode: 'owner_disconnected' });

@@ -31,6 +31,7 @@ export type BrowserContextUnavailableReasonCode =
     | 'browser_context_annotation_inactive'
     | 'browser_context_annotation_stale'
     | 'browser_context_annotation_capture_unavailable'
+    | 'browser_context_annotation_iframe_capture_unavailable'
     | 'browser_context_annotation_capture_failed'
     | 'browser_context_view_unavailable'
     | 'browser_context_item_missing'

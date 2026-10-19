@@ -2,7 +2,7 @@ import { browserViewKey } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
 
 import { createBrowserAutomationControlService, type BrowserAutomationResult } from './controlService';
-import { selectBrowserCopresence } from './copresence';
+import { readBrowserAgentPoint, selectBrowserAgentPoint, selectBrowserCopresence } from './copresence';
 
 const view = { browserSessionId: 'browser_session_1', viewId: 'browser_view_1' } as const;
 
@@ -171,5 +171,37 @@ describe('selectBrowserCopresence while a takeover settles', () => {
         const { service, presence } = setup();
         service.recordHumanInput({ ...view, inputKind: 'takeover', occurredAtMs: 1_000 });
         expect(presence(true)).toEqual({ kind: 'human', controlEpoch: 1, interruptedCompletion: null });
+    });
+});
+
+describe('selectBrowserAgentPoint', () => {
+    const target = { x: 0.5, y: 0.4, width: 0.3, height: 0.05 };
+    const lastPoint = { id: 'req_1', controlEpoch: 2, target };
+
+    it('keeps the latest action after the controller settles, but not across a takeover or while a person drives', () => {
+        expect(selectBrowserAgentPoint({ lastPoint, presence: { kind: 'idle', controlEpoch: 2 } })).toEqual({ id: 'req_1', target });
+        expect(selectBrowserAgentPoint({ lastPoint, presence: { kind: 'agent', activity: 'click', target: null, controlEpoch: 2 } }))
+            .toEqual({ id: 'req_1', target });
+        expect(selectBrowserAgentPoint({ lastPoint, presence: { kind: 'idle', controlEpoch: 3 } })).toBeNull();
+        expect(selectBrowserAgentPoint({ lastPoint, presence: { kind: 'human', controlEpoch: 2, interruptedCompletion: null } })).toBeNull();
+        expect(selectBrowserAgentPoint({ lastPoint, presence: { kind: 'stopping', controlEpoch: 2 } })).toBeNull();
+        expect(selectBrowserAgentPoint({ lastPoint: null, presence: { kind: 'idle', controlEpoch: 2 } })).toBeNull();
+    });
+
+    it('is kept by the in-app automation owner after the action settles', async () => {
+        const service = createBrowserAutomationControlService({ nowMs: () => 1_000 });
+        service.registerOwner({
+            ownerId: 'owner_1', authority: 'uiLocal', ...view, navigationGeneration: 0, adapterKind: 'localPreview',
+            fidelity: 'injectedPage', trustedInput: false, supportedActions: ['click'],
+            executeAction: async (_request, context) => {
+                context.onActiveTarget?.(target);
+                return { status: 'succeeded' };
+            },
+        });
+        await service.executeAction({
+            v: 1, automationRequestId: 'req_1', ...view, navigationGeneration: 0, requestedBy: 'agent',
+            requesterRef: { kind: 'session', id: 'session_1' }, actionKind: 'click', timeoutMs: 10_000,
+        });
+        expect(readBrowserAgentPoint(service.getSnapshot(), view)).toMatchObject({ id: 'req_1', controlEpoch: 0, target });
     });
 });

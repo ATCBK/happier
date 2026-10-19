@@ -24,9 +24,9 @@ export async function handleUiBrowserAutomationDispatchRequest(
   const currentView = control.readState()?.viewsById[view.viewId];
   if (!currentView || currentView.browserSessionId !== view.browserSessionId) return unavailable;
   const automation = readRegisteredBrowserRuntimeAutomationAdapter(view.browserSessionId, view.viewId);
-  if (!automation?.controlService) return unavailable;
+  if (request.data.actionId !== 'browser.view.openExternal' && !automation?.controlService) return unavailable;
   if (options?.signal?.aborted) return unavailable;
-  const execute = createBrowserRuntimeActionExecutor({ control, automation });
+  const execute = createBrowserRuntimeActionExecutor({ control, ...(automation ? { automation } : {}) });
   const result = await execute({ actionId: request.data.actionId, input: parsed.data, context: {
     surface: 'agent', authority: request.data.authority, defaultSessionId: request.data.sessionId, signal: options?.signal,
   } });

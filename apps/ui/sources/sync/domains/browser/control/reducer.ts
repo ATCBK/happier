@@ -343,7 +343,13 @@ export function applyBrowserControlEvent(state: BrowserControlState, event: Brow
         case 'controllerChanged': {
             const view = state.viewsById[event.viewId];
             if (!view || view.automationController && event.state.controlEpoch < view.automationController.controlEpoch) return state;
-            return { ...state, viewsById: { ...state.viewsById, [event.viewId]: { ...view, automationController: event.state } } };
+            // The action's target can arrive and settle between two renders, so the latest one is kept as
+            // its own fact for the cursor to present once (`BrowserAgentPoint`).
+            const { activeTarget, activeAutomationRequestId, controlEpoch } = event.state;
+            const agentPoint = activeTarget && activeAutomationRequestId
+                ? { id: activeAutomationRequestId, controlEpoch, target: activeTarget }
+                : view.agentPoint;
+            return { ...state, viewsById: { ...state.viewsById, [event.viewId]: { ...view, automationController: event.state, agentPoint } } };
         }
         case 'faviconChanged': {
             const view = state.viewsById[event.viewId];

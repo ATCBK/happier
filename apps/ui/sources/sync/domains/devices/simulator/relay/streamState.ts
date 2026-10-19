@@ -41,7 +41,7 @@ export type SimulatorRelayIngestionEvent =
     }>
     | Readonly<{ type: 'frame'; frame: MachineLiveStreamFrameV1 }>
     | Readonly<{ type: 'frame_decoded'; streamId: string }>
-    | Readonly<{ type: 'reconnecting'; reasonCode: string }>
+    | Readonly<{ type: 'reconnecting'; reasonCode: string; streamId?: string }>
     | Readonly<{ type: 'error'; reasonCode: string; message?: string }>
     | Readonly<{ type: 'stopped'; reasonCode?: string }>;
 
@@ -136,6 +136,7 @@ export function reduceSimulatorRelayStreamState(
         case 'reconnecting':
             return {
                 ...state,
+                ...(event.streamId ? { streamId: event.streamId } : {}),
                 player: reduceLiveStreamPlayerState(state.player, { type: 'reconnecting', reasonCode: event.reasonCode }),
             };
         case 'error':

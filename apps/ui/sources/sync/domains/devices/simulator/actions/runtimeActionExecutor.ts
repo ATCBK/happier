@@ -122,7 +122,7 @@ export function createSimulatorPreviewRuntimeActionExecutor(
             return machineUnavailableResult;
         }
         const serverId = normalizeId(args.context.serverId);
-        const serverScope = serverId ? { serverId } : {};
+        const serverScope = { ...(serverId ? { serverId } : {}), signal: args.context.signal };
 
         if (args.actionId === 'devices.simulator.list') {
             const result = await fetchSnapshot({ machineId, ...serverScope });

@@ -27,6 +27,34 @@ vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: vi.fn(async () 
 
 type BrowserRuntimeActionExecutorModule = typeof import('./runtimeActionExecutor');
 
+it.each(['ui', 'agent', 'cli'] as const)('forwards approved sandbox recovery from %s to its exact Machine', async surface => {
+    const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+    const executeOnMachine = vi.fn(async () => ({ status: 'failed', code: 'os_authorization_required' }));
+    const execute = createBrowserRuntimeActionExecutor({ executeOnMachine });
+    const args = { actionId: 'browser.sandbox.install' as const, input: { machineId: 'machine_1' },
+        context: { surface, authority: 'account_automation' as const, bypassApprovals: true,
+            externalActionTarget: { kind: 'machine' as const, machineId: 'machine_1' } } };
+    expect(await execute(args)).toEqual({ status: 'failed', code: 'os_authorization_required' });
+    expect(executeOnMachine).toHaveBeenCalledWith(args);
+    executeOnMachine.mockClear();
+    expect(await execute({ ...args, input: {} })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(await execute({ ...args, context: { ...args.context, externalActionTarget: undefined } }))
+        .toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+    expect(executeOnMachine).not.toHaveBeenCalled();
+});
+
+it.each([
+    ['browser.context.capturePage', { browserSessionId: 'browser', viewId: 'view' }],
+    ['browser.recording.status', { recordingId: 'recording' }],
+] as const)('routes daemon-owned non-command %s by its catalog schema', async (actionId, input) => {
+    const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+    const failure = { ok: false, errorCode: 'permission_denied', error: 'permission_denied' } as const;
+    const executeOnMachine = vi.fn(async () => failure);
+    const execute = createBrowserRuntimeActionExecutor({ executeOnMachine });
+    expect(await execute({ actionId, input, context: { authority: 'present_user',
+        externalActionTarget: { kind: 'machine', machineId: 'machine' } } })).toEqual(failure);
+});
+
 const localPreviewTarget = {
     kind: 'localServicePreview',
     targetId: 'preview_1',
@@ -142,6 +170,80 @@ function openViewState(input: Readonly<{
 }
 
 describe('browser runtime action executor', () => {
+    it.each(['browser.view.close', 'browser.automation.snapshot'] as const)(
+        'routes mounted and unmounted %s through its exact Machine owner', async (actionId) => {
+            const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
+            const { registerBrowserRuntimeControlAdapter } = await import('./runtimeControlRegistry');
+            const input = actionId === 'browser.view.close'
+                ? { kind: 'closeView', commandId: 'close-unmounted', browserSessionId: 'browser_session_1', viewId: 'view_1' }
+                : { v: 1, automationRequestId: 'snapshot-unmounted', browserSessionId: 'browser_session_1', viewId: 'view_1',
+                    navigationGeneration: 4, requestedBy: 'agent', requesterRef: { kind: 'session', id: 'session_1' },
+                    actionKind: 'snapshot', payload: {}, timeoutMs: 1000 };
+            // The captured-Account Machine Action transport is the external boundary. Its
+            // admission/approval refusal must survive forwarding unchanged.
+            const result = { ok: false, errorCode: 'permission_denied', error: 'permission_denied' } as const;
+            const executeOnMachine = vi.fn(async () => result);
+            const state = openViewState({ adapterKind: 'chromiumSidecar', engineKind: 'streamedSurface',
+                target: externalTarget, capabilities: sidecarCapabilities, currentUrl: externalTarget.url });
+            const unmount = registerBrowserRuntimeControlAdapter({ browserSessionId: 'browser_session_1',
+                control: { readState: () => state, applyDispatchResult: () => {} } });
+            const execute = createDefaultRuntimeActionExecutor({}, undefined, executeOnMachine);
+            const args = runtimeArgs({ actionId, input, context: { authority: 'account_automation', surface: 'agent',
+                externalActionTarget: { kind: 'machine', machineId: 'machine_1' } } });
+            try {
+                expect(await execute(args)).toEqual(result);
+                unmount();
+                expect(await execute(args)).toEqual(result);
+                expect(executeOnMachine).toHaveBeenCalledWith(args);
+            } finally {
+                unmount();
+            }
+            executeOnMachine.mockClear();
+            for (const context of [
+                { defaultSessionMachineId: 'machine_1' },
+                { externalActionTarget: { kind: 'machine', machineId: ' ' } },
+                { externalActionTarget: { kind: 'session', sessionId: 'session_1' } },
+            ] satisfies RuntimeActionExecuteArgs['context'][]) {
+                expect(await execute({ ...args, context })).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+            }
+            expect(executeOnMachine).not.toHaveBeenCalled();
+        },
+    );
+
+    it('routes a close through the exact Machine when an explicit control has no requested view', async () => {
+        const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const state = createBrowserControlState();
+        const applyDispatchResult = vi.fn();
+        // The captured-Account Machine transport is the external boundary; preserve its refusal.
+        const result = { ok: false, errorCode: 'permission_denied', error: 'permission_denied' } as const;
+        const executeOnMachine = vi.fn(async () => result);
+        const execute = createBrowserRuntimeActionExecutor({
+            control: { readState: () => state, applyDispatchResult },
+            executeOnMachine,
+        });
+        const args = runtimeArgs({ actionId: 'browser.view.close',
+            input: { kind: 'closeView', commandId: 'close-empty-control', browserSessionId: 'browser_session_1', viewId: 'view_1' },
+            context: { authority: 'account_automation', surface: 'agent',
+                externalActionTarget: { kind: 'machine', machineId: 'machine_1' } },
+        });
+
+        expect(await execute(args)).toEqual(result);
+        expect(executeOnMachine).toHaveBeenCalledWith(args);
+        expect(applyDispatchResult).not.toHaveBeenCalled();
+
+        executeOnMachine.mockClear();
+        for (const context of [
+            {},
+            { defaultSessionMachineId: 'machine_1' },
+            { externalActionTarget: { kind: 'machine', machineId: ' ' } },
+            { externalActionTarget: { kind: 'session', sessionId: 'session_1' } },
+        ] satisfies RuntimeActionExecuteArgs['context'][]) {
+            expect(await execute({ ...args, context })).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+        }
+        expect(executeOnMachine).not.toHaveBeenCalled();
+        expect(applyDispatchResult).not.toHaveBeenCalled();
+    });
+
     it('observes daemon-owned views through their admitted machine Action without using the in-app owner', async () => {
         const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
         const state = openViewState({ adapterKind: 'chromiumSidecar', engineKind: 'desktopWebView',

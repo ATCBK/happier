@@ -6,6 +6,9 @@ import type {
     SimulatorPreviewSnapshotV1,
 } from '@happier-dev/protocol';
 
+// Cold transforms belong to collection, outside each action behavior's deadline.
+await import('./runtimeActionExecutor');
+
 function runtimeArgs(
     args: Omit<RuntimeActionExecuteArgs, 'context'> & Partial<Pick<RuntimeActionExecuteArgs, 'context'>>,
 ): RuntimeActionExecuteArgs {

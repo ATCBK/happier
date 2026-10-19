@@ -2,6 +2,7 @@ import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { BrowserActiveTargetV1Schema, type BrowserActiveTargetV1 } from '@happier-dev/protocol/browser/events/activeTarget';
 import { BrowserAutomationCancelActiveResultV1Schema, BrowserAutomationActionResultV1Schema, BrowserAutomationActionKindV1Schema, isBrowserAutomationMutatingActionKind, type BrowserAutomationCancelActiveResultV1, type BrowserAutomationActionResultV1 } from '@happier-dev/protocol/browser/automation/v1';
 import { BrowserAutomationErrorCodeV1Schema, type BrowserAutomationErrorCodeV1 } from '@happier-dev/protocol/browser/automation/errors';
+import type { BrowserAgentPoint } from './copresence';
 import { redactBrowserAutomationActionResultDetails, redactBrowserAutomationTimelineDetails } from '@happier-dev/protocol/browser/automation/redaction';
 
 export type BrowserAutomationAuthority = 'uiLocal' | 'daemon' | 'serverBroker';
@@ -96,6 +97,8 @@ type BrowserAutomationControllerState = {
     /** The in-flight action's kind, so a surface can say what is happening ("Typing"). */
     activeActionKind: string | null;
     activeTarget: BrowserActiveTargetV1 | null;
+    /** The latest action's target, kept after it settles for the cursor to present once. */
+    lastPoint: BrowserAgentPoint | null;
     humanHeld: boolean;
     /** One admission fact: a changed page needs a look; an interrupted effect also remains uncertain. */
     requiresObservation: false | 'required' | 'uncertain';
@@ -213,6 +216,7 @@ export function createBrowserAutomationControlService(
             activeRequesterRef: null,
             activeActionKind: null,
             activeTarget: null,
+            lastPoint: null,
             humanHeld: false,
             requiresObservation: false,
         };
@@ -542,6 +546,7 @@ export function createBrowserAutomationControlService(
                 const parsed = BrowserActiveTargetV1Schema.safeParse(target);
                 if (!parsed.success) return;
                 controller.activeTarget = parsed.data;
+                controller.lastPoint = { id: request.automationRequestId, controlEpoch: controller.controlEpoch, target: parsed.data };
                 emitChange();
             } }).then((result) => {
                 finishActiveAction(active, result);
@@ -651,6 +656,7 @@ export function createBrowserAutomationControlService(
                 activeAutomationRequestId: controller.activeAutomationRequestId,
                 activeActionKind: controller.activeActionKind,
                 activeTarget: controller.activeTarget,
+                lastPoint: controller.lastPoint,
                 uncertain: controller.requiresObservation === 'uncertain',
                 // An interrupted action keeps admission until its engine work settles; until then a
                 // takeover has been asked for but has not landed.

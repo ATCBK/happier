@@ -17,6 +17,25 @@ const DESKTOP_AUTOMATION_SUPPORT = {
 } satisfies DesktopWebViewSupport;
 
 describe('buildBrowserAdapterCapabilities', () => {
+    it.each([
+        { adapterKind: 'chromiumSidecar', engine: 'streamedSurface', capture: true, media: true },
+        { adapterKind: 'externalUrl', engine: 'desktopWebView', capture: true, media: true },
+        { adapterKind: 'externalUrl', engine: 'desktopWebView', capture: false, media: false },
+        { adapterKind: 'localPreview', engine: 'webIframe', capture: false, media: false },
+        { adapterKind: 'externalUrl', engine: 'nativeWebView', capture: false, media: false },
+        { adapterKind: 'streamedBrowserSurface', engine: 'streamedSurface', capture: false, media: false },
+    ] as const)('admits media context only for the $adapterKind/$engine capture producer ($capture)', ({ adapterKind, engine, capture, media }) => {
+        const caps = buildBrowserAdapterCapabilities({ adapterKind,
+            supportedRenderEngines: [engine],
+            desktopWebViewSupport: { ...DESKTOP_AUTOMATION_SUPPORT, capture },
+            // The target kind does not grant the streamed viewer a screenshot producer.
+            supportedTargetKinds: [engine === 'streamedSurface' ? 'streamedBrowser' : adapterKind === 'localPreview' ? 'localServicePreview' : 'externalUrl'],
+        });
+        expect(caps.contextKinds.includes('browserAnnotation')).toBe(media);
+        expect(caps.contextKinds.includes('browserScreenshot')).toBe(media);
+        if (media) expect(caps.diagnosticsFidelityByFamily.screenshot).toBe(engine === 'streamedSurface' ? 'cdp' : 'nativeCallback');
+    });
+
     it.each(['webIframe', 'nativeWebView', 'desktopWebView'] as const)(
         'advertises only the executable injected contribution on %s, independently of human navigation and diagnostics',
         (engine) => {
