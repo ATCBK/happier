@@ -507,7 +507,7 @@ export function classifyPrimarySessionRuntimeIssue(
       const homeBase = `${resolveServerHttpBaseUrl()}/`;
       return new URL(homeError.config.url, homeError.config.baseURL ?? homeBase).href.startsWith(homeBase);
     } catch { return false; }
-  })() && classifyServerEndpointError(homeError).kind === 'server_error';
+  })() && ['server_error', 'timeout', 'network'].includes(classifyServerEndpointError(homeError).kind);
   const runtimeAuthClassification = readRuntimeAuthClassification(input.error);
   const runtimeAuthUsageLimit = buildUsageLimitDetailsFromRuntimeAuthClassification(
     runtimeAuthClassification,

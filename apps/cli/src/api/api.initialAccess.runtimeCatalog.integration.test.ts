@@ -21,6 +21,8 @@ import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedSe
 import { commitDaemonLaunchSession } from '@/daemon/spawn/commitDaemonLaunchSession';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 const initialAccess: SessionInitialAccessDraftV1 = {
   grants: [{ subject: { kind: 'team', teamId: 'team-1' }, accessLevel: 'edit', canApprovePermissions: false }],
@@ -581,6 +583,74 @@ for (const owner of ['api', 'http'] as const) {
         startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
       })).rejects.toMatchObject(refusal);
       expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ initialAccess, primaryTeamId: 'team-1' });
+    });
+
+    if (owner === 'api') it.each([true, false])(
+      'reconciles an unknown Machine binding receipt within the creation budget (committed=%s)', async committed => {
+        vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '2');
+        vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
+        const post = vi.mocked(axios.post).getMockImplementation()!;
+        const get = vi.mocked(axios.get).getMockImplementation()!;
+        const sessionRequests: unknown[] = [];
+        const bindingPaths: string[] = [];
+        let bound = false;
+        let loseReceipt = true;
+        vi.mocked(axios.get).mockImplementation(async (url, options) => String(url).includes('/v1/access-keys/')
+          ? { status: 200, data: { accessKey: bound ? { data: 'incumbent-binding' } : null } }
+          : get(url, options));
+        vi.mocked(axios.post).mockImplementation(async (url, body, options) => {
+          if (String(url).includes('/v1/access-keys/')) {
+            bindingPaths.push(String(url));
+            if (loseReceipt) {
+              loseReceipt = false;
+              bound = committed;
+              throw new axios.AxiosError('Private binding response lost', 'ECONNABORTED', {
+                url: String(url), headers: new axios.AxiosHeaders(),
+              });
+            }
+            bound = true;
+            return { status: 200, data: { success: true } };
+          }
+          sessionRequests.push(body);
+          return post(url, body, options);
+        });
+        const api = await ApiClient.create(credentials);
+        api.setLocalMachineId(`receipt-machine-${committed}`);
+        await expect(api.getOrCreateSession({ ...creation, initialAccess })).resolves.toMatchObject({ id: 'created-session' });
+        expect(bound).toBe(true);
+        expect(sessionRequests).toHaveLength(2);
+        expect(sessionRequests[1]).toEqual(sessionRequests[0]);
+        expect(new Set(bindingPaths.map(path => new URL(path).pathname))).toEqual(new Set([
+          `/v1/access-keys/created-session/receipt-machine-${committed}`,
+        ]));
+        // A committed lost receipt rejoins by GET; an uncommitted one writes
+        // the same tuple. Neither may replace an established access key.
+        expect(bindingPaths).toHaveLength(committed ? 1 : 2);
+      },
+    );
+
+    if (owner === 'api') it('preserves preparation classification when the Machine binding budget is exhausted', async () => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '2');
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
+      const post = vi.mocked(axios.post).getMockImplementation()!;
+      const get = vi.mocked(axios.get).getMockImplementation()!;
+      vi.mocked(axios.get).mockImplementation(async (url, options) => String(url).includes('/v1/access-keys/')
+        ? { status: 200, data: { accessKey: null } } : get(url, options));
+      const bindingPaths: string[] = [];
+      vi.mocked(axios.post).mockImplementation(async (url, body, options) => {
+        if (!String(url).includes('/v1/access-keys/')) return post(url, body, options);
+        bindingPaths.push(String(url));
+        throw new axios.AxiosError('Private binding response lost', 'ECONNABORTED', {
+          url: String(url), headers: new axios.AxiosHeaders(),
+        });
+      });
+      const api = await ApiClient.create(credentials);
+      api.setLocalMachineId('receipt-machine-exhausted');
+      const failure: unknown = await api.getOrCreateSession({ ...creation }).catch((error: unknown) => error);
+      expect(bindingPaths).toHaveLength(2);
+      const issue = SessionRuntimeIssueV1Schema.parse(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure }));
+      expect(issue).toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+      expect(JSON.stringify(issue)).not.toMatch(/Private|localhost|token-1/);
     });
 
     it('refuses explicit initial access before POST when Session sharing is disabled', async () => {

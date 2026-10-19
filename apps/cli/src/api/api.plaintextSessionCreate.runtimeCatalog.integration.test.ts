@@ -11,6 +11,7 @@ import type { Metadata } from './types';
 import { decodeBase64, decrypt } from './encryption';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 
 const mockPost = vi.fn();
 const mockGet = vi.fn();
@@ -264,7 +265,7 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
     expect(session?.metadata.path).toBe('/tmp');
   });
 
-  it('rejects an old server before POST when current activation is missing', async () => {
+  it('creates a keyless plain Session when feature discovery omits stored-content requirements', async () => {
     const credential = {
       token: 'token-test',
       encryption: null,
@@ -284,8 +285,29 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
+    // Stored-content requirements do not gate Session creation. Account
+    // currentness still owns its mode; HTTP carries the current declaration.
+    mockPost.mockImplementation(async (_url: string, body: Readonly<{
+      sharedMetadata: Readonly<{ ciphertext: string }>;
+      ownerMetadata: unknown;
+      agentState: string | null;
+    }>) => ({ status: 200, data: { session: {
+      id: 'session-no-stored-content-requirements',
+      seq: 1,
+      encryptionMode: 'plain',
+      metadata: body.sharedMetadata.ciphertext,
+      ownerMetadata: body.ownerMetadata,
+      metadataLayoutVersion: 1,
+      metadataVersion: 1,
+      agentState: body.agentState,
+      agentStateVersion: 0,
+      dataEncryptionKey: null,
+      share: null,
+      createdAt: 1,
+      updatedAt: 1,
+    } } }));
     const api = await ApiClient.create(credential);
-    await expect(api.getOrCreateSession({
+    const session = await api.getOrCreateSession({
       tag: 'tag-old-server',
       metadata: {
         path: '/private',
@@ -296,12 +318,28 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
         happyToolsDir: '/private/home/.happy/tools',
       },
       state: null,
-    })).rejects.toMatchObject({
-      code: 'client-upgrade-required',
-      retryable: false,
-      decision: 'missing',
     });
-    expect(mockPost).not.toHaveBeenCalled();
+    expect(session).toMatchObject({
+      id: 'session-no-stored-content-requirements',
+      encryptionMode: 'plain',
+      metadataLayoutVersion: 1,
+      metadata: { path: '/private', host: 'private-host' },
+    });
+    expect(mockGet).toHaveBeenCalledWith(
+      'https://api.example.com/v1/account/encryption/currentness',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-test' }) }),
+    );
+    expect(mockPost).toHaveBeenCalledExactlyOnceWith('https://api.example.com/v1/sessions',
+      expect.objectContaining({ metadataLayoutVersion: 1, encryptionMode: 'plain', dataEncryptionKey: null,
+        ownerMetadata: expect.objectContaining({ t: 'plain', v: expect.objectContaining({
+          workspace: expect.objectContaining({ path: '/private', host: 'private-host' }),
+        }) }),
+      }),
+      expect.objectContaining({ headers: expect.objectContaining(buildCurrentAccountStoredContentCompatibilityHttpHeaders()) }),
+    );
+    expect(credential.encryption).toBeNull();
+    expect(session).not.toHaveProperty('encryptionKey');
+    expect(JSON.parse(mockPost.mock.calls[0]![1].sharedMetadata.ciphertext)).not.toHaveProperty('path');
   });
 
   it('does not relabel a current invalid-params 400 as an old-server upgrade', async () => {
@@ -649,6 +687,9 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
           session: {
             id: 'session-e2ee-layout-v1',
             seq: 1,
+            // Layout 1 must carry an authenticated owner/recipient projection.
+            // This owner response uses the canonical released owner marker.
+            share: null,
             encryptionMode: 'e2ee',
             metadata: body.sharedMetadata.ciphertext,
             ownerMetadata: body.ownerMetadata,

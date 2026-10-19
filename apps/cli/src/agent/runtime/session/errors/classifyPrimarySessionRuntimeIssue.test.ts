@@ -8,6 +8,18 @@ import { createHttpStatusError } from '@/api/client/httpStatusError';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it.each(['ECONNABORTED', 'ECONNRESET'])('classifies a Home %s as preparation while a foreign binding remains an Agent failure', code => {
+    runWithServerHttpBaseUrl('https://home.example.test/happier', () => {
+      const failure = new AxiosError('private transport detail', code, {
+        url: 'https://home.example.test/happier/v1/access-keys/session/machine', headers: new AxiosHeaders(),
+      });
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure }))
+        .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+      failure.config!.url = 'https://home.example.test/happier-other/v1/access-keys/session/machine';
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure }))
+        .toMatchObject({ code: 'agent_session_error', source: 'agent_session_error' });
+    });
+  });
   it('classifies responding Home bootstrap failures without treating native provider failures as Home preparation', () => {
     runWithServerHttpBaseUrl('https://home.example.test/happier', () => {
       const homeFailure = new AxiosError('private upstream detail', undefined,

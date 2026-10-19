@@ -13,6 +13,49 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 describe('access-key bootstrap Home failure seam', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('classifies a lost committed binding receipt without fatal reporting and rejoins its exact tuple', async () => {
+    let bound = false;
+    let writes = 0;
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      request.resume();
+      requests.push(`${request.method} ${request.url}`);
+      if (request.method === 'POST') {
+        bound = true;
+        writes += 1;
+        request.socket.destroy();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ accessKey: bound ? { data: 'incumbent-binding' } : null }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected test Home listener');
+    const origin = `http://127.0.0.1:${address.port}`;
+    const fatal = vi.spyOn(logger, 'fatal').mockImplementation(() => {});
+    try {
+      await runWithServerHttpBaseUrl(origin, async () => {
+        const input = { token: 'PRIVATE_TOKEN', sessionId: 'receipt-session', machineId: 'receipt-machine' };
+        const failure: unknown = await ensureSessionMachineAccessKeyBinding(input).catch((error: unknown) => error);
+        expect(failure).toMatchObject({ code: 'ECONNRESET' });
+        expect(SessionRuntimeIssueV1Schema.parse(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure })))
+          .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+        expect(reportSessionRunnerFailure(failure)).toBe(1);
+        expect(fatal).not.toHaveBeenCalled();
+        await ensureSessionMachineAccessKeyBinding(input);
+        expect(writes).toBe(1);
+        expect(requests).toEqual([
+          'GET /v1/access-keys/receipt-session/receipt-machine',
+          'POST /v1/access-keys/receipt-session/receipt-machine',
+          'GET /v1/access-keys/receipt-session/receipt-machine',
+        ]);
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
   it('retains Account-mode preflight HTTP 500 for machine bootstrap without caching unknown as a key failure', async () => {
     let unavailable = true;
     const server = createServer((request, response) => {

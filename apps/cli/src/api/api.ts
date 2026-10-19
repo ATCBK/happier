@@ -92,6 +92,7 @@ import {
 } from './client/encryptionKey';
 import { serializeAxiosErrorForLog } from './client/serializeAxiosErrorForLog';
 import { logServerEndpointFailure } from './client/serverEndpointFailureLog';
+import { classifyServerEndpointError } from './client/classifyServerEndpointError';
 import { resolveServerHttpBaseUrl } from './client/serverHttpBaseUrl';
 import { readAccountEncryptionModeOnce } from './client/accountEncryptionMode';
 import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
@@ -637,6 +638,7 @@ export class ApiClient {
     for (let attempt = 1; attempt <= retryMaxAttempts; attempt += 1) {
       if (opts.signal?.aborted && unresolvedCreationError) throw unresolvedCreationError;
       opts.signal?.throwIfAborted();
+      let preparingMachineAccess = false;
       try {
         const metadataEnvelopeFields = desiredSessionEncryptionMode === 'plain'
           ? buildSessionMetadataEnvelopeCreateFields({
@@ -703,12 +705,14 @@ export class ApiClient {
           if (!this.localMachineId) return;
           // Machine admission may begin as soon as creation settles. The
           // Session socket also ensures this binding, but can connect later.
+          preparingMachineAccess = true;
           await ensureSessionMachineAccessKeyBinding({
             serverUrl: serverBaseUrl,
             token: this.credential.token,
             sessionId: raw.id,
             machineId: this.localMachineId,
           });
+          preparingMachineAccess = false;
         };
 
         const sessionEncryptionMode: 'e2ee' | 'plain' =
@@ -899,7 +903,11 @@ export class ApiClient {
           : null;
         if (initialAccessServerError) throw unresolvedCreationError ?? initialAccessServerError;
         const isRetryable5xx = typeof status === 'number' && status >= 500 && status < 600;
-        if ((outcomeUnknown || isRetryable5xx) && attempt < retryMaxAttempts) {
+        // A Session already exists here. An access-key receipt can be lost
+        // after commit; the same Session/Machine tuple is reconciled by the
+        // incumbent creation retry owner, never the generic offline/null path.
+        const retryableMachineAccessFailure = preparingMachineAccess && classifyServerEndpointError(error).retryable;
+        if ((outcomeUnknown || isRetryable5xx || retryableMachineAccessFailure) && attempt < retryMaxAttempts) {
           // Do not log raw Axios errors: they can contain bearer tokens or vendor keys.
           logger.debug('[API] [WARN] getOrCreateSession creation receipt unavailable, retrying the same tag:', serializeAxiosErrorForLog(error));
           const delayMs = Math.min(retryMaxDelayMs, retryBaseDelayMs * Math.pow(2, attempt - 1));
@@ -908,6 +916,7 @@ export class ApiClient {
         }
 
         if (unresolvedCreationError) throw unresolvedCreationError;
+        if (retryableMachineAccessFailure) throw error;
         return settleGetOrCreateSessionFailure(error);
       }
     }
